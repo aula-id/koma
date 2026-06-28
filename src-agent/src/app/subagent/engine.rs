@@ -196,11 +196,10 @@ pub async fn run_agent_loop(
     let mut last_text = String::new();
     // Count how many consecutive stall nudges have been issued so far.
     let mut nudges: usize = 0;
-    // Accumulated token/cost spend across all steps. tokens_in is updated
-    // to the last-seen prompt size (not summed — it is a context-window gauge,
+    // Accumulated token/cost spend across all steps. tokens_in is reported as
+    // the last-seen prompt size (not summed — it is a context-window gauge,
     // matching the main-model convention). tokens_out and cost are summed
     // across steps so the total reflects actual spend.
-    let mut acc_tokens_in: u64 = 0;
     let mut acc_tokens_out: u64 = 0;
     let mut acc_cost: f64 = 0.0;
 
@@ -215,17 +214,16 @@ pub async fn run_agent_loop(
 
         // Fold this step's usage into the running totals (best-effort: a step
         // with no Usage chunk simply contributes nothing). tokens_in is
-        // overwritten (current context size), tokens_out and cost are summed.
+        // reported as-is (current context size), tokens_out and cost are summed.
         // Emit a UsageReport after EVERY step so the SubAgent struct always
         // holds the latest accumulated spend — on kill/abort the drain can
         // still record what was captured so far (loses at most one step).
         if let Some((pt, ct, c)) = outcome.usage {
-            acc_tokens_in = pt;
             acc_tokens_out += ct;
             acc_cost += c;
             emit(&tx, AgentEvent::UsageReport {
                 model_id: resolved.model_id.clone(),
-                tokens_in: acc_tokens_in,
+                tokens_in: pt,
                 tokens_out: acc_tokens_out,
                 cost: acc_cost,
             });
