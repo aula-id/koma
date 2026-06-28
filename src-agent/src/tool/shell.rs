@@ -7,10 +7,11 @@
 //! flood the context.
 
 use anyhow::Result;
+use regex::Regex;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use super::{Tool, ToolCtx};
 
 /// Run `command` via `sh -c` in `cwd`, capturing stdout+stderr, and return the
@@ -129,11 +130,12 @@ impl Tool for Bash {
 
         // Redirect git commands to git_operator, which handles SSH key injection
         // and destructive-operation guards. Bash can't do either safely.
-        let trimmed = command.trim();
-        if trimmed == "git"
-            || trimmed.starts_with("git ")
-            || trimmed.starts_with("git\t")
-        {
+        // Match `git` as a command word anywhere in the command (not just at the
+        // start), so cheats like `cd /tmp && git status` or `echo $(git log)`
+        // are caught too.
+        static GIT_RE: OnceLock<Regex> = OnceLock::new();
+        let git_re = GIT_RE.get_or_init(|| Regex::new(r"\bgit\b").unwrap());
+        if git_re.is_match(command.trim()) {
             return Ok(
                 "error: use the git_operator tool for git commands, not bash. \
                  git_operator runs git directly (no shell-injection risk), injects the \
