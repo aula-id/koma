@@ -216,10 +216,19 @@ pub async fn run_agent_loop(
         // Fold this step's usage into the running totals (best-effort: a step
         // with no Usage chunk simply contributes nothing). tokens_in is
         // overwritten (current context size), tokens_out and cost are summed.
+        // Emit a UsageReport after EVERY step so the SubAgent struct always
+        // holds the latest accumulated spend — on kill/abort the drain can
+        // still record what was captured so far (loses at most one step).
         if let Some((pt, ct, c)) = outcome.usage {
             acc_tokens_in = pt;
             acc_tokens_out += ct;
             acc_cost += c;
+            emit(&tx, AgentEvent::UsageReport {
+                model_id: resolved.model_id.clone(),
+                tokens_in: acc_tokens_in,
+                tokens_out: acc_tokens_out,
+                cost: acc_cost,
+            });
         }
 
         // A fatal stream error ends the run immediately.
@@ -268,14 +277,6 @@ pub async fn run_agent_loop(
             convo.push_assistant(assistant_text, None);
             // Final turn committed: snapshot the full history before finishing.
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
-            // Surface accumulated spend before Done so the orchestrator can
-            // merge it into the session total + write the ledger row.
-            emit(&tx, AgentEvent::UsageReport {
-                model_id: resolved.model_id.clone(),
-                tokens_in: acc_tokens_in,
-                tokens_out: acc_tokens_out,
-                cost: acc_cost,
-            });
             // Deliver the CLEANED report (tags stripped, with empty-fallback) so a
             // weak model's wrapped output never reaches the orchestrator as empty
             // or with a leaked </content>.
@@ -369,13 +370,6 @@ pub async fn run_agent_loop(
                 } else {
                     finalize_report(&last_text)
                 };
-                // Surface accumulated spend before Done (budget-exhausted path).
-                emit(&tx, AgentEvent::UsageReport {
-                    model_id: resolved.model_id.clone(),
-                    tokens_in: acc_tokens_in,
-                    tokens_out: acc_tokens_out,
-                    cost: acc_cost,
-                });
                 emit(&tx, AgentEvent::Done(cap_report(final_text)));
                 return;
             }

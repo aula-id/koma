@@ -394,6 +394,12 @@ fn service_session(
                         None,
                         usage_tuple,
                     ),
+                    // /task command path: Killed or Error — no chat-fold note (the
+                    // turn is dead), but still carry accumulated usage so cost is
+                    // not silently lost.
+                    (None, SubAgentStatus::Killed | SubAgentStatus::Error(_)) => {
+                        (None, None, usage_tuple)
+                    }
                     _ => (None, None, None),
                 }
             };
