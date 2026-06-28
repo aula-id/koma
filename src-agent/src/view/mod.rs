@@ -19,6 +19,8 @@ pub mod key_input;
 pub mod loading;
 pub mod message_rewind;
 pub mod markdown;
+pub mod quit_confirm;
+pub mod session_hub;
 pub mod session_picker;
 pub mod settings;
 pub mod theme;
@@ -51,26 +53,38 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             // Resolve the actual Main model that will be used for chat requests.
             // Session overrides win over the global catalogue; falls back to
             // settings.model (the legacy field) when nothing is configured.
-            let resolved_model: String = state.rest.session.as_ref()
+            let resolved_model: String = state.rest.fg().session.as_ref()
                 .and_then(|s| resolve_role(&state.rest.config, &s.settings, ModelRole::Main))
                 .map(|r| r.model_id)
-                .or_else(|| state.rest.session.as_ref().map(|s| s.settings.model.clone()))
+                .or_else(|| state.rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
                 .unwrap_or_default();
             chat::draw(frame, &state.rest, &resolved_model, &palette);
         }
         Mode::KeyInput(form) => key_input::draw(frame, form, cache, cache_endpoint, &palette),
         Mode::SessionPicker(p) => session_picker::draw(frame, p, &palette),
+        Mode::SessionHub(h) => session_hub::draw(frame, h, &palette),
         Mode::Settings(s) => settings::draw(frame, s, cache, cache_endpoint, &palette),
         Mode::Agents(a) => agents::draw(
             frame,
             a,
             &state.rest.config,
-            state.rest.session.as_ref().map(|s| &s.settings),
+            state.rest.fg().session.as_ref().map(|s| &s.settings),
             &palette,
         ),
         Mode::Effort(e) => effort::draw(frame, e, &palette),
         Mode::Loading(s) => loading::draw(frame, s, &palette),
-        Mode::Usage(nav) => usage::draw(frame, &state.rest, nav, &palette),
+        Mode::Usage(nav) => {
+            // The dashboard renders from a pre-fetched ledger projection so the SAME
+            // draw path serves the local TUI and the daemon's thin client. The client
+            // receives the projection in the snapshot (`rest.usage_data`); a local TUI
+            // leaves that `None` and collects it live from the ledger here every frame
+            // (unchanged behaviour). See `model::usage::UsageData`.
+            let data = state.rest.usage_data.clone().unwrap_or_else(|| {
+                usage::collect_usage_data(nav, &state.rest)
+            });
+            usage::draw(frame, &state.rest, nav, &data, &palette);
+        }
         Mode::MessageRewind(rw) => message_rewind::draw(frame, rw, &palette),
+        Mode::QuitConfirm(s) => quit_confirm::draw(frame, s, &palette),
     }
 }

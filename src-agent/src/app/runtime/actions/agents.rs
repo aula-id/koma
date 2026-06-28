@@ -41,7 +41,7 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
     match result {
         Ok(_) => {
             // Reload from disk so the new agent appears with its real source.
-            if let Some(sess) = state.rest.session.as_ref() {
+            if let Some(sess) = state.rest.fg().session.as_ref() {
                 if let Mode::Agents(a) = &mut state.mode {
                     a.reload(sess);
                     // Select the freshly-created agent if we can find it.
@@ -52,7 +52,7 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
                 }
             }
             // Rebuild the system prompt so the sub-agent roster reflects the new agent.
-            if let Some(sess) = state.rest.session.as_mut() {
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
             state.rest.status = format!("agent created: {}", def.name);
@@ -97,7 +97,7 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
 
     match result {
         Ok(_) => {
-            if let Some(sess) = state.rest.session.as_ref() {
+            if let Some(sess) = state.rest.fg().session.as_ref() {
                 if let Mode::Agents(a) = &mut state.mode {
                     a.reload(sess);
                     if let Some(i) = a.agents.iter().position(|x| x.name == def.name) {
@@ -107,7 +107,7 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
                 }
             }
             // Rebuild the system prompt so the sub-agent roster reflects the change.
-            if let Some(sess) = state.rest.session.as_mut() {
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
             state.rest.status = format!("agent updated: {}", def.name);
@@ -154,14 +154,14 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
 
     match result {
         Ok(()) => {
-            if let Some(sess) = state.rest.session.as_ref() {
+            if let Some(sess) = state.rest.fg().session.as_ref() {
                 if let Mode::Agents(a) = &mut state.mode {
                     a.reload(sess);
                     a.cancel();
                 }
             }
             // Rebuild the system prompt so the sub-agent roster reflects the deletion.
-            if let Some(sess) = state.rest.session.as_mut() {
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
             state.rest.status = format!("agent deleted: {name}");

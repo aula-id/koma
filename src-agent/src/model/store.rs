@@ -40,6 +40,8 @@ use crate::model::session::Session;
 use crate::model::session_registry;
 use crate::model::settings::Settings;
 
+pub use crate::model::session_lock::{is_locked, remove_lock, write_lock};
+
 /// Lightweight metadata about a session used in the session-list UI.
 ///
 /// Loaded without deserialising the full message history — only `settings.json`
@@ -194,6 +196,84 @@ pub fn registry_path() -> Result<PathBuf> {
     Ok(base_dir()?.join("session.sqlite"))
 }
 
+/// Path to the daemon's unix-domain socket: `~/.koma/daemon.sock`.
+///
+/// This socket is the koma-daemon's liveness oracle (whoever binds it IS the live
+/// daemon) and the rendezvous point the thin TUI client connects to. Resolved
+/// from the same [`base_dir`] (`~/.koma`) as every other config path.
+pub fn daemon_sock_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("daemon.sock"))
+}
+
+/// Path to the daemon's PID file: `~/.koma/daemon.pid`.
+///
+/// Advisory only — recorded for diagnostics/`kill`. It is NOT the liveness oracle
+/// (PIDs get reused, which would wedge spawn-or-attach); the bound socket at
+/// [`daemon_sock_path`] is. Lives under the same [`base_dir`] (`~/.koma`).
+pub fn daemon_pid_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("daemon.pid"))
+}
+
+/// Write the running daemon's PID into [`daemon_pid_path`], overwriting any
+/// stale one. Best-effort and advisory only (diagnostics / `kill`), so an IO
+/// error is returned but callers treat it as non-fatal — the bound socket, not
+/// this file, is the liveness oracle. The graceful-shutdown teardown unlinks it.
+pub fn write_daemon_pid() -> Result<()> {
+    std::fs::write(daemon_pid_path()?, std::process::id().to_string())?;
+    Ok(())
+}
+
+/// A stable identity string for the CURRENTLY-RUNNING executable, used as the
+/// daemon<->client build-skew handshake (task #142).
+///
+/// The koma daemon is long-lived and survives a rebuild: after `cargo build`
+/// overwrites the on-disk binary, a freshly-built client attaching to the OLD
+/// still-running daemon renders STALE behaviour (this already produced a phantom
+/// `/agents` bug). The fingerprint lets a client detect that skew — the daemon
+/// reports the value it computed AT STARTUP, and a client that computes a
+/// DIFFERENT value now knows the binary changed since the daemon launched (a
+/// rebuild) and can restart it instead of silently talking to stale code.
+///
+/// Identity = the running file's on-disk fingerprint, NOT a content hash (cheap +
+/// std-only, yet flips on every rebuild because `cargo` rewrites the file):
+/// `CARGO_PKG_VERSION` + the executable's byte length + its mtime. Any two
+/// builds differ in length and/or mtime, so the string differs across every
+/// rebuild while staying identical for a single running binary.
+///
+/// ROBUST BY CONTRACT — never panics and always returns *something*: if
+/// [`std::env::current_exe`] or its [`std::fs::metadata`] can't be resolved (an
+/// exotic platform, a deleted/replaced exe), it degrades to JUST the crate
+/// version. That fallback is coarser (it won't catch a same-version rebuild) but
+/// is strictly better than aborting the attach — a missing fingerprint must never
+/// take the client down.
+pub fn build_fingerprint() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Best-effort: the running file's length + mtime. Either step failing drops us
+    // to the version-only fallback below (never a panic).
+    let detail = std::env::current_exe()
+        .ok()
+        .and_then(|exe| std::fs::metadata(&exe).ok())
+        .map(|meta| {
+            let len = meta.len();
+            // mtime as a stable string. `modified()` can be unsupported on some
+            // platforms; fall back to a marker so two runs on such a platform still
+            // compare equal (version+len then carry the signal).
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos().to_string())
+                .unwrap_or_else(|| "no-mtime".to_string());
+            format!("{len}:{mtime}")
+        });
+
+    match detail {
+        Some(d) => format!("{version}+{d}"),
+        None => version.to_string(),
+    }
+}
+
 /// List the sessions for the CURRENT working directory, most-recently updated
 /// first.
 ///
@@ -206,12 +286,25 @@ pub fn registry_path() -> Result<PathBuf> {
 pub fn list_sessions() -> Result<Vec<SessionMeta>> {
     let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let hash = pwd_hash(&workdir);
+    list_sessions_for(&hash)
+}
 
-    let rows = session_registry::list_by_pwd(&hash)?;
+/// List the sessions for an EXPLICIT working-directory bucket (`pwd_hash`), most-
+/// recently updated first.
+///
+/// The pwd-EXPLICIT twin of [`list_sessions`]: it takes the bucket hash directly
+/// instead of reading `std::env::current_dir()`. The headless daemon needs this —
+/// its own process cwd is the dir it was spawned in, NOT the attaching client's pwd,
+/// so a `current_dir()`-based listing would enumerate the wrong directory's sessions.
+/// pwd-aware attach (see `app::runtime::actions::session::attach_select_for_pwd`)
+/// passes the CLIENT's `pwd_hash` here so it lists sessions for the client's dir.
+/// [`list_sessions`] is the thin `current_dir()` wrapper over this.
+pub fn list_sessions_for(pwd_hash: &str) -> Result<Vec<SessionMeta>> {
+    let rows = session_registry::list_by_pwd(pwd_hash)?;
     let mut metas: Vec<SessionMeta> = Vec::with_capacity(rows.len());
 
     for row in rows {
-        let path = session_dir(&hash, &row.uuid)?;
+        let path = session_dir(pwd_hash, &row.uuid)?;
 
         // Count non-System messages for the list view; 0 on any parse failure
         // (e.g. a session that's registered but never saved messages.json yet).
@@ -263,7 +356,21 @@ pub fn create_session() -> Result<Session> {
     // The launch cwd determines both the bucket (pwd_hash) and the seeded
     // workdir. Fall back to "." if the cwd can't be resolved.
     let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let hash = pwd_hash(&workdir);
+    create_session_in(&workdir)
+}
+
+/// Create a brand-new session bucketed by an EXPLICIT `workdir` (its `pwd_hash`),
+/// seeding that same `workdir` as the session's first workspace root.
+///
+/// The pwd-EXPLICIT twin of [`create_session`]: it takes the target working
+/// directory directly instead of reading `std::env::current_dir()`. The headless
+/// daemon needs this because its own process cwd is the dir it was spawned in, not
+/// the attaching client's pwd — so a `current_dir()`-based create would bucket the new
+/// session under the WRONG directory. pwd-aware attach passes the CLIENT's launch dir
+/// here so a relaunch from a new dir gets a session rooted at that new dir.
+/// [`create_session`] is the thin `current_dir()` wrapper over this.
+pub fn create_session_in(workdir: &Path) -> Result<Session> {
+    let hash = pwd_hash(workdir);
     let uuid = Uuid::new_v4().to_string();
     let dir = session_dir(&hash, &uuid)?;
     // Pre-create memory/ so the user can drop MEMORY.md there immediately. This
@@ -349,72 +456,5 @@ pub(crate) fn slugify(name: &str) -> Result<String> {
         Err(anyhow!("name contains no usable characters"))
     } else {
         Ok(slug)
-    }
-}
-
-// --- Per-session locking ----------------------------------------------------
-//
-// A running instance marks its active session with a `session.lock` file inside
-// the session directory; the file holds the owner's PID. The picker reads these
-// to show a lock marker and to refuse re-entering a session that is already open
-// (including this instance's own session, which it holds the lock for).
-//
-// Crash safety is by PID liveness, not by the file's mere presence: if the PID
-// recorded in `session.lock` is no longer a live process, the lock is STALE and
-// treated as unlocked (and the stale file is swept). This platform is Linux, so
-// liveness is a `/proc/<pid>` existence check. All IO here is best-effort — a
-// failed read/write/remove must never crash or block the TUI.
-
-/// Path to a session's lock file: `<session_dir>/session.lock`.
-fn lock_path(session_dir: &Path) -> PathBuf {
-    session_dir.join("session.lock")
-}
-
-/// Whether `pid` refers to a live process on this (Linux) host.
-///
-/// Our own PID is alive by definition. Any other PID is alive iff `/proc/<pid>`
-/// exists — the simple, Linux-correct check the spec calls for.
-fn pid_alive(pid: u32) -> bool {
-    if pid == std::process::id() {
-        return true;
-    }
-    Path::new(&format!("/proc/{pid}")).exists()
-}
-
-/// Write our PID into the session's lock file, overwriting any existing one.
-///
-/// Best-effort: IO errors are ignored (e.g. a read-only or vanished dir just
-/// means the session won't appear locked — never a crash).
-pub fn write_lock(session_dir: &Path) {
-    let _ = std::fs::write(lock_path(session_dir), std::process::id().to_string());
-}
-
-/// Remove the session's lock file. Best-effort; a missing file or IO error is
-/// ignored.
-pub fn remove_lock(session_dir: &Path) {
-    let _ = std::fs::remove_file(lock_path(session_dir));
-}
-
-/// Whether the session is locked by a LIVE process (this one included).
-///
-/// Reads the PID from `session.lock`:
-/// - file missing / unreadable → NOT locked.
-/// - PID parses and is alive   → locked.
-/// - PID is dead or unparseable → STALE: treat as NOT locked and opportunistically
-///   remove the stale file so it stops haunting future checks.
-pub fn is_locked(session_dir: &Path) -> bool {
-    let path = lock_path(session_dir);
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return false, // no lock file (or unreadable) → not locked
-    };
-    match contents.trim().parse::<u32>() {
-        Ok(pid) if pid_alive(pid) => true,
-        // Dead PID or garbage in the file: stale lock. Sweep it (best-effort)
-        // and report unlocked so a crashed instance never blocks a session.
-        _ => {
-            let _ = std::fs::remove_file(&path);
-            false
-        }
     }
 }

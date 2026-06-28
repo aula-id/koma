@@ -6,7 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 ratatui = "0.30.2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal"] }
 reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 dom_smoothie = "0.18.0"
 fast_html2md = "0.0.62"
@@ -29,6 +29,7 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
+libc = "0.2"
 
 [[bin]]
 name = "koma"

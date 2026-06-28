@@ -161,10 +161,9 @@ impl AppStateRest {
     /// caller can fall back to inserting the raw pasted text. The session's images
     /// dir is `<session.path>/images/`.
     pub fn try_attach_image_path(&mut self, path: &str) -> bool {
-        let Some(sess) = self.session.as_ref() else {
+        let Some(images_dir) = self.fg().session.as_ref().map(|s| s.images_dir()) else {
             return false;
         };
-        let images_dir = sess.images_dir();
         match crate::model::attachment::ingest_image_from_path(
             &images_dir,
             std::path::Path::new(path),
@@ -187,10 +186,9 @@ impl AppStateRest {
     /// ingest fails (not a recognised image / write error). The caller should
     /// toast any failure independently.
     pub fn try_attach_image_bytes(&mut self, bytes: Vec<u8>, mime: &str, basename: &str) -> bool {
-        let Some(sess) = self.session.as_ref() else {
+        let Some(images_dir) = self.fg().session.as_ref().map(|s| s.images_dir()) else {
             return false;
         };
-        let images_dir = sess.images_dir();
         match crate::model::attachment::ingest_image_from_raw_bytes(
             &images_dir,
             &bytes,

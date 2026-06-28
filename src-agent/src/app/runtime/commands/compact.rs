@@ -15,16 +15,16 @@ pub(super) fn handle_compact(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    if state.rest.waiting {
+    if state.rest.fg().waiting {
         state.rest.status = "busy — wait for response".into();
         return Ok(());
     }
-    if client.is_none() || state.rest.session.is_none() {
+    if client.is_none() || state.rest.fg().session.is_none() {
         state.rest.status = "no active session".into();
         return Ok(());
     }
     let (to_sum, kept_tail) = {
-        let sess = state.rest.session.as_ref().unwrap();
+        let sess = state.rest.fg().session.as_ref().unwrap();
         let pn = sess.settings.compaction.preserve_n;
         sess.conversation.split_for_compaction(pn)
     };
@@ -37,7 +37,7 @@ pub(super) fn handle_compact(
         "You are compacting a conversation to free up context. Write a concise SUMMARY of the conversation above for your own future reference — NOT a reply to the user. Capture: what the user is building or asking for; key decisions, facts, and constraints established; the current state; specific files, code, names, and values that matter; and any open threads or next steps. Use short labeled sections or terse bullet points. Be factual. Do not greet, do not continue the task, do not address the user.",
     )];
     req.extend(to_sum);
-    state.rest.waiting = true;
+    state.rest.fg_mut().waiting = true;
     state.rest.status = "compacting...".into();
     // Start the compaction animation clock. The renderer reads this to
     // draw the spinner/elapsed/bar; the event loop reads it to redraw each
@@ -50,7 +50,7 @@ pub(super) fn handle_compact(
     // main route today) into an owned `Resolved` BEFORE the spawn, so the
     // moved-into-task value carries no borrow of `state.rest`. Compactor
     // always resolves (Main legacy fallback), but guard defensively.
-    let route = state.rest.session.as_ref().and_then(|s| {
+    let route = state.rest.fg().session.as_ref().and_then(|s| {
         crate::app::resolve::resolve_role(
             &state.rest.config,
             &s.settings,
@@ -60,7 +60,7 @@ pub(super) fn handle_compact(
     // Fresh channel for this request; the receiver lives in state so an
     // interrupt/new just drops it and the task's result is ignored.
     let (tx, rx) = mpsc::unbounded_channel();
-    state.rest.active_rx = Some(rx);
+    state.rest.fg_mut().active_rx = Some(rx);
     let c = Arc::clone(client.as_ref().unwrap());
     let jh = handle.spawn(async move {
         // Compaction sends on the resolved Compactor connection (endpoint +
@@ -79,6 +79,6 @@ pub(super) fn handle_compact(
         };
         let _ = tx.send(event);
     });
-    state.rest.current_task = Some(jh.abort_handle());
+    state.rest.fg_mut().current_task = Some(jh.abort_handle());
     Ok(())
 }

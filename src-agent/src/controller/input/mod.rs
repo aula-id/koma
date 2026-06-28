@@ -19,7 +19,9 @@ mod clipboard;
 mod key_input;
 mod paste;
 mod picker;
+mod quit_confirm;
 mod rewind;
+mod session_hub;
 mod settings;
 mod usage;
 
@@ -29,7 +31,9 @@ pub use clipboard::request_clipboard_image;
 pub use key_input::handle_key_input;
 pub use paste::handle_paste;
 pub use picker::handle_picker;
+pub use quit_confirm::handle_quit_confirm;
 pub use rewind::handle_rewind;
+pub use session_hub::handle_session_hub;
 pub use settings::handle_settings;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -62,12 +66,14 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Chat => handle_chat(&mut state.rest, key),
         Mode::KeyInput(form) => handle_key_input(form, &mut state.rest, key),
         Mode::SessionPicker(p) => handle_picker(p, &mut state.rest, key),
+        Mode::SessionHub(h) => handle_session_hub(h, &mut state.rest, key),
         Mode::Settings(s) => handle_settings(s, &mut state.rest, key),
         Mode::Agents(a) => agents::handle_agents(a, &mut state.rest, key),
         Mode::Effort(e) => handle_effort(e, &mut state.rest, key),
         Mode::Loading(l) => handle_loading(l, key),
         Mode::Usage(nav) => usage::handle_usage(nav, key),
         Mode::MessageRewind(rw) => handle_rewind(rw, &mut state.rest, key),
+        Mode::QuitConfirm(s) => handle_quit_confirm(s, &mut state.rest, key),
     }
 }
 

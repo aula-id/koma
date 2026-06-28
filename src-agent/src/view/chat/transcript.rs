@@ -40,6 +40,7 @@ pub(super) fn render_transcript(
             cache.blocks.clear();
         }
         let committed: Vec<&crate::dto::chat::ChatMessage> = rest
+            .fg()
             .session
             .as_ref()
             .map(|s| {
@@ -115,8 +116,8 @@ pub(super) fn render_transcript(
         // answers), so the block shows whenever EITHER buffer has text — they
         // share one `●` bullet. Stream renders plain (not markdown) for perf +
         // partial-fence safety.
-        let partial_content = rest.streaming.as_deref().unwrap_or("");
-        let partial_reasoning = rest.stream_reasoning.as_str();
+        let partial_content = rest.fg().streaming.as_deref().unwrap_or("");
+        let partial_reasoning = rest.fg().stream_reasoning.as_str();
         if !partial_content.is_empty() || !partial_reasoning.is_empty() {
             if !first {
                 lines.push(Line::from(""));
@@ -162,6 +163,7 @@ pub(super) fn render_transcript(
         // sub-agent is Running; disappears automatically when all finish.
         const SA_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let running_agents: Vec<&crate::app::subagent::SubAgent> = rest
+            .fg()
             .subagents
             .iter()
             .filter(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
@@ -230,6 +232,13 @@ pub(super) fn render_message_block(
 ) -> Vec<Line<'static>> {
     match msg.role {
         Role::User => {
+            // `!` user-shell shortcut entry: a SHELL_MARK-prefixed user message
+            // carrying `$ <cmd>\n<output>`. Render it DISTINCTLY (not a `★` user
+            // turn): a `$ <cmd>` header in the accent, then the captured output dim
+            // and wrapped under it — visually a command + its result, not a message.
+            if let Some(body) = msg.content.strip_prefix(crate::dto::chat::SHELL_MARK) {
+                return render_shell_block(body, palette, wrap_w);
+            }
             // The typed message (with any `[Image #N]` markers) in the accent
             // colour, then -- when the message carries image attachments -- a
             // permanent yellow/orange warn-style card listing them. The card is
@@ -306,6 +315,39 @@ pub(super) fn render_message_block(
         }
         Role::System => Vec::new(),
     }
+}
+
+/// Render a `!` user-shell entry's block: a `$ <cmd>` header (accent bullet +
+/// command) over the captured output (dim, wrapped, hanging-indented).
+///
+/// `body` is the message content with the [`crate::dto::chat::SHELL_MARK`] prefix
+/// already stripped, shaped `"$ <cmd>\n<output…>"`. The first line is the command
+/// header; the remainder is the captured stdout+stderr (already ANSI-stripped and
+/// output-capped at run time). The `$ ` bullet is split off the header so the
+/// command renders right after an accent `$` glyph (no double `$`); an unexpectedly
+/// header-less body degrades gracefully (the whole first line becomes the header).
+fn render_shell_block(body: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
+    let mut lines = body.lines();
+    let header = lines.next().unwrap_or("$");
+    // Strip the leading "$ " so it can be re-emitted as the accent bullet.
+    let cmd = header.strip_prefix("$ ").unwrap_or(header);
+
+    let mut logical: Vec<Vec<Span<'static>>> = Vec::new();
+    // Header line: the command in the accent colour (the `$ ` bullet is supplied by
+    // render_block below).
+    logical.push(vec![Span::styled(
+        cmd.to_string(),
+        Style::default().fg(palette.accent),
+    )]);
+    // Output lines: dim, one logical line each (wrapped by render_block). A blank
+    // line is preserved as an empty logical line so output spacing is kept.
+    for line in lines {
+        logical.push(vec![Span::styled(
+            line.to_string(),
+            Style::default().fg(palette.dim),
+        )]);
+    }
+    render_block(logical, "$ ", palette.accent, wrap_w, true)
 }
 
 /// Render the orange attachment folder-tree lines for a user message that

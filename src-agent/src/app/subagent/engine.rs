@@ -92,6 +92,58 @@ struct StreamOutcome {
     usage: Option<(u64, u64, f64)>,
 }
 
+/// Clean a sub-agent's raw final text into a deliverable report, mirroring the
+/// interactive engine's `final_answer` (commit 3e2401c) for the autonomous loop.
+///
+/// Weak models often wrap their answer in XML-ish markup the native tool-call
+/// path never stripped: a `<content>…</content>` wrapper, or inline
+/// `<tool_call>…</tool_call>` / orphan tags. Delivered verbatim that markup
+/// either leaks (`</content>`) or, once stripped, collapses to nothing — which is
+/// how the report arrived EMPTY. So:
+///   1. unwrap a single `<content>…</content>` wrapper to its inner text (if the
+///      whole message is such a wrapper), then
+///   2. run `strip_tool_call_tags` to drop residual tool-call markup, then
+///   3. EMPTY-FALLBACK: if cleaning emptied the text, fall back to the RAW text
+///      (better a tag-bearing report than an empty one); if the raw was itself
+///      blank, deliver a clear `(no report)` placeholder rather than nothing.
+///
+/// Returns the cleaned report ready for `cap_report`.
+fn finalize_report(raw: &str) -> String {
+    let unwrapped = unwrap_content_tag(raw);
+    let cleaned = crate::dto::chat::strip_tool_call_tags(unwrapped);
+    if !cleaned.trim().is_empty() {
+        return cleaned;
+    }
+    // Cleaning emptied it — prefer the raw text so a wrapped-but-real report is
+    // still delivered; only when the raw is ALSO blank do we emit the placeholder.
+    if !raw.trim().is_empty() {
+        raw.to_string()
+    } else {
+        "(no report)".to_string()
+    }
+}
+
+/// If `text` (trimmed) is wrapped ENTIRELY in a single `<content>…</content>`
+/// block, return the inner slice; otherwise return `text` unchanged. Only the
+/// outer wrapper is unwrapped (the inner text is then tag-stripped by the
+/// caller). Matching is case-insensitive on the tag name and tolerates a closing
+/// tag with trailing whitespace, but not extra prose outside the wrapper (so a
+/// genuine report that merely mentions `<content>` is left intact).
+fn unwrap_content_tag(text: &str) -> &str {
+    const OPEN: &str = "<content>";
+    const CLOSE: &str = "</content>";
+    let trimmed = text.trim();
+    // Case-insensitive prefix/suffix check without allocating for the body.
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with(OPEN) && lower.ends_with(CLOSE) && trimmed.len() >= OPEN.len() + CLOSE.len()
+    {
+        let inner = &trimmed[OPEN.len()..trimmed.len() - CLOSE.len()];
+        inner.trim()
+    } else {
+        trimmed
+    }
+}
+
 /// Cap a sub-agent's final report so it can't overflow the main agent's context
 /// window when delivered as a tool result. Truncates by CHARACTERS (not bytes,
 /// so it never splits a UTF-8 boundary) and appends a marker.
@@ -107,7 +159,8 @@ fn cap_report(text: String) -> String {
 
 /// Run the autonomous sub-agent loop to completion.
 ///
-/// Loops up to `max_steps` model calls. Each step:
+/// Loops until the model produces a final answer (no tool calls) or, when
+/// `max_steps` is `Some(n)`, until the step cap is reached. Each step:
 /// 1. emits [`AgentEvent::Step`], then streams one reply via
 ///    [`OpenRouterClient::stream_complete`] on the resolved route, draining the
 ///    per-step channel (accumulating assistant text as [`AgentEvent::Token`]s,
@@ -120,10 +173,11 @@ fn cap_report(text: String) -> String {
 ///    [`crate::tool::execute_tool`] — pushing every result back into `convo` so
 ///    the next step sees them.
 ///
-/// Exhausting the budget emits [`AgentEvent::Done`] with the last assistant text
-/// (or a "(stopped: step budget reached)" note). A fatal stream error emits
-/// [`AgentEvent::Error`] and returns. Never panics; a dropped receiver makes
-/// every emit a no-op.
+/// `max_steps = None` means unbounded (the natural termination above is the only
+/// exit). `max_steps = Some(n)` adds an explicit cap; exhausting it emits
+/// [`AgentEvent::Done`] with the last assistant text (or a "(stopped: step
+/// budget reached)" note). A fatal stream error emits [`AgentEvent::Error`] and
+/// returns. Never panics; a dropped receiver makes every emit a no-op.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     client: Arc<OpenRouterClient>,
@@ -134,7 +188,7 @@ pub async fn run_agent_loop(
     ctx: ToolCtx,
     mut convo: Conversation,
     task_intent: String,
-    max_steps: usize,
+    max_steps: Option<usize>,
     tx: UnboundedSender<AgentEvent>,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
@@ -150,7 +204,8 @@ pub async fn run_agent_loop(
     let mut acc_tokens_out: u64 = 0;
     let mut acc_cost: f64 = 0.0;
 
-    for step in 0..max_steps {
+    let mut step: usize = 0;
+    loop {
         emit(&tx, AgentEvent::Step(step));
 
         // 1. Stream one model reply on a fresh per-step channel, then drain it.
@@ -183,11 +238,19 @@ pub async fn run_agent_loop(
         //    when present so the tool results can answer them). Reasoning is
         //    display-only and not tracked by the sub-agent, so `None`.
         if tool_calls.is_empty() {
+            // Clean the raw text the SAME way the report will be delivered (unwrap
+            // a <content>…</content> wrapper + strip tool-call markup) BEFORE the
+            // stall gate, so the gate judges the deliverable content — a valid
+            // report wrapped in tags isn't wrongly nudged, and a pure-markup
+            // message (empty once stripped) is correctly treated as a stall.
+            let report = finalize_report(&assistant_text);
             // 3. No tools → check whether this looks like an interstitial stall
             //    ("Let me read a few more files:" with no actual tool call) rather
             //    than a genuine final answer.  If so, nudge the model to continue
-            //    instead of accepting the half-thought as a report.
-            if nudges < 2 && is_stall(&assistant_text) {
+            //    instead of accepting the half-thought as a report. The gate runs
+            //    on the cleaned report; commit the RAW text into history so the
+            //    transcript still shows what the model literally said.
+            if nudges < 2 && is_stall(&report) {
                 convo.push_assistant(assistant_text, None);
                 convo.push_user(
                     "Continue now: call the tools you need to finish the task, \
@@ -202,7 +265,7 @@ pub async fn run_agent_loop(
                 continue;
             }
             // Genuine final answer (or nudge budget exhausted).
-            convo.push_assistant(assistant_text.clone(), None);
+            convo.push_assistant(assistant_text, None);
             // Final turn committed: snapshot the full history before finishing.
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
             // Surface accumulated spend before Done so the orchestrator can
@@ -213,7 +276,10 @@ pub async fn run_agent_loop(
                 tokens_out: acc_tokens_out,
                 cost: acc_cost,
             });
-            emit(&tx, AgentEvent::Done(cap_report(assistant_text)));
+            // Deliver the CLEANED report (tags stripped, with empty-fallback) so a
+            // weak model's wrapped output never reaches the orchestrator as empty
+            // or with a leaked </content>.
+            emit(&tx, AgentEvent::Done(cap_report(report)));
             return;
         }
         convo.push_assistant_with_tools(assistant_text, tool_calls.clone(), None);
@@ -266,7 +332,17 @@ pub async fn run_agent_loop(
                     args: args_json,
                 },
             );
-            let result = crate::tool::execute_tool(&ctx, call);
+            let mut result = crate::tool::execute_tool(&ctx, call);
+            // The `cd` tool returns a `CWD_CHANGE_PREFIX`-tagged target that only the
+            // main runtime's interception knows how to apply (it repoints the LIVE
+            // session). A sub-agent runs to completion in a fixed workspace and has no
+            // persistent cwd to move, so translate the sentinel into a plain note here
+            // rather than leak the internal marker into the sub-agent's transcript.
+            if let Some(target) = result.strip_prefix(crate::tool::cd::CWD_CHANGE_PREFIX) {
+                result = format!(
+                    "note: changing the working directory is not supported inside a sub-agent (target was {target}); continue using paths under your workspace"
+                );
+            }
             emit(
                 &tx,
                 AgentEvent::ToolDone {
@@ -279,24 +355,33 @@ pub async fn run_agent_loop(
         // Turn committed (assistant + every tool result): snapshot the history
         // so the UI sees this step's tool round.
         emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
+
+        // Advance counter; check explicit cap (None = unbounded).
+        step += 1;
+        if let Some(cap) = max_steps {
+            if step >= cap {
+                // Explicit cap exhausted without a no-tool finish. Clean the last
+                // assistant text the same way the natural-finish path does (unwrap
+                // <content>, strip tool-call markup, empty-fallback) so a budget-
+                // exhausted report is never leaked-tags or empty either.
+                let final_text = if last_text.trim().is_empty() {
+                    "(stopped: step budget reached)".to_string()
+                } else {
+                    finalize_report(&last_text)
+                };
+                // Surface accumulated spend before Done (budget-exhausted path).
+                emit(&tx, AgentEvent::UsageReport {
+                    model_id: resolved.model_id.clone(),
+                    tokens_in: acc_tokens_in,
+                    tokens_out: acc_tokens_out,
+                    cost: acc_cost,
+                });
+                emit(&tx, AgentEvent::Done(cap_report(final_text)));
+                return;
+            }
+        }
         // Loop: the next step re-streams with the tool results in `convo`.
     }
-
-    // Budget exhausted without a no-tool finish. Surface the last assistant text
-    // if we have one; otherwise a clear "stopped" note.
-    let final_text = if last_text.trim().is_empty() {
-        "(stopped: step budget reached)".to_string()
-    } else {
-        last_text
-    };
-    // Surface accumulated spend before Done (budget-exhausted path).
-    emit(&tx, AgentEvent::UsageReport {
-        model_id: resolved.model_id.clone(),
-        tokens_in: acc_tokens_in,
-        tokens_out: acc_tokens_out,
-        cost: acc_cost,
-    });
-    emit(&tx, AgentEvent::Done(cap_report(final_text)));
 }
 
 /// Stream a single model reply and drain its events into a [`StreamOutcome`].

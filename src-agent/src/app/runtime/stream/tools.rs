@@ -22,13 +22,14 @@ fn tool_is_risky(name: &str) -> bool {
 /// hold a borrow of `state`.
 fn tac_inputs(
     state: &AppState,
+    sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
 ) -> Option<(
     Arc<OpenRouterClient>,
     crate::model::app_config::AppConfig,
     crate::model::settings::Settings,
 )> {
-    match (client.as_ref(), state.rest.session.as_ref()) {
+    match (client.as_ref(), state.rest.sessions[sess_idx].session.as_ref()) {
         (Some(c), Some(sess)) if sess.settings.classifier_enabled => Some((
             Arc::clone(c),
             state.rest.config.clone(),
@@ -81,6 +82,7 @@ fn tac_inputs(
 /// only from the sync loop, so the `block_on` TAC call is safe.
 pub(crate) fn process_tools(
     state: &mut AppState,
+    sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
@@ -89,14 +91,15 @@ pub(crate) fn process_tools(
     // (empty when there's no user message) so the per-call `block_on` below holds
     // no borrow of `state`. The most-recent User message is the real request even
     // after the assistant's tool-call + tool-result messages were pushed.
-    let user_intent = state
-        .rest
+    let user_intent = state.rest.sessions[sess_idx]
         .session
         .as_ref()
         .and_then(|sess| sess.conversation.last_user_content())
         .unwrap_or_default();
-    while state.rest.tool_idx < state.rest.pending_tool_calls.len() {
-        let call = state.rest.pending_tool_calls[state.rest.tool_idx].clone();
+    while state.rest.sessions[sess_idx].tool_idx < state.rest.sessions[sess_idx].pending_tool_calls.len() {
+        let call = state.rest.sessions[sess_idx].pending_tool_calls
+            [state.rest.sessions[sess_idx].tool_idx]
+            .clone();
         // Intercept the model-callable `task` tool BEFORE the generic
         // classify/dispatch path: spawn a background sub-agent (never classify it
         // as risky, never await it inline). UNLIKE the generic path, a SUCCESSFUL
@@ -116,7 +119,7 @@ pub(crate) fn process_tools(
             let agent = args.get("agent").and_then(|v| v.as_str()).unwrap_or("").trim();
             let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim();
             if agent.is_empty() || prompt.is_empty() {
-                state.rest.tool_results.push((
+                state.rest.sessions[sess_idx].tool_results.push((
                     call.id.clone(),
                     "error: task requires non-empty 'agent' and 'prompt'".to_string(),
                 ));
@@ -131,6 +134,7 @@ pub(crate) fn process_tools(
                 // the agent (eventually) finishes.
                 match super::spawn::spawn_or_queue(
                     state,
+                    sess_idx,
                     client,
                     handle,
                     &agent,
@@ -139,21 +143,136 @@ pub(crate) fn process_tools(
                 ) {
                     super::spawn::SpawnOutcome::Spawned(_)
                     | super::spawn::SpawnOutcome::Queued(_) => {
-                        state.rest.pending_subagent_calls.push(call.id.clone())
+                        state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone())
                     }
                     // Nothing started or queued (no client/session or unknown
                     // agent) → answer the call now so it isn't left dangling.
-                    super::spawn::SpawnOutcome::Failed => state
-                        .rest
+                    super::spawn::SpawnOutcome::Failed => state.rest.sessions[sess_idx]
                         .tool_results
                         .push((call.id.clone(), format!("error: unknown agent '{agent}'"))),
                 }
             }
-            state.rest.tool_idx += 1;
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `cd` tool BEFORE the generic dispatch path.
+        // `cd` must MUTATE session state (the live cwd + dir cache + awareness),
+        // which a read-only `ToolCtx` can't do — so the tool's `run` only RESOLVES
+        // + validates the target (allow-list-checked) and returns it tagged with
+        // `CWD_CHANGE_PREFIX` on success; here we apply the repoint via the shared
+        // `apply_workspace_change` primitive and answer the call with a
+        // human-readable confirmation. A resolution/validation failure returns a
+        // plain `error:`/refusal string, which is surfaced to the model verbatim
+        // (the cwd is left unchanged). The path resolution is INSTANT (canonicalize
+        // + stat), so running it inline here — not via the deferred lane — is fine.
+        // `tool_idx` advances either way so the rest of the round still processes.
+        if call.function.name == "cd" {
+            let result = run_tool(state, sess_idx, &call);
+            let final_result = if let Some(target) = result.strip_prefix(crate::tool::cd::CWD_CHANGE_PREFIX) {
+                let new_cwd = std::path::PathBuf::from(target);
+                super::spawn::apply_workspace_change(state, sess_idx, new_cwd, client, handle);
+                format!("changed working directory to {target}")
+            } else {
+                // Already an `error:`/refusal line — pass it through unchanged.
+                result
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `git_cred` tool BEFORE the generic
+        // dispatch path. A `select` result tagged with `GIT_CRED_SELECT_PREFIX`
+        // must be applied to session settings (persisted) here on the main thread
+        // rather than in a side-effect-free `ToolCtx`; a `list` result (or any
+        // `error:`) has no such prefix and is surfaced to the model verbatim.
+        // `git_cred` is INSTANT (only stat calls) so it runs inline, never via
+        // the deferred lane.
+        if call.function.name == "git_cred" {
+            let result = run_tool(state, sess_idx, &call);
+            let final_result =
+                if let Some(key) = result.strip_prefix(crate::tool::git_cred::GIT_CRED_SELECT_PREFIX) {
+                    // Apply the selection: write into settings and persist.
+                    let key = key.to_string();
+                    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                        sess.settings.git_ssh_key = Some(key.clone());
+                        let _ = sess.save();
+                    }
+                    format!("selected ssh key: {key}")
+                } else {
+                    // list output or error: — pass through unchanged.
+                    result
+                };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `git_worktree` tool BEFORE the generic
+        // dispatch path. `enter` and `exit` mutate session state (cwd + allowed
+        // roots), which a read-only `ToolCtx` can't do. The tool's `run` does the
+        // pure validation/resolution and returns a sentinel-tagged string; here we
+        // apply the state change via `apply_workspace_change` (same primitive as `cd`).
+        //
+        // `enter` result: starts with `GIT_WT_ENTER_PREFIX` + canonical path.
+        //   → push the path into `settings.workdir` (if not already present),
+        //     persist, then call `apply_workspace_change`.
+        // `exit` result: exactly `GIT_WT_EXIT_PREFIX`.
+        //   → resolve the primary workdir (first `settings.workdir` entry) and
+        //     call `apply_workspace_change` to return there.
+        // Anything else (list/create/remove output, or an `error:` string):
+        //   → pass through to the model verbatim.
+        //
+        // Borrow structure mirrors the `cd` arm: extract the path string + run
+        // `sess.save()` in a scoped block so the `state` borrow is fully released
+        // before calling `apply_workspace_change` (which also borrows `state` mutably).
+        if call.function.name == "git_worktree" {
+            let result = run_tool(state, sess_idx, &call);
+            let final_result =
+                if let Some(target) =
+                    result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
+                {
+                    // `enter` succeeded: target is the canonical path string.
+                    let new_cwd = std::path::PathBuf::from(target);
+                    let target_str = target.to_string();
+                    // Push the new root into settings.workdir if not already there,
+                    // then persist. Scoped so the mutable sess borrow ends before
+                    // we call apply_workspace_change (which also borrows state mut).
+                    {
+                        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            if !sess.settings.workdir.contains(&target_str) {
+                                sess.settings.workdir.push(target_str.clone());
+                            }
+                            let _ = sess.save();
+                        }
+                    }
+                    super::spawn::apply_workspace_change(
+                        state, sess_idx, new_cwd.clone(), client, handle,
+                    );
+                    format!("entered worktree: {}", new_cwd.display())
+                } else if result.starts_with(crate::tool::git_worktree::GIT_WT_EXIT_PREFIX) {
+                    // `exit`: return to the primary workdir (first workdir entry).
+                    // Extract the primary path in a scoped borrow, then call
+                    // apply_workspace_change outside it.
+                    let primary = {
+                        state.rest.sessions[sess_idx]
+                            .session
+                            .as_ref()
+                            .map(|sess| sess.workdir())
+                            .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    };
+                    super::spawn::apply_workspace_change(
+                        state, sess_idx, primary.clone(), client, handle,
+                    );
+                    format!("exited to {}", primary.display())
+                } else {
+                    // list/create/remove output, or an error: — pass through.
+                    result
+                };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
         }
         if tool_is_risky(&call.function.name) {
-            match tac_inputs(state, client) {
+            match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
                 Some((c, config, settings)) => {
                     let verdict = handle.block_on(crate::app::harness::classify_toolcall(
@@ -172,11 +291,11 @@ pub(crate) fn process_tools(
                         // shows the verdict was "ok".
                         if mode == AgentMode::Auto {
                             // Fall through and run it inline (no prompt).
-                            state.rest.approval_reason = None;
+                            state.rest.sessions[sess_idx].approval_reason = None;
                         } else {
-                            state.rest.approval_reason =
+                            state.rest.sessions[sess_idx].approval_reason =
                                 Some(format!("classifier: ok — {}", verdict.reason));
-                            state.rest.awaiting_approval = true;
+                            state.rest.sessions[sess_idx].awaiting_approval = true;
                             state.rest.status =
                                 format!("approve {}? [y/n]", call.function.name);
                             return;
@@ -184,15 +303,15 @@ pub(crate) fn process_tools(
                     } else if verdict.available {
                         // Definite block. Auto records it and continues; Normal asks.
                         if mode == AgentMode::Auto {
-                            state.rest.tool_results.push((
+                            state.rest.sessions[sess_idx].tool_results.push((
                                 call.id.clone(),
                                 format!("blocked by harness: {}", verdict.reason),
                             ));
-                            state.rest.tool_idx += 1;
+                            state.rest.sessions[sess_idx].tool_idx += 1;
                             continue;
                         }
-                        state.rest.approval_reason = Some(verdict.reason);
-                        state.rest.awaiting_approval = true;
+                        state.rest.sessions[sess_idx].approval_reason = Some(verdict.reason);
+                        state.rest.sessions[sess_idx].awaiting_approval = true;
                         state.rest.status = format!("approve {}? [y/n]", call.function.name);
                         return;
                     } else {
@@ -206,8 +325,9 @@ pub(crate) fn process_tools(
                         //       Run inline and surface a toast so the degradation
                         //       is visible.
                         if mode == AgentMode::Normal {
-                            state.rest.approval_reason = Some(verdict.reason.clone());
-                            state.rest.awaiting_approval = true;
+                            state.rest.sessions[sess_idx].approval_reason =
+                                Some(verdict.reason.clone());
+                            state.rest.sessions[sess_idx].awaiting_approval = true;
                             state.rest.status =
                                 format!("approve {}? [y/n]", call.function.name);
                             return;
@@ -223,7 +343,7 @@ pub(crate) fn process_tools(
                 // Classifier disabled → original behaviour: Normal asks, Auto runs.
                 None => {
                     if mode == AgentMode::Normal {
-                        state.rest.awaiting_approval = true;
+                        state.rest.sessions[sess_idx].awaiting_approval = true;
                         state.rest.status = format!("approve {}? [y/n]", call.function.name);
                         return;
                     }
@@ -243,14 +363,14 @@ pub(crate) fn process_tools(
         // correctness — two writes/edits to the same file in one round would
         // otherwise race and lose a write.
         if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str()) {
-            dispatch_deferred(state, &call);
+            dispatch_deferred(state, sess_idx, &call);
             return;
         }
         // Instant tool: name the tool for the comet phase label and run it inline.
         state.rest.status = format!("running {}", call.function.name);
-        let result = run_tool(state, &call);
-        state.rest.tool_results.push((call.id.clone(), result));
-        state.rest.tool_idx += 1;
+        let result = run_tool(state, sess_idx, &call);
+        state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+        state.rest.sessions[sess_idx].tool_idx += 1;
     }
     // Loop exhausted. PARK if there's still deferred work outstanding from this
     // round's `task`-tool sub-agent delegations (`pending_subagent_calls`). A
@@ -263,19 +383,19 @@ pub(crate) fn process_tools(
     // it lands, and once BOTH pending lists empty the resume gate re-enters
     // `process_tools` (which eventually reaches `finish_tool_round`). `waiting`
     // stays true and `awaiting_approval` stays false, so the comet keeps shimmering.
-    let has_subagents = !state.rest.pending_subagent_calls.is_empty();
-    let has_tool_tasks = !state.rest.pending_tool_tasks.is_empty();
+    let has_subagents = !state.rest.sessions[sess_idx].pending_subagent_calls.is_empty();
+    let has_tool_tasks = !state.rest.sessions[sess_idx].pending_tool_tasks.is_empty();
     if has_subagents || has_tool_tasks {
         if has_subagents {
-            state.rest.awaiting_subagents = true;
+            state.rest.sessions[sess_idx].awaiting_subagents = true;
         }
         if has_tool_tasks {
-            state.rest.awaiting_tool_tasks = true;
+            state.rest.sessions[sess_idx].awaiting_tool_tasks = true;
         }
         // Status: prefer the delegation message when sub-agents are pending (its
         // existing wording is unchanged); otherwise show the fetch is in flight.
         if has_subagents {
-            let n = state.rest.pending_subagent_calls.len();
+            let n = state.rest.sessions[sess_idx].pending_subagent_calls.len();
             state.rest.status = if n == 1 {
                 "delegating… (1 sub-agent)".into()
             } else {
@@ -286,7 +406,7 @@ pub(crate) fn process_tools(
         }
         return;
     }
-    finish_tool_round(state, client, handle);
+    finish_tool_round(state, sess_idx, client, handle);
 }
 
 /// Resume a tool round that was PARKED on deferred work — either `task`-tool
@@ -309,10 +429,11 @@ pub(crate) fn process_tools(
 /// directly) is what makes the deferred lane SEQUENTIAL.
 pub(crate) fn resume_after_subagents(
     state: &mut AppState,
+    sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
-    process_tools(state, client, handle);
+    process_tools(state, sess_idx, client, handle);
 }
 
 /// Finish a completed tool round: flush every collected result into the
@@ -323,55 +444,63 @@ pub(crate) fn resume_after_subagents(
 /// (defensive — a turn in flight normally implies both are present).
 fn finish_tool_round(
     state: &mut AppState,
+    sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
-    // Push the collected tool results into the conversation + log them.
-    if let Some(sess) = state.rest.session.as_mut() {
-        for (id, result) in &state.rest.tool_results {
-            let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
-            sess.conversation.push_tool(id.clone(), result.clone());
+    // Push the collected tool results into the conversation + log them. Bind the
+    // session runtime once so `session` (mut) + `tool_results` (read) are
+    // disjoint field borrows of the same `SessionRuntime`.
+    {
+        let rt = &mut state.rest.sessions[sess_idx];
+        if let Some(sess) = rt.session.as_mut() {
+            for (id, result) in &rt.tool_results {
+                let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
+                sess.conversation.push_tool(id.clone(), result.clone());
+            }
+            let _ = sess.save();
         }
-        let _ = sess.save();
     }
 
     // Live reload: if `remember` or `forget` ran this round, re-inject the updated
     // MEMORY.md into messages[0] so the model sees the change immediately.
     // (`recall` is read-only and must NOT trigger a rebuild.)
-    let memory_mutated = state
-        .rest
+    let memory_mutated = state.rest.sessions[sess_idx]
         .pending_tool_calls
         .iter()
         .any(|c| matches!(c.function.name.as_str(), "remember" | "forget"));
     if memory_mutated {
-        if let Some(sess) = state.rest.session.as_mut() {
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
             sess.rebuild_system();
         }
     }
 
     // Round done: clear the per-round machine before the next model call.
-    state.rest.pending_tool_calls.clear();
-    state.rest.tool_idx = 0;
-    state.rest.tool_results.clear();
+    state.rest.sessions[sess_idx].pending_tool_calls.clear();
+    state.rest.sessions[sess_idx].tool_idx = 0;
+    state.rest.sessions[sess_idx].tool_results.clear();
 
     // Continue the turn: hand the updated history back to the model. The
     // streaming buffer is re-armed so the next assistant text accumulates
-    // cleanly. `waiting` stays true (the turn isn't finished yet).
-    let history = match (state.rest.session.as_ref(), client.as_ref()) {
-        (Some(sess), Some(_)) => sess.conversation.history(),
-        _ => {
-            state.rest.waiting = false;
-            state.rest.current_task = None;
-            state.rest.agent_steps = 0;
-            state.rest.status = "no active session".into();
-            return;
-        }
+    // cleanly. `waiting` stays true (the turn isn't finished yet). Compute the
+    // history into an owned Option FIRST so no session borrow is held across the
+    // per-session writes in the no-session arm.
+    let history = match (state.rest.sessions[sess_idx].session.as_ref(), client.as_ref()) {
+        (Some(sess), Some(_)) => Some(sess.conversation.history()),
+        _ => None,
+    };
+    let Some(history) = history else {
+        state.rest.sessions[sess_idx].waiting = false;
+        state.rest.sessions[sess_idx].current_task = None;
+        state.rest.sessions[sess_idx].agent_steps = 0;
+        state.rest.status = "no active session".into();
+        return;
     };
     // The tool round is done; this re-stream is a model wait, so label it the same
     // "thinking" phase the comet sweeps (not a tool run).
     state.rest.status = "thinking".into();
-    state.rest.begin_stream();
-    super::run::start_stream_task(history, state, client, handle);
+    state.rest.sessions[sess_idx].begin_stream();
+    super::run::start_stream_task(history, state, sess_idx, client, handle);
 }
 
 /// Run a single tool call against the session workspace and return its result
@@ -381,8 +510,8 @@ fn finish_tool_round(
 ///
 /// `pub(crate)` so the approve/deny action handlers can run a single tool when
 /// resuming the approval machine.
-pub(crate) fn run_tool(state: &mut AppState, call: &ToolCall) -> String {
-    let ctx = super::spawn::build_tool_ctx(state);
+pub(crate) fn run_tool(state: &mut AppState, sess_idx: usize, call: &ToolCall) -> String {
+    let ctx = super::spawn::build_tool_ctx(state, sess_idx);
     crate::tool::execute_tool(&ctx, call)
 }
 
@@ -403,17 +532,20 @@ pub(crate) fn run_tool(state: &mut AppState, call: &ToolCall) -> String {
 /// / Option fields, no borrows) so it moves in cleanly, and the `UnboundedSender`
 /// is Send so it can fire from this off-runtime thread. The result channel is
 /// created lazily once per session, then reused.
-pub(crate) fn dispatch_deferred(state: &mut AppState, call: &ToolCall) {
-    // Lazily create the result channel once per session, then reuse it.
-    if state.rest.tool_task_tx.is_none() {
+pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &ToolCall) {
+    // Lazily create THIS session's result channel once, then reuse it. The
+    // spawned thread fires back over session `sess_idx`'s own `tool_task_tx`, so
+    // the result is routed structurally to that session's drain (no id tag
+    // needed) regardless of which session is foreground when it lands.
+    if state.rest.sessions[sess_idx].tool_task_tx.is_none() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        state.rest.tool_task_tx = Some(tx);
-        state.rest.tool_task_rx = Some(rx);
+        state.rest.sessions[sess_idx].tool_task_tx = Some(tx);
+        state.rest.sessions[sess_idx].tool_task_rx = Some(rx);
     }
-    let ctx = super::spawn::build_tool_ctx(state);
+    let ctx = super::spawn::build_tool_ctx(state, sess_idx);
     let call_cloned = call.clone();
     let id = call.id.clone();
-    let tx = state.rest.tool_task_tx.as_ref().unwrap().clone();
+    let tx = state.rest.sessions[sess_idx].tool_task_tx.as_ref().unwrap().clone();
     // Phase label for the comet: name the tool running off-thread so the
     // shimmering status surfaces what the agent is doing while it's parked.
     state.rest.status = format!("running {}", call.function.name);
@@ -421,13 +553,13 @@ pub(crate) fn dispatch_deferred(state: &mut AppState, call: &ToolCall) {
         let result = crate::tool::execute_tool(&ctx, &call_cloned);
         let _ = tx.send((id, result));
     });
-    state.rest.pending_tool_tasks.push(call.id.clone());
-    state.rest.tool_idx += 1;
+    state.rest.sessions[sess_idx].pending_tool_tasks.push(call.id.clone());
+    state.rest.sessions[sess_idx].tool_idx += 1;
     // Mark the round PARKED on async tool work so the event-loop resume gate
     // (which requires this flag set AND `pending_tool_tasks` empty) fires once the
     // result lands. The caller `return`s right after this, leaving the round
     // parked; `waiting` stays true so the comet keeps shimmering.
-    state.rest.awaiting_tool_tasks = true;
+    state.rest.sessions[sess_idx].awaiting_tool_tasks = true;
 }
 
 /// Halt the current turn by answering every still-pending tool call with
@@ -438,16 +570,15 @@ pub(crate) fn dispatch_deferred(state: &mut AppState, call: &ToolCall) {
 /// Shares the shape of [`super::actions`]'s `DenyTool` handler; used by the
 /// harness workspace check (WC) to refuse a turn whose workspace isn't allowed.
 /// Pending calls from `tool_idx` onward are the unanswered ones.
-pub(crate) fn deny_all_pending(state: &mut AppState, reason: &str) {
-    let results = state.rest.tool_results.clone();
-    let pending_ids: Vec<String> = state
-        .rest
+pub(crate) fn deny_all_pending(state: &mut AppState, sess_idx: usize, reason: &str) {
+    let results = state.rest.sessions[sess_idx].tool_results.clone();
+    let pending_ids: Vec<String> = state.rest.sessions[sess_idx]
         .pending_tool_calls
         .iter()
-        .skip(state.rest.tool_idx)
+        .skip(state.rest.sessions[sess_idx].tool_idx)
         .map(|c| c.id.clone())
         .collect();
-    if let Some(sess) = state.rest.session.as_mut() {
+    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
         for (id, result) in &results {
             let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
             sess.conversation.push_tool(id.clone(), result.clone());
@@ -458,18 +589,18 @@ pub(crate) fn deny_all_pending(state: &mut AppState, reason: &str) {
         }
         let _ = sess.save();
     }
-    state.rest.pending_tool_calls.clear();
-    state.rest.tool_idx = 0;
-    state.rest.tool_results.clear();
-    state.rest.agent_steps = 0;
-    state.rest.awaiting_approval = false;
-    state.rest.approval_reason = None;
-    state.rest.waiting = false;
-    state.rest.current_task = None;
-    // Clear deferred-task state so a killed WC turn can't ghost-restart
-    // via a stale awaiting_tool_tasks=true or leftover pending ids.
-    state.rest.pending_subagent_calls.clear();
-    state.rest.awaiting_subagents = false;
-    state.rest.pending_tool_tasks.clear();
-    state.rest.awaiting_tool_tasks = false;
+    let rt = &mut state.rest.sessions[sess_idx];
+    rt.pending_tool_calls.clear();
+    rt.tool_idx = 0;
+    rt.tool_results.clear();
+    rt.agent_steps = 0;
+    rt.awaiting_approval = false;
+    rt.approval_reason = None;
+    rt.waiting = false;
+    rt.current_task = None;
+    // Kill every running sub-agent and drop the pending queue so a killed WC
+    // turn can't ghost-restart via orphaned tasks or stale awaiting flags.
+    rt.abort_running_subagents();
+    rt.pending_tool_tasks.clear();
+    rt.awaiting_tool_tasks = false;
 }

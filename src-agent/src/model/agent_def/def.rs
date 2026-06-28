@@ -31,7 +31,11 @@ pub enum AgentSource {
 /// Frontmatter fields are deserialized directly; `name`, `prompt`, `source`,
 /// and `file_path` are runtime-only state (`#[serde(skip)]`) populated by the
 /// loader.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq` lets a `Vec<AgentDef>` ride inside the daemon's `/agents` snapshot
+/// projection (whose enclosing `ModeSnapshot` is compared by the snapshot differ to
+/// detect a mode-payload change).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentDef {
     /// Agent name — the filename stem, lowercased (`PINEAPPLE.md` → `pineapple`).
     /// Validated to alnum + dash, no path traversal. The agent identifier.

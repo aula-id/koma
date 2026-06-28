@@ -11,6 +11,7 @@
 //! - [`subagent`] – self-contained autonomous sub-agent runtime (LLM-tool loop in a background task)
 //!
 //! [`run`] is re-exported at this level so callers only need `app::run(opts)`.
+//! [`run_daemon`] is likewise re-exported for the headless `koma --daemon` path.
 
 pub mod awareness;
 pub mod harness;
@@ -20,4 +21,10 @@ pub mod runtime;
 pub mod state;
 pub mod subagent;
 
+pub use runtime::client_run;
 pub use runtime::run;
+pub use runtime::run_daemon;
+pub use runtime::run_daemon_selftest;
+pub use runtime::{
+    daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand,
+};

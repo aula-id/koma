@@ -1,0 +1,489 @@
+//! [`SessionRuntime`]: the per-session EXECUTION state carved out of
+//! [`super::AppStateRest`].
+//!
+//! This holds everything tied to ONE session's in-flight turn: its [`Session`],
+//! the streaming buffers, the tool-approval / deferred-task / sub-agent state
+//! machines, the shared dir cache, and the cache-warmth bookkeeping. Splitting
+//! it out is the structural groundwork for running several concurrent sessions
+//! later — for now there is always exactly ONE `SessionRuntime` (the foreground
+//! one) and behaviour is identical to before the split.
+//!
+//! Streaming-lifecycle methods (`begin_stream`, `append_token`,
+//! `append_reasoning`, `take_stream`, `take_reasoning`) live here because they
+//! operate purely on the moved `streaming` / `stream_reasoning` buffers.
+
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use std::time::Instant;
+
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::AbortHandle;
+
+use crate::app::subagent::{PendingSubagent, SubAgent};
+use crate::dto::chat::ToolCall;
+use crate::model::session::Session;
+use crate::service::StreamEvent;
+use crate::tool::DirCache;
+
+/// Per-session execution state. Always non-empty in [`super::AppStateRest::sessions`];
+/// the foreground one is reached through `fg()` / `fg_mut()`.
+pub struct SessionRuntime {
+    /// Stable, process-unique identity (UUID v4), assigned once at creation and
+    /// never reused or reordered. This is how the daemon's IPC clients address a
+    /// session — NEVER by its `Vec` index, which later session-lifecycle
+    /// (tombstoning) would shift and silently cross-wire (see `ipc::proto`
+    /// critique #2). Purely additive; the single-process TUI ignores it for now.
+    #[allow(dead_code)] // read by the daemon IPC layer in stage 2+
+    pub id: String,
+    pub session: Option<Session>,
+    pub waiting: bool,
+    pub streaming: Option<String>,
+    /// Parallel to `streaming`: the in-progress assistant's reasoning/thinking
+    /// text, accumulated from `StreamEvent::Reasoning` deltas during a turn. Set
+    /// up alongside the content buffer in `begin_stream`, drained at commit, and
+    /// folded onto the committed `ChatMessage` as a display-only block (never
+    /// serialised). Empty when the model emits no reasoning.
+    pub stream_reasoning: String,
+    pub current_task: Option<AbortHandle>,
+    /// Receiver for the in-flight request's events, or `None` when idle. Each
+    /// request owns a fresh channel; dropping this receiver silently discards
+    /// any further events from a task that was aborted or superseded.
+    pub active_rx: Option<UnboundedReceiver<StreamEvent>>,
+    /// Receiver for the advisory prompt-classifier (PC) verdict. Each new turn
+    /// (when the classifier is enabled) opens a fresh channel here and spawns a
+    /// background task that sends one [`StreamEvent::HarnessVerdict`]. Drained in
+    /// `run_loop` independently of the streaming channel, so PC never blocks or
+    /// interferes with streaming. `None` when no PC task is in flight.
+    pub harness_rx: Option<UnboundedReceiver<StreamEvent>>,
+    /// Usage for the in-flight response, captured from the StreamEvent::Usage
+    /// chunk and consumed when the assistant message is committed.
+    pub pending_usage: Option<(u64, u64, f64)>,
+    /// THIS session's cumulative token/cost totals (summed from its own
+    /// messages.sqlite on open via `load_token_totals`, incremented per response).
+    /// Per-session so each tab tracks only its own usage — switching foreground
+    /// just renders the active session's counters, never the sum. Survive /compact.
+    /// `tokens_in` is the CURRENT context size (latest prompt), not a running sum;
+    /// `tokens_out` and `cost` accumulate.
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cost: f64,
+    /// Prompt tokens served from the prompt cache on THIS session's LATEST
+    /// response (a cache hit at the discounted rate). Like `tokens_in`, tracks the
+    /// current prompt, not a cumulative sum; set from `StreamEvent::Usage` each
+    /// response, 0 on a cold prefix or a provider that doesn't report cache stats.
+    pub tokens_cached: u64,
+    /// Tool calls emitted by the in-flight stream, stashed on
+    /// `StreamEvent::ToolCalls` and consumed by `advance_turn` once the stream
+    /// finalises. Empty when the model returned a plain (final) answer.
+    pub pending_tool_calls: Vec<ToolCall>,
+    /// Number of tool-call rounds taken in the current turn. Reset to 0 when a
+    /// new user turn starts / the turn ends; bounded so a runaway model can't
+    /// loop forever.
+    pub agent_steps: usize,
+    // --- tool-approval state machine (within a single agentic turn) ---
+    /// Index of the next call in `pending_tool_calls` to process this round.
+    pub tool_idx: usize,
+    /// `(tool_call_id, result)` pairs collected so far this round, flushed into
+    /// the conversation once every call in the round resolves.
+    pub tool_results: Vec<(String, String)>,
+    /// True while a risky call is paused waiting for the user's `y/n`. The event
+    /// loop routes keys to the approval modal while this is set.
+    pub awaiting_approval: bool,
+    /// Reason the tool-call classifier (TAC) flagged the currently-paused call,
+    /// shown in the approval overlay so the user sees WHY approval is asked.
+    /// `None` for an approval that wasn't classifier-driven. Cleared when the
+    /// approval resolves.
+    pub approval_reason: Option<String>,
+    // --- deferred tool-task lane (parallel to the sub-agent lane below) ---
+    /// Tool-call ids of DEFERRED tools (see [`crate::tool::DEFERRED_TOOLS`] — the
+    /// heavy/blocking ones: read / write / edit / delete / bash / grep / glob /
+    /// remember / web_fetch / web_search) currently running OFF the UI thread.
+    /// These tools do blocking I/O (fs reads/writes, a subprocess, a tree walk, or
+    /// blocking HTTP), so running them inline on the event-loop thread would freeze
+    /// the TUI for the whole call. Instead `process_tools` spawns the work on a
+    /// plain `std::thread` and records the call id here; the round PARKS (mirroring
+    /// `pending_subagent_calls`) until the background thread sends its result back
+    /// over `tool_task_rx`, which the event-loop drain folds into `tool_results`
+    /// (removing the id). The round's deferred tools run ONE AT A TIME, so this vec
+    /// holds AT MOST ONE id at a time. Empty when no deferred tool is in flight.
+    pub pending_tool_tasks: Vec<String>,
+    /// True while a tool round is PARKED waiting on a deferred tool task (see
+    /// `pending_tool_tasks`). Set by `dispatch_deferred` (or alongside
+    /// `awaiting_subagents` for a task-tool park) when `process_tools` returns
+    /// without `finish_tool_round`; cleared by the event-loop drain once the
+    /// deferred tool has delivered its result, which then resumes the round.
+    /// Keeps the busy/shimmer indicator on while parked.
+    pub awaiting_tool_tasks: bool,
+    /// Receiver for deferred tool-task results: `(tool_call_id, result_string)`.
+    /// Lazily created (with `tool_task_tx`) the first time a deferred tool is
+    /// dispatched in a session, then reused. Drained each event-loop tick into
+    /// `tool_results`. `None` until the first deferred tool runs.
+    pub tool_task_rx: Option<UnboundedReceiver<(String, String)>>,
+    /// Sender half of the deferred tool-task channel. Cloned into each spawned
+    /// tool thread (the sender is `Send`, so it can fire from a non-tokio thread).
+    /// Kept here so later deferred tools in the same session reuse the one channel.
+    /// `None` until the first deferred tool runs.
+    pub tool_task_tx: Option<UnboundedSender<(String, String)>>,
+    // --- `!` user-shell lane (off-thread, parallel to the deferred tool lane) ---
+    /// True while a `!`-shortcut command is running OFF the UI/event-loop thread
+    /// (see `actions::chat::handle_shell`). The `!` shell uses the SAME blocking
+    /// `run_shell_capture` primitive the `bash` tool does, so running it inline on
+    /// the event-loop thread would freeze the local TUI render loop — or, in the
+    /// daemon, the whole event loop for EVERY session — for the command's duration
+    /// (the 120s timeout). Instead the work is spawned on a plain `std::thread` and
+    /// this latches `true`; the event-loop drain folds the captured output into a
+    /// `SHELL_MARK` conversation entry and clears it. Counts as "working"
+    /// (`is_working`) so the busy indicator stays on and the self-exit grace timer
+    /// treats the session as live; also gates a second `!`/Submit/Resend so a shell
+    /// result can never be interleaved into an in-flight or queued turn.
+    pub awaiting_shell: bool,
+    /// Receiver for `!`-shell results: `(command, captured_output)`. Lazily created
+    /// (with `shell_task_tx`) the first time a `!` command runs in a session, then
+    /// reused. Drained each event-loop tick. `None` until the first `!` runs.
+    pub shell_task_rx: Option<UnboundedReceiver<(String, String)>>,
+    /// Sender half of the `!`-shell result channel. Cloned into the spawned shell
+    /// thread (the sender is `Send`, so it can fire from a non-tokio thread). Kept
+    /// here so later `!` commands in the same session reuse the one channel.
+    /// `None` until the first `!` runs.
+    pub shell_task_tx: Option<UnboundedSender<(String, String)>>,
+    /// All sub-agents spawned this session (running + finished). Drained each tick
+    /// by the event loop; finished ones stay in the list for the UI to show their
+    /// final state.
+    pub subagents: Vec<SubAgent>,
+    /// FIFO queue of delegations accepted while all [`crate::app::subagent::MAX_SUBAGENTS`]
+    /// slots were busy. Unlimited length: over-cap delegations ENQUEUE here instead
+    /// of being refused. `try_start_pending` (in the event-loop sub-agent drain)
+    /// pops the FRONT and spawns it whenever a running sub-agent terminates and a
+    /// slot frees, so at most `MAX_SUBAGENTS` ever run at once. Each entry's id is
+    /// pre-allocated from `next_subagent_id` at enqueue time (stable `$`-panel row);
+    /// a `task`-tool entry's call id is also held in `pending_subagent_calls` so the
+    /// parked main turn waits for the queued delegation too.
+    pub pending_subagents: VecDeque<PendingSubagent>,
+    /// Tool-call ids of in-flight `task`-tool delegations whose result the main
+    /// agent is still waiting for. The model-callable `task` tool DEFERS its tool
+    /// result (mirroring the `awaiting_approval` park): `process_tools` pushes the
+    /// call id here instead of an immediate "started" result, the round parks, and
+    /// the event-loop sub-agent drain delivers the FULL report into `tool_results`
+    /// (removing the id) once that sub-agent reaches a terminal state. Empty when
+    /// no task delegation is pending. The `/task` slash command path never touches
+    /// this (its sub-agents carry `tool_call_id == None`).
+    pub pending_subagent_calls: Vec<String>,
+    /// True while a tool round is PARKED waiting on one or more deferred
+    /// `task`-tool delegations (see `pending_subagent_calls`). Set when
+    /// `process_tools` returns without calling `finish_tool_round`; cleared by the
+    /// event-loop drain once every pending delegation has filled its result, which
+    /// then resumes the round (`finish_tool_round`) so the main agent reacts to the
+    /// delegated reports. Keeps the busy/shimmer indicator on while parked.
+    pub awaiting_subagents: bool,
+    /// Monotonic counter: the id assigned to the NEXT spawned sub-agent.
+    #[allow(dead_code)]
+    pub next_subagent_id: usize,
+    /// LIVE working-directory override for this session, set by the `cd` tool /
+    /// the user `/cd` command (Phase 8). `None` means "use the session's
+    /// configured workdir" (`Session::workdir()` — the first `settings.workdir`
+    /// entry); `Some(dir)` REPOINTS the session's effective cwd to `dir` without
+    /// touching the persisted `settings.workdir` list. Like `awareness_summary`
+    /// it is purely in-memory and NEVER serialised — a cd is ephemeral per
+    /// session run. The effective cwd (this override, else the configured
+    /// workdir) feeds `build_tool_ctx`'s `ToolCtx::workspace` (so `bash` runs
+    /// there and the dir cache indexes it) and the harness workspace check (so a
+    /// `/cd` outside every allowed root makes the next MODEL tool turn WC-denied).
+    /// The configured roots in `Session::workdirs()` stay the allow-list / the
+    /// `[N]` multi-root set; cd never widens them (use `/adddir` for that).
+    pub active_cwd: Option<PathBuf>,
+    /// Background-refreshed index of the active session's workspace files
+    /// (gitignore-respecting). Re-indexed off-thread; shared with the tool layer.
+    pub dir_cache: Arc<RwLock<DirCache>>,
+    /// Project-awareness summary (Phase 2): a few-sentence digest of the
+    /// project's depth-1 docs, produced by a secondary model at startup and
+    /// after `/compact`. Appended to the first System message on every request
+    /// (see `runtime::stream::start_stream_task`) so it survives compaction.
+    /// `None` when awareness is disabled, no docs exist, or the call failed —
+    /// it is recomputed per session, never persisted.
+    pub awareness_summary: Option<String>,
+    /// Path of the session whose on-disk `session.lock` THIS instance currently
+    /// holds (its active session's directory). `reconcile_session_lock` keeps it
+    /// in lock-step with the active session: it releases this lock when switching
+    /// away and acquires the new one. The clean-exit teardown in `runtime::run`
+    /// removes it; a crash leaves a stale lock that PID-liveness later sweeps.
+    pub held_lock: Option<PathBuf>,
+    /// Latched true the first time a response reports `cached_tokens > 0`, meaning
+    /// the active provider supports and is using a prompt cache. Never reset.
+    pub provider_caches: bool,
+    /// Sticky engage-state for the cache-warmth-adaptive summarization hysteresis.
+    /// Set true when the summarizer engages; a later wave reads and writes it.
+    #[allow(dead_code)]
+    pub summarizing: bool,
+    /// Wall-clock instant of the most-recent send (user turn start). Stamped by
+    /// the submit handler in a later wave; used to estimate prompt-cache warmth.
+    #[allow(dead_code)]
+    pub last_send_at: Option<Instant>,
+    /// Working-state from the PREVIOUS event-loop tick, for the background-finish
+    /// nudge. The per-session servicer (`service_all_sessions`) records `is_working()`
+    /// here at the end of each tick; on the next tick a `was_working && !is_working`
+    /// transition for a NON-foreground session fires a "session ready" toast. Starts
+    /// `false` so a freshly-created idle session never spuriously nudges.
+    pub was_working: bool,
+    /// STICKY "this background session finished a turn and nobody has looked at it
+    /// since" flag (daemon critique #3). Distinct from the background-finish TOAST,
+    /// which is TTL-based and expires on its own — useless when the only client is
+    /// DETACHED, since it would lapse before anyone reattaches. This flag instead
+    /// LATCHES on the same NON-foreground `working -> ready` edge that raises the
+    /// toast (set in `service_all_sessions`) and is carried in `SessionSnapshot` so a
+    /// reattaching client still sees the unseen marker. Cleared when a client
+    /// foregrounds / views the session (the switch handler in a later stage, or here
+    /// the moment this session IS the foreground). Starts `false`.
+    pub finished_unseen: bool,
+    /// TOMBSTONE marker (daemon stage 10). When a session is closed
+    /// (`ClientRequest::QuitSession` or a daemon-side kill-all), it is NOT removed
+    /// from [`super::AppStateRest::sessions`] — `service_all_sessions` indexes that
+    /// Vec by POSITION ~40x per session per tick, so a `Vec::remove` would shift every
+    /// later index and silently cross-wire in-flight async (see `ipc::proto`
+    /// critique #2). Instead the slot stays put and this flag latches `true`; the
+    /// per-session servicer SKIPS a closed session (no drain, no turn advance, no
+    /// nudge) and the self-exit grace timer treats it as quiesced. Never un-set — a
+    /// tombstone is permanent for the daemon's lifetime. Starts `false`; the local
+    /// TUI never sets it (it has no per-session close).
+    pub closed: bool,
+    /// PARK-START instant for the detached-approval timeout (daemon stage 11). Set by
+    /// the daemon loop to `Some(Instant::now())` the first tick this session is
+    /// `awaiting_approval` while NO client is attached — i.e. a risky tool is parked
+    /// with no operator present to answer it. Once the elapsed time crosses
+    /// `APPROVAL_PARK_TIMEOUT` the loop AUTO-DENIES the pending call(s) (via the shared
+    /// `deny_all_pending` path, so the conversation stays API-valid) and clears this
+    /// back to `None`. Cleared the moment the park ends for ANY reason — the operator
+    /// approves/denies, or a client (re)attaches (an attached client waits for the
+    /// operator indefinitely, so the timer must not run while attached). The local TUI
+    /// never sets it (it always has its operator on screen); it is purely the daemon's
+    /// safety valve against an immortal parked daemon holding a lock with nobody home.
+    /// Starts `None`.
+    pub park_started_at: Option<Instant>,
+}
+
+impl Default for SessionRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionRuntime {
+    pub fn new() -> Self {
+        Self {
+            // Fresh stable id per session. Every construction path (the initial
+            // session in `AppStateRest::new` and each `/new` spawn) routes
+            // through here, so every session is uniquely keyed automatically.
+            id: uuid::Uuid::new_v4().to_string(),
+            session: None,
+            waiting: false,
+            streaming: None,
+            stream_reasoning: String::new(),
+            current_task: None,
+            active_rx: None,
+            harness_rx: None,
+            pending_usage: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost: 0.0,
+            tokens_cached: 0,
+            pending_tool_calls: Vec::new(),
+            agent_steps: 0,
+            tool_idx: 0,
+            tool_results: Vec::new(),
+            awaiting_approval: false,
+            approval_reason: None,
+            pending_tool_tasks: Vec::new(),
+            awaiting_tool_tasks: false,
+            tool_task_rx: None,
+            tool_task_tx: None,
+            awaiting_shell: false,
+            shell_task_rx: None,
+            shell_task_tx: None,
+            subagents: Vec::new(),
+            pending_subagents: VecDeque::new(),
+            pending_subagent_calls: Vec::new(),
+            awaiting_subagents: false,
+            next_subagent_id: 0,
+            active_cwd: None,
+            dir_cache: Arc::new(RwLock::new(DirCache::default())),
+            awareness_summary: None,
+            held_lock: None,
+            provider_caches: false,
+            summarizing: false,
+            last_send_at: None,
+            was_working: false,
+            finished_unseen: false,
+            closed: false,
+            park_started_at: None,
+        }
+    }
+
+    /// Streaming lifecycle methods.
+    pub fn begin_stream(&mut self) {
+        self.streaming = Some(String::new());
+        // Arm the parallel reasoning buffer fresh so the previous round's
+        // thinking can never bleed into this one.
+        self.stream_reasoning.clear();
+    }
+
+    pub fn append_token(&mut self, t: &str) {
+        if let Some(buf) = self.streaming.as_mut() {
+            buf.push_str(t);
+        }
+    }
+
+    /// Append a reasoning fragment to the parallel thinking buffer (driven by
+    /// `StreamEvent::Reasoning`, mirroring `append_token` for content).
+    pub fn append_reasoning(&mut self, t: &str) {
+        self.stream_reasoning.push_str(t);
+    }
+
+    pub fn take_stream(&mut self) -> Option<String> {
+        self.streaming.take()
+    }
+
+    /// Take the accumulated reasoning buffer, clearing it. Returns `Some` only
+    /// when non-empty so an empty thinking block never attaches to a message.
+    /// Always clears (alongside `take_stream`) so reasoning can't leak forward.
+    pub fn take_reasoning(&mut self) -> Option<String> {
+        if self.stream_reasoning.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.stream_reasoning))
+        }
+    }
+
+    /// Kill every still-running sub-agent that belongs to THIS session, drop
+    /// model-delegated queued sub-agents, but PRESERVE user-initiated /task
+    /// jobs (tool_call_id == None).
+    ///
+    /// Called from every turn-halt path (interrupt, deny-tool, deny-all-pending)
+    /// so that "stop means stop" — no orphaned background tokio tasks continue
+    /// running after the user has cancelled the turn.
+    ///
+    /// - Running sub-agents: `abort.abort()` kills the tokio task; status is
+    ///   flipped to `Killed` immediately so the `$` panel reflects it without
+    ///   waiting for a terminal event that will never arrive.
+    /// - Model-delegated queued sub-agents (tool_call_id == Some): dropped to
+    ///   halt the interrupted turn's work.
+    /// - User-initiated /task entries (tool_call_id == None): retained so the
+    ///   user's independent pending commands survive the turn halt.
+    /// - `pending_subagent_calls` / `awaiting_subagents`: cleared here so the
+    ///   caller does NOT need to do it separately (keeps the three halt paths
+    ///   consistent).
+    ///
+    /// This method ONLY touches the session it is called on — it is always
+    /// invoked via `state.rest.fg_mut()`, so background sessions are not
+    /// affected.
+    pub fn abort_running_subagents(&mut self) {
+        for sub in &mut self.subagents {
+            if matches!(sub.status, crate::app::subagent::SubAgentStatus::Running) {
+                sub.abort.abort();
+                sub.status = crate::app::subagent::SubAgentStatus::Killed;
+            }
+        }
+        self.pending_subagents.retain(|p| p.tool_call_id.is_none());
+        self.pending_subagent_calls.clear();
+        self.awaiting_subagents = false;
+    }
+
+    /// TOMBSTONE this session (daemon stage 10): tear down ALL of its in-flight work
+    /// and latch [`closed`](Self::closed) so the per-session servicer skips it from
+    /// now on, WITHOUT removing it from the sessions Vec (a `Vec::remove` would shift
+    /// every later index and cross-wire index-routed async — see `ipc::proto`
+    /// critique #2). After this returns the slot is inert: `is_working()` is false,
+    /// no receiver is live, no lock is held.
+    ///
+    /// Steps (a superset of `abort_current` + `abort_running_subagents`, applied to
+    /// THIS session rather than the foreground):
+    /// - abort the in-flight stream task + drop its receiver (late events vanish),
+    /// - drop the advisory prompt-classifier channel,
+    /// - abort every running sub-agent + drop queued model delegations,
+    /// - clear `waiting` and the parked-lane flags so nothing reads as busy,
+    /// - RELEASE this session's on-disk `session.lock` (so a closed session frees its
+    ///   lock immediately, not only at daemon teardown — another process may reopen
+    ///   it); the path is unlinked here and dropped from `held_lock`.
+    ///
+    /// Idempotent: closing an already-closed session is a harmless no-op (everything
+    /// is already torn down). Does NOT touch foreground — the caller repoints
+    /// foreground off a tombstone (only it knows the session set).
+    pub fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        // In-flight stream task: abort + drop the receiver so late events vanish.
+        if let Some(h) = self.current_task.take() {
+            h.abort();
+        }
+        self.active_rx = None;
+        self.harness_rx = None;
+        self.waiting = false;
+        self.awaiting_approval = false;
+        self.approval_reason = None;
+        // Drop any detached-park timer (daemon stage 11) — a tombstone is never
+        // awaiting, and the loop only inspects non-closed sessions, so this just
+        // keeps the inert slot fully clean.
+        self.park_started_at = None;
+        self.awaiting_tool_tasks = false;
+        // A `!` shell may be draining off-thread; clear the park flag so a late
+        // delivery to this tombstone is discarded by the gated drain (the OS child
+        // finishes on its own — we never block close() on it).
+        self.awaiting_shell = false;
+        // Sub-agents: kill running, drop model-delegated queued work, clear the
+        // parked-delegation bookkeeping. (Unlike a turn-halt, a CLOSE also drops
+        // user-initiated /task entries — the session is going away entirely.)
+        self.abort_running_subagents();
+        self.pending_subagents.clear();
+        // Release this session's on-disk lock right away (unlink + forget the path).
+        if let Some(path) = self.held_lock.take() {
+            crate::model::store::remove_lock(&path);
+        }
+        self.closed = true;
+    }
+
+    /// True when this session has work in flight: a turn waiting / streaming, a
+    /// paused approval, a parked deferred lane (tool tasks or sub-agent
+    /// delegations), or any still-running sub-agent. Used by the session hub's
+    /// cooking pane to flag busy sessions, by the foreground status line, and by
+    /// the background-finish nudge.
+    ///
+    /// A CLOSED (tombstoned) session is NEVER working: `close()` already tore down
+    /// every lane, but short-circuit here so a stray flag can't keep a tombstone
+    /// reading as busy (the self-exit grace timer treats `!is_working()` as quiesced).
+    pub fn is_working(&self) -> bool {
+        if self.closed {
+            return false;
+        }
+        self.waiting
+            || self.streaming.is_some()
+            || self.awaiting_approval
+            || self.awaiting_tool_tasks
+            || self.awaiting_shell
+            || self.awaiting_subagents
+            || self
+                .subagents
+                .iter()
+                .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
+    }
+
+    /// This session's EFFECTIVE working directory: the live `cd` override
+    /// ([`active_cwd`](Self::active_cwd)) when set, else the session's configured
+    /// workdir (`Session::workdir()` — the first `settings.workdir` entry), else
+    /// the process cwd when there is no session at all.
+    ///
+    /// The single source of truth for "where this session is right now". Read by
+    /// `build_tool_ctx` (→ `ToolCtx::workspace`, so `bash` + the dir cache follow
+    /// `cd`), by the harness workspace check (so a `cd` outside every allowed root
+    /// blocks the next MODEL tool turn), and by the IPC snapshot. The configured
+    /// allow-list / `[N]` roots in `Session::workdirs()` are deliberately NOT
+    /// affected — cd moves only the cwd.
+    pub fn effective_cwd(&self) -> PathBuf {
+        if let Some(cwd) = self.active_cwd.as_ref() {
+            return cwd.clone();
+        }
+        self.session
+            .as_ref()
+            .map(|s| s.workdir())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    }
+}

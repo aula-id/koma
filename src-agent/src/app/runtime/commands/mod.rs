@@ -8,6 +8,7 @@ use crate::app::state::AppState;
 use crate::controller::command::Command;
 use crate::service::openrouter::OpenRouterClient;
 
+mod cd;
 mod compact;
 mod effort;
 // `pub(crate)` so the shared `internet_feedback` helper is reachable from the
@@ -15,7 +16,7 @@ mod effort;
 // mode and must show the identical status line.
 pub(crate) mod internet;
 mod misc;
-mod new_session;
+pub(crate) mod new_session;
 mod task;
 
 /// Apply a parsed slash command. Like [`apply_action`], it mutates state and
@@ -40,6 +41,8 @@ pub(super) fn apply_slash(
         Command::Usage => misc::handle_usage(state)?,
         Command::Quit => misc::handle_quit(state)?,
         Command::Task(args) => task::handle_task(args, state, client, handle)?,
+        Command::Cd(path) => cd::handle_cd(path, state, client, handle)?,
+        Command::AddDir(path) => cd::handle_adddir(path, state)?,
         Command::Internet(target) => internet::handle_internet(target, state)?,
         Command::Unknown(s) => {
             state.rest.status = format!("unknown command: /{s}");

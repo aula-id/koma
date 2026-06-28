@@ -33,7 +33,7 @@
 //! unavailable verdict carrying the REAL cause (HTTP error / timeout / unparseable
 //! slice) so the UI shows what actually went wrong instead of a generic string.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::app::resolve::resolve_role;
 use crate::dto::chat::{ChatMessage, Role};
@@ -77,35 +77,44 @@ impl Verdict {
     }
 }
 
-/// Normalise a path to a comparable string. Prefer the canonical form (resolves
+/// Normalise a path to a comparable form. Prefer the canonical path (resolves
 /// symlinks, `.`/`..`, and relative paths against the cwd); fall back to the
 /// path as-given when it can't be canonicalised (e.g. it doesn't exist yet).
-fn norm(path: &Path) -> String {
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy().into_owned()
+fn norm(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Deterministic workspace check (WC). Returns true when `workdir` is the
-/// process launch directory OR appears in the session's allow-set: every
-/// `settings.workdir` entry plus every `settings.allowed_folders` entry.
+/// Deterministic workspace check (WC). Returns true when `workdir` is at OR
+/// under the process launch directory, OR at/under any entry in the session's
+/// allow-set: every `settings.workdir` entry plus every `settings.allowed_folders`
+/// entry.
 ///
-/// `workdir` (the dir actually being checked) is the session's *effective*
-/// workdir — the first `settings.workdir` entry — but the path list may name
-/// several directories the session is allowed to touch, so ALL of them count,
-/// alongside the extra `allowed_folders`. The launch directory is ALWAYS allowed
-/// regardless of the lists, so the common case (running the agent in the folder
-/// you want to work in) just works.
+/// `workdir` (the dir actually being checked) is the session's *effective* cwd —
+/// which, after a model/`/cd`, can be ANY subdirectory of an allowed root (e.g.
+/// `cd src/` under a `/proj` workspace makes it `/proj/src`). So the check is a
+/// **containment** test, not exact equality: a cwd inside an allowed root stays
+/// allowed (subdirectory navigation works under harness mode), while a cwd that
+/// escapes every root is denied. The path list may name several directories the
+/// session is allowed to touch, so ALL of them count as roots, alongside the
+/// extra `allowed_folders`. The launch directory is ALWAYS a root regardless of
+/// the lists, so the common case (running the agent in the folder you want to
+/// work in) just works.
 ///
-/// Comparison is on canonicalised path strings so equivalent spellings (relative
-/// vs absolute, trailing slash, symlink) of the same directory match.
+/// Comparison is on canonicalised paths via component-wise [`Path::starts_with`],
+/// so equivalent spellings (relative vs absolute, trailing slash, symlink) match
+/// and the containment honours path boundaries — `/proj` contains `/proj/src` but
+/// NOT a sibling like `/proj-evil`.
 pub fn workspace_allowed(settings: &Settings, workdir: &Path, launch_dir: &Path) -> bool {
     let wd = norm(workdir);
-    if wd == norm(launch_dir) {
+    // `starts_with` is reflexive (a path starts with itself), so this single
+    // containment test covers both "cwd IS the launch dir" and "cwd is under it".
+    if wd.starts_with(norm(launch_dir)) {
         return true;
     }
     // The allow-set is the union of the workdir path list and the extra allowed
     // folders; a blank entry can't match a real directory after canonicalisation.
+    // Each entry is a ROOT: the cwd is allowed when it sits at or beneath any of
+    // them.
     settings
         .workdir
         .iter()
@@ -113,7 +122,7 @@ pub fn workspace_allowed(settings: &Settings, workdir: &Path, launch_dir: &Path)
         .map(|f| f.trim())
         .filter(|f| !f.is_empty())
         .map(|f| norm(Path::new(f)))
-        .any(|allowed| allowed == wd)
+        .any(|allowed| wd.starts_with(allowed))
 }
 
 /// The verdict object the classifier is asked to emit as strict JSON. `allow`

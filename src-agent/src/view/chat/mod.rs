@@ -140,7 +140,7 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
     overlays::render_toast(frame, chunks[1], rest, palette);
 
     // --- Tool-approval prompt ---
-    if rest.awaiting_approval {
+    if rest.fg().awaiting_approval {
         overlays::render_tool_approval(frame, chunks[3], chunks[1], rest, palette);
     }
 }

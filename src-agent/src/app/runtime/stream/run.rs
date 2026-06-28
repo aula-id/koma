@@ -13,11 +13,12 @@ use crate::service::openrouter::OpenRouterClient;
 /// drops the active receiver (so any late events from the task vanish), and
 /// clears the waiting flag.
 pub(crate) fn abort_current(rest: &mut AppStateRest) {
-    if let Some(h) = rest.current_task.take() {
+    let rt = rest.fg_mut();
+    if let Some(h) = rt.current_task.take() {
         h.abort();
     }
-    rest.active_rx = None;
-    rest.waiting = false;
+    rt.active_rx = None;
+    rt.waiting = false;
     // Tear down any in-flight compaction animation / deferred apply so an
     // interrupt (Esc) or `/new` mid-compact doesn't leave the spinner stuck (and
     // forcing a per-tick redraw) forever.
@@ -32,6 +33,7 @@ pub(crate) fn abort_current(rest: &mut AppStateRest) {
 pub(crate) fn start_stream_task(
     mut history: Vec<ChatMessage>,
     state: &mut AppState,
+    sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
@@ -68,7 +70,7 @@ pub(crate) fn start_stream_task(
             // Volatile tail begins here — project layout + awareness summary. Sent
             // every request (so they survive compaction too) but kept AFTER the
             // cache breakpoint so file changes never bust the cached prefix.
-            if let Ok(cache) = state.rest.dir_cache.read() {
+            if let Ok(cache) = state.rest.sessions[sess_idx].dir_cache.read() {
                 let mut listing = cache.children(".", 0);
                 // When multi-workspace, also list entries from other workspaces.
                 if cache.is_multi() {
@@ -83,7 +85,7 @@ pub(crate) fn start_stream_task(
                     first.content.push_str(&listing.join("\n"));
                 }
             }
-            if let Some(summary) = state.rest.awareness_summary.as_deref() {
+            if let Some(summary) = state.rest.sessions[sess_idx].awareness_summary.as_deref() {
                 if !summary.is_empty() {
                     first.content.push_str("\n\n# Project summary\n");
                     first.content.push_str(summary);
@@ -125,7 +127,7 @@ pub(crate) fn start_stream_task(
         crate::model::settings::Settings,
         String,
         Option<crate::app::resolve::Resolved>,
-    )> = state.rest.session.as_ref().map(|sess| {
+    )> = state.rest.sessions[sess_idx].session.as_ref().map(|sess| {
         let user_intent = sess.conversation.last_user_content().unwrap_or_default();
         // Call-boundary gate for the SECONDARY fold/router calls: an Anthropic-typed
         // Awareness route can't be dispatched (native Anthropic is deferred), so
@@ -147,7 +149,7 @@ pub(crate) fn start_stream_task(
     // `Resolved` so the moved-into-task value carries no borrow of `state.rest`.
     // Main always resolves (legacy fallback), but keep it `Option` and treat a
     // `None` as "no session" below.
-    let main = state.rest.session.as_ref().and_then(|sess| {
+    let main = state.rest.sessions[sess_idx].session.as_ref().and_then(|sess| {
         crate::app::resolve::resolve_role(
             &state.rest.config,
             &sess.settings,
@@ -180,7 +182,7 @@ pub(crate) fn start_stream_task(
     // CAPABLE so a cold cache never wrongly strips an image. `None` (no session /
     // no resolved Main) means the task sends without image handling.
     let image_ctx: Option<crate::dto::openrouter::ImageWireCtx> = match (
-        state.rest.session.as_ref(),
+        state.rest.sessions[sess_idx].session.as_ref(),
         main.as_ref(),
     ) {
         (Some(sess), Some(m)) => {
@@ -211,14 +213,14 @@ pub(crate) fn start_stream_task(
     let sliding_cache = reshape
         .as_ref()
         .is_some_and(|(_, settings, _, _)| settings.sliding_cache);
-    let gap = state.rest.last_send_at.map(|t| t.elapsed());
+    let gap = state.rest.sessions[sess_idx].last_send_at.map(|t| t.elapsed());
     let cold_window = if sliding_cache {
         Duration::from_secs(300)
     } else {
         Duration::from_secs(120)
     };
-    let cache_warm = state.rest.provider_caches
-        && state.rest.tokens_cached > 0
+    let cache_warm = state.rest.sessions[sess_idx].provider_caches
+        && state.rest.sessions[sess_idx].tokens_cached > 0
         && gap.is_some_and(|g| g < cold_window);
     let engage_pct = if cache_warm {
         super::super::shortsend::ENGAGE_WARM_PCT
@@ -230,17 +232,17 @@ pub(crate) fn start_stream_task(
     //    The dead-zone between the two prevents flapping on/off each turn.
     let enter = conv_tokens > engage_pct * usable / 100;
     let exit = conv_tokens < super::super::shortsend::DISENGAGE_PCT * usable / 100;
-    if !state.rest.summarizing && enter {
-        state.rest.summarizing = true;
-    } else if state.rest.summarizing && exit {
-        state.rest.summarizing = false;
+    if !state.rest.sessions[sess_idx].summarizing && enter {
+        state.rest.sessions[sess_idx].summarizing = true;
+    } else if state.rest.sessions[sess_idx].summarizing && exit {
+        state.rest.sessions[sess_idx].summarizing = false;
     }
-    let summarizing = state.rest.summarizing;
+    let summarizing = state.rest.sessions[sess_idx].summarizing;
     // 6. Stamp the send instant so the NEXT turn can measure cache warmth from the
     //    gap since this send.
-    state.rest.last_send_at = Some(Instant::now());
+    state.rest.sessions[sess_idx].last_send_at = Some(Instant::now());
     let (tx, rx) = mpsc::unbounded_channel();
-    state.rest.active_rx = Some(rx);
+    state.rest.sessions[sess_idx].active_rx = Some(rx);
     let c = Arc::clone(client.as_ref().unwrap());
     let jh = handle.spawn(async move {
         // Reshape the wire payload just before POSTing. `shape` preserves the
@@ -297,5 +299,5 @@ pub(crate) fn start_stream_task(
             }
         }
     });
-    state.rest.current_task = Some(jh.abort_handle());
+    state.rest.sessions[sess_idx].current_task = Some(jh.abort_handle());
 }

@@ -87,7 +87,14 @@ pub enum ModelRole {
 ///
 /// Every field carries `#[serde(default)]` so a partially-written or
 /// older-schema config loads cleanly; `uuid` defaults to a freshly minted v4.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` (all fields empty) backs the daemon thin client's KEYLESS
+/// reconstruction of the `/agents` provider catalogue — it builds a `ProviderConn`
+/// with just the `uuid`/`name`/`endpoint` the model label needs and an empty
+/// `api_key` (no key ever crosses the wire). Note `Default::default()` yields an
+/// EMPTY `uuid` (the `new_uuid` serde default is a deserialize-only fallback), so
+/// callers that need a real id set it explicitly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConn {
     #[serde(default = "new_uuid")]
     pub uuid: String,
@@ -115,7 +122,12 @@ pub struct ProviderConn {
 ///
 /// Every field carries `#[serde(default)]`; `uuid` defaults to a freshly minted
 /// v4 and `route` is omitted from the JSON when `None`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` (all fields empty) backs the daemon thin client's KEYLESS
+/// reconstruction of the `/agents` model catalogue (just `uuid`/`name`/`model_id`/
+/// `provider_uuid`). As with [`ProviderConn`], `Default::default()` yields an empty
+/// `uuid`; the reconstruction sets it explicitly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelEntry {
     #[serde(default = "new_uuid")]
     pub uuid: String,

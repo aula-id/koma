@@ -146,8 +146,8 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             .collect();
         // Capture old internet mode before overwriting, so we can toast only
         // on actual change (avoids a spurious toast on every settings save).
-        let old_internet = state.rest.session.as_ref().map(|s| s.settings.internet_mode);
-        if let Some(sess) = state.rest.session.as_mut() {
+        let old_internet = state.rest.fg().session.as_ref().map(|s| s.settings.internet_mode);
+        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.api_key = api_key;
             sess.settings.model = model;
             sess.settings.provider = provider;
@@ -193,15 +193,15 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             state.rest.status = format!("config save failed: {e}");
         }
         // c) Persist the session's settings.json.
-        if let Some(sess) = state.rest.session.as_mut() {
+        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             if let Err(e) = sess.save() {
                 state.rest.status = format!("error: {e}");
             }
         }
         // c2) Reindex the dir cache against the (possibly changed) workdirs.
         //     Spawns a background thread; non-blocking.
-        let roots = state.rest.session.as_ref().map(|s| s.workdirs());
-        let dir_cache = state.rest.dir_cache.clone();
+        let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());
+        let dir_cache = state.rest.fg().dir_cache.clone();
         if let Some(r) = roots {
             crate::tool::dircache::reindex(r, dir_cache);
         }
@@ -210,12 +210,13 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //    other drafts (they're already saved above).
         let needs_rename = state
             .rest
+            .fg()
             .session
             .as_ref()
             .map(|s| !name.trim().is_empty() && name.trim() != s.name)
             .unwrap_or(false);
         if needs_rename {
-            if let Some(sess) = state.rest.session.as_mut() {
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 if let Err(e) = store::rename_session(sess, name.trim()) {
                     state.rest.status = format!("rename failed: {e}");
                 }
@@ -251,7 +252,7 @@ pub(super) fn handle_save_effort(choice: String, state: &mut AppState) -> Result
     // existing keyless client applies the new directive on the next request
     // WITHOUT busting its cache-stable plan_word.
     let effort = if choice == "default" { String::new() } else { choice };
-    if let Some(sess) = state.rest.session.as_mut() {
+    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.settings.effort = effort.clone();
         if let Err(e) = sess.save() {
             state.rest.status = format!("error: {e}");

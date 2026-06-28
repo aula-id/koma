@@ -28,7 +28,7 @@ pub(crate) fn internet_feedback(mode: InternetMode) -> (String, Option<String>) 
 /// Mutates the active session's `internet_mode`, persists via `sess.save()`,
 /// and sets a transient status line with a token-cost warning when Full.
 pub(super) fn handle_internet(target: Option<InternetMode>, state: &mut AppState) -> Result<()> {
-    let Some(sess) = state.rest.session.as_mut() else {
+    let Some(sess) = state.rest.fg_mut().session.as_mut() else {
         state.rest.set_toast("no active session".to_string());
         return Ok(());
     };

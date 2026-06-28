@@ -70,9 +70,9 @@ pub(super) fn handle_save_creds(
     };
     // Lazy creation: first-run path has no session yet. Create it now,
     // then apply the entered credentials.
-    if state.rest.session.is_none() {
+    if state.rest.fg().session.is_none() {
         match store::create_session() {
-            Ok(s) => state.rest.session = Some(s),
+            Ok(s) => state.rest.fg_mut().session = Some(s),
             Err(e) => {
                 state.rest.status = format!("error: {e}");
                 return Ok(());
@@ -83,7 +83,7 @@ pub(super) fn handle_save_creds(
     // the entered creds onto the session settings. `provider` (OpenRouter
     // routing slug) stays EMPTY — the wizard pins routing via the config
     // ProviderConn/ModelEntry below, not the legacy slug.
-    if let Some(sess) = state.rest.session.as_mut() {
+    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.settings.api_key = api_key.clone();
         sess.settings.model = model.clone();
         sess.settings.provider = String::new();
@@ -148,7 +148,7 @@ pub(super) fn handle_save_creds(
     // KEYLESS client → no creds baked in; just (re)build for a fresh
     // plan_word at this session boundary. Resolve gates whether there's a
     // usable Main route (non-empty key) so we don't pin a no-creds client.
-    *client = state.rest.session.as_ref().and_then(|sess| {
+    *client = state.rest.fg().session.as_ref().and_then(|sess| {
         crate::app::resolve::resolve_role(
             &state.rest.config,
             &sess.settings,
@@ -157,11 +157,16 @@ pub(super) fn handle_save_creds(
         .filter(|r| !r.api_key.is_empty())
         .map(|_| build_client())
     });
-    // Seed totals from the (new or picker-prefilled) session's log.
-    if let Some(p) = state.rest.session.as_ref().map(|s| s.path.clone()) {
-        state.rest.load_token_totals(&p);
+    // Seed THIS (foreground) session's own counters from its log (new or
+    // picker-prefilled session being confirmed).
+    if let Some(p) = state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
+        let fg = state.rest.foreground;
+        state.rest.load_token_totals(fg, &p);
     }
     state.rest.prev_session = None; // committed; discard fallback
+    // Creds confirmed — a /new-spawned session is no longer pending, so a later
+    // unrelated KeyInput cancel must not pop it (the spawn is now committed).
+    state.rest.spawn_pending = false;
     state.rest.reset_scroll();
     // Land in Chat first, THEN warm: `warm_session` is non-blocking and may
     // upgrade the mode to `Mode::Loading` (animated splash) when it has warm

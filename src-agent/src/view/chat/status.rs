@@ -38,21 +38,24 @@ pub(super) fn render_status(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
             Style::default().fg(palette.dim),
         )),
     };
-    let readout = if rest.tokens_in > 0 || rest.tokens_out > 0 || rest.cost > 0.0 {
+    // Read the FOREGROUND session's own counters — each tab shows only its own
+    // ↑/↓/$, never the sum across sessions.
+    let fg = rest.fg();
+    let readout = if fg.tokens_in > 0 || fg.tokens_out > 0 || fg.cost > 0.0 {
         // Show the cached-prompt-token count right after the input arrow when the
         // last response hit the prompt cache (`cached:N`), so the saving is
         // visible; omitted entirely on a cold prefix to keep the readout quiet.
-        let cached = if rest.tokens_cached > 0 {
-            format!(" cached:{}", fmt_count(rest.tokens_cached))
+        let cached = if fg.tokens_cached > 0 {
+            format!(" cached:{}", fmt_count(fg.tokens_cached))
         } else {
             String::new()
         };
         Some(format!(
             "↑{}{} ↓{}  ${:.4}",
-            fmt_count(rest.tokens_in),
+            fmt_count(fg.tokens_in),
             cached,
-            fmt_count(rest.tokens_out),
-            rest.cost
+            fmt_count(fg.tokens_out),
+            fg.cost
         ))
     } else {
         None

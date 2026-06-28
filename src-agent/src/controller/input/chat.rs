@@ -56,6 +56,7 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
     if crate::model::attachment::has_image_extension(bare) {
         // Resolve the absolute path for this workspace entry.
         let abs_path: Option<std::path::PathBuf> = rest
+            .fg()
             .session
             .as_ref()
             .map(|s| {
@@ -98,7 +99,7 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
 
 /// This session's sent user messages, oldest-first (for bash-style recall).
 fn user_messages(rest: &AppStateRest) -> Vec<String> {
-    rest.session
+    rest.fg().session
         .as_ref()
         .map(|s| {
             s.conversation
@@ -142,9 +143,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // abort), Esc or any other key closes it. Mirrors the help-overlay modal
     // handling above.
     if rest.subagents_open {
-        let count = rest.subagents.len();
+        let count = rest.fg().subagents.len();
         if is_ctrl(&key, 'x') {
-            if let Some(sa) = rest.subagents.get_mut(rest.subagent_sel) {
+            let sel = rest.subagent_sel;
+            if let Some(sa) = rest.fg_mut().subagents.get_mut(sel) {
                 sa.abort.abort();
                 sa.status = crate::app::subagent::SubAgentStatus::Killed;
             }
@@ -185,7 +187,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Tool-approval modal: while a risky call is paused, only y/n/Esc matter.
     // `y` approves (run it), `n`/Esc deny (feed "denied by user"); every other
     // key is swallowed so the prompt stays up and input can't leak underneath.
-    if rest.awaiting_approval {
+    if rest.fg().awaiting_approval {
         return match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => Action::ApproveTool,
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::DenyTool,
@@ -198,7 +200,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // is pending, and `waiting` may have already cleared if the model replied
     // fast). Never quit mid-animation — that would leave the spinner stuck.
     if is_ctrl(&key, 'c') {
-        return if rest.waiting || rest.compact_anim_start.is_some() {
+        return if rest.fg().waiting || rest.compact_anim_start.is_some() {
             Action::Interrupt
         } else {
             Action::None
@@ -206,7 +208,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     }
     // Ctrl+R: resend (only when idle).
     if is_ctrl(&key, 'r') {
-        return if rest.waiting {
+        return if rest.fg().waiting {
             Action::None
         } else {
             Action::Resend
@@ -224,7 +226,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // the next tick. No-op when a fetch is already in flight or when waiting for a
     // model response (to avoid attaching images mid-turn).
     if is_ctrl(&key, 'v') {
-        if !rest.waiting {
+        if !rest.fg().waiting {
             super::request_clipboard_image(rest);
             rest.set_toast_info("reading image from clipboard…".to_string());
         }
@@ -234,7 +236,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Session is directly on AppStateRest so this can be done inline, matching
     // the BackTab agent_mode toggle pattern.
     if is_ctrl(&key, 'e') {
-        if let Some(sess) = rest.session.as_mut() {
+        if let Some(sess) = rest.fg_mut().session.as_mut() {
             let new_mode = sess.settings.internet_mode.toggled();
             sess.settings.internet_mode = new_mode;
             // Refresh the system-prompt roster so any mode-gated agents stay in
@@ -267,7 +269,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         KeyCode::Esc => {
             // Interrupt if waiting OR a compaction animation is still running
             // (compact_anim_start remains set during the deferred-apply window).
-            if rest.waiting || rest.compact_anim_start.is_some() {
+            if rest.fg().waiting || rest.compact_anim_start.is_some() {
                 // A live Esc cancels the in-flight turn; clear any pending
                 // idle-Esc so it can't pair with a later one across this turn.
                 rest.last_esc = None;
@@ -315,7 +317,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             } else {
                 // File palette: complete instead of submitting when a file match is selected.
                 let fmatches: Vec<String> = file_ref_partial(&rest.input)
-                    .map(|p| rest.dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     complete_file_ref(rest, &fmatches);
@@ -325,7 +327,32 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                     // Slash command (not submit): discard staged attachments.
                     rest.pending_attachments.clear();
                     Action::Slash(command::parse(&line))
-                } else if !rest.input.trim().is_empty() && !rest.waiting {
+                } else if rest.input.trim_start().starts_with('!') {
+                    // `!` user-shell shortcut: run the rest of the line directly in
+                    // the session cwd (no model round-trip). Strip the leading `!` +
+                    // trim. An empty command (a lone `!`) is a no-op. Discard staged
+                    // attachments — they belong to a message, not a shell run.
+                    //
+                    // Busy guard (mirrors the Submit arm below): if a turn is
+                    // streaming OR a previous `!` is still draining off-thread, do
+                    // NOT route the shell — running it now would push a shell entry
+                    // mid-turn, interleaving it between the pending question and the
+                    // not-yet-committed reply ([user, shell, assistant] on the next
+                    // send). Leave the input intact (no `take_input`) so the typed
+                    // command is preserved, and consume the keystroke as a no-op.
+                    if rest.fg().waiting || rest.fg().awaiting_shell {
+                        Action::None
+                    } else {
+                        let line = rest.take_input();
+                        rest.pending_attachments.clear();
+                        let cmd = line.trim_start().strip_prefix('!').unwrap_or("").trim();
+                        if cmd.is_empty() {
+                            Action::None
+                        } else {
+                            Action::Shell(cmd.to_string())
+                        }
+                    }
+                } else if !rest.input.trim().is_empty() && !rest.fg().waiting && !rest.fg().awaiting_shell {
                     Action::Submit(rest.take_input())
                 } else {
                     Action::None
@@ -358,7 +385,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.palette_sel = rest.palette_sel.saturating_sub(1);
             } else {
                 let fmatches: Vec<String> = file_ref_partial(&rest.input)
-                    .map(|p| rest.dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     rest.palette_sel = rest.palette_sel.saturating_sub(1);
@@ -375,7 +402,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.palette_sel = (rest.palette_sel + 1).min(n - 1);
             } else {
                 let fmatches: Vec<String> = file_ref_partial(&rest.input)
-                    .map(|p| rest.dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     rest.palette_sel = (rest.palette_sel + 1).min(fmatches.len() - 1);
@@ -395,7 +422,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.cursor_end(); // input replaced wholesale → caret to the end
             } else {
                 let fmatches: Vec<String> = file_ref_partial(&rest.input)
-                    .map(|p| rest.dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     complete_file_ref(rest, &fmatches);
@@ -442,7 +469,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             rest.subagents_open = true;
             rest.subagent_sel = rest
                 .subagent_sel
-                .min(rest.subagents.len().saturating_sub(1));
+                .min(rest.fg().subagents.len().saturating_sub(1));
             Action::None
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {

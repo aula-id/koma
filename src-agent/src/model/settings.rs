@@ -278,6 +278,13 @@ pub struct Settings {
     /// from the shared file and `Session::save` writes it back there.
     #[serde(skip)]
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
+    /// The bare filename of the SSH identity key this session uses for
+    /// git-over-SSH (e.g. `"id_ed25519"`). Stored as a filename only — never a
+    /// full path, never key file contents. `None` means no key has been selected;
+    /// the `git_cred` tool lists available keys (from `~/.ssh`) and sets this
+    /// field when the user calls `action="select"`.
+    #[serde(default)]
+    pub git_ssh_key: Option<String>,
 }
 
 fn default_model() -> String {
@@ -351,6 +358,7 @@ impl Default for Settings {
             sliding_cache: default_sliding_cache(),
             internet_mode: InternetMode::Simple,
             session_models: Vec::new(),
+            git_ssh_key: None,
         }
     }
 }

@@ -12,18 +12,18 @@
 //!
 //! # Module layout
 //!
-//! - `types`  – [`AgentMode`], [`ToastKind`], [`TranscriptCache`], [`CataloguePending`]
-//! - `rest`   – [`AppStateRest`] struct + constructor
-//! - `input`  – input-editing and history `impl` blocks
-//! - `scroll` – scroll `impl` block
-//! - `stream` – streaming-lifecycle `impl` block
-//! - `misc`   – credentials, catalogue requests, toast `impl` block
+//! - `types`   – [`AgentMode`], [`ToastKind`], [`TranscriptCache`], [`CataloguePending`]
+//! - `rest`    – [`AppStateRest`] struct + constructor
+//! - `runtime` – [`SessionRuntime`]: the per-session execution state + stream methods
+//! - `input`   – input-editing and history `impl` blocks
+//! - `scroll`  – scroll `impl` block
+//! - `misc`    – credentials, catalogue requests, toast `impl` block
 
 mod types;
 mod rest;
+mod runtime;
 mod input;
 mod scroll;
-mod stream;
 mod misc;
 
 use crate::app::mode::Mode;
@@ -32,6 +32,10 @@ use crate::app::mode::Mode;
 // external paths remain identical.
 pub use types::{AgentMode, ToastKind};
 pub use rest::AppStateRest;
+// Public surface for the upcoming multi-session stages; not yet referenced
+// outside this module while there is a single foreground session.
+#[allow(unused_imports)]
+pub use runtime::SessionRuntime;
 
 pub struct AppState {
     pub mode: Mode,

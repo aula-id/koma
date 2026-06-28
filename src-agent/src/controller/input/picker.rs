@@ -8,11 +8,12 @@ use super::{is_ctrl, Action};
 /// Handle a key press inside the `--resume` session picker.
 ///
 /// Typing characters updates the live search query and triggers `refilter`.
+/// Typing `/new` + Enter spawns a fresh session and drops into Chat.
 /// Esc/Ctrl+C return to Chat when an active session exists (opened via /resume),
 /// or quit when there is no session (opened by the --resume startup flag).
 pub fn handle_picker(p: &mut PickerState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     if is_ctrl(&key, 'c') {
-        return if rest.session.is_some() {
+        return if rest.fg().session.is_some() {
             Action::CancelPickerToChat
         } else {
             Action::Quit
@@ -21,7 +22,7 @@ pub fn handle_picker(p: &mut PickerState, rest: &mut AppStateRest, key: KeyEvent
 
     match key.code {
         KeyCode::Esc => {
-            if rest.session.is_some() {
+            if rest.fg().session.is_some() {
                 Action::CancelPickerToChat
             } else {
                 Action::Quit
@@ -35,7 +36,15 @@ pub fn handle_picker(p: &mut PickerState, rest: &mut AppStateRest, key: KeyEvent
             p.move_down();
             Action::None
         }
-        KeyCode::Enter => Action::PickerSelect,
+        KeyCode::Enter => {
+            if p.query == "/new" {
+                p.query.clear();
+                p.refilter();
+                Action::PickerNewSession
+            } else {
+                Action::PickerSelect
+            }
+        }
         KeyCode::Backspace => {
             p.query.pop();
             p.refilter();

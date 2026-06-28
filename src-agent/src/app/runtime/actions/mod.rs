@@ -3,7 +3,7 @@
 //! The module is split into focused submodules by concern:
 //! - [`chat`]     — Submit, Interrupt, Resend, ApproveTool, DenyTool
 //! - [`settings`] — SaveCreds, SaveSettings, SaveEffort, EffortCancel, FetchModelEndpoints
-//! - [`session`]  — CancelKeyInput, CancelKeyInputToPicker, CancelPickerToChat, PickerSelect, SkipLoading
+//! - [`session`]  — CancelKeyInput, CancelKeyInputToPicker, CancelPickerToChat, PickerSelect, LiveSwitch, HubOpenHistory, CloseSessionHub, SkipLoading
 //! - [`agents`]   — CreateAgent, SaveAgent, DeleteAgent, CloseAgents
 
 use std::sync::Arc;
@@ -16,14 +16,31 @@ use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
 mod chat;
+// `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
+// `commands` module) can route through the same `request_quit` chokepoint as the
+// quit keybind, instead of duplicating the working-aware open-or-quit logic.
+pub(in crate::app::runtime) mod quit;
 mod rewind;
 mod session;
 mod settings;
+
+// Re-export the pwd-aware attach selector so the daemon's `Attach` handler (in the
+// sibling `event_loop::daemon` module) can drive session selection through the SAME
+// load/switch/create handlers the local TUI uses. Attach is not a keystroke, so it
+// doesn't route through `apply_action` — it calls this directly. The `session` module
+// is otherwise private to `actions`, so this single re-export is the only surface.
+pub(in crate::app::runtime) use session::attach_select_for_pwd;
 mod settings_creds;
 
 /// Apply one `Action` (the decoded result of a keystroke) by mutating state and,
 /// where needed, spawning/aborting the request task.
-pub(super) fn apply_action(
+///
+/// `pub(in crate::app::runtime)` (not just `pub(super)`) so the headless daemon
+/// loop (`event_loop::daemon`) can drive the SAME action handlers the local TUI
+/// uses: a daemon client's `SubmitInput` / `SendKey` / `ApproveTool` / `NewSession`
+/// / `SwitchForeground` request is translated to the corresponding `Action` and
+/// funnelled through here, so the daemon never forks the turn/submit/approval logic.
+pub(in crate::app::runtime) fn apply_action(
     action: Action,
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
@@ -33,14 +50,29 @@ pub(super) fn apply_action(
         Action::None => {}
 
         Action::Quit => {
-            if state.rest.waiting {
-                crate::app::runtime::stream::abort_current(&mut state.rest);
-            }
-            state.rest.should_quit = true;
+            // Quit chokepoint: quit immediately if nothing is working, else open
+            // the kill-all / detach / cancel confirm overlay.
+            quit::request_quit(state);
+        }
+
+        Action::QuitKillAll => {
+            quit::handle_quit_kill_all(state);
+        }
+
+        Action::QuitDetach => {
+            quit::handle_quit_detach(state);
+        }
+
+        Action::QuitCancel => {
+            quit::handle_quit_cancel(state);
         }
 
         Action::Submit(text) => {
             chat::handle_submit(text, state, client, handle)?;
+        }
+
+        Action::Shell(cmd) => {
+            chat::handle_shell(cmd, state)?;
         }
 
         Action::Slash(cmd) => {
@@ -81,6 +113,27 @@ pub(super) fn apply_action(
 
         Action::PickerSelect => {
             session::handle_picker_select(state, client, handle)?;
+        }
+
+        Action::PickerNewSession => {
+            super::commands::apply_slash(
+                crate::controller::command::Command::New,
+                state,
+                client,
+                handle,
+            )?;
+        }
+
+        Action::LiveSwitch(idx) => {
+            session::handle_live_switch(idx, state, client)?;
+        }
+
+        Action::HubOpenHistory(idx) => {
+            session::handle_hub_open_history(idx, state, client, handle)?;
+        }
+
+        Action::CloseSessionHub => {
+            session::handle_close_session_hub(state)?;
         }
 
         Action::SaveSettings => {

@@ -21,7 +21,9 @@ mod key_input;
 mod effort;
 mod loading;
 mod picker;
+mod quit_confirm;
 mod rewind;
+mod session_hub;
 pub mod settings;
 pub mod agents;
 pub mod editor;
@@ -31,7 +33,9 @@ pub use effort::EffortPickerState;
 pub use key_input::KeyInputForm;
 pub use loading::{LoadingState, WarmStatus};
 pub use picker::PickerState;
-pub use rewind::RewindState;
+pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
+pub use quit_confirm::QuitConfirmState;
+pub use rewind::{RewindEntry, RewindState};
 pub use settings::{
     filter_models, SettingField, SettingsState, PICKER_MAX,
     SETTING_CATEGORIES,
@@ -71,8 +75,12 @@ impl UsageRange {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         match self {
-            // Floor to midnight UTC so "today" always starts at 00:00:00.
-            Self::Today => now - now % 86400,
+            // Floor to local midnight so "today" starts at 00:00:00 local time.
+            Self::Today => {
+                let tz = crate::model::usage::local_utc_offset_secs();
+                let local_now = now + tz;
+                local_now - local_now % 86400 - tz
+            }
             Self::Week  => now - 7 * 86400,
             Self::Year  => now - 365 * 86400,
         }
@@ -122,7 +130,20 @@ pub enum Mode {
     /// and tracks which field is focused.
     KeyInput(KeyInputForm),
     /// `--resume` session picker: shows saved sessions and a live search bar.
+    /// Opened by the `--resume` startup flag and by Esc-out of a picker-launched
+    /// KeyInput. The `/resume` COMMAND now opens [`Mode::SessionHub`] instead.
     SessionPicker(PickerState),
+    /// Unified two-pane session hub (`/resume`): merges the old `/swap` live picker
+    /// and the disk picker into one overlay. The TOP "cooking" pane lists the
+    /// currently-LIVE sessions (one per [`crate::app::state::SessionRuntime`] in
+    /// `AppStateRest::sessions`), each with a ● working / ○ ready marker and the
+    /// foreground one flagged `(current)`; the BOTTOM "history" pane lists the
+    /// on-disk sessions MINUS any already live (dedup). Tab toggles the focused
+    /// pane; Up/Down move the selection within it; Enter on cooking switches the
+    /// foreground (no abort, no lock change), Enter on history loads that session
+    /// into a NEW appended tab; Esc closes back to Chat. Boxed to keep `Mode`
+    /// small, consistent with the other list variants.
+    SessionHub(Box<SessionHub>),
     /// Normal chat view: messages are rendered and the user types in the
     /// input bar.  All chat-specific state lives in `AppStateRest`.
     Chat,
@@ -165,4 +186,14 @@ pub enum Mode {
     /// entry list and the cursor. Boxed to keep `Mode` small, consistent with the
     /// other list/dashboard variants.
     MessageRewind(Box<RewindState>),
+    /// Quit-confirm overlay: shown when the user asks to quit (the `/quit`
+    /// command or the quit keybind) while at least one session still has work in
+    /// flight. Offers three keyed choices — `k` kill all & quit (abort every
+    /// session, release all locks, exit), `d` detach & quit (leave conversations
+    /// persisted on disk and exit without aborting), `Esc` cancel back to Chat.
+    /// When NOTHING is working the quit happens immediately and this mode is
+    /// never entered. The inner [`QuitConfirmState`] only carries the busy-session
+    /// count for the warning text. Boxed for consistency with the other overlay
+    /// variants (it is small, but the box keeps `Mode` uniform + cheap to move).
+    QuitConfirm(Box<QuitConfirmState>),
 }

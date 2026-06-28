@@ -10,13 +10,15 @@ pub(crate) use turn::push_image_unsupported_notice;
 pub(super) use tools::{dispatch_deferred, process_tools, run_tool};
 pub(super) use run::{abort_current, start_stream_task};
 pub(crate) use tools::resume_after_subagents;
+// Re-exported for the daemon's detached-approval park-timeout (stage 11): the loop
+// auto-denies a too-long parked call through the SAME deny path the TUI uses.
+pub(crate) use tools::deny_all_pending;
 pub(crate) use spawn::{spawn_or_queue, try_start_pending, SpawnOutcome};
+// The Phase 8 workspace-mutating primitive, shared by the `cd` tool interception
+// (here) and the user `/cd` + `/adddir` commands.
+pub(crate) use spawn::apply_workspace_change;
 #[allow(unused_imports)]
 pub(crate) use spawn::spawn_task;
-
-/// Hard cap on tool-call rounds within a single user turn. Once exceeded the
-/// turn is stopped so a misbehaving model can't loop indefinitely.
-pub(super) const MAX_AGENT_STEPS: usize = 40;
 
 /// Pick the assistant message content + display-reasoning for a FINAL turn.
 /// Normally content is the answer and `reasoning` rides along (rendered gray).

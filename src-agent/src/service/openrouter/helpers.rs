@@ -5,7 +5,7 @@
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::dto::chat::{sanitize_tool_arguments, ToolCall};
+use crate::dto::chat::ToolCall;
 use crate::dto::openrouter::ReasoningConfig;
 use crate::service::StreamEvent;
 
@@ -15,17 +15,39 @@ pub(super) fn emit(tx: &UnboundedSender<StreamEvent>, event: StreamEvent) {
     let _ = tx.send(event);
 }
 
-/// Repair every accumulated tool call's `function.arguments` in place via
-/// [`sanitize_tool_arguments`] before the assembled set leaves the client.
+/// Sanitise every accumulated tool call before the assembled set leaves the client.
 ///
-/// Streamed argument fragments are concatenated assuming pure deltas; providers
-/// that re-send the FULL arguments per chunk (common on budget routes) make that
-/// concatenation a malformed `{...}{...}` string. Collapsing it to one clean value
-/// here keeps the bad string from entering the runtime/persistence pipeline — the
-/// SOURCE-layer guard. A single clean value is left semantically unchanged.
-pub(super) fn sanitize_tool_acc(tool_acc: &mut [ToolCall]) {
+/// Three concerns are addressed in one pass:
+///
+/// 1. **Null-name slots** — when the SSE stream opens a tool-call slot with a
+///    `null` function delta the accumulator ends up with `name: ""`. Dispatching
+///    that returns `"error: unknown tool ''"` and poisons the conversation history
+///    with a junk result. These slots are dropped entirely.
+///
+/// 2. **Duplicate-fragment arguments** — providers that re-send the FULL arguments
+///    per chunk (common on budget routes) make blind delta concatenation yield
+///    `{...}{...}`. [`crate::dto::chat::sanitize_tool_arguments`] collapses it to
+///    one clean value so the runtime and persistence layers never see a malformed
+///    string.
+///
+/// 3. **Empty tool-call IDs** — some providers omit the `id` field entirely. An
+///    empty `tool_call_id` causes an API 400 on the next request because OpenRouter
+///    requires non-empty IDs. A UUID-based fallback is generated for each such slot.
+pub(super) fn sanitize_tool_acc(tool_acc: &mut Vec<ToolCall>) {
+    // Drop slots where the model emitted a tool call with no name (null function
+    // delta): dispatching them returns "error: unknown tool ''" and pollutes the
+    // conversation with a junk result.
+    tool_acc.retain(|c| !c.function.name.is_empty());
+
     for call in tool_acc.iter_mut() {
-        call.function.arguments = sanitize_tool_arguments(&call.function.arguments);
+        // Repair arguments (duplicate-fragment collapse for budget providers).
+        call.function.arguments =
+            crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+        // Generate a fallback ID when the provider omits it: an empty tool_call_id
+        // causes API 400 on the next request because OpenRouter requires non-empty IDs.
+        if call.id.is_empty() {
+            call.id = format!("call_{}", uuid::Uuid::new_v4().simple());
+        }
     }
 }
 

@@ -18,6 +18,7 @@ pub mod conversation;
 pub mod memory;
 pub mod msglog;
 pub mod session;
+pub mod session_lock;
 pub mod session_registry;
 pub mod settings;
 pub mod store;

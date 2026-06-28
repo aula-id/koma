@@ -236,7 +236,7 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
                             // session models from.
                             AgentEditField::Model => {
                                 if let Some(settings) =
-                                    rest.session.as_ref().map(|sess| sess.settings.clone())
+                                    rest.fg().session.as_ref().map(|sess| sess.settings.clone())
                                 {
                                     s.open_model_picker(&rest.config, &settings);
                                 }

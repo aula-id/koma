@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// tokens the model accepts (e.g. `["high","low"]`); empty means the model
 /// either takes no discrete efforts (on/off only) or none were reported.
 /// `mandatory` is true when reasoning can't be turned off.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct ModelReasoning {
     #[serde(default)]
     pub mandatory: bool,
@@ -32,7 +32,7 @@ pub struct ModelReasoning {
 /// the serving provider). The provider-served value is what matters for
 /// summarisation thresholds; the nominal value is the fallback when this
 /// object is absent.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct TopProvider {
     #[serde(default)]
     pub context_length: Option<u64>,
@@ -42,7 +42,7 @@ pub struct TopProvider {
 /// OpenRouter represents these as decimal strings (e.g. `"0.00000015"`).
 // dead_code: UI layer will consume these fields once the models-select feature lands.
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ModelPricing {
     #[serde(default)]
     pub prompt: Option<String>,
@@ -56,7 +56,7 @@ pub struct ModelPricing {
 /// `["text","image"]`). A model can take images iff this contains `"image"`
 /// (see [`crate::service::openrouter::model_takes_images`]). Defaults so a model
 /// that omits the field (or the whole `architecture` object) still deserialises.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct Architecture {
     #[serde(default)]
     pub input_modalities: Vec<String>,
@@ -70,7 +70,7 @@ pub struct Architecture {
 /// `top_provider` carries the provider-served context limit, which takes
 /// precedence over the nominal `context_length` when computing thresholds.
 /// `name` is the human-readable display name; `pricing` is the per-token cost.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ModelInfo {
     pub id: String,
     // dead_code: consumed by models-select UI (not yet wired).

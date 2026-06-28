@@ -10,7 +10,7 @@ use super::tool::ToolCall;
 ///
 /// Serialised to / from JSON so it can be stored in `messages.json` and sent
 /// directly in `ChatRequest::messages` without a mapping step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,

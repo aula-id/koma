@@ -25,7 +25,7 @@ use super::Term;
 pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()> {
     execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
     let mut out = stdout();
-    if let Some(sess) = rest.session.as_ref() {
+    if let Some(sess) = rest.fg().session.as_ref() {
         for m in sess.conversation.messages() {
             let label = match m.role {
                 Role::System | Role::Tool => continue,
@@ -69,7 +69,7 @@ pub(super) fn apply_compaction_result(
     summary: String,
     kept_tail: Vec<crate::dto::chat::ChatMessage>,
 ) {
-    if let Some(sess) = state.rest.session.as_mut() {
+    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);
         sess.rebuild_system();
@@ -80,7 +80,7 @@ pub(super) fn apply_compaction_result(
     // compaction" requirement. Best-effort; gated by `awareness_enabled` inside
     // `summarize`. Clone the inputs out first (including `config` for the role
     // resolution) so the `block_on` doesn't hold a borrow of `state.rest`.
-    let aware_inputs = match (client.as_ref(), state.rest.session.as_ref()) {
+    let aware_inputs = match (client.as_ref(), state.rest.fg().session.as_ref()) {
         (Some(c), Some(sess)) if sess.settings.awareness_enabled => Some((
             Arc::clone(c),
             state.rest.config.clone(),
@@ -105,7 +105,7 @@ pub(super) fn apply_compaction_result(
                 r.provider(),
                 &workdir,
             ));
-            state.rest.awareness_summary = s;
+            state.rest.fg_mut().awareness_summary = s;
         }
     }
 
@@ -124,7 +124,7 @@ pub(super) fn apply_compaction_result(
         .rest
         .set_toast_info(format!("compacted ✓\n{}", cap_summary(&summary, 400)));
 
-    state.rest.waiting = false;
+    state.rest.fg_mut().waiting = false;
     state.rest.status = "ready".into();
     // Animation is done: stop the per-tick redraw + drop any deferral bookkeeping.
     state.rest.compact_anim_start = None;

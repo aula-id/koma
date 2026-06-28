@@ -41,7 +41,7 @@ pub(super) fn input_row_count(rest: &AppStateRest, frame_width: u16, frame_heigh
 /// Render the input block (borders + either the compact animation or the
 /// multiline editor) into `chunk`.
 pub(super) fn render_input(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
-    let session_tab: Option<Span<'static>> = rest.session.as_ref().map(|s| {
+    let session_tab: Option<Span<'static>> = rest.fg().session.as_ref().map(|s| {
         Span::styled(
             format!(" {} ", s.name.clone()),
             Style::default().fg(palette.accent),

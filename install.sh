@@ -51,23 +51,25 @@ case "$_arch" in
 esac
 
 # ---------------------------------------------------------------------------
-# Supported platform gate
-# ---------------------------------------------------------------------------
-# Currently only Linux x86_64 is supported.
-if [ "$os" != "linux" ] || [ "$arch" != "x86_64" ]; then
-    echo "ERROR: koma currently supports Linux x86_64 only." >&2
-    echo "Detected ${os}/${arch}, which is not supported yet." >&2
-    echo "Linux arm64 and macOS builds are coming soon." >&2
-    exit 1
-fi
-
-# ---------------------------------------------------------------------------
 # Build asset URL
 # ---------------------------------------------------------------------------
-# The current release publishes a single Linux x86_64 binary asset named
-# "koma-linux-64". It is installed as "koma" at $INSTALL_DIR/koma.
-# TODO(koma.run): when per-platform artifacts exist, publish koma-linux-arm64 and macOS builds.
-asset="koma-linux-64"
+# Release artifacts (see .github/workflows/release.yml) are published per
+# platform with these names; install them as "koma" at $INSTALL_DIR/koma:
+#   linux  x86_64 -> koma-linux-x64
+#   linux  arm64  -> koma-linux-arm64
+#   darwin arm64  -> koma-darwin-arm64   (Apple Silicon)
+#   darwin x86_64 -> koma-darwin-x64     (Intel Mac)
+case "${os}/${arch}" in
+    linux/x86_64)  asset="koma-linux-x64"    ;;
+    linux/arm64)   asset="koma-linux-arm64"  ;;
+    darwin/arm64)  asset="koma-darwin-arm64" ;;
+    darwin/x86_64) asset="koma-darwin-x64"   ;;
+    *)
+        echo "ERROR: no prebuilt koma binary for ${os}/${arch}." >&2
+        echo "Supported: linux x86_64, linux arm64, macOS arm64, macOS x86_64." >&2
+        exit 1
+        ;;
+esac
 url="${KOMA_RELEASE_BASE}/${asset}"
 
 echo "koma installer — detected ${os}/${arch}"
@@ -117,6 +119,19 @@ else
         echo "  $INSTALL_DIR is not writable; using sudo for install step."
         sudo mv "$tmp" "$INSTALL_DIR/koma"
         sudo chmod +x "$INSTALL_DIR/koma"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# macOS: clear the Gatekeeper quarantine flag on the downloaded binary so it
+# runs without the "unidentified developer" prompt. Best-effort — ignore if
+# xattr is unavailable or the attribute was never set.
+# ---------------------------------------------------------------------------
+if [ "$os" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
+    if [ -w "$INSTALL_DIR/koma" ]; then
+        xattr -d com.apple.quarantine "$INSTALL_DIR/koma" 2>/dev/null || true
+    else
+        sudo xattr -d com.apple.quarantine "$INSTALL_DIR/koma" 2>/dev/null || true
     fi
 fi
 

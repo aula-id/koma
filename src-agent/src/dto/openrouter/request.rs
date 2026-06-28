@@ -188,7 +188,16 @@ pub fn to_wire_with_images(
                 // practice those paths never carry attachments.
                 WireContent::Parts(attachment_parts(&m.content, &m.attachments, image_ctx))
             } else {
-                WireContent::Text(m.content)
+                // Strip a leading `!`-shell SHELL_MARK so the model reads the clean
+                // `$ <cmd>\n<output>` text (the invisible mark is a transcript-render
+                // device only). A no-op for every other message. `strip_prefix`
+                // returns the slice after the mark, or `None` (→ unchanged) otherwise.
+                let text = m
+                    .content
+                    .strip_prefix(crate::dto::chat::SHELL_MARK)
+                    .map(str::to_string)
+                    .unwrap_or(m.content);
+                WireContent::Text(text)
             };
             // Repair any tool-call argument string on the way OUT. A provider that
             // violated the streaming-delta contract may have persisted a malformed

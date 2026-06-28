@@ -69,7 +69,7 @@ pub(super) fn handle_effort(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
 ) -> Result<()> {
-    if state.rest.waiting {
+    if state.rest.fg().waiting {
         state.rest.status = "busy — wait for response".into();
         return Ok(());
     }
@@ -77,7 +77,7 @@ pub(super) fn handle_effort(
     // fetched on demand by the debounced tick, not here.
     let (Some(_c), Some(settings)) = (
         client.as_ref(),
-        state.rest.session.as_ref().map(|s| s.settings.clone()),
+        state.rest.fg().session.as_ref().map(|s| s.settings.clone()),
     ) else {
         state.rest.status = "no active session".into();
         return Ok(());
@@ -140,6 +140,7 @@ pub(super) fn handle_effort(
 
     let stored = state
         .rest
+        .fg()
         .session
         .as_ref()
         .map(|s| s.settings.effort.clone())

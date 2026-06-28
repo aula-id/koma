@@ -45,19 +45,35 @@ pub(super) fn draw_list(
             .enumerate()
             .map(|(i, a)| {
                 let selected = i == st.list_sel;
-                let (marker, color) = if selected {
-                    let c = if list_focused { palette.accent } else { palette.dim };
-                    ("› ", c)
-                } else {
-                    ("  ", palette.dim)
-                };
                 let name = truncate(&a.name, name_w);
-                Line::from(vec![
-                    Span::styled(marker, Style::default().fg(color)),
-                    Span::styled(format!("{name:<width$}", width = name_w), Style::default().fg(color)),
-                    Span::styled(" ", Style::default()),
-                    Span::styled(source_label(a.source), Style::default().fg(palette.dim)),
-                ])
+                if selected && list_focused {
+                    // Focused selection: accent-block highlight matching the @ / /
+                    // command-palette convention (sel_fg on sel_bg across the row).
+                    let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
+                    Line::from(vec![
+                        Span::styled("› ", hl),
+                        Span::styled(format!("{name:<width$}", width = name_w), hl),
+                        Span::styled(" ", Style::default()),
+                        Span::styled(source_label(a.source), Style::default().fg(palette.dim)),
+                    ])
+                } else if selected {
+                    // Selected but focus is in the detail pane: keep accent text so
+                    // the selection stays visible without the full highlight block.
+                    let accent = Style::default().fg(palette.accent);
+                    Line::from(vec![
+                        Span::styled("› ", accent),
+                        Span::styled(format!("{name:<width$}", width = name_w), accent),
+                        Span::styled(" ", Style::default()),
+                        Span::styled(source_label(a.source), Style::default().fg(palette.dim)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled("  ", Style::default().fg(palette.dim)),
+                        Span::styled(format!("{name:<width$}", width = name_w), Style::default().fg(palette.dim)),
+                        Span::styled(" ", Style::default()),
+                        Span::styled(source_label(a.source), Style::default().fg(palette.dim)),
+                    ])
+                }
             })
             .collect()
     };

@@ -59,7 +59,7 @@ pub(super) fn render_model_row(
 ) {
     let row_inner_w = chunk.width.saturating_sub(4) as usize; // 2+2 padding
     let display_model = if resolved_model.is_empty() {
-        match rest.session.as_ref() {
+        match rest.fg().session.as_ref() {
             Some(s) => s.settings.model.as_str(),
             None    => DEFAULT_MODEL,
         }

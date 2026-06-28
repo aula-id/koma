@@ -145,7 +145,7 @@ pub fn draw(frame: &mut Frame, picker: &PickerState, palette: &Palette) {
 
     // --- Keybinding hint (flat, with session count prepended) ---
     let hint = format!(
-        "{} sessions · ↑↓ select · type to filter · Enter open · Esc/Ctrl+C quit",
+        "{} sessions · ↑↓ select · type to filter · Enter open · /new spawn · Esc/Ctrl+C quit",
         picker.filtered_idx.len()
     );
     let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));

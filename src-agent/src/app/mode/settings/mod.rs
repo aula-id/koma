@@ -11,7 +11,7 @@ mod field_types;
 mod model_types;
 mod provider_types;
 
-pub use picker::PICKER_MAX;
+pub use picker::{PathPicker, PickerMode, PICKER_MAX};
 pub use state::SettingsState;
 
 pub use field_types::{SettingField, SETTING_CATEGORIES};

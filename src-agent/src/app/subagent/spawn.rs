@@ -25,9 +25,6 @@ use super::context;
 use super::engine::run_agent_loop;
 use super::{SubAgent, SubAgentStatus};
 
-/// Default agentic step budget for an agent that declares no `steps` cap.
-const DEFAULT_STEPS: usize = 25;
-
 /// Max characters of the task kept in the sub-agent's display label.
 const LABEL_LEN: usize = 60;
 
@@ -54,7 +51,8 @@ fn truncate_label(s: &str, max: usize) -> String {
 /// - its seed conversation is built by [`context::build_seed`] from the agent
 ///   persona + `memory_md` + `awareness` + `task` (fully isolated from the main
 ///   session history);
-/// - its step budget is the agent's `steps` (default [`DEFAULT_STEPS`]).
+/// - its step budget is the agent's `steps` (`None` when absent = unbounded;
+///   the loop terminates naturally when the model produces no tool calls).
 ///
 /// The loop is spawned on `handle`; the returned [`SubAgent`] owns its
 /// [`AbortHandle`](tokio::task::AbortHandle) and the receiver end of the event
@@ -84,7 +82,9 @@ pub fn spawn_subagent(
     // The effective allow-list + isolated seed conversation + step budget.
     let tools = agent.effective_tools();
     let convo = context::build_seed(agent, awareness, memory_md, task);
-    let max_steps = agent.steps.map(|s| s as usize).unwrap_or(DEFAULT_STEPS);
+    // None = unbounded (natural termination when model returns no tool calls).
+    // Some(n) = explicit per-agent cap from the agent-def `steps` field.
+    let max_steps: Option<usize> = agent.steps.map(|s| s as usize);
 
     // Owned clones moved into the task so it borrows nothing from the caller.
     let client_arc = Arc::clone(client);

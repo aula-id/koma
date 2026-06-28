@@ -8,6 +8,7 @@
 //! Supported commands: `/compact`, `/new`, `/mode`, `/effort`,
 //! `/rename [session] <name>`, `/settings` (alias `/config`),
 //! `/resume` (alias `/sessions`), `/task <agent> <task>`,
+//! `/cd <path>`, `/adddir <path>`,
 //! `/internet [simple|full]`, `/help`, `/quit` (aliases: `/q`, `/exit`).
 
 use crate::model::settings::InternetMode;
@@ -15,14 +16,16 @@ use crate::model::settings::InternetMode;
 /// User-facing slash commands shown in the `/` palette, in display order.
 /// (name, one-line description). Source of truth for the palette UI.
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("/new", "Start a new session"),
-    ("/resume", "Open the session picker to switch sessions"),
+    ("/new", "Spawn a new parallel session (current keeps running)"),
+    ("/resume", "Open the session hub (live + past sessions)"),
     ("/mode", "Toggle Normal/Auto tool approval"),
     ("/effort", "Set model reasoning/thinking effort"),
     ("/internet", "Toggle internet mode (simple | full)"),
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
     ("/task", "Run an agent on a task in the background"),
+    ("/cd", "Change the session working directory"),
+    ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),
     ("/usage", "Show the cost and token usage dashboard"),
     ("/rename", "Rename the current session"),
@@ -56,7 +59,8 @@ pub fn palette_matches(input: &str) -> Vec<(&'static str, &'static str)> {
 pub enum Command {
     /// Compact the conversation history to save context window space.
     Compact,
-    /// Start a fresh session (discards current chat).
+    /// Spawn a fresh PARALLEL session (the current one keeps running in the
+    /// background); the new session becomes the foreground.
     New,
     /// Toggle the tool-approval policy between Normal and Auto.
     Mode,
@@ -70,9 +74,17 @@ pub enum Command {
     Agents,
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
     Task(String),
+    /// Change the session's working directory to the held path (Phase 8). The
+    /// USER path is UNRESTRICTED — no workspace allow-list check (the user is
+    /// trusted); resolution is shell-like (`[N]` / absolute / relative-to-cwd).
+    Cd(String),
+    /// Append the held directory to the session's workspace roots (widen the
+    /// allow-list / add an `[N]` root). Resolved relative to the current cwd.
+    AddDir(String),
     /// Toggle or set internet mode. `None` = toggle; `Some(mode)` = set explicitly.
     Internet(Option<InternetMode>),
-    /// Open the session picker to switch to a different session (alias: `/sessions`).
+    /// Open the unified session hub — live (cooking) + past (history) sessions in
+    /// one two-pane overlay (alias: `/sessions`).
     Resume,
     /// Dump the conversation to the normal terminal for native copy/paste.
     Select,
@@ -115,6 +127,8 @@ pub fn parse(line: &str) -> Command {
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,
         "task" => Command::Task(rest.to_string()),
+        "cd" => Command::Cd(rest.to_string()),
+        "adddir" => Command::AddDir(rest.to_string()),
         "internet" => Command::Internet(InternetMode::from_token(rest)),
         "resume" | "sessions" => Command::Resume,
         "select" => Command::Select,

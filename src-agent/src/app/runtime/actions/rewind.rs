@@ -17,6 +17,7 @@ use crate::model::msglog;
 pub(super) fn handle_open_rewind(state: &mut AppState) -> Result<()> {
     let rewind = state
         .rest
+        .fg()
         .session
         .as_ref()
         .and_then(|s| RewindState::from_messages(s.conversation.messages()));
@@ -72,12 +73,12 @@ pub(super) fn handle_rewind_cancel(state: &mut AppState) -> Result<()> {
 /// rails already prevent resurrection on their own.
 pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Result<()> {
     // 1. Abort any running stream so it can't append onto the cut history.
-    if state.rest.waiting {
+    if state.rest.fg().waiting {
         abort_current(&mut state.rest);
-        state.rest.waiting = false;
+        state.rest.fg_mut().waiting = false;
     }
 
-    let Some(sess) = state.rest.session.as_mut() else {
+    let Some(sess) = state.rest.fg_mut().session.as_mut() else {
         // No active session to rewind — just leave the picker.
         state.mode = Mode::Chat;
         return Ok(());

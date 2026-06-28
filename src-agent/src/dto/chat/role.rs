@@ -12,6 +12,15 @@ pub const PLAN_NUDGE_MARK: &str = "\u{2063}";
 /// summary). `to_wire` puts the cache breakpoint on the head only.
 pub const CACHE_SPLIT_MARK: &str = "\u{2062}\u{2061}";
 
+/// Prefix marking a `User` message as the output of the `!` user-shell shortcut
+/// (a command the user ran directly in the session cwd, NOT a message to the
+/// model). The transcript renders such a message distinctly (a `$ <cmd>` header
+/// over dim output) instead of the normal `★` user bullet, and the wire builder
+/// (`to_wire`) STRIPS this invisible char so the model still sees the clean
+/// `$ <cmd>\n<output>` text as context. An invisible char so, even on the off
+/// chance it reaches the model un-stripped, it never affects what the model reads.
+pub const SHELL_MARK: &str = "\u{2064}";
+
 /// Which participant authored a message.
 ///
 /// Serialised as lowercase strings (`"system"`, `"user"`, `"assistant"`) to
