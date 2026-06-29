@@ -1,13 +1,13 @@
 [package]
 name = "agent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
 ratatui = "0.30.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal"] }
-reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking", "native-tls-vendored"] }
 dom_smoothie = "0.18.0"
 fast_html2md = "0.0.62"
 scraper = "0.27.0"
