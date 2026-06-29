@@ -16,6 +16,53 @@ use crate::view::theme::Palette;
 
 use super::truncate;
 
+/// Split `s` into chunks of at most `width` chars (char-boundary safe, handles
+/// multibyte). If `s` is empty returns a single empty string so callers always
+/// get at least one element.  `width` is clamped to at least 1.
+fn wrap_chars(s: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    if s.is_empty() {
+        return vec![String::new()];
+    }
+    let chars: Vec<char> = s.chars().collect();
+    chars
+        .chunks(width)
+        .map(|c| c.iter().collect())
+        .collect()
+}
+
+/// Push wrapped label+value lines into `lines`.
+///
+/// - First line:        `label` (left-padded to `label_w`) + chunk[0], label in `dim`, value in `color`
+/// - Continuation lines: `label_w` spaces + chunk[n], value in `color`
+fn push_wrapped(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    value: String,
+    label_w: usize,
+    width: usize,
+    dim: ratatui::style::Color,
+    color: ratatui::style::Color,
+) {
+    let chunks = wrap_chars(&value, width);
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        if i == 0 {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:<label_w$}"), Style::default().fg(dim)),
+                Span::styled(chunk, Style::default().fg(color)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    " ".repeat(label_w),
+                    Style::default().fg(dim),
+                ),
+                Span::styled(chunk, Style::default().fg(color)),
+            ]));
+        }
+    }
+}
+
 /// Render the LIST pane: one row per server (`name` + enabled marker + transport
 /// + live status), with a RIGHT border as the divider.
 ///
@@ -138,8 +185,9 @@ fn browse_lines<'a>(
         ))];
     };
     let value_w = width.saturating_sub(14).max(4);
-    let mut lines = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
+    // Short single-line rows (fixed-width values that never need wrapping).
     let row = |label: &str, value: String, color: ratatui::style::Color| -> Line<'static> {
         Line::from(vec![
             Span::styled(format!("{label:<14}"), Style::default().fg(palette.dim)),
@@ -147,7 +195,10 @@ fn browse_lines<'a>(
         ])
     };
 
-    lines.push(row("name", s.name.clone(), palette.accent));
+    // name — may be long, wrap it.
+    push_wrapped(&mut lines, "name", s.name.clone(), 14, value_w, palette.dim, palette.accent);
+
+    // enabled / transport — always short, keep as single rows.
     lines.push(row(
         "enabled",
         if s.enabled { "yes".into() } else { "no".into() },
@@ -162,20 +213,19 @@ fn browse_lines<'a>(
 
     match s.transport {
         McpTransport::Stdio => {
-            let cmd = if s.command.trim().is_empty() {
-                ("(none)".to_string(), palette.dim)
+            if s.command.trim().is_empty() {
+                lines.push(row("command", "(none)".to_string(), palette.dim));
             } else {
-                (truncate(&s.command, value_w), palette.fg)
-            };
-            lines.push(row("command", cmd.0, cmd.1));
-            let args = if s.args.is_empty() {
-                ("(none)".to_string(), palette.dim)
+                push_wrapped(&mut lines, "command", s.command.clone(), 14, value_w, palette.dim, palette.fg);
+            }
+            if s.args.is_empty() {
+                lines.push(row("args", "(none)".to_string(), palette.dim));
             } else {
-                (truncate(&s.args.join(" "), value_w), palette.fg)
-            };
-            lines.push(row("args", args.0, args.1));
-            let env = if s.env.is_empty() {
-                ("(none)".to_string(), palette.dim)
+                let joined = s.args.join(" ");
+                push_wrapped(&mut lines, "args", joined, 14, value_w, palette.dim, palette.fg);
+            }
+            if s.env.is_empty() {
+                lines.push(row("env", "(none)".to_string(), palette.dim));
             } else {
                 let joined = s
                     .env
@@ -183,17 +233,15 @@ fn browse_lines<'a>(
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                (truncate(&joined, value_w), palette.fg)
-            };
-            lines.push(row("env", env.0, env.1));
+                push_wrapped(&mut lines, "env", joined, 14, value_w, palette.dim, palette.fg);
+            }
         }
         McpTransport::Http => {
-            let url = if s.url.trim().is_empty() {
-                ("(none)".to_string(), palette.dim)
+            if s.url.trim().is_empty() {
+                lines.push(row("url", "(none)".to_string(), palette.dim));
             } else {
-                (truncate(&s.url, value_w), palette.fg)
-            };
-            lines.push(row("url", url.0, url.1));
+                push_wrapped(&mut lines, "url", s.url.clone(), 14, value_w, palette.dim, palette.fg);
+            }
         }
     }
 
@@ -255,7 +303,8 @@ fn editor_lines<'a>(st: &'a McpState, palette: &Palette, width: usize) -> Vec<Li
 
         // Single-line text fields (Name / Command / Args / Env / Url).
         let raw = st.draft(f);
-        let (shown, color) = if raw.is_empty() && !editing_here {
+        if raw.is_empty() && !editing_here {
+            // Show placeholder as a single dim line.
             let ph = match f {
                 McpEditField::Name => "(required)",
                 McpEditField::Command => "(required — e.g. npx)",
@@ -265,24 +314,42 @@ fn editor_lines<'a>(st: &'a McpState, palette: &Palette, width: usize) -> Vec<Li
                 // Toggles handled above.
                 McpEditField::Enabled | McpEditField::Transport => "",
             };
-            (ph.to_string(), palette.dim)
+            lines.push(Line::from(vec![
+                marker,
+                label,
+                Span::styled(ph.to_string(), Style::default().fg(palette.dim)),
+            ]));
         } else {
-            let trunc_w = if editing_here {
-                value_w.saturating_sub(1)
+            // Wrap the full value; if editing append cursor to raw first so it
+            // appears at the end of the last wrapped line.
+            let display_raw = if editing_here {
+                let mut s = raw.to_string();
+                s.push('█');
+                s
             } else {
-                value_w
+                raw.to_string()
             };
-            let mut shown = truncate(raw, trunc_w);
-            if editing_here {
-                shown.push('█');
+            let chunks = wrap_chars(&display_raw, value_w);
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                if i == 0 {
+                    // First line: marker + label + value chunk.
+                    lines.push(Line::from(vec![
+                        marker.clone(),
+                        label.clone(),
+                        Span::styled(chunk, Style::default().fg(palette.fg)),
+                    ]));
+                } else {
+                    // Continuation: 16 spaces (marker 2 + label 14) + value chunk.
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            " ".repeat(16),
+                            Style::default().fg(palette.dim),
+                        ),
+                        Span::styled(chunk, Style::default().fg(palette.fg)),
+                    ]));
+                }
             }
-            (shown, palette.fg)
-        };
-        lines.push(Line::from(vec![
-            marker,
-            label,
-            Span::styled(shown, Style::default().fg(color)),
-        ]));
+        }
     }
 
     lines
