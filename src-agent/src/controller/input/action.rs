@@ -161,6 +161,14 @@ pub enum Action {
     SecurityStop,
     /// `r` in the `/security` panel — restart the daemon (stop then start).
     SecurityRestart,
+    /// `Enter`/`Space` in the `/security` panel — toggle the currently-selected tool's
+    /// active state (flip its membership in `state.rest.sec_inactive`). A disabled tool
+    /// is no longer advertised to the model; re-enabling restores it. Refreshes the panel.
+    SecurityToggleTool,
+    /// `d` in the `/security` panel — toggle every tool sharing the selected tool's
+    /// domain: if all of that domain are currently active, disable them all; otherwise
+    /// enable them all. Refreshes the panel.
+    SecurityToggleDomain,
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.

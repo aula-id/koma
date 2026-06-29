@@ -486,6 +486,12 @@ pub struct SecuritySnapshot {
     pub status: crate::app::sec::SecStatus,
     /// Selected index into `status.tools` (the tool-inventory cursor).
     pub selected: usize,
+    /// Tool names the user has disabled (the inactive set), as a sorted Vec so the
+    /// projection round-trips deterministically. Empty = every tool active. The view
+    /// dims a row whose name is in this list and the daemon filters them out of the
+    /// model's advertised tools.
+    #[serde(default)]
+    pub inactive: Vec<String>,
 }
 
 /// A serde-safe projection of the /agents dashboard.

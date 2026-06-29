@@ -206,6 +206,14 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_security_restart(state)?;
         }
 
+        Action::SecurityToggleTool => {
+            security::handle_security_toggle_tool(state)?;
+        }
+
+        Action::SecurityToggleDomain => {
+            security::handle_security_toggle_domain(state)?;
+        }
+
         Action::CloseHelp => {
             state.mode = crate::app::mode::Mode::Chat;
         }

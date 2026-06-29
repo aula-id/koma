@@ -96,7 +96,14 @@ pub(crate) fn start_stream_task(
             // grepping the codebase for "security tools".
             if state.rest.security_enabled {
                 if let Some(sec) = state.rest.sec_manager.as_ref() {
-                    let defs = sec.tool_defs();
+                    // Drop any tool the user disabled in the `/security` panel so the
+                    // awareness block lists ONLY the active tools (empty `sec_inactive`
+                    // = unchanged behaviour, every tool listed as before).
+                    let defs: Vec<_> = sec
+                        .tool_defs()
+                        .into_iter()
+                        .filter(|d| !state.rest.sec_inactive.contains(&d.function.name))
+                        .collect();
                     if !defs.is_empty() {
                         first.content.push_str(
                             "\n\n# Security mode (ACTIVE)\n\
@@ -303,8 +310,16 @@ grep the codebase looking for \"security tools\"; these are them:\n",
     // the allow-list with the daemon's `sec_`-prefixed names and append its ToolDefs.
     if state.rest.security_enabled {
         if let Some(sec) = state.rest.sec_manager.as_ref() {
-            advertise.extend(sec.tool_names());
-            mcp_tools.extend(sec.tool_defs());
+            // Filter out tools the user disabled in the `/security` panel so they are
+            // neither advertised nor allow-listed (an empty `sec_inactive` keeps every
+            // tool, so this is byte-identical to before when nothing is toggled off).
+            let inactive = &state.rest.sec_inactive;
+            advertise.extend(sec.tool_names().into_iter().filter(|n| !inactive.contains(n)));
+            mcp_tools.extend(
+                sec.tool_defs()
+                    .into_iter()
+                    .filter(|d| !inactive.contains(&d.function.name)),
+            );
         }
     }
 

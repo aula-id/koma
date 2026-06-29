@@ -15,12 +15,17 @@ pub struct SecurityState {
     pub status: SecStatus,
     /// Selected index into `status.tools` (the tool-inventory cursor).
     pub selected: usize,
+    /// Tool names the user has disabled (the inactive set), mirrored from
+    /// `state.rest.sec_inactive`. Empty = every tool active. The view dims a row whose
+    /// name is in this set; the toggle actions flip membership on `state.rest` and
+    /// refresh this copy.
+    pub inactive: std::collections::HashSet<String>,
 }
 
 impl SecurityState {
-    /// Build from a live status snapshot, cursor at the top.
-    pub fn new(status: SecStatus) -> Self {
-        Self { status, selected: 0 }
+    /// Build from a live status snapshot + the disabled-tool set, cursor at the top.
+    pub fn new(status: SecStatus, inactive: std::collections::HashSet<String>) -> Self {
+        Self { status, selected: 0, inactive }
     }
 
     /// Move the cursor up by one (saturating at 0).
@@ -36,10 +41,11 @@ impl SecurityState {
         }
     }
 
-    /// Replace the status snapshot (called after start/stop/restart to reflect
-    /// the new daemon state without re-opening the panel).
-    pub fn refresh(&mut self, status: SecStatus) {
+    /// Replace the status snapshot + disabled-tool set (called after start/stop/restart
+    /// or a tool/domain toggle to reflect the new state without re-opening the panel).
+    pub fn refresh(&mut self, status: SecStatus, inactive: std::collections::HashSet<String>) {
         self.status = status;
+        self.inactive = inactive;
         // Clamp the cursor in case the tool count shrank (daemon stopped → 0 tools).
         let max = self.status.tools.len().saturating_sub(1);
         if self.selected > max && !self.status.tools.is_empty() {

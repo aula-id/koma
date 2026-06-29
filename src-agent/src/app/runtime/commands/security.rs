@@ -24,7 +24,7 @@ pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
         .as_ref()
         .map(|m| m.status())
         .unwrap_or_default();
-    let st = SecurityState::new(status);
+    let st = SecurityState::new(status, state.rest.sec_inactive.clone());
     state.mode = Mode::Security(Box::new(st));
     Ok(())
 }

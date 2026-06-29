@@ -470,8 +470,13 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         .as_ref()
         .map(|m| m.status())
         .unwrap_or_else(|| s.status.clone());
+    // The inactive set is authoritative on `state.rest`; project it sorted so the
+    // wire form is deterministic.
+    let mut inactive: Vec<String> = state.rest.sec_inactive.iter().cloned().collect();
+    inactive.sort();
     SecuritySnapshot {
         status,
         selected: s.selected,
+        inactive,
     }
 }

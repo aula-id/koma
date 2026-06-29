@@ -581,5 +581,8 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
     SecurityState {
         status: s.status,
         selected: s.selected,
+        // The projected inactive set rides as a sorted Vec; rebuild the HashSet the
+        // view + render path read from.
+        inactive: s.inactive.into_iter().collect(),
     }
 }

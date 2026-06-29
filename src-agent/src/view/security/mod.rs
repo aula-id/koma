@@ -136,11 +136,17 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                 }
 
                 let is_selected = idx == st.selected;
+                // A tool the user disabled in this panel renders dim with an "  off"
+                // suffix; active tools render as before. The selection highlight still
+                // applies on top so the cursor stays visible over a disabled row.
+                let is_inactive = st.inactive.contains(&t.name);
                 let name_style = if is_selected && active {
                     Style::default()
                         .fg(palette.sel_fg)
                         .bg(palette.sel_bg)
                         .add_modifier(Modifier::BOLD)
+                } else if is_inactive {
+                    dim_style
                 } else {
                     tool_style
                 };
@@ -160,11 +166,19 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                     Span::raw("")
                 };
 
+                // Inactive marker — minimalist dim suffix, no box (house style).
+                let off_span = if is_inactive {
+                    Span::styled("  off", dim_style)
+                } else {
+                    Span::raw("")
+                };
+
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(format!("{:<20}", t.name), name_style),
                     compute_span,
                     risk_span,
+                    off_span,
                 ]));
             }
 
@@ -180,7 +194,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
     // --- Footer: full-width inverse hint bar. ---
     let footer_rect = outer[2];
     if footer_rect.width > 0 {
-        let hint = "t toggle · s start · x stop · r restart · ↑/↓ · Esc close";
+        let hint = "Enter toggle · d domain · t toggle · s start · x stop · r restart · ↑/↓ · Esc close";
         let bar_style = Style::default()
             .fg(palette.sel_fg)
             .bg(palette.sel_bg)

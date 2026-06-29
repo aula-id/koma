@@ -12,6 +12,8 @@
 //! - `s`        → `Action::SecurityStart`
 //! - `x`        → `Action::SecurityStop`
 //! - `r`        → `Action::SecurityRestart`
+//! - `Enter`/`Space` → `Action::SecurityToggleTool` (toggle the selected tool active)
+//! - `d`        → `Action::SecurityToggleDomain` (toggle every tool in the selected tool's domain)
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
@@ -28,6 +30,10 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
     if let Some(m) = rest.sec_manager.as_ref() {
         s.status = m.status();
     }
+    // Keep the mode-state's inactive mirror in step with the authoritative set on
+    // `rest` (the action handlers mutate `rest.sec_inactive` then refresh, but a
+    // re-entry into the panel reads this on each key).
+    s.inactive = rest.sec_inactive.clone();
     if is_ctrl(&key, 'c') {
         return Action::Quit;
     }
@@ -42,6 +48,8 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
             s.move_down();
             Action::None
         }
+        KeyCode::Enter | KeyCode::Char(' ') => Action::SecurityToggleTool,
+        KeyCode::Char('d') | KeyCode::Char('D') => Action::SecurityToggleDomain,
         KeyCode::Char('t') | KeyCode::Char('T') => Action::SecurityToggle,
         KeyCode::Char('s') | KeyCode::Char('S') => Action::SecurityStart,
         KeyCode::Char('x') | KeyCode::Char('X') => Action::SecurityStop,

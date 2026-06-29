@@ -102,6 +102,14 @@ pub struct AppStateRest {
     /// `/security` panel. Starts `false` so the daemon stays off by default even when
     /// installed. The panel's toggle key (`t`) flips this and starts/stops the daemon.
     pub security_enabled: bool,
+    /// Tool names the user has explicitly DISABLED from the `/security` panel (the
+    /// inactive set). Empty by default = every tool active, so the stream's
+    /// advertise-fold behaves byte-identically to before this feature when nothing has
+    /// been toggled off. The fold filters any `sec_` tool whose name is in this set out
+    /// of the advertised ToolDefs + allow-list + the awareness tool-list injection, so
+    /// disabled tools never bleed into the model's view (e.g. hiding PWN/CRYPTO tools
+    /// during WEB work). Toggled by the panel's Enter (one tool) / `d` (whole domain).
+    pub sec_inactive: std::collections::HashSet<String>,
     /// Set by `/select`; the event loop performs the terminal hand-off next tick.
     pub select_pending: bool,
     /// True while the conversation is dumped to the normal terminal for copying.
@@ -263,6 +271,7 @@ impl AppStateRest {
             sec_manager: None,
             sec_token: String::new(),
             security_enabled: false,
+            sec_inactive: std::collections::HashSet::new(),
             select_pending: false,
             select_active: false,
             transcript_cache: RefCell::new(TranscriptCache::default()),
