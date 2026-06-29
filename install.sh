@@ -156,13 +156,31 @@ echo "  Re-run this installer with --with-research (or run"
 echo "  'koma --internet-fullmode-install') to enable full internet mode."
 echo ""
 
-# Warn if install dir may not be on PATH
+# Ensure INSTALL_DIR is on PATH. If missing, append the export to the user's
+# shell rc file and tell them how to refresh THIS shell. (An installer runs in a
+# subshell and cannot reload the parent interactive shell itself, so the final
+# `source` is a step the user runs.)
 case ":${PATH}:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
-        echo "  NOTE: $INSTALL_DIR does not appear to be in your PATH."
-        echo "  Add the following to your shell profile and restart your terminal:"
-        echo "    export PATH=\"$INSTALL_DIR:\$PATH\""
+        # Pick the rc file for the user's login shell.
+        rc=""
+        case "$(basename "${SHELL:-}")" in
+            zsh)  rc="$HOME/.zshrc"  ;;
+            bash) rc="$HOME/.bashrc" ;;
+            *)
+                if [ -f "$HOME/.zshrc" ]; then rc="$HOME/.zshrc"; else rc="$HOME/.bashrc"; fi
+                ;;
+        esac
+        export_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+        if [ -n "$rc" ] && ! grep -qsF "$INSTALL_DIR" "$rc" 2>/dev/null; then
+            printf '\n# Added by koma installer\n%s\n' "$export_line" >> "$rc"
+            echo "  Added $INSTALL_DIR to your PATH in $rc"
+        fi
+        echo ""
+        echo "  To use 'koma' in your current shell right now, run:"
+        echo "    source $rc"
+        echo "  (new terminals will pick it up automatically)"
         echo ""
         ;;
 esac
