@@ -318,6 +318,30 @@ impl SecDaemonManager {
     /// timeout removes the pending entry and returns `Err("sec tool '<name>' timed
     /// out")`.
     pub fn execute_blocking(&self, tool: &str, args: &serde_json::Value) -> Result<String, String> {
+        self.request(serde_json::json!({ "op": "call", "tool": tool, "args": args }))
+    }
+
+    /// THE SYNC→ASYNC BRIDGE (op-generic). Send one request `frame` to the daemon and
+    /// block until the reply (or [`CALL_TIMEOUT`]) lands, returning the daemon's
+    /// `result` string on `ok` or its `error` string otherwise.
+    ///
+    /// This is the shared core extracted from [`Self::execute_blocking`]; it knows
+    /// nothing about the `op` it carries, so `call`/`health`/`install` (and any future
+    /// op) all dispatch through the SAME path — the reader task already routes purely
+    /// by request id. The caller supplies the frame WITHOUT an `id`; `request` injects
+    /// the fresh id under the lock, registers the matching `oneshot`, and the reader
+    /// fulfils it when the id-tagged reply arrives.
+    ///
+    /// Under a brief lock it grabs the writer + a fresh id + a clone of the `pending`
+    /// map, drops the lock, then spawns an async task that enqueues the frame to the
+    /// writer and bridges the `oneshot` to a `std::sync::mpsc` this thread blocks on
+    /// with `recv_timeout`. `Handle::block_on` is NOT used because the synchronous tool
+    /// path may already be inside the tokio runtime, where `block_on` panics.
+    ///
+    /// Returns `Err("security daemon not running")` when no child is live, and on
+    /// timeout removes the pending entry and returns `Err("sec request '<op>' timed
+    /// out")`.
+    fn request(&self, mut frame: serde_json::Value) -> Result<String, String> {
         // Grab the writer, a fresh id, and the pending map under a brief lock, then
         // drop the guard before spawning.
         let (writer, id, pending) = {
@@ -334,21 +358,26 @@ impl SecDaemonManager {
             (writer, id, Arc::clone(&inner.pending))
         };
 
+        // Inject the fresh id into the caller-supplied frame. The frame is always a
+        // JSON object built by us (`json!({ "op": .. })`), so `as_object_mut` is
+        // present; fall back to a no-op only to stay panic-free.
+        if let Some(obj) = frame.as_object_mut() {
+            obj.insert("id".to_string(), serde_json::json!(id));
+        }
+        // For the timeout/disconnect messages: identify the request by its op.
+        let op = frame
+            .get("op")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("request")
+            .to_string();
+        let frame = frame.to_string();
+
         // Register the oneshot under this id so the reader task can fulfil it.
         let (otx, orx) = oneshot::channel::<Result<String, String>>();
         {
             let mut map = pending.lock().unwrap_or_else(|p| p.into_inner());
             map.insert(id, otx);
         }
-
-        // Build the call frame once, on this thread.
-        let frame = serde_json::json!({
-            "id": id,
-            "op": "call",
-            "tool": tool,
-            "args": args,
-        })
-        .to_string();
 
         // Bridge the async oneshot to a sync mpsc this thread blocks on. The spawned
         // task: enqueue the frame to the writer, then await the oneshot and forward
@@ -384,16 +413,30 @@ impl SecDaemonManager {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .remove(&id);
-                Err(format!("sec tool '{tool}' timed out"))
+                Err(format!("sec request '{op}' timed out"))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 pending
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .remove(&id);
-                Err(format!("sec tool '{tool}' task dropped before result"))
+                Err(format!("sec request '{op}' task dropped before result"))
             }
         }
+    }
+
+    /// Round-trip the daemon's health probe. Heavy (full IPC call) — callers fetch on
+    /// panel open/refresh only.
+    pub fn health(&self) -> Result<Vec<InstallHealthEntry>, String> {
+        let raw = self.request(serde_json::json!({ "op": "health" }))?;
+        serde_json::from_str::<Vec<InstallHealthEntry>>(&raw)
+            .map_err(|e| format!("failed to parse health response: {e}"))
+    }
+
+    /// Install/repair a single dependency by manifest key; returns the daemon's status
+    /// string.
+    pub fn install(&self, key: &str) -> Result<String, String> {
+        self.request(serde_json::json!({ "op": "install", "key": key }))
     }
 
     /// Wire [`ToolDef`]s for every advertised tool, ready to extend the request
@@ -483,6 +526,30 @@ pub struct SecToolInfo {
     pub risk: bool,
     /// Free-form compute-class hint.
     pub compute: String,
+}
+
+/// One dependency's install-health entry, as reported by the daemon's `health` op.
+///
+/// Mirrors the daemon's per-entry JSON exactly: `key`, `name`, `tier`, `present`,
+/// `method`, `tools`, `hint`. Surfaced in the `/security` cockpit's install panel so
+/// the user can see what is installed and repair missing dependencies via
+/// [`SecDaemonManager::install`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InstallHealthEntry {
+    /// Manifest key, used as the argument to [`SecDaemonManager::install`].
+    pub key: String,
+    /// Human-readable dependency name.
+    pub name: String,
+    /// Tier/priority of the dependency.
+    pub tier: u8,
+    /// Whether the dependency is currently present.
+    pub present: bool,
+    /// Install/detection method (e.g. `"pip"`, `"apt"`, `"binary"`).
+    pub method: String,
+    /// Tool names this dependency backs.
+    pub tools: Vec<String>,
+    /// Free-form hint for installing/repairing the dependency.
+    pub hint: String,
 }
 
 /// The product of a successful spawn + handshake: the live child, its split I/O
