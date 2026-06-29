@@ -471,6 +471,23 @@ pub struct HelpSnapshot {
     pub selected: usize,
 }
 
+/// A serde-safe projection of the `/security` daemon control panel.
+///
+/// Carries a full [`crate::app::sec::SecStatus`] (which already derives
+/// Serialize + Deserialize) plus the tool-list cursor. The projection re-reads
+/// LIVE status from the daemon manager at snapshot time (see
+/// `ipc::snapshot::projection::modes::security_snapshot`) so the panel always
+/// reflects current daemon state after start/stop/restart, rather than the
+/// potentially-stale snapshot that was open when the mode was entered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct SecuritySnapshot {
+    /// Live status from the daemon manager (running, installed, tools).
+    pub status: crate::app::sec::SecStatus,
+    /// Selected index into `status.tools` (the tool-inventory cursor).
+    pub selected: usize,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

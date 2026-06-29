@@ -22,6 +22,7 @@ mod mcp;
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
 pub(in crate::app::runtime) mod quit;
 mod rewind;
+mod security;
 mod session;
 mod settings;
 
@@ -183,6 +184,26 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseMcp => {
             mcp::handle_close_mcp(state)?;
+        }
+
+        Action::CloseSecurity => {
+            security::handle_close_security(state)?;
+        }
+
+        Action::SecurityToggle => {
+            security::handle_security_toggle(state)?;
+        }
+
+        Action::SecurityStart => {
+            security::handle_security_start(state)?;
+        }
+
+        Action::SecurityStop => {
+            security::handle_security_stop(state)?;
+        }
+
+        Action::SecurityRestart => {
+            security::handle_security_restart(state)?;
         }
 
         Action::CloseHelp => {

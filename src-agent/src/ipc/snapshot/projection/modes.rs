@@ -7,6 +7,7 @@ use super::tokens::{
 use crate::app::mode::agents::{AgentsState, ModelPickerState, ToolPickerState};
 use crate::app::mode::help::HelpState;
 use crate::app::mode::mcp::McpState;
+use crate::app::mode::security::SecurityState;
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
@@ -23,7 +24,7 @@ use crate::ipc::proto::{
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot, ModelDraftSnapshot,
     ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
     ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
-    RolePickerSnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
+    RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
     TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
@@ -41,6 +42,10 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // per-server tool counts (the client owns no MCP manager), so a thin client
         // rebuilds and renders the dashboard faithfully instead of a blank Chat screen.
         Mode::Mcp(m) => ModeSnapshot::Mcp(Box::new(mcp_snapshot(m, state))),
+        // The `/security` control panel projects a live status re-read from the
+        // daemon manager (so the snapshot always reflects current daemon state after
+        // start/stop, not just the state at mode-open time) plus the cursor.
+        Mode::Security(s) => ModeSnapshot::Security(Box::new(security_snapshot(s, state))),
         // The `/help` reference projects a full wire snapshot, exactly like `/mcp`:
         // the query + entry list (each entry's kind as a wire token) + filtered subset
         // + cursor, so a thin client rebuilds and renders the searchable help screen
@@ -449,5 +454,24 @@ pub fn text_editor_snapshot(ed: &TextEditorState) -> TextEditorSnapshot {
         row: ed.row,
         col: ed.col,
         scroll: ed.scroll,
+    }
+}
+
+/// Project the `/security` control panel.
+///
+/// Re-reads LIVE status from the daemon manager every snapshot — the panel always
+/// reflects current daemon state after start/stop/restart, not just the state when
+/// the mode was opened. Falls back to `s.status` (the in-mode snapshot) when there
+/// is no manager (thin client path, which has no manager of its own).
+pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapshot {
+    let status = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .map(|m| m.status())
+        .unwrap_or_else(|| s.status.clone());
+    SecuritySnapshot {
+        status,
+        selected: s.selected,
     }
 }

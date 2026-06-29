@@ -10,10 +10,11 @@ use crate::service::openrouter::OpenRouterClient;
 use crate::app::state::AgentMode;
 
 /// True for tools that mutate the workspace (or run arbitrary shell commands)
-/// and therefore require approval in Normal mode. Deterministic, name-based —
-/// no classifier / network call.
-pub(super) fn tool_is_risky(name: &str) -> bool {
-    matches!(name, "write" | "delete" | "edit" | "bash")
+/// and therefore require approval in Normal mode. Thin re-export of the
+/// canonical definition in [`crate::tool::tool_is_risky`] so callers within
+/// this module use the local name unchanged.
+fn tool_is_risky(name: &str) -> bool {
+    crate::tool::tool_is_risky(name)
 }
 
 /// Inputs for a tool-call-classifier (TAC) call, or `None` when TAC should not
@@ -276,7 +277,9 @@ pub(crate) fn process_tools(
             state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
         }
-        if tool_is_risky(&call.function.name) {
+        let risky = tool_is_risky(&call.function.name)
+            || state.rest.sec_manager.as_ref().is_some_and(|m| m.tool_risk(&call.function.name));
+        if risky {
             match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
                 Some((c, config, settings)) => {
@@ -374,6 +377,7 @@ pub(crate) fn process_tools(
         // off-thread deferred lane as bash/read/web_fetch.
         if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str())
             || call.function.name.starts_with("mcp__")
+            || call.function.name.starts_with("sec_")
         {
             super::dispatch::dispatch_deferred(state, sess_idx, &call);
             return;

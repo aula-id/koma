@@ -149,6 +149,18 @@ pub enum Action {
     /// Esc from the MCP dashboard (Browse, LIST focused) — discard any drafts and
     /// return to Chat.
     CloseMcp,
+    // --- Security daemon control panel actions ---
+    /// Esc from the `/security` panel — return to Chat.
+    CloseSecurity,
+    /// `t` in the `/security` panel — toggle the security-enabled flag: if now enabled,
+    /// start the daemon; if now disabled, stop it. Refreshes the panel status.
+    SecurityToggle,
+    /// `s` in the `/security` panel — start the daemon (no-op when already running).
+    SecurityStart,
+    /// `x` in the `/security` panel — stop the daemon (no-op when not running).
+    SecurityStop,
+    /// `r` in the `/security` panel — restart the daemon (stop then start).
+    SecurityRestart,
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.

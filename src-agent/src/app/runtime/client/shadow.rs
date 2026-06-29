@@ -249,6 +249,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
             Mode::Agents(Box::new(shadow_agents(*a)))
         }
         ModeSnapshot::Mcp(m) => Mode::Mcp(Box::new(shadow_mcp(*m))),
+        ModeSnapshot::Security(s) => Mode::Security(Box::new(shadow_security(*s))),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Effort(e) => Mode::Effort(Box::new(shadow_effort(e))),
         ModeSnapshot::Usage(u) => {

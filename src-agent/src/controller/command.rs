@@ -25,6 +25,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
     ("/mcp", "Add, edit, or remove MCP servers"),
+    ("/security", "Security daemon control panel"),
     ("/task", "Run an agent on a task, or open the sub-agents viewer (no args)"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
@@ -104,6 +105,8 @@ pub enum Command {
     Agents,
     /// Open the `/mcp` server management dashboard.
     Mcp,
+    /// Open the `/security` daemon control panel.
+    Security,
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
     Task(String),
     /// Change the session's working directory to the held path (Phase 8). The
@@ -165,6 +168,7 @@ pub fn parse(line: &str) -> Command {
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,
         "mcp" => Command::Mcp,
+        "security" => Command::Security,
         "task" => Command::Task(rest.to_string()),
         "cd" => Command::Cd(rest.to_string()),
         "adddir" => Command::AddDir(rest.to_string()),

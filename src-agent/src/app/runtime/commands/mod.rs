@@ -18,6 +18,7 @@ pub(crate) mod internet;
 mod mcp;
 mod misc;
 pub(crate) mod new_session;
+mod security;
 mod task;
 
 /// Apply a parsed slash command. Like [`apply_action`], it mutates state and
@@ -37,6 +38,7 @@ pub(super) fn apply_slash(
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,
         Command::Mcp => mcp::handle_mcp(state)?,
+        Command::Security => security::handle_security(state)?,
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,
         Command::Help => misc::handle_help(state)?,

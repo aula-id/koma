@@ -7,6 +7,7 @@ use crate::app::mode::agents::{
 };
 use crate::app::mode::help::{HelpEntry, HelpKind, HelpState};
 use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
+use crate::app::mode::security::SecurityState;
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft, ProviderModal, RolePickerState,
@@ -21,8 +22,8 @@ use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, EffortSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, PathPickerSnapshot,
-    PickerSnapshot, RewindSnapshot, SessionHubSnapshot, SettingsSnapshot, TextEditorSnapshot,
-    ToolPickerSnapshot, WarmStatusWire,
+    PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot, SettingsSnapshot,
+    TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
 use crate::model::settings::{InternetMode, Settings};
@@ -569,5 +570,16 @@ fn shadow_role(r: &str) -> ModelRole {
         "safeguard" => ModelRole::Safeguard,
         "compactor" => ModelRole::Compactor,
         _ => ModelRole::Main,
+    }
+}
+
+/// Rebuild the `/security` control panel ([`SecurityState`]) from its projection.
+///
+/// The status snapshot rides verbatim (already serde-safe); the cursor is restored
+/// as-is. Render-only — every key is forwarded to the daemon.
+pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
+    SecurityState {
+        status: s.status,
+        selected: s.selected,
     }
 }

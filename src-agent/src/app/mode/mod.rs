@@ -29,9 +29,11 @@ pub mod agents;
 pub mod mcp;
 pub mod help;
 pub mod editor;
+pub mod security;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
+pub use security::SecurityState;
 // `HelpEntry` is part of the module's public surface and will be consumed by the
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
@@ -219,4 +221,10 @@ pub enum Mode {
     /// count for the warning text. Boxed for consistency with the other overlay
     /// variants (it is small, but the box keeps `Mode` uniform + cheap to move).
     QuitConfirm(Box<QuitConfirmState>),
+    /// Security daemon control panel (`/security`): a full-screen status view +
+    /// lifecycle controls (start/stop/restart/toggle) + the tool inventory from the
+    /// daemon's last handshake. No editor sub-modes — control panel only. The inner
+    /// [`SecurityState`] holds the daemon status snapshot + the tool-list cursor.
+    /// Boxed to keep `Mode` small, consistent with the other full-screen variants.
+    Security(Box<SecurityState>),
 }

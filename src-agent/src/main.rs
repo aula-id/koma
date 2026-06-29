@@ -43,6 +43,7 @@ mod controller;
 mod dto;
 mod internet;
 mod ipc;
+mod security;
 mod model;
 mod resources;
 mod service;
@@ -95,6 +96,16 @@ fn main() -> anyhow::Result<()> {
 
     if opts.internet_fullmode_uninstall {
         return match internet::uninstall() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+        };
+    }
+
+    if opts.security_install {
+        return match security::install(opts.force) {
             Ok(()) => Ok(()),
             Err(e) => {
                 eprintln!("error: {e:#}");

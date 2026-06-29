@@ -33,6 +33,14 @@ pub mod task;
 
 pub use dircache::DirCache;
 
+/// True for built-in tools that mutate the workspace (or run arbitrary shell
+/// commands) and therefore require approval in Normal mode. Deterministic,
+/// name-based — no classifier / network call. Canonical single-source definition
+/// used by both the interactive approval gate and the sub-agent engine.
+pub(crate) fn tool_is_risky(name: &str) -> bool {
+    matches!(name, "write" | "delete" | "edit" | "bash")
+}
+
 /// Shared context handed to every tool invocation.
 pub struct ToolCtx {
     /// Absolute workspace root (the session's primary workdir). All tool paths
@@ -60,6 +68,12 @@ pub struct ToolCtx {
     /// is available (e.g. headless/test constructions) — MCP calls then fall through
     /// to the "unknown tool" error, exactly as before MCP existed.
     pub mcp_manager: Option<Arc<crate::app::mcp::McpManager>>,
+    /// The GLOBAL security daemon client manager, shared across every session.
+    /// `Some` once startup builds it (it lives in `AppStateRest`); used by
+    /// [`execute_tool`] to dispatch `sec_*` tool calls to the daemon. `None` where
+    /// no manager is available (e.g. headless/test constructions) — sec calls then
+    /// fall through to the "unknown tool" error.
+    pub sec_manager: Option<Arc<crate::app::sec::SecDaemonManager>>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -320,6 +334,13 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
     // falls through to the unknown-tool error unchanged.
     if call.function.name.starts_with("mcp__") {
         if let Some(mgr) = ctx.mcp_manager.as_ref() {
+            return mgr
+                .execute_blocking(&call.function.name, &args)
+                .unwrap_or_else(|e| format!("error: {e}"));
+        }
+    }
+    if call.function.name.starts_with("sec_") {
+        if let Some(mgr) = ctx.sec_manager.as_ref() {
             return mgr
                 .execute_blocking(&call.function.name, &args)
                 .unwrap_or_else(|e| format!("error: {e}"));

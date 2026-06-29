@@ -50,11 +50,12 @@ fn emit(tx: &UnboundedSender<AgentEvent>, event: AgentEvent) {
     let _ = tx.send(event);
 }
 
-/// True for tools that mutate the workspace (or run arbitrary shell commands),
-/// matching `app::runtime::stream::tool_is_risky`. Deterministic, name-based.
-/// A risky call must clear the tool-call classifier before it runs.
+/// True for tools that mutate the workspace (or run arbitrary shell commands).
+/// Delegates to the single canonical definition in [`crate::tool::tool_is_risky`]
+/// so the builtin-risky check is never duplicated. A risky call must clear the
+/// tool-call classifier before it runs.
 fn tool_is_risky(name: &str) -> bool {
-    matches!(name, "write" | "delete" | "edit" | "bash")
+    crate::tool::tool_is_risky(name)
 }
 
 /// Returns `true` when `text` looks like interstitial narration rather than a
@@ -297,10 +298,14 @@ pub async fn run_agent_loop(
                 continue;
             }
 
-            // 4b. Risky calls (write/delete/edit/bash) must clear the tool-call
-            //     classifier first. FAIL CLOSED: an unavailable classifier blocks
-            //     the call (a sub-agent has no human to defer to).
-            if tool_is_risky(&name) {
+            // 4b. Risky calls (write/delete/edit/bash, and sec tools with risk=true)
+            //     must clear the tool-call classifier first. FAIL CLOSED: an
+            //     unavailable classifier blocks the call (a sub-agent has no human to
+            //     defer to). The sec_manager check mirrors the main-agent gate in
+            //     approval.rs so a sub-agent cannot bypass risk=true sec tools.
+            if tool_is_risky(&name)
+                || ctx.sec_manager.as_ref().is_some_and(|m| m.tool_risk(&name))
+            {
                 let verdict = crate::app::harness::classify_toolcall(
                     &client,
                     &config,

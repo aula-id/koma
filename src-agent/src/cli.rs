@@ -91,7 +91,9 @@ pub struct Opts {
     pub internet_fullmode_install: bool,
     /// When `true`, remove the Python full-mode (browser) environment then exit.
     pub internet_fullmode_uninstall: bool,
-    /// Modifier for `--internet-fullmode-install`: overwrite an existing install.
+    /// When `true`, provision the Python security daemon environment then exit.
+    pub security_install: bool,
+    /// Modifier for `--internet-fullmode-install` / `--security-install`: overwrite an existing install.
     pub force: bool,
     /// When `true`, run the daemon IPC transport self-test then exit
     /// (`--ipc-selftest` flag).
@@ -148,6 +150,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--resume"                       => opts.resume = true,
             "--internet-fullmode-install"    => opts.internet_fullmode_install = true,
             "--internet-fullmode-uninstall"  => opts.internet_fullmode_uninstall = true,
+            "--security-install"             => opts.security_install = true,
             "--force"                        => opts.force = true,
             "--ipc-selftest"                 => opts.ipc_selftest = true,
             "--daemon-selftest"              => opts.daemon_selftest = true,

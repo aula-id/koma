@@ -248,7 +248,7 @@ pub(crate) fn start_stream_task(
     // stream's advertise filter keeps the model's calls to them. With no MCP servers
     // (or none connected yet) both are empty and the request is byte-identical to the
     // pre-MCP path. Sub-agents get NO MCP tools (kept simple) — only the main agent.
-    let (mcp_tools, advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
+    let (mut mcp_tools, mut advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
         match state.rest.mcp_manager.as_ref() {
             Some(mgr) => {
                 let mut names = crate::tool::main_tool_names();
@@ -257,6 +257,16 @@ pub(crate) fn start_stream_task(
             }
             None => (Vec::new(), crate::tool::main_tool_names()),
         };
+    // Security daemon tools for the MAIN agent. Gated on BOTH the runtime enable
+    // flag (`security_enabled`) AND having a manager. When disabled, sec_ tools are
+    // not advertised, keeping normal turns lean. Same pattern as MCP otherwise: extend
+    // the allow-list with the daemon's `sec_`-prefixed names and append its ToolDefs.
+    if state.rest.security_enabled {
+        if let Some(sec) = state.rest.sec_manager.as_ref() {
+            advertise.extend(sec.tool_names());
+            mcp_tools.extend(sec.tool_defs());
+        }
+    }
 
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);

@@ -23,6 +23,7 @@ mod paste;
 mod picker;
 mod quit_confirm;
 mod rewind;
+mod security;
 mod session_hub;
 mod settings;
 mod usage;
@@ -72,6 +73,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Settings(s) => handle_settings(s, &mut state.rest, key),
         Mode::Agents(a) => agents::handle_agents(a, &mut state.rest, key),
         Mode::Mcp(m) => mcp::handle_mcp(m, &mut state.rest, key),
+        Mode::Security(s) => security::handle_security(s, &mut state.rest, key),
         Mode::Help(h) => help::handle_help(h, &mut state.rest, key),
         Mode::Effort(e) => handle_effort(e, &mut state.rest, key),
         Mode::Loading(l) => handle_loading(l, key),
