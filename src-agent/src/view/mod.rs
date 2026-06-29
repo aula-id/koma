@@ -33,8 +33,20 @@ pub mod usage;
 use ratatui::Frame;
 use crate::app::mode::Mode;
 use crate::app::resolve::{resolve_role};
-use crate::app::state::AppState;
+use crate::app::state::{AppState, AppStateRest};
 use crate::model::app_config::ModelRole;
+
+/// Resolve the concrete Main model id for the foreground session, mirroring
+/// the logic the request layer uses. Session overrides win; falls back to the
+/// legacy `settings.model` field; defaults to empty string when there is no
+/// session at all.
+fn resolved_main_model(rest: &AppStateRest) -> String {
+    rest.fg().session.as_ref()
+        .and_then(|s| resolve_role(&rest.config, &s.settings, ModelRole::Main))
+        .map(|r| r.model_id)
+        .or_else(|| rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
+        .unwrap_or_default()
+}
 
 /// Render the entire terminal frame for the current application state.
 ///
@@ -54,14 +66,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
     let cache_endpoint = state.rest.models_cache_endpoint.as_deref();
     match &state.mode {
         Mode::Chat => {
-            // Resolve the actual Main model that will be used for chat requests.
-            // Session overrides win over the global catalogue; falls back to
-            // settings.model (the legacy field) when nothing is configured.
-            let resolved_model: String = state.rest.fg().session.as_ref()
-                .and_then(|s| resolve_role(&state.rest.config, &s.settings, ModelRole::Main))
-                .map(|r| r.model_id)
-                .or_else(|| state.rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
-                .unwrap_or_default();
+            let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
         }
         Mode::KeyInput(form) => key_input::draw(frame, form, cache, cache_endpoint, &palette),
@@ -90,7 +95,12 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             mcp::draw(frame, m, status.as_ref(), &palette);
         }
         Mode::Security(s) => security::draw(frame, s, &palette),
-        Mode::Bash(b) => bash::draw_bash(frame, b, &palette),
+        Mode::Bash(b) => {
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            let chunks = chat::layout_chunks(&state.rest, frame.area());
+            bash::render_bash_overlay(frame, chunks[3], chunks[1], &b.jobs, b.selected, &palette);
+        }
         Mode::Help(h) => help::draw(frame, h, &palette),
         Mode::Effort(e) => effort::draw(frame, e, &palette),
         Mode::Loading(s) => loading::draw(frame, s, &palette),

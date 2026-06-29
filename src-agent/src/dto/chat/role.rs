@@ -21,6 +21,14 @@ pub const CACHE_SPLIT_MARK: &str = "\u{2062}\u{2061}";
 /// chance it reaches the model un-stripped, it never affects what the model reads.
 pub const SHELL_MARK: &str = "\u{2064}";
 
+/// Prefix marking a `User` message as a BACKGROUND-BASH completion nudge: a
+/// synthetic turn injected when a `run_in_background` bash job finishes so the
+/// model reacts. The transcript renders it as ONE compact dim line with a green
+/// `✓` (just the `[bash-N] status` summary on line 1); the wire builder
+/// (`to_wire`) STRIPS this invisible char so the model reads the clean
+/// `summary\n<context>` text. Invisible char, distinct from `SHELL_MARK`.
+pub const BASH_NUDGE_MARK: &str = "\u{2061}";
+
 /// Which participant authored a message.
 ///
 /// Serialised as lowercase strings (`"system"`, `"user"`, `"assistant"`) to

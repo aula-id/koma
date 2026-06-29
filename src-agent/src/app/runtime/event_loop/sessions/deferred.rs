@@ -130,6 +130,7 @@ pub(super) fn drain_deferred_and_resume(
                 });
             if let Some(label) = label {
                 state.rest.set_toast_info(format!("bash-{id} finished: {label}"));
+                state.rest.sessions[idx].pending_bash_nudges.push((id, label));
                 dirty = true;
             }
         }
@@ -154,6 +155,67 @@ pub(super) fn drain_deferred_and_resume(
         state.rest.sessions[idx].awaiting_subagents = false;
         state.rest.sessions[idx].awaiting_tool_tasks = false;
         resume_after_subagents(state, idx, client, handle);
+        dirty = true;
+    }
+
+    // --- bg-bash completion NUDGE: inject + auto-wake when idle ---
+    // A finished bg-bash job is buffered in `pending_bash_nudges` (above). The
+    // moment this session is idle (no turn in flight, nothing parked, no running
+    // sub-agents) we drain the whole buffer into ONE synthetic user turn so the
+    // model REACTS to the completion(s). While busy we leave the buffer untouched
+    // and re-check on a later tick — so we never inject mid-turn (which would
+    // corrupt tool_call/tool_result ordering). Auto-wake mirrors `handle_submit`:
+    // begin_stream + waiting + the per-turn resets, then `start_stream_task`.
+    if !state.rest.sessions[idx].pending_bash_nudges.is_empty()
+        && !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        let nudges = std::mem::take(&mut state.rest.sessions[idx].pending_bash_nudges);
+        // Line 1 = terse per-job summary shown in the transcript (a dim green-✓
+        // line). Lines 2+ = model-only context, hidden from the transcript and
+        // stripped of the mark on the wire. The leading BASH_NUDGE_MARK is what
+        // makes the transcript render this compactly instead of as a `★` turn.
+        let summary = nudges
+            .iter()
+            .map(|(id, label)| format!("[bash-{id}] {label}"))
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let body = format!(
+            "{}{summary}\nbackground bash job(s) finished \u{2014} read full output with bash_output if needed; react only if action is required, otherwise acknowledge briefly.",
+            crate::dto::chat::BASH_NUDGE_MARK,
+        );
+
+        // Append as a USER turn (so the model treats it as input to respond to),
+        // persist to msglog + messages.json, then capture history for the wire.
+        let history = {
+            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
+            let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+            sess.conversation.push_user(body);
+            let _ = sess.save();
+            sess.conversation.history()
+        };
+
+        // Per-turn reset + start stream, mirroring handle_submit's kickoff. The
+        // session is idle here, so these are clean-state resets (defensive).
+        {
+            let rt = &mut state.rest.sessions[idx];
+            rt.begin_stream();
+            rt.waiting = true;
+            rt.agent_steps = 0;
+            rt.pending_tool_calls.clear();
+            rt.awaiting_approval = false;
+            rt.tool_idx = 0;
+            rt.tool_results.clear();
+            rt.pending_tool_tasks.clear();
+            rt.awaiting_tool_tasks = false;
+        }
+        // Foreground-only UI cues (don't yank a background session's transcript).
+        if idx == state.rest.foreground {
+            state.rest.reset_scroll();
+            state.rest.status = "thinking".into();
+        }
+        super::super::super::stream::start_stream_task(history, state, idx, client, handle);
         dirty = true;
     }
 

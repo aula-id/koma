@@ -53,11 +53,33 @@ mod subagents;
 mod transcript;
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     Frame,
 };
 use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
+
+/// Compute the 5-element layout split for the chat screen given `rest` and the
+/// terminal `area`. The result is identical to what `draw` uses internally and
+/// is exposed so overlay renderers (e.g. the `/bash` panel) can anchor their
+/// popup at the same chunk positions without re-deriving the layout.
+///
+/// Chunks in order: [0] header, [1] transcript, [2] model-name row,
+/// [3] input box, [4] status bar.
+pub(crate) fn layout_chunks(rest: &AppStateRest, area: Rect) -> std::rc::Rc<[Rect]> {
+    let input_rows = input::input_row_count(rest, area.width, area.height);
+    let input_h = (input_rows as u16) + 2;
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(input_h),
+            Constraint::Length(1),
+        ])
+        .split(area)
+}
 
 /// Render the chat screen from `rest` using the given colour `palette`.
 ///
@@ -79,27 +101,12 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
         return;
     }
 
-    // --- Input height ---
-    // The input box grows to fit its wrapped content (capped). Compute the row
-    // count BEFORE the layout split so the layout can reserve the right height.
-    let input_rows = input::input_row_count(rest, frame.area().width, frame.area().height);
-    let input_h = (input_rows as u16) + 2; // + top & bottom borders
-
     // Layout: header (text + bottom rule) | transcript | model name row |
     // input (top+bottom rules) | status. Header/input get thin dim borders so
     // the screen reads as structured, not boxed; the transcript stays flat.
     // The model-name row is a single dim right-aligned line sitting directly
     // above the input's top border (no extra gap — it reads as a label for it).
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),       // header line + bottom border
-            Constraint::Min(1),          // transcript
-            Constraint::Length(1),       // model name (right-aligned, dim)
-            Constraint::Length(input_h), // top border + input row(s) + bottom border
-            Constraint::Length(1),       // status bar
-        ])
-        .split(frame.area());
+    let chunks = layout_chunks(rest, frame.area());
 
     // --- Header ---
     header::render_header(frame, chunks[0], rest, palette);
