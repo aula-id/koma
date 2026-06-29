@@ -52,6 +52,8 @@ pub fn handle_bash(s: &mut BashState, rest: &mut AppStateRest, key: KeyEvent) ->
             Some(job) if job.running => Action::BashKillJob(job.id),
             _ => Action::None,
         },
-        _ => Action::None,
+        // Any other key closes the panel (mirrors the /task sub-agents overlay,
+        // which dismisses on any non-navigation key so the next keystroke types).
+        _ => Action::CloseBash,
     }
 }

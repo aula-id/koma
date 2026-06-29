@@ -168,6 +168,11 @@ pub struct SessionRuntime {
     /// spawned bg-bash worker thread (the sender is `Send`, so it can fire from a
     /// non-tokio thread). `None` until the first bg job runs.
     pub bash_done_tx: Option<UnboundedSender<usize>>,
+    /// Background bash jobs that have finished but whose completion has not yet
+    /// been delivered to the model as a nudge. Buffered here while the agent is
+    /// busy; drained into ONE injected user turn when the session next goes idle.
+    /// Each entry is `(job_id, status_label)`.
+    pub pending_bash_nudges: Vec<(usize, String)>,
     /// All sub-agents spawned this session (running + finished). Drained each tick
     /// by the event loop; finished ones stay in the list for the UI to show their
     /// final state.
@@ -324,6 +329,7 @@ impl SessionRuntime {
             next_bash_job_id: 1,
             bash_done_rx: None,
             bash_done_tx: None,
+            pending_bash_nudges: Vec::new(),
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
             pending_subagent_calls: Vec::new(),

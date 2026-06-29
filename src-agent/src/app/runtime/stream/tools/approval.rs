@@ -42,6 +42,29 @@ fn bash_status_line(status: &crate::app::bgbash::BashJobStatus) -> String {
     }
 }
 
+/// Filter a background job's captured output for `bash_output`: keep only lines
+/// matching `pattern` (a regex, grep-style) when set, then the LAST `tail_lines`
+/// of what remains when set (>0). Returns `Err` with a clean message on an invalid
+/// regex so the model sees why its filter was rejected. An empty `Ok` string means
+/// "no lines left" (the caller maps it to a friendly note).
+fn filter_bash_output(
+    out: &str,
+    tail_lines: Option<usize>,
+    pattern: Option<&str>,
+) -> Result<String, String> {
+    let mut lines: Vec<&str> = out.lines().collect();
+    if let Some(pat) = pattern {
+        let re = regex::Regex::new(pat).map_err(|e| format!("invalid pattern: {e}"))?;
+        lines.retain(|l| re.is_match(l));
+    }
+    if let Some(n) = tail_lines {
+        if n > 0 && lines.len() > n {
+            lines = lines.split_off(lines.len() - n);
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 /// Inputs for a tool-call-classifier (TAC) call, or `None` when TAC should not
 /// run: the harness is disabled, or there's no client/session. `None` makes the
 /// caller fall back to the ORIGINAL approval behaviour (Normal prompts a risky
@@ -250,6 +273,12 @@ pub(crate) fn process_tools(
             let args: serde_json::Value =
                 serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
             let job_id = args.get("job_id").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let tail_lines = args.get("tail_lines").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let pattern = args
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             let result = match parse_bash_id(job_id)
                 .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
             {
@@ -259,7 +288,11 @@ pub(crate) fn process_tools(
                     if out.is_empty() {
                         format!("{line}\n(no output yet)")
                     } else {
-                        format!("{line}\n{out}")
+                        match filter_bash_output(&out, tail_lines, pattern) {
+                            Ok(filtered) if filtered.is_empty() => format!("{line}\n(no matching lines)"),
+                            Ok(filtered) => format!("{line}\n{filtered}"),
+                            Err(e) => format!("{line}\n[{e}]"),
+                        }
                     }
                 }
                 None => format!("error: no such job: {job_id}"),
