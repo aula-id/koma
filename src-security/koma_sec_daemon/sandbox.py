@@ -7,6 +7,7 @@ run() wraps subprocess.run() with:
   - Optional bubblewrap (bwrap) network-isolation sandbox
   - Output cap at 400 000 chars with a truncation note
 """
+from __future__ import annotations
 
 import subprocess
 import sys

@@ -19,6 +19,7 @@ so this module is importable with ZERO toolkit installed.
 
 Stdlib only at module level.
 """
+from __future__ import annotations
 
 import os
 import re

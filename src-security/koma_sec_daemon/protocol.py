@@ -5,6 +5,7 @@ Frames are single UTF-8 lines: one JSON object per line, terminated by '\n'.
 Blank lines are silently ignored.
 Malformed JSON raises ValueError — the caller must turn that into an error frame.
 """
+from __future__ import annotations
 
 import json
 
