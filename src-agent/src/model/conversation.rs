@@ -313,4 +313,46 @@ impl Conversation {
             .find(|m| m.role == Role::User)
             .map(|m| m.content.clone())
     }
+
+    /// Render the recent conversation tail as a compact transcript for the
+    /// tool-call safety classifier (TAC).
+    ///
+    /// Returns the last `max_msgs` User/Assistant messages (System and Tool
+    /// messages are skipped — the classifier cares about human intent and the
+    /// agent's stated plan, not raw tool I/O), oldest-to-newest, one per line as
+    /// `User: ...` / `Assistant: ...`. Each message's content is trimmed and
+    /// truncated to `max_chars` (char-boundary safe, ellipsis appended when cut).
+    /// Empty-content messages (e.g. a tool-call-only assistant turn) are skipped
+    /// so no blank `Assistant:` lines leak in. Returns an empty string when there
+    /// is nothing to show.
+    ///
+    /// Why a tail and not just the latest user line: in multi-turn chats the most
+    /// recent user message is often a terse confirmation ("ok go!", "yes") whose
+    /// intent only resolves against the earlier request + the agent's proposal.
+    pub fn recent_context(&self, max_msgs: usize, max_chars: usize) -> String {
+        let mut picked: Vec<String> = self
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, Role::User | Role::Assistant))
+            .filter(|m| !m.content.trim().is_empty())
+            .rev()
+            .take(max_msgs)
+            .map(|m| {
+                let label = match m.role {
+                    Role::User => "User",
+                    _ => "Assistant",
+                };
+                let body = m.content.trim();
+                let body: String = if body.chars().count() > max_chars {
+                    let cut: String = body.chars().take(max_chars).collect();
+                    format!("{cut}…")
+                } else {
+                    body.to_string()
+                };
+                format!("{label}: {body}")
+            })
+            .collect();
+        picked.reverse();
+        picked.join("\n")
+    }
 }

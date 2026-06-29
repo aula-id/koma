@@ -330,7 +330,8 @@ pub async fn classify_prompt(
 }
 
 /// Tool-call classifier (TAC). Classify a single tool call for auto-run safety,
-/// INTENT-AWARE: it sees the user's latest request alongside the proposed call,
+/// INTENT-AWARE: it sees the recent conversation tail (the latest user message
+/// plus the prior turns and the agent's stated plan) alongside the proposed call,
 /// so it can block a mutation the user never asked for (e.g. the user asked a
 /// question but the model tried to edit a file).
 ///
@@ -343,12 +344,12 @@ pub async fn classify_toolcall(
     client: &OpenRouterClient,
     config: &AppConfig,
     settings: &Settings,
-    user_intent: &str,
+    convo_context: &str,
     tool_name: &str,
     args_json: &str,
 ) -> Verdict {
     let call = format!(
-        "User request: {user_intent}\n\nProposed tool call:\ntool: {tool_name}\narguments: {args_json}"
+        "Recent conversation (oldest to newest; the last line is the user's latest message, which may be a short confirmation of something proposed earlier):\n{convo_context}\n\nProposed tool call:\ntool: {tool_name}\narguments: {args_json}"
     );
     let messages = vec![
         ChatMessage::new(Role::System, crate::resources::classifier_toolcall()),

@@ -89,14 +89,17 @@ pub(crate) fn process_tools(
     handle: &tokio::runtime::Handle,
 ) {
     let mode = state.rest.agent_mode;
-    // The user's latest request, used to make TAC intent-aware. Cloned out once
-    // (empty when there's no user message) so the per-call `block_on` below holds
-    // no borrow of `state`. The most-recent User message is the real request even
-    // after the assistant's tool-call + tool-result messages were pushed.
-    let user_intent = state.rest.sessions[sess_idx]
+    // Recent conversation tail, used to make TAC intent-aware. Cloned out once
+    // (empty when there's no session) so the per-call `block_on` below holds no
+    // borrow of `state`. We feed the last few User/Assistant turns — NOT just the
+    // most-recent user line — because in multi-turn chats that last line is often a
+    // terse confirmation ("ok go!", "yes") whose intent only resolves against the
+    // earlier request and the agent's proposed plan. 6 messages × 600 chars keeps
+    // the safeguard call cheap.
+    let convo_context = state.rest.sessions[sess_idx]
         .session
         .as_ref()
-        .and_then(|sess| sess.conversation.last_user_content())
+        .map(|sess| sess.conversation.recent_context(6, 600))
         .unwrap_or_default();
     while state.rest.sessions[sess_idx].tool_idx < state.rest.sessions[sess_idx].pending_tool_calls.len() {
         let call = state.rest.sessions[sess_idx].pending_tool_calls
@@ -281,7 +284,7 @@ pub(crate) fn process_tools(
                         &c,
                         &config,
                         &settings,
-                        &user_intent,
+                        &convo_context,
                         &call.function.name,
                         &call.function.arguments,
                     ));
