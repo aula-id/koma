@@ -29,6 +29,7 @@ pub mod runtime;
 pub mod sec;
 pub mod state;
 pub mod subagent;
+pub mod update;
 pub mod version;
 
 pub use runtime::client_run;
@@ -38,3 +39,4 @@ pub use runtime::run_daemon_selftest;
 pub use runtime::{
     daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand,
 };
+pub use update::run_update;
