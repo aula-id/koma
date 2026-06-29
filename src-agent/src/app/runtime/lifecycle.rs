@@ -165,6 +165,20 @@ fn build_startup(
         &state.rest.config.mcp_servers,
     ));
 
+    // Build the security-daemon client. Mint a per-process token and, if the
+    // daemon is installed, auto-start it (M1: gated only on install; a later
+    // milestone adds the /security enabled-toggle gate). Non-blocking.
+    let sec_token = uuid::Uuid::new_v4().to_string();
+    let sec = crate::app::sec::SecDaemonManager::new(&handle);
+    // Auto-start is gated on BOTH install and the runtime enable flag. The flag
+    // starts `false` so the daemon stays off by default; the `/security` panel's
+    // toggle key (`t`) sets it and calls `.start()` explicitly.
+    if crate::security::is_installed() && state.rest.security_enabled {
+        sec.start(sec_token.clone());
+    }
+    state.rest.sec_token = sec_token;
+    state.rest.sec_manager = Some(sec);
+
     // Capture the process launch directory for the harness workspace check (WC).
     // This folder is always an allowed workspace regardless of the allow-list.
     if let Ok(cwd) = std::env::current_dir() {

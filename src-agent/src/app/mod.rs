@@ -3,12 +3,15 @@
 //! Exposes the sub-modules that together own the application's lifecycle:
 //!
 //! - [`awareness`] – project-doc summarisation for the self-awareness block
+//! - [`bgbash`] – background-bash registry: run a shell command detached, poll it
+//!   with `bash_output`, stop it with `bash_kill`
 //! - [`harness`] – safety classifier ("Pass B") + deterministic workspace check
 //! - [`mcp`] – MCP (Model Context Protocol) client: connect to configured servers,
 //!   discover their tools, advertise + dispatch them
 //! - [`mode`] – [`Mode`] enum and associated per-mode state types
 //! - [`resolve`] – per-role route resolution (model + provider + endpoint + key)
 //! - [`runtime`] – event loop, terminal setup/teardown, and the main `run` function that ties controller + view together
+//! - [`sec`] – security daemon client: spawn the Python `koma_sec_daemon`, discover its tools, advertise + dispatch them over newline-delimited JSON
 //! - [`state`] – [`AppState`] (mode + rest) and [`AppStateRest`] (shared fields used across all modes: messages, input, client, …)
 //! - [`subagent`] – self-contained autonomous sub-agent runtime (LLM-tool loop in a background task)
 //!
@@ -16,11 +19,13 @@
 //! [`run_daemon`] is likewise re-exported for the headless `koma --daemon` path.
 
 pub mod awareness;
+pub mod bgbash;
 pub mod harness;
 pub mod mcp;
 pub mod mode;
 pub mod resolve;
 pub mod runtime;
+pub mod sec;
 pub mod state;
 pub mod subagent;
 

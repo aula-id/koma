@@ -149,6 +149,40 @@ pub enum Action {
     /// Esc from the MCP dashboard (Browse, LIST focused) — discard any drafts and
     /// return to Chat.
     CloseMcp,
+    // --- Security daemon control panel actions ---
+    /// Esc from the `/security` panel — return to Chat.
+    CloseSecurity,
+    /// `t` in the `/security` panel — toggle the security-enabled flag: if now enabled,
+    /// start the daemon; if now disabled, stop it. Refreshes the panel status.
+    SecurityToggle,
+    /// `s` in the `/security` panel — start the daemon (no-op when already running).
+    SecurityStart,
+    /// `x` in the `/security` panel — stop the daemon (no-op when not running).
+    SecurityStop,
+    /// `r` in the `/security` panel — restart the daemon (stop then start).
+    SecurityRestart,
+    /// `Enter`/`Space` in the `/security` panel — toggle the currently-selected tool's
+    /// active state (flip its membership in `state.rest.sec_inactive`). A disabled tool
+    /// is no longer advertised to the model; re-enabling restores it. Refreshes the panel.
+    SecurityToggleTool,
+    /// `d` in the `/security` panel — toggle every tool sharing the selected tool's
+    /// domain: if all of that domain are currently active, disable them all; otherwise
+    /// enable them all. Refreshes the panel.
+    SecurityToggleDomain,
+    /// `i` in the `/security` panel's DEPENDENCY pane — install/repair the selected
+    /// dependency. Inner string is its manifest key (the argument to
+    /// [`crate::app::sec::SecDaemonManager::install`]). v1 runs the install BLOCKING
+    /// (a Tier-2 download can take seconds), then re-fetches install-health so the
+    /// pane's present-flags update.
+    SecurityInstall(String),
+    // --- Bash background-job panel actions ---
+    /// Esc from the `/bash` panel — return to Chat.
+    CloseBash,
+    /// `k` in the `/bash` panel — kill the selected RUNNING background bash job
+    /// (inner `usize` is its id, `bash-<id>`). The runtime resolves the job in the
+    /// foreground session's live registry and signals it; the panel stays open and
+    /// refreshes on the next key. A no-op when the id is absent or already terminal.
+    BashKillJob(usize),
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.

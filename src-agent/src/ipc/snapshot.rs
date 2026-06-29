@@ -25,4 +25,4 @@ mod projection;
 
 #[allow(unused_imports)]
 pub use diff::{diff, DiffResult};
-pub use projection::{build_snapshot, build_snapshot_with_mode, mode_snapshot};
+pub use projection::{bash_job_views, build_snapshot, build_snapshot_with_mode, mode_snapshot};

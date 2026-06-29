@@ -90,6 +90,26 @@ pub struct AppStateRest {
     /// builds it (and stays `None` for a config with no MCP servers — the manager is
     /// still built but inert, so this is `Some` of an empty manager in practice).
     pub mcp_manager: Option<std::sync::Arc<crate::app::mcp::McpManager>>,
+    /// The GLOBAL security daemon client manager, built once at startup. Shared
+    /// (cloned `Arc`) into every [`crate::tool::ToolCtx`] so `sec_*` tool calls can
+    /// be dispatched to the daemon. `None` until startup builds it (and stays inert
+    /// when the daemon is not installed — behaviour is byte-identical to a build
+    /// without the security daemon).
+    pub sec_manager: Option<std::sync::Arc<crate::app::sec::SecDaemonManager>>,
+    /// Token koma mints and hands the security daemon child at spawn.
+    pub sec_token: String,
+    /// Runtime flag: `true` when the user has enabled the security daemon from the
+    /// `/security` panel. Starts `false` so the daemon stays off by default even when
+    /// installed. The panel's toggle key (`t`) flips this and starts/stops the daemon.
+    pub security_enabled: bool,
+    /// Tool names the user has explicitly DISABLED from the `/security` panel (the
+    /// inactive set). Empty by default = every tool active, so the stream's
+    /// advertise-fold behaves byte-identically to before this feature when nothing has
+    /// been toggled off. The fold filters any `sec_` tool whose name is in this set out
+    /// of the advertised ToolDefs + allow-list + the awareness tool-list injection, so
+    /// disabled tools never bleed into the model's view (e.g. hiding PWN/CRYPTO tools
+    /// during WEB work). Toggled by the panel's Enter (one tool) / `d` (whole domain).
+    pub sec_inactive: std::collections::HashSet<String>,
     /// Set by `/select`; the event loop performs the terminal hand-off next tick.
     pub select_pending: bool,
     /// True while the conversation is dumped to the normal terminal for copying.
@@ -248,6 +268,10 @@ impl AppStateRest {
             last_provider: None,
             config: AppConfig::default(),
             mcp_manager: None,
+            sec_manager: None,
+            sec_token: String::new(),
+            security_enabled: false,
+            sec_inactive: std::collections::HashSet::new(),
             select_pending: false,
             select_active: false,
             transcript_cache: RefCell::new(TranscriptCache::default()),

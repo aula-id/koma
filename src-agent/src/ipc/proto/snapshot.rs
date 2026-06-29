@@ -471,6 +471,72 @@ pub struct HelpSnapshot {
     pub selected: usize,
 }
 
+/// A serde-safe projection of the `/security` daemon control panel.
+///
+/// Carries a full [`crate::app::sec::SecStatus`] (which already derives
+/// Serialize + Deserialize) plus the tool-list cursor. The projection re-reads
+/// LIVE status from the daemon manager at snapshot time (see
+/// `ipc::snapshot::projection::modes::security_snapshot`) so the panel always
+/// reflects current daemon state after start/stop/restart, rather than the
+/// potentially-stale snapshot that was open when the mode was entered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct SecuritySnapshot {
+    /// Live status from the daemon manager (running, installed, tools).
+    pub status: crate::app::sec::SecStatus,
+    /// Selected index into `status.tools` (the tool-inventory cursor).
+    pub selected: usize,
+    /// Tool names the user has disabled (the inactive set), as a sorted Vec so the
+    /// projection round-trips deterministically. Empty = every tool active. The view
+    /// dims a row whose name is in this list and the daemon filters them out of the
+    /// model's advertised tools.
+    #[serde(default)]
+    pub inactive: Vec<String>,
+    /// Per-dependency install-health, carried VERBATIM from the open mode state (NOT
+    /// re-fetched at snapshot time — `health()` is a heavy IPC round-trip and the
+    /// projection runs every frame). Empty when the daemon is stopped.
+    #[serde(default)]
+    pub install_health: Vec<crate::app::sec::InstallHealthEntry>,
+    /// Which body pane is showing: `false` = tools (default), `true` = dependencies.
+    #[serde(default)]
+    pub health_view: bool,
+    /// Selected index into `install_health` (the dependency-pane cursor).
+    #[serde(default)]
+    pub health_selected: usize,
+}
+
+/// A serde-safe projection of ONE background bash job for the `/bash` panel.
+///
+/// An already-rendered view of a [`crate::app::bgbash::BashJob`] (whose live
+/// `Arc<Mutex<…>>` + `Instant` state can't cross the wire): `status` is the
+/// status rendered to a label (`"running"` / `"exit {n}"` / `"killed"` /
+/// `"error: {…}"`), `running` flags a still-live job, `elapsed_secs` is the
+/// wall-clock age, and `output_tail` is the last slice of captured output. Built
+/// LIVE every frame by `bash_job_views`, exactly as the agents list is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct BashJobView {
+    pub id: usize,
+    pub command: String,
+    pub status: String,
+    pub running: bool,
+    pub elapsed_secs: u64,
+    pub output_tail: String,
+}
+
+/// A serde-safe projection of the `/bash` background-job panel.
+///
+/// Mirrors [`AgentsSnapshot`]'s shape (list + cursor): the job views + the LIST
+/// cursor. The client rebuilds [`crate::app::mode::BashState`] from this verbatim
+/// and renders the same master/detail view; it never mutates it (keys are
+/// forwarded to the daemon).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct BashSnapshot {
+    pub jobs: Vec<BashJobView>,
+    pub selected: usize,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

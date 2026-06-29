@@ -8,6 +8,7 @@ use crate::app::state::AppState;
 use crate::controller::command::Command;
 use crate::service::openrouter::OpenRouterClient;
 
+mod bash;
 mod cd;
 mod compact;
 mod effort;
@@ -18,6 +19,7 @@ pub(crate) mod internet;
 mod mcp;
 mod misc;
 pub(crate) mod new_session;
+mod security;
 mod task;
 
 /// Apply a parsed slash command. Like [`apply_action`], it mutates state and
@@ -37,12 +39,14 @@ pub(super) fn apply_slash(
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,
         Command::Mcp => mcp::handle_mcp(state)?,
+        Command::Security => security::handle_security(state)?,
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,
         Command::Help => misc::handle_help(state)?,
         Command::Usage => misc::handle_usage(state)?,
         Command::Quit => misc::handle_quit(state)?,
         Command::Task(args) => task::handle_task(args, state, client, handle)?,
+        Command::Bash => bash::handle_bash(state)?,
         Command::Cd(path) => cd::handle_cd(path, state, client, handle)?,
         Command::AddDir(path) => cd::handle_adddir(path, state)?,
         Command::Internet(target) => internet::handle_internet(target, state)?,

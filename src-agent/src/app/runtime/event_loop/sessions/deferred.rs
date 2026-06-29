@@ -97,6 +97,44 @@ pub(super) fn drain_deferred_and_resume(
         }
     }
 
+    // --- drain background-bash COMPLETION signals (toast only) ---
+    // A `bash` call with `run_in_background: true` runs DETACHED on its own worker
+    // thread (spawned in `process_tools` via `bgbash::spawn_bash_job`); when the
+    // child exits the worker fires the finished job id over `bash_done_tx`. This is
+    // a fire-and-forget completion: the job is NEVER parked on (the tool already
+    // answered with its id immediately), so finishing only pops an info toast so
+    // the user sees it landed. The job STAYS in `bash_jobs` so a later
+    // `bash_output` can still read its final status + output. Non-blocking
+    // try_recv loop. (Chat-line rendering of the completion is a later stage.)
+    {
+        // Drain the finished ids into a local FIRST so the `rx` borrow of this
+        // session's runtime is released before we look the jobs back up below.
+        let mut finished: Vec<usize> = Vec::new();
+        if let Some(rx) = state.rest.sessions[idx].bash_done_rx.as_mut() {
+            while let Ok(id) = rx.try_recv() {
+                finished.push(id);
+            }
+        }
+        for id in finished {
+            // Snapshot the final status into a short label for the toast. An id
+            // with no matching job (cleared session) just falls through silently.
+            let label = state.rest.sessions[idx]
+                .bash_jobs
+                .iter()
+                .find(|j| j.id == id)
+                .map(|j| match j.snapshot_status() {
+                    crate::app::bgbash::BashJobStatus::Running => "running".to_string(),
+                    crate::app::bgbash::BashJobStatus::Done(code) => format!("exit {code}"),
+                    crate::app::bgbash::BashJobStatus::Killed => "killed".to_string(),
+                    crate::app::bgbash::BashJobStatus::Error(msg) => format!("error: {msg}"),
+                });
+            if let Some(label) = label {
+                state.rest.set_toast_info(format!("bash-{id} finished: {label}"));
+                dirty = true;
+            }
+        }
+    }
+
     // --- resume a round parked on deferred work (BOTH lanes) ---
     // Unpark only when EVERY deferred id — sub-agent delegations AND deferred
     // tool tasks — has filled its result (above). The resume

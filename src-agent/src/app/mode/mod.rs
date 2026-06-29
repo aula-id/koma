@@ -29,9 +29,13 @@ pub mod agents;
 pub mod mcp;
 pub mod help;
 pub mod editor;
+pub mod security;
+pub mod bash;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
+pub use security::SecurityState;
+pub use bash::BashState;
 // `HelpEntry` is part of the module's public surface and will be consumed by the
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
@@ -219,4 +223,18 @@ pub enum Mode {
     /// count for the warning text. Boxed for consistency with the other overlay
     /// variants (it is small, but the box keeps `Mode` uniform + cheap to move).
     QuitConfirm(Box<QuitConfirmState>),
+    /// Security daemon control panel (`/security`): a full-screen status view +
+    /// lifecycle controls (start/stop/restart/toggle) + the tool inventory from the
+    /// daemon's last handshake. No editor sub-modes — control panel only. The inner
+    /// [`SecurityState`] holds the daemon status snapshot + the tool-list cursor.
+    /// Boxed to keep `Mode` small, consistent with the other full-screen variants.
+    Security(Box<SecurityState>),
+    /// Background bash-job panel (`/bash`): a READ-ONLY master/detail view of the
+    /// foreground session's background bash jobs (the LEFT pane lists them, the
+    /// RIGHT pane shows the selected job's command + status + live output tail).
+    /// The only mutating action is killing a running job (`k`) — no editing, no
+    /// create/delete, no pickers, no sub-modes. The inner [`BashState`] holds the
+    /// (live-projected) job list + the LIST cursor. Boxed to keep `Mode` small,
+    /// consistent with the other full-screen variants.
+    Bash(Box<BashState>),
 }

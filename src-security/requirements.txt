@@ -1,0 +1,11 @@
+checksec.py
+fpylll
+hashid
+jsbeautifier
+name-that-hash
+playwright
+pwntools>=4.15
+requests>=2.31
+ROPgadget
+sqlmap
+z3-solver

@@ -13,8 +13,10 @@
 //! No logic lives here; all rendering decisions belong to the sub-modules.
 
 pub mod agents;
+pub mod bash;
 pub mod chat;
 pub mod mcp;
+pub mod security;
 pub mod help;
 pub mod effort;
 pub mod key_input;
@@ -87,6 +89,8 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 .or_else(|| m.shadow_status.clone());
             mcp::draw(frame, m, status.as_ref(), &palette);
         }
+        Mode::Security(s) => security::draw(frame, s, &palette),
+        Mode::Bash(b) => bash::draw_bash(frame, b, &palette),
         Mode::Help(h) => help::draw(frame, h, &palette),
         Mode::Effort(e) => effort::draw(frame, e, &palette),
         Mode::Loading(s) => loading::draw(frame, s, &palette),

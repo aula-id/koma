@@ -50,11 +50,12 @@ fn emit(tx: &UnboundedSender<AgentEvent>, event: AgentEvent) {
     let _ = tx.send(event);
 }
 
-/// True for tools that mutate the workspace (or run arbitrary shell commands),
-/// matching `app::runtime::stream::tool_is_risky`. Deterministic, name-based.
-/// A risky call must clear the tool-call classifier before it runs.
+/// True for tools that mutate the workspace (or run arbitrary shell commands).
+/// Delegates to the single canonical definition in [`crate::tool::tool_is_risky`]
+/// so the builtin-risky check is never duplicated. A risky call must clear the
+/// tool-call classifier before it runs.
 fn tool_is_risky(name: &str) -> bool {
-    matches!(name, "write" | "delete" | "edit" | "bash")
+    crate::tool::tool_is_risky(name)
 }
 
 /// Returns `true` when `text` looks like interstitial narration rather than a
@@ -300,6 +301,7 @@ pub async fn run_agent_loop(
             // 4b. Risky calls (write/delete/edit/bash) must clear the tool-call
             //     classifier first. FAIL CLOSED: an unavailable classifier blocks
             //     the call (a sub-agent has no human to defer to).
+            // sec_* tools are harness-exempt (see approval.rs) — only builtin risky tools gate.
             if tool_is_risky(&name) {
                 let verdict = crate::app::harness::classify_toolcall(
                     &client,

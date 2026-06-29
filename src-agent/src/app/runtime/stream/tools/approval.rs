@@ -10,10 +10,36 @@ use crate::service::openrouter::OpenRouterClient;
 use crate::app::state::AgentMode;
 
 /// True for tools that mutate the workspace (or run arbitrary shell commands)
-/// and therefore require approval in Normal mode. Deterministic, name-based —
-/// no classifier / network call.
-pub(super) fn tool_is_risky(name: &str) -> bool {
-    matches!(name, "write" | "delete" | "edit" | "bash")
+/// and therefore require approval in Normal mode. Thin re-export of the
+/// canonical definition in [`crate::tool::tool_is_risky`] so callers within
+/// this module use the local name unchanged.
+fn tool_is_risky(name: &str) -> bool {
+    crate::tool::tool_is_risky(name)
+}
+
+/// Parse a background-bash job handle (`bash-<n>`, or a bare `<n>`) into its
+/// numeric id. Returns `None` for anything that doesn't end in a number, so an
+/// unknown/garbage handle surfaces a clean "no such job" error to the model.
+fn parse_bash_id(job_id: &str) -> Option<usize> {
+    job_id
+        .strip_prefix("bash-")
+        .unwrap_or(job_id)
+        .trim()
+        .parse::<usize>()
+        .ok()
+}
+
+/// Render a one-line status banner for a background bash job, shown FIRST in a
+/// `bash_output` result so the model sees the lifecycle at a glance: `[running]`,
+/// `[exit <code>]`, `[killed]`, or `[error: <msg>]`.
+fn bash_status_line(status: &crate::app::bgbash::BashJobStatus) -> String {
+    use crate::app::bgbash::BashJobStatus::*;
+    match status {
+        Running => "[running]".to_string(),
+        Done(code) => format!("[exit {code}]"),
+        Killed => "[killed]".to_string(),
+        Error(msg) => format!("[error: {msg}]"),
+    }
 }
 
 /// Inputs for a tool-call-classifier (TAC) call, or `None` when TAC should not
@@ -160,6 +186,110 @@ pub(crate) fn process_tools(
             state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
         }
+        // Intercept a model-callable `bash` call with `run_in_background: true`
+        // BEFORE the generic classify/dispatch path: register a background job,
+        // spawn it DETACHED, and answer the call IMMEDIATELY with its job id (do
+        // NOT park the round). The model then polls the captured output with
+        // `bash_output` and stops it with `bash_kill` (both intercepted below).
+        // A plain `bash` (no `run_in_background`, or `false`) is left UNTOUCHED —
+        // it falls through to the normal approval gate + deferred lane exactly as
+        // before, so default behaviour is unchanged.
+        if call.function.name == "bash" {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let background = args
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if background {
+                let command = args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let result = if command.trim().is_empty() {
+                    "error: bash requires a non-empty 'command'".to_string()
+                } else {
+                    // Lazily create THIS session's completion channel once, then
+                    // reuse it (mirrors the deferred tool-task channel). The worker
+                    // fires the finished job id over `bash_done_tx`; the event-loop
+                    // deferred drain reads `bash_done_rx` to pop a toast.
+                    if state.rest.sessions[sess_idx].bash_done_tx.is_none() {
+                        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                        state.rest.sessions[sess_idx].bash_done_tx = Some(tx);
+                        state.rest.sessions[sess_idx].bash_done_rx = Some(rx);
+                    }
+                    let id = state.rest.sessions[sess_idx].next_bash_id();
+                    // Same effective cwd the inline `bash` runs in (the `cd`
+                    // override, else the configured workdir).
+                    let cwd = state.rest.sessions[sess_idx].effective_cwd();
+                    let done_tx = state.rest.sessions[sess_idx].bash_done_tx.clone();
+                    let job = crate::app::bgbash::spawn_bash_job(id, command, cwd, done_tx);
+                    state.rest.sessions[sess_idx].bash_jobs.push(job);
+                    format!(
+                        "started background job bash-{id} (running). Poll with \
+                         bash_output{{\"job_id\":\"bash-{id}\"}}, stop with \
+                         bash_kill{{\"job_id\":\"bash-{id}\"}}."
+                    )
+                };
+                state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+            // Not a background bash — fall through to the normal path below.
+        }
+        // Intercept the model-callable `bash_output` tool: look up the background
+        // job in this session's registry and answer synchronously with a status
+        // line followed by the captured output so far. Never parks. An unknown id
+        // returns an `error:` line surfaced to the model verbatim.
+        if call.function.name == "bash_output" {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let job_id = args.get("job_id").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let result = match parse_bash_id(job_id)
+                .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
+            {
+                Some(job) => {
+                    let line = bash_status_line(&job.snapshot_status());
+                    let out = job.output_snapshot();
+                    if out.is_empty() {
+                        format!("{line}\n(no output yet)")
+                    } else {
+                        format!("{line}\n{out}")
+                    }
+                }
+                None => format!("error: no such job: {job_id}"),
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `bash_kill` tool: find the job and SIGTERM
+        // it (best effort), flipping its status to `Killed`. Never parks. An
+        // unknown id returns an `error:` line.
+        if call.function.name == "bash_kill" {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let job_id = args.get("job_id").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let result = match parse_bash_id(job_id)
+                .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
+            {
+                Some(job) => {
+                    crate::app::bgbash::kill_bash_job(job);
+                    format!("job bash-{} killed", job.id)
+                }
+                None => format!("error: no such job: {job_id}"),
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
         // Intercept the model-callable `cd` tool BEFORE the generic dispatch path.
         // `cd` must MUTATE session state (the live cwd + dir cache + awareness),
         // which a read-only `ToolCtx` can't do — so the tool's `run` only RESOLVES
@@ -276,6 +406,10 @@ pub(crate) fn process_tools(
             state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
         }
+        // `sec_*` tools are harness-EXEMPT: security mode is explicit user
+        // authorization to test their own target, so the TAC classifier (built to
+        // block unrequested mutations) would only block legit offensive steps. The
+        // tool's `risk` metadata is still shown in the /security panel as a label.
         if tool_is_risky(&call.function.name) {
             match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
@@ -374,6 +508,7 @@ pub(crate) fn process_tools(
         // off-thread deferred lane as bash/read/web_fetch.
         if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str())
             || call.function.name.starts_with("mcp__")
+            || call.function.name.starts_with("sec_")
         {
             super::dispatch::dispatch_deferred(state, sess_idx, &call);
             return;

@@ -49,6 +49,10 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // into every ToolCtx so `mcp__*` tool calls can dispatch to their server. `None`
     // before startup builds it (and harmless when there are no MCP servers).
     let mcp_manager = state.rest.mcp_manager.clone();
+    // The GLOBAL security daemon manager (built once at startup, shared across
+    // sessions). Cloned into every ToolCtx so `sec_*` tool calls can dispatch to
+    // the daemon. `None` before startup builds it (and inert when not installed).
+    let sec_manager = state.rest.sec_manager.clone();
     crate::tool::ToolCtx {
         workspace,
         workspaces,
@@ -57,6 +61,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         internet_mode,
         ssh_key,
         mcp_manager,
+        sec_manager,
     }
 }
 

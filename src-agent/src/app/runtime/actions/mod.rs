@@ -15,6 +15,7 @@ use crate::controller::input::Action;
 use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
+mod bash;
 mod chat;
 mod mcp;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
@@ -22,6 +23,7 @@ mod mcp;
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
 pub(in crate::app::runtime) mod quit;
 mod rewind;
+mod security;
 mod session;
 mod settings;
 
@@ -183,6 +185,46 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseMcp => {
             mcp::handle_close_mcp(state)?;
+        }
+
+        Action::CloseSecurity => {
+            security::handle_close_security(state)?;
+        }
+
+        Action::SecurityToggle => {
+            security::handle_security_toggle(state)?;
+        }
+
+        Action::SecurityStart => {
+            security::handle_security_start(state)?;
+        }
+
+        Action::SecurityStop => {
+            security::handle_security_stop(state)?;
+        }
+
+        Action::SecurityRestart => {
+            security::handle_security_restart(state)?;
+        }
+
+        Action::SecurityToggleTool => {
+            security::handle_security_toggle_tool(state)?;
+        }
+
+        Action::SecurityToggleDomain => {
+            security::handle_security_toggle_domain(state)?;
+        }
+
+        Action::SecurityInstall(key) => {
+            security::handle_security_install(key, state)?;
+        }
+
+        Action::CloseBash => {
+            bash::handle_close_bash(state)?;
+        }
+
+        Action::BashKillJob(id) => {
+            bash::handle_bash_kill(id, state)?;
         }
 
         Action::CloseHelp => {
