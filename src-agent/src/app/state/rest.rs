@@ -234,6 +234,23 @@ pub struct AppStateRest {
     /// composer's last token is an `@partial`; the daemon leaves it `None` otherwise
     /// so it never lingers into an unrelated frame.
     pub file_palette: Option<Vec<String>>,
+    /// The newest koma version learned from the public version endpoint. `None`
+    /// until the first background check SUCCEEDS (a failed/unreachable check leaves
+    /// it `None`, so the UI shows only the current version). Updated in place on the
+    /// event-loop tick when a fresh [`crate::app::version::VersionInfo`] arrives;
+    /// kept as the LATEST received. Read-only for the UI (next stage), which compares
+    /// it against [`crate::model::store::current_version`] via
+    /// [`crate::app::version::is_newer`] to decide whether to advertise an update.
+    pub latest_version: Option<crate::app::version::VersionInfo>,
+    /// Clone-per-spawn SENDER for the background version check. Created once in
+    /// `new()` and held for the app's lifetime; every session spawn clones it into a
+    /// fresh [`crate::app::version::spawn_check`] thread. Because this end is kept
+    /// alive here, the channel never observes a premature `Disconnected` in the drain.
+    pub version_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::app::version::VersionInfo>>,
+    /// RECEIVER for the background version check, drained each tick in the event
+    /// loop (alongside `warm_rx`/`endpoints_rx`). Each `try_recv`'d `VersionInfo` is
+    /// stored into `latest_version`. Non-blocking: never awaited.
+    pub version_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::version::VersionInfo>>,
 }
 
 impl Default for AppStateRest {
@@ -244,6 +261,11 @@ impl Default for AppStateRest {
 
 impl AppStateRest {
     pub fn new() -> Self {
+        // Version-check channel, created ONCE here: the sender is cloned per session
+        // spawn into a background `spawn_check` thread; the receiver is drained each
+        // event-loop tick into `latest_version`. Holding the sender for the app's
+        // lifetime keeps the drain from ever seeing a premature `Disconnected`.
+        let (vtx, vrx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             sessions: vec![SessionRuntime::new()],
             foreground: 0,
@@ -296,6 +318,9 @@ impl AppStateRest {
             clipboard_rx: None,
             usage_data: None,
             file_palette: None,
+            latest_version: None,
+            version_tx: Some(vtx),
+            version_rx: Some(vrx),
         }
     }
 

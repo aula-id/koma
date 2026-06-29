@@ -120,6 +120,11 @@ fn build_startup(
                     // brand-new session has no ledger yet); harmless and explicit.
                     let fg = st.rest.foreground;
                     st.rest.load_token_totals(fg, &sess_path);
+                    // Every session spawn kicks a fresh NON-BLOCKING version check;
+                    // the result lands in `latest_version` when (if) it succeeds.
+                    if let Some(tx) = st.rest.version_tx.as_ref() {
+                        crate::app::version::spawn_check(tx.clone());
+                    }
                 }
                 Err(e) => {
                     // Couldn't create the session dir — fall back to the prompt.

@@ -14,6 +14,7 @@
 //! - [`sec`] – security daemon client: spawn the Python `koma_sec_daemon`, discover its tools, advertise + dispatch them over newline-delimited JSON
 //! - [`state`] – [`AppState`] (mode + rest) and [`AppStateRest`] (shared fields used across all modes: messages, input, client, …)
 //! - [`subagent`] – self-contained autonomous sub-agent runtime (LLM-tool loop in a background task)
+//! - [`version`] – self-update awareness: compiled-in version + non-blocking check against the public version endpoint
 //!
 //! [`run`] is re-exported at this level so callers only need `app::run(opts)`.
 //! [`run_daemon`] is likewise re-exported for the headless `koma --daemon` path.
@@ -28,6 +29,8 @@ pub mod runtime;
 pub mod sec;
 pub mod state;
 pub mod subagent;
+pub mod update;
+pub mod version;
 
 pub use runtime::client_run;
 pub use runtime::run;
@@ -36,3 +39,4 @@ pub use runtime::run_daemon_selftest;
 pub use runtime::{
     daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand,
 };
+pub use update::run_update;
