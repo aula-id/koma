@@ -25,7 +25,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
     ("/mcp", "Add, edit, or remove MCP servers"),
-    ("/task", "Run an agent on a task in the background"),
+    ("/task", "Run an agent on a task, or open the sub-agents viewer (no args)"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),

@@ -18,6 +18,17 @@ pub(super) fn handle_task(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
+    // `/task` with no args is a convenient, always-reliable way to open the
+    // sub-agents overlay (same panel as the `$` key, which only fires on an empty
+    // composer). With args, fall through to the normal spawn path below.
+    if args.trim().is_empty() {
+        state.rest.subagents_open = true;
+        state.rest.subagent_sel = state
+            .rest
+            .subagent_sel
+            .min(state.rest.fg().subagents.len().saturating_sub(1));
+        return Ok(());
+    }
     // Guard: needs an active client + session.
     if client.is_none() || state.rest.fg().session.is_none() {
         state.rest.status = "no active session".into();
