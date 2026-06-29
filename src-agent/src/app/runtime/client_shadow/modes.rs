@@ -515,6 +515,8 @@ pub(crate) fn shadow_help(s: HelpSnapshot) -> HelpState {
             .collect(),
         filtered_idx: s.filtered_idx,
         selected: s.selected,
+        current_version: s.current_version,
+        update: s.update,
     }
 }
 

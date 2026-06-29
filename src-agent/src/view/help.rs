@@ -18,7 +18,7 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -30,18 +30,30 @@ use crate::view::theme::Palette;
 /// Width the key column is padded to (so descriptions align in a column).
 const KEY_W: usize = 16;
 
+/// Hardcoded "newer version available" green (NOT themeable — matches the header
+/// badge in `view::chat::header`).
+const GREEN: Color = Color::Rgb(57, 255, 20);
+
 /// Render the help reference for `st` using the given colour `palette`.
 ///
-/// All colours flow through `palette` — no hardcoded `Color::` values.
+/// Colours flow through `palette`, except the fixed `GREEN` "update available"
+/// accent in the "Updating koma" block (it mirrors the non-themeable header badge).
 pub fn draw(frame: &mut Frame, st: &HelpState, palette: &Palette) {
-    // Outer vertical zones: header | search | list | footer.
+    // Height of the "Updating koma" block: label + current/available + run-command,
+    // plus one extra line when the update carries a release message. A trailing
+    // spacer line separates it from the search row.
+    let has_msg = matches!(&st.update, Some((_, Some(_))));
+    let update_h = if has_msg { 4 } else { 3 } + 1; // +1 spacer
+
+    // Outer vertical zones: header | update block | search | list | footer.
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // header text + BOTTOM border
-            Constraint::Length(2), // search line + spacer
-            Constraint::Min(0),    // filtered list
-            Constraint::Length(1), // footer hint
+            Constraint::Length(2),                 // header text + BOTTOM border
+            Constraint::Length(update_h as u16),   // "Updating koma" info block + spacer
+            Constraint::Length(2),                 // search line + spacer
+            Constraint::Min(0),                    // filtered list
+            Constraint::Length(1),                 // footer hint
         ])
         .split(frame.area());
 
@@ -59,8 +71,38 @@ pub fn draw(frame: &mut Frame, st: &HelpState, palette: &Palette) {
         }),
     );
 
+    // --- "Updating koma" info block (dim, non-interactive — sits above search). ---
+    let update_inner = outer[1].inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
+    let dim = Style::default().fg(palette.dim);
+    let mut update_lines: Vec<Line> = Vec::with_capacity(4);
+    // Section label.
+    update_lines.push(Line::from(Span::styled("updating koma", dim)));
+    // Current (+ available [latest] when an update is known).
+    let mut cur_spans = vec![Span::styled(
+        format!("  current {}", st.current_version),
+        dim,
+    )];
+    if let Some((latest, _)) = &st.update {
+        cur_spans.push(Span::styled("  ·  available ", dim));
+        cur_spans.push(Span::styled(format!("[{latest}]"), Style::default().fg(GREEN)));
+    }
+    update_lines.push(Line::from(cur_spans));
+    // How to update.
+    update_lines.push(Line::from(Span::styled(
+        "  run  koma update  in your shell  (or  curl -fsSL https://koma.run/install.sh | sh )",
+        dim,
+    )));
+    // Optional release message.
+    if let Some((_, Some(msg))) = &st.update {
+        update_lines.push(Line::from(Span::styled(format!("  {msg}"), dim)));
+    }
+    frame.render_widget(Paragraph::new(update_lines), update_inner);
+
     // --- Search line (live query + block cursor) ---
-    let search_inner = outer[1].inner(Margin {
+    let search_inner = outer[2].inner(Margin {
         horizontal: 2,
         vertical: 0,
     });
@@ -72,7 +114,7 @@ pub fn draw(frame: &mut Frame, st: &HelpState, palette: &Palette) {
     frame.render_widget(Paragraph::new(search_line), search_inner);
 
     // --- Filtered list (windowed so the selection stays visible) ---
-    let list_inner = outer[2].inner(Margin {
+    let list_inner = outer[3].inner(Margin {
         horizontal: 2,
         vertical: 0,
     });
@@ -129,7 +171,7 @@ pub fn draw(frame: &mut Frame, st: &HelpState, palette: &Palette) {
     }
 
     // --- Footer: full-width inverse hint bar (matches /mcp). ---
-    let footer_rect = outer[3];
+    let footer_rect = outer[4];
     if footer_rect.width > 0 {
         let hint = "type to search · ↑/↓ select · Enter run · Esc close";
         let bar_style = Style::default()

@@ -3,8 +3,10 @@
 
 use anyhow::Result;
 
-use crate::app::mode::{AgentsState, Mode, SettingsState};
+use crate::app::mode::{AgentsState, HelpState, Mode, SettingsState};
 use crate::app::state::AppState;
+use crate::app::version;
+use crate::model::store;
 
 /// Handle the `/mode` command: toggle chat ↔ agentic mode.
 pub(super) fn handle_mode(state: &mut AppState) -> Result<()> {
@@ -74,7 +76,17 @@ pub(super) fn handle_select(state: &mut AppState) -> Result<()> {
 /// COMMANDS + KEYBINDINGS registries), so there is no busy/session guard — it
 /// opens regardless of session state, like `/usage`.
 pub(super) fn handle_help(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Help(Box::default());
+    // Resolve the "Updating koma" version data from app state at open time: the
+    // compiled-in version, plus the fetched latest IFF it is strictly newer.
+    let current = store::current_version();
+    let update = state
+        .rest
+        .latest_version
+        .as_ref()
+        .filter(|v| version::is_newer(&v.version, current))
+        .map(|v| (v.version.clone(), v.message.clone()));
+    let st = HelpState::new().with_version(current.to_string(), update);
+    state.mode = Mode::Help(Box::new(st));
     Ok(())
 }
 
