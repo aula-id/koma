@@ -69,6 +69,13 @@ pub(super) fn apply_compaction_result(
     summary: String,
     kept_tail: Vec<crate::dto::chat::ChatMessage>,
 ) {
+    // Some summariser models (gpt-oss / harmony) emit inline tool-call markup
+    // (`<tool_call>…</tool_call>`, `<function=…>`, `<parameter=…>`) inside their
+    // text. Strip it here so the raw XML never lands in the stored summary
+    // message, the wire history, or the toast — the same scrub the streaming /
+    // final-answer paths already apply to assistant content.
+    let summary = crate::dto::chat::strip_tool_call_tags(&summary);
+
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);
