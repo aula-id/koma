@@ -151,6 +151,12 @@ pub(crate) fn handle_new(
         // we just wrote — so it is a no-op for locks and never releases the
         // previous foreground's lock.
         super::super::warm_session(state, client, handle);
+        // Every session spawn kicks a fresh NON-BLOCKING version check; the result
+        // lands in `latest_version` when (if) it succeeds. Fires only on the
+        // creds-present path — the no-creds branch defers to the KeyInput confirm.
+        if let Some(tx) = state.rest.version_tx.as_ref() {
+            crate::app::version::spawn_check(tx.clone());
+        }
     }
     Ok(())
 }

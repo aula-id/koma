@@ -246,6 +246,14 @@ pub fn write_daemon_pid() -> Result<()> {
 /// version. That fallback is coarser (it won't catch a same-version rebuild) but
 /// is strictly better than aborting the attach — a missing fingerprint must never
 /// take the client down.
+/// The compiled-in koma version (from Cargo.toml).
+// Consumed by the version/update UI (next stage), which compares it against the
+// fetched `latest_version` via `crate::app::version::is_newer`.
+#[allow(dead_code)]
+pub fn current_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 pub fn build_fingerprint() -> String {
     let version = env!("CARGO_PKG_VERSION");
 
