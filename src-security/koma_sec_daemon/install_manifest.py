@@ -142,13 +142,12 @@ MANIFEST: list[dict] = [
     {
         "key": "RsaCtfTool",
         "name": "RsaCtfTool",
-        "tier": 1,
-        "method": "pip",
+        "tier": 3,
+        "method": "manual",
         "detect": "RsaCtfTool",
         "detect_kind": "which",
         "tools": ["sec_rsa"],
-        "hint": "pip install RsaCtfTool",
-        "pip": ["RsaCtfTool"],
+        "hint": "git clone https://github.com/RsaCtfTool/RsaCtfTool && pip install -r RsaCtfTool/requirements.txt  (needs Python <=3.11; not pip-installable on 3.12)",
     },
     {
         "key": "ROPgadget",

@@ -7,6 +7,5 @@ playwright
 pwntools>=4.15
 requests>=2.31
 ROPgadget
-RsaCtfTool
 sqlmap
 z3-solver

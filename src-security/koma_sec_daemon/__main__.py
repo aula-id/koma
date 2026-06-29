@@ -63,7 +63,8 @@ def main() -> None:
     from koma_sec_daemon.install_manifest import bin_dir
     _bd = bin_dir()
     os.makedirs(_bd, exist_ok=True)
-    os.environ["PATH"] = _bd + os.pathsep + os.environ.get("PATH", "")
+    _venv_bin = os.path.dirname(sys.executable)
+    os.environ["PATH"] = _bd + os.pathsep + _venv_bin + os.pathsep + os.environ.get("PATH", "")
 
     # --- HANDSHAKE ---
     try:
