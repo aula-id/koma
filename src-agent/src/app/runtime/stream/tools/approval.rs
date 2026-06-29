@@ -1,16 +1,18 @@
 //! Tool-approval state machine: classify, run, deny, finish tool rounds.
+//! Includes risky-tool detection, TAC (tool-call classifier) inputs, and the
+//! main `process_tools` loop that drives approval/dispatch for each tool call.
 
 use std::sync::Arc;
 
 use crate::app::state::AppState;
-use crate::dto::chat::{Role, ToolCall};
+use crate::dto::chat::ToolCall;
 use crate::service::openrouter::OpenRouterClient;
 use crate::app::state::AgentMode;
 
 /// True for tools that mutate the workspace (or run arbitrary shell commands)
 /// and therefore require approval in Normal mode. Deterministic, name-based —
 /// no classifier / network call.
-fn tool_is_risky(name: &str) -> bool {
+pub(super) fn tool_is_risky(name: &str) -> bool {
     matches!(name, "write" | "delete" | "edit" | "bash")
 }
 
@@ -20,7 +22,7 @@ fn tool_is_risky(name: &str) -> bool {
 /// call, Auto runs it) — the unchanged path when the harness is off. The
 /// `Settings` and client `Arc` are cloned out so the caller's `block_on` doesn't
 /// hold a borrow of `state`.
-fn tac_inputs(
+pub(super) fn tac_inputs(
     state: &AppState,
     sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
@@ -61,12 +63,12 @@ fn tac_inputs(
 /// A pause sets `awaiting_approval` and returns; the turn is resumed later by
 /// [`Action::ApproveTool`] / [`Action::DenyTool`] (which run/deny that one call,
 /// advance `tool_idx`, and call back in here). Once every call in the round has
-/// resolved it calls [`finish_tool_round`].
+/// resolved it calls [`super::dispatch::finish_tool_round`].
 ///
 /// **Deferred tools.** A call cleared to run whose name is in
 /// [`crate::tool::DEFERRED_TOOLS`] (the heavy/blocking ones — read/write/edit/
 /// delete/bash/grep/glob/remember/web_fetch/web_search) is NOT run inline:
-/// [`dispatch_deferred`] hands it to a background `std::thread` and PARKS the
+/// [`super::dispatch::dispatch_deferred`] hands it to a background `std::thread` and PARKS the
 /// round. The round's deferred tools run ONE AT A TIME — after dispatching a
 /// deferred call we `return` immediately rather than looping, so the next call
 /// isn't dispatched until this one's result lands (correctness: two writes to the
@@ -132,7 +134,7 @@ pub(crate) fn process_tools(
                 // `pending_subagent_calls`, so the parked round waits for the
                 // delegation whether it runs now or later — its result fills when
                 // the agent (eventually) finishes.
-                match super::spawn::spawn_or_queue(
+                match super::super::spawn::spawn_or_queue(
                     state,
                     sess_idx,
                     client,
@@ -141,13 +143,13 @@ pub(crate) fn process_tools(
                     &prompt,
                     Some(call.id.clone()),
                 ) {
-                    super::spawn::SpawnOutcome::Spawned(_)
-                    | super::spawn::SpawnOutcome::Queued(_) => {
+                    super::super::spawn::SpawnOutcome::Spawned(_)
+                    | super::super::spawn::SpawnOutcome::Queued(_) => {
                         state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone())
                     }
                     // Nothing started or queued (no client/session or unknown
                     // agent) → answer the call now so it isn't left dangling.
-                    super::spawn::SpawnOutcome::Failed => state.rest.sessions[sess_idx]
+                    super::super::spawn::SpawnOutcome::Failed => state.rest.sessions[sess_idx]
                         .tool_results
                         .push((call.id.clone(), format!("error: unknown agent '{agent}'"))),
                 }
@@ -167,10 +169,10 @@ pub(crate) fn process_tools(
         // + stat), so running it inline here — not via the deferred lane — is fine.
         // `tool_idx` advances either way so the rest of the round still processes.
         if call.function.name == "cd" {
-            let result = run_tool(state, sess_idx, &call);
+            let result = super::dispatch::run_tool(state, sess_idx, &call);
             let final_result = if let Some(target) = result.strip_prefix(crate::tool::cd::CWD_CHANGE_PREFIX) {
                 let new_cwd = std::path::PathBuf::from(target);
-                super::spawn::apply_workspace_change(state, sess_idx, new_cwd, client, handle);
+                super::super::spawn::apply_workspace_change(state, sess_idx, new_cwd, client, handle);
                 format!("changed working directory to {target}")
             } else {
                 // Already an `error:`/refusal line — pass it through unchanged.
@@ -188,7 +190,7 @@ pub(crate) fn process_tools(
         // `git_cred` is INSTANT (only stat calls) so it runs inline, never via
         // the deferred lane.
         if call.function.name == "git_cred" {
-            let result = run_tool(state, sess_idx, &call);
+            let result = super::dispatch::run_tool(state, sess_idx, &call);
             let final_result =
                 if let Some(key) = result.strip_prefix(crate::tool::git_cred::GIT_CRED_SELECT_PREFIX) {
                     // Apply the selection: write into settings and persist.
@@ -225,7 +227,7 @@ pub(crate) fn process_tools(
         // `sess.save()` in a scoped block so the `state` borrow is fully released
         // before calling `apply_workspace_change` (which also borrows `state` mutably).
         if call.function.name == "git_worktree" {
-            let result = run_tool(state, sess_idx, &call);
+            let result = super::dispatch::run_tool(state, sess_idx, &call);
             let final_result =
                 if let Some(target) =
                     result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
@@ -244,7 +246,7 @@ pub(crate) fn process_tools(
                             let _ = sess.save();
                         }
                     }
-                    super::spawn::apply_workspace_change(
+                    super::super::spawn::apply_workspace_change(
                         state, sess_idx, new_cwd.clone(), client, handle,
                     );
                     format!("entered worktree: {}", new_cwd.display())
@@ -259,7 +261,7 @@ pub(crate) fn process_tools(
                             .map(|sess| sess.workdir())
                             .unwrap_or_else(|| std::path::PathBuf::from("."))
                     };
-                    super::spawn::apply_workspace_change(
+                    super::super::spawn::apply_workspace_change(
                         state, sess_idx, primary.clone(), client, handle,
                     );
                     format!("exited to {}", primary.display())
@@ -370,12 +372,12 @@ pub(crate) fn process_tools(
         if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str())
             || call.function.name.starts_with("mcp__")
         {
-            dispatch_deferred(state, sess_idx, &call);
+            super::dispatch::dispatch_deferred(state, sess_idx, &call);
             return;
         }
         // Instant tool: name the tool for the comet phase label and run it inline.
         state.rest.status = format!("running {}", call.function.name);
-        let result = run_tool(state, sess_idx, &call);
+        let result = super::dispatch::run_tool(state, sess_idx, &call);
         state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
         state.rest.sessions[sess_idx].tool_idx += 1;
     }
@@ -413,201 +415,5 @@ pub(crate) fn process_tools(
         }
         return;
     }
-    finish_tool_round(state, sess_idx, client, handle);
-}
-
-/// Resume a tool round that was PARKED on deferred work — either `task`-tool
-/// sub-agent delegations (`pending_subagent_calls`) or a deferred heavy tool
-/// (`pending_tool_tasks`).
-///
-/// Called from the event-loop resume gate once BOTH deferred lists are empty
-/// (every parked id has had its result folded into `tool_results`). It simply
-/// RE-ENTERS [`process_tools`] at the current `tool_idx` to CONTINUE the round:
-/// - For a deferred heavy tool, exactly one call was dispatched before the park,
-///   so re-entry processes the NEXT call (and may dispatch+park again). The round
-///   advances one deferred tool per resume, in order.
-/// - For `task`-tool delegations the round had already walked every call before
-///   parking (`tool_idx == len`), so re-entry finds the loop exhausted.
-///
-/// In both cases, when `process_tools` reaches the end of the round with no
-/// further deferred work it falls through to [`finish_tool_round`], which flushes
-/// all collected `tool_results` and re-streams — the main agent now sees every
-/// result and reacts. Re-entering (rather than calling `finish_tool_round`
-/// directly) is what makes the deferred lane SEQUENTIAL.
-pub(crate) fn resume_after_subagents(
-    state: &mut AppState,
-    sess_idx: usize,
-    client: &Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-) {
-    process_tools(state, sess_idx, client, handle);
-}
-
-/// Finish a completed tool round: flush every collected result into the
-/// conversation + log, clear the machine, and re-stream so the model sees the
-/// tool outputs and continues the turn (`waiting` stays true throughout).
-///
-/// Bails cleanly if there is no session or client to continue against
-/// (defensive — a turn in flight normally implies both are present).
-fn finish_tool_round(
-    state: &mut AppState,
-    sess_idx: usize,
-    client: &Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-) {
-    // Push the collected tool results into the conversation + log them. Bind the
-    // session runtime once so `session` (mut) + `tool_results` (read) are
-    // disjoint field borrows of the same `SessionRuntime`.
-    {
-        let rt = &mut state.rest.sessions[sess_idx];
-        if let Some(sess) = rt.session.as_mut() {
-            for (id, result) in &rt.tool_results {
-                let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
-                sess.conversation.push_tool(id.clone(), result.clone());
-            }
-            let _ = sess.save();
-        }
-    }
-
-    // Live reload: if `remember` or `forget` ran this round, re-inject the updated
-    // MEMORY.md into messages[0] so the model sees the change immediately.
-    // (`recall` is read-only and must NOT trigger a rebuild.)
-    let memory_mutated = state.rest.sessions[sess_idx]
-        .pending_tool_calls
-        .iter()
-        .any(|c| matches!(c.function.name.as_str(), "remember" | "forget"));
-    if memory_mutated {
-        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-            sess.rebuild_system();
-        }
-    }
-
-    // Round done: clear the per-round machine before the next model call.
-    state.rest.sessions[sess_idx].pending_tool_calls.clear();
-    state.rest.sessions[sess_idx].tool_idx = 0;
-    state.rest.sessions[sess_idx].tool_results.clear();
-
-    // Continue the turn: hand the updated history back to the model. The
-    // streaming buffer is re-armed so the next assistant text accumulates
-    // cleanly. `waiting` stays true (the turn isn't finished yet). Compute the
-    // history into an owned Option FIRST so no session borrow is held across the
-    // per-session writes in the no-session arm.
-    let history = match (state.rest.sessions[sess_idx].session.as_ref(), client.as_ref()) {
-        (Some(sess), Some(_)) => Some(sess.conversation.history()),
-        _ => None,
-    };
-    let Some(history) = history else {
-        state.rest.sessions[sess_idx].waiting = false;
-        state.rest.sessions[sess_idx].current_task = None;
-        state.rest.sessions[sess_idx].agent_steps = 0;
-        state.rest.status = "no active session".into();
-        return;
-    };
-    // The tool round is done; this re-stream is a model wait, so label it the same
-    // "thinking" phase the comet sweeps (not a tool run).
-    state.rest.status = "thinking".into();
-    state.rest.sessions[sess_idx].begin_stream();
-    super::run::start_stream_task(history, state, sess_idx, client, handle);
-}
-
-/// Run a single tool call against the session workspace and return its result
-/// string (an `error: …` line on failure / unknown tool). Reads the session for
-/// the workspace path and clones the shared dir cache up front, then dispatches
-/// to the matching [`crate::tool::Tool`].
-///
-/// `pub(crate)` so the approve/deny action handlers can run a single tool when
-/// resuming the approval machine.
-pub(crate) fn run_tool(state: &mut AppState, sess_idx: usize, call: &ToolCall) -> String {
-    let ctx = super::spawn::build_tool_ctx(state, sess_idx);
-    crate::tool::execute_tool(&ctx, call)
-}
-
-/// Dispatch a single DEFERRED (heavy/blocking) tool OFF the UI/event-loop thread
-/// and register it as pending, advancing `tool_idx` past it. The caller MUST
-/// `return` right after (parking the round) so the round's deferred tools run
-/// SEQUENTIALLY: this one finishes, the event-loop drain folds its result into
-/// `tool_results` + drops its id, and the resume gate re-enters `process_tools`
-/// to handle the next call.
-///
-/// `pub(crate)` so the `ApproveTool` handler can defer an approved risky tool the
-/// same way (rather than running it inline on the UI thread and re-freezing the
-/// comet during, e.g., a large approved write).
-///
-/// The work runs on a PLAIN `std::thread` (NOT a tokio task): the network tools'
-/// internal `reqwest::blocking` work would panic inside a tokio runtime context,
-/// so the worker must have none. `ToolCtx` is Send + 'static (PathBuf / Vec / Arc
-/// / Option fields, no borrows) so it moves in cleanly, and the `UnboundedSender`
-/// is Send so it can fire from this off-runtime thread. The result channel is
-/// created lazily once per session, then reused.
-pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &ToolCall) {
-    // Lazily create THIS session's result channel once, then reuse it. The
-    // spawned thread fires back over session `sess_idx`'s own `tool_task_tx`, so
-    // the result is routed structurally to that session's drain (no id tag
-    // needed) regardless of which session is foreground when it lands.
-    if state.rest.sessions[sess_idx].tool_task_tx.is_none() {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        state.rest.sessions[sess_idx].tool_task_tx = Some(tx);
-        state.rest.sessions[sess_idx].tool_task_rx = Some(rx);
-    }
-    let ctx = super::spawn::build_tool_ctx(state, sess_idx);
-    let call_cloned = call.clone();
-    let id = call.id.clone();
-    let tx = state.rest.sessions[sess_idx].tool_task_tx.as_ref().unwrap().clone();
-    // Phase label for the comet: name the tool running off-thread so the
-    // shimmering status surfaces what the agent is doing while it's parked.
-    state.rest.status = format!("running {}", call.function.name);
-    std::thread::spawn(move || {
-        let result = crate::tool::execute_tool(&ctx, &call_cloned);
-        let _ = tx.send((id, result));
-    });
-    state.rest.sessions[sess_idx].pending_tool_tasks.push(call.id.clone());
-    state.rest.sessions[sess_idx].tool_idx += 1;
-    // Mark the round PARKED on async tool work so the event-loop resume gate
-    // (which requires this flag set AND `pending_tool_tasks` empty) fires once the
-    // result lands. The caller `return`s right after this, leaving the round
-    // parked; `waiting` stays true so the comet keeps shimmering.
-    state.rest.sessions[sess_idx].awaiting_tool_tasks = true;
-}
-
-/// Halt the current turn by answering every still-pending tool call with
-/// `reason` (and flushing any results already collected this round), so the
-/// stored conversation keeps every `tool_call` id answered — then reset the
-/// agentic-loop machine and end the turn WITHOUT re-streaming.
-///
-/// Shares the shape of [`super::actions`]'s `DenyTool` handler; used by the
-/// harness workspace check (WC) to refuse a turn whose workspace isn't allowed.
-/// Pending calls from `tool_idx` onward are the unanswered ones.
-pub(crate) fn deny_all_pending(state: &mut AppState, sess_idx: usize, reason: &str) {
-    let results = state.rest.sessions[sess_idx].tool_results.clone();
-    let pending_ids: Vec<String> = state.rest.sessions[sess_idx]
-        .pending_tool_calls
-        .iter()
-        .skip(state.rest.sessions[sess_idx].tool_idx)
-        .map(|c| c.id.clone())
-        .collect();
-    if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-        for (id, result) in &results {
-            let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
-            sess.conversation.push_tool(id.clone(), result.clone());
-        }
-        for id in &pending_ids {
-            let _ = crate::model::msglog::append(&sess.path, Role::Tool, reason, None);
-            sess.conversation.push_tool(id.clone(), reason.to_string());
-        }
-        let _ = sess.save();
-    }
-    let rt = &mut state.rest.sessions[sess_idx];
-    rt.pending_tool_calls.clear();
-    rt.tool_idx = 0;
-    rt.tool_results.clear();
-    rt.agent_steps = 0;
-    rt.awaiting_approval = false;
-    rt.approval_reason = None;
-    rt.waiting = false;
-    rt.current_task = None;
-    // Kill every running sub-agent and drop the pending queue so a killed WC
-    // turn can't ghost-restart via orphaned tasks or stale awaiting flags.
-    rt.abort_running_subagents();
-    rt.pending_tool_tasks.clear();
-    rt.awaiting_tool_tasks = false;
+    super::dispatch::finish_tool_round(state, sess_idx, client, handle);
 }
