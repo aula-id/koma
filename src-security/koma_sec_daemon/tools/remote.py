@@ -40,7 +40,7 @@ DESCRIPTOR = {
                 "description": "Hostname or IP (required for action=open).",
             },
             "port": {
-                "type": ["integer", "string"],
+                "type": "integer",
                 "description": "TCP port (required for action=open).",
             },
             "session": {

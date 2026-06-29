@@ -18,7 +18,7 @@ DESCRIPTOR = {
         "type": "object",
         "properties": {
             "n": {
-                "type": ["string", "integer"],
+                "type": "string",
                 "description": "The integer to factor (required).",
             },
         },
