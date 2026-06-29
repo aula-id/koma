@@ -17,6 +17,8 @@ stderr (same pattern as scrapion_agent/__main__.py).
 """
 
 import sys
+import os
+import json
 import argparse
 import io
 
@@ -54,6 +56,14 @@ def main() -> None:
     from koma_sec_daemon.sessions import SessionStore
 
     sessions = SessionStore()
+
+    # Ensure the persisted binary dir (where Tier-2 downloads land) is on PATH so
+    # sandbox.run() subprocesses can find tools installed via the `install` op.
+    # Done before the handshake so the very first tool call already sees them.
+    from koma_sec_daemon.install_manifest import bin_dir
+    _bd = bin_dir()
+    os.makedirs(_bd, exist_ok=True)
+    os.environ["PATH"] = _bd + os.pathsep + os.environ.get("PATH", "")
 
     # --- HANDSHAKE ---
     try:
@@ -97,34 +107,57 @@ def main() -> None:
             frame_id = frame.get("id")
             op = frame.get("op")
 
-            if op != "call":
+            if op == "call":
+                tool_name = frame.get("tool", "")
+                tool_args = frame.get("args") or {}
+
+                # Check for unknown tool BEFORE calling so a handler's internal
+                # KeyError (e.g. missing required arg) is never mis-reported as
+                # "unknown tool".  All handler exceptions fall through to the
+                # generic except below and produce a meaningful error string.
+                if tool_name not in registry.REGISTRY:
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": False,
+                        "error": f"unknown tool: {tool_name}",
+                    })
+                    continue
+
+                try:
+                    result = call(tool_name, tool_args, sessions)
+                    write_frame(real_stdout, {"id": frame_id, "ok": True, "result": result})
+                except Exception as exc:
+                    write_frame(real_stdout, {
+                        "id": frame_id,
+                        "ok": False,
+                        "error": str(exc),
+                    })
+
+            elif op == "health":
+                # Install-health for every external dep. Modules imported lazily
+                # here so daemon startup stays lean. probe() is pure stdlib and
+                # never raises; result is a JSON-encoded string the Rust side
+                # json-parses out of the standard "result" field.
+                from koma_sec_daemon import health
+                write_frame(real_stdout, {
+                    "id": frame_id,
+                    "ok": True,
+                    "result": json.dumps(health.probe()),
+                })
+
+            elif op == "install":
+                # Best-effort tiered install for one dep. installer.install()
+                # returns a status string (incl. "error: …") and never raises.
+                key = frame.get("key", "")
+                from koma_sec_daemon import installer
+                write_frame(real_stdout, {
+                    "id": frame_id,
+                    "ok": True,
+                    "result": installer.install(key),
+                })
+
+            else:
                 write_frame(real_stdout, {"id": frame_id, "ok": False, "error": "unknown op"})
-                continue
-
-            tool_name = frame.get("tool", "")
-            tool_args = frame.get("args") or {}
-
-            # Check for unknown tool BEFORE calling so a handler's internal
-            # KeyError (e.g. missing required arg) is never mis-reported as
-            # "unknown tool".  All handler exceptions fall through to the
-            # generic except below and produce a meaningful error string.
-            if tool_name not in registry.REGISTRY:
-                write_frame(real_stdout, {
-                    "id": frame_id,
-                    "ok": False,
-                    "error": f"unknown tool: {tool_name}",
-                })
-                continue
-
-            try:
-                result = call(tool_name, tool_args, sessions)
-                write_frame(real_stdout, {"id": frame_id, "ok": True, "result": result})
-            except Exception as exc:
-                write_frame(real_stdout, {
-                    "id": frame_id,
-                    "ok": False,
-                    "error": str(exc),
-                })
     finally:
         sessions.close_all()
 
