@@ -4,6 +4,7 @@ hashid
 jsbeautifier
 name-that-hash
 playwright
+unicorn==2.1.1
 pwntools>=4.15
 requests>=2.31
 ROPgadget

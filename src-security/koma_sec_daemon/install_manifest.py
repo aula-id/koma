@@ -81,7 +81,11 @@ MANIFEST: list[dict] = [
         "detect_kind": "import",
         "tools": ["sec_remote", "sec_pwntmpl", "sec_triage", "sec_rop"],
         "hint": "pip install pwntools>=4.15",
-        "pip": ["pwntools>=4.15"],
+        # unicorn pinned to 2.1.1: pwntools 4.15 excludes 2.1.3/2.1.4 (the versions
+        # that ship a macOS arm64 wheel) and 2.1.2 is source-only, forcing a QEMU
+        # compile that fails on Apple Clang 17 (Int128 typedef redefinition). 2.1.1
+        # ships a prebuilt arm64 wheel and is pwntools-compatible — no compiler needed.
+        "pip": ["unicorn==2.1.1", "pwntools>=4.15"],
     },
     {
         "key": "z3-solver",
