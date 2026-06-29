@@ -37,10 +37,14 @@ fn default_accent() -> String {
 }
 
 /// Mint a fresh random UUID (v4) as a `String`. Used as the serde default for
-/// the `uuid` field of [`ProviderConn`] / [`ModelEntry`] so entries read from an
-/// old config file without a uuid get a stable identity on load, and so new
-/// entries can be minted in Rust without a hand-rolled scheme.
-fn new_uuid() -> String {
+/// the `uuid` field of [`ProviderConn`] / [`ModelEntry`] / [`McpServerEntry`] so
+/// entries read from an old config file without a uuid get a stable identity on
+/// load, and so new entries can be minted in Rust without a hand-rolled scheme.
+///
+/// `pub(crate)` so the `/mcp` dashboard can mint a uuid for a freshly-created
+/// server entry through the same canonical config-layer helper (mirrors the
+/// settings UI's own `new_uuid`).
+pub(crate) fn new_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
@@ -166,6 +170,61 @@ impl ModelEntry {
     }
 }
 
+/// Wire transport an MCP server speaks. `Stdio` (the default) launches a child
+/// process and talks over its stdin/stdout; `Http` connects to a streamable-HTTP
+/// MCP endpoint. Persisted serde snake_case (`"stdio"` / `"http"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    #[default]
+    Stdio,
+    Http,
+}
+
+/// One configured MCP (Model Context Protocol) server, keyed by `uuid`.
+///
+/// koma connects to each ENABLED entry as an MCP client, discovers its tools, and
+/// advertises them to the model (see [`crate::app::mcp`]). For now these entries
+/// are managed by hand-editing `config.json`; there is no UI.
+///
+/// Every field carries `#[serde(default)]` so an older `config.json` (which had no
+/// `mcp_servers` at all) — or a partially-written entry — loads cleanly. `uuid`
+/// defaults to a freshly minted v4 so a hand-written entry without one still gets a
+/// stable identity on load.
+///
+/// Transport-specific fields are unioned: a `Stdio` server uses `command` / `args`
+/// / `env`; an `Http` server uses `url`. Unused fields for a given transport are
+/// simply ignored.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct McpServerEntry {
+    #[serde(default = "new_uuid")]
+    pub uuid: String,
+    /// Human-facing name; also the source of the `mcp__<name>__<tool>` namespace
+    /// (sanitised at advertise time).
+    #[serde(default)]
+    pub name: String,
+    /// When false, the server is skipped entirely (no connection, no tools).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Wire transport (`Stdio` default, or `Http`).
+    #[serde(default)]
+    pub transport: McpTransport,
+    /// Stdio transport: the executable to launch (e.g. `npx`).
+    #[serde(default)]
+    pub command: String,
+    /// Stdio transport: arguments passed to `command`.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Stdio transport: extra environment variables (`[["KEY","value"], …]`) set on
+    /// the child process. A list of pairs (not a map) so the on-disk order is stable
+    /// and round-trips predictably.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+    /// Http transport: the streamable-HTTP MCP endpoint URL.
+    #[serde(default)]
+    pub url: String,
+}
+
 /// Global user-facing configuration (theme + accent + provider/model catalogue).
 ///
 /// All fields carry `#[serde(default)]` so the struct round-trips cleanly
@@ -183,6 +242,10 @@ pub struct AppConfig {
     /// Global catalogue of named models; each references a provider by uuid.
     #[serde(default)]
     pub models: Vec<ModelEntry>,
+    /// Configured MCP servers. Empty by default; old config files (no such key)
+    /// load with an empty vec, so behaviour is unchanged until a server is added.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerEntry>,
 }
 
 impl Default for AppConfig {
@@ -192,6 +255,7 @@ impl Default for AppConfig {
             accent: default_accent(),
             providers: Vec::new(),
             models: Vec::new(),
+            mcp_servers: Vec::new(),
         }
     }
 }

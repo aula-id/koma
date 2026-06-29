@@ -31,11 +31,16 @@ pub(super) fn render_command_palette(
     if cmd_matches.is_empty() {
         return false;
     }
+    const MAX_VIS: usize = 7;
     let sel = rest.palette_sel.min(cmd_matches.len() - 1);
-    let rows: Vec<Line> = cmd_matches
+    // window start keeps `sel` visible (anchors to bottom when scrolling down)
+    let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
+    let end = (start + MAX_VIS).min(cmd_matches.len());
+    let rows: Vec<Line> = cmd_matches[start..end]
         .iter()
         .enumerate()
-        .map(|(i, (name, desc))| {
+        .map(|(vi, (name, desc))| {
+            let i = start + vi;
             if i == sel {
                 let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
                 Line::from(vec![
@@ -51,7 +56,7 @@ pub(super) fn render_command_palette(
         })
         .collect();
 
-    // Size the box to the list (+2 for borders), clamped to the space
+    // Size the box to the visible window (+2 for borders), clamped to the space
     // between the header rule and the input, and anchor it just above input.
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = ((rows.len() as u16) + 2).min(avail.max(3));

@@ -4,6 +4,8 @@
 //!
 //! - [`awareness`] – project-doc summarisation for the self-awareness block
 //! - [`harness`] – safety classifier ("Pass B") + deterministic workspace check
+//! - [`mcp`] – MCP (Model Context Protocol) client: connect to configured servers,
+//!   discover their tools, advertise + dispatch them
 //! - [`mode`] – [`Mode`] enum and associated per-mode state types
 //! - [`resolve`] – per-role route resolution (model + provider + endpoint + key)
 //! - [`runtime`] – event loop, terminal setup/teardown, and the main `run` function that ties controller + view together
@@ -15,6 +17,7 @@
 
 pub mod awareness;
 pub mod harness;
+pub mod mcp;
 pub mod mode;
 pub mod resolve;
 pub mod runtime;

@@ -16,6 +16,7 @@ use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
 mod chat;
+mod mcp;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
 // `commands` module) can route through the same `request_quit` chokepoint as the
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
@@ -162,6 +163,22 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseAgents => {
             agents::handle_close_agents(state)?;
+        }
+
+        Action::CreateMcp => {
+            mcp::handle_create_mcp(state)?;
+        }
+
+        Action::SaveMcp => {
+            mcp::handle_save_mcp(state)?;
+        }
+
+        Action::DeleteMcp => {
+            mcp::handle_delete_mcp(state)?;
+        }
+
+        Action::CloseMcp => {
+            mcp::handle_close_mcp(state)?;
         }
 
         Action::FetchModelEndpoints(model_id) => {

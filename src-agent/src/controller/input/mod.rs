@@ -15,6 +15,7 @@
 mod action;
 mod agents;
 mod chat;
+mod mcp;
 mod clipboard;
 mod key_input;
 mod paste;
@@ -69,6 +70,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::SessionHub(h) => handle_session_hub(h, &mut state.rest, key),
         Mode::Settings(s) => handle_settings(s, &mut state.rest, key),
         Mode::Agents(a) => agents::handle_agents(a, &mut state.rest, key),
+        Mode::Mcp(m) => mcp::handle_mcp(m, &mut state.rest, key),
         Mode::Effort(e) => handle_effort(e, &mut state.rest, key),
         Mode::Loading(l) => handle_loading(l, key),
         Mode::Usage(nav) => usage::handle_usage(nav, key),

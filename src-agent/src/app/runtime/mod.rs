@@ -308,6 +308,17 @@ fn build_startup(
     // later write config.json). Falls back to AppConfig::default() on any error.
     state.rest.config = AppConfig::load();
 
+    // Build the GLOBAL MCP client manager from the configured servers and stash it
+    // in AppStateRest (cloned into every ToolCtx so `mcp__*` calls can dispatch).
+    // NON-BLOCKING: `connect_all` returns immediately and connects each enabled
+    // server in a background task on the runtime; tools appear once a server is
+    // ready. With no `mcp_servers` configured this spawns nothing and advertises no
+    // tools — behaviour is identical to a build without MCP.
+    state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
+        &handle,
+        &state.rest.config.mcp_servers,
+    ));
+
     // Capture the process launch directory for the harness workspace check (WC).
     // This folder is always an allowed workspace regardless of the allow-list.
     if let Ok(cwd) = std::env::current_dir() {

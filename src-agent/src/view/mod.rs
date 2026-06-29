@@ -14,6 +14,7 @@
 
 pub mod agents;
 pub mod chat;
+pub mod mcp;
 pub mod effort;
 pub mod key_input;
 pub mod loading;
@@ -71,6 +72,13 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             state.rest.fg().session.as_ref().map(|s| &s.settings),
             &palette,
         ),
+        Mode::Mcp(m) => {
+            // Live per-server tool counts from the MCP manager snapshot (owned map
+            // so the manager lock isn't held across the draw); `None` when no
+            // manager exists. Feeds the LIST + detail status display.
+            let status = state.rest.mcp_manager.as_ref().map(|mgr| mgr.server_status());
+            mcp::draw(frame, m, status.as_ref(), &palette);
+        }
         Mode::Effort(e) => effort::draw(frame, e, &palette),
         Mode::Loading(s) => loading::draw(frame, s, &palette),
         Mode::Usage(nav) => {

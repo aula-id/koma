@@ -15,6 +15,7 @@ mod effort;
 // Ctrl+E handler (controller) and the settings-save action, which flip the same
 // mode and must show the identical status line.
 pub(crate) mod internet;
+mod mcp;
 mod misc;
 pub(crate) mod new_session;
 mod task;
@@ -35,6 +36,7 @@ pub(super) fn apply_slash(
         Command::Rename(name) => new_session::handle_rename(state, name)?,
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,
+        Command::Mcp => mcp::handle_mcp(state)?,
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,
         Command::Help => misc::handle_help(state)?,

@@ -406,8 +406,11 @@ async fn stream_step(
             endpoint: &endpoint,
             api_key: &api_key,
         };
+        // Sub-agents advertise only their own allow-list and receive NO MCP tools
+        // (kept simple — MCP is a main-agent capability for now), so pass an empty
+        // `mcp_tools` slice.
         let _ = c
-            .stream_complete(conn, &model_id, &provider, &effort, history, &advertise, None, inner_tx)
+            .stream_complete(conn, &model_id, &provider, &effort, history, &advertise, &[], None, inner_tx)
             .await;
     });
 
