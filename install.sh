@@ -6,14 +6,14 @@
 #
 # Environment overrides:
 #   KOMA_RELEASE_BASE   override the base download URL
-#   KOMA_INSTALL_DIR    override the install directory (default /usr/local/bin)
+#   KOMA_INSTALL_DIR    override the install directory (default ~/.local/bin)
 
 set -e
 
 # Base download URL (GitHub latest release). Override with KOMA_RELEASE_BASE=...
 KOMA_RELEASE_BASE="${KOMA_RELEASE_BASE:-https://github.com/aula-id/koma/releases/latest/download}"
 
-INSTALL_DIR="${KOMA_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${KOMA_INSTALL_DIR:-$HOME/.local/bin}"
 
 WITH_RESEARCH=0
 for arg in "$@"; do
@@ -110,6 +110,7 @@ chmod +x "$tmp"
 # ---------------------------------------------------------------------------
 # Install — fall back to sudo if the directory is not user-writable
 # ---------------------------------------------------------------------------
+mkdir -p "$INSTALL_DIR" 2>/dev/null || true
 if [ -w "$INSTALL_DIR" ]; then
     mv "$tmp" "$INSTALL_DIR/koma"
 else
