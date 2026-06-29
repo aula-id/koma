@@ -1,2 +1,3 @@
+playwright
 pwntools>=4.15
 requests>=2.31

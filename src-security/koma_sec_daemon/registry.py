@@ -19,6 +19,12 @@ from __future__ import annotations
 
 from koma_sec_daemon.tools.http import DESCRIPTOR as _HTTP_DESC
 from koma_sec_daemon.tools.remote import DESCRIPTOR as _REMOTE_DESC
+from koma_sec_daemon.tools.sec_sqlmap import DESCRIPTOR as _SEC_SQLMAP_DESC
+from koma_sec_daemon.tools.sec_nuclei import DESCRIPTOR as _SEC_NUCLEI_DESC
+from koma_sec_daemon.tools.sec_ffuf import DESCRIPTOR as _SEC_FFUF_DESC
+from koma_sec_daemon.tools.sec_dalfox import DESCRIPTOR as _SEC_DALFOX_DESC
+from koma_sec_daemon.tools.sec_zap import DESCRIPTOR as _SEC_ZAP_DESC
+from koma_sec_daemon.tools.sec_xss_confirm import DESCRIPTOR as _SEC_XSS_CONFIRM_DESC
 
 # Wire-safe keys — everything except the callable handler
 _WIRE_KEYS = ("name", "description", "parameters", "risk", "compute", "domain")
@@ -26,6 +32,12 @@ _WIRE_KEYS = ("name", "description", "parameters", "risk", "compute", "domain")
 REGISTRY: dict[str, dict] = {
     _HTTP_DESC["name"]: _HTTP_DESC,
     _REMOTE_DESC["name"]: _REMOTE_DESC,
+    _SEC_SQLMAP_DESC["name"]: _SEC_SQLMAP_DESC,
+    _SEC_NUCLEI_DESC["name"]: _SEC_NUCLEI_DESC,
+    _SEC_FFUF_DESC["name"]: _SEC_FFUF_DESC,
+    _SEC_DALFOX_DESC["name"]: _SEC_DALFOX_DESC,
+    _SEC_ZAP_DESC["name"]: _SEC_ZAP_DESC,
+    _SEC_XSS_CONFIRM_DESC["name"]: _SEC_XSS_CONFIRM_DESC,
 }
 
 
