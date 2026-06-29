@@ -15,6 +15,7 @@ Protocol (newline-delimited JSON, parent speaks first):
 stdout is the frame channel (binary wire); all library/debug output goes to
 stderr (same pattern as scrapion_agent/__main__.py).
 """
+from __future__ import annotations
 
 import sys
 import os

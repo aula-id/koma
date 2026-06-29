@@ -5,6 +5,7 @@ deterministic, incrementing session id (s0, s1, …).
 IDs are deterministic on purpose: no random/uuid, so logs and replays are
 predictable and easy to grep.
 """
+from __future__ import annotations
 
 
 class SessionStore:

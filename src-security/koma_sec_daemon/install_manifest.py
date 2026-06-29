@@ -28,6 +28,7 @@ Descriptor schema
   members      (method=="binary")  files to extract from the archive into bin/
   gem          (method=="gem")     gem name
 """
+from __future__ import annotations
 
 import os
 import platform

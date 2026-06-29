@@ -9,6 +9,7 @@ The returned dicts deliberately expose ONLY wire-safe fields (key, name, tier,
 present, method, tools, hint) — never the install internals (repo, asset_re,
 pip pkgs, …). The Rust /security cockpit consumes this list.
 """
+from __future__ import annotations
 
 import importlib.util
 import shutil
