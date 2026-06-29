@@ -35,6 +35,23 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/quit", "Quit koma"),
 ];
 
+/// User-facing keyboard shortcuts shown in the `/help` reference, in display
+/// order. (key, one-line description). Source of truth for the keybinding half
+/// of the Help mode (the command half comes from [`COMMANDS`]). Lifted out of
+/// the old hardcoded help overlay so the help screen is fully data-driven.
+pub const KEYBINDINGS: &[(&str, &str)] = &[
+    ("Enter", "send message / run command"),
+    ("Tab", "complete the selected command"),
+    ("Ctrl+R", "resend the last message"),
+    ("Ctrl+E", "toggle internet mode (simple / full)"),
+    ("Ctrl+J", "insert a newline"),
+    ("Ctrl+V", "paste an image from the clipboard"),
+    ("Esc", "interrupt while busy"),
+    ("Esc Esc", "edit a previous message (rewind)"),
+    ("Up/Down/wheel", "scroll the transcript"),
+    ("$", "open the sub-agents panel — Ctrl+X kills the selected"),
+];
+
 /// True while the user is still typing a command NAME: input starts with `/`
 /// and contains no whitespace yet (once they type a space they're onto args).
 pub fn palette_active(input: &str) -> bool {

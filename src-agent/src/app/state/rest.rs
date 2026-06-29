@@ -62,8 +62,6 @@ pub struct AppStateRest {
     /// transcript and auto-dismissed once the instant passes. `kind` selects the
     /// box style (red "error" vs neutral "info").
     pub toast: Option<(String, std::time::Instant, ToastKind)>,
-    /// True while the `/help` overlay is shown. Any key closes it.
-    pub help_open: bool,
     pub should_quit: bool,
     pub scroll: u16,
     /// When true, the transcript stays pinned to the bottom (auto-follows new
@@ -240,7 +238,6 @@ impl AppStateRest {
             palette_sel: 0,
             status: "ready".into(),
             toast: None,
-            help_open: false,
             should_quit: false,
             scroll: 0,
             follow: true,

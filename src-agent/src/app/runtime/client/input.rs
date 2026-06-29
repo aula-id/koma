@@ -27,8 +27,9 @@ use crate::ipc::proto::{ClientRequest, KeyWire};
 /// reconcile from the daemon's snapshot.
 ///
 /// The echo is suppressed unless the shadow is in plain `Chat` with no modal surface
-/// open (help / sub-agents panel / viewer / tool-approval), matching where the
-/// daemon's chat composer actually consumes these keys.
+/// open (sub-agents panel / viewer / tool-approval), matching where the daemon's chat
+/// composer actually consumes these keys. (`/help` is now its own mode, so the
+/// `Mode::Chat` guard already excludes it.)
 pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
     // Only echo in plain Chat with no modal overlay capturing keys. In any other mode
     // (or with a modal open) the daemon routes the key elsewhere, so faking a text
@@ -37,8 +38,7 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
         return;
     }
     let rest = &mut shadow.rest;
-    if rest.help_open
-        || rest.subagents_open
+    if rest.subagents_open
         || rest.agent_viewer.is_some()
         || rest.fg().awaiting_approval
     {

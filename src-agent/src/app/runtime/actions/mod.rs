@@ -181,6 +181,21 @@ pub(in crate::app::runtime) fn apply_action(
             mcp::handle_close_mcp(state)?;
         }
 
+        Action::CloseHelp => {
+            state.mode = crate::app::mode::Mode::Chat;
+        }
+
+        Action::HelpRun(cmd) => {
+            // Close the reference first, then run the chosen command through the
+            // SAME dispatcher a typed slash command uses (a mode-opening command
+            // like `/mcp` will set its own mode, replacing this Chat).
+            state.mode = crate::app::mode::Mode::Chat;
+            // Don't re-dispatch the `/help` command itself — user is already leaving Help.
+            if !matches!(cmd, crate::controller::command::Command::Help) {
+                super::commands::apply_slash(cmd, state, client, handle)?;
+            }
+        }
+
         Action::FetchModelEndpoints(model_id) => {
             settings::handle_fetch_model_endpoints(model_id, state, client, handle)?;
         }

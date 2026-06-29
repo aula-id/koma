@@ -126,11 +126,6 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
         overlays::render_file_palette(frame, chunks[3], chunks[1], rest, palette);
     }
 
-    // --- Help overlay ---
-    if rest.help_open {
-        overlays::render_help(frame, chunks[3], chunks[1], palette);
-    }
-
     // --- Sub-agents panel ---
     if rest.subagents_open {
         subagents::render_subagents_panel(frame, chunks[3], chunks[1], rest, palette);

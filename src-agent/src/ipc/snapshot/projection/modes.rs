@@ -1,10 +1,11 @@
 use super::tokens::{
     agent_field_token, agent_scope_token, agent_submode_token, api_type_token,
-    mcp_field_token, mcp_submode_token, mcp_transport_token, role_token, theme_token,
-    usage_metric_token, usage_view_token,
+    help_kind_token, mcp_field_token, mcp_submode_token, mcp_transport_token, role_token,
+    theme_token, usage_metric_token, usage_view_token,
 };
 
 use crate::app::mode::agents::{AgentsState, ModelPickerState, ToolPickerState};
+use crate::app::mode::help::HelpState;
 use crate::app::mode::mcp::McpState;
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft};
@@ -18,12 +19,12 @@ use crate::model::store::SessionMeta;
 
 use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, CatalogueModelSnapshot, CatalogueProviderSnapshot,
-    CookingEntrySnapshot, EffortSnapshot, HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot,
-    McpSnapshot, ModeSnapshot, ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot,
-    PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
-    RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SessionHubSnapshot,
-    SessionMetaSnapshot, SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot,
-    WarmStatusWire,
+    CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot, HistoryEntrySnapshot,
+    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot, ModelDraftSnapshot,
+    ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
+    ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
+    RolePickerSnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
+    TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -40,6 +41,11 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // per-server tool counts (the client owns no MCP manager), so a thin client
         // rebuilds and renders the dashboard faithfully instead of a blank Chat screen.
         Mode::Mcp(m) => ModeSnapshot::Mcp(Box::new(mcp_snapshot(m, state))),
+        // The `/help` reference projects a full wire snapshot, exactly like `/mcp`:
+        // the query + entry list (each entry's kind as a wire token) + filtered subset
+        // + cursor, so a thin client rebuilds and renders the searchable help screen
+        // instead of a blank Chat screen.
+        Mode::Help(h) => ModeSnapshot::Help(Box::new(help_snapshot(h))),
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
         Mode::MessageRewind(rw) => ModeSnapshot::MessageRewind(rewind_snapshot(rw)),
@@ -392,6 +398,23 @@ pub fn mcp_snapshot(m: &McpState, state: &AppState) -> McpSnapshot {
             .as_ref()
             .map(|mgr| mgr.server_status())
             .unwrap_or_default(),
+    }
+}
+
+pub fn help_snapshot(h: &HelpState) -> HelpSnapshot {
+    HelpSnapshot {
+        query: h.query.clone(),
+        all: h
+            .all
+            .iter()
+            .map(|e| HelpEntrySnapshot {
+                kind: help_kind_token(e.kind).to_string(),
+                key: e.key.clone(),
+                desc: e.desc.clone(),
+            })
+            .collect(),
+        filtered_idx: h.filtered_idx.clone(),
+        selected: h.selected,
     }
 }
 

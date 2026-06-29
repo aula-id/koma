@@ -1,5 +1,8 @@
 //! Floating overlay widgets: slash-command palette, file-reference palette,
-//! help overlay, toast notification, and tool-approval prompt.
+//! toast notification, and tool-approval prompt.
+//!
+//! (The `/help` reference is no longer an overlay — it is a dedicated
+//! full-screen mode; see [`crate::view::help`].)
 
 use ratatui::{
     layout::Rect,
@@ -129,64 +132,6 @@ pub(super) fn render_file_palette(
             frame.render_widget(Paragraph::new(rows), inner);
         }
     }
-}
-
-/// Render the help overlay (opened with `/help`).
-///
-/// Same flat box style as the slash-command palette, anchored just above the
-/// input. Modal: any key closes it (handled in the input controller).
-pub(super) fn render_help(
-    frame: &mut Frame,
-    input_chunk: Rect,
-    transcript_chunk: Rect,
-    palette: &Palette,
-) {
-    let mut rows: Vec<Line> = Vec::new();
-    rows.push(Line::from(Span::styled(
-        "commands",
-        Style::default().fg(palette.dim),
-    )));
-    for (name, desc) in command::COMMANDS {
-        rows.push(Line::from(vec![
-            Span::styled(format!("  {name:<12}"), Style::default().fg(palette.accent)),
-            Span::styled(*desc, Style::default().fg(palette.fg)),
-        ]));
-    }
-    rows.push(Line::from(""));
-    rows.push(Line::from(Span::styled("keys", Style::default().fg(palette.dim))));
-    let keys: &[(&str, &str)] = &[
-        ("Enter", "send message / run command"),
-        ("Tab", "complete the selected command"),
-        ("Ctrl+R", "resend the last message"),
-        ("Ctrl+E", "toggle internet mode (simple / full)"),
-        ("/internet", "set internet mode: simple | full"),
-        ("Esc", "interrupt while busy"),
-        ("/quit", "exit the app"),
-        ("Up/Down/wheel", "scroll the transcript"),
-        ("$", "open the sub-agents panel — Ctrl+X kills the selected"),
-    ];
-    for (k, v) in keys {
-        rows.push(Line::from(vec![
-            Span::styled(format!("  {k:<14}"), Style::default().fg(palette.accent)),
-            Span::styled(*v, Style::default().fg(palette.fg)),
-        ]));
-    }
-
-    // Anchor just above the input, full input width, growing upward —
-    // identical placement to the slash-command palette.
-    let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
-    let h = ((rows.len() as u16) + 2).min(avail.max(3));
-    let y = input_chunk.y.saturating_sub(h);
-    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
-
-    let block = Block::bordered()
-        .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(" help ", Style::default().fg(palette.dim)))
-        .padding(Padding::horizontal(1));
-    let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(block, rect);
-    frame.render_widget(Paragraph::new(rows), inner);
 }
 
 /// Render the transient toast notification pinned to the top of the transcript.

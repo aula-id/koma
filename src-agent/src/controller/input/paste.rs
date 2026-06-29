@@ -147,6 +147,13 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             paste_single_line(text, |c| p.query.push(c));
             p.refilter();
         }
+        Mode::Help(h) => {
+            // The `/help` reference has a live search field: paste feeds the
+            // query and re-runs the filter, exactly as a typed char does
+            // (single-line — strip any newlines so the query stays one line).
+            paste_single_line(text, |c| h.query.push(c));
+            h.refilter();
+        }
         // No text entry on the effort picker, loading splash, usage dashboard,
         // the message-rewind picker, the session hub, or the quit-confirm overlay
         // — paste is a no-op in all of them.

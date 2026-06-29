@@ -27,10 +27,16 @@ mod session_hub;
 pub mod settings;
 pub mod agents;
 pub mod mcp;
+pub mod help;
 pub mod editor;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
+// `HelpEntry` is part of the module's public surface and will be consumed by the
+// daemon Help projection (follow-up); re-exported now so that lands without
+// re-touching this line. `allow` silences the meanwhile-unused warning.
+#[allow(unused_imports)]
+pub use help::{HelpEntry, HelpKind, HelpState};
 pub use effort::EffortPickerState;
 pub use key_input::KeyInputForm;
 pub use loading::{LoadingState, WarmStatus};
@@ -177,6 +183,14 @@ pub enum Mode {
     /// of [`Self::Agents`] (no markdown files, no pickers, no body editor). Boxed to
     /// keep `Mode` small, consistent with `Agents`.
     Mcp(Box<McpState>),
+    /// Full-screen, searchable command/keybinding reference + launcher (`/help`):
+    /// replaces the old floating help overlay. The inner [`HelpState`] aggregates
+    /// every entry in the COMMANDS + KEYBINDINGS registries into one filterable
+    /// list (same query/select shape as [`Self::SessionPicker`]). Type to search;
+    /// ↑/↓ select; Enter RUNS the highlighted command (keybinding rows are
+    /// reference-only); Esc closes back to Chat. Boxed to keep `Mode` small,
+    /// consistent with the other list variants.
+    Help(Box<HelpState>),
     /// Reasoning/thinking-effort picker (`/effort`): a small overlay listing the
     /// effort options the current model supports. The inner [`EffortPickerState`]
     /// holds the option list, the cursor, and a one-line capability note. Boxed

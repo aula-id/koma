@@ -15,6 +15,7 @@
 pub mod agents;
 pub mod chat;
 pub mod mcp;
+pub mod help;
 pub mod effort;
 pub mod key_input;
 pub mod loading;
@@ -86,6 +87,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 .or_else(|| m.shadow_status.clone());
             mcp::draw(frame, m, status.as_ref(), &palette);
         }
+        Mode::Help(h) => help::draw(frame, h, &palette),
         Mode::Effort(e) => effort::draw(frame, e, &palette),
         Mode::Loading(s) => loading::draw(frame, s, &palette),
         Mode::Usage(nav) => {

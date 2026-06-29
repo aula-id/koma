@@ -1,4 +1,5 @@
 use crate::app::mode::agents::{AgentEditField, AgentScope, AgentSubMode};
+use crate::app::mode::help::HelpKind;
 use crate::app::mode::mcp::{McpEditField, McpSubMode};
 use crate::app::mode::{UsageMetric, UsageView};
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
@@ -78,6 +79,13 @@ pub fn mcp_transport_token(t: McpTransport) -> &'static str {
     match t {
         McpTransport::Stdio => "stdio",
         McpTransport::Http => "http",
+    }
+}
+
+pub fn help_kind_token(k: HelpKind) -> &'static str {
+    match k {
+        HelpKind::Command => "command",
+        HelpKind::Keybinding => "keybinding",
     }
 }
 

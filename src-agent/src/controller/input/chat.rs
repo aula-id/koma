@@ -117,12 +117,6 @@ fn user_messages(rest: &AppStateRest) -> Vec<String> {
 /// Ctrl+C and Esc both interrupt an in-flight request when `waiting` is true;
 /// when idle they quit the app.  Ctrl+R re-sends the last message (idle only).
 pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    // The help overlay is modal: any key closes it and is otherwise swallowed.
-    if rest.help_open {
-        rest.help_open = false;
-        return Action::None;
-    }
-
     // The full-screen sub-agent VIEWER is the most modal surface: while it's open
     // every key routes to it. Up/Down/PgUp scroll; Esc closes it back to the still-
     // open `$` panel; everything else is swallowed so nothing leaks underneath.

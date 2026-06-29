@@ -68,9 +68,13 @@ pub(super) fn handle_select(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
-/// Handle the `/help` command: open the help overlay.
+/// Handle the `/help` command: open the full-screen, searchable help reference.
+///
+/// Read-only and self-contained (the entry list is built from the static
+/// COMMANDS + KEYBINDINGS registries), so there is no busy/session guard — it
+/// opens regardless of session state, like `/usage`.
 pub(super) fn handle_help(state: &mut AppState) -> Result<()> {
-    state.rest.help_open = true;
+    state.mode = Mode::Help(Box::default());
     Ok(())
 }
 

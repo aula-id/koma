@@ -434,6 +434,35 @@ pub struct McpSnapshot {
     pub status: std::collections::HashMap<String, usize>,
 }
 
+/// A serde-safe projection of one row in the `/help` reference.
+///
+/// Mirrors [`crate::app::mode::help::HelpEntry`] field-for-field. The `kind` enum
+/// crosses as a wire token (see `help_kind_token` in `tokens.rs`), exactly as the
+/// McpSnapshot tokenizes its sub-mode / transport enums.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct HelpEntrySnapshot {
+    /// "command" | "keybinding" — the wire token for `HelpKind`.
+    pub kind: String,
+    pub key: String,
+    pub desc: String,
+}
+
+/// A serde-safe projection of the full-screen, searchable `/help` reference.
+///
+/// Mirrors [`crate::app::mode::help::HelpState`] field-for-field. Each entry rides as
+/// a `HelpEntrySnapshot` (its `kind` enum tokenized like McpSnapshot's enums), so a
+/// thin client — which renders the same view::draw path — rebuilds and shows the help
+/// screen instead of a blank Chat screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct HelpSnapshot {
+    pub query: String,
+    pub all: Vec<HelpEntrySnapshot>,
+    pub filtered_idx: Vec<usize>,
+    pub selected: usize,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::app::mode::agents::{
     AgentEditField, AgentScope, AgentSubMode, AgentsState, ModelPickerState, ToolPickerState,
 };
+use crate::app::mode::help::{HelpEntry, HelpKind, HelpState};
 use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{
@@ -18,10 +19,10 @@ use crate::app::mode::{
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
-    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, EffortSnapshot, KeyInputSnapshot,
-    LoadingSnapshot, McpSnapshot, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
-    RewindSnapshot, SessionHubSnapshot, SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot,
-    WarmStatusWire,
+    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, EffortSnapshot, HelpSnapshot,
+    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, PathPickerSnapshot,
+    PickerSnapshot, RewindSnapshot, SessionHubSnapshot, SettingsSnapshot, TextEditorSnapshot,
+    ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
 use crate::model::settings::{InternetMode, Settings};
@@ -476,6 +477,39 @@ fn shadow_mcp_transport(t: &str) -> McpTransport {
     match t {
         "http" => McpTransport::Http,
         _ => McpTransport::Stdio,
+    }
+}
+
+/// Rebuild the `/help` reference ([`HelpState`]) from its projection.
+///
+/// Mirrors [`shadow_picker`]: built as a struct literal (NOT `HelpState::new`, which
+/// would re-aggregate the COMMANDS/KEYBINDINGS registries and discard the daemon's
+/// `query` + `filtered_idx` + `selected`) so the SAME filtered rows + cursor render.
+/// Each entry's `kind` decodes from its wire token. Render-only — every key is
+/// forwarded to the daemon, which owns the real launch behaviour.
+pub(crate) fn shadow_help(s: HelpSnapshot) -> HelpState {
+    HelpState {
+        query: s.query,
+        all: s
+            .all
+            .into_iter()
+            .map(|e| HelpEntry {
+                kind: shadow_help_kind(&e.kind),
+                key: e.key,
+                desc: e.desc,
+            })
+            .collect(),
+        filtered_idx: s.filtered_idx,
+        selected: s.selected,
+    }
+}
+
+/// Map a `/help` kind wire token back to a [`HelpKind`] (unknown → Command, the
+/// launchable default — never lost).
+fn shadow_help_kind(k: &str) -> HelpKind {
+    match k {
+        "keybinding" => HelpKind::Keybinding,
+        _ => HelpKind::Command,
     }
 }
 

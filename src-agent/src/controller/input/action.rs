@@ -141,6 +141,15 @@ pub enum Action {
     /// Esc from the MCP dashboard (Browse, LIST focused) — discard any drafts and
     /// return to Chat.
     CloseMcp,
+    // --- Help reference + launcher actions ---
+    /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
+    /// close the reference and return to Chat unchanged.
+    CloseHelp,
+    /// Enter on a COMMAND row in `/help`: close the reference AND run the carried
+    /// command. The runtime drops back to Chat, then dispatches the [`Command`]
+    /// through the SAME `apply_slash` pipeline a typed slash command uses, so the
+    /// launcher needs no bespoke plumbing.
+    HelpRun(Command),
     /// Fetch the provider-endpoint list for the given model id (the inner
     /// `String`) on a background task. Emitted by the model modal when an
     /// OpenRouter model is selected (search) or an existing model is opened for
