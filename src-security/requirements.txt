@@ -1,4 +1,4 @@
-checksec.sh
+checksec.py
 fpylll
 hashid
 jsbeautifier

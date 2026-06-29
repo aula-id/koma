@@ -88,7 +88,7 @@ return an error. Install what you need; leave the rest.
 
 | Binary / service        | Tool module  | Install hint                                                                              |
 |-------------------------|--------------|-------------------------------------------------------------------------------------------|
-| `checksec`              | sec_triage   | `pip install checksec.sh`  or  `apt install checksec`                                     |
+| `checksec`              | sec_triage   | `pip install checksec.py`  or  `apt install checksec`                                     |
 | `ROPgadget`             | sec_rop      | `pip install ROPgadget`                                                                   |
 | `one_gadget`            | sec_rop      | `gem install one_gadget`  (requires Ruby)                                                 |
 | _(python)_ `pwntools`   | sec_triage, sec_rop, sec_pwntmpl | `pip install pwntools>=4.15`  (already in `requirements.txt`)   |
@@ -96,7 +96,7 @@ return an error. Install what you need; leave the rest.
 ### Notes
 
 - `checksec` is used by `sec_triage` to enumerate binary protections (NX, PIE,
-  RELRO, canary, FORTIFY). Both the `checksec.sh`-based PyPI wrapper and the
+  RELRO, canary, FORTIFY). Both the `checksec.py`-based PyPI wrapper and the
   native `apt` package expose a compatible CLI; either works.
 - `ROPgadget` must be on `$PATH` as `ROPgadget`; installed via
   `pip install ROPgadget`. Used by `sec_rop` to enumerate ROP gadgets from an

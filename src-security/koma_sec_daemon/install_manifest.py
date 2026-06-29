@@ -191,8 +191,8 @@ MANIFEST: list[dict] = [
         "detect": "checksec",
         "detect_kind": "which",
         "tools": ["sec_triage"],
-        "hint": "pip install checksec.sh  or  apt install checksec",
-        "pip": ["checksec.sh"],
+        "hint": "pip install checksec.py  or  apt install checksec",
+        "pip": ["checksec.py"],
     },
     # ----------------------------------------------------------------- TIER 2
     # Downloadable single-file binaries from GitHub releases.
