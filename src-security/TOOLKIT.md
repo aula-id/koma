@@ -31,10 +31,29 @@ return an error. Install what you need; leave the rest.
 
 ---
 
-## CRYPTO / MATH  _(binaries — not yet documented)_
+## CRYPTO
 
-Entries for `sec_rsa`, `sec_factor`, `sec_lattice`, `sec_sage`, `sec_z3`, and
-`sec_hashid` will be added in a later commit once the crypto domain is wired.
+| Binary / service   | Tool module  | Install hint                                                                 |
+|--------------------|--------------|------------------------------------------------------------------------------|
+| `sage`             | sec_sage     | Install SageMath: `apt install sagemath`  or  https://www.sagemath.org/     |
+| `RsaCtfTool`       | sec_rsa      | `pip install RsaCtfTool`  or  `git clone https://github.com/RsaCtfTool/RsaCtfTool` |
+| `hashcat`          | sec_crack    | `apt install hashcat`  or  https://hashcat.net/hashcat/                      |
+| `hashid` / `name-that-hash` | sec_hashid | `pip install hashid`  or  `pip install name-that-hash`           |
+| _(python)_ `z3-solver` | sec_z3  | `pip install z3-solver`                                                      |
+| _(python)_ `fpylll`    | sec_lattice | `pip install fpylll`  (may require `libfplll-dev` on Debian/Ubuntu)        |
+
+### Notes
+
+- `sage` must be on `$PATH` as the `sage` binary; `sec_sage` shells out to it
+  directly. On some distros the package is `sagemath`.
+- `RsaCtfTool` can be used as a Python import or as a CLI binary; `sec_rsa`
+  uses the CLI form — ensure the script is executable and on `$PATH`.
+- `hashcat` requires a compatible GPU driver for GPU acceleration; CPU-only
+  mode (`-D 1`) is the fallback and is slower.
+- `fpylll` wheels are available on PyPI for Linux x86-64; on other platforms
+  you may need to build from source (`apt install libfplll-dev` first).
+- `z3-solver` and `fpylll` are listed in `requirements.txt` and are installed
+  with the daemon's normal `pip install -r requirements.txt`.
 
 ---
 

@@ -25,6 +25,14 @@ from koma_sec_daemon.tools.sec_ffuf import DESCRIPTOR as _SEC_FFUF_DESC
 from koma_sec_daemon.tools.sec_dalfox import DESCRIPTOR as _SEC_DALFOX_DESC
 from koma_sec_daemon.tools.sec_zap import DESCRIPTOR as _SEC_ZAP_DESC
 from koma_sec_daemon.tools.sec_xss_confirm import DESCRIPTOR as _SEC_XSS_CONFIRM_DESC
+from koma_sec_daemon.tools.sec_z3 import DESCRIPTOR as _SEC_Z3_DESC
+from koma_sec_daemon.tools.sec_sage import DESCRIPTOR as _SEC_SAGE_DESC
+from koma_sec_daemon.tools.sec_rsa import DESCRIPTOR as _SEC_RSA_DESC
+from koma_sec_daemon.tools.sec_factor import DESCRIPTOR as _SEC_FACTOR_DESC
+from koma_sec_daemon.tools.sec_lattice import DESCRIPTOR as _SEC_LATTICE_DESC
+from koma_sec_daemon.tools.sec_crack import DESCRIPTOR as _SEC_CRACK_DESC
+from koma_sec_daemon.tools.sec_hashid import DESCRIPTOR as _SEC_HASHID_DESC
+from koma_sec_daemon.tools.sec_decode import DESCRIPTOR as _SEC_DECODE_DESC
 
 # Wire-safe keys — everything except the callable handler
 _WIRE_KEYS = ("name", "description", "parameters", "risk", "compute", "domain")
@@ -38,6 +46,14 @@ REGISTRY: dict[str, dict] = {
     _SEC_DALFOX_DESC["name"]: _SEC_DALFOX_DESC,
     _SEC_ZAP_DESC["name"]: _SEC_ZAP_DESC,
     _SEC_XSS_CONFIRM_DESC["name"]: _SEC_XSS_CONFIRM_DESC,
+    _SEC_Z3_DESC["name"]: _SEC_Z3_DESC,
+    _SEC_SAGE_DESC["name"]: _SEC_SAGE_DESC,
+    _SEC_RSA_DESC["name"]: _SEC_RSA_DESC,
+    _SEC_FACTOR_DESC["name"]: _SEC_FACTOR_DESC,
+    _SEC_LATTICE_DESC["name"]: _SEC_LATTICE_DESC,
+    _SEC_CRACK_DESC["name"]: _SEC_CRACK_DESC,
+    _SEC_HASHID_DESC["name"]: _SEC_HASHID_DESC,
+    _SEC_DECODE_DESC["name"]: _SEC_DECODE_DESC,
 }
 
 
