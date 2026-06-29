@@ -170,7 +170,17 @@ pub fn open_disk_session(
     store::write_lock(&sess.path);
     let mut runtime = crate::app::state::SessionRuntime::new();
     runtime.held_lock = Some(sess.path.clone());
-    let no_creds = sess.settings.api_key.is_empty();
+    // Show KeyInput only when NO usable Main route exists for this loaded session —
+    // resolve against the GLOBAL config (providers/models) plus the legacy fallback,
+    // not just the bare `settings.api_key`. A populated global config => straight to
+    // chat even if this session has no legacy key. Computed before `sess` is moved
+    // into `runtime` below; only borrows `&state.rest.config` + `&sess.settings`.
+    let no_creds = crate::app::resolve::resolve_role(
+        &state.rest.config,
+        &sess.settings,
+        crate::model::app_config::ModelRole::Main,
+    )
+    .is_none_or(|r| r.api_key.is_empty());
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 

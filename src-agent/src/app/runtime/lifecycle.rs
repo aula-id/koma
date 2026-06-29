@@ -67,6 +67,15 @@ fn build_startup(
     let rt = tokio::runtime::Runtime::new()?;
     let handle = rt.handle().clone();
 
+    // Load the global config UP FRONT — before the first-run decision below — so the
+    // gate can ask the real question ("does the user have a usable Main route?")
+    // against the global provider/model catalogue, not just the legacy
+    // `settings.api_key` field. `ensure_dirs` has already run (so the dir exists if we
+    // later persist config.json); `AppConfig::load()` is a pure read and falls back to
+    // `AppConfig::default()` on any error. Stashed into `state.rest.config` below at the
+    // point the old code loaded it (so the MCP wiring that reads it is unchanged).
+    let config = AppConfig::load();
+
     // Decide initial state.
     let mut state = if opts.resume {
         let metas = store::list_sessions()?;
@@ -78,7 +87,21 @@ fn build_startup(
         state
     } else {
         let (lk, lm, lp) = prefill_creds();
-        let key_known = lk.as_deref().is_some_and(|k| !k.is_empty());
+        // "Is this user configured?" is whether the MAIN role resolves to a route
+        // with a non-empty api_key — `resolve_role` consults the global
+        // `config.providers`/`config.models` AND the legacy per-field fallback, so a
+        // populated ~/.koma/config.json (provider + Main model) counts even with no
+        // legacy session key, and a legacy-only session still counts via the fallback.
+        // Probe with a Settings reflecting the prefilled legacy creds so the fallback
+        // path has them to work with.
+        let probe = Settings {
+            api_key: lk.clone().unwrap_or_default(),
+            model: lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            provider: lp.clone().unwrap_or_default(),
+            ..Default::default()
+        };
+        let key_known = resolve_role(&config, &probe, ModelRole::Main)
+            .is_some_and(|r| !r.api_key.is_empty());
         let mut state = if key_known {
             // Returning user: spawn a fresh session pre-loaded with the last
             // creds and drop straight into chat. The credential prompt only
@@ -126,9 +149,10 @@ fn build_startup(
         state
     };
 
-    // Load global config now that ensure_dirs has run (so the dir exists if we
-    // later write config.json). Falls back to AppConfig::default() on any error.
-    state.rest.config = AppConfig::load();
+    // Stash the global config loaded up front (before the first-run gate). Moved here
+    // — at the original load point — so the MCP wiring below that reads
+    // `state.rest.config.mcp_servers` is unchanged. No second AppConfig::load().
+    state.rest.config = config;
 
     // Build the GLOBAL MCP client manager from the configured servers and stash it
     // in AppStateRest (cloned into every ToolCtx so `mcp__*` calls can dispatch).

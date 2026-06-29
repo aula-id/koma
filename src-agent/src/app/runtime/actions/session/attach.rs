@@ -201,7 +201,16 @@ fn create_session_for_pwd(
     store::write_lock(&sess.path);
     let mut runtime = crate::app::state::SessionRuntime::new();
     runtime.held_lock = Some(sess.path.clone());
-    let no_creds = sess.settings.api_key.is_empty();
+    // KeyInput only when NO usable Main route exists — resolve against the GLOBAL
+    // config (providers/models) + legacy fallback, not just `settings.api_key`, so a
+    // populated global config drops a fresh pwd session straight into chat. Computed
+    // before `sess` moves into `runtime`; borrows `&state.rest.config` + `&sess.settings`.
+    let no_creds = crate::app::resolve::resolve_role(
+        &state.rest.config,
+        &sess.settings,
+        crate::model::app_config::ModelRole::Main,
+    )
+    .is_none_or(|r| r.api_key.is_empty());
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 

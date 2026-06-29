@@ -58,7 +58,17 @@ pub(super) fn handle_new(
     store::write_lock(&sess.path);
     let mut runtime = SessionRuntime::new();
     runtime.held_lock = Some(sess.path.clone());
-    let no_creds = sess.settings.api_key.is_empty();
+    // KeyInput only when NO usable Main route exists for the new session — resolve
+    // against the GLOBAL config (providers/models) + legacy fallback, not just
+    // `settings.api_key`, so a populated global config means /new drops straight into
+    // chat. Computed before `sess` is moved into `runtime.session`; borrows only
+    // `&state.rest.config` + `&sess.settings`.
+    let no_creds = crate::app::resolve::resolve_role(
+        &state.rest.config,
+        &sess.settings,
+        crate::model::app_config::ModelRole::Main,
+    )
+    .is_none_or(|r| r.api_key.is_empty());
     runtime.session = Some(sess);
 
     // Remember where to return if the (creds-less) KeyInput below is cancelled,
