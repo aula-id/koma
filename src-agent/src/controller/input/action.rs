@@ -175,6 +175,14 @@ pub enum Action {
     /// (a Tier-2 download can take seconds), then re-fetches install-health so the
     /// pane's present-flags update.
     SecurityInstall(String),
+    // --- Bash background-job panel actions ---
+    /// Esc from the `/bash` panel — return to Chat.
+    CloseBash,
+    /// `k` in the `/bash` panel — kill the selected RUNNING background bash job
+    /// (inner `usize` is its id, `bash-<id>`). The runtime resolves the job in the
+    /// foreground session's live registry and signals it; the panel stays open and
+    /// refreshes on the next key. A no-op when the id is absent or already terminal.
+    BashKillJob(usize),
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.

@@ -15,14 +15,14 @@ use crate::app::mode::{
     PickerState, RewindState, SessionHub, SessionKind, SettingsState, UsageNavState,
     WarmStatus,
 };
-use crate::app::state::AppState;
+use crate::app::state::{AppState, AppStateRest};
 use crate::model::store::SessionMeta;
 
 use crate::ipc::proto::{
-    AgentModelPickerSnapshot, AgentsSnapshot, CatalogueModelSnapshot, CatalogueProviderSnapshot,
-    CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot, HistoryEntrySnapshot,
-    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot, ModelDraftSnapshot,
-    ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
+    AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
+    CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot,
+    HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot,
+    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
     ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
     RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
     TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
@@ -46,6 +46,10 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // daemon manager (so the snapshot always reflects current daemon state after
         // start/stop, not just the state at mode-open time) plus the cursor.
         Mode::Security(s) => ModeSnapshot::Security(Box::new(security_snapshot(s, state))),
+        // The `/bash` panel projects the LIVE background-job registry (read fresh from
+        // the foreground session every frame, like `/agents`) + the list cursor, so a
+        // thin client renders the same master/detail view of current jobs.
+        Mode::Bash(b) => ModeSnapshot::Bash(Box::new(bash_snapshot(b, &state.rest))),
         // The `/help` reference projects a full wire snapshot, exactly like `/mcp`:
         // the query + entry list (each entry's kind as a wire token) + filtered subset
         // + cursor, so a thin client rebuilds and renders the searchable help screen
@@ -382,6 +386,73 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
         editor_clear_confirm: a.editor_clear_confirm,
         catalogue_models,
         catalogue_providers,
+    }
+}
+
+/// Project the FOREGROUND session's background bash jobs into wire-safe views.
+///
+/// Reads `rest.fg().bash_jobs` LIVE and maps each [`crate::app::bgbash::BashJob`]
+/// into a [`BashJobView`]: the lifecycle status rendered to a label
+/// (`"running"` / `"exit {n}"` / `"killed"` / `"error: {…}"`), a `running` flag,
+/// the wall-clock elapsed seconds, and a trimmed `output_tail` (the last ~40 lines,
+/// then capped to ~4000 chars so a chatty job's snapshot stays bounded). Built fresh
+/// every frame + on every key, exactly like the agents list, so the panel always
+/// reflects current jobs.
+///
+/// Takes `&AppStateRest` (not `&AppState`) so the `/bash` command + the input handler
+/// — which only hold `rest` — can call it directly to seed/refresh the panel.
+pub fn bash_job_views(rest: &AppStateRest) -> Vec<BashJobView> {
+    use crate::app::bgbash::BashJobStatus;
+
+    rest.fg()
+        .bash_jobs
+        .iter()
+        .map(|job| {
+            let status = match job.snapshot_status() {
+                BashJobStatus::Running => "running".to_string(),
+                BashJobStatus::Done(code) => format!("exit {code}"),
+                BashJobStatus::Killed => "killed".to_string(),
+                BashJobStatus::Error(msg) => format!("error: {msg}"),
+            };
+            let running = job.is_running();
+            let elapsed_secs = job.started_at.elapsed().as_secs();
+            BashJobView {
+                id: job.id,
+                command: job.command.clone(),
+                status,
+                running,
+                elapsed_secs,
+                output_tail: tail_output(&job.output_snapshot()),
+            }
+        })
+        .collect()
+}
+
+/// Trim a job's captured output to a bounded tail for the panel: keep the LAST ~40
+/// lines, then cap the result to the last ~4000 chars (char-based, so multi-byte
+/// UTF-8 is never sliced mid-codepoint). The detail pane renders this verbatim.
+fn tail_output(full: &str) -> String {
+    const MAX_LINES: usize = 40;
+    const MAX_CHARS: usize = 4000;
+
+    // Last ~MAX_LINES lines (preserving their order).
+    let lines: Vec<&str> = full.lines().collect();
+    let start = lines.len().saturating_sub(MAX_LINES);
+    let mut tail = lines[start..].join("\n");
+
+    // Then cap to the last MAX_CHARS chars so a single huge line can't blow the budget.
+    let len = tail.chars().count();
+    if len > MAX_CHARS {
+        tail = tail.chars().skip(len - MAX_CHARS).collect();
+    }
+    tail
+}
+
+/// Project the `/bash` panel: the LIVE job views + the list cursor.
+pub fn bash_snapshot(b: &crate::app::mode::BashState, rest: &AppStateRest) -> BashSnapshot {
+    BashSnapshot {
+        jobs: bash_job_views(rest),
+        selected: b.selected,
     }
 }
 

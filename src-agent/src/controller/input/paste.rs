@@ -156,14 +156,16 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         }
         // No text entry on the effort picker, loading splash, usage dashboard,
         // the message-rewind picker, the session hub, the quit-confirm overlay,
-        // or the security control panel — paste is a no-op in all of them.
+        // the security control panel, or the background-bash panel — paste is a
+        // no-op in all of them.
         Mode::Effort(_)
         | Mode::Loading(_)
         | Mode::Usage(_)
         | Mode::MessageRewind(_)
         | Mode::SessionHub(_)
         | Mode::QuitConfirm(_)
-        | Mode::Security(_) => {}
+        | Mode::Security(_)
+        | Mode::Bash(_) => {}
     }
 }
 

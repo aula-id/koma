@@ -505,6 +505,38 @@ pub struct SecuritySnapshot {
     pub health_selected: usize,
 }
 
+/// A serde-safe projection of ONE background bash job for the `/bash` panel.
+///
+/// An already-rendered view of a [`crate::app::bgbash::BashJob`] (whose live
+/// `Arc<Mutex<…>>` + `Instant` state can't cross the wire): `status` is the
+/// status rendered to a label (`"running"` / `"exit {n}"` / `"killed"` /
+/// `"error: {…}"`), `running` flags a still-live job, `elapsed_secs` is the
+/// wall-clock age, and `output_tail` is the last slice of captured output. Built
+/// LIVE every frame by `bash_job_views`, exactly as the agents list is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct BashJobView {
+    pub id: usize,
+    pub command: String,
+    pub status: String,
+    pub running: bool,
+    pub elapsed_secs: u64,
+    pub output_tail: String,
+}
+
+/// A serde-safe projection of the `/bash` background-job panel.
+///
+/// Mirrors [`AgentsSnapshot`]'s shape (list + cursor): the job views + the LIST
+/// cursor. The client rebuilds [`crate::app::mode::BashState`] from this verbatim
+/// and renders the same master/detail view; it never mutates it (keys are
+/// forwarded to the daemon).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct BashSnapshot {
+    pub jobs: Vec<BashJobView>,
+    pub selected: usize,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

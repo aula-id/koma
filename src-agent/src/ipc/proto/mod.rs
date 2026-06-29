@@ -95,6 +95,7 @@ pub enum ModeSnapshot {
     Agents(Box<AgentsSnapshot>),
     Mcp(Box<McpSnapshot>),
     Security(Box<SecuritySnapshot>),
+    Bash(Box<BashSnapshot>),
     Help(Box<HelpSnapshot>),
     Effort(EffortSnapshot),
     Usage(Box<UsageSnapshot>),

@@ -15,6 +15,7 @@ use crate::controller::input::Action;
 use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
+mod bash;
 mod chat;
 mod mcp;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
@@ -216,6 +217,14 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::SecurityInstall(key) => {
             security::handle_security_install(key, state)?;
+        }
+
+        Action::CloseBash => {
+            bash::handle_close_bash(state)?;
+        }
+
+        Action::BashKillJob(id) => {
+            bash::handle_bash_kill(id, state)?;
         }
 
         Action::CloseHelp => {

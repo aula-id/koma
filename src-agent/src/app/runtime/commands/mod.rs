@@ -8,6 +8,7 @@ use crate::app::state::AppState;
 use crate::controller::command::Command;
 use crate::service::openrouter::OpenRouterClient;
 
+mod bash;
 mod cd;
 mod compact;
 mod effort;
@@ -45,6 +46,7 @@ pub(super) fn apply_slash(
         Command::Usage => misc::handle_usage(state)?,
         Command::Quit => misc::handle_quit(state)?,
         Command::Task(args) => task::handle_task(args, state, client, handle)?,
+        Command::Bash => bash::handle_bash(state)?,
         Command::Cd(path) => cd::handle_cd(path, state, client, handle)?,
         Command::AddDir(path) => cd::handle_adddir(path, state)?,
         Command::Internet(target) => internet::handle_internet(target, state)?,

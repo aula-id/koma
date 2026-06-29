@@ -8,6 +8,7 @@ use crate::app::mode::agents::{
 use crate::app::mode::help::{HelpEntry, HelpKind, HelpState};
 use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
 use crate::app::mode::security::SecurityState;
+use crate::app::mode::bash::BashState;
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft, ProviderModal, RolePickerState,
@@ -20,7 +21,7 @@ use crate::app::mode::{
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
-    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, EffortSnapshot, HelpSnapshot,
+    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, PathPickerSnapshot,
     PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot, SettingsSnapshot,
     TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
@@ -589,5 +590,17 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
         install_health: s.install_health,
         health_view: s.health_view,
         health_selected: s.health_selected,
+    }
+}
+
+/// Rebuild the `/bash` background-job panel ([`BashState`]) from its projection.
+///
+/// The job views + the list cursor ride verbatim (already serde-safe, pre-rendered
+/// data). Render-only — the client never mutates it; every key is forwarded to the
+/// daemon, which owns the real registry + kill path.
+pub(crate) fn shadow_bash(s: BashSnapshot) -> BashState {
+    BashState {
+        jobs: s.jobs,
+        selected: s.selected,
     }
 }
