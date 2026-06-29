@@ -232,6 +232,12 @@ pub(super) fn render_message_block(
 ) -> Vec<Line<'static>> {
     match msg.role {
         Role::User => {
+            // bg-bash completion nudge: render as ONE compact dim line with a green
+            // `✓` (just the `[bash-N] status` summary, line 1 of the body). The model-
+            // only context on the remaining lines is NOT shown. NOT a `★` user turn.
+            if let Some(body) = msg.content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK) {
+                return render_bash_nudge_block(body, palette);
+            }
             // `!` user-shell shortcut entry: a SHELL_MARK-prefixed user message
             // carrying `$ <cmd>\n<output>`. Render it DISTINCTLY (not a `★` user
             // turn): a `$ <cmd>` header in the accent, then the captured output dim
@@ -348,6 +354,22 @@ fn render_shell_block(body: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<
         )]);
     }
     render_block(logical, "$ ", palette.accent, wrap_w, true)
+}
+
+/// Render a background-bash completion nudge as a single compact line: a GREEN
+/// `✓` glyph followed by the dim per-job summary (line 1 of `body`). The remaining
+/// lines of `body` are model-only context and are NOT displayed. Styled like a
+/// tool-call sub-line (2-col indent + dim text), not a `★` user turn. The green is
+/// hardcoded (theme-independent, like the orange attachment card) so the check
+/// always reads as "success".
+fn render_bash_nudge_block(body: &str, palette: &Palette) -> Vec<Line<'static>> {
+    let summary = body.lines().next().unwrap_or("").to_string();
+    let green = Color::Rgb(0, 200, 83);
+    vec![Line::from(vec![
+        Span::raw("  "),
+        Span::styled("\u{2713} ", Style::default().fg(green)),
+        Span::styled(summary, Style::default().fg(palette.dim)),
+    ])]
 }
 
 /// Render the orange attachment folder-tree lines for a user message that
