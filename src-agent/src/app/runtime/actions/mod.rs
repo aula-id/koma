@@ -214,6 +214,10 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_security_toggle_domain(state)?;
         }
 
+        Action::SecurityInstall(key) => {
+            security::handle_security_install(key, state)?;
+        }
+
         Action::CloseHelp => {
             state.mode = crate::app::mode::Mode::Chat;
         }

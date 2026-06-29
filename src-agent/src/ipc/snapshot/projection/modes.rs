@@ -478,5 +478,11 @@ pub fn security_snapshot(s: &SecurityState, state: &AppState) -> SecuritySnapsho
         status,
         selected: s.selected,
         inactive,
+        // Install-health is carried straight from the mode state — NEVER re-fetched
+        // here. `health()` is a heavy IPC round-trip and this projection runs on every
+        // frame; the mode seeds it once on open and after an install.
+        install_health: s.install_health.clone(),
+        health_view: s.health_view,
+        health_selected: s.health_selected,
     }
 }

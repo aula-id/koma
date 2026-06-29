@@ -6,8 +6,10 @@
 //! Key map:
 //! - `Esc`      → `Action::CloseSecurity` (return to Chat)
 //! - `Ctrl+C`   → `Action::Quit`
-//! - `Up`       → move cursor up in the tool inventory
-//! - `Down`     → move cursor down in the tool inventory
+//! - `Up`       → move cursor up in the ACTIVE pane (tools or deps)
+//! - `Down`     → move cursor down in the ACTIVE pane (tools or deps)
+//! - `h`/`H`    → toggle the body pane (tools ⇄ dependencies); mode-state only
+//! - `i`/`I`    → (deps pane only) `Action::SecurityInstall` the selected dependency
 //! - `t`        → `Action::SecurityToggle` (enable/disable + start/stop)
 //! - `s`        → `Action::SecurityStart`
 //! - `x`        → `Action::SecurityStop`
@@ -50,6 +52,24 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
         }
         KeyCode::Enter | KeyCode::Char(' ') => Action::SecurityToggleTool,
         KeyCode::Char('d') | KeyCode::Char('D') => Action::SecurityToggleDomain,
+        // Toggle the body pane (tools ⇄ dependencies). Pure mode-state mutation, like
+        // the cursor moves — no runtime round-trip needed.
+        KeyCode::Char('h') | KeyCode::Char('H') => {
+            s.toggle_health_view();
+            Action::None
+        }
+        // Install/repair the selected dependency — ONLY in the dependency pane, and only
+        // when a row is actually selected.
+        KeyCode::Char('i') | KeyCode::Char('I') => {
+            if s.health_view {
+                match s.install_health.get(s.health_selected) {
+                    Some(e) => Action::SecurityInstall(e.key.clone()),
+                    None => Action::None,
+                }
+            } else {
+                Action::None
+            }
+        }
         KeyCode::Char('t') | KeyCode::Char('T') => Action::SecurityToggle,
         KeyCode::Char('s') | KeyCode::Char('S') => Action::SecurityStart,
         KeyCode::Char('x') | KeyCode::Char('X') => Action::SecurityStop,

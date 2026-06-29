@@ -24,7 +24,17 @@ pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
         .as_ref()
         .map(|m| m.status())
         .unwrap_or_default();
-    let st = SecurityState::new(status, state.rest.sec_inactive.clone());
+    // Fetch the per-dependency install-health ONCE on open. `health()` is a heavy IPC
+    // round-trip, so it is fetched here (and after an install) and carried thereafter —
+    // never on a plain refresh. `Err` / no manager / daemon stopped → empty vec, and
+    // the panel still opens (the deps pane just shows "no health data").
+    let install_health = state
+        .rest
+        .sec_manager
+        .as_ref()
+        .and_then(|m| m.health().ok())
+        .unwrap_or_default();
+    let st = SecurityState::new(status, state.rest.sec_inactive.clone(), install_health);
     state.mode = Mode::Security(Box::new(st));
     Ok(())
 }

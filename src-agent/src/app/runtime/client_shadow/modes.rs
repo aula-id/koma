@@ -584,5 +584,10 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
         // The projected inactive set rides as a sorted Vec; rebuild the HashSet the
         // view + render path read from.
         inactive: s.inactive.into_iter().collect(),
+        // Install-health + the pane toggle + its cursor ride verbatim so the client
+        // renders the same dependency pane the daemon would.
+        install_health: s.install_health,
+        health_view: s.health_view,
+        health_selected: s.health_selected,
     }
 }

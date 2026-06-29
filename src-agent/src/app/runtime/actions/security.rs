@@ -9,13 +9,17 @@
 //! - `SecurityToggleTool`   — toggle the selected tool's active state (membership in
 //!   `state.rest.sec_inactive`).
 //! - `SecurityToggleDomain` — toggle every tool sharing the selected tool's domain.
+//! - `SecurityInstall`      — install/repair one dependency, then re-fetch install-health.
 //!
 //! After every lifecycle action the open `Mode::Security` state is refreshed from
-//! the live manager so the panel reflects the new daemon state immediately.
+//! the live manager so the panel reflects the new daemon state immediately. The plain
+//! refreshes carry `install_health` untouched (it is a heavy IPC round-trip); only the
+//! install path re-fetches it.
 
 use anyhow::Result;
 
 use crate::app::mode::Mode;
+use crate::app::sec::InstallHealthEntry;
 use crate::app::state::AppState;
 
 /// Handle `Action::CloseSecurity`: return to Chat.
@@ -43,7 +47,7 @@ pub(super) fn handle_security_toggle(state: &mut AppState) -> Result<()> {
         }
         state.rest.status = "security: daemon stopped".into();
     }
-    refresh_security_state(state);
+    refresh_security_state(state, None);
     Ok(())
 }
 
@@ -56,7 +60,7 @@ pub(super) fn handle_security_start(state: &mut AppState) -> Result<()> {
         m.start(state.rest.sec_token.clone());
     }
     state.rest.status = "security: starting daemon…".into();
-    refresh_security_state(state);
+    refresh_security_state(state, None);
     Ok(())
 }
 
@@ -69,7 +73,7 @@ pub(super) fn handle_security_stop(state: &mut AppState) -> Result<()> {
         m.stop();
     }
     state.rest.status = "security: daemon stopped".into();
-    refresh_security_state(state);
+    refresh_security_state(state, None);
     Ok(())
 }
 
@@ -82,7 +86,7 @@ pub(super) fn handle_security_restart(state: &mut AppState) -> Result<()> {
         m.restart(state.rest.sec_token.clone());
     }
     state.rest.status = "security: restarting daemon…".into();
-    refresh_security_state(state);
+    refresh_security_state(state, None);
     Ok(())
 }
 
@@ -108,7 +112,7 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
             state.rest.status = format!("security: {name} disabled");
         }
     }
-    refresh_security_state(state);
+    refresh_security_state(state, None);
     Ok(())
 }
 
@@ -151,7 +155,35 @@ pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> 
             state.rest.status = format!("security: domain [{domain}] enabled");
         }
     }
-    refresh_security_state(state);
+    refresh_security_state(state, None);
+    Ok(())
+}
+
+/// Handle `Action::SecurityInstall(key)`: install/repair one dependency by manifest
+/// key, then re-fetch install-health so the dependency pane's present-flags update.
+///
+/// v1 is BLOCKING: a Tier-2 download can take seconds, and async progress would need
+/// the deferred streaming protocol (not built yet). The status line reports the
+/// daemon's message (or the failure). After the install we re-fetch `health()` ONCE
+/// and seed it into the open panel via `refresh_security_state` — this is the ONLY
+/// refresh path that pays the heavy health round-trip; the lifecycle refreshes carry
+/// the existing health untouched. A missing/unparseable health response leaves the
+/// previous list in place (we pass `None`), so the pane never blanks on a transient
+/// IPC hiccup.
+pub(super) fn handle_security_install(key: String, state: &mut AppState) -> Result<()> {
+    let fresh: Option<Vec<InstallHealthEntry>> = if let Some(m) = state.rest.sec_manager.as_ref() {
+        match m.install(&key) {
+            Ok(msg) => state.rest.status = format!("security: {msg}"),
+            Err(e) => state.rest.status = format!("security: install '{key}' failed: {e}"),
+        }
+        // Re-probe install-health regardless of the install's outcome — even a failed
+        // install may have changed what is present, and a success certainly did.
+        m.health().ok()
+    } else {
+        state.rest.status = format!("security: install '{key}' failed: no daemon");
+        None
+    };
+    refresh_security_state(state, fresh);
     Ok(())
 }
 
@@ -159,7 +191,13 @@ pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> 
 /// `Mode::Security` state so the panel updates immediately. If the mode is
 /// not `Security` (the action was dispatched from somewhere else), this is a
 /// no-op — the panel will pick up fresh status the next time it opens.
-fn refresh_security_state(state: &mut AppState) {
+///
+/// `fresh_health` is the install path's freshly-probed install-health:
+/// - `None` (the lifecycle refreshes) → `install_health` is CARRIED untouched, so no
+///   extra (heavy) `health()` IPC call is made.
+/// - `Some(list)` (the install path) → seed the panel's `install_health` with the new
+///   list so the dependency pane's present-flags reflect the install.
+fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<InstallHealthEntry>>) {
     let status = state
         .rest
         .sec_manager
@@ -168,6 +206,11 @@ fn refresh_security_state(state: &mut AppState) {
         .unwrap_or_default();
     let inactive = state.rest.sec_inactive.clone();
     if let Mode::Security(s) = &mut state.mode {
+        // `refresh` preserves `install_health`; overwrite it only when the install path
+        // handed us a fresh probe. `refresh` re-clamps both cursors afterwards.
+        if let Some(health) = fresh_health {
+            s.install_health = health;
+        }
         s.refresh(status, inactive);
     }
 }

@@ -169,6 +169,12 @@ pub enum Action {
     /// domain: if all of that domain are currently active, disable them all; otherwise
     /// enable them all. Refreshes the panel.
     SecurityToggleDomain,
+    /// `i` in the `/security` panel's DEPENDENCY pane — install/repair the selected
+    /// dependency. Inner string is its manifest key (the argument to
+    /// [`crate::app::sec::SecDaemonManager::install`]). v1 runs the install BLOCKING
+    /// (a Tier-2 download can take seconds), then re-fetches install-health so the
+    /// pane's present-flags update.
+    SecurityInstall(String),
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.

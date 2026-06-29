@@ -492,6 +492,17 @@ pub struct SecuritySnapshot {
     /// model's advertised tools.
     #[serde(default)]
     pub inactive: Vec<String>,
+    /// Per-dependency install-health, carried VERBATIM from the open mode state (NOT
+    /// re-fetched at snapshot time — `health()` is a heavy IPC round-trip and the
+    /// projection runs every frame). Empty when the daemon is stopped.
+    #[serde(default)]
+    pub install_health: Vec<crate::app::sec::InstallHealthEntry>,
+    /// Which body pane is showing: `false` = tools (default), `true` = dependencies.
+    #[serde(default)]
+    pub health_view: bool,
+    /// Selected index into `install_health` (the dependency-pane cursor).
+    #[serde(default)]
+    pub health_selected: usize,
 }
 
 /// A serde-safe projection of the /agents dashboard.
