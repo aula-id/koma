@@ -86,6 +86,12 @@ pub struct AppStateRest {
     /// Global application config (theme, accent). Loaded once at startup after
     /// `ensure_dirs`; defaults to `AppConfig::default()` until then.
     pub config: AppConfig,
+    /// The GLOBAL MCP client manager, built once at startup from
+    /// `config.mcp_servers`. Shared (cloned `Arc`) into every [`crate::tool::ToolCtx`]
+    /// so `mcp__*` tool calls can be dispatched to their server. `None` until startup
+    /// builds it (and stays `None` for a config with no MCP servers — the manager is
+    /// still built but inert, so this is `Some` of an empty manager in practice).
+    pub mcp_manager: Option<std::sync::Arc<crate::app::mcp::McpManager>>,
     /// Set by `/select`; the event loop performs the terminal hand-off next tick.
     pub select_pending: bool,
     /// True while the conversation is dumped to the normal terminal for copying.
@@ -244,6 +250,7 @@ impl AppStateRest {
             last_model: None,
             last_provider: None,
             config: AppConfig::default(),
+            mcp_manager: None,
             select_pending: false,
             select_active: false,
             transcript_cache: RefCell::new(TranscriptCache::default()),

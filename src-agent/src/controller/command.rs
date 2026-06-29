@@ -23,6 +23,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/internet", "Toggle internet mode (simple | full)"),
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
+    ("/mcp", "Add, edit, or remove MCP servers"),
     ("/task", "Run an agent on a task in the background"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
@@ -72,6 +73,8 @@ pub enum Command {
     Settings,
     /// Open the `/agents` management dashboard (alias: `/agent`).
     Agents,
+    /// Open the `/mcp` server management dashboard.
+    Mcp,
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
     Task(String),
     /// Change the session's working directory to the held path (Phase 8). The
@@ -126,6 +129,7 @@ pub fn parse(line: &str) -> Command {
         "effort" => Command::Effort,
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,
+        "mcp" => Command::Mcp,
         "task" => Command::Task(rest.to_string()),
         "cd" => Command::Cd(rest.to_string()),
         "adddir" => Command::AddDir(rest.to_string()),

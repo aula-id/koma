@@ -45,6 +45,10 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     let ssh_key = session_ref
         .as_ref()
         .and_then(|s| s.settings.git_ssh_key.clone());
+    // The GLOBAL MCP manager (built once at startup, shared across sessions). Cloned
+    // into every ToolCtx so `mcp__*` tool calls can dispatch to their server. `None`
+    // before startup builds it (and harmless when there are no MCP servers).
+    let mcp_manager = state.rest.mcp_manager.clone();
     crate::tool::ToolCtx {
         workspace,
         workspaces,
@@ -52,6 +56,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         memory_dir,
         internet_mode,
         ssh_key,
+        mcp_manager,
     }
 }
 

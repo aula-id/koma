@@ -241,6 +241,23 @@ pub(crate) fn start_stream_task(
     // 6. Stamp the send instant so the NEXT turn can measure cache warmth from the
     //    gap since this send.
     state.rest.sessions[sess_idx].last_send_at = Some(Instant::now());
+
+    // MCP tools for the MAIN agent. Snapshot the global manager's discovered tools
+    // BEFORE the spawn (the task holds no borrow of `state`): the wire `ToolDef`s to
+    // advertise, plus their namespaced names appended to the main allow-list so the
+    // stream's advertise filter keeps the model's calls to them. With no MCP servers
+    // (or none connected yet) both are empty and the request is byte-identical to the
+    // pre-MCP path. Sub-agents get NO MCP tools (kept simple) — only the main agent.
+    let (mcp_tools, advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
+        match state.rest.mcp_manager.as_ref() {
+            Some(mgr) => {
+                let mut names = crate::tool::main_tool_names();
+                names.extend(mgr.tool_names());
+                (mgr.tool_defs(), names)
+            }
+            None => (Vec::new(), crate::tool::main_tool_names()),
+        };
+
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
     let c = Arc::clone(client.as_ref().unwrap());
@@ -291,7 +308,8 @@ pub(crate) fn start_stream_task(
                         m.provider(),
                         &m.effort,
                         history,
-                        &crate::tool::main_tool_names(),
+                        &advertise,
+                        &mcp_tools,
                         image_ctx,
                         tx,
                     )

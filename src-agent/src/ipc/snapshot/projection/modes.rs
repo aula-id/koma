@@ -32,6 +32,11 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         Mode::Loading(s) => ModeSnapshot::Loading(loading_snapshot(s)),
         Mode::Settings(s) => ModeSnapshot::Settings(Box::new(settings_snapshot(s))),
         Mode::Agents(a) => ModeSnapshot::Agents(Box::new(agents_snapshot(a, state))),
+        // The `/mcp` dashboard is a LOCAL-TUI-only mode for now: it has no daemon
+        // wire snapshot (no `ModeSnapshot::Mcp` variant), so a thin client attached
+        // to a host that's in `/mcp` simply sees Chat. Additive + crash-free; wiring
+        // a real remote projection is out of scope for this pass.
+        Mode::Mcp(_) => ModeSnapshot::Chat,
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
         Mode::MessageRewind(rw) => ModeSnapshot::MessageRewind(rewind_snapshot(rw)),

@@ -128,6 +128,19 @@ pub enum Action {
     /// Esc from the agents dashboard (Browse, LIST focused) — discard any drafts
     /// and return to Chat.
     CloseAgents,
+    // --- MCP dashboard actions ---
+    /// Confirm CREATE: append a new MCP server from the drafts to the config,
+    /// persist, reload, back to Browse.
+    CreateMcp,
+    /// Confirm EDIT: overwrite the selected MCP server from the drafts, persist,
+    /// reload, back to Browse.
+    SaveMcp,
+    /// Confirm DELETE: remove the selected MCP server from the config, persist,
+    /// reload, back to Browse.
+    DeleteMcp,
+    /// Esc from the MCP dashboard (Browse, LIST focused) — discard any drafts and
+    /// return to Chat.
+    CloseMcp,
     /// Fetch the provider-endpoint list for the given model id (the inner
     /// `String`) on a background task. Emitted by the model modal when an
     /// OpenRouter model is selected (search) or an existing model is opened for

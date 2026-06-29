@@ -364,7 +364,14 @@ pub(crate) fn process_tools(
         // loop continues at the next call. This sequencing is REQUIRED for
         // correctness — two writes/edits to the same file in one round would
         // otherwise race and lose a write.
-        if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str()) {
+        // MCP tools (`mcp__<server>__<tool>`) have DYNAMIC names so they can't be
+        // listed in `DEFERRED_TOOLS`, but their dispatch blocks the calling thread
+        // on a `call_tool` round-trip for up to `CALL_TIMEOUT` (60s) — running that
+        // inline would freeze the UI. Route any `mcp__*` call through the SAME
+        // off-thread deferred lane as bash/read/web_fetch.
+        if crate::tool::DEFERRED_TOOLS.contains(&call.function.name.as_str())
+            || call.function.name.starts_with("mcp__")
+        {
             super::dispatch::dispatch_deferred(state, sess_idx, &call);
             return;
         }

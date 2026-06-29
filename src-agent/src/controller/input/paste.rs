@@ -132,6 +132,15 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                 }
             }
         }
+        Mode::Mcp(m) => {
+            // The MCP dashboard has only single-line text fields (name / command /
+            // args / env / url), inline-edited; the toggle fields take no text. Feed
+            // the paste into the active draft when editing, stripping newlines so a
+            // multi-line clipboard can't corrupt a one-line field.
+            if m.editing {
+                paste_single_line(text, |c| m.push_char(c));
+            }
+        }
         Mode::SessionPicker(p) => {
             // The `--resume` picker has a live search field: paste feeds the
             // query and re-runs the filter, exactly as a typed char does.

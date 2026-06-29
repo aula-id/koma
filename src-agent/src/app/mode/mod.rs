@@ -26,9 +26,11 @@ mod rewind;
 mod session_hub;
 pub mod settings;
 pub mod agents;
+pub mod mcp;
 pub mod editor;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
+pub use mcp::{McpEditField, McpState, McpSubMode};
 pub use effort::EffortPickerState;
 pub use key_input::KeyInputForm;
 pub use loading::{LoadingState, WarmStatus};
@@ -168,6 +170,13 @@ pub enum Mode {
     /// machine, and the per-field working drafts. Boxed to keep `Mode` small,
     /// consistent with `Settings`.
     Agents(Box<AgentsState>),
+    /// In-app MCP server manager (`/mcp`): create / modify / delete / enable-toggle
+    /// the configured MCP servers, persisted to `config.json`. The inner
+    /// [`McpState`] holds a snapshot of `config.mcp_servers`, the LIST/DETAIL cursor,
+    /// the sub-mode state machine, and the per-field working drafts. A simpler clone
+    /// of [`Self::Agents`] (no markdown files, no pickers, no body editor). Boxed to
+    /// keep `Mode` small, consistent with `Agents`.
+    Mcp(Box<McpState>),
     /// Reasoning/thinking-effort picker (`/effort`): a small overlay listing the
     /// effort options the current model supports. The inner [`EffortPickerState`]
     /// holds the option list, the cursor, and a one-line capability note. Boxed

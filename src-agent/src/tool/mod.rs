@@ -54,6 +54,12 @@ pub struct ToolCtx {
     /// `git_operator` to inject `-i ~/.ssh/<key>` into git commands. `None`
     /// means no key has been selected yet.
     pub ssh_key: Option<String>,
+    /// The GLOBAL MCP client manager, shared across every session. `Some` once
+    /// startup builds it (it lives in `AppStateRest`); used by [`execute_tool`] to
+    /// dispatch `mcp__*` tool calls to their owning server. `None` where no manager
+    /// is available (e.g. headless/test constructions) — MCP calls then fall through
+    /// to the "unknown tool" error, exactly as before MCP existed.
+    pub mcp_manager: Option<Arc<crate::app::mcp::McpManager>>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -306,6 +312,17 @@ pub fn execute_tool(ctx: &ToolCtx, call: &crate::dto::chat::ToolCall) -> String 
                 Ok(s) => s,
                 Err(e) => format!("error: {e}"),
             };
+        }
+    }
+    // No built-in tool matched. An `mcp__*` name is a remote MCP tool: dispatch it
+    // through the manager's sync→async bridge. Only attempted when a manager is
+    // present (it always is in the live app), so a build/test ToolCtx without one
+    // falls through to the unknown-tool error unchanged.
+    if call.function.name.starts_with("mcp__") {
+        if let Some(mgr) = ctx.mcp_manager.as_ref() {
+            return mgr
+                .execute_blocking(&call.function.name, &args)
+                .unwrap_or_else(|e| format!("error: {e}"));
         }
     }
     format!("error: unknown tool '{}'", call.function.name)

@@ -30,6 +30,9 @@ globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
 libc = "0.2"
+# MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
+# streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
+rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
 
 [[bin]]
 name = "koma"

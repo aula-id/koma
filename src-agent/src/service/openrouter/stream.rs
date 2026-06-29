@@ -37,6 +37,7 @@ impl OpenRouterClient {
         effort: &str,
         messages: Vec<ChatMessage>,
         advertise: &[String],
+        mcp_tools: &[ToolDef],
         image_ctx: Option<ImageWireCtx>,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
@@ -52,7 +53,7 @@ impl OpenRouterClient {
         // `INTERNAL_ONLY`, currently empty), and each sub-agent advertises only
         // its effective allow-list. Each retained tool maps to an OpenAI/OpenRouter
         // `function` definition (name + description + raw JSON-Schema parameters).
-        let tools: Vec<ToolDef> = crate::tool::all_tools()
+        let mut tools: Vec<ToolDef> = crate::tool::all_tools()
             .iter()
             .filter(|t| advertise.iter().any(|n| n == t.name()))
             .map(|t| ToolDef {
@@ -64,6 +65,13 @@ impl OpenRouterClient {
                 },
             })
             .collect();
+        // Append the caller-supplied MCP tool definitions (already wire-shaped
+        // `ToolDef`s built from the manager's discovered tools). These are namespaced
+        // `mcp__<server>__<tool>` and were already added to `advertise` at the call
+        // site, so the runtime's dispatch filter accepts the model's calls to them.
+        // Empty (the common case: no MCP servers) ⇒ this is a no-op and the request
+        // body is byte-identical to before MCP existed.
+        tools.extend(mcp_tools.iter().cloned());
         let body = ChatRequest {
             model: model.to_string(),
             // Wrap into wire messages: the system message gets the single prompt-
