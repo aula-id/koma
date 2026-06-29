@@ -417,32 +417,49 @@ pub(super) fn render_tool_lines(
     let Some(calls) = msg.tool_calls.as_ref() else {
         return Vec::new();
     };
-    calls
-        .iter()
-        .enumerate()
-        .map(|(ci, call)| {
-            let args = truncate_chars(&call.function.arguments, 60);
-            let done = completed.contains(call.id.as_str());
-            let (glyph, glyph_style) = if done {
-                ("✓ ", Style::default().fg(palette.accent))
-            } else {
-                ("⚙ ", Style::default().fg(palette.dim))
-            };
-            let prefix = if !has_body && ci == 0 {
-                Span::styled("● ", Style::default().fg(palette.fg))
-            } else {
-                Span::raw("  ")
-            };
-            Line::from(vec![
-                prefix,
-                Span::styled(glyph, glyph_style),
-                Span::styled(
-                    format!("{}({})", call.function.name, args),
-                    Style::default().fg(palette.dim),
-                ),
-            ])
-        })
-        .collect()
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(calls.len());
+    for (ci, call) in calls.iter().enumerate() {
+        let args = truncate_chars(&call.function.arguments, 60);
+        let done = completed.contains(call.id.as_str());
+        let (glyph, glyph_style) = if done {
+            ("✓ ", Style::default().fg(palette.accent))
+        } else {
+            ("⚙ ", Style::default().fg(palette.dim))
+        };
+        let prefix = if !has_body && ci == 0 {
+            Span::styled("● ", Style::default().fg(palette.fg))
+        } else {
+            Span::raw("  ")
+        };
+        lines.push(Line::from(vec![
+            prefix,
+            Span::styled(glyph, glyph_style),
+            Span::styled(
+                format!("{}({})", call.function.name, args),
+                Style::default().fg(palette.dim),
+            ),
+        ]));
+
+        // For background bash calls, append a dim+italic annotation sub-line.
+        if call.function.name == "bash" {
+            let parsed = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            let is_background = parsed
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_background {
+                let annotation_style = Style::default()
+                    .fg(palette.dim)
+                    .add_modifier(Modifier::ITALIC);
+                lines.push(Line::from(vec![Span::styled(
+                    "  ↳ running in background · /bash to manage",
+                    annotation_style,
+                )]));
+            }
+        }
+    }
+    lines
 }
 
 /// Assemble a full transcript from a flat `&[ChatMessage]` slice into styled
