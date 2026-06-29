@@ -57,11 +57,28 @@ return an error. Install what you need; leave the rest.
 
 ---
 
-## WEB-RE / PWN  _(binaries — not yet documented)_
+## WEB-RE
 
-Entries for `sec_sourcemap`, `sec_jsdeobf`, `sec_unmin`, `sec_wasm`,
-`sec_rop`, `sec_pwntmpl`, `sec_crack`, `sec_decode`, and `sec_triage` will be
-added once the web-re/pwn domain is wired.
+| Binary / service        | Tool module    | Install hint                                                                         |
+|-------------------------|----------------|--------------------------------------------------------------------------------------|
+| `node` / `npx`          | sec_jsdeobf, sec_unmin | `apt install nodejs npm`  or  https://nodejs.org/ (LTS recommended)      |
+| `webcrack` (npx)        | sec_jsdeobf, sec_unmin | `npm install -g webcrack`  (run via `npx webcrack`)                      |
+| `wasm-decompile` / `wasm2wat` | sec_wasm | Install [wabt](https://github.com/WebAssembly/wabt): `apt install wabt`  or  build from source |
+| _(python)_ `jsbeautifier` | sec_jsdeobf, sec_unmin, sec_sourcemap | `pip install jsbeautifier`                              |
+
+### Notes
+
+- `node` and `npx` are required for JavaScript deobfuscation (`sec_jsdeobf`)
+  and unminification (`sec_unmin`). Ensure they are on `$PATH`.
+- `webcrack` is invoked via `npx webcrack`; install globally with
+  `npm install -g webcrack` or rely on `npx` auto-fetch (requires internet on
+  first run).
+- `wabt` provides `wasm-decompile` and `wasm2wat`; `sec_wasm` shells out to
+  whichever is available. On Debian/Ubuntu: `apt install wabt`.
+- `jsbeautifier` is a Python package listed in `requirements.txt` and installed
+  with the normal `pip install -r requirements.txt`.
+- `sec_sourcemap` uses `jsbeautifier` (Python) only — no additional system
+  binary is required beyond Node/npm for source map fetching.
 
 ---
 

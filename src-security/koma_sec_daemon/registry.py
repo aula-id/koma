@@ -33,6 +33,10 @@ from koma_sec_daemon.tools.sec_lattice import DESCRIPTOR as _SEC_LATTICE_DESC
 from koma_sec_daemon.tools.sec_crack import DESCRIPTOR as _SEC_CRACK_DESC
 from koma_sec_daemon.tools.sec_hashid import DESCRIPTOR as _SEC_HASHID_DESC
 from koma_sec_daemon.tools.sec_decode import DESCRIPTOR as _SEC_DECODE_DESC
+from koma_sec_daemon.tools.sec_jsdeobf import DESCRIPTOR as _SEC_JSDEOBF_DESC
+from koma_sec_daemon.tools.sec_unmin import DESCRIPTOR as _SEC_UNMIN_DESC
+from koma_sec_daemon.tools.sec_sourcemap import DESCRIPTOR as _SEC_SOURCEMAP_DESC
+from koma_sec_daemon.tools.sec_wasm import DESCRIPTOR as _SEC_WASM_DESC
 
 # Wire-safe keys — everything except the callable handler
 _WIRE_KEYS = ("name", "description", "parameters", "risk", "compute", "domain")
@@ -54,6 +58,10 @@ REGISTRY: dict[str, dict] = {
     _SEC_CRACK_DESC["name"]: _SEC_CRACK_DESC,
     _SEC_HASHID_DESC["name"]: _SEC_HASHID_DESC,
     _SEC_DECODE_DESC["name"]: _SEC_DECODE_DESC,
+    _SEC_JSDEOBF_DESC["name"]: _SEC_JSDEOBF_DESC,
+    _SEC_UNMIN_DESC["name"]: _SEC_UNMIN_DESC,
+    _SEC_SOURCEMAP_DESC["name"]: _SEC_SOURCEMAP_DESC,
+    _SEC_WASM_DESC["name"]: _SEC_WASM_DESC,
 }
 
 
