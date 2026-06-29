@@ -21,7 +21,13 @@ use crate::app::state::AppStateRest;
 use super::{is_ctrl, Action};
 
 /// Handle a key press inside the `/security` control panel.
-pub fn handle_security(s: &mut SecurityState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // Keep the cursor clamp honest: the daemon may have started/stopped since the
+    // panel opened (the view re-reads status live, but this mode-state copy didn't),
+    // so refresh from the live manager before handling navigation.
+    if let Some(m) = rest.sec_manager.as_ref() {
+        s.status = m.status();
+    }
     if is_ctrl(&key, 'c') {
         return Action::Quit;
     }

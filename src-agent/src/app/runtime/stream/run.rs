@@ -91,6 +91,26 @@ pub(crate) fn start_stream_task(
                     first.content.push_str(summary);
                 }
             }
+            // Security mode: when active, tell the model it IS a security testing agent
+            // and list its live security tools, so it uses them directly instead of
+            // grepping the codebase for "security tools".
+            if state.rest.security_enabled {
+                if let Some(sec) = state.rest.sec_manager.as_ref() {
+                    let defs = sec.tool_defs();
+                    if !defs.is_empty() {
+                        first.content.push_str(
+                            "\n\n# Security mode (ACTIVE)\n\
+                             You are operating as a security testing agent for the user's OWN code/app \
+                             (the user owns the target; they cloned it into the workspace). The tools \
+                             listed below ARE your security tools — call them directly. Do NOT search or \
+                             grep the codebase looking for \"security tools\"; these are them:\n",
+                        );
+                        for d in &defs {
+                            first.content.push_str(&format!("- {}: {}\n", d.function.name, d.function.description));
+                        }
+                    }
+                }
+            }
         }
     }
     // Short-send reshape inputs, snapshotted out of `state` BEFORE the spawn so
