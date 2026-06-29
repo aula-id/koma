@@ -16,7 +16,8 @@ use crate::model::settings::InternetMode;
 /// User-facing slash commands shown in the `/` palette, in display order.
 /// (name, one-line description). Source of truth for the palette UI.
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("/new", "Spawn a new parallel session (current keeps running)"),
+    ("/new", "Spawn a new session, swap to it (current keeps running)"),
+    ("/new kill", "Spawn a new session and close the current one"),
     ("/resume", "Open the session hub (live + past sessions)"),
     ("/mode", "Toggle Normal/Auto tool approval"),
     ("/effort", "Set model reasoning/thinking effort"),
@@ -72,14 +73,25 @@ pub fn palette_matches(input: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// Disposition of the CURRENT foreground session when `/new` spawns the next one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewMode {
+    /// Keep the current session running in the background; just swap foreground
+    /// to the new one. This is the default (`/new` and `/new swap`).
+    Swap,
+    /// Close (tombstone) the current foreground session as the new one opens
+    /// (`/new kill`).
+    Kill,
+}
+
 /// A parsed in-chat slash command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Compact the conversation history to save context window space.
     Compact,
-    /// Spawn a fresh PARALLEL session (the current one keeps running in the
-    /// background); the new session becomes the foreground.
-    New,
+    /// Spawn a fresh PARALLEL session. `NewMode` controls whether the previous
+    /// foreground is kept running (`Swap`) or tombstoned (`Kill`).
+    New(NewMode),
     /// Toggle the tool-approval policy between Normal and Auto.
     Mode,
     /// Open the reasoning/thinking-effort picker for the current model.
@@ -141,7 +153,13 @@ pub fn parse(line: &str) -> Command {
 
     match head_lc.as_str() {
         "compact" => Command::Compact,
-        "new" => Command::New,
+        "new" => {
+            let mode = match rest.split_whitespace().next().unwrap_or("").to_lowercase().as_str() {
+                "kill" => NewMode::Kill,
+                _ => NewMode::Swap,
+            };
+            Command::New(mode)
+        }
         "mode" => Command::Mode,
         "effort" => Command::Effort,
         "settings" | "config" => Command::Settings,

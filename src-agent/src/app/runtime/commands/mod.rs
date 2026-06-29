@@ -30,7 +30,7 @@ pub(super) fn apply_slash(
 ) -> Result<()> {
     match cmd {
         Command::Compact => compact::handle_compact(state, client, handle)?,
-        Command::New => new_session::handle_new(state, client, handle)?,
+        Command::New(mode) => new_session::handle_new(state, client, handle, mode)?,
         Command::Mode => misc::handle_mode(state)?,
         Command::Effort => effort::handle_effort(state, client)?,
         Command::Rename(name) => new_session::handle_rename(state, name)?,

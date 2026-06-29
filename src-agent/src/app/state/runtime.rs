@@ -441,6 +441,83 @@ impl SessionRuntime {
         self.closed = true;
     }
 
+    /// Stop this session's in-flight turn WITHOUT tombstoning it: abort the
+    /// stream task + sub-agents, drop all parked agentic state, and commit any
+    /// partial assistant buffer with an `[interrupted]` marker. Idempotent and
+    /// safe on an idle session (nothing in flight → no-op commit). Used both by
+    /// the foreground Esc-interrupt and by the session hub's Ctrl+X "stop".
+    ///
+    /// This is the per-session half of the old `handle_interrupt`: every step here
+    /// operated on `fg_mut()` before, so it works on ANY session now. The partial
+    /// buffer is committed to THIS session's own `session` (path/conversation/log),
+    /// and only THIS session's counters are touched. The rest-GLOBAL compaction
+    /// cleanup + status line stay with the caller (`actions::chat::handle_interrupt`).
+    pub fn interrupt(&mut self) {
+        // Abort the in-flight stream task + stop listening to it (the per-session
+        // part of `abort_current`): abort the handle, drop the active receiver so
+        // any late events from the aborted task vanish, and clear `waiting`.
+        if let Some(h) = self.current_task.take() {
+            h.abort();
+        }
+        self.active_rx = None;
+        self.waiting = false;
+        // Halt the agentic loop: drop any stashed tool calls, reset the step
+        // counter, and clear the approval machine so a halt mid-approval doesn't
+        // leave the turn wedged.
+        self.pending_tool_calls.clear();
+        self.agent_steps = 0;
+        self.awaiting_approval = false;
+        self.approval_reason = None;
+        self.tool_idx = 0;
+        self.tool_results.clear();
+        // Kill every running sub-agent spawned by this turn and drop the pending
+        // queue. `abort_running_subagents` also clears `pending_subagent_calls`
+        // and `awaiting_subagents`, so the halt path is complete — no orphaned
+        // background task can deliver a late result.
+        self.abort_running_subagents();
+        // Abandon any round parked on a deferred tool task. The off-thread worker
+        // keeps running but its result lands with no matching pending id, so the
+        // next-turn machine reset discards it; it can't resume a turn that was
+        // killed. The channel itself is left intact for reuse by later deferred
+        // tools. We deliberately do NOT join the worker here.
+        self.pending_tool_tasks.clear();
+        self.awaiting_tool_tasks = false;
+        // Take any captured usage unconditionally so a partial turn's usage can't
+        // leak into the next response.
+        let usage = self.pending_usage.take();
+        // Likewise drain the reasoning buffer unconditionally so a half-streamed
+        // thinking block can't bleed into the next turn; it's folded onto the
+        // interrupted message (display-only).
+        let reasoning = self.take_reasoning();
+        let buf = self.take_stream();
+        if let Some(b) = buf {
+            if !b.is_empty() {
+                let mut committed = false;
+                if let Some(sess) = self.session.as_mut() {
+                    let content = format!("{b}  [interrupted]");
+                    let _ = crate::model::msglog::append(
+                        &sess.path,
+                        crate::dto::chat::Role::Assistant,
+                        &content,
+                        usage,
+                    );
+                    sess.conversation.push_assistant(content, reasoning);
+                    let _ = sess.save();
+                    committed = true;
+                }
+                // Update THIS session's own counters once the `sess` borrow above
+                // has ended (mirrors the foreground-interrupt accounting).
+                if committed {
+                    if let Some((pt, ct, cost)) = usage {
+                        self.tokens_in = pt; // current context size, not a sum
+                        self.tokens_out += ct;
+                        self.cost += cost;
+                    }
+                }
+            }
+        }
+    }
+
     /// True when this session has work in flight: a turn waiting / streaming, a
     /// paused approval, a parked deferred lane (tool tasks or sub-agent
     /// delegations), or any still-running sub-agent. Used by the session hub's
@@ -464,6 +541,14 @@ impl SessionRuntime {
                 .subagents
                 .iter()
                 .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
+    }
+
+    /// True once this session has been tombstoned via [`close()`](Self::close) —
+    /// its slot stays in `sessions` (so no index shifts) but it is inert. Read by
+    /// the session-hub cooking builder (a closed session must not reappear) and by
+    /// the kill handler's foreground reassignment (never repoint onto a tombstone).
+    pub fn is_closed(&self) -> bool {
+        self.closed
     }
 
     /// This session's EFFECTIVE working directory: the live `cd` override

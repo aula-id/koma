@@ -80,7 +80,25 @@ fn shadow_warm_status(w: WarmStatusWire) -> WarmStatus {
 /// not projected and not rendered, so reconstructed rows carry `0` for it; the
 /// HISTORY rows' live `path` is likewise daemon-only, rebuilt as an empty path. The
 /// client never acts on these — Enter is forwarded for the daemon to resolve.
+///
+/// The incoming `history` is ALREADY filtered by the daemon, so the shadow's
+/// `history_filtered` is rebuilt as the identity over those rows (its render path
+/// indexes through it the same way) and `history_selected` passes through unchanged.
+/// `history_query` rides along only so the view can echo the search line; the client
+/// never re-filters (the daemon owns that). `pending_kill` indexes the cooking list,
+/// which is order-identical here, so the confirm bar resolves `cooking[pending_kill]`.
 pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
+    let history: Vec<HistoryEntry> = h
+        .history
+        .into_iter()
+        .map(|e| HistoryEntry {
+            path: std::path::PathBuf::new(), // daemon-side load target; not rendered
+            name: e.name,
+            last_active: std::time::UNIX_EPOCH + Duration::from_secs(e.last_active_secs),
+        })
+        .collect();
+    // The projected history is already filtered → identity filter over it.
+    let history_filtered: Vec<usize> = (0..history.len()).collect();
     SessionHub {
         cooking: h
             .cooking
@@ -96,16 +114,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 is_foreground: c.is_foreground,
             })
             .collect(),
-        history: h
-            .history
-            .into_iter()
-            .map(|e| HistoryEntry {
-                path: std::path::PathBuf::new(), // daemon-side load target; not rendered
-                name: e.name,
-                last_active: std::time::UNIX_EPOCH
-                    + Duration::from_secs(e.last_active_secs),
-            })
-            .collect(),
+        history,
         focus: if h.focus_cooking {
             HubPane::Cooking
         } else {
@@ -113,6 +122,9 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
         },
         cooking_selected: h.cooking_selected,
         history_selected: h.history_selected,
+        history_query: h.history_query,
+        history_filtered,
+        pending_kill: h.pending_kill,
     }
 }
 

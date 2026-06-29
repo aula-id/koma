@@ -10,7 +10,7 @@ use crate::dto::chat::Role;
 use crate::model::msglog;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::stream::{abort_current, dispatch_deferred, process_tools, run_tool, start_stream_task};
+use crate::app::runtime::stream::{dispatch_deferred, process_tools, run_tool, start_stream_task};
 
 /// Handle `Action::Submit`: push the user message, spawn the stream task, and
 /// optionally kick off the advisory prompt-classifier on a background task.
@@ -227,66 +227,21 @@ pub(super) fn handle_shell(text: String, state: &mut AppState) -> Result<()> {
 /// Handle `Action::Interrupt`: abort the in-flight stream, finalize the partial
 /// buffer with an "[interrupted]" marker, and reset the agentic-loop state.
 pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
-    // Custom finalization (not finish_stream): the partial buffer is
-    // committed with an "  [interrupted]" marker. abort_current drops
-    // active_rx, so the aborted task's late events are ignored.
+    // Custom finalization (not finish_stream): the partial buffer is committed
+    // with an "  [interrupted]" marker. The per-session teardown (abort task +
+    // drop active_rx so late events are ignored, halt the agentic loop, kill
+    // sub-agents, commit the partial buffer to the foreground session) lives in
+    // `SessionRuntime::interrupt()` so the session hub's Ctrl+X can reuse it on
+    // ANY session; here it runs on the foreground.
     if state.rest.fg().waiting {
-        abort_current(&mut state.rest);
-        // Halt the agentic loop: drop any stashed tool calls, reset the
-        // step counter, and clear the approval machine so a halt mid-
-        // approval doesn't leave the turn wedged.
-        state.rest.fg_mut().pending_tool_calls.clear();
-        state.rest.fg_mut().agent_steps = 0;
-        state.rest.fg_mut().awaiting_approval = false;
-        state.rest.fg_mut().approval_reason = None;
-        state.rest.fg_mut().tool_idx = 0;
-        state.rest.fg_mut().tool_results.clear();
-        // Kill every running sub-agent spawned by this turn and drop the
-        // pending queue.  abort_running_subagents also clears
-        // pending_subagent_calls and awaiting_subagents, so the halt path is
-        // complete — no orphaned background task can deliver a late result.
-        state.rest.fg_mut().abort_running_subagents();
-        // Abandon any round parked on a deferred tool task (the heavy/blocking
-        // tools — read/write/edit/delete/bash/grep/glob/remember/web_fetch/
-        // web_search) the same way. The off-thread worker keeps running but its
-        // result lands with no matching pending id, so the next-turn machine reset
-        // discards it; it can't resume a turn the user killed. The channel itself
-        // is left intact for reuse by later deferred tools. We deliberately do NOT
-        // join the worker here — joining could block the UI thread for the full
-        // duration of the tool (e.g. a long bash or HTTP timeout), the exact freeze
-        // this fix removes.
-        state.rest.fg_mut().pending_tool_tasks.clear();
-        state.rest.fg_mut().awaiting_tool_tasks = false;
-        // Take any captured usage unconditionally so a partial turn's
-        // usage can't leak into the next response.
-        let usage = state.rest.fg_mut().pending_usage.take();
-        // Likewise drain the reasoning buffer unconditionally so a
-        // half-streamed thinking block can't bleed into the next turn;
-        // it's folded onto the interrupted message (display-only).
-        let reasoning = state.rest.fg_mut().take_reasoning();
-        let buf = state.rest.fg_mut().take_stream();
-        if let Some(b) = buf {
-            if !b.is_empty() {
-                let mut committed = false;
-                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    let content = format!("{b}  [interrupted]");
-                    let _ = msglog::append(&sess.path, Role::Assistant, &content, usage);
-                    sess.conversation.push_assistant(content, reasoning);
-                    let _ = sess.save();
-                    committed = true;
-                }
-                // Update the FOREGROUND session's own counters once the `sess`
-                // borrow above has ended (this is the active tab being interrupted).
-                if committed {
-                    if let Some((pt, ct, cost)) = usage {
-                        let rt = state.rest.fg_mut();
-                        rt.tokens_in = pt;        // current context size, not a sum
-                        rt.tokens_out += ct;
-                        rt.cost += cost;
-                    }
-                }
-            }
-        }
+        state.rest.fg_mut().interrupt();
+        // Rest-GLOBAL compaction cleanup (NOT per-session, so it stays here — it
+        // was previously folded into `abort_current`): tear down any in-flight
+        // compaction animation / deferred apply so an interrupt mid-compact
+        // doesn't leave the spinner stuck forever.
+        state.rest.compact_anim_start = None;
+        state.rest.compact_apply_at = None;
+        state.rest.compact_pending = None;
     }
     state.rest.status = "interrupted".into();
     Ok(())

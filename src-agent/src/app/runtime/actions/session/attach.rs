@@ -79,6 +79,147 @@ pub fn handle_close_session_hub(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
+/// Handle `Action::HubKillConfirm`: act on the session armed in the hub's
+/// `pending_kill`, then rebuild the hub in place so it stays open with the change
+/// reflected. The policy is "abort if cooking, else close":
+///
+/// - **Working session** → [`SessionRuntime::interrupt`]: stop its in-flight turn
+///   but KEEP the session (it goes idle, lock retained). The cooking row stays,
+///   now marked ready. Foreground is untouched.
+/// - **Idle session** → [`SessionRuntime::close`]: tombstone it (abort lanes,
+///   release its lock; the slot stays so no index shifts). If it was the
+///   foreground, reassign foreground onto another live session (via the shared
+///   [`handle_live_switch`] flat-UI-reset path), or — if none remain — spawn a
+///   fresh foreground via `/new` so `foreground` never points at a tombstone.
+///
+/// The hub is rebuilt from [`build_session_hub`] (single source of truth) and the
+/// user's prior `focus` + `history_query` are re-applied, with selections clamped.
+/// A no-op (just clears the arm + rebuilds) when nothing valid is pending.
+pub fn handle_hub_kill_confirm(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    // 1. Resolve the armed target out of the hub state (the `pending_kill` position
+    //    in `cooking` → that row's `sessions` index + kind). Borrow released before
+    //    we mutate `state` below.
+    let target = if let Mode::SessionHub(hub) = &state.mode {
+        hub.pending_kill
+            .and_then(|ci| hub.cooking.get(ci))
+            .map(|e| (e.idx, e.kind))
+    } else {
+        None
+    };
+
+    // Preserve the user's view (focus + search) across the rebuild.
+    let (prev_focus, prev_query) = if let Mode::SessionHub(hub) = &state.mode {
+        (hub.focus, hub.history_query.clone())
+    } else {
+        (crate::app::mode::HubPane::Cooking, String::new())
+    };
+
+    // Nothing valid armed (no pending, gone, or the synthetic new-session row) →
+    // just clear the arm and rebuild the hub unchanged.
+    let Some((session_idx, kind)) = target else {
+        return rebuild_hub(state, prev_focus, prev_query);
+    };
+    if kind != crate::app::mode::SessionKind::Session {
+        return rebuild_hub(state, prev_focus, prev_query);
+    }
+
+    // 2. Act on the target. Out-of-range can't normally happen (the cooking idx is
+    //    a live `sessions` index and `sessions` is only ever appended to), but guard.
+    if session_idx < state.rest.sessions.len() {
+        if state.rest.sessions[session_idx].is_working() {
+            // Working → stop the turn but KEEP the session (goes idle). Foreground
+            // is untouched — interrupting a background session leaves it live.
+            state.rest.sessions[session_idx].interrupt();
+            // Mirror handle_interrupt: the compaction animation/timer is rest-global
+            // and tied to the FOREGROUND session, so clear it when we interrupt the
+            // foreground (a background session can't be mid-/compact).
+            if session_idx == state.rest.foreground {
+                state.rest.compact_anim_start = None;
+                state.rest.compact_apply_at = None;
+                state.rest.compact_pending = None;
+            }
+        } else {
+            // Idle → tombstone it. The slot stays in place (no index shift).
+            state.rest.sessions[session_idx].close();
+
+            // If the closed session was the foreground, reassign so `foreground`
+            // never points at a tombstone.
+            if session_idx == state.rest.foreground {
+                // First live, non-closed session — prefer one that ISN'T the one we
+                // just closed (it now reads closed anyway, so this is belt-and-braces).
+                let next = state
+                    .rest
+                    .sessions
+                    .iter()
+                    .enumerate()
+                    .find(|(i, rt)| {
+                        *i != session_idx && rt.session.is_some() && !rt.is_closed()
+                    })
+                    .map(|(i, _)| i);
+                match next {
+                    // Reuse the local foreground-switch path so the flat foreground-UI
+                    // is reset (composer/scroll/attachments/transcript) and the keyless
+                    // client is rebuilt for the now-shown session, exactly like a
+                    // cooking-pane Enter.
+                    Some(i) => handle_live_switch(i, state, client)?,
+                    // No live session left → spawn a fresh foreground so there is
+                    // always a valid one. `/new` (Swap) appends + foregrounds + warms,
+                    // inheriting last-used creds (populated, since we had a live tab).
+                    None => {
+                        crate::app::runtime::commands::new_session::handle_new(
+                            state,
+                            client,
+                            handle,
+                            crate::controller::command::NewMode::Swap,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. If the fallback `/new` had to open a credentials prompt (no usable creds),
+    //    it set `spawn_pending` + `Mode::KeyInput`. Don't bury that behind the hub —
+    //    leave the prompt up so the user can finish creating the session. (In
+    //    practice this never fires: killing a live session means creds were already
+    //    resolved, so `/new` lands in Chat.)
+    if state.rest.spawn_pending {
+        return Ok(());
+    }
+
+    // 4. Rebuild the hub in place so the killed/now-idle change is reflected and the
+    //    overlay stays open with the user's view preserved.
+    rebuild_hub(state, prev_focus, prev_query)
+}
+
+/// Rebuild the session hub from current state (via [`build_session_hub`]) and
+/// re-apply the caller's prior `focus` + `history_query` (re-running the filter and
+/// clamping the cursors), with `pending_kill` cleared. Shared tail of
+/// [`handle_hub_kill_confirm`] so every exit path leaves a consistent, open hub.
+fn rebuild_hub(
+    state: &mut AppState,
+    prev_focus: crate::app::mode::HubPane,
+    prev_query: String,
+) -> Result<()> {
+    let mut hub = crate::app::runtime::commands::new_session::build_session_hub(state);
+    // Restore the user's pane focus and live search, then re-filter so the history
+    // view + selection match the restored query (refilter clamps history_selected).
+    hub.focus = prev_focus;
+    hub.history_query = prev_query;
+    hub.refilter_history();
+    // Clamp the cooking cursor into the (possibly shorter) rebuilt list.
+    hub.cooking_selected = hub
+        .cooking_selected
+        .min(hub.cooking.len().saturating_sub(1));
+    hub.pending_kill = None;
+    state.mode = Mode::SessionHub(Box::new(hub));
+    Ok(())
+}
+
 /// pwd-AWARE attach selection (stage 3): point the daemon's foreground at a session
 /// for the ATTACHING CLIENT's working directory (`cwd`), so relaunching `koma` from a
 /// NEW directory lands on a session for THAT directory — not the daemon's unrelated

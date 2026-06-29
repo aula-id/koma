@@ -92,10 +92,19 @@ pub fn warm_status_wire(s: &WarmStatus) -> WarmStatusWire {
 pub fn session_hub_snapshot(h: &SessionHub) -> SessionHubSnapshot {
     SessionHubSnapshot {
         cooking: h.cooking.iter().map(cooking_entry_snapshot).collect(),
-        history: h.history.iter().map(history_entry_snapshot).collect(),
+        // Project the FILTERED history view (in filtered order) — the client renders
+        // it verbatim and `history_selected` already indexes into this filtered list.
+        history: h
+            .history_filtered
+            .iter()
+            .filter_map(|&i| h.history.get(i))
+            .map(history_entry_snapshot)
+            .collect(),
         focus_cooking: matches!(h.focus, HubPane::Cooking),
         cooking_selected: h.cooking_selected,
         history_selected: h.history_selected,
+        history_query: h.history_query.clone(),
+        pending_kill: h.pending_kill,
     }
 }
 

@@ -90,8 +90,20 @@ pub struct SessionHub {
     pub focus: HubPane,
     /// Cursor within `cooking` (used when `focus == Cooking`).
     pub cooking_selected: usize,
-    /// Cursor within `history` (used when `focus == History`).
+    /// Cursor within `history_filtered` (used when `focus == History`) — i.e. an
+    /// index into the FILTERED view, not into `history` directly. Resolve the real
+    /// entry via `history[history_filtered[history_selected]]`.
     pub history_selected: usize,
+    /// Live search query over the history pane (printable keys typed while the
+    /// History pane is focused). Empty = show all.
+    pub history_query: String,
+    /// Indices into `history` that match `history_query` (identity when empty).
+    /// `history_selected` indexes into THIS, not `history`.
+    pub history_filtered: Vec<usize>,
+    /// When set, a kill is awaiting confirmation: the value is the position in
+    /// `cooking` of the session to act on. While Some, the hub shows a confirm
+    /// bar and the input handler only accepts confirm/cancel.
+    pub pending_kill: Option<usize>,
 }
 
 impl SessionHub {
@@ -103,7 +115,8 @@ impl SessionHub {
         };
     }
 
-    /// Move the focused pane's cursor up one row (clamps at 0).
+    /// Move the focused pane's cursor up one row (clamps at 0). The History pane
+    /// scrolls over the FILTERED view (`history_filtered`).
     pub fn move_up(&mut self) {
         match self.focus {
             HubPane::Cooking => {
@@ -115,7 +128,8 @@ impl SessionHub {
         }
     }
 
-    /// Move the focused pane's cursor down one row (clamps at the last entry).
+    /// Move the focused pane's cursor down one row (clamps at the last entry). The
+    /// History pane scrolls over the FILTERED view (`history_filtered`).
     pub fn move_down(&mut self) {
         match self.focus {
             HubPane::Cooking => {
@@ -124,11 +138,33 @@ impl SessionHub {
                 }
             }
             HubPane::History => {
-                if self.history_selected + 1 < self.history.len() {
+                if self.history_selected + 1 < self.history_filtered.len() {
                     self.history_selected += 1;
                 }
             }
         }
+    }
+
+    /// Rebuild `history_filtered` from the current `history_query`: identity when
+    /// the query is empty, else the indices whose `history[i].name` contains the
+    /// query case-insensitively. Clamps `history_selected` into the new filtered
+    /// range (0 when empty) so the cursor never dangles past the visible rows.
+    pub fn refilter_history(&mut self) {
+        if self.history_query.is_empty() {
+            self.history_filtered = (0..self.history.len()).collect();
+        } else {
+            let q = self.history_query.to_lowercase();
+            self.history_filtered = self
+                .history
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.name.to_lowercase().contains(&q))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        self.history_selected = self
+            .history_selected
+            .min(self.history_filtered.len().saturating_sub(1));
     }
 
     /// The highlighted COOKING entry, or `None` if that pane is empty. Read on
@@ -138,9 +174,11 @@ impl SessionHub {
         self.cooking.get(self.cooking_selected)
     }
 
-    /// The highlighted HISTORY entry, or `None` if that pane is empty. Read on
-    /// Enter while the history pane is focused to resolve the path to load.
-    pub fn selected_history(&self) -> Option<&HistoryEntry> {
-        self.history.get(self.history_selected)
+    /// The REAL index into `history` of the highlighted history row (the filtered
+    /// cursor resolved back to its underlying `history` position), or `None` when
+    /// the filtered view is empty. Carried out on Enter so the runtime opens the
+    /// row the user actually sees regardless of the active filter.
+    pub fn selected_history_real_idx(&self) -> Option<usize> {
+        self.history_filtered.get(self.history_selected).copied()
     }
 }

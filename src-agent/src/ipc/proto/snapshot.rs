@@ -149,6 +149,12 @@ pub struct HistoryEntrySnapshot {
 }
 
 /// A serde-safe projection of the two-pane session hub.
+///
+/// `history` carries the ALREADY-FILTERED rows (the daemon projects only the rows
+/// matching `history_query`), so `history_selected` indexes straight into it on the
+/// client. `pending_kill` indexes the cooking list, which is order-identical on both
+/// sides, so the client's confirm bar resolves the target name + working flag from
+/// `cooking[pending_kill]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SessionHubSnapshot {
@@ -157,6 +163,8 @@ pub struct SessionHubSnapshot {
     pub focus_cooking: bool,
     pub cooking_selected: usize,
     pub history_selected: usize,
+    pub history_query: String,
+    pub pending_kill: Option<usize>,
 }
 
 /// A serde-safe mirror of ModelEndpoint.

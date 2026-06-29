@@ -30,10 +30,14 @@ use crate::service::openrouter::OpenRouterClient;
 /// reordered/removed (in-flight async routes by Vec index), and the previous
 /// foreground's lock is NEVER released — every live session holds its own lock
 /// for its whole lifetime.
-pub(super) fn handle_new(
+// `pub(crate)` (widened from `pub(super)`) so the session-hub kill handler
+// (`actions::session::handle_hub_kill_confirm`) can spawn a fallback foreground
+// via the SAME `/new` path when a closed session was the last live one.
+pub(crate) fn handle_new(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
+    mode: crate::controller::command::NewMode,
 ) -> Result<()> {
     let mut sess = match store::create_session() {
         Ok(s) => s,
@@ -70,6 +74,10 @@ pub(super) fn handle_new(
     )
     .is_none_or(|r| r.api_key.is_empty());
     runtime.session = Some(sess);
+
+    // Capture the previous foreground index before we swap, so we can
+    // optionally tombstone it after the new session is established.
+    let prev_fg = state.rest.foreground;
 
     // Remember where to return if the (creds-less) KeyInput below is cancelled,
     // then APPEND the new runtime and make it the foreground. The old foreground
@@ -115,6 +123,20 @@ pub(super) fn handle_new(
             false, // not from picker
         ));
     } else {
+        // Kill mode: tombstone the previous foreground only on the creds-present
+        // path, where we are actually committing to the new session (no KeyInput
+        // prompt that the user might cancel). `/new` inherits last-used creds, so
+        // when a live foreground exists `no_creds` is essentially never true;
+        // deferring the close here means `/new kill` behaves like `/new swap` in
+        // the (near-impossible) no-creds case, avoiding a tombstoned foreground
+        // that the cancel handler would try to restore.
+        if mode == crate::controller::command::NewMode::Kill
+            && prev_fg < state.rest.sessions.len()
+            && prev_fg != state.rest.foreground
+            && state.rest.sessions[prev_fg].session.is_some()
+        {
+            state.rest.sessions[prev_fg].close();
+        }
         state.rest.spawn_pending = false;
         *client = Some(super::super::build_client());
         // Land in Chat first, THEN warm: `warm_session` is non-blocking and
@@ -133,27 +155,29 @@ pub(super) fn handle_new(
     Ok(())
 }
 
-/// Handle the `/resume` command: open the unified two-pane session hub.
+/// Build a fresh two-pane [`SessionHub`] from the current state — the SINGLE
+/// source of truth for the hub's list contents, shared by `/resume`
+/// ([`handle_resume`]) and the hub's Ctrl+X kill rebuild
+/// ([`crate::app::runtime::actions::session::handle_hub_kill_confirm`]).
 ///
-/// Builds BOTH panes from a fresh snapshot at open time:
-/// - COOKING — every live [`SessionRuntime`] in `state.rest.sessions` (its Vec
-///   index, name, working flag, and whether it is the current foreground).
+/// Builds BOTH panes from a fresh snapshot:
+/// - COOKING — a synthetic "[+ new session]" row at index 0, then one row per LIVE
+///   session: a non-empty `Session` that is NOT closed/tombstoned (the daemon's
+///   initial empty placeholder is dead on arrival; a `/new kill`-ed or hub-killed
+///   session must not reappear). Each row carries its `sessions` Vec index, name,
+///   `is_working()` flag, and whether it is the current foreground.
 /// - HISTORY — the on-disk sessions from `store::list_sessions()` MINUS any whose
-///   path is already live (dedup: a live session shows ONLY in cooking).
+///   path is already live (dedup: a live session shows ONLY in cooking). Starts
+///   fully visible (`history_filtered` = identity, empty query).
 ///
-/// Focus defaults to the cooking pane (always non-empty) with the cursor on the
-/// current foreground row. We do NOT clear the current session/client — Esc out of
-/// the hub returns to the active chat unchanged.
-pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
-    // Don't open the hub mid /new-KeyInput confirmation (mirror the picker-select
-    // guard): the session tail is unstable until the new session's creds resolve.
-    if state.rest.spawn_pending {
-        return Ok(());
-    }
-
-    // COOKING pane: a synthetic "[+ new session]" row at index 0, then one row
-    // per LIVE session with a non-empty Session (the daemon's initial empty
-    // placeholder is filtered out — it is dead on arrival).
+/// Pure read of `state` (no status mutation): focus defaults to the cooking pane
+/// (always non-empty) with the cursor on the current foreground row, and no kill
+/// is pending. A `list_sessions` failure yields an empty history pane rather than
+/// a surfaced error — the cooking pane is still useful, and the caller owns the
+/// status line.
+pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
+    // COOKING pane: a synthetic "[+ new session]" row at index 0, then one row per
+    // LIVE session with a non-empty Session that ISN'T tombstoned.
     let mut cooking: Vec<CookingEntry> = Vec::with_capacity(state.rest.sessions.len() + 1);
     cooking.push(CookingEntry {
         idx: usize::MAX,
@@ -163,8 +187,11 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
         is_foreground: false,
     });
     for (raw_idx, rt) in state.rest.sessions.iter().enumerate() {
-        if rt.session.is_none() {
-            continue; // skip the initial empty placeholder
+        // Skip the initial empty placeholder AND any closed/tombstoned slot — the
+        // latter is the same check `service_all_sessions` uses to ignore a dead
+        // session, so a killed one never re-surfaces in the cooking list.
+        if rt.session.is_none() || rt.is_closed() {
+            continue;
         }
         cooking.push(CookingEntry {
             idx: raw_idx,
@@ -181,6 +208,9 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
 
     // Set of LIVE on-disk paths, used to dedup the history pane. A live session's
     // path is its canonical identity, matching the `SessionMeta.path` listing.
+    // (A closed session's path is intentionally still considered "live" for dedup:
+    // it keeps the on-disk row hidden until the next refresh, and a closed slot is
+    // never re-openable while the daemon lives, so the row would only mislead.)
     let live_paths: std::collections::HashSet<std::path::PathBuf> = state
         .rest
         .sessions
@@ -199,32 +229,47 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
                 last_active: m.modified,
             })
             .collect(),
-        Err(e) => {
-            // A listing failure shouldn't block the hub — the cooking pane is still
-            // useful. Surface the error and show an empty history pane.
-            state.rest.status = format!("error listing sessions: {e}");
-            Vec::new()
-        }
+        // A listing failure shouldn't block the hub — show an empty history pane.
+        Err(_) => Vec::new(),
     };
 
-    // Default the cooking cursor to the current foreground's row. The synthetic
-    // [+ new session] row is at index 0, so a real session at `sessions` index N
-    // maps to cooking index N+1 (filtered sessions before it are skipped, but
-    // since we only skip the initial empty placeholder which is always at index 0
-    // and never the foreground, the mapping is simply N+1). Clamp defensively.
+    // Default the cooking cursor to the current foreground's row. Clamp defensively
+    // (a closed foreground is filtered out, so its row may be absent → fall to 0).
     let cooking_selected = cooking
         .iter()
         .position(|e| e.kind == SessionKind::Session && e.idx == state.rest.foreground)
         .unwrap_or(0)
         .min(cooking.len().saturating_sub(1));
 
-    state.mode = Mode::SessionHub(Box::new(SessionHub {
+    // History starts fully visible: identity filter, empty query.
+    let history_filtered: Vec<usize> = (0..history.len()).collect();
+
+    SessionHub {
         cooking,
         history,
         focus: HubPane::Cooking,
         cooking_selected,
         history_selected: 0,
-    }));
+        history_query: String::new(),
+        history_filtered,
+        pending_kill: None,
+    }
+}
+
+/// Handle the `/resume` command: open the unified two-pane session hub.
+///
+/// Delegates the list-building to [`build_session_hub`] (the single source of
+/// truth, shared with the hub's kill rebuild) and swaps the mode to it. We do NOT
+/// clear the current session/client — Esc out of the hub returns to the active
+/// chat unchanged.
+pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
+    // Don't open the hub mid /new-KeyInput confirmation (mirror the picker-select
+    // guard): the session tail is unstable until the new session's creds resolve.
+    if state.rest.spawn_pending {
+        return Ok(());
+    }
+
+    state.mode = Mode::SessionHub(Box::new(build_session_hub(state)));
     Ok(())
 }
 

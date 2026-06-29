@@ -118,7 +118,7 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::PickerNewSession => {
             super::commands::apply_slash(
-                crate::controller::command::Command::New,
+                crate::controller::command::Command::New(crate::controller::command::NewMode::Swap),
                 state,
                 client,
                 handle,
@@ -131,6 +131,10 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::HubOpenHistory(idx) => {
             session::handle_hub_open_history(idx, state, client, handle)?;
+        }
+
+        Action::HubKillConfirm => {
+            session::handle_hub_kill_confirm(state, client, handle)?;
         }
 
         Action::CloseSessionHub => {

@@ -101,6 +101,14 @@ pub enum Action {
     /// hub state, then runs the same load path as the `--resume` picker (swap if it
     /// turns out to be live, refuse if locked by another process, else load).
     HubOpenHistory(usize),
+    /// Confirm a kill armed on the hub's COOKING pane (Enter / y / Ctrl+X while a
+    /// `pending_kill` is set). The runtime reads the pending target out of the hub
+    /// state and, on a real session, "aborts if cooking, else closes": a working
+    /// session is interrupted (kept, goes idle); an idle session is tombstoned
+    /// (`close()`), repointing/spawning the foreground if the closed one was it.
+    /// The hub is then rebuilt in place (the killed/now-idle session reflected) so
+    /// the overlay stays open. No-op if nothing valid is pending.
+    HubKillConfirm,
     /// Esc/Ctrl+C on the session hub — close it and return to the (unchanged) Chat
     /// view. No session state is touched.
     CloseSessionHub,

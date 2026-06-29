@@ -279,7 +279,7 @@ impl DaemonHub {
             // inherits last-used creds + the launch dir); wiring them is a later
             // refinement, so they are accepted-and-ignored rather than rejected.
             ClientRequest::NewSession { .. } => {
-                let result = apply_action(Action::Slash(Command::New), state, client, handle);
+                let result = apply_action(Action::Slash(Command::New(crate::controller::command::NewMode::Swap)), state, client, handle);
                 self.ack_or_error(idx, result);
             }
 
