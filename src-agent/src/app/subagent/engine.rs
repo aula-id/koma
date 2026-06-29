@@ -298,14 +298,11 @@ pub async fn run_agent_loop(
                 continue;
             }
 
-            // 4b. Risky calls (write/delete/edit/bash, and sec tools with risk=true)
-            //     must clear the tool-call classifier first. FAIL CLOSED: an
-            //     unavailable classifier blocks the call (a sub-agent has no human to
-            //     defer to). The sec_manager check mirrors the main-agent gate in
-            //     approval.rs so a sub-agent cannot bypass risk=true sec tools.
-            if tool_is_risky(&name)
-                || ctx.sec_manager.as_ref().is_some_and(|m| m.tool_risk(&name))
-            {
+            // 4b. Risky calls (write/delete/edit/bash) must clear the tool-call
+            //     classifier first. FAIL CLOSED: an unavailable classifier blocks
+            //     the call (a sub-agent has no human to defer to).
+            // sec_* tools are harness-exempt (see approval.rs) — only builtin risky tools gate.
+            if tool_is_risky(&name) {
                 let verdict = crate::app::harness::classify_toolcall(
                     &client,
                     &config,

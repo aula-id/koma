@@ -277,9 +277,11 @@ pub(crate) fn process_tools(
             state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
         }
-        let risky = tool_is_risky(&call.function.name)
-            || state.rest.sec_manager.as_ref().is_some_and(|m| m.tool_risk(&call.function.name));
-        if risky {
+        // `sec_*` tools are harness-EXEMPT: security mode is explicit user
+        // authorization to test their own target, so the TAC classifier (built to
+        // block unrequested mutations) would only block legit offensive steps. The
+        // tool's `risk` metadata is still shown in the /security panel as a label.
+        if tool_is_risky(&call.function.name) {
             match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
                 Some((c, config, settings)) => {
