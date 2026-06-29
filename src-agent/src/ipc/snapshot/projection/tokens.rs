@@ -1,6 +1,7 @@
 use crate::app::mode::agents::{AgentEditField, AgentScope, AgentSubMode};
+use crate::app::mode::mcp::{McpEditField, McpSubMode};
 use crate::app::mode::{UsageMetric, UsageView};
-use crate::model::app_config::{ApiType, ModelRole, ThemeMode};
+use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
 
 pub fn theme_token(t: &ThemeMode) -> &'static str {
     match t {
@@ -49,6 +50,34 @@ pub fn agent_scope_token(s: AgentScope) -> &'static str {
     match s {
         AgentScope::Session => "session",
         AgentScope::Global => "global",
+    }
+}
+
+pub fn mcp_submode_token(m: McpSubMode) -> &'static str {
+    match m {
+        McpSubMode::Browse => "browse",
+        McpSubMode::Edit => "edit",
+        McpSubMode::Create => "create",
+        McpSubMode::DeleteConfirm => "delete_confirm",
+    }
+}
+
+pub fn mcp_field_token(f: McpEditField) -> &'static str {
+    match f {
+        McpEditField::Name => "name",
+        McpEditField::Enabled => "enabled",
+        McpEditField::Transport => "transport",
+        McpEditField::Command => "command",
+        McpEditField::Args => "args",
+        McpEditField::Env => "env",
+        McpEditField::Url => "url",
+    }
+}
+
+pub fn mcp_transport_token(t: McpTransport) -> &'static str {
+    match t {
+        McpTransport::Stdio => "stdio",
+        McpTransport::Http => "http",
     }
 }
 

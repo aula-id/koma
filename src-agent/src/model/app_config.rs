@@ -195,7 +195,7 @@ pub enum McpTransport {
 /// Transport-specific fields are unioned: a `Stdio` server uses `command` / `args`
 /// / `env`; an `Http` server uses `url`. Unused fields for a given transport are
 /// simply ignored.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpServerEntry {
     #[serde(default = "new_uuid")]
     pub uuid: String,

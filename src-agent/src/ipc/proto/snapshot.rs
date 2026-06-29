@@ -403,6 +403,37 @@ pub struct AgentEntry {
     pub prompt: String,
 }
 
+/// A serde-safe projection of the `/mcp` server dashboard.
+///
+/// Mirrors [`crate::app::mode::mcp::McpState`] field-for-field. The configured
+/// servers ride as `McpServerEntry` directly (it already derives serde + is pure
+/// data — no key/secret material, so no lighter mirror is needed, exactly the
+/// AgentsSnapshot stance of carrying the lightest serde-able server record). The
+/// sub-mode / field / transport enums cross as wire tokens (see `tokens.rs`), and
+/// `status` carries the daemon's LIVE per-server tool counts (uuid -> count) so a
+/// thin client — which owns no MCP manager — can render the `● N tools` column.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct McpSnapshot {
+    pub servers: Vec<crate::model::app_config::McpServerEntry>,
+    pub list_sel: usize,
+    pub in_detail: bool,
+    pub mode: String,
+    pub field: String,
+    pub editing: bool,
+    pub draft_uuid: String,
+    pub draft_name: String,
+    pub draft_enabled: bool,
+    pub draft_transport: String,
+    pub draft_command: String,
+    pub draft_args: String,
+    pub draft_env: String,
+    pub draft_url: String,
+    /// Live per-server tool counts (server uuid -> tool count) from the daemon's
+    /// MCP manager, projected so the client's status column matches the daemon's.
+    pub status: std::collections::HashMap<String, usize>,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

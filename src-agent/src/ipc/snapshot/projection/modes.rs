@@ -1,9 +1,11 @@
 use super::tokens::{
-    agent_field_token, agent_scope_token, agent_submode_token, api_type_token, role_token,
-    theme_token, usage_metric_token, usage_view_token,
+    agent_field_token, agent_scope_token, agent_submode_token, api_type_token,
+    mcp_field_token, mcp_submode_token, mcp_transport_token, role_token, theme_token,
+    usage_metric_token, usage_view_token,
 };
 
 use crate::app::mode::agents::{AgentsState, ModelPickerState, ToolPickerState};
+use crate::app::mode::mcp::McpState;
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
@@ -17,10 +19,11 @@ use crate::model::store::SessionMeta;
 use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, CatalogueModelSnapshot, CatalogueProviderSnapshot,
     CookingEntrySnapshot, EffortSnapshot, HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot,
-    ModeSnapshot, ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot,
-    PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot,
-    RewindSnapshot, RolePickerSnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
-    TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
+    McpSnapshot, ModeSnapshot, ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot,
+    PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
+    RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SessionHubSnapshot,
+    SessionMetaSnapshot, SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot,
+    WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -32,11 +35,11 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         Mode::Loading(s) => ModeSnapshot::Loading(loading_snapshot(s)),
         Mode::Settings(s) => ModeSnapshot::Settings(Box::new(settings_snapshot(s))),
         Mode::Agents(a) => ModeSnapshot::Agents(Box::new(agents_snapshot(a, state))),
-        // The `/mcp` dashboard is a LOCAL-TUI-only mode for now: it has no daemon
-        // wire snapshot (no `ModeSnapshot::Mcp` variant), so a thin client attached
-        // to a host that's in `/mcp` simply sees Chat. Additive + crash-free; wiring
-        // a real remote projection is out of scope for this pass.
-        Mode::Mcp(_) => ModeSnapshot::Chat,
+        // The `/mcp` dashboard projects a full wire snapshot, exactly like `/agents`:
+        // the server list + drafts + sub-mode/field/transport tokens, plus the LIVE
+        // per-server tool counts (the client owns no MCP manager), so a thin client
+        // rebuilds and renders the dashboard faithfully instead of a blank Chat screen.
+        Mode::Mcp(m) => ModeSnapshot::Mcp(Box::new(mcp_snapshot(m, state))),
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
         Mode::MessageRewind(rw) => ModeSnapshot::MessageRewind(rewind_snapshot(rw)),
@@ -359,6 +362,36 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
         editor_clear_confirm: a.editor_clear_confirm,
         catalogue_models,
         catalogue_providers,
+    }
+}
+
+pub fn mcp_snapshot(m: &McpState, state: &AppState) -> McpSnapshot {
+    McpSnapshot {
+        // `McpServerEntry` is serde-able pure data (no secrets), so the server list
+        // rides verbatim — the lightest projection that round-trips.
+        servers: m.servers.clone(),
+        list_sel: m.list_sel,
+        in_detail: m.in_detail,
+        mode: mcp_submode_token(m.mode).to_string(),
+        field: mcp_field_token(m.field).to_string(),
+        editing: m.editing,
+        draft_uuid: m.draft_uuid.clone(),
+        draft_name: m.draft_name.clone(),
+        draft_enabled: m.draft_enabled,
+        draft_transport: mcp_transport_token(m.draft_transport).to_string(),
+        draft_command: m.draft_command.clone(),
+        draft_args: m.draft_args.clone(),
+        draft_env: m.draft_env.clone(),
+        draft_url: m.draft_url.clone(),
+        // LIVE per-server tool counts from the daemon's MCP manager (uuid -> count).
+        // The client owns no manager, so this projected map is its only status source
+        // (it lands in `McpState::shadow_status` and the view falls back to it).
+        status: state
+            .rest
+            .mcp_manager
+            .as_ref()
+            .map(|mgr| mgr.server_status())
+            .unwrap_or_default(),
     }
 }
 

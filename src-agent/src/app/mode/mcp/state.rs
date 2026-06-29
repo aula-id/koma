@@ -48,6 +48,12 @@ pub struct McpState {
     pub draft_env: String,
     /// Draft (Http): the endpoint URL.
     pub draft_url: String,
+
+    /// LIVE per-server tool counts (server uuid -> tool count) when this state was
+    /// rebuilt on a thin client from a wire snapshot — the client owns no MCP
+    /// manager, so the view falls back to this projected map for its status column.
+    /// `None` for a local-TUI instance (which reads status from the live manager).
+    pub shadow_status: Option<std::collections::HashMap<String, usize>>,
 }
 
 impl McpState {
@@ -69,6 +75,8 @@ impl McpState {
             draft_args: String::new(),
             draft_env: String::new(),
             draft_url: String::new(),
+            // Local-TUI instance: status comes from the live manager, not a snapshot.
+            shadow_status: None,
         }
     }
 

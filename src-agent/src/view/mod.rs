@@ -74,9 +74,16 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         ),
         Mode::Mcp(m) => {
             // Live per-server tool counts from the MCP manager snapshot (owned map
-            // so the manager lock isn't held across the draw); `None` when no
-            // manager exists. Feeds the LIST + detail status display.
-            let status = state.rest.mcp_manager.as_ref().map(|mgr| mgr.server_status());
+            // so the manager lock isn't held across the draw). The local TUI reads
+            // the live manager; a thin client owns NO manager, so it falls back to
+            // the status projected into the shadowed state (`m.shadow_status`). Feeds
+            // the LIST + detail status display.
+            let status = state
+                .rest
+                .mcp_manager
+                .as_ref()
+                .map(|mgr| mgr.server_status())
+                .or_else(|| m.shadow_status.clone());
             mcp::draw(frame, m, status.as_ref(), &palette);
         }
         Mode::Effort(e) => effort::draw(frame, e, &palette),

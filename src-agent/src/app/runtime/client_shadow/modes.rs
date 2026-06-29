@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::app::mode::agents::{
     AgentEditField, AgentScope, AgentSubMode, AgentsState, ModelPickerState, ToolPickerState,
 };
+use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft, ProviderModal, RolePickerState,
@@ -18,10 +19,11 @@ use crate::app::mode::{
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, EffortSnapshot, KeyInputSnapshot,
-    LoadingSnapshot, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot, RewindSnapshot,
-    SessionHubSnapshot, SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
+    LoadingSnapshot, McpSnapshot, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
+    RewindSnapshot, SessionHubSnapshot, SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot,
+    WarmStatusWire,
 };
-use crate::model::app_config::{ApiType, ModelRole, ThemeMode};
+use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
 use crate::model::settings::{InternetMode, Settings};
 use crate::model::store::SessionMeta;
 
@@ -411,6 +413,69 @@ fn shadow_text_editor(ed: TextEditorSnapshot) -> TextEditorState {
         col: ed.col,
         scroll: ed.scroll,
         wrap_w: std::cell::Cell::new(usize::MAX),
+    }
+}
+
+/// Rebuild the `/mcp` dashboard ([`McpState`]) from its projection.
+///
+/// Mirrors [`shadow_agents`]: the server list rides as `McpServerEntry` directly
+/// (already serde pure-data) so it is moved in verbatim; the sub-mode / field /
+/// transport cursors decode from their wire tokens. The LIVE per-server tool counts
+/// land in `shadow_status` (the client has no MCP manager, so the view falls back to
+/// this map for its status column). The reconstructed state is render-only — every
+/// key is forwarded to the daemon, which owns the real config + persistence.
+pub(crate) fn shadow_mcp(s: McpSnapshot) -> McpState {
+    McpState {
+        servers: s.servers,
+        list_sel: s.list_sel,
+        in_detail: s.in_detail,
+        mode: shadow_mcp_submode(&s.mode),
+        field: shadow_mcp_field(&s.field),
+        editing: s.editing,
+        draft_uuid: s.draft_uuid,
+        draft_name: s.draft_name,
+        draft_enabled: s.draft_enabled,
+        draft_transport: shadow_mcp_transport(&s.draft_transport),
+        draft_command: s.draft_command,
+        draft_args: s.draft_args,
+        draft_env: s.draft_env,
+        draft_url: s.draft_url,
+        // The projected live status — this is the client's only status source.
+        shadow_status: Some(s.status),
+    }
+}
+
+/// Map an `/mcp` sub-mode wire token back to an [`McpSubMode`] (unknown → Browse,
+/// the read-only default — never lost).
+fn shadow_mcp_submode(m: &str) -> McpSubMode {
+    match m {
+        "edit" => McpSubMode::Edit,
+        "create" => McpSubMode::Create,
+        "delete_confirm" => McpSubMode::DeleteConfirm,
+        _ => McpSubMode::Browse,
+    }
+}
+
+/// Map an `/mcp` field wire token back to an [`McpEditField`] (unknown → Name, the
+/// editor's first field — never lost).
+fn shadow_mcp_field(f: &str) -> McpEditField {
+    match f {
+        "enabled" => McpEditField::Enabled,
+        "transport" => McpEditField::Transport,
+        "command" => McpEditField::Command,
+        "args" => McpEditField::Args,
+        "env" => McpEditField::Env,
+        "url" => McpEditField::Url,
+        _ => McpEditField::Name,
+    }
+}
+
+/// Map an `/mcp` transport wire token back to an [`McpTransport`] (unknown → Stdio,
+/// the default transport).
+fn shadow_mcp_transport(t: &str) -> McpTransport {
+    match t {
+        "http" => McpTransport::Http,
+        _ => McpTransport::Stdio,
     }
 }
 

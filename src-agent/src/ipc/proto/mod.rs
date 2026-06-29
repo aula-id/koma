@@ -93,6 +93,7 @@ pub enum ModeSnapshot {
     Loading(LoadingSnapshot),
     Settings(Box<SettingsSnapshot>),
     Agents(Box<AgentsSnapshot>),
+    Mcp(Box<McpSnapshot>),
     Effort(EffortSnapshot),
     Usage(Box<UsageSnapshot>),
     MessageRewind(RewindSnapshot),
