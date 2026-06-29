@@ -7,11 +7,28 @@ use crate::app::subagent::SubAgentStatus;
 use crate::model::app_config::{AppConfig, ModelRole};
 
 use crate::ipc::proto::{
-    GlobalSnapshot, PendingSubagentSnapshot, SessionSnapshot, StateSnapshot, SubAgentSnapshot,
+    GlobalSnapshot, ModeSnapshot, PendingSubagentSnapshot, SessionSnapshot, StateSnapshot,
+    SubAgentSnapshot,
 };
 
 /// Build a complete, frozen [`StateSnapshot`] from the live [`AppState`].
+///
+/// Builds the mode payload via the pure [`mode_snapshot`] projection, then defers to
+/// [`build_snapshot_with_mode`]. The daemon's hot streaming path bypasses this and
+/// supplies a CACHED [`ModeSnapshot`] directly (the mode payload is the expensive part
+/// for heavy modes like `/usage` / `/agents` / `/mcp`), so this default entry point is
+/// used only by the rarer attach/resync paths and tests.
 pub fn build_snapshot(state: &AppState) -> StateSnapshot {
+    build_snapshot_with_mode(state, mode_snapshot(state))
+}
+
+/// Build a [`StateSnapshot`] using a PRE-BUILT [`ModeSnapshot`] instead of projecting
+/// the mode fresh. Identical to [`build_snapshot`] except the (expensive) mode payload
+/// is supplied by the caller — the daemon streams this with a throttled/discriminant-
+/// cached mode so the per-tick rebuild stays cheap. Everything else (sessions +
+/// foreground + the rest of [`global_snapshot_with_mode`]) is still projected from live
+/// `state`.
+pub fn build_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> StateSnapshot {
     let config = &state.rest.config;
     let sessions: Vec<SessionSnapshot> = state
         .rest
@@ -29,7 +46,7 @@ pub fn build_snapshot(state: &AppState) -> StateSnapshot {
     StateSnapshot {
         foreground_id,
         sessions,
-        global: global_snapshot(state),
+        global: global_snapshot_with_mode(state, mode),
     }
 }
 
@@ -124,7 +141,11 @@ fn pending_subagent_snapshot(
     }
 }
 
-pub fn global_snapshot(state: &AppState) -> GlobalSnapshot {
+/// Build a [`GlobalSnapshot`] from a PRE-BUILT [`ModeSnapshot`] instead of projecting
+/// the mode fresh. See [`build_snapshot_with_mode`] for why the daemon supplies a cached
+/// mode here; the default mode-projecting path is folded into [`build_snapshot`] via
+/// [`mode_snapshot`], so there is no separate `global_snapshot` wrapper.
+pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> GlobalSnapshot {
     GlobalSnapshot {
         input: state.rest.input.clone(),
         cursor: state.rest.cursor,
@@ -137,7 +158,7 @@ pub fn global_snapshot(state: &AppState) -> GlobalSnapshot {
             .map(|since| since.elapsed().as_millis() as u64),
         theme: theme_token(&state.rest.config.theme).to_string(),
         accent: state.rest.config.accent.clone(),
-        mode: mode_snapshot(state),
+        mode,
         toast: state.rest.toast.as_ref().map(|(msg, _until, kind)| {
             let kind = match kind {
                 crate::app::state::ToastKind::Error => "error".to_string(),

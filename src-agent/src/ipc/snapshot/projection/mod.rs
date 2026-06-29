@@ -6,4 +6,5 @@ mod core;
 mod modes;
 mod tokens;
 
-pub use core::build_snapshot;
+pub use core::{build_snapshot, build_snapshot_with_mode};
+pub use modes::mode_snapshot;

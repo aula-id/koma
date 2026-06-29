@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::app::state::AppState;
 use crate::ipc::proto::{DaemonEvent, DaemonFrame};
-use crate::ipc::snapshot::{build_snapshot, diff};
+use crate::ipc::snapshot::{build_snapshot_with_mode, diff};
 
 use super::core::DaemonHub;
 
@@ -70,8 +70,14 @@ impl DaemonHub {
         }
 
         // Build the live projection ONCE; every attached client diffs against it
-        // from its own baseline below.
-        let next = build_snapshot(state);
+        // from its own baseline below. The (expensive) mode payload comes from the
+        // discriminant+TTL cache so heavy full-screen pages (/usage, /agents, /mcp)
+        // aren't rebuilt every ~8ms streaming tick — that per-tick rebuild starved
+        // input/stream handling and froze those pages while the chat iterated. The
+        // cache rebuilds instantly on a mode-variant change and at most ~10x/sec
+        // otherwise; the rest of the snapshot is still projected fresh from `state`.
+        let mode = self.mode_snapshot_cached(state);
+        let next = build_snapshot_with_mode(state, mode);
 
         for i in 0..self.clients.len() {
             if !self.clients[i].attached {

@@ -1,7 +1,19 @@
+use std::mem::Discriminant;
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::{Duration, Instant};
 
-use crate::ipc::proto::{DaemonFrame};
+use crate::app::mode::Mode;
 use crate::app::state::AppState;
+use crate::ipc::proto::{DaemonFrame, ModeSnapshot};
+
+/// Max age of a cached [`ModeSnapshot`] before the daemon's streaming path rebuilds it
+/// even WITHOUT a mode-variant change. Bounds intra-variant payload staleness (e.g. live
+/// `/usage` cost ticks or `/mcp` connection-status changes) to ~10Hz while capping the
+/// expensive per-mode projection at the same rate — instead of paying it every ~8ms
+/// streaming tick (~125Hz), which starved input polling + stream draining and froze the
+/// heavy full-screen pages. A mode-VARIANT change bypasses this window and rebuilds
+/// immediately (see [`DaemonHub::mode_snapshot_cached`]).
+const MODE_SNAPSHOT_TTL: Duration = Duration::from_millis(100);
 
 /// One inbound message on the sync-loop bridge, tagged with the client it came
 /// from. The per-client connection task (stage 5, [`crate::ipc::conn`]) emits a
@@ -87,6 +99,21 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// gap between that fresh on-disk fingerprint and this stored one is exactly the
     /// stale-daemon skew the handshake exists to catch.
     pub(super) version: String,
+    /// Cached mode payload for the per-tick streaming projection, reused across ticks so
+    /// the EXPENSIVE per-mode snapshot build (`/usage` ledger query, `/agents` catalogue
+    /// clone, `/mcp` mutex + status map) is not paid on every ~8ms streaming tick — which
+    /// starved input polling and froze the heavy full-screen pages while the chat iterated.
+    ///
+    /// Holds `(mode discriminant, built-at instant, payload)`. [`mode_snapshot_cached`](
+    /// Self::mode_snapshot_cached) REUSES it while the mode VARIANT is unchanged AND the
+    /// entry is younger than [`MODE_SNAPSHOT_TTL`]; it REBUILDS (and restamps) when the
+    /// variant changes — giving instant open/close/switch response — or the TTL elapses,
+    /// so live in-mode updates still refresh ~10x/sec. `None` until the first build.
+    ///
+    /// Only the streaming path is cached; the rarer attach/resync snapshots build a fresh
+    /// mode (they go through the plain `build_snapshot`), so they never serve a stale page
+    /// to a just-attached client and never pollute this cache.
+    pub(super) mode_snapshot_cache: Option<(Discriminant<Mode>, Instant, ModeSnapshot)>,
 }
 
 impl DaemonHub {
@@ -108,9 +135,37 @@ impl DaemonHub {
                 clients: Vec::new(),
                 shutdown: false,
                 version: crate::model::store::build_fingerprint(),
+                mode_snapshot_cache: None,
             },
             msg_tx,
         )
+    }
+
+    /// Build the mode payload for this tick's streaming projection, REUSING the cached
+    /// [`ModeSnapshot`] when it is still fresh so the expensive per-mode build is capped
+    /// at ~10Hz instead of paid every ~8ms streaming tick (the daemon-freeze fix).
+    ///
+    /// Rebuilds (and restamps the cache) when EITHER:
+    /// - the mode VARIANT changed — `discriminant(&state.mode)` differs from the cached
+    ///   one — so opening / closing / switching a full-screen page renders INSTANTLY (no
+    ///   throttle delay on a transition), OR
+    /// - the cached entry is at least [`MODE_SNAPSHOT_TTL`] old — so live intra-mode
+    ///   updates (e.g. `/usage` costs, `/mcp` connection status) still refresh ~10x/sec.
+    ///
+    /// Otherwise it CLONES the cached payload. Reusing the identical payload for ≤100ms
+    /// means consecutive snapshots carry an EQUAL `global.mode`, so the per-client diff
+    /// sees no mode change and stays on the cheap path; a rebuild that actually differs
+    /// yields one `needs_full` and a single full snapshot — the intended behaviour.
+    pub(super) fn mode_snapshot_cached(&mut self, state: &AppState) -> ModeSnapshot {
+        let disc = std::mem::discriminant(&state.mode);
+        if let Some((cached_disc, built_at, snap)) = &self.mode_snapshot_cache {
+            if *cached_disc == disc && built_at.elapsed() < MODE_SNAPSHOT_TTL {
+                return snap.clone();
+            }
+        }
+        let snap = crate::ipc::snapshot::mode_snapshot(state);
+        self.mode_snapshot_cache = Some((disc, Instant::now(), snap.clone()));
+        snap
     }
 
     /// Whether a controller asked the daemon to quit ([`ClientRequest::QuitDaemon`]).
