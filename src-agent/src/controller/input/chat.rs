@@ -454,18 +454,6 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             rest.status = format!("mode: {}", rest.agent_mode.label());
             Action::None
         }
-        // `$` on an EMPTY input opens the sub-agents panel instead of being typed
-        // (mirrors the `/` and `@` palette triggers). With any input present it's
-        // a normal character.
-        KeyCode::Char('$')
-            if !key.modifiers.contains(KeyModifiers::CONTROL) && rest.input.is_empty() =>
-        {
-            rest.subagents_open = true;
-            rest.subagent_sel = rest
-                .subagent_sel
-                .min(rest.fg().subagents.len().saturating_sub(1));
-            Action::None
-        }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             rest.push_char(c);
             Action::None
