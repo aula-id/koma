@@ -1,4 +1,4 @@
 {
-  "version": "0.1.1",
-  "message": "Bug fixes and cross-platform build improvements."
+  "version": "0.1.2",
+  "message": "Security daemon now supports older Python (3.8 / 3.9)."
 }
