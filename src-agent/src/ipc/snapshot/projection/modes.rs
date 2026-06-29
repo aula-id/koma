@@ -500,6 +500,8 @@ pub fn help_snapshot(h: &HelpState) -> HelpSnapshot {
             .collect(),
         filtered_idx: h.filtered_idx.clone(),
         selected: h.selected,
+        current_version: h.current_version.clone(),
+        update: h.update.clone(),
     }
 }
 

@@ -119,6 +119,9 @@ pub struct Opts {
     /// short-circuits into a usage print + non-zero exit (bare/unknown verb); `None`
     /// is the normal path (TUI / other flags). Either `Some` exits before the TUI.
     pub subcommand: Option<DaemonCli>,
+    /// When `true`, stop the running daemon then run the installer to fetch the
+    /// latest release binary, then exit (`koma update` positional verb).
+    pub update: bool,
 }
 
 /// Parse command-line arguments into [`Opts`].
@@ -181,6 +184,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
     match positional.next().map(String::as_str) {
         Some("agents") => opts.resume = true,
         Some("alone") => opts.local = true,
+        Some("update") => opts.update = true,
         Some("daemon") => {
             opts.subcommand = Some(match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
                 Some(sub) => DaemonCli::Run(sub),

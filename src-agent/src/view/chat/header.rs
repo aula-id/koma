@@ -26,17 +26,44 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     // header_inner width = frame width minus 2 (border) minus 4 (horizontal padding 2+2)
     let header_inner_w = frame.area().width.saturating_sub(2 + 4) as usize;
     let brand = "koma";
-    // Gap = available width minus brand chars minus mode string chars; floor at 1 space.
-    let gap = header_inner_w
-        .saturating_sub(brand.chars().count() + mode_str.chars().count())
-        .max(1);
-    let header_spans = vec![
+
+    // Version badge — HARDCODED colours (NOT palette.accent, which is themeable):
+    // green when up-to-date, pink current + green "[latest]" when an update is known.
+    const GREEN: Color = Color::Rgb(57, 255, 20);
+    const PINK: Color = Color::Rgb(255, 105, 180);
+    let cur = crate::model::store::current_version();
+    let update = rest
+        .latest_version
+        .as_ref()
+        .filter(|v| crate::app::version::is_newer(&v.version, cur));
+
+    // Build the badge spans (brand stays dim; only the version part is coloured) and
+    // measure their TOTAL char width so the gap keeps the mode icon/label right-aligned.
+    let mut badge_spans = vec![
         Span::styled(brand, Style::default().fg(palette.dim)),
-        Span::raw(" ".repeat(gap)),
-        Span::styled(mode_icon, Style::default().fg(mode_color)),
         Span::raw(" "),
-        Span::styled(mode_label, Style::default().fg(mode_color)),
     ];
+    let mut badge_w = brand.chars().count() + 1; // brand + leading space before version
+    if let Some(v) = update {
+        let latest = format!("[{}]", v.version);
+        badge_w += cur.chars().count() + 1 + latest.chars().count(); // cur + space + "[latest]"
+        badge_spans.push(Span::styled(cur, Style::default().fg(PINK)));
+        badge_spans.push(Span::raw(" "));
+        badge_spans.push(Span::styled(latest, Style::default().fg(GREEN)));
+    } else {
+        badge_w += cur.chars().count();
+        badge_spans.push(Span::styled(cur, Style::default().fg(GREEN)));
+    }
+
+    // Gap = available width minus the FULL badge width minus mode string chars; floor at 1.
+    let gap = header_inner_w
+        .saturating_sub(badge_w + mode_str.chars().count())
+        .max(1);
+    let mut header_spans = badge_spans;
+    header_spans.push(Span::raw(" ".repeat(gap)));
+    header_spans.push(Span::styled(mode_icon, Style::default().fg(mode_color)));
+    header_spans.push(Span::raw(" "));
+    header_spans.push(Span::styled(mode_label, Style::default().fg(mode_color)));
     let header_line = Line::from(header_spans);
     let header_block = Block::new()
         .borders(Borders::BOTTOM)

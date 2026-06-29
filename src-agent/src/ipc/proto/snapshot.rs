@@ -469,6 +469,13 @@ pub struct HelpSnapshot {
     pub all: Vec<HelpEntrySnapshot>,
     pub filtered_idx: Vec<usize>,
     pub selected: usize,
+    /// The compiled-in koma version for the "Updating koma" block (mirrors
+    /// [`crate::app::mode::help::HelpState::current_version`]).
+    pub current_version: String,
+    /// `Some((latest, message))` iff a newer koma version is available (mirrors
+    /// [`crate::app::mode::help::HelpState::update`]); serde-safe (tuple of
+    /// String + Option<String>).
+    pub update: Option<(String, Option<String>)>,
 }
 
 /// A serde-safe projection of the `/security` daemon control panel.

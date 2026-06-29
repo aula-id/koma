@@ -97,6 +97,21 @@ pub(super) fn service_global(
         }
     }
 
+    // Drain the background version-check channel. Each session spawn fires a
+    // non-blocking `spawn_check` thread that, on success, sends one `VersionInfo`;
+    // a failed/unreachable check sends nothing (graceful degrade). Fold the LATEST
+    // received result into `latest_version` for the UI to read. Take() the receiver
+    // to mutate `rest`, then ALWAYS put it back: the matching sender lives in
+    // `version_tx` for the app's lifetime, so the channel never closes — there is no
+    // `Disconnected` terminal state to drop the receiver on. Non-blocking (try_recv).
+    if let Some(mut vrx) = state.rest.version_rx.take() {
+        while let Ok(info) = vrx.try_recv() {
+            state.rest.latest_version = Some(info);
+            dirty = true;
+        }
+        state.rest.version_rx = Some(vrx);
+    }
+
     // Drain the startup-warming channel. Fully independent of streaming: the
     // background catalogue + awareness tasks each send one [`WarmEvent`]. ALWAYS
     // fold the result into `state.rest.*` (the cache / summary) regardless of the

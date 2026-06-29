@@ -82,6 +82,17 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // --- short-circuit: `koma update` — stop daemon + run installer (no TUI) ---
+    if opts.update {
+        return match crate::app::run_update() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("koma update failed: {e}");
+                std::process::exit(1);
+            }
+        };
+    }
+
     // --- short-circuit: provisioner modes (no TUI) ---
 
     if opts.internet_fullmode_install {
