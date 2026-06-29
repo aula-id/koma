@@ -174,7 +174,9 @@ impl Tool for BashOutput {
     fn description(&self) -> &'static str {
         "Return the current status and captured output of a background bash job \
          (one started by bash with run_in_background=true). Poll this to watch a \
-         long-running command's progress."
+         long-running command's progress. Optionally filter the output with \
+         `pattern` (a regex, grep-style) and/or limit to the last `tail_lines` \
+         lines to save tokens on noisy jobs."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -183,6 +185,14 @@ impl Tool for BashOutput {
                 "job_id": {
                     "type": "string",
                     "description": "The job id returned when the background command was started (e.g. \"bash-1\")."
+                },
+                "tail_lines": {
+                    "type": "number",
+                    "description": "If set (>0), return only the last N lines of output (applied AFTER any pattern filter). Omit for the full captured tail."
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "If set, a regular expression; only output lines matching it are returned (like grep). Combine with tail_lines to get the last N matching lines."
                 }
             },
             "required": ["job_id"]
