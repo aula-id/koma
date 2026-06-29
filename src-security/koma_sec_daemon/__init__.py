@@ -8,5 +8,6 @@ Tools shipped in this milestone:
   sec_http    — stateless single HTTP request (proof of stateless tool)
   sec_remote  — stateful pwntools remote session (proof of stateful session)
 """
+from __future__ import annotations
 
 __version__ = "0.1.0"
