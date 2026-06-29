@@ -135,6 +135,53 @@ grep the codebase looking for \"security tools\"; these are them:\n",
                         for d in &defs {
                             first.content.push_str(&format!("- {}: {}\n", d.function.name, d.function.description));
                         }
+                        // Per-domain playbooks: only include a domain's playbook when at
+                        // least one of its tools is currently ACTIVE (not in sec_inactive).
+                        // Domain membership is read from the daemon's SecToolInfo metadata
+                        // (the wire ToolDef does not carry the domain tag).
+                        let inactive = &state.rest.sec_inactive;
+                        let active_domains: std::collections::HashSet<String> = sec
+                            .status()
+                            .tools
+                            .into_iter()
+                            .filter(|t| !inactive.contains(&t.name))
+                            .map(|t| t.domain.to_lowercase())
+                            .collect();
+                        if !active_domains.is_empty() {
+                            first.content.push_str("\n## Domain playbooks\n");
+                        }
+                        if active_domains.contains("web") {
+                            first.content.push_str(
+                                "\n### WEB\n\
+crawl/enumerate (sec_ffuf) -> scan (sec_nuclei) -> probe SQLi (sec_sqlmap) and XSS \
+(sec_dalfox) -> CONFIRM XSS visually in the browser with sec_xss_confirm (a fired \
+dialog is proof; reflected != confirmed) -> report each finding WITH a concrete code \
+fix. Prefer sec_http for raw requests.\n",
+                            );
+                        }
+                        if active_domains.contains("crypto") {
+                            first.content.push_str(
+                                "\n### CRYPTO\n\
+identify (sec_hashid/sec_decode) -> for RSA use sec_rsa / sec_factor (factordb->ECM->NFS, \
+cheap first) -> lattice attacks via sec_lattice -> general constraint/math via sec_z3 or \
+sec_sage (write the math, run it) -> crack hashes with sec_crack.\n",
+                            );
+                        }
+                        if active_domains.contains("web-re") {
+                            first.content.push_str(
+                                "\n### WEB-RE\n\
+unminify (sec_unmin) / deobfuscate (sec_jsdeobf) bundled JS, recover originals via \
+sec_sourcemap, decompile wasm with sec_wasm. All static/read-only.\n",
+                            );
+                        }
+                        if active_domains.contains("pwn") {
+                            first.content.push_str(
+                                "\n### PWN\n\
+triage the binary first (sec_triage: file+checksec+one_gadget), hunt gadgets with \
+sec_rop, scaffold the exploit with sec_pwntmpl, then drive the target interactively \
+over sec_remote (stateful socket).\n",
+                            );
+                        }
                     }
                 }
             }
