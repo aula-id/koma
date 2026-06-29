@@ -147,6 +147,27 @@ pub struct SessionRuntime {
     /// here so later `!` commands in the same session reuse the one channel.
     /// `None` until the first `!` runs.
     pub shell_task_tx: Option<UnboundedSender<(String, String)>>,
+    // --- background-bash lane (model `bash` with run_in_background=true) ---
+    /// All background bash jobs registered this session (running + finished).
+    /// A `bash` call with `run_in_background: true` is intercepted in
+    /// `process_tools`, spawned via [`crate::app::bgbash::spawn_bash_job`], and
+    /// pushed here; finished jobs STAY in the list so a later `bash_output` poll
+    /// can still read their final status + captured output. Addressed by the model
+    /// as `bash-<id>` (the id below), never by Vec position.
+    pub bash_jobs: Vec<crate::app::bgbash::BashJob>,
+    /// Monotonic counter: the id assigned to the NEXT background bash job (starts
+    /// at 1, so job ids read as `bash-1`, `bash-2`, …). Never reused.
+    pub next_bash_job_id: usize,
+    /// Receiver for background-bash COMPLETION signals: the job id of a finished
+    /// job. The worker thread fires the id over `bash_done_tx` when its child
+    /// exits; the event-loop deferred drain reads it to pop a completion toast.
+    /// Lazily created (with `bash_done_tx`) the first time a bg job is spawned in a
+    /// session, then reused. `None` until the first bg job runs.
+    pub bash_done_rx: Option<UnboundedReceiver<usize>>,
+    /// Sender half of the background-bash completion channel. Cloned into each
+    /// spawned bg-bash worker thread (the sender is `Send`, so it can fire from a
+    /// non-tokio thread). `None` until the first bg job runs.
+    pub bash_done_tx: Option<UnboundedSender<usize>>,
     /// All sub-agents spawned this session (running + finished). Drained each tick
     /// by the event loop; finished ones stay in the list for the UI to show their
     /// final state.
@@ -299,6 +320,10 @@ impl SessionRuntime {
             awaiting_shell: false,
             shell_task_rx: None,
             shell_task_tx: None,
+            bash_jobs: Vec::new(),
+            next_bash_job_id: 1,
+            bash_done_rx: None,
+            bash_done_tx: None,
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
             pending_subagent_calls: Vec::new(),
@@ -351,6 +376,15 @@ impl SessionRuntime {
         } else {
             Some(std::mem::take(&mut self.stream_reasoning))
         }
+    }
+
+    /// Allocate the next background-bash job id, advancing the counter. Ids are
+    /// monotonic and never reused, so a finished job's id stays a stable handle
+    /// for later `bash_output` polls (the job is kept in `bash_jobs`).
+    pub fn next_bash_id(&mut self) -> usize {
+        let id = self.next_bash_job_id;
+        self.next_bash_job_id += 1;
+        id
     }
 
     /// Kill every still-running sub-agent that belongs to THIS session, drop

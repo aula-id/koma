@@ -118,6 +118,10 @@ impl Tool for Bash {
                 "timeout_ms": {
                     "type": "number",
                     "description": "Timeout in milliseconds (default 120000)."
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Run the command in the background and return a job id immediately; poll with bash_output, stop with bash_kill. Use for long-running commands. Defaults to false."
                 }
             },
             "required": ["command"]
@@ -153,5 +157,71 @@ impl Tool for Bash {
         // timeout bound. `run` is fallible by trait, but the primitive folds every
         // failure into its returned string, so this is always `Ok`.
         Ok(run_shell_capture(command, &ctx.workspace, timeout_ms))
+    }
+}
+
+/// Poll a background bash job's status + captured output.
+///
+/// Like [`Task`](super::task::Task), this tool is advertised to the model but
+/// NEVER dispatched through [`Tool::run`]: the runtime
+/// (`app::runtime::stream::process_tools`) intercepts a `bash_output` call BEFORE
+/// the generic dispatch path, looks up the job in the session's `bash_jobs`
+/// registry, and answers synchronously. The `run` impl exists only to satisfy the
+/// [`Tool`] trait and must never be reached.
+pub struct BashOutput;
+impl Tool for BashOutput {
+    fn name(&self) -> &'static str { "bash_output" }
+    fn description(&self) -> &'static str {
+        "Return the current status and captured output of a background bash job \
+         (one started by bash with run_in_background=true). Poll this to watch a \
+         long-running command's progress."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "The job id returned when the background command was started (e.g. \"bash-1\")."
+                }
+            },
+            "required": ["job_id"]
+        })
+    }
+    fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
+        // Intercepted by the runtime before dispatch; never actually called.
+        Ok("error: bash_output must be handled by the runtime".into())
+    }
+}
+
+/// Terminate a running background bash job.
+///
+/// Like [`Task`](super::task::Task), this tool is advertised to the model but
+/// NEVER dispatched through [`Tool::run`]: the runtime intercepts a `bash_kill`
+/// call BEFORE the generic dispatch path, kills the job (SIGTERM to its child),
+/// and answers synchronously. The `run` impl exists only to satisfy the [`Tool`]
+/// trait and must never be reached.
+pub struct BashKill;
+impl Tool for BashKill {
+    fn name(&self) -> &'static str { "bash_kill" }
+    fn description(&self) -> &'static str {
+        "Terminate a running background bash job (one started by bash with \
+         run_in_background=true)."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "The job id of the background command to stop (e.g. \"bash-1\")."
+                }
+            },
+            "required": ["job_id"]
+        })
+    }
+    fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
+        // Intercepted by the runtime before dispatch; never actually called.
+        Ok("error: bash_kill must be handled by the runtime".into())
     }
 }

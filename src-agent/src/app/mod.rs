@@ -3,6 +3,8 @@
 //! Exposes the sub-modules that together own the application's lifecycle:
 //!
 //! - [`awareness`] – project-doc summarisation for the self-awareness block
+//! - [`bgbash`] – background-bash registry: run a shell command detached, poll it
+//!   with `bash_output`, stop it with `bash_kill`
 //! - [`harness`] – safety classifier ("Pass B") + deterministic workspace check
 //! - [`mcp`] – MCP (Model Context Protocol) client: connect to configured servers,
 //!   discover their tools, advertise + dispatch them
@@ -17,6 +19,7 @@
 //! [`run_daemon`] is likewise re-exported for the headless `koma --daemon` path.
 
 pub mod awareness;
+pub mod bgbash;
 pub mod harness;
 pub mod mcp;
 pub mod mode;

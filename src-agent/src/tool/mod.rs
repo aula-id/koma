@@ -111,6 +111,8 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(fs::Edit),
         Box::new(fs::Delete),
         Box::new(shell::Bash),
+        Box::new(shell::BashOutput),
+        Box::new(shell::BashKill),
         Box::new(cd::Cd),
         Box::new(fs::DirList),
         Box::new(dircache::DirCacheUpdate),
