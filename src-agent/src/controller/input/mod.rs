@@ -66,6 +66,15 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     if key.kind != KeyEventKind::Press {
         return Action::None;
     }
+    // QEMU and serial consoles send Backspace as ^H (byte 0x08), which crossterm
+    // decodes as Ctrl+H. Normalize it to a real Backspace so every mode's existing
+    // KeyCode::Backspace handler works (a proper terminal sends 0x7f → Backspace
+    // directly). Nothing in koma binds Ctrl+H, so this never shadows a real binding.
+    let key = if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+    } else {
+        key
+    };
     match &mut state.mode {
         Mode::Chat => handle_chat(&mut state.rest, key),
         Mode::KeyInput(form) => handle_key_input(form, &mut state.rest, key),

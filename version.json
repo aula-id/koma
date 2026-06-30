@@ -1,4 +1,4 @@
 {
-  "version": "0.1.3",
-  "message": "Fix security tool-call schemas so models can invoke sec_remote and sec_factor reliably."
+  "version": "0.1.4",
+  "message": "Backspace now works in QEMU/serial consoles (^H); forward-Delete supported in the composer."
 }
