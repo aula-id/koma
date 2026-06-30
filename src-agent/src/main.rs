@@ -199,15 +199,21 @@ fn main() -> anyhow::Result<()> {
     // spawns its OWN daemon bound to `run/<id>.sock` via `--daemon --session <id>`, then
     // connects to that same keyed socket. Two `koma` in two terminals mint two different
     // ids → two fully independent daemons. The minted id is always new, so the daemon's
-    // create-or-load always takes the CREATE branch here (resume/load is a later commit).
+    // create-or-load always takes the CREATE branch here.
     //
-    // TODO(hub): --resume opens the daemon swapper — wired in a later commit. For now a
-    // `--resume` / `koma agents` launch behaves like a plain fresh `koma`: it still mints
-    // a new session and spawns a fresh session-daemon (the `resume` bit is kept plumbed
-    // end-to-end so the later hub commit can divert here instead of spawning).
+    // `--resume` / `koma agents` is DIFFERENT: it opens the CLIENT-SIDE daemon swapper
+    // FIRST and spawns/attaches NOTHING up front. We hand control straight to `client_run`
+    // WITHOUT minting a session or spawning a daemon — seeing `opts.resume`, it starts in
+    // its Swapper state, lists live + on-disk sessions, and only on a pick does it
+    // ensure+attach the chosen session's daemon (minting a fresh id only for `[+ new
+    // session]`). So a `--resume` launch never creates a stray empty session-daemon.
+    if opts.resume {
+        return app::client_run(opts);
+    }
+
     let mut opts = opts;
     let session_id = uuid::Uuid::new_v4().to_string();
-    if let Err(e) = app::ensure_daemon_running(&session_id, opts.resume) {
+    if let Err(e) = app::ensure_daemon_running(&session_id, false) {
         eprintln!("error: could not start the koma daemon: {e:#} — try `koma --local`");
         std::process::exit(1);
     }

@@ -413,9 +413,13 @@ impl DaemonHub {
                 self.send_to(idx, DaemonEvent::Ack);
             }
 
-            // The client was launched with --resume / koma agents: open the session
-            // hub immediately, same as the /resume slash command. Ack on success or
-            // Error on failure (e.g. spawn_pending is set mid-/new).
+            // Legacy `--resume` open-the-hub request. Daemon-per-session: the client no
+            // longer sends this on `--resume` (it opens its swapper LOCALLY before/without
+            // attaching — see `client_run`). Kept compiling + honoured for any stray
+            // sender: it runs the SAME `handle_resume`, which now just sets
+            // `resume_pending`; the hub then signals this client with `OpenSwapper` next
+            // tick (it does NOT build a daemon-side hub mode). Ack on success or Error on
+            // failure (e.g. spawn_pending is set mid-/new).
             ClientRequest::OpenSessionHub => {
                 let result = crate::app::runtime::commands::new_session::handle_resume(state);
                 self.ack_or_error(idx, result);

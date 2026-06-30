@@ -267,12 +267,23 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
     }
 }
 
-/// Handle the `/resume` command: open the unified two-pane session hub.
+/// Handle the `/resume` command: SIGNAL that the session hub / swapper should open.
 ///
-/// Delegates the list-building to [`build_session_hub`] (the single source of
-/// truth, shared with the hub's kill rebuild) and swaps the mode to it. We do NOT
-/// clear the current session/client — Esc out of the hub returns to the active
-/// chat unchanged.
+/// This sets the transient `resume_pending` flag rather than swapping the mode
+/// itself, mirroring how `/select` sets `select_pending` and lets each loop act on
+/// it. The two loops diverge on what "open the picker" means:
+///
+/// - **Daemon (daemon-per-session):** the hub drains `resume_pending` into a one-shot
+///   [`crate::ipc::proto::DaemonEvent::OpenSwapper`] to the controlling client, which
+///   opens its OWN cross-daemon swapper locally (it detaches first, so the daemon's
+///   snapshots can't clobber the client's local hub). The daemon's own mode is left in
+///   Chat — it never enters a hub mode — so a cancel-back never finds it stuck mid-hub.
+/// - **Standalone (`--local`, no daemon):** there is no client to signal, so the local
+///   event loop drains `resume_pending` by opening `Mode::SessionHub` directly from
+///   [`build_session_hub`] (its in-memory sessions are the only source — no discovery).
+///
+/// We do NOT clear the current session/client — Esc out of the swapper/hub returns to
+/// the active chat unchanged.
 pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
     // Don't open the hub mid /new-KeyInput confirmation (mirror the picker-select
     // guard): the session tail is unstable until the new session's creds resolve.
@@ -280,8 +291,11 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
         return Ok(());
     }
 
-    let hub = build_session_hub(state);
-    *state.mode_mut() = Mode::SessionHub(Box::new(hub));
+    // Transient signal only — the active loop (daemon vs standalone) converts it to the
+    // appropriate picker next tick. NEVER build `Mode::SessionHub` here: in the daemon
+    // that would put the daemon itself into a hub mode (clobbered by/clobbering the
+    // client) instead of signalling the client to open its local swapper.
+    state.rest.resume_pending = true;
     Ok(())
 }
 

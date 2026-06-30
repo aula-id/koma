@@ -33,71 +33,62 @@ use std::io::stdout;
 use anyhow::Result;
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::app::mode::Mode;
+use crate::app::mode::{Mode, SessionHub};
 use crate::ipc::proto::ClientRequest;
 use crate::model::store;
 
 use connect::{connect_attach_and_handshake, Connection};
 use bridge::WRITER_FLUSH_TIMEOUT;
+use swapper::{build_local_hub, run_swapper, SwapperOutcome};
 
 use crate::app::runtime::terminal::TerminalGuard;
 
-/// Attach to a running daemon and run the thin render+forward client.
+/// The client's run-loop state: either ATTACHED to a session-daemon (rendering its frames
+/// and forwarding input) or running the local detached SWAPPER (the `/resume` picker).
 ///
-/// Connects to the daemon socket (an `Err` means no daemon is up — surfaced to the
-/// caller, which prints it), spawns the reader/writer bridge tasks, sends
-/// [`ClientRequest::Attach`], runs the build-skew handshake (task #142), then enters
-/// the synchronous render loop. Returns when the user detaches (Ctrl-C) or the
-/// daemon's socket closes; the terminal is restored by [`TerminalGuard`]'s drop and
-/// the runtime is dropped last.
+/// A swap is "detach-then-pick": entering the swapper from an attached session first tears
+/// the connection down (leaving that daemon cooking) so the daemon's snapshots can't
+/// clobber the local hub, then runs the swapper STANDALONE; a pick attaches to the chosen
+/// daemon, a cancel reconnects to the one just left.
+enum ClientState {
+    /// Live attached to a session-daemon.
+    Attached(Connection),
+    /// Detached, showing the local cross-daemon swapper.
+    Swapper(SessionHub),
+}
+
+/// Attach to a session-daemon, spawning it if needed, and run the build-skew handshake.
+///
+/// The single attach primitive used everywhere the client connects: the initial
+/// non-resume attach, a swapper PICK, and a swapper CANCEL-reconnect. It:
+/// 1. ensures the session's daemon is RUNNING ([`super::manage::ensure_daemon_running`],
+///    `resume=false`): for a LIVE session this is a no-op (the daemon is already up); for
+///    a brand-new minted id it spawns a fresh `--daemon --session <id>` (create branch);
+///    for an on-disk history id it spawns one that create-or-LOADs that session;
+/// 2. connects + attaches + runs the `Hello` handshake ([`connect_attach_and_handshake`]);
+/// 3. on a CONFIRMED build-skew mismatch, restarts that one stale daemon (AT MOST ONCE)
+///    via the SAME machinery `koma daemon restart` uses and reconnects.
 ///
 /// # Build-skew auto-restart (task #142)
 ///
-/// The koma daemon outlives a rebuild, so a freshly-built client can attach to a
-/// daemon still running OLD code and silently render its stale frames (this already
-/// caused a phantom `/agents` bug). On connect the client compares its OWN build
-/// fingerprint ([`store::build_fingerprint`], computed fresh now) against the
-/// daemon's reported one (the `Hello` value, which the daemon captured AT ITS
-/// STARTUP). On a mismatch it restarts the stale daemon via the SAME machinery
-/// `koma daemon restart` uses ([`super::manage::restart_daemon`]) and reconnects.
-///
-/// LOOP GUARD: the auto-restart fires AT MOST ONCE per launch. If the freshly-spawned
-/// daemon STILL mismatches (it shouldn't — it was just built from the current binary),
-/// the client prints an error and renders against it anyway rather than restart-looping
-/// forever. A daemon that sends no `Hello` (predates the handshake, or is slow) is
-/// never restarted on that absence alone — only a CONFIRMED mismatch triggers a restart.
-pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
-    // The client needs the config dirs only to resolve the socket path; it owns no
-    // sessions and writes no config. In particular it touches NO session lock here
-    // or anywhere downstream (lock ownership belongs to the daemon — see the
-    // module header): the only `store` calls are these two lock-free path helpers.
-    store::ensure_dirs()?;
+/// The koma daemon outlives a rebuild, so a freshly-built client can attach to a daemon
+/// still running OLD code and silently render its stale frames (this caused a phantom
+/// `/agents` bug). The client compares its OWN fresh fingerprint
+/// ([`store::build_fingerprint`]) against the daemon's reported `Hello`; on a mismatch it
+/// restarts the stale daemon and reconnects. LOOP GUARD: the restart fires at most once —
+/// if the just-spawned daemon STILL mismatches (it shouldn't, it was built from the current
+/// binary) it warns and renders against it rather than restart-looping. A daemon that sends
+/// no `Hello` (slow / pre-handshake) is never restarted on that absence alone.
+fn attach_session(handle: &tokio::runtime::Handle, session_id: &str) -> Result<Connection> {
+    // Make sure a daemon owns this session before we connect. No-op when it is already
+    // live (the bind-as-oracle probe inside short-circuits); spawns + waits otherwise.
+    super::manage::ensure_daemon_running(session_id, false)
+        .map_err(|e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"))?;
 
-    // Daemon-per-session: this client owns exactly one session-daemon, keyed by the
-    // session UUID `main` minted (or `--attach --session <id>`). It connects to that
-    // session's keyed socket (`run/<id>.sock`) and restarts only THAT daemon on a
-    // build-skew. The id is REQUIRED here — without it there is no socket to reach.
-    let session_id = opts.session.clone().ok_or_else(|| {
-        anyhow::anyhow!("internal: client_run requires a session id (--session <id>)")
-    })?;
-    let sock_path = store::daemon_sock_path(&session_id)?;
-
-    // A small multi-thread runtime drives the two socket tasks. The render loop runs
-    // on THIS thread (synchronous), exactly like the local TUI's `run_loop`.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let handle = rt.handle().clone();
-
-    // THIS client's build fingerprint, read fresh now (the on-disk binary as it exists
-    // at launch). Compared below to each daemon's reported `Hello` to detect a daemon
-    // running stale code.
+    let sock_path = store::daemon_sock_path(session_id)?;
     let my_fingerprint = store::build_fingerprint();
 
-    // Connect + attach + handshake, restarting a version-skewed daemon AT MOST ONCE
-    // (the loop guard). On a confirmed mismatch we restart the stale daemon and
-    // reconnect; on the (unexpected) second mismatch we give up and render against it.
-    let mut conn = connect_attach_and_handshake(&handle, &sock_path)?;
+    let mut conn = connect_attach_and_handshake(handle, &sock_path)?;
     let mut already_restarted = false;
     while conn
         .daemon_version
@@ -105,9 +96,6 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         .is_some_and(|v| v != my_fingerprint)
     {
         if already_restarted {
-            // The just-restarted daemon STILL reports a different fingerprint. This
-            // shouldn't happen (it was spawned from the current binary); don't loop
-            // forever — warn and render against it.
             eprintln!(
                 "koma: daemon still reports a different build after a restart; \
                  continuing against it"
@@ -118,89 +106,33 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         already_restarted = true;
 
         // Tear down the stale connection's bridge before restarting: drop our request
-        // sender (the writer drains + exits) and let the reader task observe the
-        // daemon's death as EOF. Both old tasks self-terminate; the runtime persists
-        // for the reconnect below.
+        // sender (the writer drains + exits) and let the reader observe the daemon's
+        // death as EOF. Both old tasks self-terminate; the runtime persists.
         drop(conn.req_tx);
         drop(conn.frame_rx);
 
-        // Restart ONLY this session's stale daemon (kill escalation + spawn-and-confirm,
-        // keyed by session id). A failure here is fatal — we can't recover a usable daemon.
-        super::manage::restart_daemon(&session_id)
+        super::manage::restart_daemon(session_id)
             .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
 
-        // Reconnect to the freshly-spawned daemon and re-handshake.
-        conn = connect_attach_and_handshake(&handle, &sock_path)?;
+        conn = connect_attach_and_handshake(handle, &sock_path)?;
     }
+    Ok(conn)
+}
 
-    // Terminal setup — identical to the local TUI (`run`). Guard first so a failure
-    // anywhere after still restores the terminal. The guard (and, next commit, the
-    // shadow) persists ACROSS the connection loop below so a swap re-attaches without
-    // re-entering the alt-screen.
-    let _guard = TerminalGuard::enter()?;
-    let backend = CrosstermBackend::new(stdout());
-    let mut terminal = Terminal::new(backend)?;
-    terminal.clear()?;
-
-    // Connection run-loop. TODAY it runs EXACTLY ONCE: render against the connection
-    // we settled on above, and `break` the first time the render loop asks to exit.
-    // The loop is the seam the NEXT commit grows — a `ClientTransition::Swap(id)`
-    // outcome will drop `conn`'s bridge and re-`connect_attach_and_handshake` to a
-    // DIFFERENT session-daemon's socket, then continue the loop with the new `conn`.
-    // Crucially `rt`/`handle`, the terminal, and the `TerminalGuard` are owned OUTSIDE
-    // this loop, so a reconnect reuses the same runtime + screen.
-    //
-    // The render loop's `Result` is CAPTURED (not `?`-propagated) so the teardown
-    // below — the polite `Detach` + writer flush — runs even on a render error,
-    // exactly as before; the captured result is returned only after teardown so the
-    // daemon is never left orphaned by an early return.
-    let mut render_result: Result<()> = Ok(());
-    // INTENTIONAL single-iteration loop this commit: every arm currently `break`s, so
-    // it runs exactly once (behavior is byte-identical to the prior straight-line
-    // connect→render→teardown). It is written as a `loop` on purpose — the next commit
-    // adds a `Swap` arm that `continue`s after re-attaching `conn` to a different
-    // daemon socket, at which point it genuinely loops. Allow `never_loop` until then.
-    #[allow(clippy::never_loop)]
-    loop {
-        // Take the handshake's prebuffered frames OUT of `conn` for this iteration
-        // (the render loop consumes them); a future reconnect replaces `conn` wholesale
-        // and brings its own. Leaves an empty Vec behind so `conn` stays intact for the
-        // teardown after the loop.
-        let prebuffered = std::mem::take(&mut conn.prebuffered);
-
-        // Run the synchronous render loop with the runtime context entered on THIS
-        // thread, SCOPED so the `EnterGuard` is dropped the instant the loop returns —
-        // BEFORE the teardown's `handle.block_on` below (which panics if called while a
-        // runtime context is entered). The context is needed only so a snapshot rebuild
-        // can mint the inert `AbortHandle` a reconstructed shadow `SubAgent` carries
-        // (`tokio::spawn` needs a runtime in scope — see `shadow_subagent`); the loop
-        // itself stays sync.
-        let transition = {
-            let _rt_ctx = handle.enter();
-            render::render_loop(
-                &mut terminal,
-                &conn.frame_rx,
-                &conn.req_tx,
-                prebuffered,
-                opts.resume,
-            )
-        };
-
-        match transition {
-            // The only outcome today: leave the client. (Next commit: a Swap arm here
-            // drops + reconnects `conn` and `continue`s instead of breaking.)
-            Ok(render::ClientTransition::Exit) => break,
-            // A render error ends the loop the same way an exit does, but the error is
-            // carried out and returned AFTER teardown (matching the previous single-shot
-            // `let result = ...; <teardown>; result` flow).
-            Err(e) => {
-                render_result = Err(e);
-                break;
-            }
-        }
-    }
-
-    // Teardown for the connection we end on. Unpack it now that the run-loop is done.
+/// Tear a live [`Connection`] down cleanly: queue a polite `Detach`, then drop the request
+/// sender and JOIN the writer so the final frame(s) flush before the runtime is touched.
+///
+/// Run on EVERY exit from an [`ClientState::Attached`] — a plain exit, a render error, AND
+/// the detach-then-swap into the swapper — so the source daemon is never left orphaned
+/// (socket open, no controller) and never stuck mid-hub. The `/quit` overlay's `[k]`/`[d]`
+/// paths may have queued their own `Detach` (and a `QuitSession` for `[k]`) already; this
+/// extra `Detach` is then a harmless no-op (the daemon deregistered this client by id, so
+/// a second one matches nobody). Dropping `req_tx` closes the outbound channel, which the
+/// writer observes as `Disconnected`: it drains EVERY remaining queued request to the
+/// socket and returns. We JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`], so a wedged socket
+/// can't hang exit) BEFORE returning, which is what guarantees the shutdown frames land.
+/// MUST NOT be called while a tokio runtime context is entered (it `block_on`s).
+fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
     let Connection {
         frame_rx: _,
         req_tx,
@@ -209,34 +141,178 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         daemon_version: _,
     } = conn;
 
-    // Polite detach so the daemon passes the controller seat promptly (the socket
-    // close would also trigger it, but this is cleaner). The `/quit` overlay's `[k]`
-    // (close-window) and `[d]` (detach) paths ALREADY queued their own `Detach` (and,
-    // for `[k]`, a `QuitSession` ahead of it) before the loop returned; this extra
-    // `Detach` is then a harmless no-op (the daemon already deregistered this client by
-    // id, so a second Detach finds no matching client and returns). For a plain exit
-    // (Ctrl-C / EOF) this is the primary detach. All queued requests MUST reach the
-    // daemon or it could be left orphaned (socket open, no controller).
     let _ = req_tx.send(ClientRequest::Detach);
-
-    // Deterministic flush of the final frame(s) before the runtime dies. Dropping
-    // `req_tx` closes the outbound channel, which the writer observes as
-    // `Disconnected`: it then drains EVERY remaining queued request to the socket
-    // and returns (see `writer_task`). We must wait for that drain — previously the
-    // runtime was dropped immediately, cancelling the writer mid-`poll.tick()` sleep
-    // and LOSING the queued `QuitDaemon`/`Detach` (an orphaned daemon). Drop the
-    // sender, then JOIN the writer (bounded, so a wedged socket can't hang exit).
     drop(req_tx);
     let _ = handle.block_on(async {
         tokio::time::timeout(WRITER_FLUSH_TIMEOUT, writer_handle).await
     });
+}
 
-    // Writer is done (or the bound elapsed) — its final frames are flushed to the
-    // socket. Drop the runtime LAST so the reader task is cancelled after exit.
+/// Run the thin attach client, with the daemon-per-session SWAPPER.
+///
+/// A two-state run-loop ([`ClientState`]): ATTACHED (render a daemon's frames + forward
+/// input) or SWAPPER (the detached `/resume` picker). Startup depends on `opts.resume`:
+///
+/// - **`--resume` / `koma agents`** (`opts.resume`): start in the SWAPPER with NO daemon
+///   connection and nothing to return to. The user picks a session (live, history, or a
+///   fresh `[+ new session]`) and the client attaches to it; cancelling with nothing to
+///   return to exits cleanly. (`opts.session` is ignored on this path — main does not mint
+///   one for `--resume`.)
+/// - **plain `koma` / `--session X`** (no resume): attach immediately to `opts.session`
+///   (the uuid main minted + spawned a daemon for), exactly as before.
+///
+/// Swap is detach-then-pick: a `/resume` IN-session makes the daemon send `OpenSwapper`,
+/// the render loop returns [`render::ClientTransition::OpenSwapper`], and here we
+/// [`teardown_connection`] (leaving that daemon cooking) before running the swapper
+/// STANDALONE — so its snapshots can't clobber the local hub. A PICK attaches the chosen
+/// daemon; a CANCEL reconnects the one we left. `rt`/`handle`, the terminal, and the
+/// [`TerminalGuard`] are owned across the whole loop, so a swap reuses the same runtime +
+/// alt-screen with no re-enter flash. A failed attach degrades to the swapper (rebuilt
+/// from fresh discovery) rather than crashing.
+pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
+    // The client needs the config dirs only to resolve socket paths; it owns no sessions
+    // and writes no config (lock ownership belongs to the daemon — see the module header).
+    store::ensure_dirs()?;
+
+    // A small multi-thread runtime drives the two socket tasks of whatever connection is
+    // live. The render/swapper loops run on THIS thread (synchronous), like the local TUI.
+    // Owned across the WHOLE state machine so every attach/reattach reuses it.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let handle = rt.handle().clone();
+
+    // Terminal setup — identical to the local TUI (`run`). Guard first so a failure
+    // anywhere after still restores the terminal. The guard persists ACROSS the loop so a
+    // detach-then-swap re-attaches without re-entering the alt-screen.
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    // `current_session_id` is the session we are (or are becoming) attached to;
+    // `prev_session` is what a swapper CANCEL returns to. On `--resume` both start empty
+    // (the swapper opens cold); otherwise `current` is the minted/`--session` id.
+    let mut current_session_id: Option<String> = None;
+    let mut prev_session: Option<String> = None;
+
+    // Seed the initial state. Build-skew handling + daemon-spawn live in `attach_session`,
+    // so an `Err` here (no daemon could be started, or the initial connect failed) is
+    // surfaced to the caller exactly as before — BUT only on the non-resume path, where an
+    // attach happens up front. The `--resume` path can't fail here (no attach yet).
+    let mut state = if opts.resume {
+        // `--resume` / `koma agents`: swapper first, no connection, nothing to return to.
+        ClientState::Swapper(build_local_hub(None))
+    } else {
+        // Plain `koma` / `--session X`: attach immediately to the minted/given id (REQUIRED
+        // here — without it there is no socket to reach).
+        let id = opts.session.clone().ok_or_else(|| {
+            anyhow::anyhow!("internal: client_run requires a session id (--session <id>) without --resume")
+        })?;
+        let conn = attach_session(&handle, &id)?;
+        current_session_id = Some(id);
+        ClientState::Attached(conn)
+    };
+
+    // The loop's terminal outcome (Ok on a clean exit, or a render error captured so the
+    // active connection's teardown still runs before it is returned).
+    let mut render_result: Result<()> = Ok(());
+
+    loop {
+        state = match state {
+            // --- ATTACHED: render the daemon's frames + forward input ---
+            ClientState::Attached(mut conn) => {
+                // Take the handshake's prebuffered frames OUT for this render pass (the
+                // loop consumes them); leaves an empty Vec so `conn` stays intact for the
+                // teardown / detach below.
+                let prebuffered = std::mem::take(&mut conn.prebuffered);
+
+                // Run the render loop with the runtime context entered on THIS thread,
+                // SCOPED so the `EnterGuard` drops the instant it returns — BEFORE any
+                // `teardown_connection`'s `block_on` (which panics under an entered
+                // context). The context is needed only so a snapshot rebuild can mint the
+                // inert `AbortHandle` a reconstructed shadow `SubAgent` carries.
+                let transition = {
+                    let _rt_ctx = handle.enter();
+                    render::render_loop(
+                        &mut terminal,
+                        &conn.frame_rx,
+                        &conn.req_tx,
+                        prebuffered,
+                    )
+                };
+
+                match transition {
+                    // Leave the client: tear this connection down (flush the Detach) and
+                    // break out of the loop. No connection survives, so the post-loop has
+                    // nothing more to detach.
+                    Ok(render::ClientTransition::Exit) => {
+                        teardown_connection(&handle, conn);
+                        break;
+                    }
+                    // `/resume`: DETACH from this daemon (leaving it cooking) and open the
+                    // local swapper STANDALONE. Record where to return on cancel, then
+                    // build the hub from fresh cross-daemon discovery (flagging the row we
+                    // just left as `is_foreground`).
+                    Ok(render::ClientTransition::OpenSwapper) => {
+                        teardown_connection(&handle, conn);
+                        prev_session = current_session_id.take();
+                        ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                    }
+                    // A render error ends the loop like an exit, but the error is carried
+                    // out and returned AFTER this connection's teardown so the daemon is
+                    // never orphaned by an early return.
+                    Err(e) => {
+                        teardown_connection(&handle, conn);
+                        render_result = Err(e);
+                        break;
+                    }
+                }
+            }
+
+            // --- SWAPPER: the detached `/resume` picker ---
+            ClientState::Swapper(mut hub) => match run_swapper(&mut terminal, &mut hub)? {
+                // Picked a target session: attach to its daemon (spawning if needed). On
+                // success it becomes the foreground; on failure DEGRADE to the swapper
+                // rebuilt from fresh discovery (the dead/unreachable session drops out)
+                // rather than crash — the user can pick again.
+                SwapperOutcome::Pick(target) => match attach_session(&handle, &target) {
+                    Ok(conn) => {
+                        current_session_id = Some(target);
+                        ClientState::Attached(conn)
+                    }
+                    Err(e) => {
+                        eprintln!("koma: could not attach to session {target}: {e:#}");
+                        ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                    }
+                },
+                // Cancelled: reconnect to the previous session if there was one; otherwise
+                // (a `--resume` cold start with nothing to return to) exit cleanly. A
+                // failed reconnect to a since-died previous daemon also degrades back to
+                // the swapper instead of crashing.
+                SwapperOutcome::Cancel => match prev_session.take() {
+                    Some(prev) => match attach_session(&handle, &prev) {
+                        Ok(conn) => {
+                            current_session_id = Some(prev);
+                            ClientState::Attached(conn)
+                        }
+                        Err(e) => {
+                            eprintln!("koma: could not reconnect to session {prev}: {e:#}");
+                            ClientState::Swapper(build_local_hub(None))
+                        }
+                    },
+                    None => break,
+                },
+            },
+        };
+    }
+
+    // Every live connection was already torn down inside the `Attached` arm it exited from
+    // (so there is no double-detach and no connection to clean up here). A break straight
+    // out of the swapper has no connection at all. Drop the runtime LAST so the active
+    // connection's reader task (if any) is cancelled after exit.
     drop(rt);
 
-    // Return the render loop's outcome (Ok on a normal exit, or the captured error)
-    // AFTER teardown — identical to the previous `let result = ...; <teardown>; result`.
     render_result
 }
 
