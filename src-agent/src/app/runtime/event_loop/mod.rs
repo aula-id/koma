@@ -75,6 +75,20 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
+        // Perform a pending /new (STANDALONE only). `/new` sets `new_pending = Some(kill)`
+        // rather than creating a session (mirroring `/resume`); in the no-daemon local TUI
+        // there is no client to spawn a new session-daemon on, so run the legacy in-process
+        // append-a-session path directly via `apply_new_session_local` — so `--local` `/new`
+        // behaves exactly as before. The daemon loop instead drains this into a
+        // `DaemonEvent::NewSession` (see `drain_new_pending`). The bool is the `/new kill`
+        // flag (tombstone the previous foreground as the new session opens).
+        if let Some(kill) = state.rest.new_pending.take() {
+            crate::app::runtime::commands::new_session::apply_new_session_local(
+                state, client, handle, kill,
+            )?;
+            dirty = true;
+        }
+
         if dirty && !state.rest.select_active {
             terminal.draw(|f| view::draw(f, state))?;
             dirty = false;

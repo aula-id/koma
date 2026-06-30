@@ -23,6 +23,7 @@ pub(super) fn apply_frame(
     awaiting_resync: &mut bool,
     select_requested: &mut bool,
     open_swapper_requested: &mut bool,
+    new_session_requested: &mut Option<bool>,
     req_tx: &std::sync::mpsc::Sender<ClientRequest>,
 ) -> bool {
     // --- seq-gap detection (critique #1) ---
@@ -88,6 +89,16 @@ pub(super) fn apply_frame(
         // detach itself. Non-visual to the shadow, so the redraw flag stays false.
         DaemonEvent::OpenSwapper => {
             *open_swapper_requested = true;
+            false
+        }
+        // The `/new` hand-off: the daemon asked THIS client to spawn + attach a brand-new
+        // session-daemon (detaching — or killing, then detaching — the current one). Latch
+        // the request (carrying the KILL flag) so `render_loop` returns
+        // `ClientTransition::NewSession { kill }` AFTER this drain pass — `apply_frame` owns
+        // no terminal / connection and can't tear itself down. Non-visual to the shadow, so
+        // the redraw flag stays false. Mirrors `OpenSwapper`.
+        DaemonEvent::NewSession { kill } => {
+            *new_session_requested = Some(kill);
             false
         }
         // Non-visual control replies. (A future refinement could toast an Error.)

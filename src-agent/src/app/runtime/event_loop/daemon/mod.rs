@@ -333,6 +333,18 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     same control-frame seam BEFORE `stream_deltas`.
         hub.drain_resume_pending(state);
 
+        // 3a-pre3. `/new` hand-off (daemon-per-session spawn): a just-drained `/new`
+        //     slash-command set `state.rest.new_pending = Some(kill)` INSTEAD of creating a
+        //     session (a daemon owns ONE session, so `/new` makes another DAEMON — a
+        //     client-side act). Mirror `/resume`: signal the CONTROLLER client to spawn +
+        //     attach a brand-new session-daemon via a one-shot
+        //     `DaemonEvent::NewSession { kill }`, leaving the daemon's own mode untouched (it
+        //     stays in Chat, cooking, until the client detaches — plain `/new` — or sends
+        //     `QuitDaemon` — `/new kill`). Consume the flag here, right after
+        //     `drain_resume_pending`, so it observes a same-tick `/new` and rides the same
+        //     control-frame seam BEFORE `stream_deltas`.
+        hub.drain_new_pending(state);
+
         // 3a. Daemon-side `should_quit` sweep: if anything daemon-side ever sets
         //     `should_quit` (via `handle_quit_kill_all`), translate it to "close every
         //     session" (NOT an abrupt loop break — that is the LOCAL standalone TUI's

@@ -121,12 +121,12 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::PickerNewSession => {
-            super::commands::apply_slash(
-                crate::controller::command::Command::New(crate::controller::command::NewMode::Swap),
-                state,
-                client,
-                handle,
-            )?;
+            // The session-PICKER's `[+ new session]` row must create an in-process session
+            // RIGHT HERE (same daemon), so call `apply_new_session_local` directly — NOT the
+            // `/new` slash command, which (daemon-per-session) merely sets `new_pending` and
+            // would make the client tear this daemon down + spawn a whole new one. `kill =
+            // false` (Swap): keep any previous foreground cooking.
+            super::commands::new_session::apply_new_session_local(state, client, handle, false)?;
         }
 
         Action::LiveSwitch(idx) => {
