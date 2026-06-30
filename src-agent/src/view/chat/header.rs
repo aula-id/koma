@@ -20,7 +20,7 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
         crate::app::state::AgentMode::Normal => ("●", "normal", Color::Rgb(80, 220, 80)),
         crate::app::state::AgentMode::Auto   => ("»", "auto",   Color::Rgb(255, 210, 60)),
-        crate::app::state::AgentMode::Yolo   => ("!", "yolo",   Color::Rgb(255, 60, 60)),
+        crate::app::state::AgentMode::Yolo   => ("!", "yooloo", Color::Rgb(255, 60, 60)),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.
@@ -30,9 +30,9 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     let brand = "koma";
 
     // Version badge — HARDCODED colours (NOT palette.accent, which is themeable):
-    // green when up-to-date, pink current + green "[latest]" when an update is known.
+    // green when up-to-date, red current + green "[latest]" when an update is known.
     const GREEN: Color = Color::Rgb(57, 255, 20);
-    const PINK: Color = Color::Rgb(255, 105, 180);
+    const RED: Color = Color::Rgb(255, 60, 60);
     let cur = crate::model::store::current_version();
     let update = rest
         .latest_version
@@ -49,7 +49,7 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     if let Some(v) = update {
         let latest = format!("[{}]", v.version);
         badge_w += cur.chars().count() + 1 + latest.chars().count(); // cur + space + "[latest]"
-        badge_spans.push(Span::styled(cur, Style::default().fg(PINK)));
+        badge_spans.push(Span::styled(cur, Style::default().fg(RED)));
         badge_spans.push(Span::raw(" "));
         badge_spans.push(Span::styled(latest, Style::default().fg(GREEN)));
     } else {
