@@ -123,11 +123,16 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     };
     shadow.rest.foreground = fg.min(shadow.rest.sessions.len() - 1);
 
-    // Global render fields.
-    shadow.rest.input = global.input;
-    shadow.rest.cursor = global.cursor;
-    shadow.rest.scroll = global.scroll;
-    shadow.rest.follow = global.follow;
+    // Composer + transcript-view fields now live on the foreground session
+    // (per-session in C1; still the single global foreground), so copy them onto
+    // the shadow's foreground runtime via `fg_mut()`. `status` stays rest-global.
+    {
+        let fg = shadow.rest.fg_mut();
+        fg.input = global.input;
+        fg.cursor = global.cursor;
+        fg.scroll = global.scroll;
+        fg.follow = global.follow;
+    }
     shadow.rest.status = global.status;
     shadow.rest.toast = global.toast.map(|(kind, text)| {
         (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
@@ -184,7 +189,8 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // Staged composer attachments (ingested daemon-side via path-paste / clipboard /
     // @-picker). The `[Image #N]` marker text already arrives in `input`; mirror the
     // attachment RECORDS too so the shadow composer matches the daemon's exactly.
-    shadow.rest.pending_attachments = global.pending_attachments;
+    // Lives on the foreground session (alongside `input`) now.
+    shadow.rest.fg_mut().pending_attachments = global.pending_attachments;
     // The precomputed `@`-file palette (the daemon ran `dir_cache.search` on its
     // index). The client's reconstructed `dir_cache` is empty, so the unmodified
     // file-palette view renders this projected list instead (see
@@ -323,8 +329,10 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             // Carries the WHOLE input string, so replace wholesale; clamp the caret
             // into bounds defensively (the daemon sends a consistent pair, but the
             // composer renderer indexes by cursor and must never read past the end).
-            shadow.rest.input = text;
-            shadow.rest.cursor = cursor.min(shadow.rest.input.chars().count());
+            // Composer now lives on the foreground session (single global fg in C1).
+            let fg = shadow.rest.fg_mut();
+            fg.input = text;
+            fg.cursor = cursor.min(fg.input.chars().count());
             true
         }
         StateDelta::ScrollChanged { scroll, follow } => {
@@ -333,8 +341,10 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             // offset tracks the daemon between full snapshots. The renderer clamps
             // `scroll` against the live content height each draw, so an offset that
             // momentarily exceeds the shadow's shorter content is self-correcting.
-            shadow.rest.scroll = scroll;
-            shadow.rest.follow = follow;
+            // Transcript view state now lives on the foreground session.
+            let fg = shadow.rest.fg_mut();
+            fg.scroll = scroll;
+            fg.follow = follow;
             true
         }
         StateDelta::SessionStatusChanged {

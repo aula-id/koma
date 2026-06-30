@@ -203,7 +203,7 @@ pub(super) fn render_transcript(
         let total = u16::try_from(lines.len()).unwrap_or(u16::MAX);
         let max_scroll = total.saturating_sub(body.height);
         rest.last_max_scroll.set(max_scroll);
-        let top = if rest.follow { max_scroll } else { rest.scroll.min(max_scroll) };
+        let top = if rest.fg().follow { max_scroll } else { rest.fg().scroll.min(max_scroll) };
         let messages = Paragraph::new(lines).scroll((top, 0));
         frame.render_widget(messages, body);
     } // cache borrow ends

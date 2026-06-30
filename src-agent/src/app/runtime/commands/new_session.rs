@@ -86,14 +86,17 @@ pub(crate) fn handle_new(
     state.rest.sessions.push(runtime);
     state.rest.foreground = state.rest.sessions.len() - 1;
 
-    // Reset the FLAT foreground-UI fields (shared on AppStateRest) for a clean
-    // slate on the new tab: empty composer + caret, pinned-to-bottom scroll, no
-    // staged attachments, and a fresh (empty) transcript so the new conversation
-    // renders instead of the previous tab's cached blocks.
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view state for a clean slate on the new
+    // tab: empty composer + caret, pinned-to-bottom scroll, no staged
+    // attachments, and a fresh (empty) transcript so the new conversation renders
+    // instead of the previous tab's cached blocks.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
     state.rest.status = "ready".into();
     // Fresh session → seed ITS OWN counters from its (empty) ledger, i.e. 0. No

@@ -57,12 +57,15 @@ pub fn handle_cancel_key_input(
         } else {
             None
         };
-        // Reset the flat foreground-UI for the restored tab + invalidate the
-        // transcript cache so its conversation (not the popped empty one) renders.
-        state.rest.input.clear();
-        state.rest.cursor = 0;
+        // Reset the per-session composer + view for the restored tab + invalidate
+        // the transcript cache so its conversation (not the popped empty one) renders.
+        {
+            let fg = state.rest.fg_mut();
+            fg.input.clear();
+            fg.cursor = 0;
+            fg.pending_attachments.clear();
+        }
         state.rest.reset_scroll();
-        state.rest.pending_attachments.clear();
         state.rest.transcript_cache.borrow_mut().blocks.clear();
         // No token reseed on this switch-back: the restored foreground carries its
         // OWN per-session counters in its slot (untouched while it sat in the

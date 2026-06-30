@@ -27,7 +27,7 @@ const PREFIX_W: usize = 4;
 pub(super) fn input_row_count(rest: &AppStateRest, frame_width: u16, frame_height: u16) -> usize {
     let inner_w = (frame_width.saturating_sub(4) as usize).max(1);
     let mut input_rows = 0usize;
-    for line in rest.input.split('\n') {
+    for line in rest.fg().input.split('\n') {
         let prefixed = line.chars().count() + PREFIX_W;
         input_rows += 1usize.max(prefixed.div_ceil(inner_w));
     }
@@ -82,8 +82,8 @@ pub(super) fn render_input(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, 
 /// keyboard).
 fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &Palette) {
     let inner_w = (area.width as usize).max(1);
-    let cursor = rest.cursor;
-    let logicals: Vec<&str> = rest.input.split('\n').collect();
+    let cursor = rest.fg().cursor;
+    let logicals: Vec<&str> = rest.fg().input.split('\n').collect();
     let last_idx = logicals.len().saturating_sub(1);
 
     // Total wrapped visual lines (uncapped) and caret's wrapped row.

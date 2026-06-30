@@ -34,27 +34,6 @@ pub struct AppStateRest {
     /// cancelled (see `spawn_pending`). Set in `handle_new` just before the new
     /// session is appended + made foreground. Only meaningful while `spawn_pending`.
     pub spawn_prev_fg: usize,
-    pub input: String,
-    /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
-    /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
-    /// paints the block cursor here instead of always at the end. Kept in char
-    /// units so multibyte input never splits a code point; converted to a byte
-    /// offset only at the `String::insert`/`remove` call site. Reset to the end
-    /// on any bulk replace (submit/clear, history recall, completion).
-    pub cursor: usize,
-    /// Image attachments staged by the composer (path-paste / `@`-picker) that
-    /// have NOT yet been submitted. Each was produced by the ingest core (its
-    /// bytes are already on disk under `<session>/images/`) and matches an
-    /// `[Image #N]` marker inserted into `input`. On submit, these are MOVED onto
-    /// the user `ChatMessage` and this is cleared; a `/clear` or take_input that
-    /// drops the text also clears them so a stray marker can't outlive its image.
-    pub pending_attachments: Vec<crate::dto::chat::Attachment>,
-    /// Bash-style input history: index into the sent-user-message list while
-    /// recalling (None = editing live input).
-    pub hist_idx: Option<usize>,
-    /// Live input stashed when history recall starts; restored on recall past
-    /// the newest entry.
-    pub input_stash: String,
     /// Selected row in the `/` command palette (index into the filtered list).
     pub palette_sel: usize,
     pub status: String,
@@ -63,10 +42,6 @@ pub struct AppStateRest {
     /// box style (red "error" vs neutral "info").
     pub toast: Option<(String, std::time::Instant, ToastKind)>,
     pub should_quit: bool,
-    pub scroll: u16,
-    /// When true, the transcript stays pinned to the bottom (auto-follows new
-    /// content). Cleared when the user scrolls up; re-set on reaching bottom.
-    pub follow: bool,
     /// Max scroll offset (content_lines - viewport) from the LAST render. The
     /// renderer writes it (via interior mutability through a shared ref); the
     /// key/mouse scroll handlers read it to clamp + detect "at bottom". Single-
@@ -290,17 +265,10 @@ impl AppStateRest {
             prev_session: None,
             spawn_pending: false,
             spawn_prev_fg: 0,
-            input: String::new(),
-            cursor: 0,
-            pending_attachments: Vec::new(),
-            hist_idx: None,
-            input_stash: String::new(),
             palette_sel: 0,
             status: "ready".into(),
             toast: None,
             should_quit: false,
-            scroll: 0,
-            follow: true,
             last_max_scroll: std::cell::Cell::new(0),
             last_key: None,
             last_esc: None,

@@ -108,14 +108,18 @@ pub fn open_disk_session(
         .position(|rt| rt.session.as_ref().map(|s| &s.path) == Some(&path))
     {
         state.rest.foreground = idx;
-        // Flat foreground-UI reset for the now-shown tab (mirror handle_live_switch):
-        // empty composer + caret, pinned-to-bottom scroll, no staged attachments, and
-        // a fresh transcript cache so the target's conversation renders instead of the
-        // previous tab's cached blocks. No token reseed — each slot owns its counters.
-        state.rest.input.clear();
-        state.rest.cursor = 0;
+        // Per-session composer + view reset for the now-shown tab (mirror
+        // handle_live_switch): empty composer + caret, pinned-to-bottom scroll, no
+        // staged attachments, and a fresh transcript cache so the target's
+        // conversation renders instead of the previous tab's cached blocks. No
+        // token reseed — each slot owns its counters.
+        {
+            let fg = state.rest.fg_mut();
+            fg.input.clear();
+            fg.cursor = 0;
+            fg.pending_attachments.clear();
+        }
         state.rest.reset_scroll();
-        state.rest.pending_attachments.clear();
         state.rest.transcript_cache.borrow_mut().blocks.clear();
         // KEYLESS client → rebuild for a fresh plan_word at this session boundary,
         // gated on the target having a usable Main route (no-client-no-send).
@@ -190,13 +194,17 @@ pub fn open_disk_session(
     state.rest.sessions.push(runtime);
     state.rest.foreground = state.rest.sessions.len() - 1;
 
-    // Reset the flat foreground-UI for a clean slate on the new tab (mirror /new):
-    // empty composer + caret, pinned-to-bottom scroll, no staged attachments (so the
-    // previous session's images don't leak in), fresh transcript cache.
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view for a clean slate on the new tab
+    // (mirror /new): empty composer + caret, pinned-to-bottom scroll, no staged
+    // attachments (so the previous session's images don't leak in), fresh
+    // transcript cache.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
     state.rest.status = "ready".into();
 

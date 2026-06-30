@@ -30,7 +30,7 @@ pub(super) fn render_command_palette(
     rest: &AppStateRest,
     palette: &Palette,
 ) -> bool {
-    let cmd_matches = command::palette_matches(&rest.input);
+    let cmd_matches = command::palette_matches(&rest.fg().input);
     if cmd_matches.is_empty() {
         return false;
     }
@@ -88,7 +88,7 @@ pub(super) fn render_file_palette(
     rest: &AppStateRest,
     palette: &Palette,
 ) {
-    if let Some(partial) = crate::controller::input::file_ref_partial(&rest.input) {
+    if let Some(partial) = crate::controller::input::file_ref_partial(&rest.fg().input) {
         const MAX_VIS: usize = 10;
         // Prefer the daemon-projected palette when present (the thin attach client,
         // whose reconstructed `dir_cache` is empty — it would otherwise show no rows).

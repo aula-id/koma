@@ -32,14 +32,17 @@ pub fn handle_live_switch(
         return Ok(());
     }
     state.rest.foreground = idx;
-    // Reset the flat foreground-UI for the newly-shown session: empty composer +
-    // caret, pinned-to-bottom scroll, no staged attachments, and a fresh (empty)
-    // transcript cache so the target's conversation renders instead of the
-    // previous tab's cached blocks.
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view for the newly-shown session: empty
+    // composer + caret, pinned-to-bottom scroll, no staged attachments, and a
+    // fresh (empty) transcript cache so the target's conversation renders instead
+    // of the previous tab's cached blocks.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
     // NO token reseed on a foreground switch: each session now carries its OWN
     // token/cost counters in its slot, so switching foreground just renders fg()'s
@@ -361,11 +364,14 @@ fn create_session_for_pwd(
     state.rest.sessions.push(runtime);
     state.rest.foreground = state.rest.sessions.len() - 1;
 
-    // Reset the flat foreground-UI for a clean slate on the new tab (mirror /new).
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view for a clean slate on the new tab (mirror /new).
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
     state.rest.status = "ready".into();
 

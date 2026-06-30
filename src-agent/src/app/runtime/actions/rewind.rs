@@ -116,12 +116,16 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
 
     // 5. Load the message into the composer for editing; do NOT auto-send. Mirror
     //    the history-recall load: replace input, caret to end, and leave recall /
-    //    palette state clean so the editor starts fresh.
-    state.rest.input = text;
-    state.rest.pending_attachments.clear();
+    //    palette state clean so the editor starts fresh. The composer fields live
+    //    on the foreground session now; `palette_sel` stays rest-global.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input = text;
+        fg.pending_attachments.clear();
+        fg.hist_idx = None;
+        fg.input_stash.clear();
+    }
     state.rest.cursor_end();
-    state.rest.hist_idx = None;
-    state.rest.input_stash.clear();
     state.rest.palette_sel = 0;
     state.rest.status = "rewound - edit and press Enter to resend".into();
     state.mode = Mode::Chat;

@@ -152,7 +152,7 @@ fn controller_sendkey_edits_composer() {
     hub.handle_inbound(HubInbound::Register { client_id: 1, frame_tx: tx }, &mut state, &mut client, &h);
     hub.handle_inbound(HubInbound::Request { client_id: 1, req: ClientRequest::SendKey(KeyWire { code: KeyCodeWire::Char('z'), mods: 0 }) }, &mut state, &mut client, &h);
 
-    assert_eq!(state.rest.input, "z", "key reached the composer via apply_action");
+    assert_eq!(state.rest.fg().input, "z", "key reached the composer via apply_action");
     assert!(matches!(rx.try_recv().expect("reply").event, DaemonEvent::Ack));
 }
 

@@ -143,8 +143,12 @@ pub(super) fn apply_compaction_result(
     state.rest.transcript_cache.borrow_mut().blocks.clear();
     // Jump to the top of the transcript so the freshly-written summary is what the
     // user sees once the animation clears (instead of the kept tail at the bottom).
-    state.rest.follow = false;
-    state.rest.scroll = 0;
+    // Transcript view state lives on the foreground session now.
+    {
+        let fg = state.rest.fg_mut();
+        fg.follow = false;
+        fg.scroll = 0;
+    }
 
     // Surface the generated summary "under the finish animation" as a neutral,
     // multi-line info toast (capped so a long summary stays contained).

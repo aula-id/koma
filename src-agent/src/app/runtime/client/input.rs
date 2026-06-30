@@ -52,7 +52,7 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
     match key.code {
         // `$` on an EMPTY input opens the `$` panel daemon-side (not a typed char), so
         // don't echo it; with text present it is a normal character and echoes below.
-        KeyCode::Char('$') if rest.input.is_empty() => {}
+        KeyCode::Char('$') if rest.fg().input.is_empty() => {}
         KeyCode::Char(c) => rest.push_char(c),
         KeyCode::Backspace => rest.backspace(),
         KeyCode::Left => rest.cursor_left(),
