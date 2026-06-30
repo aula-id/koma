@@ -262,8 +262,15 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
             Mode::Usage(Box::new(shadow_usage_nav(&view, &range, &metric)))
         }
         ModeSnapshot::MessageRewind(rw) => Mode::MessageRewind(Box::new(shadow_rewind(rw))),
-        ModeSnapshot::QuitConfirm { working, total } => {
-            Mode::QuitConfirm(Box::new(QuitConfirmState::new(working, total)))
+        ModeSnapshot::QuitConfirm { working, total, selected } => {
+            // Rebuild the overlay state and restore the daemon-owned focus index.
+            // `new` defaults `selected` to 2 (the safe cancel); overwrite it with the
+            // projected value so arrow/Tab navigation — which mutates `selected` on the
+            // daemon — is reflected on the next frame. `button_rects` stays default
+            // (Rect::ZERO); the client's draw recomputes the hit-boxes every frame.
+            let mut st = QuitConfirmState::new(working, total);
+            st.selected = selected;
+            Mode::QuitConfirm(Box::new(st))
         }
     };
 

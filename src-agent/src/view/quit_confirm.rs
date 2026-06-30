@@ -28,8 +28,9 @@ use crate::app::mode::QuitConfirmState;
 use crate::view::theme::Palette;
 
 /// The three button labels, left→right, in `button_rects`/`selected` index order
-/// (`0` = quit & kill, `1` = minimize, `2` = cancel). The chip is the label
-/// padded with one space on each side (` quit & kill `).
+/// (`0` = quit & kill, `1` = minimize, `2` = cancel). The chip is the label wrapped
+/// in literal brackets (`[quit & kill]`) — koma button style — so the chip width is
+/// `label.len() + 2`, matching the click-rect math below.
 const LABELS: [&str; 3] = ["quit & kill", "minimize", "cancel"];
 
 /// One-line description for each button, same index order as [`LABELS`].
@@ -78,12 +79,14 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     // happen) never panics on array indexing below.
     let sel = s.selected.min(2);
 
-    // Build the chip Span for a button: the label padded ` like this `, rendered
-    // highlighted when focused (reversed onto the accent colour, BOLD) or subdued
-    // (dim) otherwise. `sel_fg` is the on-accent foreground (true-black/white),
-    // legible under BOLD — matching the footer + selection inverse treatment.
+    // Build the chip Span for a button: the label wrapped in literal brackets
+    // (`[like this]`, koma button style), rendered highlighted when focused (reversed
+    // onto the accent colour, BOLD — the brackets stay visible as part of the chip
+    // text) or subdued (dim) otherwise. `sel_fg` is the on-accent foreground
+    // (true-black/white), legible under BOLD — matching the footer + selection
+    // inverse treatment.
     let chip = |idx: usize| {
-        let label = format!(" {} ", LABELS[idx]);
+        let label = format!("[{}]", LABELS[idx]);
         let style = if idx == sel {
             Style::default()
                 .bg(palette.accent)
@@ -132,8 +135,8 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     )));
     frame.render_widget(Paragraph::new(lines), inner);
 
-    // On-screen width of a button chip: label plus one padding space each side,
-    // matching the ` label ` chip rendered above.
+    // On-screen width of a button chip: label plus the `[` and `]` bracket chars,
+    // matching the `[label]` chip rendered above.
     let chip_w = |idx: usize| LABELS[idx].len() as u16 + 2;
 
     // Record each button's on-screen Rect as a chip-width horizontal segment on

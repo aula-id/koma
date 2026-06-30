@@ -100,7 +100,7 @@ pub enum ModeSnapshot {
     Effort(EffortSnapshot),
     Usage(Box<UsageSnapshot>),
     MessageRewind(RewindSnapshot),
-    QuitConfirm { working: usize, total: usize },
+    QuitConfirm { working: usize, total: usize, selected: usize },
 }
 
 // ─── incremental deltas ──────────────────────────────────────────────────────
