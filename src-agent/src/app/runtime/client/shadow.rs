@@ -155,6 +155,10 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         "yolo"   => AgentMode::Yolo,
         _        => AgentMode::Auto,
     };
+    shadow.rest.latest_version = global
+        .latest_version
+        .as_ref()
+        .map(|version| crate::app::version::VersionInfo { version: version.clone(), message: None });
     // The shadow `AppConfig`'s registered-model + provider catalogue is populated
     // ONLY for the `/agents` screen (which resolves a chosen `model_uuid` to a
     // `name @ provider` label off `rest.config`), from that mode's KEYLESS projection.

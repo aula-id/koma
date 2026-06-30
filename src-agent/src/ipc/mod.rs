@@ -145,6 +145,7 @@ mod roundtrip_tests {
             }],
             file_palette: Some(vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]),
             agent_mode: "auto".to_string(),
+            latest_version: None,
         }
     }
 

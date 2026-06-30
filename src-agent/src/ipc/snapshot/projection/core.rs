@@ -182,6 +182,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             crate::app::state::AgentMode::Yolo => "yolo",
         }
         .to_string(),
+        latest_version: state.rest.latest_version.as_ref().map(|v| v.version.clone()),
     }
 }
 
