@@ -125,9 +125,9 @@ fn attach_session(handle: &tokio::runtime::Handle, session_id: &str) -> Result<C
 /// Run on EVERY exit from an [`ClientState::Attached`] — a plain exit, a render error, AND
 /// the detach-then-swap into the swapper — so the source daemon is never left orphaned
 /// (socket open, no controller) and never stuck mid-hub. The `/quit` overlay's `[k]`/`[d]`
-/// paths may have queued their own `Detach` (and a `QuitSession` for `[k]`) already; this
-/// extra `Detach` is then a harmless no-op (the daemon deregistered this client by id, so
-/// a second one matches nobody). Dropping `req_tx` closes the outbound channel, which the
+/// paths may have queued their own `Detach` (and a `QuitDaemon` for `[k]`, which kills the
+/// daemon outright) already; this extra `Detach` is then a harmless no-op (the daemon
+/// deregistered this client by id, so a second one matches nobody). Dropping `req_tx` closes the outbound channel, which the
 /// writer observes as `Disconnected`: it drains EVERY remaining queued request to the
 /// socket and returns. We JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`], so a wedged socket
 /// can't hang exit) BEFORE returning, which is what guarantees the shutdown frames land.

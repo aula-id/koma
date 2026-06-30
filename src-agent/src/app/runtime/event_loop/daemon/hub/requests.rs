@@ -391,6 +391,13 @@ impl DaemonHub {
             // foreground, repoint foreground onto a still-live session so render/service
             // never touch a tombstone. The daemon self-exits later (grace-timed) once
             // EVERY session is closed AND no client is attached.
+            //
+            // Phase B (daemon-per-session): no client SENDS this anymore — the `/quit`
+            // overlay's `[k]` now sends the controller-only `QuitDaemon` (a window IS its
+            // own single-session daemon, so closing it kills the daemon, not just the
+            // session). The handler is kept wired + tested as the per-session tombstone
+            // primitive; Phase C removes it along with the rest of the multi-session
+            // machinery if nothing else picks it up.
             ClientRequest::QuitSession { session_id } => {
                 match state.rest.sessions.iter().position(|s| s.id == session_id) {
                     Some(target) => {

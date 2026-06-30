@@ -259,8 +259,8 @@ pub(super) fn render_loop(
                     // The `/quit` overlay's choices are CLIENT-process decisions, so
                     // when the shadow is in QuitConfirm (mirrored from the daemon's
                     // mode) the client intercepts its keys locally instead of
-                    // forwarding them (daemon stage 12). `Detach`/`Kill` ask the loop
-                    // to exit the client.
+                    // forwarding them (daemon stage 12). `[k]` kills this window's
+                    // daemon, `[d]` detaches it; both ask the loop to exit the client.
                     if matches!(shadow.mode(), Mode::QuitConfirm(_)) {
                         // The daemon owns the focus index; read the shadow's mirrored
                         // `selected` so Enter activates the focused button (and nav keys
@@ -270,17 +270,7 @@ pub(super) fn render_loop(
                         } else {
                             0
                         };
-                        // This window's foreground session id (from the shadow, which
-                        // mirrors THIS client's own per-client foreground projection): the
-                        // `[k]` "close this window" path tombstones exactly this session
-                        // (C4), not the whole daemon. `.get()` so an empty/out-of-range
-                        // foreground degrades to None (plain detach) instead of panicking.
-                        let fg_id = shadow
-                            .rest
-                            .sessions
-                            .get(shadow.rest.foreground)
-                            .map(|s| s.id.clone());
-                        match handle_quit_confirm_key(&key, req_tx, sel, fg_id.as_deref()) {
+                        match handle_quit_confirm_key(&key, req_tx, sel) {
                             QuitConfirmKey::ExitClient => return Ok(ClientTransition::Exit),
                             QuitConfirmKey::Stay => {}
                         }
