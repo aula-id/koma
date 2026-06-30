@@ -52,7 +52,7 @@ impl DaemonHub {
     }
 
     /// Apply one bridge message against the registry / emit its reply.
-    pub(super) fn handle_inbound(
+    pub(in crate::app::runtime::event_loop::daemon) fn handle_inbound(
         &mut self,
         msg: HubInbound,
         state: &mut AppState,
