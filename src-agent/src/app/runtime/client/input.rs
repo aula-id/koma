@@ -84,7 +84,7 @@ pub(super) enum QuitConfirmKey {
 
 /// Handle a key while the shadow mirrors the daemon's `/quit` confirm overlay
 /// (daemon stage 12). The overlay is a navigable horizontal button row —
-/// `[close window]` `[minimize]` `[cancel]` (indices 0/1/2) — whose three choices
+/// `[close window]` `[detach]` `[cancel]` (indices 0/1/2) — whose three choices
 /// are CLIENT-process-lifecycle decisions. Two classes of key:
 ///
 /// NAVIGATION (`Left`/`Right`, `Tab`/`Shift+Tab`, `h`/`l`) — the daemon owns the focus
@@ -96,18 +96,23 @@ pub(super) enum QuitConfirmKey {
 /// ACTIVATION — the client acts on the lifecycle choice itself rather than letting it
 /// cross to the daemon, because closing/detaching tears down THIS process. `Enter`
 /// activates the CURRENTLY FOCUSED button (`selected`): 0 (close window) → like `k`,
-/// 1 (minimize) → like `d`, 2/other → like `Esc`. The direct shortcuts fire regardless
+/// 1 (detach) → like `d`, 2/other → like `Esc`. The direct shortcuts fire regardless
 /// of focus:
-///   - `[k]` CLOSE THIS WINDOW — close ONLY this client's foreground session via
-///     [`ClientRequest::QuitSession`] (the daemon tombstones that one session + repoints
-///     every other client off it) then [`ClientRequest::Detach`] to exit THIS client;
-///     other windows + their sessions keep running, and the daemon self-exits later only
-///     when nothing is left. See [`close_window_and_detach`]. (C4 behaviour change: the
-///     old `[k]` sent a daemon-wide `QuitDaemon`, which wrongly killed other windows.)
+///   - `[k]` CLOSE THIS WINDOW — KILL this window's daemon. A window now IS its own
+///     single-session daemon (daemon-per-session), and the attached client holds the
+///     controller seat, so it sends [`ClientRequest::QuitDaemon`] (controller-only,
+///     accepted here): the daemon aborts its one session, shuts down, and unlinks its
+///     socket. The session is left on disk only → it reappears in the swapper's HISTORY
+///     pane (reloadable). Then [`ClientRequest::Detach`] exits THIS client. See
+///     [`quit_daemon_and_detach`]. (Phase B change: the old `[k]` sent a per-session
+///     `QuitSession`, which only tombstoned the session and left the daemon alive in
+///     grace — stale multi-session-per-daemon framing.)
 ///   - `[d]` DETACH & keep — reset the daemon's overlay back to Chat (a forwarded `Esc`
 ///     = the daemon's own cancel, so a later reattach lands in Chat, not the stale
 ///     overlay), send [`ClientRequest::Detach`] (the daemon passes the controller seat
-///     and keeps EVERY session cooking headless), then exit ONLY the client.
+///     and keeps its session COOKING headless), then exit ONLY the client. The live
+///     session → it reappears in the swapper's COOKING pane and a resume reattaches to
+///     the live process.
 ///   - `Esc` / `Ctrl-C` cancel — forward an `Esc` so the daemon's `handle_quit_confirm`
 ///     runs `QuitCancel` and returns to Chat; the resulting snapshot flips the shadow
 ///     back. The client stays attached.
@@ -115,18 +120,16 @@ pub(super) enum QuitConfirmKey {
 /// Every other key is swallowed (the overlay has no text entry — mirrors the daemon's
 /// own `handle_quit_confirm`, which returns `Action::None` for anything else).
 ///
-/// Requests share the ordered outbound queue, so the `[k]` (QuitSession-then-Detach) and
+/// Requests share the ordered outbound queue, so the `[k]` (QuitDaemon-then-Detach) and
 /// `[d]` (Esc-then-Detach) pairs are delivered in sequence, guaranteeing the daemon
-/// processes the close/cancel before the client drops.
+/// processes the kill/cancel before the client drops.
 ///
 /// `selected` is the shadow's current focus index (mirrored from the daemon), used to
-/// resolve what `Enter` activates. `fg_session_id` is this client's foreground session
-/// id (from its shadow), the session `[k]` closes.
+/// resolve what `Enter` activates.
 pub(super) fn handle_quit_confirm_key(
     key: &KeyEvent,
     req_tx: &Sender<ClientRequest>,
     selected: usize,
-    fg_session_id: Option<&str>,
 ) -> QuitConfirmKey {
     // Ctrl-C in the overlay means "cancel", NOT the global detach — match the daemon's
     // `handle_quit_confirm`, which treats Ctrl-C like Esc.
@@ -149,11 +152,11 @@ pub(super) fn handle_quit_confirm_key(
         // --- Activate the focused button (same effect as its direct shortcut). ---
         KeyCode::Enter => match selected {
             0 => {
-                // close this window — like `k`.
-                close_window_and_detach(req_tx, fg_session_id)
+                // close window — like `k`: kill this window's daemon, then detach.
+                quit_daemon_and_detach(req_tx)
             }
             1 => {
-                // minimize / detach — like `d`: reset the overlay then detach.
+                // detach — like `d`: reset the overlay then detach (daemon keeps cooking).
                 send_overlay_cancel(req_tx);
                 let _ = req_tx.send(ClientRequest::Detach);
                 QuitConfirmKey::ExitClient
@@ -168,13 +171,14 @@ pub(super) fn handle_quit_confirm_key(
         KeyCode::Char('d') | KeyCode::Char('D') => {
             // Reset the daemon overlay → Chat first, then detach. Ordered queue keeps
             // the sequence, so a reattaching client sees Chat rather than the overlay.
+            // No QuitDaemon/QuitSession: the daemon keeps running + cooking headless.
             send_overlay_cancel(req_tx);
             let _ = req_tx.send(ClientRequest::Detach);
             QuitConfirmKey::ExitClient
         }
         KeyCode::Char('k') | KeyCode::Char('K') => {
-            // Close ONLY this window's foreground session, then detach this client.
-            close_window_and_detach(req_tx, fg_session_id)
+            // Kill this window's daemon, then detach this client.
+            quit_daemon_and_detach(req_tx)
         }
         KeyCode::Esc => {
             send_overlay_cancel(req_tx);
@@ -185,38 +189,27 @@ pub(super) fn handle_quit_confirm_key(
     }
 }
 
-/// `[k]` (close this window): close ONLY the acting client's foreground session, then
-/// detach THIS client — a PER-WINDOW close, NOT a daemon-wide teardown (C4 behaviour
-/// change). With per-client windows, the old `QuitDaemon` wrongly killed every other
-/// window's live sessions; now each window's `[k]` only tears down its own.
+/// `[k]` (close window): KILL this window's daemon, then detach THIS client. A window
+/// now IS its own single-session daemon (daemon-per-session), so closing the window ends
+/// the daemon — there is no other window or session sharing it to spare.
 ///
 /// Two ordered requests on the shared outbound queue:
-///   1. [`ClientRequest::QuitSession`] of this client's foreground session id — the
-///      EXACT tombstone path `/quit`-a-single-session uses: the daemon `close()`s that
-///      session (aborts its stream + sub-agents, releases its lock, slot stays so no
-///      index shifts) and runs `repoint_foreground_off_closed`, which repoints EVERY
-///      other client whose pointer named that session onto a still-live one (so no other
-///      window is left looking at a tombstone). The closed session's stale `QuitConfirm`
-///      mode is never projected again, so no overlay-cancel is needed.
-///   2. [`ClientRequest::Detach`] — the SAME clean client-exit `[d]` uses: the daemon
-///      deregisters this client and passes the controller seat; every OTHER session +
-///      client keeps running headless. The daemon self-exits later, grace-timed, only
-///      once NO session remains AND no client is attached — so a lone window closing its
-///      one session still ends the daemon (same end state as before), while other live
-///      windows keep it up.
+///   1. [`ClientRequest::QuitDaemon`] — the controller-only daemon-wide teardown. The
+///      attached client holds the controller seat, so the daemon accepts it: it latches
+///      its shutdown flag, aborts its one session on the way out, drops the runtime, and
+///      UNLINKS its socket. The session is left on disk only → it reappears in the
+///      swapper's HISTORY pane (reloadable). The same request `/new kill` already uses to
+///      reap a daemon (see `client::client_run`).
+///   2. [`ClientRequest::Detach`] — the SAME clean client-exit `[d]` uses, queued AFTER
+///      so the daemon flushes its `QuitDaemon` Ack first. With the daemon shutting down it
+///      is largely a courtesy (the controller seat is moot once the daemon exits), but it
+///      keeps the teardown symmetric with `[d]` and harmless if delivery races the
+///      shutdown.
 ///
-/// `fg_session_id` is this client's foreground session id (from its shadow). `None`
-/// (no foreground to close — shouldn't happen in the overlay) degrades to a plain
-/// detach: nothing to tombstone, just leave this window.
-fn close_window_and_detach(
-    req_tx: &Sender<ClientRequest>,
-    fg_session_id: Option<&str>,
-) -> QuitConfirmKey {
-    if let Some(id) = fg_session_id {
-        let _ = req_tx.send(ClientRequest::QuitSession {
-            session_id: id.to_string(),
-        });
-    }
+/// Returns `ExitClient` so `client_run`'s Attached→Exit arm runs `teardown_connection`,
+/// whose writer drains BOTH queued requests to the socket before the connection drops.
+fn quit_daemon_and_detach(req_tx: &Sender<ClientRequest>) -> QuitConfirmKey {
+    let _ = req_tx.send(ClientRequest::QuitDaemon);
     let _ = req_tx.send(ClientRequest::Detach);
     QuitConfirmKey::ExitClient
 }
