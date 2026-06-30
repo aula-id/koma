@@ -62,27 +62,47 @@ impl DaemonHub {
     /// missing — never a shared baseline that one client's reseed could shortcut.
     /// Each emitted frame bumps the receiving client's own seq (blocker #1). No-op
     /// for a client whose baseline already equals `next`.
-    pub(in crate::app::runtime::event_loop::daemon) fn stream_deltas(&mut self, state: &AppState) {
+    ///
+    /// `state` is `&mut` (C2) so each client's snapshot can be projected from ITS OWN
+    /// foreground: before building client `i`'s snapshot we point the transient
+    /// `state.rest.foreground` cursor at that client's persistent UUID pointer, so
+    /// `build_snapshot_with_mode` reads THAT client's composer / scroll / foreground_id.
+    /// No live runtime state is mutated — only the view cursor is swapped per client.
+    pub(in crate::app::runtime::event_loop::daemon) fn stream_deltas(&mut self, state: &mut AppState) {
         // Nothing to do until at least one client has attached. Enrolled-but-not-
         // attached clients have no baseline and receive nothing (critique #2).
         if !self.clients.iter().any(|c| c.attached) {
             return;
         }
 
-        // Build the live projection ONCE; every attached client diffs against it
-        // from its own baseline below. The (expensive) mode payload comes from the
-        // discriminant+TTL cache so heavy full-screen pages (/usage, /agents, /mcp)
-        // aren't rebuilt every ~8ms streaming tick — that per-tick rebuild starved
-        // input/stream handling and froze those pages while the chat iterated. The
-        // cache rebuilds instantly on a mode-variant change and at most ~10x/sec
-        // otherwise; the rest of the snapshot is still projected fresh from `state`.
-        let mode = self.mode_snapshot_cached(state);
-        let next = build_snapshot_with_mode(state, mode);
-
         for i in 0..self.clients.len() {
             if !self.clients[i].attached {
                 continue;
             }
+
+            // Project THIS client's foreground (C2): resolve its persistent UUID pointer
+            // to a live index (fallback: first non-closed, else 0) and point the transient
+            // cursor at it BEFORE the build, so the snapshot carries this client's own
+            // composer / scroll / follow / foreground_id. Clone the UUID into a local
+            // first so the immutable borrow of `clients[i]` ends before the `&mut state`
+            // assignment. Mode is PER-SESSION now (C3) and reached through the foreground,
+            // so swapping the cursor here ALSO selects this client's own overlay — the
+            // cache below keys on `fg().mode`'s discriminant, making it per-client too.
+            let fg_id = self.clients[i].foreground.clone();
+            state.rest.foreground = state.rest.resolve_foreground(fg_id.as_deref());
+
+            // Build THIS client's live projection. The (expensive) mode payload comes
+            // from THIS client's OWN discriminant+TTL cache (moved off the hub-global
+            // slot in C1.5) so heavy full-screen pages (/usage, /agents, /mcp) aren't
+            // rebuilt every ~8ms streaming tick — that per-tick rebuild starved
+            // input/stream handling and froze those pages while the chat iterated. The
+            // cache rebuilds instantly on a mode-variant change and at most ~10x/sec
+            // otherwise; the rest of the snapshot is still projected fresh from `state`.
+            // Mode is per-CLIENT now (C3): the foreground cursor was swapped to THIS client
+            // just above, so the cache's discriminant is read off ITS foreground-session
+            // mode — a client opening `/help` rebuilds only its own cache, not the others'.
+            let mode = self.mode_snapshot_cached(i, state);
+            let next = build_snapshot_with_mode(state, mode);
 
             // Diff this client's OWN baseline -> next. Scoped so the immutable
             // borrow of `last_snapshot` ends before the `&mut self` sends below.

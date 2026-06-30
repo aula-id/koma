@@ -16,7 +16,7 @@ use crate::service::openrouter::OpenRouterClient;
 pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
     // 1. Pull drafts out of the mode first so the borrow of `state.mode`
     //    is released before we mutate `state.rest` / `state.mode` below.
-    let drafts = match &state.mode {
+    let drafts = match state.mode() {
         Mode::Settings(s) => Some((
             s.api_key.clone(),
             s.model.clone(),
@@ -190,12 +190,12 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         state.rest.config.providers = provider_conns;
         state.rest.config.models = model_entries;
         if let Err(e) = state.rest.config.save() {
-            state.rest.status = format!("config save failed: {e}");
+            state.rest.fg_mut().status = format!("config save failed: {e}");
         }
         // c) Persist the session's settings.json.
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             if let Err(e) = sess.save() {
-                state.rest.status = format!("error: {e}");
+                state.rest.fg_mut().status = format!("error: {e}");
             }
         }
         // c2) Reindex the dir cache against the (possibly changed) workdirs.
@@ -218,7 +218,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         if needs_rename {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 if let Err(e) = store::rename_session(sess, name.trim()) {
-                    state.rest.status = format!("rename failed: {e}");
+                    state.rest.fg_mut().status = format!("rename failed: {e}");
                 }
             }
         }
@@ -233,13 +233,13 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         if old_internet.is_some_and(|old| old != internet_mode) {
             let (status, toast) =
                 crate::app::runtime::commands::internet::internet_feedback(internet_mode);
-            state.rest.status = status;
+            state.rest.fg_mut().status = status;
             if let Some(t) = toast {
-                state.rest.set_toast_info(t);
+                state.rest.fg_mut().set_toast_info(t);
             }
         }
     }
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -255,12 +255,12 @@ pub(super) fn handle_save_effort(choice: String, state: &mut AppState) -> Result
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.settings.effort = effort.clone();
         if let Err(e) = sess.save() {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
         }
     }
     let label = if effort.is_empty() { "default" } else { &effort };
-    state.rest.status = format!("effort: {label}");
-    state.mode = Mode::Chat;
+    state.rest.fg_mut().status = format!("effort: {label}");
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -287,8 +287,8 @@ pub(super) fn handle_fetch_model_endpoints(
     // (the view renders "no providers found" / Auto-only routing) and clear
     // loading. This keeps non-OpenRouter + Anthropic providers from
     // spinning on a request that would 404/400.
-    if !matches!(&state.mode, Mode::Settings(s) if s.mm_provider_has_endpoints_api()) {
-        if let Mode::Settings(s) = &mut state.mode {
+    if !matches!(state.mode(), Mode::Settings(s) if s.mm_provider_has_endpoints_api()) {
+        if let Mode::Settings(s) = state.mode_mut() {
             if let Some(m) = s.model_modal.as_mut() {
                 m.endpoints = Some(Vec::new());
                 m.endpoints_loading = false;
@@ -303,13 +303,13 @@ pub(super) fn handle_fetch_model_endpoints(
     // be on a completely different provider). Pull (endpoint, api_key)
     // from `mm_provider_conn` and MOVE the owned Strings into the task
     // (no borrow of `state` crosses the spawn boundary).
-    let provider_conn = if let Mode::Settings(s) = &state.mode {
+    let provider_conn = if let Mode::Settings(s) = state.mode() {
         s.mm_provider_conn()
     } else {
         None
     };
     let (Some(c), Some((endpoint, api_key))) = (client.as_ref(), provider_conn) else {
-        if let Mode::Settings(s) = &mut state.mode {
+        if let Mode::Settings(s) = state.mode_mut() {
             if let Some(m) = s.model_modal.as_mut() {
                 m.endpoints_loading = false;
             }
@@ -317,7 +317,7 @@ pub(super) fn handle_fetch_model_endpoints(
         return Ok(());
     };
     if endpoint.trim().is_empty() {
-        if let Mode::Settings(s) = &mut state.mode {
+        if let Mode::Settings(s) = state.mode_mut() {
             if let Some(m) = s.model_modal.as_mut() {
                 m.endpoints_loading = false;
             }

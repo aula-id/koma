@@ -105,7 +105,14 @@ pub enum WarmEvent {
     /// so it is NOT retried in a loop; the omnisearch degrades to manual model-id
     /// entry. The in-flight guard is cleared.
     WarmCatalogueFailed { endpoint: String },
-    /// The project-awareness summary resolved: `Some(text)` on success, `None`
-    /// when there were no docs / the call failed. Folded into `awareness_summary`.
-    WarmAwareness(Option<String>),
+    /// The project-awareness summary resolved for the session identified by
+    /// `session_id` (its stable [`crate::app::state::SessionRuntime`] UUID): `summary`
+    /// is `Some(text)` on success, `None` when there were no docs / the call failed.
+    /// The drain routes it to THAT session's `awareness_summary` by id (C4) — the warm
+    /// channel is shared/replaced across sessions, so an untagged result could land on
+    /// the wrong session if two warm concurrently. Tagging it makes the routing exact.
+    WarmAwareness {
+        session_id: String,
+        summary: Option<String>,
+    },
 }

@@ -8,7 +8,6 @@
 
 use super::*;
 use crate::app::mode::Mode;
-use crate::app::runtime::event_loop::daemon::hub::close_all_sessions;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, KeyCodeWire, KeyWire, StateDelta, key_mods};
 
 /// A keyless client + a current-thread tokio runtime — the minimal context the
@@ -42,8 +41,8 @@ fn attach_then_change_emits_snapshot_then_seqd_delta() {
     assert_eq!(f1.seq, 2, "snapshot follows hello");
     assert!(matches!(f1.event, DaemonEvent::Snapshot(_)), "attach emits a Snapshot after Hello, got {:?}", f1.event);
 
-    state.rest.status = "streaming".into();
-    hub.stream_deltas(&state);
+    state.rest.fg_mut().status = "streaming".into();
+    hub.stream_deltas(&mut state);
     let f2 = frame_rx.try_recv().expect("delta frame after change");
     assert_eq!(f2.seq, 3, "delta seq is N+1");
     match f2.event {
@@ -54,7 +53,7 @@ fn attach_then_change_emits_snapshot_then_seqd_delta() {
         other => panic!("expected StatusChanged delta, got {other:?}"),
     }
 
-    hub.stream_deltas(&state);
+    hub.stream_deltas(&mut state);
     assert!(frame_rx.try_recv().is_err(), "no frame emitted when state is unchanged");
 }
 
@@ -74,7 +73,7 @@ fn structural_change_emits_full_snapshot() {
     let _snap = frame_rx.try_recv().expect("attach snapshot");
 
     state.rest.fg_mut().awaiting_approval = true;
-    hub.stream_deltas(&state);
+    hub.stream_deltas(&mut state);
     let f = frame_rx.try_recv().expect("frame after structural change");
     assert_eq!(f.seq, 3);
     assert!(matches!(f.event, DaemonEvent::Snapshot(_)), "structural change must resync with a full Snapshot, got {:?}", f.event);
@@ -152,7 +151,7 @@ fn controller_sendkey_edits_composer() {
     hub.handle_inbound(HubInbound::Register { client_id: 1, frame_tx: tx }, &mut state, &mut client, &h);
     hub.handle_inbound(HubInbound::Request { client_id: 1, req: ClientRequest::SendKey(KeyWire { code: KeyCodeWire::Char('z'), mods: 0 }) }, &mut state, &mut client, &h);
 
-    assert_eq!(state.rest.input, "z", "key reached the composer via apply_action");
+    assert_eq!(state.rest.fg().input, "z", "key reached the composer via apply_action");
     assert!(matches!(rx.try_recv().expect("reply").event, DaemonEvent::Ack));
 }
 
@@ -305,7 +304,11 @@ fn close_all_then_all_closed_true() {
     let _id2 = push_session(&mut state);
     assert!(!all_sessions_closed(&state), "not closed before kill-all");
 
-    close_all_sessions(&mut state);
+    // `close_all_sessions` is now a method on the hub (C1.5: it also repoints the
+    // per-client foreground pointers). With no clients enrolled the per-client repoint
+    // is a no-op, so the `state` outcome asserted here is identical to before.
+    let (mut hub, _runner_tx) = DaemonHub::new();
+    hub.close_all_sessions(&mut state);
 
     assert!(all_sessions_closed(&state), "every session closed after kill-all");
     assert!(state.rest.sessions.iter().all(|s| !s.is_working()), "no tombstone reads as working");
@@ -316,11 +319,12 @@ fn close_all_then_all_closed_true() {
 fn should_quit_flag_drives_close_all() {
     let mut state = AppState::new(Mode::Chat);
     let _id1 = push_session(&mut state);
+    let (mut hub, _runner_tx) = DaemonHub::new();
 
     state.rest.should_quit = true;
 
     if state.rest.should_quit {
-        close_all_sessions(&mut state);
+        hub.close_all_sessions(&mut state);
         state.rest.should_quit = false;
     }
 

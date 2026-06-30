@@ -215,9 +215,11 @@ pub enum Mode {
     MessageRewind(Box<RewindState>),
     /// Quit-confirm overlay: shown when the user asks to quit (the `/quit`
     /// command or the quit keybind) while at least one session still has work in
-    /// flight. Offers three keyed choices — `k` kill all & quit (abort every
-    /// session, release all locks, exit), `d` detach & quit (leave conversations
-    /// persisted on disk and exit without aborting), `Esc` cancel back to Chat.
+    /// flight. Offers three keyed choices — `k` close window (LOCAL single-window:
+    /// abort every session, release all locks, exit; under the daemon: close only
+    /// THIS window's session + detach this client, other windows keep running — C4),
+    /// `d` detach & quit (leave conversations persisted on disk and exit without
+    /// aborting), `Esc` cancel back to Chat.
     /// When NOTHING is working the quit happens immediately and this mode is
     /// never entered. The inner [`QuitConfirmState`] only carries the busy-session
     /// count for the warning text. Boxed for consistency with the other overlay

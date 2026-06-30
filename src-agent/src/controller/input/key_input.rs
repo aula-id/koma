@@ -83,7 +83,7 @@ pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: K
                     // id so the wizard never traps. Finish only when it's non-empty.
                     let typed = form.query.trim();
                     if typed.is_empty() {
-                        rest.status = "model required".into();
+                        rest.fg_mut().status = "model required".into();
                         Action::None
                     } else {
                         form.model = typed.to_string();
@@ -145,7 +145,7 @@ pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: K
                 // next field.
                 if form.is_last_field() {
                     if form.api_key.trim().is_empty() {
-                        rest.status = "api key required".into();
+                        rest.fg_mut().status = "api key required".into();
                         Action::None
                     } else {
                         // Advance to the model step. For a fetchable endpoint, ALSO
@@ -174,7 +174,7 @@ pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: K
                         model: form.model.trim().to_string(),
                     }
                 } else {
-                    rest.status = "model required".into();
+                    rest.fg_mut().status = "model required".into();
                     Action::None
                 }
             }

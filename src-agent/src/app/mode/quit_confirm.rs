@@ -10,11 +10,15 @@
 //! (purely for the header text — sessions changing state while the overlay is up
 //! just mean a slightly stale count, which is harmless). The overlay offers
 //! three choices, rendered as a navigable horizontal button row and handled in
-//! [`crate::controller::input::handle_quit_confirm`]:
-//!   [quit & kill] — abort every session's in-flight stream, then exit;
-//!   [minimize]    — leave conversations persisted on disk (resumable later),
-//!                   then exit — in-flight work still stops when the process exits;
-//!   [cancel]      — back to Chat, no quit.
+//! [`crate::controller::input::handle_quit_confirm`] (local TUI) /
+//! `client::input::handle_quit_confirm_key` (attached client):
+//!   [close window] — close THIS window's session, then exit this window. Local
+//!                    single-window: aborts every session + quits koma. Under the
+//!                    daemon: tombstones only this window's foreground session and
+//!                    detaches this client; other windows keep running (C4);
+//!   [minimize]     — leave conversations persisted on disk (resumable later),
+//!                    then exit — in-flight work still stops when the process exits;
+//!   [cancel]       — back to Chat, no quit.
 //!
 //! Focus moves across the row with Left/Right (and Tab/Shift+Tab); Enter
 //! activates the focused button. The legacy `k` / `d` / `Esc` shortcuts still
@@ -44,13 +48,13 @@ pub struct QuitConfirmState {
     /// Total number of sessions at open time. Display only.
     pub total: usize,
     /// Index of the currently focused button, in fixed order:
-    /// `0` = quit & kill, `1` = minimize (detach), `2` = cancel. Moved by
+    /// `0` = close window, `1` = minimize (detach), `2` = cancel. Moved by
     /// Left/Right + Tab/Shift+Tab (and a click sets it to the hit button);
     /// Enter activates it. Initialized to `2` (cancel) so an immediate Enter
-    /// lands on the SAFE choice and can't accidentally kill sessions.
+    /// lands on the SAFE choice and can't accidentally close a window's session.
     pub selected: usize,
     /// On-screen hit-boxes for the three clickable buttons, in fixed order:
-    /// `[0]` = quit & kill (k), `[1]` = minimize (d), `[2]` = cancel (esc).
+    /// `[0]` = close window (k), `[1]` = minimize (d), `[2]` = cancel (esc).
     /// Written by the `&self` draw via interior mutability each frame and read by
     /// the event loop on a left-click. The buttons are laid out as horizontal
     /// segments on one row, so each rect is a chip-width band. All-zero

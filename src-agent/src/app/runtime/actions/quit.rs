@@ -43,7 +43,7 @@ pub(in crate::app::runtime) fn request_quit(state: &mut AppState) {
         .filter(|s| s.is_working())
         .count();
     // Always ask: the overlay header adapts to whether work is in flight.
-    state.mode = Mode::QuitConfirm(Box::new(QuitConfirmState::new(working, total)));
+    *state.mode_mut() = Mode::QuitConfirm(Box::new(QuitConfirmState::new(working, total)));
 }
 
 /// Handle `Action::QuitKillAll`: abort EVERY session's in-flight stream, then
@@ -60,12 +60,13 @@ pub(super) fn handle_quit_kill_all(state: &mut AppState) {
         }
         s.active_rx = None;
         s.waiting = false;
+        // Tear down EACH session's in-flight compaction animation / deferred apply so a
+        // kill mid-compact leaves no bookkeeping dangling. Per-session now (C4) — clear
+        // it on every session as part of the same kill-all sweep.
+        s.compact_anim_start = None;
+        s.compact_apply_at = None;
+        s.compact_pending = None;
     }
-    // Tear down any in-flight compaction animation / deferred apply so a kill
-    // mid-compact doesn't leave bookkeeping dangling (global, set once).
-    state.rest.compact_anim_start = None;
-    state.rest.compact_apply_at = None;
-    state.rest.compact_pending = None;
     state.rest.should_quit = true;
 }
 
@@ -83,5 +84,5 @@ pub(super) fn handle_quit_detach(state: &mut AppState) {
 /// Handle `Action::QuitCancel`: dismiss the overlay and return to Chat
 /// unchanged. Nothing is aborted; the app keeps running.
 pub(super) fn handle_quit_cancel(state: &mut AppState) {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
 }

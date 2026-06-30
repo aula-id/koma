@@ -13,11 +13,11 @@ use crate::app::state::AppState;
 /// while a request is in flight, matching the `/agents` / `/settings` busy guard.
 pub(super) fn handle_bash(state: &mut AppState) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     let jobs = crate::ipc::snapshot::bash_job_views(&state.rest);
     let st = BashState::new(jobs);
-    state.mode = Mode::Bash(Box::new(st));
+    *state.mode_mut() = Mode::Bash(Box::new(st));
     Ok(())
 }

@@ -24,13 +24,16 @@ pub(super) fn drain_stream(
             match event {
                 StreamEvent::Token(t) => {
                     state.rest.sessions[idx].append_token(&t);
-                    state.rest.status = "streaming".into();
+                    // Status is per-session (C6): set it on THIS session's slot. The
+                    // projection reads `fg().status` per client, so a background session's
+                    // stream only flashes "streaming" in the client(s) viewing it.
+                    state.rest.sessions[idx].status = "streaming".into();
                 }
                 StreamEvent::Reasoning(t) => {
                     // Accumulate the model's thinking into the parallel buffer;
                     // `dirty` is already set so it animates in like content.
                     state.rest.sessions[idx].append_reasoning(&t);
-                    state.rest.status = "thinking".into();
+                    state.rest.sessions[idx].status = "thinking".into();
                 }
                 StreamEvent::Usage { prompt_tokens, completion_tokens, cached_tokens, cost } => {
                     // Stash for the assistant-commit step; do NOT break — usage
@@ -70,12 +73,12 @@ pub(super) fn drain_stream(
                     state.rest.sessions[idx].approval_reason = None;
                     state.rest.sessions[idx].tool_idx = 0;
                     state.rest.sessions[idx].tool_results.clear();
-                    // Clear any in-flight compaction animation so a failed
+                    // Clear THIS session's in-flight compaction animation so a failed
                     // compaction (e.g. null content decode error) doesn't leave the
-                    // spinner stuck driving per-tick redraws indefinitely.
-                    state.rest.compact_anim_start = None;
-                    state.rest.compact_apply_at = None;
-                    state.rest.compact_pending = None;
+                    // spinner stuck driving per-tick redraws indefinitely. Per-session (C4).
+                    state.rest.sessions[idx].compact_anim_start = None;
+                    state.rest.sessions[idx].compact_apply_at = None;
+                    state.rest.sessions[idx].compact_pending = None;
                     still_streaming = false;
                     break;
                 }
@@ -86,19 +89,21 @@ pub(super) fn drain_stream(
                     // flash the animation. If we haven't shown the animation long
                     // enough yet, stash the result and defer the apply to a later
                     // tick (NON-blocking — never sleep).
-                    let elapsed = state
-                        .rest
+                    // Per-session (C4): read/write THIS session's own animation clock,
+                    // never the transient foreground — so a fast compaction on a
+                    // background session defers + applies to ITS OWN slot.
+                    let elapsed = state.rest.sessions[idx]
                         .compact_anim_start
                         .map(|t| t.elapsed())
                         .unwrap_or(MIN_COMPACT_ANIM);
                     if elapsed < MIN_COMPACT_ANIM {
-                        let start = state.rest.compact_anim_start.unwrap();
-                        state.rest.compact_apply_at = Some(start + MIN_COMPACT_ANIM);
-                        state.rest.compact_pending = Some((summary, kept_tail));
+                        let start = state.rest.sessions[idx].compact_anim_start.unwrap();
+                        state.rest.sessions[idx].compact_apply_at = Some(start + MIN_COMPACT_ANIM);
+                        state.rest.sessions[idx].compact_pending = Some((summary, kept_tail));
                         // Keep `waiting` true so the 8ms poll + per-tick redraw keep
                         // the animation running until the gate opens.
                     } else {
-                        apply_compaction_result(state, client, handle, summary, kept_tail);
+                        apply_compaction_result(state, idx, client, handle, summary, kept_tail);
                     }
                     still_streaming = false;
                     break;
@@ -121,27 +126,25 @@ pub(super) fn drain_stream(
 
     // 1.5. Drain THIS session's advisory prompt-classifier (PC) verdict channel.
     //      Fully independent of streaming: a BLOCK verdict never cancels the turn
-    //      (it already proceeded) — it only raises an advisory toast. This is now
+    //      (it already proceeded) — it only raises an advisory toast. This is
     //      PER-SESSION so a background session's verdict is drained promptly
-    //      instead of being stuck until the user swaps to it. The toast is a
-    //      GLOBAL/foreground UI surface, so it is shown ONLY for the foreground
-    //      session; a non-foreground session's verdict is drained + parked
-    //      silently (no toast, no mode change) so it can't hijack the screen the
-    //      user is looking at. take() the receiver so the arm can mutate
+    //      instead of being stuck until the user swaps to it. The advisory toast is
+    //      now per-session too (C6): raise it on `sessions[idx]` itself so the
+    //      projection (`fg().toast`) surfaces it ONLY in the client(s) viewing this
+    //      session — a verdict for a session no one is looking at lands on that
+    //      session's slot and is shown when (if) a client foregrounds it, never
+    //      hijacking another window. take() the receiver so the arm can mutate
     //      `state.rest`; put it back unless the PC task finished / delivered.
     if let Some(mut hrx) = state.rest.sessions[idx].harness_rx.take() {
-        let is_fg = idx == state.rest.foreground;
         let mut keep = true;
         while let Ok(event) = hrx.try_recv() {
             if let StreamEvent::HarnessVerdict { allow, reason } = event {
                 if !allow {
-                    // Foreground only: surface the advisory toast. Background
-                    // verdicts are drained but parked silently (dirty still set so
-                    // the channel teardown is reflected, but no visible toast).
-                    if is_fg {
-                        let reason = if reason.is_empty() { "flagged".into() } else { reason };
-                        state.rest.set_toast(format!("harness flagged: {reason}"));
-                    }
+                    let reason = if reason.is_empty() { "flagged".into() } else { reason };
+                    state
+                        .rest
+                        .sessions[idx]
+                        .set_toast(format!("harness flagged: {reason}"));
                     dirty = true;
                 }
                 // One verdict per turn; stop listening on this channel.

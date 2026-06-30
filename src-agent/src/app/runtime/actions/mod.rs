@@ -27,12 +27,13 @@ mod security;
 mod session;
 mod settings;
 
-// Re-export the pwd-aware attach selector so the daemon's `Attach` handler (in the
-// sibling `event_loop::daemon` module) can drive session selection through the SAME
-// load/switch/create handlers the local TUI uses. Attach is not a keystroke, so it
-// doesn't route through `apply_action` — it calls this directly. The `session` module
-// is otherwise private to `actions`, so this single re-export is the only surface.
-pub(in crate::app::runtime) use session::attach_select_for_pwd;
+// Re-export the per-client fresh-session creator so the daemon's `Attach` handler (in
+// the sibling `event_loop::daemon` module) can spawn the fresh session a plain `koma`
+// attach always lands on, through the SAME create handler the local TUI uses. Attach is
+// not a keystroke, so it doesn't route through `apply_action` — it calls this directly.
+// The `session` module is otherwise private to `actions`, so this single re-export is
+// the only surface. (Plain attach no longer resumes; resume is the picker's job.)
+pub(in crate::app::runtime) use session::create_session_for_pwd;
 mod settings_creds;
 
 /// Apply one `Action` (the decoded result of a keystroke) by mutating state and,
@@ -152,7 +153,7 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::EffortCancel => {
-            state.mode = crate::app::mode::Mode::Chat;
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
         }
 
         Action::CreateAgent => {
@@ -219,14 +220,14 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::CloseHelp => {
-            state.mode = crate::app::mode::Mode::Chat;
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
         }
 
         Action::HelpRun(cmd) => {
             // Close the reference first, then run the chosen command through the
             // SAME dispatcher a typed slash command uses (a mode-opening command
             // like `/mcp` will set its own mode, replacing this Chat).
-            state.mode = crate::app::mode::Mode::Chat;
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
             // Don't re-dispatch the `/help` command itself — user is already leaving Help.
             if !matches!(cmd, crate::controller::command::Command::Help) {
                 super::commands::apply_slash(cmd, state, client, handle)?;
@@ -242,8 +243,8 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::CloseUsage => {
-            state.mode = crate::app::mode::Mode::Chat;
-            state.rest.status = "ready".into();
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+            state.rest.fg_mut().status = "ready".into();
         }
 
         Action::OpenRewind => {

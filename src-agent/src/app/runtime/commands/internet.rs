@@ -7,8 +7,8 @@ use crate::model::settings::InternetMode;
 
 /// Status-bar label + optional actionable toast for a just-applied internet `mode`.
 ///
-/// The first element is written to `rest.status` (a brief flash that resets to
-/// `"ready"` on the next action). The second is `Some(_)` only when `Full` is
+/// The first element is written to the foreground session's `status` (C6; a brief
+/// flash that resets to `"ready"` on the next action). The second is `Some(_)` only when `Full` is
 /// selected without its browser backend installed — that message is also
 /// toasted so it persists long enough to read the install command.
 pub(crate) fn internet_feedback(mode: InternetMode) -> (String, Option<String>) {
@@ -29,7 +29,7 @@ pub(crate) fn internet_feedback(mode: InternetMode) -> (String, Option<String>) 
 /// and sets a transient status line with a token-cost warning when Full.
 pub(super) fn handle_internet(target: Option<InternetMode>, state: &mut AppState) -> Result<()> {
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
-        state.rest.set_toast("no active session".to_string());
+        state.rest.fg_mut().set_toast("no active session".to_string());
         return Ok(());
     };
 
@@ -41,16 +41,16 @@ pub(super) fn handle_internet(target: Option<InternetMode>, state: &mut AppState
     sess.rebuild_system();
 
     if let Err(e) = sess.save() {
-        state.rest.set_toast(format!("error saving settings: {e}"));
+        state.rest.fg_mut().set_toast(format!("error saving settings: {e}"));
         return Ok(());
     }
 
     // Status bar resets on next keypress; the optional toast persists so the
     // user can read the install command when Full lacks its backend.
     let (status, toast) = internet_feedback(new_mode);
-    state.rest.status = status;
+    state.rest.fg_mut().status = status;
     if let Some(t) = toast {
-        state.rest.set_toast_info(t);
+        state.rest.fg_mut().set_toast_info(t);
     }
 
     Ok(())

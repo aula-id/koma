@@ -55,8 +55,9 @@ pub(super) fn render_loop(
     // a neutral Chat with a single empty session; the first Snapshot replaces it.
     let mut shadow = AppState::new(Mode::Chat);
     // Until the first Snapshot lands the shadow is empty — show a clear status so
-    // the screen isn't a blank "ready".
-    shadow.rest.status = "attaching…".into();
+    // the screen isn't a blank "ready". Status is per-session (C6); the shadow has a
+    // single placeholder session here, so write it on the foreground.
+    shadow.rest.fg_mut().status = "attaching…".into();
 
     // Tracks the last wrap width we sent to the daemon for the agents editor, so we
     // only send `EditorWrapW` when it changes and always re-send on a fresh editor open
@@ -160,10 +161,13 @@ pub(super) fn render_loop(
         advance_local_animations(&mut shadow);
 
         // Expire a locally-reconstructed toast once its TTL passes (the daemon never
-        // sends a "toast cleared" delta; the client owns its own dismissal timer).
-        if let Some((_, until, _)) = shadow.rest.toast.as_ref() {
+        // sends a "toast cleared" delta; the client owns its own dismissal timer). The
+        // toast is per-session (C6); the rendered toast is the foreground session's, so
+        // sweep that one.
+        let fg = shadow.rest.fg_mut();
+        if let Some((_, until, _)) = fg.toast.as_ref() {
             if Instant::now() >= *until {
-                shadow.rest.toast = None;
+                fg.toast = None;
             }
         }
 
@@ -179,7 +183,7 @@ pub(super) fn render_loop(
         // so we send the client-side value whenever it changes. Reset last_sent_wrap_w
         // when not in the agents editor so each fresh editor open triggers a resend
         // (the daemon's freshly-opened editor is back at usize::MAX).
-        if let Mode::Agents(ref a) = shadow.mode {
+        if let Mode::Agents(ref a) = shadow.mode() {
             if let Some((_, ref ed)) = a.editor {
                 let w = ed.wrap_w.get();
                 if last_sent_wrap_w != Some(w) {
@@ -203,16 +207,26 @@ pub(super) fn render_loop(
                     // mode) the client intercepts its keys locally instead of
                     // forwarding them (daemon stage 12). `Detach`/`Kill` ask the loop
                     // to exit the client.
-                    if matches!(shadow.mode, Mode::QuitConfirm(_)) {
+                    if matches!(shadow.mode(), Mode::QuitConfirm(_)) {
                         // The daemon owns the focus index; read the shadow's mirrored
                         // `selected` so Enter activates the focused button (and nav keys
                         // can be forwarded for the daemon to move focus).
-                        let sel = if let Mode::QuitConfirm(s) = &shadow.mode {
+                        let sel = if let Mode::QuitConfirm(s) = shadow.mode() {
                             s.selected
                         } else {
                             0
                         };
-                        match handle_quit_confirm_key(&key, req_tx, sel) {
+                        // This window's foreground session id (from the shadow, which
+                        // mirrors THIS client's own per-client foreground projection): the
+                        // `[k]` "close this window" path tombstones exactly this session
+                        // (C4), not the whole daemon. `.get()` so an empty/out-of-range
+                        // foreground degrades to None (plain detach) instead of panicking.
+                        let fg_id = shadow
+                            .rest
+                            .sessions
+                            .get(shadow.rest.foreground)
+                            .map(|s| s.id.clone());
+                        match handle_quit_confirm_key(&key, req_tx, sel, fg_id.as_deref()) {
                             QuitConfirmKey::ExitClient => return Ok(()),
                             QuitConfirmKey::Stay => {}
                         }
@@ -235,7 +249,7 @@ pub(super) fn render_loop(
                 // gives immediate feedback without a round-trip). Bottom-pinning
                 // follow is reconstructed from snapshots, so a manual scroll just
                 // nudges the local offset for this render.
-                Event::Mouse(m) if matches!(shadow.mode, Mode::Chat) => match m.kind {
+                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         for _ in 0..3 {
                             shadow.rest.scroll_up();
@@ -298,7 +312,7 @@ pub(super) fn advance_local_animations(shadow: &mut AppState) {
     reconcile_work_clock(shadow);
 
     // Loading splash: keep the local spinner counter rotating between snapshots.
-    if let Mode::Loading(s) = &mut shadow.mode {
+    if let Mode::Loading(s) = shadow.mode_mut() {
         s.frame = s.frame.wrapping_add(1);
     }
 }

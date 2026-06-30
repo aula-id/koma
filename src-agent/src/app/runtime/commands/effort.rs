@@ -70,7 +70,7 @@ pub(super) fn handle_effort(
     client: &mut Option<Arc<OpenRouterClient>>,
 ) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     // `_c` only gates "is there a usable client?"; the catalogue is now
@@ -79,7 +79,7 @@ pub(super) fn handle_effort(
         client.as_ref(),
         state.rest.fg().session.as_ref().map(|s| s.settings.clone()),
     ) else {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     };
     let model = settings.model.clone();
@@ -126,7 +126,7 @@ pub(super) fn handle_effort(
             }
             None => {
                 // No reasoning control: don't open the menu, just say so.
-                state.rest.status = "model has no thinking control".into();
+                state.rest.fg_mut().status = "model has no thinking control".into();
                 return Ok(());
             }
         }
@@ -146,7 +146,7 @@ pub(super) fn handle_effort(
         .map(|s| s.settings.effort.clone())
         .unwrap_or_default();
     let selected = preselect_effort(&options, &stored);
-    state.mode = Mode::Effort(Box::new(EffortPickerState {
+    *state.mode_mut() = Mode::Effort(Box::new(EffortPickerState {
         options,
         selected,
         note,

@@ -30,10 +30,11 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
 
     // Folders: never attach; keep the palette open at the new depth.
     if entry.ends_with('/') {
-        let start = rest.input.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
-        rest.input.truncate(start);
-        rest.input.push('@');
-        rest.input.push_str(entry);
+        let fg = rest.fg_mut();
+        let start = fg.input.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
+        fg.input.truncate(start);
+        fg.input.push('@');
+        fg.input.push_str(entry);
         rest.palette_sel = 0;
         rest.cursor_end();
         return;
@@ -69,11 +70,14 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
         if let Some(abs) = abs_path {
             // Erase the `@token` from input and park the caret at that position
             // BEFORE calling insert_marker (which inserts at the current cursor).
-            let start = rest.input.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
-            rest.input.truncate(start);
-            rest.cursor = rest.input.chars().count(); // char index after truncation
+            {
+                let fg = rest.fg_mut();
+                let start = fg.input.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
+                fg.input.truncate(start);
+                fg.cursor = fg.input.chars().count(); // char index after truncation
+                fg.hist_idx = None;
+            }
             rest.palette_sel = 0;
-            rest.hist_idx = None;
 
             if rest.try_attach_image_path(&abs.to_string_lossy()) {
                 // Marker was inserted; add a trailing space to close the palette.
@@ -87,11 +91,14 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
     }
 
     // Default path: insert `@entry ` (file) into the input.
-    let start = rest.input.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
-    rest.input.truncate(start);
-    rest.input.push('@');
-    rest.input.push_str(entry);
-    rest.input.push(' '); // a FILE completion always closes the palette
+    {
+        let fg = rest.fg_mut();
+        let start = fg.input.rfind([' ', '\n']).map(|i| i + 1).unwrap_or(0);
+        fg.input.truncate(start);
+        fg.input.push('@');
+        fg.input.push_str(entry);
+        fg.input.push(' '); // a FILE completion always closes the palette
+    }
     rest.palette_sel = 0;
     // The input was rewritten wholesale; park the caret at the end.
     rest.cursor_end();
@@ -167,7 +174,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                     rest.agent_viewer_scroll = 0;
                     rest.agent_viewer_follow = true; // open pinned to the bottom
                 } else {
-                    rest.status = "sub-agent queued — not started yet".into();
+                    rest.fg_mut().status = "sub-agent queued — not started yet".into();
                 }
             }
             // Esc or any non-nav key closes the panel.
@@ -194,7 +201,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // is pending, and `waiting` may have already cleared if the model replied
     // fast). Never quit mid-animation — that would leave the spinner stuck.
     if is_ctrl(&key, 'c') {
-        return if rest.fg().waiting || rest.compact_anim_start.is_some() {
+        return if rest.fg().waiting || rest.fg().compact_anim_start.is_some() {
             Action::Interrupt
         } else {
             Action::None
@@ -222,7 +229,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     if is_ctrl(&key, 'v') {
         if !rest.fg().waiting {
             super::request_clipboard_image(rest);
-            rest.set_toast_info("reading image from clipboard…".to_string());
+            rest.fg_mut().set_toast_info("reading image from clipboard…".to_string());
         }
         return Action::None;
     }
@@ -240,17 +247,17 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 Ok(()) => {
                     let (status, toast) =
                         crate::app::runtime::commands::internet::internet_feedback(new_mode);
-                    rest.status = status;
+                    rest.fg_mut().status = status;
                     if let Some(t) = toast {
-                        rest.set_toast_info(t);
+                        rest.fg_mut().set_toast_info(t);
                     }
                 }
                 Err(e) => {
-                    rest.set_toast(format!("error saving settings: {e}"));
+                    rest.fg_mut().set_toast(format!("error saving settings: {e}"));
                 }
             }
         } else {
-            rest.set_toast("no active session".to_string());
+            rest.fg_mut().set_toast("no active session".to_string());
         }
         return Action::None;
     }
@@ -263,7 +270,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         KeyCode::Esc => {
             // Interrupt if waiting OR a compaction animation is still running
             // (compact_anim_start remains set during the deferred-apply window).
-            if rest.fg().waiting || rest.compact_anim_start.is_some() {
+            if rest.fg().waiting || rest.fg().compact_anim_start.is_some() {
                 // A live Esc cancels the in-flight turn; clear any pending
                 // idle-Esc so it can't pair with a later one across this turn.
                 rest.last_esc = None;
@@ -298,7 +305,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.push_char('\n');
                 return Action::None;
             }
-            let cmd_matches = command::palette_matches(&rest.input);
+            let cmd_matches = command::palette_matches(&rest.fg().input);
             if !cmd_matches.is_empty() {
                 // Command palette open: run the highlighted command, not the raw text.
                 let sel = rest.palette_sel.min(cmd_matches.len() - 1);
@@ -306,22 +313,22 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.take_input();
                 // Slash command (not submit): discard staged attachments so
                 // they can't leak into the next message.
-                rest.pending_attachments.clear();
+                rest.fg_mut().pending_attachments.clear();
                 Action::Slash(command::parse(name))
             } else {
                 // File palette: complete instead of submitting when a file match is selected.
-                let fmatches: Vec<String> = file_ref_partial(&rest.input)
+                let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
                     .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     complete_file_ref(rest, &fmatches);
                     Action::None
-                } else if rest.input.trim().starts_with('/') {
+                } else if rest.fg().input.trim().starts_with('/') {
                     let line = rest.take_input();
                     // Slash command (not submit): discard staged attachments.
-                    rest.pending_attachments.clear();
+                    rest.fg_mut().pending_attachments.clear();
                     Action::Slash(command::parse(&line))
-                } else if rest.input.trim_start().starts_with('!') {
+                } else if rest.fg().input.trim_start().starts_with('!') {
                     // `!` user-shell shortcut: run the rest of the line directly in
                     // the session cwd (no model round-trip). Strip the leading `!` +
                     // trim. An empty command (a lone `!`) is a no-op. Discard staged
@@ -338,7 +345,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                         Action::None
                     } else {
                         let line = rest.take_input();
-                        rest.pending_attachments.clear();
+                        rest.fg_mut().pending_attachments.clear();
                         let cmd = line.trim_start().strip_prefix('!').unwrap_or("").trim();
                         if cmd.is_empty() {
                             Action::None
@@ -346,7 +353,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                             Action::Shell(cmd.to_string())
                         }
                     }
-                } else if !rest.input.trim().is_empty() && !rest.fg().waiting && !rest.fg().awaiting_shell {
+                } else if !rest.fg().input.trim().is_empty() && !rest.fg().waiting && !rest.fg().awaiting_shell {
                     Action::Submit(rest.take_input())
                 } else {
                     Action::None
@@ -379,10 +386,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         KeyCode::Up => {
             // Command palette takes precedence; then file palette; then within-input
             // line movement; finally history recall (only when already on line 0).
-            if !command::palette_matches(&rest.input).is_empty() {
+            if !command::palette_matches(&rest.fg().input).is_empty() {
                 rest.palette_sel = rest.palette_sel.saturating_sub(1);
             } else {
-                let fmatches: Vec<String> = file_ref_partial(&rest.input)
+                let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
                     .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
@@ -395,11 +402,11 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Down => {
-            let n = command::palette_matches(&rest.input).len();
+            let n = command::palette_matches(&rest.fg().input).len();
             if n > 0 {
                 rest.palette_sel = (rest.palette_sel + 1).min(n - 1);
             } else {
-                let fmatches: Vec<String> = file_ref_partial(&rest.input)
+                let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
                     .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
@@ -412,14 +419,14 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Tab => {
-            let cmd_matches = command::palette_matches(&rest.input);
+            let cmd_matches = command::palette_matches(&rest.fg().input);
             if !cmd_matches.is_empty() {
                 let sel = rest.palette_sel.min(cmd_matches.len() - 1);
-                rest.input = format!("{} ", cmd_matches[sel].0);
+                rest.fg_mut().input = format!("{} ", cmd_matches[sel].0);
                 rest.palette_sel = 0;
                 rest.cursor_end(); // input replaced wholesale → caret to the end
             } else {
-                let fmatches: Vec<String> = file_ref_partial(&rest.input)
+                let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
                     .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
@@ -444,7 +451,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         // editing). With an EMPTY input it keeps its old meaning — jump the
         // transcript to the bottom and resume following.
         KeyCode::End => {
-            if rest.input.is_empty() {
+            if rest.fg().input.is_empty() {
                 rest.reset_scroll();
             } else {
                 rest.cursor_end();
@@ -457,7 +464,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         // from the /security panel does the cycle include Yolo (Auto→Normal→Yolo→Auto).
         KeyCode::BackTab => {
             rest.agent_mode = rest.agent_mode.cycle(rest.yolo_armed);
-            rest.status = format!("mode: {}", rest.agent_mode.label());
+            // Per-session status (C6): label into a local (disjoint `agent_mode` read)
+            // before the `fg_mut()` borrow.
+            let label = rest.agent_mode.label();
+            rest.fg_mut().status = format!("mode: {label}");
             Action::None
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {

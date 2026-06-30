@@ -187,11 +187,17 @@ fn service_approval_park_timeouts(state: &mut AppState, client_attached: bool) -
 /// cadence (caller handles that) so a reattached operator's approve is processed
 /// with minimal latency.
 fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool {
-    // Any global async work pending → not quiescent.
-    if state.rest.catalogue_pending.is_some()
-        || matches!(state.mode, crate::app::mode::Mode::Loading(_))
-        || has_running_subagents(state)
-    {
+    // Any global async work pending → not quiescent. The loading-splash check is
+    // per-SESSION now (C3): mode lives on each session, and this runs OUTSIDE any client
+    // bracket (so the transient foreground cursor is stale scratch). A Loading session
+    // ANYWHERE self-advances (its splash ticks + flips to Chat on warm-complete), so keep
+    // the fast cadence whenever ANY session is Loading — not just the foreground's mode.
+    let any_loading = state
+        .rest
+        .sessions
+        .iter()
+        .any(|s| matches!(s.mode, crate::app::mode::Mode::Loading(_)));
+    if state.rest.catalogue_pending.is_some() || any_loading || has_running_subagents(state) {
         return false;
     }
     // Any live session doing self-advancing work (anything working that ISN'T merely
@@ -240,20 +246,25 @@ fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool 
 ///    client that connected DURING the grace window aborts the exit rather than being
 ///    left with a half-open socket.
 ///
-/// `/quit` kill-all (item 4): the CLIENT (`--attach`) and the LOCAL TUI reach this
-/// the SAME end (every session tombstoned, daemon torn down) via DIFFERENT paths:
-///   - CLIENT: `handle_quit_confirm_key`'s `[k]` does NOT forward a `SendKey`; it
-///     sends [`ClientRequest::QuitDaemon`] directly. The hub latches its shutdown
-///     flag (observed via [`DaemonHub::should_shutdown`], trigger 1 above), so the
-///     daemon tears down through the shared graceful path — no `should_quit` round
-///     trip is involved on the client `[k]` path.
-///   - LOCAL TUI: there is no IPC; the forwarded-key story does not apply. The kill-
-///     all key runs through `handle_key` -> `QuitKillAll` -> `handle_quit_kill_all`,
-///     which sets `state.rest.should_quit`. This loop observes that flag, CLOSES every
-///     session (tombstone), and clears it — which makes [`all_sessions_closed`] true so
-///     the grace-timed self-exit (3) fires and tears down cleanly. It does NOT break
-///     immediately: letting self-exit drive the exit keeps the teardown path single and
-///     flushes a final closed-state snapshot to any attached client.
+/// `/quit` `[k]` (item 4): the CLIENT (`--attach`) and the LOCAL TUI now DIVERGE — `[k]`
+/// is PER-WINDOW for a client (C4) but whole-process for the lone local TUI:
+///   - CLIENT: `handle_quit_confirm_key`'s `[k]` does NOT forward a `SendKey` and does
+///     NOT send `QuitDaemon` (that would wrongly kill other windows). It sends
+///     [`ClientRequest::QuitSession`] of THIS client's foreground session — the same
+///     per-session tombstone path `/quit`-a-single-session uses (the hub `close()`s that
+///     session + `repoint_foreground_off_closed` fixes every other client's pointer) —
+///     then [`ClientRequest::Detach`] to exit this one client. Other windows + their
+///     sessions keep running; the daemon self-exits later via the grace timer (3) ONLY
+///     once nothing is left. A daemon-wide teardown stays reachable solely via the
+///     explicit controller-only [`ClientRequest::QuitDaemon`] (trigger 1 above), never
+///     from `[k]`.
+///   - LOCAL TUI: there is no IPC; the forwarded-key story does not apply. The `[k]` key
+///     runs through `handle_key` -> `QuitKillAll` -> `handle_quit_kill_all`, which sets
+///     `state.rest.should_quit`. In the standalone `run_loop` that simply breaks the loop
+///     and the process exits (one window, so "close window" == quit koma). NOTE: this
+///     `should_quit` -> `close_all_sessions` translation BELOW is effectively dormant for
+///     clients now (no client sets `should_quit` on the daemon); it remains only as a
+///     defensive sweep in case a future daemon-side path ever sets the flag.
 ///
 /// `shutting_down` is the process-level (signal-driven) stop flag; it is ORed with
 /// the hub's client-driven `QuitDaemon` flag so either path tears down identically.
@@ -274,6 +285,14 @@ pub(in crate::app::runtime) fn daemon_loop(
     let mut quiesce_ticks: u32 = 0;
 
     loop {
+        // 0. Refresh the per-tick VIEWED set (C2) from the hub BEFORE servicing sessions:
+        //    the UUIDs every attached client currently views. `service_all_sessions` runs
+        //    OUTSIDE any client bracket, so `state.rest.foreground` is stale scratch there;
+        //    its per-session gates (background-finish toast, finished-unseen clear, harness
+        //    toast, stream-start status) test `viewed_sessions` instead. A session viewed
+        //    by NOBODY behaves as a pure background session.
+        hub.refresh_viewed_sessions(state);
+
         // 1. Service EVERY session: drain each session's stream / tool-task /
         //    sub-agent channels and advance its turn. Identical to the TUI loop —
         //    the `dirty` return is irrelevant headless (nothing is drawn). Closed
@@ -304,16 +323,19 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     a render delta, and its seq is independent of the snapshot stream.
         hub.drain_select_pending(state);
 
-        // 3a. Kill-all (item 4): a forwarded QuitConfirm `[k]` set `should_quit` via
-        //     `handle_quit_kill_all`. In the DAEMON that means "close every session"
-        //     (NOT an abrupt loop break — that is the LOCAL TUI's behaviour, where the
-        //     run_loop breaks on `should_quit`). Tombstone them all and clear the flag;
-        //     `all_sessions_closed` is now true, so the grace-timed self-exit below
-        //     drives a single clean teardown. Foreground is repointed inside
-        //     `close_all_sessions`. (Detach `[d]` leaves sessions live and is a CLIENT-
-        //     side exit — it never reaches here as a daemon close.)
+        // 3a. Daemon-side `should_quit` sweep: if anything daemon-side ever sets
+        //     `should_quit` (via `handle_quit_kill_all`), translate it to "close every
+        //     session" (NOT an abrupt loop break — that is the LOCAL standalone TUI's
+        //     behaviour, where `run_loop` breaks on `should_quit`). Tombstone them all and
+        //     clear the flag; `all_sessions_closed` is then true, so the grace-timed
+        //     self-exit below drives a single clean teardown. Foreground is repointed
+        //     inside `close_all_sessions`. NOTE (C4): the CLIENT `[k]` no longer routes
+        //     here — it sends a per-session `QuitSession` + `Detach` (close THIS window
+        //     only), and `[d]` detach leaves sessions live and is a client-side exit. So
+        //     this block is effectively dormant for clients today; it stays as a defensive
+        //     translation in case a future daemon-side path sets the flag.
         if state.rest.should_quit {
-            hub::close_all_sessions(state);
+            hub.close_all_sessions(state);
             state.rest.should_quit = false;
         }
 

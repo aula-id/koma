@@ -57,12 +57,15 @@ pub fn handle_cancel_key_input(
         } else {
             None
         };
-        // Reset the flat foreground-UI for the restored tab + invalidate the
-        // transcript cache so its conversation (not the popped empty one) renders.
-        state.rest.input.clear();
-        state.rest.cursor = 0;
+        // Reset the per-session composer + view for the restored tab + invalidate
+        // the transcript cache so its conversation (not the popped empty one) renders.
+        {
+            let fg = state.rest.fg_mut();
+            fg.input.clear();
+            fg.cursor = 0;
+            fg.pending_attachments.clear();
+        }
         state.rest.reset_scroll();
-        state.rest.pending_attachments.clear();
         state.rest.transcript_cache.borrow_mut().blocks.clear();
         // No token reseed on this switch-back: the restored foreground carries its
         // OWN per-session counters in its slot (untouched while it sat in the
@@ -70,8 +73,8 @@ pub fn handle_cancel_key_input(
         // clobber a mid-turn `tokens_in` (current context) with the cumulative sum.
         // The restored foreground already holds its own lock (untouched); no
         // reconcile needed (and reconcile must not release any other session's lock).
-        state.mode = Mode::Chat;
-        state.rest.status = if client.is_some() {
+        *state.mode_mut() = Mode::Chat;
+        state.rest.fg_mut().status = if client.is_some() {
             "ready".into()
         } else {
             "no active session".into()
@@ -109,11 +112,11 @@ pub fn handle_cancel_key_input(
     // and re-acquire the restored one's.
     super::super::super::reconcile_session_lock(state);
     state.rest.reset_scroll();
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     if client.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
     } else {
-        state.rest.status = "ready".into();
+        state.rest.fg_mut().status = "ready".into();
     }
     Ok(())
 }
@@ -134,8 +137,8 @@ pub fn handle_cancel_key_input_to_picker(
     state.rest.spawn_pending = false;
     *client = None;
     state.rest.reset_scroll();
-    state.mode = Mode::SessionPicker(PickerState::new(store::list_sessions()?));
-    state.rest.status = "ready".into();
+    *state.mode_mut() = Mode::SessionPicker(PickerState::new(store::list_sessions()?));
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }
 
@@ -145,7 +148,7 @@ pub fn handle_cancel_picker_to_chat(state: &mut AppState) -> Result<()> {
     // Esc/Ctrl+C in the /resume-opened session picker: the active
     // session is still in state.rest.fg().session (untouched), so just
     // swap the mode back to Chat without disturbing anything else.
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -157,7 +160,7 @@ pub fn handle_skip_loading(state: &mut AppState) -> Result<()> {
     // `state.rest.*` via the `warm_rx` drain (the receiver is untouched
     // here). The session/chat state was already set up by the activation
     // path that opened the splash, so we only swap the mode.
-    state.mode = Mode::Chat;
-    state.rest.status = "ready".into();
+    *state.mode_mut() = Mode::Chat;
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }

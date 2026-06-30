@@ -65,27 +65,25 @@ pub(super) fn service_global(
         while let Ok(ev) = erx.try_recv() {
             match ev {
                 StreamEvent::EndpointsLoaded { model_id, endpoints } => {
-                    if let Mode::Settings(s) = &mut state.mode {
-                        if let Some(m) = s.model_modal.as_mut() {
-                            if m.endpoints_for.as_deref() == Some(model_id.as_str()) {
-                                m.endpoints = Some(endpoints);
-                                m.endpoints_loading = false;
-                            }
-                        }
-                    }
+                    // De-globalized (C3): mode is per-session and `service_global` runs
+                    // OUTSIDE any client bracket, so the foreground cursor is stale scratch
+                    // here. Fold the result into WHICHEVER session(s) have a Settings model-
+                    // modal awaiting THIS model's endpoints (matched by `endpoints_for`),
+                    // not the (stale) foreground. A single fetch is in flight at a time, so
+                    // in practice one session matches; iterating keeps it index-correct.
+                    apply_to_settings_modal_for(state, &model_id, |m| {
+                        m.endpoints = Some(endpoints.clone());
+                        m.endpoints_loading = false;
+                    });
                     dirty = true;
                     keep = false;
                 }
                 StreamEvent::EndpointsError { model_id, .. } => {
-                    if let Mode::Settings(s) = &mut state.mode {
-                        if let Some(m) = s.model_modal.as_mut() {
-                            if m.endpoints_for.as_deref() == Some(model_id.as_str()) {
-                                // Empty list => "no providers found" display.
-                                m.endpoints = Some(Vec::new());
-                                m.endpoints_loading = false;
-                            }
-                        }
-                    }
+                    apply_to_settings_modal_for(state, &model_id, |m| {
+                        // Empty list => "no providers found" display.
+                        m.endpoints = Some(Vec::new());
+                        m.endpoints_loading = false;
+                    });
                     dirty = true;
                     keep = false;
                 }
@@ -123,16 +121,20 @@ pub(super) fn service_global(
     if let Some(mut hrx) = state.rest.sec_health_rx.take() {
         match hrx.try_recv() {
             Ok(Ok(health)) => {
-                if let Mode::Security(s) = &mut state.mode {
-                    s.install_health = health;
+                // De-globalized (C3): apply to whichever session(s) have the `/security`
+                // panel open, not the (stale outside a client bracket) foreground.
+                for s in security_states(state) {
+                    s.install_health = health.clone();
                     s.health_fetching = false;
                 }
                 // Receiver consumed (one-shot result delivered) → don't put it back.
                 dirty = true;
             }
             Ok(Err(e)) => {
-                state.rest.set_toast(format!("security health probe failed: {e}"));
-                if let Mode::Security(s) = &mut state.mode {
+                // Toast is per-session (C6); a health-probe failure is a global notice —
+                // surface it on the foreground session (single-window: the only session).
+                state.rest.fg_mut().set_toast(format!("security health probe failed: {e}"));
+                for s in security_states(state) {
                     s.health_fetching = false;
                 }
                 // Receiver consumed → don't put it back.
@@ -145,7 +147,7 @@ pub(super) fn service_global(
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                 // Sender dropped without sending (shouldn't happen — the spawn always
                 // sends — but stay clean): end the probe, clear the spinner.
-                if let Mode::Security(s) = &mut state.mode {
+                for s in security_states(state) {
                     s.health_fetching = false;
                 }
                 dirty = true;
@@ -190,20 +192,33 @@ pub(super) fn service_global(
                     }
                     dirty = true;
                 }
-                Ok(WarmEvent::WarmAwareness(summary)) => {
+                Ok(WarmEvent::WarmAwareness { session_id, summary }) => {
                     let had = summary.is_some();
-                    // Always populate the summary (appended to the system message
-                    // on every request), even if we've already skipped to chat.
-                    state.rest.fg_mut().awareness_summary = summary;
-                    if let Mode::Loading(s) = &mut state.mode {
-                        // Some → ready; None → "no docs" (treated as a benign
-                        // terminal Done detail, not a hard failure).
-                        s.awareness = if had {
-                            WarmStatus::Done("ready".into())
-                        } else {
-                            WarmStatus::Done("no docs".into())
-                        };
+                    // Route by SESSION ID (C4): the warm result belongs to exactly the
+                    // session that was warming, identified by its stable UUID tagged into
+                    // the event. The shared `warm_rx` is REPLACED per warm, so without the
+                    // tag a result could land on whatever OTHER session happens to still be
+                    // in `Mode::Loading` (two near-simultaneous `/new`s) — that was the
+                    // cross-session corruption C3 exposed. `service_global` runs OUTSIDE a
+                    // client bracket, so the foreground cursor is stale scratch here. Find
+                    // the tagged session by id and set its summary (appended to the system
+                    // message on every request); advance ITS splash step if it is still
+                    // Loading (it may have been Esc'd to Chat — the summary must land
+                    // regardless, preserving "summary populates even after skip").
+                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
+                        if let Mode::Loading(ls) = &mut s.mode {
+                            // Some → ready; None → "no docs" (a benign terminal Done detail,
+                            // not a hard failure).
+                            ls.awareness = if had {
+                                WarmStatus::Done("ready".into())
+                            } else {
+                                WarmStatus::Done("no docs".into())
+                            };
+                        }
+                        s.awareness_summary = summary;
                     }
+                    // If the tagged session is gone (closed/never found) the result is
+                    // simply dropped — there is no live session to carry it.
                     dirty = true;
                 }
                 // Channel drained for now: keep listening on later ticks.
@@ -280,11 +295,14 @@ pub(super) fn service_global(
                 let attached =
                     state.rest.try_attach_image_bytes(bytes, "image/png", "pasted.png");
                 if attached {
+                    // The image attached to the FOREGROUND session (`try_attach_image_bytes`
+                    // targets `fg()`), so its toast belongs on the foreground too (C6).
                     state
                         .rest
+                        .fg_mut()
                         .set_toast_info("image attached from clipboard".to_string());
                 } else {
-                    state.rest.set_toast(
+                    state.rest.fg_mut().set_toast(
                         "clipboard image: no active session or ingest failed".to_string(),
                     );
                 }
@@ -292,7 +310,7 @@ pub(super) fn service_global(
                 dirty = true;
             }
             Ok(Err(reason)) => {
-                state.rest.set_toast(format!("clipboard image: {reason}"));
+                state.rest.fg_mut().set_toast(format!("clipboard image: {reason}"));
                 state.rest.clipboard_rx = None;
                 dirty = true;
             }
@@ -307,53 +325,74 @@ pub(super) fn service_global(
         }
     }
 
-    // Loading splash: workspace step, transition, and animation. While in
-    // `Mode::Loading` the splash is driven entirely from the loop tick.
-    if let Mode::Loading(s) = &mut state.mode {
-        // Workspace step: mark Done once the background reindex has SETTLED
-        // (indexing flag cleared). Poll the cache readiness each tick; this never
-        // gates the transition (a slow reindex must not hold up chat).
-        if matches!(s.workspace, WarmStatus::Running) {
-            let settled = state
-                .rest
-                .fg()
-                .dir_cache
-                .read()
-                .map(|c| !c.indexing)
-                .unwrap_or(false);
-            if settled {
+    // Loading splash: workspace step, transition, and animation. De-globalized (C3):
+    // mode is per-session and `service_global` runs OUTSIDE any client bracket, so drive
+    // EACH session that is in `Mode::Loading` off ITS OWN state — its own `dir_cache` for
+    // the workspace step, its own splash for the spinner, and flip ITS OWN mode to Chat
+    // when ITS warm completes — rather than the (stale) foreground. Loading is normally a
+    // single startup session, so this is index-correct with identical single-window
+    // behaviour. Index-based so each session's `mode` and `dir_cache` (disjoint fields)
+    // can be touched without a foreground borrow.
+    for i in 0..state.rest.sessions.len() {
+        // Compute the workspace-settled flag from THIS session's own dir_cache up front
+        // (immutable read), so the `&mut mode` below doesn't overlap it.
+        let settled = state.rest.sessions[i]
+            .dir_cache
+            .read()
+            .map(|c| !c.indexing)
+            .unwrap_or(false);
+        // Decide whether to flip to Chat AFTER the `&mut Loading` borrow ends (a flip
+        // would reassign `mode`, which the borrow forbids while live).
+        let mut flip_to_chat = false;
+        if let Mode::Loading(s) = &mut state.rest.sessions[i].mode {
+            // Workspace step: mark Done once the background reindex has SETTLED (indexing
+            // flag cleared). Polled each tick; never gates the transition.
+            if matches!(s.workspace, WarmStatus::Running) && settled {
                 s.workspace = WarmStatus::Done(String::new());
             }
-        }
-        // TRANSITION: once the catalogue + awareness steps are both terminal
-        // (Done / Skipped / Failed) switch into Chat. The session/chat state was
-        // already set up by the activation path; we only swap the mode. The
-        // workspace step is intentionally excluded from this gate.
-        if s.ready_to_enter() {
-            state.mode = Mode::Chat;
+            // TRANSITION gate: catalogue + awareness both terminal → enter Chat (workspace
+            // step intentionally excluded). Otherwise advance the spinner + force a redraw.
+            if s.ready_to_enter() {
+                flip_to_chat = true;
+            } else {
+                s.frame = s.frame.wrapping_add(1);
+            }
             dirty = true;
-        } else {
-            // ANIMATION: still loading — advance the spinner and force a redraw
-            // each tick so the braille frames actually cycle. Paired with the fast
-            // (8ms) poll cadence (which also wakes on `Mode::Loading`) so the loop
-            // never idle-sleeps the spinner.
-            s.frame = s.frame.wrapping_add(1);
+        }
+        if flip_to_chat {
+            // The session/chat state was already set up by the activation path; only swap
+            // THIS session's mode.
+            state.rest.sessions[i].mode = Mode::Chat;
             dirty = true;
         }
     }
 
-    // Deferred compaction apply. A fast compaction stashes its result and an
-    // `apply_at` instant so the animation holds for a short minimum (cosmetic).
-    // Apply once that instant passes — driven by the loop tick, never by sleeping,
-    // so input/animation stay responsive meanwhile.
-    if let Some(apply_at) = state.rest.compact_apply_at {
-        if std::time::Instant::now() >= apply_at {
-            if let Some((summary, kept_tail)) = state.rest.compact_pending.take() {
-                apply_compaction_result(state, client, handle, summary, kept_tail);
-            }
-            state.rest.compact_apply_at = None;
-            dirty = true;
+    // Deferred compaction apply (per-session, C4). A fast compaction stashes its
+    // result and an `apply_at` instant on ITS OWN session so the animation holds for a
+    // short minimum (cosmetic). `service_global` runs OUTSIDE a client bracket, so the
+    // transient foreground cursor is stale scratch here — iterate sessions by INDEX and
+    // apply to each whose OWN `compact_apply_at` is now due, never to `fg()`. The
+    // due-index is captured first (immutable scan) so the `apply_compaction_result`
+    // call below borrows `state` mutably without overlapping. At most one session is
+    // typically mid-defer, but the loop is correct for any number.
+    let now = std::time::Instant::now();
+    let due_idxs: Vec<usize> = state
+        .rest
+        .sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, rt)| rt.compact_apply_at.is_some_and(|t| now >= t))
+        .map(|(i, _)| i)
+        .collect();
+    for i in due_idxs {
+        // take() the pending result for THIS session; clear its apply_at either way so
+        // a due gate with no stashed result (shouldn't happen) can't re-fire each tick.
+        let pending = state.rest.sessions[i].compact_pending.take();
+        state.rest.sessions[i].compact_apply_at = None;
+        if let Some((summary, kept_tail)) = pending {
+            apply_compaction_result(state, i, client, handle, summary, kept_tail);
         }
+        dirty = true;
     }
 
     // When a background reindex has SETTLED (not indexing), warn once about any
@@ -367,7 +406,9 @@ pub(super) fn service_global(
     };
     if !indexing_now && missing_now != state.rest.warned_missing_roots {
         if !missing_now.is_empty() {
-            state.rest.set_toast_info(format!(
+            // The missing-roots check reads the FOREGROUND session's dir_cache (above), so
+            // its warning toast belongs on the foreground session (C6).
+            state.rest.fg_mut().set_toast_info(format!(
                 "workspace root(s) not found on disk:\n{}\nfix the path in /settings",
                 missing_now.join("\n")
             ));
@@ -395,9 +436,10 @@ pub(super) fn service_global(
     // ADVANCE the security health-probe spinner while a probe is in flight. Mirrors the
     // loading-splash frame advance: bump the frame counter each tick on the OPEN panel so
     // the braille frames actually cycle, paired with the force-dirty below so the loop
-    // redraws even though no events arrive during the cold IPC round-trip.
+    // redraws even though no events arrive during the cold IPC round-trip. De-globalized
+    // (C3): bump it on whichever session(s) have `/security` open, not the stale foreground.
     if state.rest.sec_health_rx.is_some() {
-        if let Mode::Security(s) = &mut state.mode {
+        for s in security_states(state) {
             s.health_frame = s.health_frame.wrapping_add(1);
             dirty = true;
         }
@@ -412,7 +454,16 @@ pub(super) fn service_global(
     // `waiting`), force redraws so the in-chat spinner animates. And while a security
     // health probe is pending, force redraws so its "checking dependencies…" spinner
     // keeps cycling until the result lands.
-    if state.rest.compact_anim_start.is_some()
+    // Compaction anim is per-session now (C4): force a redraw while ANY session has a
+    // live compaction clock, so a background session's spinner still advances (the
+    // rendered foreground may not be the compacting one, but the per-tick redraw is
+    // global anyway and the foreground's own anim drives its own spinner).
+    let any_compacting = state
+        .rest
+        .sessions
+        .iter()
+        .any(|rt| rt.compact_anim_start.is_some());
+    if any_compacting
         || shimmer_active
         || has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()
@@ -420,12 +471,59 @@ pub(super) fn service_global(
         dirty = true;
     }
 
-    // Auto-dismiss an expired error toast.
-    if state.rest.tick_toast() {
-        dirty = true;
+    // Auto-dismiss expired toasts. Toast is per-session now (C6), and this runs
+    // OUTSIDE any client bracket, so sweep EVERY session's toast — a background
+    // session's toast must expire on its own clock even while no client views it
+    // (otherwise it would linger until that session is foregrounded). Each
+    // session's `tick_toast` clears its own expired toast and reports it.
+    for rt in state.rest.sessions.iter_mut() {
+        if rt.tick_toast() {
+            dirty = true;
+        }
     }
 
     dirty
+}
+
+/// De-globalization helper (C3): mutably borrow the [`SecurityState`] of EVERY session
+/// currently showing the `/security` panel.
+///
+/// `service_global` runs OUTSIDE any client bracket, so the transient foreground cursor is
+/// stale scratch — a drain that targets "the open `/security` panel" must reach the
+/// session(s) actually in `Mode::Security`, not the foreground. In the single-window case
+/// at most one session is in that mode, so the iterator yields one element and behaviour is
+/// identical to the old `if let Mode::Security(s) = &mut state.mode`.
+fn security_states(
+    state: &mut AppState,
+) -> impl Iterator<Item = &mut crate::app::mode::SecurityState> {
+    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
+        Mode::Security(sec) => Some(sec.as_mut()),
+        _ => None,
+    })
+}
+
+/// De-globalization helper (C3): apply `f` to the Settings model-modal of every session
+/// whose modal is awaiting endpoints for `model_id` (matched by `ModelModal::endpoints_for`).
+///
+/// The per-model provider-endpoints fetch (a single rest-global receiver) lands in
+/// `service_global` outside any client bracket, so the result is folded into WHICHEVER
+/// session(s) have a Settings model-modal open on THIS model — never the (stale) foreground.
+/// One fetch is in flight at a time, so in practice one session matches; iterating keeps it
+/// index-correct and matches the old foreground-only fold for the single-window case.
+fn apply_to_settings_modal_for(
+    state: &mut AppState,
+    model_id: &str,
+    mut f: impl FnMut(&mut crate::app::mode::settings::ModelModal),
+) {
+    for s in state.rest.sessions.iter_mut() {
+        if let Mode::Settings(set) = &mut s.mode {
+            if let Some(m) = set.model_modal.as_mut() {
+                if m.endpoints_for.as_deref() == Some(model_id) {
+                    f(m);
+                }
+            }
+        }
+    }
 }
 
 /// Whether any sub-agent on the FOREGROUND session is currently `Running`.

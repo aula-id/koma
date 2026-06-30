@@ -123,15 +123,22 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     };
     shadow.rest.foreground = fg.min(shadow.rest.sessions.len() - 1);
 
-    // Global render fields.
-    shadow.rest.input = global.input;
-    shadow.rest.cursor = global.cursor;
-    shadow.rest.scroll = global.scroll;
-    shadow.rest.follow = global.follow;
-    shadow.rest.status = global.status;
-    shadow.rest.toast = global.toast.map(|(kind, text)| {
-        (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
-    });
+    // Composer + transcript-view fields now live on the foreground session
+    // (per-session in C1; still the single global foreground), so copy them onto
+    // the shadow's foreground runtime via `fg_mut()`. `status` + `toast` are per-session
+    // too (C6) — the snapshot's `global.status`/`global.toast` were projected from the
+    // daemon's `fg()`, so they belong on THIS client's foreground session here.
+    {
+        let fg = shadow.rest.fg_mut();
+        fg.input = global.input;
+        fg.cursor = global.cursor;
+        fg.scroll = global.scroll;
+        fg.follow = global.follow;
+        fg.status = global.status;
+        fg.toast = global.toast.map(|(kind, text)| {
+            (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
+        });
+    }
     // The on-demand model catalogue + the endpoint it was fetched for. The Settings
     // model modal + KeyInput step-1 search render their omnisearch dropdowns from
     // these; without them a remote client's dropdown would sit on `searching
@@ -184,7 +191,8 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // Staged composer attachments (ingested daemon-side via path-paste / clipboard /
     // @-picker). The `[Image #N]` marker text already arrives in `input`; mirror the
     // attachment RECORDS too so the shadow composer matches the daemon's exactly.
-    shadow.rest.pending_attachments = global.pending_attachments;
+    // Lives on the foreground session (alongside `input`) now.
+    shadow.rest.fg_mut().pending_attachments = global.pending_attachments;
     // The precomputed `@`-file palette (the daemon ran `dir_cache.search` on its
     // index). The client's reconstructed `dir_cache` is empty, so the unmodified
     // file-palette view renders this projected list instead (see
@@ -211,7 +219,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // unmodified `view::draw` renders every screen faithfully — the client never
     // mutates these (input is forwarded), it only needs enough to DRAW. Chat is
     // payload-free. The QuitConfirm overlay is special-cased so the client can ALSO
-    // intercept its lifecycle keys ([d] detach / [k] kill-all) locally (see
+    // intercept its lifecycle keys ([d] detach / [k] close-window) locally (see
     // `render_loop`). With stage 3 EVERY variant carries its payload, so nothing falls
     // back to a blank Chat render any more.
     //
@@ -220,7 +228,12 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // seed `rest.usage_data` from it so the unmodified dashboard renders DB-free.
     // Clear it first so a stale projection never lingers into the next non-Usage mode.
     shadow.rest.usage_data = None;
-    shadow.mode = match global.mode {
+    // Mode lives on the shadow's FOREGROUND session now (C3), reached via `set_mode` (which
+    // borrows `shadow.rest`). Several arms ALSO write `shadow.rest.*` (the Agents catalogue,
+    // the Usage `usage_data`), which would overlap a direct `*shadow.mode_mut() = …` borrow.
+    // So build the mode into a local — the arms keep their `shadow.rest` writes — then store
+    // it onto the foreground session with `set_mode`.
+    let new_mode = match global.mode {
         ModeSnapshot::KeyInput(f) => Mode::KeyInput(shadow_key_input(f)),
         ModeSnapshot::SessionPicker(p) => Mode::SessionPicker(shadow_picker(p)),
         ModeSnapshot::SessionHub(h) => Mode::SessionHub(Box::new(shadow_session_hub(h))),
@@ -277,6 +290,9 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
             Mode::QuitConfirm(Box::new(st))
         }
     };
+    // Apply the rebuilt mode onto the shadow's foreground session (the snapshot's mode is
+    // the daemon's foreground-session mode, projected at `fg().mode`; C3).
+    shadow.set_mode(new_mode);
 
     // NOTE: the comet clock (`work_since`) was already set authoritatively from the
     // snapshot's `work_elapsed_ms` above, so it is deliberately NOT reconciled here
@@ -310,10 +326,11 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             false
         }
         StateDelta::StatusChanged { session_id, text } => match session_id {
-            // Session-scoped status is not separately rendered today (the status line
-            // is global); a `None` (global) status updates the rendered status line.
+            // The status line is rendered from the foreground session (C6). The daemon's
+            // global status delta was diffed off ITS foreground's status, so apply it onto
+            // the shadow's foreground session — the window the user is looking at.
             None => {
-                shadow.rest.status = text;
+                shadow.rest.fg_mut().status = text;
                 true
             }
             Some(_) => false,
@@ -323,8 +340,10 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             // Carries the WHOLE input string, so replace wholesale; clamp the caret
             // into bounds defensively (the daemon sends a consistent pair, but the
             // composer renderer indexes by cursor and must never read past the end).
-            shadow.rest.input = text;
-            shadow.rest.cursor = cursor.min(shadow.rest.input.chars().count());
+            // Composer now lives on the foreground session (single global fg in C1).
+            let fg = shadow.rest.fg_mut();
+            fg.input = text;
+            fg.cursor = cursor.min(fg.input.chars().count());
             true
         }
         StateDelta::ScrollChanged { scroll, follow } => {
@@ -333,8 +352,10 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             // offset tracks the daemon between full snapshots. The renderer clamps
             // `scroll` against the live content height each draw, so an offset that
             // momentarily exceeds the shadow's shorter content is self-correcting.
-            shadow.rest.scroll = scroll;
-            shadow.rest.follow = follow;
+            // Transcript view state now lives on the foreground session.
+            let fg = shadow.rest.fg_mut();
+            fg.scroll = scroll;
+            fg.follow = follow;
             true
         }
         StateDelta::SessionStatusChanged {
@@ -386,7 +407,10 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             false
         }
         StateDelta::Toast { kind, text } => {
-            shadow.rest.toast = Some((text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
+            // Toast is per-session (C6); the daemon diffed it off its foreground, so raise
+            // it on the shadow's foreground session — the one this client is viewing.
+            shadow.rest.fg_mut().toast =
+                Some((text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
             true
         }
     }

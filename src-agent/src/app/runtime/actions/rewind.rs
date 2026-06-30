@@ -23,10 +23,10 @@ pub(super) fn handle_open_rewind(state: &mut AppState) -> Result<()> {
         .and_then(|s| RewindState::from_messages(s.conversation.messages()));
     match rewind {
         Some(rw) => {
-            state.mode = Mode::MessageRewind(Box::new(rw));
+            *state.mode_mut() = Mode::MessageRewind(Box::new(rw));
         }
         None => {
-            state.rest.status = "nothing to edit".into();
+            state.rest.fg_mut().status = "nothing to edit".into();
         }
     }
     Ok(())
@@ -35,7 +35,7 @@ pub(super) fn handle_open_rewind(state: &mut AppState) -> Result<()> {
 /// Handle `Action::RewindCancel`: discard the picker and return to Chat. The
 /// conversation is untouched, so just swap the mode back.
 pub(super) fn handle_rewind_cancel(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -79,21 +79,26 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
     }
 
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
-        // No active session to rewind — just leave the picker.
-        state.mode = Mode::Chat;
+        // No active session to rewind — just leave the picker. (`sess` is None here, so
+        // the `fg_mut()` borrow has ended — writing mode through `rest` is unconflicted.)
+        *state.mode_mut() = Mode::Chat;
         return Ok(());
     };
 
     // 2. Snapshot the selected message's text and resolve its sqlite cut id while
-    //    the message is still present in the live conversation.
+    //    the message is still present in the live conversation. Resolve the text into an
+    //    owned `Option` and DROP the `sess`/`messages` borrow before branching, so the
+    //    "not a user turn" exit can write `mode` (which now goes through `state.rest`)
+    //    without a live `state.rest` borrow from `sess`.
     let messages = sess.conversation.messages();
+    // Only user turns are ever offered by the picker; guard anyway.
     let text = match messages.get(idx) {
-        // Only user turns are ever offered by the picker; guard anyway.
-        Some(m) if m.role == Role::User => m.content.clone(),
-        _ => {
-            state.mode = Mode::Chat;
-            return Ok(());
-        }
+        Some(m) if m.role == Role::User => Some(m.content.clone()),
+        _ => None,
+    };
+    let Some(text) = text else {
+        *state.mode_mut() = Mode::Chat;
+        return Ok(());
     };
     // The selected message is the Nth user turn (0-based) where N = the count of
     // User-role messages strictly before `idx`. That same N indexes the archive's
@@ -116,14 +121,18 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
 
     // 5. Load the message into the composer for editing; do NOT auto-send. Mirror
     //    the history-recall load: replace input, caret to end, and leave recall /
-    //    palette state clean so the editor starts fresh.
-    state.rest.input = text;
-    state.rest.pending_attachments.clear();
+    //    palette state clean so the editor starts fresh. The composer fields live
+    //    on the foreground session now; `palette_sel` stays rest-global.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input = text;
+        fg.pending_attachments.clear();
+        fg.hist_idx = None;
+        fg.input_stash.clear();
+    }
     state.rest.cursor_end();
-    state.rest.hist_idx = None;
-    state.rest.input_stash.clear();
     state.rest.palette_sel = 0;
-    state.rest.status = "rewound - edit and press Enter to resend".into();
-    state.mode = Mode::Chat;
+    state.rest.fg_mut().status = "rewound - edit and press Enter to resend".into();
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
