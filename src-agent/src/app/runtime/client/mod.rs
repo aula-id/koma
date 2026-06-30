@@ -26,6 +26,7 @@ mod render;
 mod shadow;
 mod input;
 mod bridge;
+mod swapper;
 
 use std::io::stdout;
 
@@ -132,33 +133,81 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         conn = connect_attach_and_handshake(&handle, &sock_path)?;
     }
 
-    // Unpack the connection we settled on (fresh-built match, an unverified daemon, or
-    // a post-restart daemon we chose to accept).
-    let Connection {
-        frame_rx,
-        req_tx,
-        writer_handle,
-        prebuffered,
-        daemon_version: _,
-    } = conn;
-
     // Terminal setup — identical to the local TUI (`run`). Guard first so a failure
-    // anywhere after still restores the terminal.
+    // anywhere after still restores the terminal. The guard (and, next commit, the
+    // shadow) persists ACROSS the connection loop below so a swap re-attaches without
+    // re-entering the alt-screen.
     let _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    // Run the synchronous render loop with the runtime context entered on THIS thread,
-    // SCOPED so the `EnterGuard` is dropped the instant the loop returns — BEFORE the
-    // teardown's `handle.block_on` below (which panics if called while a runtime
-    // context is entered). The context is needed only so a snapshot rebuild can mint
-    // the inert `AbortHandle` a reconstructed shadow `SubAgent` carries (`tokio::spawn`
-    // needs a runtime in scope — see `shadow_subagent`); the loop itself stays sync.
-    let result = {
-        let _rt_ctx = handle.enter();
-        render::render_loop(&mut terminal, &frame_rx, &req_tx, prebuffered, opts.resume)
-    };
+    // Connection run-loop. TODAY it runs EXACTLY ONCE: render against the connection
+    // we settled on above, and `break` the first time the render loop asks to exit.
+    // The loop is the seam the NEXT commit grows — a `ClientTransition::Swap(id)`
+    // outcome will drop `conn`'s bridge and re-`connect_attach_and_handshake` to a
+    // DIFFERENT session-daemon's socket, then continue the loop with the new `conn`.
+    // Crucially `rt`/`handle`, the terminal, and the `TerminalGuard` are owned OUTSIDE
+    // this loop, so a reconnect reuses the same runtime + screen.
+    //
+    // The render loop's `Result` is CAPTURED (not `?`-propagated) so the teardown
+    // below — the polite `Detach` + writer flush — runs even on a render error,
+    // exactly as before; the captured result is returned only after teardown so the
+    // daemon is never left orphaned by an early return.
+    let mut render_result: Result<()> = Ok(());
+    // INTENTIONAL single-iteration loop this commit: every arm currently `break`s, so
+    // it runs exactly once (behavior is byte-identical to the prior straight-line
+    // connect→render→teardown). It is written as a `loop` on purpose — the next commit
+    // adds a `Swap` arm that `continue`s after re-attaching `conn` to a different
+    // daemon socket, at which point it genuinely loops. Allow `never_loop` until then.
+    #[allow(clippy::never_loop)]
+    loop {
+        // Take the handshake's prebuffered frames OUT of `conn` for this iteration
+        // (the render loop consumes them); a future reconnect replaces `conn` wholesale
+        // and brings its own. Leaves an empty Vec behind so `conn` stays intact for the
+        // teardown after the loop.
+        let prebuffered = std::mem::take(&mut conn.prebuffered);
+
+        // Run the synchronous render loop with the runtime context entered on THIS
+        // thread, SCOPED so the `EnterGuard` is dropped the instant the loop returns —
+        // BEFORE the teardown's `handle.block_on` below (which panics if called while a
+        // runtime context is entered). The context is needed only so a snapshot rebuild
+        // can mint the inert `AbortHandle` a reconstructed shadow `SubAgent` carries
+        // (`tokio::spawn` needs a runtime in scope — see `shadow_subagent`); the loop
+        // itself stays sync.
+        let transition = {
+            let _rt_ctx = handle.enter();
+            render::render_loop(
+                &mut terminal,
+                &conn.frame_rx,
+                &conn.req_tx,
+                prebuffered,
+                opts.resume,
+            )
+        };
+
+        match transition {
+            // The only outcome today: leave the client. (Next commit: a Swap arm here
+            // drops + reconnects `conn` and `continue`s instead of breaking.)
+            Ok(render::ClientTransition::Exit) => break,
+            // A render error ends the loop the same way an exit does, but the error is
+            // carried out and returned AFTER teardown (matching the previous single-shot
+            // `let result = ...; <teardown>; result` flow).
+            Err(e) => {
+                render_result = Err(e);
+                break;
+            }
+        }
+    }
+
+    // Teardown for the connection we end on. Unpack it now that the run-loop is done.
+    let Connection {
+        frame_rx: _,
+        req_tx,
+        writer_handle,
+        prebuffered: _,
+        daemon_version: _,
+    } = conn;
 
     // Polite detach so the daemon passes the controller seat promptly (the socket
     // close would also trigger it, but this is cleaner). The `/quit` overlay's `[k]`
@@ -186,7 +235,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // socket. Drop the runtime LAST so the reader task is cancelled after exit.
     drop(rt);
 
-    result
+    // Return the render loop's outcome (Ok on a normal exit, or the captured error)
+    // AFTER teardown — identical to the previous `let result = ...; <teardown>; result`.
+    render_result
 }
 
 /// Run the `/select` transcript dump on the CLIENT's terminal.

@@ -114,6 +114,11 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 name: c.name,
                 working: c.working,
                 is_foreground: c.is_foreground,
+                // The wire projection doesn't carry the session UUID, and this
+                // shadow hub is render-only (the daemon resolves the pick by its
+                // own index, not by id). The client swapper sources its addressing
+                // id from `build_local_hub`/discovery, never from this path.
+                session_id: None,
             })
             .collect(),
         history,

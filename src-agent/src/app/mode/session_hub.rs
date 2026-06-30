@@ -62,6 +62,14 @@ pub struct CookingEntry {
     /// Whether this is the current foreground session, tagged `(current)`.
     /// Ignored for `NewSession` entries.
     pub is_foreground: bool,
+    /// The session's UUID (the on-disk dir name / socket key), used by the
+    /// client-side swapper to address the chosen session-daemon directly. The
+    /// synthetic `NewSession` row carries `None`; a real session carries
+    /// `Some(uuid)`.
+    // Populated now (daemon builder + client `build_local_hub`) but not yet READ —
+    // the swapper that consumes it lands next commit. Allow until then.
+    #[allow(dead_code)]
+    pub session_id: Option<String>,
 }
 
 /// One row in the HISTORY pane: an on-disk session not currently live.
