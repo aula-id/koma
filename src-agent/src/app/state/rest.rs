@@ -165,20 +165,6 @@ pub struct AppStateRest {
     /// spawns the fetch; cleared by the `warm_rx` drain when the result lands.
     /// `None` when nothing is being fetched.
     pub catalogue_fetching: Option<String>,
-    /// Start instant of the `/compact` animation. `Some` only while a compaction
-    /// is in flight (set in `Command::Compact`, cleared once the result is
-    /// applied). The renderer uses it to draw the spinner + elapsed + indeterminate
-    /// bar, and the event loop uses it both to keep redrawing each tick (so the
-    /// animation actually animates) and to enforce the cosmetic minimum duration.
-    pub compact_anim_start: Option<std::time::Instant>,
-    /// Earliest instant the stashed compaction result may be applied. Set when a
-    /// fast `StreamEvent::Compacted` arrives before the minimum animation duration
-    /// has elapsed; the event loop applies `compact_pending` once `now >= this`.
-    pub compact_apply_at: Option<std::time::Instant>,
-    /// Stashed `(summary, kept_tail)` awaiting the minimum-duration gate. Held
-    /// only when a compaction finished faster than the minimum so the apply is
-    /// deferred (non-blocking) rather than slept on. Applied by the event loop.
-    pub compact_pending: Option<(String, Vec<crate::dto::chat::ChatMessage>)>,
     /// Start instant of the current WORKING wait — the moment the app entered a
     /// model/tool/fold wait that should shimmer (i.e. `waiting && !awaiting_approval`).
     /// Drives the status-line "comet" animation's elapsed counter and its travelling
@@ -316,9 +302,6 @@ impl AppStateRest {
             models_cache_endpoint: None,
             catalogue_pending: None,
             catalogue_fetching: None,
-            compact_anim_start: None,
-            compact_apply_at: None,
-            compact_pending: None,
             work_since: None,
             warned_missing_roots: Vec::new(),
             subagents_open: false,

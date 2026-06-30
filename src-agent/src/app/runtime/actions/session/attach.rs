@@ -146,14 +146,12 @@ pub fn handle_hub_kill_confirm(
             // Working → stop the turn but KEEP the session (goes idle). Foreground
             // is untouched — interrupting a background session leaves it live.
             state.rest.sessions[session_idx].interrupt();
-            // Mirror handle_interrupt: the compaction animation/timer is rest-global
-            // and tied to the FOREGROUND session, so clear it when we interrupt the
-            // foreground (a background session can't be mid-/compact).
-            if session_idx == state.rest.foreground {
-                state.rest.compact_anim_start = None;
-                state.rest.compact_apply_at = None;
-                state.rest.compact_pending = None;
-            }
+            // Compaction anim/timer is PER-SESSION now (C4), so clear it on the very
+            // session we just interrupted — no foreground check needed (a background
+            // session CAN be mid-/compact in the daemon).
+            state.rest.sessions[session_idx].compact_anim_start = None;
+            state.rest.sessions[session_idx].compact_apply_at = None;
+            state.rest.sessions[session_idx].compact_pending = None;
         } else {
             // Idle → tombstone it. The slot stays in place (no index shift).
             state.rest.sessions[session_idx].close();

@@ -234,14 +234,14 @@ pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
     // `SessionRuntime::interrupt()` so the session hub's Ctrl+X can reuse it on
     // ANY session; here it runs on the foreground.
     if state.rest.fg().waiting {
-        state.rest.fg_mut().interrupt();
-        // Rest-GLOBAL compaction cleanup (NOT per-session, so it stays here — it
-        // was previously folded into `abort_current`): tear down any in-flight
-        // compaction animation / deferred apply so an interrupt mid-compact
+        let fg = state.rest.fg_mut();
+        fg.interrupt();
+        // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
+        // in-flight compaction animation / deferred apply so an interrupt mid-compact
         // doesn't leave the spinner stuck forever.
-        state.rest.compact_anim_start = None;
-        state.rest.compact_apply_at = None;
-        state.rest.compact_pending = None;
+        fg.compact_anim_start = None;
+        fg.compact_apply_at = None;
+        fg.compact_pending = None;
     }
     state.rest.status = "interrupted".into();
     Ok(())

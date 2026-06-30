@@ -201,7 +201,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // is pending, and `waiting` may have already cleared if the model replied
     // fast). Never quit mid-animation — that would leave the spinner stuck.
     if is_ctrl(&key, 'c') {
-        return if rest.fg().waiting || rest.compact_anim_start.is_some() {
+        return if rest.fg().waiting || rest.fg().compact_anim_start.is_some() {
             Action::Interrupt
         } else {
             Action::None
@@ -270,7 +270,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         KeyCode::Esc => {
             // Interrupt if waiting OR a compaction animation is still running
             // (compact_anim_start remains set during the deferred-apply window).
-            if rest.fg().waiting || rest.compact_anim_start.is_some() {
+            if rest.fg().waiting || rest.fg().compact_anim_start.is_some() {
                 // A live Esc cancels the in-flight turn; clear any pending
                 // idle-Esc so it can't pair with a later one across this turn.
                 rest.last_esc = None;

@@ -70,12 +70,12 @@ pub(super) fn drain_stream(
                     state.rest.sessions[idx].approval_reason = None;
                     state.rest.sessions[idx].tool_idx = 0;
                     state.rest.sessions[idx].tool_results.clear();
-                    // Clear any in-flight compaction animation so a failed
+                    // Clear THIS session's in-flight compaction animation so a failed
                     // compaction (e.g. null content decode error) doesn't leave the
-                    // spinner stuck driving per-tick redraws indefinitely.
-                    state.rest.compact_anim_start = None;
-                    state.rest.compact_apply_at = None;
-                    state.rest.compact_pending = None;
+                    // spinner stuck driving per-tick redraws indefinitely. Per-session (C4).
+                    state.rest.sessions[idx].compact_anim_start = None;
+                    state.rest.sessions[idx].compact_apply_at = None;
+                    state.rest.sessions[idx].compact_pending = None;
                     still_streaming = false;
                     break;
                 }
@@ -86,19 +86,21 @@ pub(super) fn drain_stream(
                     // flash the animation. If we haven't shown the animation long
                     // enough yet, stash the result and defer the apply to a later
                     // tick (NON-blocking — never sleep).
-                    let elapsed = state
-                        .rest
+                    // Per-session (C4): read/write THIS session's own animation clock,
+                    // never the transient foreground — so a fast compaction on a
+                    // background session defers + applies to ITS OWN slot.
+                    let elapsed = state.rest.sessions[idx]
                         .compact_anim_start
                         .map(|t| t.elapsed())
                         .unwrap_or(MIN_COMPACT_ANIM);
                     if elapsed < MIN_COMPACT_ANIM {
-                        let start = state.rest.compact_anim_start.unwrap();
-                        state.rest.compact_apply_at = Some(start + MIN_COMPACT_ANIM);
-                        state.rest.compact_pending = Some((summary, kept_tail));
+                        let start = state.rest.sessions[idx].compact_anim_start.unwrap();
+                        state.rest.sessions[idx].compact_apply_at = Some(start + MIN_COMPACT_ANIM);
+                        state.rest.sessions[idx].compact_pending = Some((summary, kept_tail));
                         // Keep `waiting` true so the 8ms poll + per-tick redraw keep
                         // the animation running until the gate opens.
                     } else {
-                        apply_compaction_result(state, client, handle, summary, kept_tail);
+                        apply_compaction_result(state, idx, client, handle, summary, kept_tail);
                     }
                     still_streaming = false;
                     break;

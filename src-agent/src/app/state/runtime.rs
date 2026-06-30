@@ -265,6 +265,23 @@ pub struct SessionRuntime {
     /// `None` when awareness is disabled, no docs exist, or the call failed —
     /// it is recomputed per session, never persisted.
     pub awareness_summary: Option<String>,
+    /// Start instant of THIS session's `/compact` animation. `Some` only while a
+    /// compaction is in flight for this session (set in `Command::Compact`, cleared
+    /// once the result is applied). The renderer reads the FOREGROUND session's value
+    /// to draw the spinner + elapsed + indeterminate bar; the event loop reads it both
+    /// to keep redrawing each tick (so the animation actually animates) and to enforce
+    /// the cosmetic minimum duration. Per-session (C4) so two clients compacting
+    /// different sessions can't cross-corrupt each other's apply.
+    pub compact_anim_start: Option<Instant>,
+    /// Earliest instant THIS session's stashed compaction result may be applied. Set
+    /// when a fast `StreamEvent::Compacted` arrives before the minimum animation
+    /// duration has elapsed; the event loop applies `compact_pending` once `now >= this`.
+    pub compact_apply_at: Option<Instant>,
+    /// Stashed `(summary, kept_tail)` for THIS session awaiting the minimum-duration
+    /// gate. Held only when a compaction finished faster than the minimum so the apply
+    /// is deferred (non-blocking) rather than slept on. Applied by the event loop to
+    /// this session by index.
+    pub compact_pending: Option<(String, Vec<crate::dto::chat::ChatMessage>)>,
     /// Path of the session whose on-disk `session.lock` THIS instance currently
     /// holds (its active session's directory). `reconcile_session_lock` keeps it
     /// in lock-step with the active session: it releases this lock when switching
@@ -387,6 +404,9 @@ impl SessionRuntime {
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             awareness_summary: None,
+            compact_anim_start: None,
+            compact_apply_at: None,
+            compact_pending: None,
             held_lock: None,
             provider_caches: false,
             summarizing: false,

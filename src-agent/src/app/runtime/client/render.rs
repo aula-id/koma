@@ -212,7 +212,17 @@ pub(super) fn render_loop(
                         } else {
                             0
                         };
-                        match handle_quit_confirm_key(&key, req_tx, sel) {
+                        // This window's foreground session id (from the shadow, which
+                        // mirrors THIS client's own per-client foreground projection): the
+                        // `[k]` "close this window" path tombstones exactly this session
+                        // (C4), not the whole daemon. `.get()` so an empty/out-of-range
+                        // foreground degrades to None (plain detach) instead of panicking.
+                        let fg_id = shadow
+                            .rest
+                            .sessions
+                            .get(shadow.rest.foreground)
+                            .map(|s| s.id.clone());
+                        match handle_quit_confirm_key(&key, req_tx, sel, fg_id.as_deref()) {
                             QuitConfirmKey::ExitClient => return Ok(()),
                             QuitConfirmKey::Stay => {}
                         }

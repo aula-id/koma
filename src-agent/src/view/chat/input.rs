@@ -31,7 +31,7 @@ pub(super) fn input_row_count(rest: &AppStateRest, frame_width: u16, frame_heigh
         let prefixed = line.chars().count() + PREFIX_W;
         input_rows += 1usize.max(prefixed.div_ceil(inner_w));
     }
-    if rest.compact_anim_start.is_some() {
+    if rest.fg().compact_anim_start.is_some() {
         return 2;
     }
     let max_inner = ((frame_height / 2).saturating_sub(2) as usize).max(1);
@@ -62,7 +62,7 @@ pub(super) fn render_input(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, 
     };
     let input_inner = input_block.inner(chunk);
     frame.render_widget(input_block, chunk);
-    if let Some(start) = rest.compact_anim_start {
+    if let Some(start) = rest.fg().compact_anim_start {
         render_compact_anim(frame, input_inner, start, palette);
     } else {
         render_editor(frame, input_inner, rest, palette);

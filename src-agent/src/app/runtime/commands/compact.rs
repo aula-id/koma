@@ -39,13 +39,17 @@ pub(super) fn handle_compact(
     req.extend(to_sum);
     state.rest.fg_mut().waiting = true;
     state.rest.status = "compacting...".into();
-    // Start the compaction animation clock. The renderer reads this to
-    // draw the spinner/elapsed/bar; the event loop reads it to redraw each
-    // tick and to enforce the minimum on-screen duration. Clear any stale
-    // deferred-apply bookkeeping from a prior compaction.
-    state.rest.compact_anim_start = Some(std::time::Instant::now());
-    state.rest.compact_apply_at = None;
-    state.rest.compact_pending = None;
+    // Start THIS session's compaction animation clock (per-session, C4 — set on the
+    // acting session, which in a client bracket is `fg()`). The renderer reads the
+    // foreground session's value to draw the spinner/elapsed/bar; the event loop reads
+    // it to redraw each tick and to enforce the minimum on-screen duration. Clear any
+    // stale deferred-apply bookkeeping from a prior compaction on this session.
+    {
+        let fg = state.rest.fg_mut();
+        fg.compact_anim_start = Some(std::time::Instant::now());
+        fg.compact_apply_at = None;
+        fg.compact_pending = None;
+    }
     // Resolve the COMPACTOR role (falls back to Main — compaction rides the
     // main route today) into an owned `Resolved` BEFORE the spawn, so the
     // moved-into-task value carries no borrow of `state.rest`. Compactor

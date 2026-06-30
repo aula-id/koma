@@ -66,6 +66,10 @@ pub(crate) fn warm_session(
         Some(s) => (s.workdir(), s.settings.clone(), s.workdirs()),
         None => return,
     };
+    // Capture the warming session's stable UUID (the SessionRuntime id, the same key the
+    // drain routes on) so the WarmAwareness result lands on THIS session by id (C4),
+    // even if another session replaces the shared `warm_rx` and is also Loading.
+    let warming_id = state.rest.fg().id.clone();
     let config = state.rest.config.clone();
     // Workspace reindex is already async (background thread); fire it always,
     // independent of whether we show the loading splash.
@@ -143,7 +147,12 @@ pub(crate) fn warm_session(
                     .await
                 }
             };
-            let _ = tx.send(WarmEvent::WarmAwareness(summary));
+            // Tag the result with the warming session's id so the drain routes it to
+            // exactly that session (C4), never to a different Loading session.
+            let _ = tx.send(WarmEvent::WarmAwareness {
+                session_id: warming_id,
+                summary,
+            });
         });
     }
 }

@@ -190,20 +190,20 @@ pub(super) fn service_global(
                     }
                     dirty = true;
                 }
-                Ok(WarmEvent::WarmAwareness(summary)) => {
+                Ok(WarmEvent::WarmAwareness { session_id, summary }) => {
                     let had = summary.is_some();
-                    // De-globalized (C3): the warm result belongs to the session that was
-                    // warming — the one in `Mode::Loading`. `service_global` runs OUTSIDE a
-                    // client bracket, so the foreground cursor is stale scratch here; drive
-                    // the Loading session(s) instead. Set the summary (appended to the system
-                    // message on every request) AND advance the splash's awareness step on
-                    // each Loading session. If NONE is Loading (the user already Esc'd the
-                    // splash to Chat), the summary must still land — fall back to the
-                    // foreground (the session that skipped), preserving the single-window
-                    // "summary populates even after skip" behaviour. The warm channel is
-                    // startup/single-session-scoped, so at most one session is Loading.
-                    let mut landed = false;
-                    for s in state.rest.sessions.iter_mut() {
+                    // Route by SESSION ID (C4): the warm result belongs to exactly the
+                    // session that was warming, identified by its stable UUID tagged into
+                    // the event. The shared `warm_rx` is REPLACED per warm, so without the
+                    // tag a result could land on whatever OTHER session happens to still be
+                    // in `Mode::Loading` (two near-simultaneous `/new`s) — that was the
+                    // cross-session corruption C3 exposed. `service_global` runs OUTSIDE a
+                    // client bracket, so the foreground cursor is stale scratch here. Find
+                    // the tagged session by id and set its summary (appended to the system
+                    // message on every request); advance ITS splash step if it is still
+                    // Loading (it may have been Esc'd to Chat — the summary must land
+                    // regardless, preserving "summary populates even after skip").
+                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
                         if let Mode::Loading(ls) = &mut s.mode {
                             // Some → ready; None → "no docs" (a benign terminal Done detail,
                             // not a hard failure).
@@ -212,15 +212,11 @@ pub(super) fn service_global(
                             } else {
                                 WarmStatus::Done("no docs".into())
                             };
-                            s.awareness_summary = summary.clone();
-                            landed = true;
                         }
+                        s.awareness_summary = summary;
                     }
-                    if !landed {
-                        // Skipped-to-Chat case: no Loading session to carry it — put the
-                        // summary on the foreground (the warming session that skipped).
-                        state.rest.fg_mut().awareness_summary = summary;
-                    }
+                    // If the tagged session is gone (closed/never found) the result is
+                    // simply dropped — there is no live session to carry it.
                     dirty = true;
                 }
                 // Channel drained for now: keep listening on later ticks.
@@ -366,18 +362,32 @@ pub(super) fn service_global(
         }
     }
 
-    // Deferred compaction apply. A fast compaction stashes its result and an
-    // `apply_at` instant so the animation holds for a short minimum (cosmetic).
-    // Apply once that instant passes — driven by the loop tick, never by sleeping,
-    // so input/animation stay responsive meanwhile.
-    if let Some(apply_at) = state.rest.compact_apply_at {
-        if std::time::Instant::now() >= apply_at {
-            if let Some((summary, kept_tail)) = state.rest.compact_pending.take() {
-                apply_compaction_result(state, client, handle, summary, kept_tail);
-            }
-            state.rest.compact_apply_at = None;
-            dirty = true;
+    // Deferred compaction apply (per-session, C4). A fast compaction stashes its
+    // result and an `apply_at` instant on ITS OWN session so the animation holds for a
+    // short minimum (cosmetic). `service_global` runs OUTSIDE a client bracket, so the
+    // transient foreground cursor is stale scratch here — iterate sessions by INDEX and
+    // apply to each whose OWN `compact_apply_at` is now due, never to `fg()`. The
+    // due-index is captured first (immutable scan) so the `apply_compaction_result`
+    // call below borrows `state` mutably without overlapping. At most one session is
+    // typically mid-defer, but the loop is correct for any number.
+    let now = std::time::Instant::now();
+    let due_idxs: Vec<usize> = state
+        .rest
+        .sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, rt)| rt.compact_apply_at.is_some_and(|t| now >= t))
+        .map(|(i, _)| i)
+        .collect();
+    for i in due_idxs {
+        // take() the pending result for THIS session; clear its apply_at either way so
+        // a due gate with no stashed result (shouldn't happen) can't re-fire each tick.
+        let pending = state.rest.sessions[i].compact_pending.take();
+        state.rest.sessions[i].compact_apply_at = None;
+        if let Some((summary, kept_tail)) = pending {
+            apply_compaction_result(state, i, client, handle, summary, kept_tail);
         }
+        dirty = true;
     }
 
     // When a background reindex has SETTLED (not indexing), warn once about any
@@ -437,7 +447,16 @@ pub(super) fn service_global(
     // `waiting`), force redraws so the in-chat spinner animates. And while a security
     // health probe is pending, force redraws so its "checking dependencies…" spinner
     // keeps cycling until the result lands.
-    if state.rest.compact_anim_start.is_some()
+    // Compaction anim is per-session now (C4): force a redraw while ANY session has a
+    // live compaction clock, so a background session's spinner still advances (the
+    // rendered foreground may not be the compacting one, but the per-tick redraw is
+    // global anyway and the foreground's own anim drives its own spinner).
+    let any_compacting = state
+        .rest
+        .sessions
+        .iter()
+        .any(|rt| rt.compact_anim_start.is_some());
+    if any_compacting
         || shimmer_active
         || has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()

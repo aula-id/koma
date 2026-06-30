@@ -240,7 +240,9 @@ impl DaemonHub {
             // is `QuitDaemon` — a daemon-wide teardown — which stays CONTROLLER-ONLY so a
             // non-controller can't kill the whole daemon out from under the other clients; a
             // non-controller `QuitDaemon` is rejected with an Error + no-op. (QuitConfirm `[k]`
-            // kill-all is unchanged here — that is the C4 per-window concern.)
+            // is now PER-WINDOW (C4): it sends `QuitSession` of this client's own foreground
+            // + `Detach`, both allowed for any client below — never `QuitDaemon` — so a
+            // non-controller closing ITS window is fine and touches no other window.)
             ClientRequest::QuitDaemon if !self.clients[idx].is_controller => {
                 self.send_to(
                     idx,

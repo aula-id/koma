@@ -217,7 +217,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // unmodified `view::draw` renders every screen faithfully — the client never
     // mutates these (input is forwarded), it only needs enough to DRAW. Chat is
     // payload-free. The QuitConfirm overlay is special-cased so the client can ALSO
-    // intercept its lifecycle keys ([d] detach / [k] kill-all) locally (see
+    // intercept its lifecycle keys ([d] detach / [k] close-window) locally (see
     // `render_loop`). With stage 3 EVERY variant carries its payload, so nothing falls
     // back to a blank Chat render any more.
     //
