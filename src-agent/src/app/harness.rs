@@ -293,9 +293,13 @@ async fn classify(
     if !route.is_routable() {
         return unavailable("safeguard provider not wired (Anthropic)".to_string());
     }
+    // Resolve the Main route now so we can fall back to it when the Safeguard call
+    // fails. Done unconditionally (cheap — no I/O) before the first attempt so the
+    // owned route is available in both branches of the match below.
+    let main_route = resolve_role(config, settings, ModelRole::Main);
     match tokio::time::timeout(
         CLASSIFY_TIMEOUT,
-        client.classify_with(route.conn(), &route.model_id, route.provider(), messages),
+        client.classify_with(route.conn(), &route.model_id, route.provider(), messages.clone()),
     )
     .await
     {
@@ -303,7 +307,35 @@ async fn classify(
             Some(v) => v,
             None => unavailable(format!("unparseable verdict: {}", truncate(&reply, 100))),
         },
-        Ok(Err(e)) => unavailable(format!("classifier error: {}", truncate(&e.to_string(), 100))),
+        Ok(Err(primary_err)) => {
+            // The Safeguard call failed. Retry ONCE with the Main route when it is
+            // meaningfully different (different model_id OR different endpoint). If
+            // Main resolves to the same route (same model + endpoint) the retry would
+            // fail the same way, so skip it. When Main is absent or equal, fall
+            // through to the unavailable verdict as before.
+            let should_retry = main_route.as_ref().is_some_and(|m| {
+                m.model_id != route.model_id || m.endpoint != route.endpoint
+            });
+            if let (true, Some(m)) = (should_retry, main_route.as_ref()) {
+                if let Ok(Ok(reply)) = tokio::time::timeout(
+                    CLASSIFY_TIMEOUT,
+                    client.classify_with(m.conn(), &m.model_id, m.provider(), messages),
+                )
+                .await
+                {
+                    match parse_verdict(&reply) {
+                        Some(v) => return v,
+                        None => {
+                            return unavailable(format!(
+                                "unparseable verdict (main fallback): {}",
+                                truncate(&reply, 100)
+                            ))
+                        }
+                    }
+                }
+            }
+            unavailable(format!("classifier error: {}", truncate(&primary_err.to_string(), 100)))
+        }
         Err(_) => unavailable("classifier timeout".to_string()),
     }
 }

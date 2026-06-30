@@ -94,8 +94,10 @@ pub enum Command {
     /// Spawn a fresh PARALLEL session. `NewMode` controls whether the previous
     /// foreground is kept running (`Swap`) or tombstoned (`Kill`).
     New(NewMode),
-    /// Toggle the tool-approval policy between Normal and Auto.
-    Mode,
+    /// Set or cycle the tool-approval policy. `None` = armed-aware cycle
+    /// (Auto→Normal→[Yolo when armed]→Auto); `Some(token)` explicitly sets the
+    /// named mode (`auto` / `normal` / `yolo`). `yolo` is refused unless armed.
+    Mode(Option<String>),
     /// Open the reasoning/thinking-effort picker for the current model.
     Effort,
     /// Rename the current session.  Holds the new name string.
@@ -166,7 +168,12 @@ pub fn parse(line: &str) -> Command {
             };
             Command::New(mode)
         }
-        "mode" => Command::Mode,
+        "mode" => {
+            // Bare `/mode` cycles (None); `/mode <token>` sets explicitly. The token
+            // is lowercased; `handle_mode` validates it (and gates `yolo` on armed).
+            let arg = rest.split_whitespace().next();
+            Command::Mode(arg.map(|s| s.to_lowercase()))
+        }
         "effort" => Command::Effort,
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,

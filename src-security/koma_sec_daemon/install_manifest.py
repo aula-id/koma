@@ -265,12 +265,22 @@ MANIFEST: list[dict] = [
         "method": "gem",
         "detect": "one_gadget",
         "detect_kind": "which",
-        "tools": ["sec_rop"],
+        "tools": ["sec_rop", "sec_triage"],
         "hint": "gem install one_gadget  (requires Ruby >= 2.6)",
         "gem": "one_gadget",
     },
     # ----------------------------------------------------------------- TIER 3
     # Heavy / system deps — detect only. install returns the manual hint.
+    {
+        "key": "file",
+        "name": "file",
+        "tier": 3,
+        "method": "manual",
+        "detect": "file",
+        "detect_kind": "which",
+        "tools": ["sec_triage"],
+        "hint": "apt install file  (usually preinstalled on Unix)",
+    },
     {
         "key": "sage",
         "name": "SageMath",

@@ -451,10 +451,12 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             }
             Action::None
         }
-        // Shift+Tab toggles the tool-approval mode (Auto <-> Normal). Crossterm
-        // reports Shift+Tab as BackTab, so it never collides with plain Tab.
+        // Shift+Tab cycles the tool-approval mode. Crossterm reports Shift+Tab as
+        // BackTab, so it never collides with plain Tab. The cycle is ARMED-AWARE:
+        // unarmed it's Auto<->Normal (identical to before); only once YOLO is armed
+        // from the /security panel does the cycle include Yolo (Auto→Normal→Yolo→Auto).
         KeyCode::BackTab => {
-            rest.agent_mode = rest.agent_mode.toggled();
+            rest.agent_mode = rest.agent_mode.cycle(rest.yolo_armed);
             rest.status = format!("mode: {}", rest.agent_mode.label());
             Action::None
         }

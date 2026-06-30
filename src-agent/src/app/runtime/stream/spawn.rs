@@ -130,14 +130,34 @@ pub(crate) fn apply_workspace_change(
         )
         .filter(|r| r.is_routable())
         {
-            let summary = handle.block_on(crate::app::awareness::summarize(
-                &c,
+            // Also resolve the Main route as a fallback for when the Awareness
+            // model call itself errors (e.g. bad/typo'd model name). Cheap — no I/O.
+            let main_route = crate::app::resolve::resolve_role(
+                &config,
                 &settings,
-                route.conn(),
-                &route.model_id,
-                route.provider(),
-                &new_cwd,
-            ));
+                crate::model::app_config::ModelRole::Main,
+            );
+            let summary = match main_route {
+                Some(ref m) => handle.block_on(crate::app::awareness::summarize_with_fallback(
+                    &c,
+                    &settings,
+                    route.conn(),
+                    &route.model_id,
+                    route.provider(),
+                    &new_cwd,
+                    m.conn(),
+                    &m.model_id,
+                    m.provider(),
+                )),
+                None => handle.block_on(crate::app::awareness::summarize(
+                    &c,
+                    &settings,
+                    route.conn(),
+                    &route.model_id,
+                    route.provider(),
+                    &new_cwd,
+                )),
+            };
             state.rest.sessions[sess_idx].awareness_summary = summary;
         }
     }

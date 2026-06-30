@@ -99,19 +99,40 @@ pub(super) fn apply_compaction_result(
     if let Some((c, config, settings, workdir)) = aware_inputs {
         // Resolve the Awareness role (endpoint + key + model + upstream-route slug)
         // for the summary call; Awareness always resolves, but guard defensively.
+        // Also resolve the Main route as a fallback: when the Awareness model call
+        // itself fails (e.g. bad/typo'd model name) we retry once on the trusted
+        // Main route before giving up.
         if let Some(r) = crate::app::resolve::resolve_role(
             &config,
             &settings,
             crate::model::app_config::ModelRole::Awareness,
         ) {
-            let s = handle.block_on(crate::app::awareness::summarize(
-                &c,
+            let main_route = crate::app::resolve::resolve_role(
+                &config,
                 &settings,
-                r.conn(),
-                &r.model_id,
-                r.provider(),
-                &workdir,
-            ));
+                crate::model::app_config::ModelRole::Main,
+            );
+            let s = match main_route {
+                Some(ref m) => handle.block_on(crate::app::awareness::summarize_with_fallback(
+                    &c,
+                    &settings,
+                    r.conn(),
+                    &r.model_id,
+                    r.provider(),
+                    &workdir,
+                    m.conn(),
+                    &m.model_id,
+                    m.provider(),
+                )),
+                None => handle.block_on(crate::app::awareness::summarize(
+                    &c,
+                    &settings,
+                    r.conn(),
+                    &r.model_id,
+                    r.provider(),
+                    &workdir,
+                )),
+            };
             state.rest.fg_mut().awareness_summary = s;
         }
     }

@@ -112,6 +112,47 @@ pub(super) fn service_global(
         state.rest.version_rx = Some(vrx);
     }
 
+    // Drain the NON-BLOCKING security health probe (mirrors the `version_rx` drain). A
+    // `SecDaemonManager::health_async` fetch sends exactly one result: Ok(entries) on a
+    // successful probe, Ok(Err(msg)) when the daemon reported/timed-out an error. Fold a
+    // success into the OPEN `/security` panel's `install_health` and clear the spinner;
+    // toast an error. Take() the receiver so the arms can mutate `state.mode`; put it back
+    // only while still Empty (a delivered result OR a closed channel ends the probe). On
+    // any terminal outcome the spinner flag is cleared so a panel that is open stops
+    // animating. Non-blocking (try_recv).
+    if let Some(mut hrx) = state.rest.sec_health_rx.take() {
+        match hrx.try_recv() {
+            Ok(Ok(health)) => {
+                if let Mode::Security(s) = &mut state.mode {
+                    s.install_health = health;
+                    s.health_fetching = false;
+                }
+                // Receiver consumed (one-shot result delivered) → don't put it back.
+                dirty = true;
+            }
+            Ok(Err(e)) => {
+                state.rest.set_toast(format!("security health probe failed: {e}"));
+                if let Mode::Security(s) = &mut state.mode {
+                    s.health_fetching = false;
+                }
+                // Receiver consumed → don't put it back.
+                dirty = true;
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                // Still in flight — keep the receiver for the next tick.
+                state.rest.sec_health_rx = Some(hrx);
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                // Sender dropped without sending (shouldn't happen — the spawn always
+                // sends — but stay clean): end the probe, clear the spinner.
+                if let Mode::Security(s) = &mut state.mode {
+                    s.health_fetching = false;
+                }
+                dirty = true;
+            }
+        }
+    }
+
     // Drain the startup-warming channel. Fully independent of streaming: the
     // background catalogue + awareness tasks each send one [`WarmEvent`]. ALWAYS
     // fold the result into `state.rest.*` (the cache / summary) regardless of the
@@ -351,16 +392,30 @@ pub(super) fn service_global(
         _ => {}
     }
 
+    // ADVANCE the security health-probe spinner while a probe is in flight. Mirrors the
+    // loading-splash frame advance: bump the frame counter each tick on the OPEN panel so
+    // the braille frames actually cycle, paired with the force-dirty below so the loop
+    // redraws even though no events arrive during the cold IPC round-trip.
+    if state.rest.sec_health_rx.is_some() {
+        if let Mode::Security(s) = &mut state.mode {
+            s.health_frame = s.health_frame.wrapping_add(1);
+            dirty = true;
+        }
+    }
+
     // While a compaction animation is in flight, mark every tick dirty so the
     // spinner/elapsed/bar actually advance (rendering is otherwise only
     // event-driven). The same applies while the comet shimmer is active: it must
     // keep travelling even when NO stream events arrive (first-token latency, tool
     // exec, the summarizer fold), so force a redraw each tick then too. Similarly,
     // while any sub-agent is running (background `/task` agents that don't set
-    // `waiting`), force redraws so the in-chat spinner animates.
+    // `waiting`), force redraws so the in-chat spinner animates. And while a security
+    // health probe is pending, force redraws so its "checking dependencies…" spinner
+    // keeps cycling until the result lands.
     if state.rest.compact_anim_start.is_some()
         || shimmer_active
         || has_running_subagents(state)
+        || state.rest.sec_health_rx.is_some()
     {
         dirty = true;
     }

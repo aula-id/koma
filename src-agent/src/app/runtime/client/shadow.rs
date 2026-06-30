@@ -148,8 +148,11 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     shadow.rest.config.theme = shadow_theme(&global.theme);
     shadow.rest.config.accent = global.accent;
     // Agent mode: decode from the wire token so the header reflects the current mode.
+    // "yolo" must be decoded explicitly — falling to the `_ => Auto` default would
+    // silently drop the loud-red Yolo header on the thin client.
     shadow.rest.agent_mode = match global.agent_mode.as_str() {
         "normal" => AgentMode::Normal,
+        "yolo"   => AgentMode::Yolo,
         _        => AgentMode::Auto,
     };
     // The shadow `AppConfig`'s registered-model + provider catalogue is populated

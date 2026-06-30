@@ -14,11 +14,13 @@ use super::helpers::truncate_chars;
 
 /// Render the header line ("koma" + mode indicator) into `chunk`.
 ///
-/// Mode colours are fixed regardless of theme: Normal = green, Auto = yellow.
+/// Mode colours are fixed regardless of theme: Normal = green, Auto = yellow,
+/// Yolo = LOUD red (harness bypassed — make it unmistakable).
 pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
         crate::app::state::AgentMode::Normal => ("●", "normal", Color::Rgb(80, 220, 80)),
         crate::app::state::AgentMode::Auto   => ("»", "auto",   Color::Rgb(255, 210, 60)),
+        crate::app::state::AgentMode::Yolo   => ("!", "yolo",   Color::Rgb(255, 60, 60)),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.

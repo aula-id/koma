@@ -433,6 +433,27 @@ impl SecDaemonManager {
             .map_err(|e| format!("failed to parse health response: {e}"))
     }
 
+    /// Kick off [`Self::health`] on a blocking-pool thread and deliver the result over an
+    /// unbounded channel. NON-BLOCKING — returns immediately; the caller drains the
+    /// receiver in the event loop (mirrors the `version_rx` / `warm_rx` async-result
+    /// pattern) so the `/security` panel never freezes on the cold first probe.
+    ///
+    /// `spawn_blocking` (NOT `spawn`) is mandatory: `health()` calls `request()`, which
+    /// blocks the calling thread on a synchronous `recv_timeout` — running that on an
+    /// async worker thread would stall the runtime. `self.handle` is the manager's private
+    /// tokio [`Handle`], accessible here as this is an inherent method on the same type.
+    pub fn health_async(
+        self: &Arc<Self>,
+    ) -> mpsc::UnboundedReceiver<Result<Vec<InstallHealthEntry>, String>> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let me = Arc::clone(self);
+        self.handle.spawn_blocking(move || {
+            // A dropped receiver (panel closed before the probe finished) makes this a no-op.
+            let _ = tx.send(me.health());
+        });
+        rx
+    }
+
     /// Install/repair a single dependency by manifest key; returns the daemon's status
     /// string.
     pub fn install(&self, key: &str) -> Result<String, String> {

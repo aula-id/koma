@@ -24,7 +24,43 @@ import argparse
 import io
 
 
+def _augment_path() -> None:
+    """Append standard bin dirs to PATH so detection + tool subprocess calls find
+    binaries installed outside the daemon's inherited PATH (e.g. ~/.local/bin,
+    Homebrew). Only existing, not-already-present dirs are appended; existing PATH
+    order is preserved."""
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        candidates = [
+            os.path.join(home, ".local", "bin"),
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/bin",
+            "/bin",
+        ]
+    else:  # linux and other unix
+        candidates = [
+            os.path.join(home, ".local", "bin"),
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    path = os.environ.get("PATH", "")
+    existing = path.split(os.pathsep) if path else []
+    existing_set = set(existing)
+    additions = [d for d in candidates if os.path.isdir(d) and d not in existing_set]
+    if additions:
+        os.environ["PATH"] = os.pathsep.join(existing + additions)
+
+
 def main() -> None:
+    _augment_path()
+
     parser = argparse.ArgumentParser(
         description="koma security daemon — speak newline-delimited JSON on stdin/stdout",
         prog="python -m koma_sec_daemon",
