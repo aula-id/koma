@@ -113,10 +113,25 @@ pub fn sessions_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("sessions"))
 }
 
-/// Create `~/.simple-coder/sessions/` (and its parents) if they do not exist.
+/// Returns `~/.koma/run/` — the per-session daemon runtime dir.
+///
+/// Daemon-per-session keys every daemon's unix socket + pidfile by the session UUID
+/// it owns (`run/<session_id>.sock`, `run/<session_id>.pid`), so two `koma` in two
+/// terminals get two fully independent daemons under here instead of contending for a
+/// single global `daemon.sock`. Lives under the same [`base_dir`] (`~/.koma`) as every
+/// other config path; created by [`ensure_dirs`].
+pub fn run_dir() -> Result<PathBuf> {
+    Ok(base_dir()?.join("run"))
+}
+
+/// Create `~/.simple-coder/sessions/` and `~/.koma/run/` (and their parents) if they
+/// do not exist.
 pub fn ensure_dirs() -> Result<()> {
     let sessions = sessions_dir()?;
     std::fs::create_dir_all(&sessions)?;
+    // The per-session daemon socket/pid dir; the daemon binds `run/<id>.sock` here.
+    let run = run_dir()?;
+    std::fs::create_dir_all(&run)?;
     Ok(())
 }
 
@@ -196,30 +211,34 @@ pub fn registry_path() -> Result<PathBuf> {
     Ok(base_dir()?.join("session.sqlite"))
 }
 
-/// Path to the daemon's unix-domain socket: `~/.koma/daemon.sock`.
+/// Path to a SESSION-daemon's unix-domain socket: `~/.koma/run/<session_id>.sock`.
 ///
-/// This socket is the koma-daemon's liveness oracle (whoever binds it IS the live
-/// daemon) and the rendezvous point the thin TUI client connects to. Resolved
-/// from the same [`base_dir`] (`~/.koma`) as every other config path.
-pub fn daemon_sock_path() -> Result<PathBuf> {
-    Ok(base_dir()?.join("daemon.sock"))
+/// Daemon-per-session: each `koma` owns its own daemon bound to a socket keyed by the
+/// session UUID it serves, so two terminals get two independent daemons instead of
+/// multiplexing one global `daemon.sock`. This socket is THAT daemon's liveness oracle
+/// (whoever binds it IS the live daemon for `session_id`) and the rendezvous point its
+/// thin TUI client connects to. The client mints `session_id` and passes it to the
+/// daemon via `--session`, so both agree on the key. Lives under [`run_dir`].
+pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
+    Ok(run_dir()?.join(format!("{session_id}.sock")))
 }
 
-/// Path to the daemon's PID file: `~/.koma/daemon.pid`.
+/// Path to a SESSION-daemon's PID file: `~/.koma/run/<session_id>.pid`.
 ///
 /// Advisory only — recorded for diagnostics/`kill`. It is NOT the liveness oracle
 /// (PIDs get reused, which would wedge spawn-or-attach); the bound socket at
-/// [`daemon_sock_path`] is. Lives under the same [`base_dir`] (`~/.koma`).
-pub fn daemon_pid_path() -> Result<PathBuf> {
-    Ok(base_dir()?.join("daemon.pid"))
+/// [`daemon_sock_path`] is. Keyed by the same `session_id` as the socket, under
+/// [`run_dir`].
+pub fn daemon_pid_path(session_id: &str) -> Result<PathBuf> {
+    Ok(run_dir()?.join(format!("{session_id}.pid")))
 }
 
-/// Write the running daemon's PID into [`daemon_pid_path`], overwriting any
-/// stale one. Best-effort and advisory only (diagnostics / `kill`), so an IO
-/// error is returned but callers treat it as non-fatal — the bound socket, not
+/// Write the running daemon's PID into [`daemon_pid_path`] for `session_id`,
+/// overwriting any stale one. Best-effort and advisory only (diagnostics / `kill`), so
+/// an IO error is returned but callers treat it as non-fatal — the bound socket, not
 /// this file, is the liveness oracle. The graceful-shutdown teardown unlinks it.
-pub fn write_daemon_pid() -> Result<()> {
-    std::fs::write(daemon_pid_path()?, std::process::id().to_string())?;
+pub fn write_daemon_pid(session_id: &str) -> Result<()> {
+    std::fs::write(daemon_pid_path(session_id)?, std::process::id().to_string())?;
     Ok(())
 }
 
@@ -378,8 +397,25 @@ pub fn create_session() -> Result<Session> {
 /// here so a relaunch from a new dir gets a session rooted at that new dir.
 /// [`create_session`] is the thin `current_dir()` wrapper over this.
 pub fn create_session_in(workdir: &Path) -> Result<Session> {
+    create_session_in_with_id(workdir, &Uuid::new_v4().to_string())
+}
+
+/// Create a brand-new session with a CALLER-PROVIDED id, bucketed by an EXPLICIT
+/// `workdir` (its `pwd_hash`).
+///
+/// The id-EXPLICIT twin of [`create_session_in`]: instead of minting a fresh
+/// `Uuid::new_v4()` it uses the `id` the caller supplies. Daemon-per-session needs this
+/// — the client mints the session UUID and hands it to the daemon via `--session`, and
+/// the daemon must create THAT exact session (its socket key == its session id) rather
+/// than a different random one. ALL other logic is identical to [`create_session_in`]
+/// (session dir, `memory/`, scratch dir, images dir, `Settings { name = id }`,
+/// `Session::new`, registry `register`, `rebuild_system` + first `save`).
+///
+/// The caller is responsible for ensuring `id` is unique (a fresh v4 UUID); reusing an
+/// existing id would re-`register` (UPSERT) the same row and overwrite its on-disk dir.
+pub fn create_session_in_with_id(workdir: &Path, id: &str) -> Result<Session> {
     let hash = pwd_hash(workdir);
-    let uuid = Uuid::new_v4().to_string();
+    let uuid = id.to_string();
     let dir = session_dir(&hash, &uuid)?;
     // Pre-create memory/ so the user can drop MEMORY.md there immediately. This
     // also creates the session dir (and its bucket parent) as a side effect.

@@ -27,12 +27,13 @@ mod security;
 mod session;
 mod settings;
 
-// Re-export the per-client fresh-session creator so the daemon's `Attach` handler (in
-// the sibling `event_loop::daemon` module) can spawn the fresh session a plain `koma`
-// attach always lands on, through the SAME create handler the local TUI uses. Attach is
-// not a keystroke, so it doesn't route through `apply_action` — it calls this directly.
-// The `session` module is otherwise private to `actions`, so this single re-export is
-// the only surface. (Plain attach no longer resumes; resume is the picker's job.)
+// Re-export the pwd-explicit fresh-session creator. Daemon-per-session no longer creates
+// a session on Attach (the daemon owns its one session from startup — see
+// `lifecycle::install_daemon_session`, which mirrors this creator's construction), so
+// this currently has NO in-tree caller; it is retained for the LATER `/new`-spawns-a-
+// daemon commit and to keep the create logic in one place. `#[allow(unused_imports)]`
+// keeps the dormant re-export warning-free at this commit.
+#[allow(unused_imports)]
 pub(in crate::app::runtime) use session::create_session_for_pwd;
 mod settings_creds;
 

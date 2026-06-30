@@ -247,11 +247,13 @@ fn rebuild_hub(
 /// If the inherited creds are empty this opens KeyInput for the new session (marking it
 /// `spawn_pending` so an Esc pops it), exactly as `/new` does.
 ///
-/// `pub(in crate::app::runtime)` so the daemon's `Attach` handler (in the sibling
-/// `event_loop::daemon` module) can call it directly — attach is NOT a keystroke, so it
-/// does not route through `apply_action`; it reuses this same session creator instead of
-/// forking the create logic. The handler guards it behind the client's first-attach flag
-/// so a re-attach/resync from an already-attached client does NOT spawn a second session.
+/// `pub(in crate::app::runtime)` so a session-create caller in the runtime can call it
+/// directly without routing through `apply_action`. Daemon-per-session no longer creates
+/// a session on Attach (the daemon owns its one session from startup), so this has no
+/// in-tree caller at THIS commit — `#[allow(dead_code)]` keeps it warning-free until the
+/// later `/new`-spawns-a-daemon commit reuses it. `install_daemon_session` mirrors its
+/// construction beat-for-beat (kept deliberately parallel so they don't drift).
+#[allow(dead_code)]
 pub(in crate::app::runtime) fn create_session_for_pwd(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
