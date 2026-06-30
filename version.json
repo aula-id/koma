@@ -1,4 +1,4 @@
 {
-  "version": "0.1.6",
-  "message": "quit-confirm: removed the stale Phase-2/daemon note (accurate detach wording now), and the k/d/esc options are clickable buttons in addition to the keyboard shortcuts."
+  "version": "0.1.7",
+  "message": "background bash jobs are now killed with Ctrl+X (koma's standard kill key) instead of k; the /bash panel header stays clean and Ctrl+X is documented in /help."
 }
