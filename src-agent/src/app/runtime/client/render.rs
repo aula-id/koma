@@ -31,6 +31,21 @@ pub(super) const TOAST_TTL: Duration = Duration::from_secs(4);
 /// independent of the daemon's frame rate (the socket is drained non-blocking).
 pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 
+/// Why [`render_loop`] returned — i.e. what the client run-loop in
+/// [`super::client_run`] should do next.
+///
+/// Today there is exactly ONE outcome: leave the client (detach, the `/quit`
+/// overlay's ExitClient choice, or the daemon's socket closing). This enum is the
+/// seam the NEXT commit grows: a `Swap(session_id)` variant will let the render
+/// loop ask `client_run` to drop the current connection and re-attach to a
+/// DIFFERENT session-daemon's socket without tearing down the runtime. Until then
+/// every exit path maps to [`ClientTransition::Exit`], so behavior is unchanged.
+pub(super) enum ClientTransition {
+    /// Tear the client down and return from `client_run` (detach / ExitClient /
+    /// frame channel disconnected).
+    Exit,
+}
+
 /// The synchronous render loop, decoupled from the socket and paced at ~60fps.
 ///
 /// Each frame, in order: (a) drain ALL pending [`DaemonFrame`]s non-blocking and
@@ -42,13 +57,17 @@ pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// rest). The loop NEVER blocks on the socket: if no frame arrived it still paints and
 /// animations still advance. Returns when the user detaches (Ctrl-C) or the socket
 /// closes.
+///
+/// Returns a [`ClientTransition`] telling [`super::client_run`] what to do next.
+/// TODAY that is always [`ClientTransition::Exit`] (the loop only ever leaves the
+/// client); the next commit adds a swap outcome here.
 pub(super) fn render_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     frame_rx: &Receiver<DaemonFrame>,
     req_tx: &Sender<ClientRequest>,
     prebuffered: Vec<DaemonFrame>,
     resume: bool,
-) -> Result<()> {
+) -> Result<ClientTransition> {
     use std::sync::mpsc::TryRecvError;
 
     // The shadow is a real AppState reconstructed purely from frames. It starts in
@@ -127,7 +146,7 @@ pub(super) fn render_loop(
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed.
                 // Nothing more will ever arrive — leave the client.
-                Err(TryRecvError::Disconnected) => return Ok(()),
+                Err(TryRecvError::Disconnected) => return Ok(ClientTransition::Exit),
             }
         }
 
@@ -227,7 +246,7 @@ pub(super) fn render_loop(
                             .get(shadow.rest.foreground)
                             .map(|s| s.id.clone());
                         match handle_quit_confirm_key(&key, req_tx, sel, fg_id.as_deref()) {
-                            QuitConfirmKey::ExitClient => return Ok(()),
+                            QuitConfirmKey::ExitClient => return Ok(ClientTransition::Exit),
                             QuitConfirmKey::Stay => {}
                         }
                         continue;
@@ -235,7 +254,7 @@ pub(super) fn render_loop(
                     // Outside the overlay: the ONE locally-interpreted gesture is
                     // Ctrl-C, which detaches the client (leaves the daemon running).
                     if is_detach(&key) {
-                        return Ok(());
+                        return Ok(ClientTransition::Exit);
                     }
                     // Render-ahead: apply the plain composer edits to the shadow NOW
                     // (the daemon's authoritative InputChanged reconciles later), then

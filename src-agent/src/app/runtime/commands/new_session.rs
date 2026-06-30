@@ -194,6 +194,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         name: "[+ new session]".to_string(),
         working: false,
         is_foreground: false,
+        session_id: None,
     });
     for (raw_idx, rt) in state.rest.sessions.iter().enumerate() {
         // Skip the initial empty placeholder AND any closed/tombstoned slot — the
@@ -212,6 +213,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
                 .unwrap_or_default(),
             working: rt.is_working(),
             is_foreground: raw_idx == state.rest.foreground,
+            session_id: Some(rt.id.clone()),
         });
     }
 
