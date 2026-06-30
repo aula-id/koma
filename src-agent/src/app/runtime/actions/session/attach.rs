@@ -173,15 +173,19 @@ pub fn handle_hub_kill_confirm(
                     // client is rebuilt for the now-shown session, exactly like a
                     // cooking-pane Enter.
                     Some(i) => handle_live_switch(i, state, client)?,
-                    // No live session left → spawn a fresh foreground so there is
-                    // always a valid one. `/new` (Swap) appends + foregrounds + warms,
-                    // inheriting last-used creds (populated, since we had a live tab).
+                    // No live session left → spawn a fresh foreground so there is always a
+                    // valid one. Call `apply_new_session_local` directly (the legacy in-process
+                    // `/new` body): it appends + foregrounds + warms, inheriting last-used creds
+                    // (populated, since we had a live tab). NOT the `/new` slash command, which
+                    // (daemon-per-session) only sets `new_pending` — that would make the client
+                    // tear THIS daemon down + spawn a new one instead of restoring a foreground
+                    // here. `false` (Swap): nothing to kill, we just need a live foreground.
                     None => {
-                        crate::app::runtime::commands::new_session::handle_new(
+                        crate::app::runtime::commands::new_session::apply_new_session_local(
                             state,
                             client,
                             handle,
-                            crate::controller::command::NewMode::Swap,
+                            false,
                         )?;
                     }
                 }

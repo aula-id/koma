@@ -259,6 +259,44 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         prev_session = current_session_id.take();
                         ClientState::Swapper(build_local_hub(prev_session.as_deref()))
                     }
+                    // `/new` (`kill = false`) / `/new kill` (`kill = true`): DETACH from this
+                    // daemon and attach a BRAND-NEW one. In the daemon-per-session world a
+                    // daemon owns exactly ONE session, so `/new` makes another DAEMON, not a
+                    // tab. On `kill` we queue `QuitDaemon` on the request channel BEFORE
+                    // teardown so the writer flushes it (the old daemon releases its lock,
+                    // drops its session, and unlinks its socket) ahead of the polite `Detach`;
+                    // on plain `/new` we only `Detach` and leave the old daemon cooking
+                    // (resumable via the swapper). Then mint a fresh uuid and attach its daemon
+                    // (spawned on demand by `attach_session`). `prev_session` is deliberately
+                    // LEFT as-is — a `/new` is not a swapper cancel, so there is nothing to
+                    // "return to". If the attach of the new session fails we DEGRADE to the
+                    // swapper (rebuilt from fresh discovery) rather than crash, matching the
+                    // failed-Pick degrade below.
+                    Ok(render::ClientTransition::NewSession { kill }) => {
+                        if kill {
+                            // Reap the old daemon: queue QuitDaemon BEFORE teardown so the
+                            // writer drains it (then the Detach) before the socket closes.
+                            // The client is its daemon's controller, so QuitDaemon is accepted.
+                            let _ = conn.req_tx.send(ClientRequest::QuitDaemon);
+                        }
+                        teardown_connection(&handle, conn);
+                        let new_id = uuid::Uuid::new_v4().to_string();
+                        match attach_session(&handle, &new_id) {
+                            Ok(conn) => {
+                                current_session_id = Some(new_id);
+                                ClientState::Attached(conn)
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "koma: could not start a new session {new_id}: {e:#}"
+                                );
+                                // Degrade to the swapper (fresh discovery). Don't disturb
+                                // `prev_session`; the old daemon (if not killed) is still in
+                                // the discovered list.
+                                ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                            }
+                        }
+                    }
                     // A render error ends the loop like an exit, but the error is carried
                     // out and returned AFTER this connection's teardown so the daemon is
                     // never orphaned by an early return.

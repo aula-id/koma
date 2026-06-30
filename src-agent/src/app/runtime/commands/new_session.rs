@@ -39,6 +39,51 @@ pub(crate) fn handle_new(
     handle: &tokio::runtime::Handle,
     mode: crate::controller::command::NewMode,
 ) -> Result<()> {
+    // Daemon-per-session world: `/new` no longer creates/appends a session HERE. A daemon
+    // owns exactly ONE session, so `/new` must make another DAEMON, which is a CLIENT-side
+    // act (detach/kill the current daemon, attach a fresh one). The daemon can't do that
+    // to itself, so — exactly like `/resume` → `resume_pending` — set a transient flag the
+    // hub drains next tick into a one-shot `DaemonEvent::NewSession { kill }` to the
+    // controlling client. The bool is the KILL flag (`/new kill` tears the current daemon
+    // down first; plain `/new` leaves it cooking).
+    //
+    // The `--local` (no-daemon) loop NEVER reaches this signal: it drains `new_pending`
+    // into `apply_new_session_local` below (the legacy append-a-session path), so
+    // standalone `/new` behaves exactly as before. The (state, client, handle) params are
+    // kept so the dispatch signature is unchanged and the standalone drain can hand them
+    // straight to `apply_new_session_local`.
+    let _ = (client, handle);
+    state.rest.new_pending = Some(matches!(mode, crate::controller::command::NewMode::Kill));
+    Ok(())
+}
+
+/// Spawn a fresh PARALLEL session IN-PROCESS — the legacy `/new` body, used ONLY by the
+/// STANDALONE (`--local`, no-daemon) loop (the daemon-per-session path signals the client
+/// via `new_pending` instead; see [`handle_new`]).
+///
+/// The current foreground session is left UNTOUCHED — it keeps its lock, its in-flight
+/// turn, and all of its execution state, still cooking in the background in its own
+/// `sessions` slot. A brand-new [`Session`] is created (inheriting last-used creds), given
+/// its OWN lock, wrapped in a fresh [`SessionRuntime`], APPENDED to `state.rest.sessions`,
+/// and made the new foreground. The flat foreground-UI fields (composer, scroll,
+/// attachments, transcript cache, status) are reset for a clean slate on the new tab.
+///
+/// If no creds are known yet, this opens the KeyInput prompt for the new session;
+/// cancelling it pops the just-appended session back off (the `handle_cancel_key_input`
+/// action keys off the `spawn_pending` flag set here).
+///
+/// `kill` is the `/new kill` flag: when set AND a live previous foreground exists on the
+/// creds-present path, the previous foreground is tombstoned as the new session opens.
+///
+/// INVARIANT (this stage): `sessions` is only ever APPENDED to here and never
+/// reordered/removed (in-flight async routes by Vec index), and the previous foreground's
+/// lock is NEVER released — every live session holds its own lock for its whole lifetime.
+pub(crate) fn apply_new_session_local(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+    kill: bool,
+) -> Result<()> {
     let mut sess = match store::create_session() {
         Ok(s) => s,
         Err(e) => {
@@ -133,7 +178,7 @@ pub(crate) fn handle_new(
         // deferring the close here means `/new kill` behaves like `/new swap` in
         // the (near-impossible) no-creds case, avoiding a tombstoned foreground
         // that the cancel handler would try to restore.
-        if mode == crate::controller::command::NewMode::Kill
+        if kill
             && prev_fg < state.rest.sessions.len()
             && prev_fg != state.rest.foreground
             && state.rest.sessions[prev_fg].session.is_some()

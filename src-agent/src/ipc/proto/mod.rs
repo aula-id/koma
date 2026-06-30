@@ -106,6 +106,16 @@ pub enum DaemonEvent {
     /// Handled entirely client-side in `render_loop` (it detaches + runs the swapper
     /// standalone); the shadow treats it as a non-visual no-op.
     OpenSwapper,
+    /// One-shot: signal the foreground client to spawn + attach a BRAND-NEW
+    /// session-daemon (the `/new` hand-off). Mirrors [`OpenSwapper`] — a daemon-side
+    /// `/new` sets `new_pending` and the hub emits this to the controlling client INSTEAD
+    /// of creating a session itself (a daemon owns exactly ONE session). `kill` is the
+    /// `/new kill` flag: `true` tears the CURRENT session-daemon down (`QuitDaemon`) before
+    /// attaching the new one; `false` leaves it cooking (resumable via the swapper). Handled
+    /// entirely client-side in `render_loop`/`client_run` (it detaches — or kills, then
+    /// detaches — and attaches a freshly minted id); the shadow treats it as a non-visual
+    /// no-op.
+    NewSession { kill: bool },
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
