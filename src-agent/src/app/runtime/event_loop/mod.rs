@@ -140,12 +140,13 @@ pub(super) fn run_loop(
                             }
                         } else if let Mode::QuitConfirm(s) = &state.mode {
                             // Quit-confirm overlay: a LEFT click on one of the three
-                            // option rows runs the same action its key does. Hit-test
-                            // the rects the draw fn recorded (index 0=kill, 1=detach,
-                            // 2=cancel), then dispatch through the SHARED `apply_action`
-                            // path the keyboard uses so the click and the key can never
-                            // diverge. The immutable `&state.mode` borrow ends with this
-                            // block, before the mutable dispatch below.
+                            // buttons runs the same action its key does. The buttons are
+                            // horizontal chip-width segments on one row; hit-test the rects
+                            // the draw fn recorded (index 0=kill, 1=minimize, 2=cancel),
+                            // then dispatch through the SHARED `apply_action` path the
+                            // keyboard uses so the click and the key can never diverge. The
+                            // immutable `&state.mode` borrow ends with this block, before
+                            // the mutable dispatch below.
                             let clicked = if let MouseEventKind::Down(MouseButton::Left) = m.kind {
                                 let rects = s.button_rects.get();
                                 rects.iter().position(|r| {
@@ -158,6 +159,11 @@ pub(super) fn run_loop(
                                 None
                             };
                             if let Some(idx) = clicked {
+                                // Move focus to the clicked button too, so the highlight
+                                // tracks the click — harmless since we activate immediately.
+                                if let Mode::QuitConfirm(s) = &mut state.mode {
+                                    s.selected = idx;
+                                }
                                 let action = match idx {
                                     0 => controller::input::Action::QuitKillAll,
                                     1 => controller::input::Action::QuitDetach,
