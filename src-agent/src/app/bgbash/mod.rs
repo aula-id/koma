@@ -56,6 +56,10 @@ pub struct BashJobShared {
     /// The child's OS pid, recorded the instant it is spawned so `bash_kill`
     /// can signal it. `None` until the child is spawned (or if the spawn failed).
     pub pid: Mutex<Option<u32>>,
+    /// Wall-clock instant the job reached a terminal state (Done/Killed/Error);
+    /// None while Running. Frozen so the /bash panel's elapsed timer stops at
+    /// the final duration.
+    pub ended_at: Mutex<Option<Instant>>,
 }
 
 /// One registered background bash job: its identity, the command, when it
@@ -101,6 +105,16 @@ impl BashJob {
     pub fn is_running(&self) -> bool {
         matches!(self.snapshot_status(), BashJobStatus::Running)
     }
+
+    /// Elapsed wall-clock seconds for the panel timer: frozen at the terminal
+    /// instant once the job finished/was killed, else live since start.
+    pub fn elapsed_secs(&self) -> u64 {
+        let ended = self.shared.ended_at.lock().ok().and_then(|g| *g);
+        match ended {
+            Some(end) => end.saturating_duration_since(self.started_at).as_secs(),
+            None => self.started_at.elapsed().as_secs(),
+        }
+    }
 }
 
 /// Append `chunk` to the shared output buffer, ANSI-stripping it first and then
@@ -144,6 +158,7 @@ pub fn spawn_bash_job(
         output: Mutex::new(String::new()),
         status: Mutex::new(BashJobStatus::Running),
         pid: Mutex::new(None),
+        ended_at: Mutex::new(None),
     });
     let job = BashJob {
         id,
@@ -216,6 +231,11 @@ pub fn spawn_bash_job(
                     Ok(status) => BashJobStatus::Done(status.code().unwrap_or(-1)),
                     Err(e) => BashJobStatus::Error(format!("wait failed: {e}")),
                 };
+                if let Ok(mut e) = shared.ended_at.lock() {
+                    if e.is_none() {
+                        *e = Some(Instant::now());
+                    }
+                }
             }
         }
 
@@ -258,6 +278,11 @@ pub fn kill_bash_job(job: &BashJob) {
     // leaves it (the `matches!(Running)` guard there).
     if let Ok(mut st) = job.shared.status.lock() {
         *st = BashJobStatus::Killed;
+    }
+    if let Ok(mut e) = job.shared.ended_at.lock() {
+        if e.is_none() {
+            *e = Some(Instant::now());
+        }
     }
     // Signal the child if we have its pid. SIGTERM lets the process clean up; the
     // worker thread's `wait()` then unblocks and the reader pipes hit EOF.

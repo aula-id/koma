@@ -420,7 +420,7 @@ pub fn bash_job_views(rest: &AppStateRest) -> Vec<BashJobView> {
                 BashJobStatus::Error(msg) => format!("error: {msg}"),
             };
             let running = job.is_running();
-            let elapsed_secs = job.started_at.elapsed().as_secs();
+            let elapsed_secs = job.elapsed_secs();
             BashJobView {
                 id: job.id,
                 command: job.command.clone(),
