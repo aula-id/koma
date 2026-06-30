@@ -63,7 +63,7 @@ pub(super) fn handle_settings(state: &mut AppState) -> Result<()> {
         return Ok(());
     };
     let st = SettingsState::from(session, &state.rest.config);
-    state.mode = Mode::Settings(Box::new(st));
+    *state.mode_mut() = Mode::Settings(Box::new(st));
     Ok(())
 }
 
@@ -81,7 +81,7 @@ pub(super) fn handle_agents(state: &mut AppState) -> Result<()> {
         return Ok(());
     };
     let st = AgentsState::from(session);
-    state.mode = Mode::Agents(Box::new(st));
+    *state.mode_mut() = Mode::Agents(Box::new(st));
     Ok(())
 }
 
@@ -115,7 +115,7 @@ pub(super) fn handle_help(state: &mut AppState) -> Result<()> {
         .filter(|v| version::is_newer(&v.version, current))
         .map(|v| (v.version.clone(), v.message.clone()));
     let st = HelpState::new().with_version(current.to_string(), update);
-    state.mode = Mode::Help(Box::new(st));
+    *state.mode_mut() = Mode::Help(Box::new(st));
     Ok(())
 }
 
@@ -134,6 +134,6 @@ pub(super) fn handle_quit(state: &mut AppState) -> Result<()> {
 ///
 /// Read-only; no waiting guard needed (the dashboard never writes).
 pub(super) fn handle_usage(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Usage(Box::default());
+    *state.mode_mut() = Mode::Usage(Box::default());
     Ok(())
 }

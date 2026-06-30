@@ -85,7 +85,9 @@ impl DaemonHub {
             // cursor at it BEFORE the build, so the snapshot carries this client's own
             // composer / scroll / follow / foreground_id. Clone the UUID into a local
             // first so the immutable borrow of `clients[i]` ends before the `&mut state`
-            // assignment. Mode is still global (C3), so the cache below is unaffected.
+            // assignment. Mode is PER-SESSION now (C3) and reached through the foreground,
+            // so swapping the cursor here ALSO selects this client's own overlay — the
+            // cache below keys on `fg().mode`'s discriminant, making it per-client too.
             let fg_id = self.clients[i].foreground.clone();
             state.rest.foreground = state.rest.resolve_foreground(fg_id.as_deref());
 
@@ -96,8 +98,9 @@ impl DaemonHub {
             // input/stream handling and froze those pages while the chat iterated. The
             // cache rebuilds instantly on a mode-variant change and at most ~10x/sec
             // otherwise; the rest of the snapshot is still projected fresh from `state`.
-            // Mode is still global in C1.5, so every client's cache yields the same
-            // payload → byte-identical output; only the cache storage moved per-client.
+            // Mode is per-CLIENT now (C3): the foreground cursor was swapped to THIS client
+            // just above, so the cache's discriminant is read off ITS foreground-session
+            // mode — a client opening `/help` rebuilds only its own cache, not the others'.
             let mode = self.mode_snapshot_cached(i, state);
             let next = build_snapshot_with_mode(state, mode);
 

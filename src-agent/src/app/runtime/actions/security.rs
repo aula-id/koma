@@ -27,7 +27,7 @@ use crate::app::state::{AgentMode, AppState};
 
 /// Handle `Action::CloseSecurity`: return to Chat.
 pub(super) fn handle_close_security(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     state.rest.status = "ready".into();
     Ok(())
 }
@@ -125,7 +125,7 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
     // Resolve the selected row (and, for a tool, its name) out of the open panel BEFORE
     // mutating `rest` — `selected_sec()` walks the same render-ordered list the cursor and
     // view use, so this targets exactly the highlighted row.
-    let target = if let Mode::Security(s) = &state.mode {
+    let target = if let Mode::Security(s) = state.mode() {
         match s.selected_sec() {
             Some(SecSel::Daemon) => Some(ToggleTarget::Daemon),
             Some(SecSel::Yolo) => Some(ToggleTarget::Yolo),
@@ -213,7 +213,7 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
 pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> {
     // Resolve the selected tool's domain + every tool name in it out of the panel. Only a
     // tool row has a domain; the daemon and YOLO checkboxes resolve to `None` here.
-    let domain_tools: Option<(String, Vec<String>)> = if let Mode::Security(s) = &state.mode {
+    let domain_tools: Option<(String, Vec<String>)> = if let Mode::Security(s) = state.mode() {
         match s.selected_sec() {
             Some(SecSel::Tool(i)) => s.status.tools.get(i).map(|sel| {
                 let domain = sel.domain.clone();
@@ -302,7 +302,7 @@ fn refresh_security_state(state: &mut AppState, fresh_health: Option<Vec<Install
         .unwrap_or_default();
     let inactive = state.rest.sec_inactive.clone();
     let yolo_armed = state.rest.yolo_armed;
-    if let Mode::Security(s) = &mut state.mode {
+    if let Mode::Security(s) = state.mode_mut() {
         // `refresh` preserves `install_health`; overwrite it only when the install path
         // handed us a fresh probe. `refresh` re-clamps both cursors afterwards.
         if let Some(health) = fresh_health {

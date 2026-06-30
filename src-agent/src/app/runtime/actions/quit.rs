@@ -43,7 +43,7 @@ pub(in crate::app::runtime) fn request_quit(state: &mut AppState) {
         .filter(|s| s.is_working())
         .count();
     // Always ask: the overlay header adapts to whether work is in flight.
-    state.mode = Mode::QuitConfirm(Box::new(QuitConfirmState::new(working, total)));
+    *state.mode_mut() = Mode::QuitConfirm(Box::new(QuitConfirmState::new(working, total)));
 }
 
 /// Handle `Action::QuitKillAll`: abort EVERY session's in-flight stream, then
@@ -83,5 +83,5 @@ pub(super) fn handle_quit_detach(state: &mut AppState) {
 /// Handle `Action::QuitCancel`: dismiss the overlay and return to Chat
 /// unchanged. Nothing is aborted; the app keeps running.
 pub(super) fn handle_quit_cancel(state: &mut AppState) {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
 }

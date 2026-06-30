@@ -34,7 +34,7 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
     // Only echo in plain Chat with no modal overlay capturing keys. In any other mode
     // (or with a modal open) the daemon routes the key elsewhere, so faking a text
     // edit would desync until the next snapshot corrects it.
-    if !matches!(shadow.mode, Mode::Chat) {
+    if !matches!(shadow.mode(), Mode::Chat) {
         return;
     }
     let rest = &mut shadow.rest;

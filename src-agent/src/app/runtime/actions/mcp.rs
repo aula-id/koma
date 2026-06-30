@@ -19,7 +19,7 @@ use crate::app::state::AppState;
 
 /// Handle `Action::CloseMcp`: discard any in-flight drafts and return to Chat.
 pub(super) fn handle_close_mcp(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     state.rest.status = "ready".into();
     Ok(())
 }
@@ -31,7 +31,7 @@ pub(super) fn handle_close_mcp(state: &mut AppState) -> Result<()> {
 /// save error the status line reports it and the editor stays open so the draft
 /// isn't lost.
 pub(super) fn handle_create_mcp(state: &mut AppState) -> Result<()> {
-    let Mode::Mcp(m) = &state.mode else {
+    let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
     let entry = m.to_entry();
@@ -46,7 +46,7 @@ pub(super) fn handle_create_mcp(state: &mut AppState) -> Result<()> {
 /// Handle `Action::SaveMcp`: overwrite the server whose uuid matches the Edit
 /// draft with the drafts' values, persist, and refresh the snapshot.
 pub(super) fn handle_save_mcp(state: &mut AppState) -> Result<()> {
-    let Mode::Mcp(m) = &state.mode else {
+    let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
     let entry = m.to_entry();
@@ -73,12 +73,12 @@ pub(super) fn handle_save_mcp(state: &mut AppState) -> Result<()> {
 /// Handle `Action::DeleteMcp`: remove the selected server from `config.mcp_servers`
 /// by uuid, persist, and refresh the snapshot.
 pub(super) fn handle_delete_mcp(state: &mut AppState) -> Result<()> {
-    let Mode::Mcp(m) = &state.mode else {
+    let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
     let Some(server) = m.current() else {
         // Nothing selected (empty list): just drop back to Browse.
-        if let Mode::Mcp(m) = &mut state.mode {
+        if let Mode::Mcp(m) = state.mode_mut() {
             m.cancel();
         }
         return Ok(());
@@ -104,7 +104,7 @@ fn persist_and_finish(state: &mut AppState, select_uuid: &str, ok_status: String
     match state.rest.config.save() {
         Ok(()) => {
             let servers = state.rest.config.mcp_servers.clone();
-            if let Mode::Mcp(m) = &mut state.mode {
+            if let Mode::Mcp(m) = state.mode_mut() {
                 m.reload(&servers);
                 if !select_uuid.is_empty() {
                     if let Some(i) = m.servers.iter().position(|s| s.uuid == select_uuid) {

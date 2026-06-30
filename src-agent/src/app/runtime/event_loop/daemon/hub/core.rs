@@ -91,8 +91,9 @@ pub(super) struct HubClient {
     /// the entry is younger than [`MODE_SNAPSHOT_TTL`]; it REBUILDS (and restamps) when the
     /// variant changes — giving instant open/close/switch response — or the TTL elapses,
     /// so live in-mode updates still refresh ~10x/sec. `None` until this client's first
-    /// build. Mode is still GLOBAL in C1.5, so every client's cache holds the same value →
-    /// byte-identical output; C3 makes mode per-client.
+    /// build. Mode is PER-SESSION now (C3) and the per-client foreground is swapped in
+    /// before the cache is consulted (in `stream_deltas`), so each client's discriminant is
+    /// its OWN foreground-session mode — a genuinely per-client cache, not a shared value.
     pub(super) mode_snapshot_cache: Option<(Discriminant<Mode>, Instant, ModeSnapshot)>,
 }
 
@@ -165,11 +166,17 @@ impl DaemonHub {
     /// means consecutive snapshots carry an EQUAL `global.mode`, so the per-client diff
     /// sees no mode change and stays on the cheap path; a rebuild that actually differs
     /// yields one `needs_full` and a single full snapshot — the intended behaviour. Mode is
-    /// still global in C1.5, so every client's cache holds the same payload → byte-identical
-    /// output; only the cache STORAGE moved per-client. Index validity is the caller's
-    /// contract (it iterates known client indices).
+    /// PER-SESSION now (C3): the caller swaps THIS client's foreground in before calling, so
+    /// the discriminant is read off its own foreground-session mode and the cache is
+    /// genuinely per-client. Index validity is the caller's contract (it iterates known
+    /// client indices).
     pub(super) fn mode_snapshot_cached(&mut self, idx: usize, state: &AppState) -> ModeSnapshot {
-        let disc = std::mem::discriminant(&state.mode);
+        // Read the mode discriminant off the FOREGROUND session's mode (C3) — and the
+        // caller (`stream_deltas`) has ALREADY swapped the transient foreground cursor to
+        // THIS client's per-client pointer, so this is client `idx`'s own overlay. That
+        // makes the discriminant-keyed cache invalidation per-client: a client switching
+        // into `/help` rebuilds only ITS cache; another client in Chat is untouched.
+        let disc = std::mem::discriminant(state.mode());
         if let Some((cached_disc, built_at, snap)) = &self.clients[idx].mode_snapshot_cache {
             if *cached_disc == disc && built_at.elapsed() < MODE_SNAPSHOT_TTL {
                 return snap.clone();

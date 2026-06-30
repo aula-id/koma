@@ -12,7 +12,7 @@ use crate::app::state::AppState;
 
 /// Handle `Action::CloseBash`: return to Chat.
 pub(super) fn handle_close_bash(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     state.rest.status = "ready".into();
     Ok(())
 }

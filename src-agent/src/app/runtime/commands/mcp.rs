@@ -17,6 +17,6 @@ pub(super) fn handle_mcp(state: &mut AppState) -> Result<()> {
         return Ok(());
     }
     let st = McpState::from(&state.rest.config.mcp_servers);
-    state.mode = Mode::Mcp(Box::new(st));
+    *state.mode_mut() = Mode::Mcp(Box::new(st));
     Ok(())
 }

@@ -65,6 +65,6 @@ pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
         Vec::new(),
     );
     st.health_fetching = fetching;
-    state.mode = Mode::Security(Box::new(st));
+    *state.mode_mut() = Mode::Security(Box::new(st));
     Ok(())
 }

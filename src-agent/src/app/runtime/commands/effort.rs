@@ -146,7 +146,7 @@ pub(super) fn handle_effort(
         .map(|s| s.settings.effort.clone())
         .unwrap_or_default();
     let selected = preselect_effort(&options, &stored);
-    state.mode = Mode::Effort(Box::new(EffortPickerState {
+    *state.mode_mut() = Mode::Effort(Box::new(EffortPickerState {
         options,
         selected,
         note,

@@ -179,7 +179,7 @@ pub(super) fn render_loop(
         // so we send the client-side value whenever it changes. Reset last_sent_wrap_w
         // when not in the agents editor so each fresh editor open triggers a resend
         // (the daemon's freshly-opened editor is back at usize::MAX).
-        if let Mode::Agents(ref a) = shadow.mode {
+        if let Mode::Agents(ref a) = shadow.mode() {
             if let Some((_, ref ed)) = a.editor {
                 let w = ed.wrap_w.get();
                 if last_sent_wrap_w != Some(w) {
@@ -203,11 +203,11 @@ pub(super) fn render_loop(
                     // mode) the client intercepts its keys locally instead of
                     // forwarding them (daemon stage 12). `Detach`/`Kill` ask the loop
                     // to exit the client.
-                    if matches!(shadow.mode, Mode::QuitConfirm(_)) {
+                    if matches!(shadow.mode(), Mode::QuitConfirm(_)) {
                         // The daemon owns the focus index; read the shadow's mirrored
                         // `selected` so Enter activates the focused button (and nav keys
                         // can be forwarded for the daemon to move focus).
-                        let sel = if let Mode::QuitConfirm(s) = &shadow.mode {
+                        let sel = if let Mode::QuitConfirm(s) = shadow.mode() {
                             s.selected
                         } else {
                             0
@@ -235,7 +235,7 @@ pub(super) fn render_loop(
                 // gives immediate feedback without a round-trip). Bottom-pinning
                 // follow is reconstructed from snapshots, so a manual scroll just
                 // nudges the local offset for this render.
-                Event::Mouse(m) if matches!(shadow.mode, Mode::Chat) => match m.kind {
+                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         for _ in 0..3 {
                             shadow.rest.scroll_up();
@@ -298,7 +298,7 @@ pub(super) fn advance_local_animations(shadow: &mut AppState) {
     reconcile_work_clock(shadow);
 
     // Loading splash: keep the local spinner counter rotating between snapshots.
-    if let Mode::Loading(s) = &mut shadow.mode {
+    if let Mode::Loading(s) = shadow.mode_mut() {
         s.frame = s.frame.wrapping_add(1);
     }
 }

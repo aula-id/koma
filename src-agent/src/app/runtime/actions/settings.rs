@@ -16,7 +16,7 @@ use crate::service::openrouter::OpenRouterClient;
 pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
     // 1. Pull drafts out of the mode first so the borrow of `state.mode`
     //    is released before we mutate `state.rest` / `state.mode` below.
-    let drafts = match &state.mode {
+    let drafts = match state.mode() {
         Mode::Settings(s) => Some((
             s.api_key.clone(),
             s.model.clone(),
@@ -239,7 +239,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             }
         }
     }
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -260,7 +260,7 @@ pub(super) fn handle_save_effort(choice: String, state: &mut AppState) -> Result
     }
     let label = if effort.is_empty() { "default" } else { &effort };
     state.rest.status = format!("effort: {label}");
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -287,8 +287,8 @@ pub(super) fn handle_fetch_model_endpoints(
     // (the view renders "no providers found" / Auto-only routing) and clear
     // loading. This keeps non-OpenRouter + Anthropic providers from
     // spinning on a request that would 404/400.
-    if !matches!(&state.mode, Mode::Settings(s) if s.mm_provider_has_endpoints_api()) {
-        if let Mode::Settings(s) = &mut state.mode {
+    if !matches!(state.mode(), Mode::Settings(s) if s.mm_provider_has_endpoints_api()) {
+        if let Mode::Settings(s) = state.mode_mut() {
             if let Some(m) = s.model_modal.as_mut() {
                 m.endpoints = Some(Vec::new());
                 m.endpoints_loading = false;
@@ -303,13 +303,13 @@ pub(super) fn handle_fetch_model_endpoints(
     // be on a completely different provider). Pull (endpoint, api_key)
     // from `mm_provider_conn` and MOVE the owned Strings into the task
     // (no borrow of `state` crosses the spawn boundary).
-    let provider_conn = if let Mode::Settings(s) = &state.mode {
+    let provider_conn = if let Mode::Settings(s) = state.mode() {
         s.mm_provider_conn()
     } else {
         None
     };
     let (Some(c), Some((endpoint, api_key))) = (client.as_ref(), provider_conn) else {
-        if let Mode::Settings(s) = &mut state.mode {
+        if let Mode::Settings(s) = state.mode_mut() {
             if let Some(m) = s.model_modal.as_mut() {
                 m.endpoints_loading = false;
             }
@@ -317,7 +317,7 @@ pub(super) fn handle_fetch_model_endpoints(
         return Ok(());
     };
     if endpoint.trim().is_empty() {
-        if let Mode::Settings(s) = &mut state.mode {
+        if let Mode::Settings(s) = state.mode_mut() {
             if let Some(m) = s.model_modal.as_mut() {
                 m.endpoints_loading = false;
             }

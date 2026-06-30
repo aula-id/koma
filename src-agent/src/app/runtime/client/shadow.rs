@@ -226,7 +226,12 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // seed `rest.usage_data` from it so the unmodified dashboard renders DB-free.
     // Clear it first so a stale projection never lingers into the next non-Usage mode.
     shadow.rest.usage_data = None;
-    shadow.mode = match global.mode {
+    // Mode lives on the shadow's FOREGROUND session now (C3), reached via `set_mode` (which
+    // borrows `shadow.rest`). Several arms ALSO write `shadow.rest.*` (the Agents catalogue,
+    // the Usage `usage_data`), which would overlap a direct `*shadow.mode_mut() = …` borrow.
+    // So build the mode into a local — the arms keep their `shadow.rest` writes — then store
+    // it onto the foreground session with `set_mode`.
+    let new_mode = match global.mode {
         ModeSnapshot::KeyInput(f) => Mode::KeyInput(shadow_key_input(f)),
         ModeSnapshot::SessionPicker(p) => Mode::SessionPicker(shadow_picker(p)),
         ModeSnapshot::SessionHub(h) => Mode::SessionHub(Box::new(shadow_session_hub(h))),
@@ -283,6 +288,9 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
             Mode::QuitConfirm(Box::new(st))
         }
     };
+    // Apply the rebuilt mode onto the shadow's foreground session (the snapshot's mode is
+    // the daemon's foreground-session mode, projected at `fg().mode`; C3).
+    shadow.set_mode(new_mode);
 
     // NOTE: the comet clock (`work_since`) was already set authoritatively from the
     // snapshot's `work_elapsed_ms` above, so it is deliberately NOT reconciled here

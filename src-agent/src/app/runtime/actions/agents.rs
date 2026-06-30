@@ -9,7 +9,7 @@ use crate::app::state::AppState;
 /// Handle `Action::CloseAgents`: discard any in-flight drafts and return to Chat.
 pub(super) fn handle_close_agents(state: &mut AppState) -> Result<()> {
     // Discard any in-flight drafts; the dashboard never wrote them.
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     state.rest.status = "ready".into();
     Ok(())
 }
@@ -24,7 +24,7 @@ pub(super) fn handle_close_agents(state: &mut AppState) -> Result<()> {
 pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
     use crate::model::agent_def::{save_agent, AgentScope as DefScope};
 
-    let Mode::Agents(a) = &state.mode else {
+    let Mode::Agents(a) = state.mode() else {
         return Ok(());
     };
     let scope_session = matches!(a.create_scope, crate::app::mode::AgentScope::Session);
@@ -40,16 +40,22 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
 
     match result {
         Ok(_) => {
-            // Reload from disk so the new agent appears with its real source.
-            if let Some(sess) = state.rest.fg().session.as_ref() {
-                if let Mode::Agents(a) = &mut state.mode {
-                    a.reload(sess);
-                    // Select the freshly-created agent if we can find it.
-                    if let Some(i) = a.agents.iter().position(|x| x.name == def.name) {
-                        a.list_sel = i;
+            // Reload from disk so the new agent appears with its real source. Take/put-back
+            // the mode so `fg().session` can be borrowed alongside the owned `Mode::Agents`
+            // (C3: mode is in `state.rest` now, so `mode_mut()` would overlap `&session`).
+            if state.rest.fg().session.is_some() {
+                let mut m = state.take_mode();
+                if let Mode::Agents(a) = &mut m {
+                    if let Some(sess) = state.rest.fg().session.as_ref() {
+                        a.reload(sess);
+                        // Select the freshly-created agent if we can find it.
+                        if let Some(i) = a.agents.iter().position(|x| x.name == def.name) {
+                            a.list_sel = i;
+                        }
+                        a.cancel();
                     }
-                    a.cancel();
                 }
+                state.set_mode(m);
             }
             // Rebuild the system prompt so the sub-agent roster reflects the new agent.
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
@@ -74,7 +80,7 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
 pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
     use crate::model::agent_def::{save_agent, AgentScope as DefScope, AgentSource};
 
-    let Mode::Agents(a) = &state.mode else {
+    let Mode::Agents(a) = state.mode() else {
         return Ok(());
     };
     let Some(agent) = a.current_agent() else {
@@ -97,14 +103,21 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
 
     match result {
         Ok(_) => {
-            if let Some(sess) = state.rest.fg().session.as_ref() {
-                if let Mode::Agents(a) = &mut state.mode {
-                    a.reload(sess);
-                    if let Some(i) = a.agents.iter().position(|x| x.name == def.name) {
-                        a.list_sel = i;
+            // Take the mode OUT so `state.rest.fg().session` can be borrowed alongside the
+            // owned `Mode::Agents` (C3: mode now lives in `state.rest`, so `mode_mut()`
+            // would overlap the `&session` borrow that `a.reload(sess)` needs). Put it back.
+            if state.rest.fg().session.is_some() {
+                let mut m = state.take_mode();
+                if let Mode::Agents(a) = &mut m {
+                    if let Some(sess) = state.rest.fg().session.as_ref() {
+                        a.reload(sess);
+                        if let Some(i) = a.agents.iter().position(|x| x.name == def.name) {
+                            a.list_sel = i;
+                        }
+                        a.cancel();
                     }
-                    a.cancel();
                 }
+                state.set_mode(m);
             }
             // Rebuild the system prompt so the sub-agent roster reflects the change.
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
@@ -129,7 +142,7 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
 pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
     use crate::model::agent_def::{delete_agent, AgentScope as DefScope, AgentSource};
 
-    let Mode::Agents(a) = &state.mode else {
+    let Mode::Agents(a) = state.mode() else {
         return Ok(());
     };
     let Some(agent) = a.current_agent() else {
@@ -144,7 +157,7 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
         AgentSource::Session => DefScope::Session(&session_dir),
         AgentSource::Builtin => {
             state.rest.status = "cannot delete a built-in agent".into();
-            if let Mode::Agents(a) = &mut state.mode {
+            if let Mode::Agents(a) = state.mode_mut() {
                 a.cancel();
             }
             return Ok(());
@@ -154,11 +167,17 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
 
     match result {
         Ok(()) => {
-            if let Some(sess) = state.rest.fg().session.as_ref() {
-                if let Mode::Agents(a) = &mut state.mode {
-                    a.reload(sess);
-                    a.cancel();
+            // Take/put-back the mode so `fg().session` can be borrowed alongside the owned
+            // `Mode::Agents` (C3 — see the create/save handlers for the same pattern).
+            if state.rest.fg().session.is_some() {
+                let mut m = state.take_mode();
+                if let Mode::Agents(a) = &mut m {
+                    if let Some(sess) = state.rest.fg().session.as_ref() {
+                        a.reload(sess);
+                        a.cancel();
+                    }
                 }
+                state.set_mode(m);
             }
             // Rebuild the system prompt so the sub-agent roster reflects the deletion.
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
@@ -168,7 +187,7 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
         }
         Err(e) => {
             state.rest.status = format!("delete failed: {e}");
-            if let Mode::Agents(a) = &mut state.mode {
+            if let Mode::Agents(a) = state.mode_mut() {
                 a.cancel();
             }
         }

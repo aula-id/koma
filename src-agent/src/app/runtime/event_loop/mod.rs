@@ -114,7 +114,7 @@ pub(super) fn run_loop(
         // service_global uses to force redraws — reuse it here for the cadence.
         let timeout = if state.rest.fg().waiting
             || state.rest.catalogue_pending.is_some()
-            || matches!(state.mode, Mode::Loading(_))
+            || matches!(state.mode(), Mode::Loading(_))
             || has_running_subagents(state)
         {
             Duration::from_millis(8)
@@ -138,7 +138,7 @@ pub(super) fn run_loop(
                     }
                     Event::Mouse(m) => {
                         // Wheel scrolls the chat transcript only.
-                        if matches!(state.mode, Mode::Chat) {
+                        if matches!(state.mode(), Mode::Chat) {
                             match m.kind {
                                 MouseEventKind::ScrollUp => {
                                     for _ in 0..3 { state.rest.scroll_up(); }
@@ -150,7 +150,7 @@ pub(super) fn run_loop(
                                 }
                                 _ => {}
                             }
-                        } else if let Mode::QuitConfirm(s) = &state.mode {
+                        } else if let Mode::QuitConfirm(s) = state.mode() {
                             // Quit-confirm overlay: a LEFT click on one of the three
                             // buttons runs the same action its key does. The buttons are
                             // horizontal chip-width segments on one row; hit-test the rects
@@ -173,7 +173,7 @@ pub(super) fn run_loop(
                             if let Some(idx) = clicked {
                                 // Move focus to the clicked button too, so the highlight
                                 // tracks the click — harmless since we activate immediately.
-                                if let Mode::QuitConfirm(s) = &mut state.mode {
+                                if let Mode::QuitConfirm(s) = state.mode_mut() {
                                     s.selected = idx;
                                 }
                                 let action = match idx {

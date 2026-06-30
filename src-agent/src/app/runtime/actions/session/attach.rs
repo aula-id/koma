@@ -27,10 +27,17 @@ pub fn handle_live_switch(
     // live `sessions`, and `sessions` is only ever appended to this stage, so a
     // stale index can't normally occur — but never panic).
     if idx >= state.rest.sessions.len() {
-        state.mode = Mode::Chat;
+        // Still on the (unchanged) current foreground here — reset ITS mode to Chat.
+        *state.mode_mut() = Mode::Chat;
         state.rest.status = "session unavailable".into();
         return Ok(());
     }
+    // Per-session mode (C3): the picker/hub that triggered this switch set the CURRENT
+    // (leaving) foreground's mode to SessionHub/SessionPicker. Reset THAT session's mode to
+    // Chat BEFORE repointing, so switching back to it later doesn't resurrect the stale
+    // overlay. The session we switch TO keeps its OWN stored mode (normally Chat) — we do
+    // NOT overwrite it, so a target that was itself mid-overlay would be preserved.
+    state.rest.fg_mut().mode = Mode::Chat;
     state.rest.foreground = idx;
     // Reset the per-session composer + view for the newly-shown session: empty
     // composer + caret, pinned-to-bottom scroll, no staged attachments, and a
@@ -71,14 +78,16 @@ pub fn handle_live_switch(
     } else {
         "ready".into()
     };
-    state.mode = Mode::Chat;
+    // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
+    // the repoint above; the now-foreground session shows its OWN stored mode (normally
+    // Chat). Forcing Chat here would clobber a target that legitimately had its own overlay.
     Ok(())
 }
 
 /// Handle `Action::CloseSessionHub`: discard the session hub and return to the
 /// unchanged Chat view. No session state, foreground, or lock is touched.
 pub fn handle_close_session_hub(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -106,7 +115,7 @@ pub fn handle_hub_kill_confirm(
     // 1. Resolve the armed target out of the hub state (the `pending_kill` position
     //    in `cooking` → that row's `sessions` index + kind). Borrow released before
     //    we mutate `state` below.
-    let target = if let Mode::SessionHub(hub) = &state.mode {
+    let target = if let Mode::SessionHub(hub) = state.mode() {
         hub.pending_kill
             .and_then(|ci| hub.cooking.get(ci))
             .map(|e| (e.idx, e.kind))
@@ -115,7 +124,7 @@ pub fn handle_hub_kill_confirm(
     };
 
     // Preserve the user's view (focus + search) across the rebuild.
-    let (prev_focus, prev_query) = if let Mode::SessionHub(hub) = &state.mode {
+    let (prev_focus, prev_query) = if let Mode::SessionHub(hub) = state.mode() {
         (hub.focus, hub.history_query.clone())
     } else {
         (crate::app::mode::HubPane::Cooking, String::new())
@@ -219,7 +228,7 @@ fn rebuild_hub(
         .cooking_selected
         .min(hub.cooking.len().saturating_sub(1));
     hub.pending_kill = None;
-    state.mode = Mode::SessionHub(Box::new(hub));
+    *state.mode_mut() = Mode::SessionHub(Box::new(hub));
     Ok(())
 }
 
@@ -383,7 +392,7 @@ fn create_session_for_pwd(
         // No creds yet — prompt FOR THE NEW SESSION. spawn_pending so Esc pops it.
         *client = None;
         state.rest.spawn_pending = true;
-        state.mode = Mode::KeyInput(KeyInputForm::prefilled(
+        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
             state.rest.last_key.clone().unwrap_or_default(),
             state
                 .rest
@@ -397,7 +406,7 @@ fn create_session_for_pwd(
         state.rest.spawn_pending = false;
         *client = Some(build_client());
         // Land in Chat first, THEN warm (warm_session may upgrade to Loading).
-        state.mode = Mode::Chat;
+        *state.mode_mut() = Mode::Chat;
         super::super::super::warm_session(state, client, handle);
     }
     Ok(())

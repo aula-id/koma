@@ -90,7 +90,7 @@ pub(crate) fn warm_session(
         return;
     }
 
-    state.mode = Mode::Loading(LoadingState {
+    *state.mode_mut() = Mode::Loading(LoadingState {
         started: std::time::Instant::now(),
         frame: 0,
         workspace: WarmStatus::Running,

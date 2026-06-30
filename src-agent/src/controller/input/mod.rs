@@ -56,11 +56,13 @@ pub(super) fn is_ctrl(key: &KeyEvent, c: char) -> bool {
 /// Translate a raw key event into an [`Action`] based on the current [`Mode`].
 ///
 /// # Borrow-checker note
-/// `AppState` is split into `state.mode` and `state.rest`.  Both are mutably
-/// borrowed at the same time here because they are *disjoint* fields — the
-/// borrow checker can prove they occupy non-overlapping memory.  The handlers
-/// therefore receive `&mut mode_specific_data` and `&mut state.rest` as
-/// separate parameters.
+/// `mode` now lives PER-SESSION on the foreground [`crate::app::state::SessionRuntime`]
+/// (C3), reached via [`AppState::mode_mut`] — which borrows `state.rest`. The per-mode
+/// handlers still need `&mut state.rest` ALONGSIDE `&mut mode_specific_data`, which would
+/// overlap that borrow. So the mode is TAKEN out into a local (`take_mode`, leaving a
+/// cheap `Chat` placeholder), matched there — freeing `state.rest` to pass to the handler
+/// — and written back with `set_mode` afterwards. The handlers mutate the mode inner in
+/// place via the `&mut` to the local, so the put-back carries their edits.
 pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     // Ignore key-release and key-repeat events; only act on physical presses.
     if key.kind != KeyEventKind::Press {
@@ -75,7 +77,10 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     } else {
         key
     };
-    match &mut state.mode {
+    // Take the foreground session's mode out so the arms can ALSO borrow `state.rest`
+    // (the handlers need both); put it back below, carrying any in-place edits.
+    let mut mode = state.take_mode();
+    let action = match &mut mode {
         Mode::Chat => handle_chat(&mut state.rest, key),
         Mode::KeyInput(form) => handle_key_input(form, &mut state.rest, key),
         Mode::SessionPicker(p) => handle_picker(p, &mut state.rest, key),
@@ -91,7 +96,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Usage(nav) => usage::handle_usage(nav, key),
         Mode::MessageRewind(rw) => handle_rewind(rw, &mut state.rest, key),
         Mode::QuitConfirm(s) => handle_quit_confirm(s, &mut state.rest, key),
-    }
+    };
+    state.set_mode(mode);
+    action
 }
 
 /// Handle a key press inside the `/effort` reasoning-effort picker.

@@ -172,7 +172,7 @@ pub(super) fn handle_save_creds(
     // upgrade the mode to `Mode::Loading` (animated splash) when it has warm
     // work to spawn, so it must run LAST to get the final word. With no warm
     // work it leaves the mode as the Chat we just set.
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     state.rest.status = "ready".into();
     // Warm the confirmed session: reindex its workspace + (async) fetch the
     // catalogue and awareness summary so it's primed like a cold boot.

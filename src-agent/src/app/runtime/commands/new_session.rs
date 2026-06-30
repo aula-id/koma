@@ -119,7 +119,7 @@ pub(crate) fn handle_new(
         // freshly-appended session and restores the previous foreground.
         *client = None;
         state.rest.spawn_pending = true;
-        state.mode = Mode::KeyInput(KeyInputForm::prefilled(
+        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
             String::new(),
             DEFAULT_MODEL.to_string(),
             false, // Esc -> CancelKeyInput (which pops the spawned session)
@@ -146,7 +146,7 @@ pub(crate) fn handle_new(
         // may upgrade the mode to `Mode::Loading` (animated splash) when it
         // has warm work to spawn, so it must run LAST to get the final word.
         // With no warm work it leaves the mode as the Chat we just set.
-        state.mode = Mode::Chat;
+        *state.mode_mut() = Mode::Chat;
         // Warm the new foreground session: reindex its workspace + (async) fetch
         // the catalogue and awareness summary so /new is primed like a cold boot.
         // `warm_session` -> `reconcile_session_lock` only ever touches the
@@ -278,7 +278,8 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
         return Ok(());
     }
 
-    state.mode = Mode::SessionHub(Box::new(build_session_hub(state)));
+    let hub = build_session_hub(state);
+    *state.mode_mut() = Mode::SessionHub(Box::new(hub));
     Ok(())
 }
 

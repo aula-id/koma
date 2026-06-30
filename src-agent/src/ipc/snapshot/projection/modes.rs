@@ -29,7 +29,11 @@ use crate::ipc::proto::{
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
-    match &state.mode {
+    // Source the wire mode from the FOREGROUND session's mode (C3). The wire
+    // `GlobalSnapshot.mode` stays as-is; it is just sourced per-session now. In the
+    // daemon the per-client foreground is swapped in before each per-client projection
+    // (C2), so this projects THAT client's overlay.
+    match state.mode() {
         Mode::KeyInput(f) => ModeSnapshot::KeyInput(key_input_snapshot(f)),
         Mode::SessionPicker(p) => ModeSnapshot::SessionPicker(picker_snapshot(p)),
         Mode::SessionHub(h) => ModeSnapshot::SessionHub(session_hub_snapshot(h)),

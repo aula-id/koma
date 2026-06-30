@@ -18,6 +18,6 @@ pub(super) fn handle_bash(state: &mut AppState) -> Result<()> {
     }
     let jobs = crate::ipc::snapshot::bash_job_views(&state.rest);
     let st = BashState::new(jobs);
-    state.mode = Mode::Bash(Box::new(st));
+    *state.mode_mut() = Mode::Bash(Box::new(st));
     Ok(())
 }

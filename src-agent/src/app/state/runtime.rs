@@ -20,6 +20,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::AbortHandle;
 
+use crate::app::mode::Mode;
 use crate::app::subagent::{PendingSubagent, SubAgent};
 use crate::dto::chat::ToolCall;
 use crate::model::session::Session;
@@ -36,6 +37,16 @@ pub struct SessionRuntime {
     /// critique #2). Purely additive; the single-process TUI ignores it for now.
     #[allow(dead_code)] // read by the daemon IPC layer in stage 2+
     pub id: String,
+    /// This session's CURRENT UI mode (C3): the screen it shows — `Chat` or one of the
+    /// slash overlays / pickers (`Settings`, `Help`, `SessionHub`, `Loading`, …) with its
+    /// form/picker data. Moved OUT of [`super::AppState`] and onto the session so each
+    /// session carries its own overlay state; reached through [`super::AppState::mode`] /
+    /// [`mode_mut`](super::AppState::mode_mut), which index the foreground. In the daemon
+    /// the per-client foreground is swapped in before each request/projection (C2), so a
+    /// client in `/help` over session A no longer forces a client in Chat over session B
+    /// into `/help`. A fresh session defaults to `Chat` (see [`Self::new`]); the
+    /// spawn/startup flows set the right initial mode on the right session.
+    pub mode: Mode,
     pub input: String,
     /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
     /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
@@ -326,6 +337,11 @@ impl SessionRuntime {
             // session in `AppStateRest::new` and each `/new` spawn) routes
             // through here, so every session is uniquely keyed automatically.
             id: uuid::Uuid::new_v4().to_string(),
+            // Fresh session default (C3): a brand-new live session lands in Chat. The
+            // spawn/startup flows (KeyInput on a creds-less spawn, Loading on a warming
+            // startup session, SessionPicker on --resume) overwrite this on the RIGHT
+            // session after construction.
+            mode: Mode::Chat,
             input: String::new(),
             cursor: 0,
             pending_attachments: Vec::new(),

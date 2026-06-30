@@ -187,11 +187,17 @@ fn service_approval_park_timeouts(state: &mut AppState, client_attached: bool) -
 /// cadence (caller handles that) so a reattached operator's approve is processed
 /// with minimal latency.
 fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool {
-    // Any global async work pending → not quiescent.
-    if state.rest.catalogue_pending.is_some()
-        || matches!(state.mode, crate::app::mode::Mode::Loading(_))
-        || has_running_subagents(state)
-    {
+    // Any global async work pending → not quiescent. The loading-splash check is
+    // per-SESSION now (C3): mode lives on each session, and this runs OUTSIDE any client
+    // bracket (so the transient foreground cursor is stale scratch). A Loading session
+    // ANYWHERE self-advances (its splash ticks + flips to Chat on warm-complete), so keep
+    // the fast cadence whenever ANY session is Loading — not just the foreground's mode.
+    let any_loading = state
+        .rest
+        .sessions
+        .iter()
+        .any(|s| matches!(s.mode, crate::app::mode::Mode::Loading(_)));
+    if state.rest.catalogue_pending.is_some() || any_loading || has_running_subagents(state) {
         return false;
     }
     // Any live session doing self-advancing work (anything working that ISN'T merely

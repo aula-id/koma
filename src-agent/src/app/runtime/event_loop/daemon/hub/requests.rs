@@ -402,7 +402,7 @@ impl DaemonHub {
             // width the client renders. Only meaningful when the daemon is in the
             // agents full-screen editor; a no-op Ack otherwise.
             ClientRequest::EditorWrapW(n) => {
-                if let Mode::Agents(ref a) = state.mode {
+                if let Mode::Agents(ref a) = state.mode() {
                     if let Some((_, ref ed)) = a.editor {
                         ed.wrap_w.set(n);
                     }
