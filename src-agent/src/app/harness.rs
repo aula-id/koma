@@ -283,7 +283,7 @@ async fn classify(
     // verdict, exactly as when the classifier can't be reached. The caller degrades
     // that to a human prompt (TAC) / advisory toast (PC) rather than auto-allowing.
     let Some(route) = resolve_role(config, settings, ModelRole::Safeguard) else {
-        return unavailable("safeguard model not configured".to_string());
+        return unavailable("classifier not configured (no safeguard model) — set one in /settings".to_string());
     };
     // Call-boundary gate (fail-CLOSED): an Anthropic-typed safeguard provider can't
     // be dispatched against the OpenAI-compatible client (native Anthropic is
