@@ -357,6 +357,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             rest.backspace();
             Action::None
         }
+        KeyCode::Delete => {
+            rest.delete_forward();
+            Action::None
+        }
         // Caret movement within the input line (mid-text editing). Left/Right
         // step one char; Home jumps to the start. End is handled below (it also
         // doubles as "scroll to bottom" when the input is empty).

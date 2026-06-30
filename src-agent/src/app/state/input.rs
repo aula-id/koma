@@ -43,6 +43,18 @@ impl AppStateRest {
         self.hist_idx = None;
     }
 
+    /// Delete the char AT the caret (forward delete, the Delete key); no-op at the
+    /// end of the input. Mirrors [`Self::backspace`] but does not move the caret.
+    pub fn delete_forward(&mut self) {
+        if self.cursor >= self.char_len() {
+            return;
+        }
+        let at = self.byte_at(self.cursor);
+        self.input.remove(at);
+        self.palette_sel = 0;
+        self.hist_idx = None;
+    }
+
     /// Move the caret one char left (no-op at the start).
     pub fn cursor_left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
