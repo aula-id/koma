@@ -61,6 +61,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         Mode::QuitConfirm(s) => ModeSnapshot::QuitConfirm {
             working: s.working,
             total: s.total,
+            selected: s.selected,
         },
     }
 }

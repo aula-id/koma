@@ -90,6 +90,9 @@ pub struct GlobalSnapshot {
     pub pending_attachments: Vec<crate::dto::chat::Attachment>,
     pub file_palette: Option<Vec<String>>,
     pub agent_mode: String,
+    /// Latest published koma version when newer than the running one (for the
+    /// header update badge), else None. Projected from the daemon's version check.
+    pub latest_version: Option<String>,
 }
 
 // -- mode payload projections (stage 2: core interactive modes) ----------------

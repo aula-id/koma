@@ -204,7 +204,15 @@ pub(super) fn render_loop(
                     // forwarding them (daemon stage 12). `Detach`/`Kill` ask the loop
                     // to exit the client.
                     if matches!(shadow.mode, Mode::QuitConfirm(_)) {
-                        match handle_quit_confirm_key(&key, req_tx) {
+                        // The daemon owns the focus index; read the shadow's mirrored
+                        // `selected` so Enter activates the focused button (and nav keys
+                        // can be forwarded for the daemon to move focus).
+                        let sel = if let Mode::QuitConfirm(s) = &shadow.mode {
+                            s.selected
+                        } else {
+                            0
+                        };
+                        match handle_quit_confirm_key(&key, req_tx, sel) {
                             QuitConfirmKey::ExitClient => return Ok(()),
                             QuitConfirmKey::Stay => {}
                         }

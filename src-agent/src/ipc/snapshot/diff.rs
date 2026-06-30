@@ -72,6 +72,7 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
     if prev.global.theme != next.global.theme
         || prev.global.accent != next.global.accent
         || prev.global.agent_mode != next.global.agent_mode
+        || prev.global.latest_version != next.global.latest_version
     {
         return DiffResult::full();
     }

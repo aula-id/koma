@@ -83,32 +83,46 @@ pub(super) enum QuitConfirmKey {
 }
 
 /// Handle a key while the shadow mirrors the daemon's `/quit` confirm overlay
-/// (daemon stage 12). The overlay's three choices are CLIENT-process-lifecycle
-/// decisions, so — unlike every other key, which is forwarded for the daemon to
-/// interpret — the client acts on them itself:
+/// (daemon stage 12). The overlay is a navigable horizontal button row —
+/// `[quit & kill]` `[minimize]` `[cancel]` (indices 0/1/2) — whose three choices
+/// are CLIENT-process-lifecycle decisions. Two classes of key:
 ///
-///   `[d]` DETACH & keep — reset the daemon's overlay back to Chat (a forwarded
-///         `Esc` = the daemon's own cancel, so a later reattach lands in Chat, not
-///         the stale overlay), send [`ClientRequest::Detach`] (the daemon passes the
-///         controller seat and keeps EVERY session cooking headless), then exit ONLY
-///         the client.
-///   `[k]` KILL ALL & quit — send [`ClientRequest::QuitDaemon`]; the daemon latches
-///         its shutdown flag, tombstones every session, releases all locks, unlinks
-///         its socket, and self-exits via its graceful teardown. Then exit the client.
-///         (No `Esc` first: the daemon is shutting down wholesale, so its mode is moot.)
-///   `Esc` / `Ctrl-C` cancel — forward an `Esc` so the daemon's `handle_quit_confirm`
-///         runs `QuitCancel` and returns to Chat; the resulting snapshot flips the
-///         shadow back. The client stays attached.
+/// NAVIGATION (`Left`/`Right`, `Tab`/`Shift+Tab`, `h`/`l`) — the daemon owns the focus
+/// index (`selected`), so these are FORWARDED verbatim (like the cancel `Esc`). The
+/// daemon's `handle_quit_confirm` moves `selected` and the next snapshot flips the
+/// shadow, so the highlight tracks. The client never mutates `selected` itself (it
+/// would just be overwritten by the snapshot, and could race). Returns `Stay`.
+///
+/// ACTIVATION — the client acts on the lifecycle choice itself rather than letting it
+/// cross to the daemon, because killing/detaching tears down THIS process. `Enter`
+/// activates the CURRENTLY FOCUSED button (`selected`): 0 (quit & kill) → like `k`,
+/// 1 (minimize) → like `d`, 2/other → like `Esc`. The direct shortcuts fire regardless
+/// of focus:
+///   - `[k]` KILL ALL & quit — send [`ClientRequest::QuitDaemon`]; the daemon latches
+///     its shutdown flag, tombstones every session, releases all locks, unlinks its
+///     socket, and self-exits via its graceful teardown. Then exit the client. (No
+///     `Esc` first: the daemon is shutting down wholesale.)
+///   - `[d]` DETACH & keep — reset the daemon's overlay back to Chat (a forwarded `Esc`
+///     = the daemon's own cancel, so a later reattach lands in Chat, not the stale
+///     overlay), send [`ClientRequest::Detach`] (the daemon passes the controller seat
+///     and keeps EVERY session cooking headless), then exit ONLY the client.
+///   - `Esc` / `Ctrl-C` cancel — forward an `Esc` so the daemon's `handle_quit_confirm`
+///     runs `QuitCancel` and returns to Chat; the resulting snapshot flips the shadow
+///     back. The client stays attached.
 ///
 /// Every other key is swallowed (the overlay has no text entry — mirrors the daemon's
 /// own `handle_quit_confirm`, which returns `Action::None` for anything else).
 ///
-/// Requests share the ordered outbound queue, so the `[d]` pair is delivered
-/// Esc-then-Detach in sequence, guaranteeing the daemon leaves the overlay before the
-/// client drops.
+/// Requests share the ordered outbound queue, so the `[d]` (and `Enter`-on-minimize)
+/// pair is delivered Esc-then-Detach in sequence, guaranteeing the daemon leaves the
+/// overlay before the client drops.
+///
+/// `selected` is the shadow's current focus index (mirrored from the daemon), used to
+/// resolve what `Enter` activates.
 pub(super) fn handle_quit_confirm_key(
     key: &KeyEvent,
     req_tx: &Sender<ClientRequest>,
+    selected: usize,
 ) -> QuitConfirmKey {
     // Ctrl-C in the overlay means "cancel", NOT the global detach — match the daemon's
     // `handle_quit_confirm`, which treats Ctrl-C like Esc.
@@ -117,6 +131,37 @@ pub(super) fn handle_quit_confirm_key(
         return QuitConfirmKey::Stay;
     }
     match key.code {
+        // --- Navigation: the daemon owns `selected`, so forward and let its
+        // `handle_quit_confirm` move focus; the next snapshot reflects it. ---
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Tab
+        | KeyCode::BackTab
+        | KeyCode::Char('h')
+        | KeyCode::Char('l') => {
+            let _ = req_tx.send(ClientRequest::SendKey(KeyWire::from(*key)));
+            QuitConfirmKey::Stay
+        }
+        // --- Activate the focused button (same effect as its direct shortcut). ---
+        KeyCode::Enter => match selected {
+            0 => {
+                // quit & kill — like `k`.
+                let _ = req_tx.send(ClientRequest::QuitDaemon);
+                QuitConfirmKey::ExitClient
+            }
+            1 => {
+                // minimize / detach — like `d`: reset the overlay then detach.
+                send_overlay_cancel(req_tx);
+                let _ = req_tx.send(ClientRequest::Detach);
+                QuitConfirmKey::ExitClient
+            }
+            // cancel (2) or any out-of-range — like `Esc`: cancel + stay.
+            _ => {
+                send_overlay_cancel(req_tx);
+                QuitConfirmKey::Stay
+            }
+        },
+        // --- Direct shortcuts (fire regardless of focus). ---
         KeyCode::Char('d') | KeyCode::Char('D') => {
             // Reset the daemon overlay → Chat first, then detach. Ordered queue keeps
             // the sequence, so a reattaching client sees Chat rather than the overlay.
