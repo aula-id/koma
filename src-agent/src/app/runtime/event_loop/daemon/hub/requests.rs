@@ -9,7 +9,7 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, StateSnapshot};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::actions::{apply_action, attach_select_for_pwd};
+use crate::app::runtime::actions::{apply_action, create_session_for_pwd};
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -175,23 +175,33 @@ impl DaemonHub {
         match req {
             // --- read-only / control (honoured for everyone) ---
             ClientRequest::Attach { cwd, .. } => {
-                // pwd-AWARE attach selection (stage 3): BEFORE snapshotting, point the
-                // foreground at a session for the ATTACHING CLIENT's working directory,
-                // so launching `koma` from a NEW dir lands on a session for THAT dir —
-                // not the daemon's unrelated last session. Runs for EVERY attaching client
-                // now (C2): the controller-only gate is GONE because the C2 LOAD/STORE
-                // bracket scopes `attach_select_for_pwd`'s mutation to THIS client's view
-                // and persists the resulting foreground onto its OWN per-client pointer —
-                // so each client lands on (and keeps) a session for its own cwd without
-                // disturbing any other client's view. A client that sent no `cwd` just
-                // gets its current foreground. Any handler error is swallowed (surfaced
-                // via status, never aborts the loop) so a bad selection can't wedge the
-                // attach handshake; the snapshot below still goes out, reflecting whatever
-                // foreground resulted.
-                if let Some(cwd) = cwd {
-                    let cwd = std::path::PathBuf::from(cwd);
-                    if let Err(e) = attach_select_for_pwd(state, client, handle, &cwd) {
-                        state.rest.status = format!("attach select error: {e:#}");
+                // FRESH-on-attach (C5): a plain `koma` attach ALWAYS creates a brand-new
+                // session rooted at the ATTACHING CLIENT's cwd — it never resumes a live
+                // or on-disk session for that dir. (The old pwd-aware resume was the bug:
+                // reopening `koma` in a dir landed on the OLD session — stale chat, even a
+                // stale /quit page. Resume / cooking / history is reached only via
+                // `koma --resume` / `koma agents`, which fire `OpenSessionHub` to open the
+                // picker OVER this fresh base.)
+                //
+                // GUARDED to the FIRST attach for this client (`!attached`, still false
+                // here since `attached` is flipped true only AFTER the snapshot below):
+                // a re-attach / resync from an already-attached client must NOT spawn a
+                // second session — it just re-snapshots that client's existing foreground.
+                // Runs for EVERY first-attaching client (C2): the C2 LOAD/STORE bracket
+                // scopes the create's foreground move to THIS client's view and the post-
+                // attach STORE persists the new session's UUID onto its OWN per-client
+                // pointer, so each window gets (and keeps) its own independent fresh
+                // session without disturbing any other client's view. A client that sent
+                // no `cwd` just keeps its current foreground (nothing to root a session
+                // at). Any create error is swallowed (surfaced via status, never aborts
+                // the loop) so a bad create can't wedge the attach handshake; the snapshot
+                // below still goes out, reflecting whatever foreground resulted.
+                if !self.clients[idx].attached {
+                    if let Some(cwd) = cwd {
+                        let cwd = std::path::PathBuf::from(cwd);
+                        if let Err(e) = create_session_for_pwd(state, client, handle, &cwd) {
+                            state.rest.status = format!("attach create error: {e:#}");
+                        }
                     }
                 }
                 // Build-skew handshake (task #142): emit the daemon's startup

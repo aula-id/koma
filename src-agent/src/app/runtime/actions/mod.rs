@@ -27,12 +27,13 @@ mod security;
 mod session;
 mod settings;
 
-// Re-export the pwd-aware attach selector so the daemon's `Attach` handler (in the
-// sibling `event_loop::daemon` module) can drive session selection through the SAME
-// load/switch/create handlers the local TUI uses. Attach is not a keystroke, so it
-// doesn't route through `apply_action` — it calls this directly. The `session` module
-// is otherwise private to `actions`, so this single re-export is the only surface.
-pub(in crate::app::runtime) use session::attach_select_for_pwd;
+// Re-export the per-client fresh-session creator so the daemon's `Attach` handler (in
+// the sibling `event_loop::daemon` module) can spawn the fresh session a plain `koma`
+// attach always lands on, through the SAME create handler the local TUI uses. Attach is
+// not a keystroke, so it doesn't route through `apply_action` — it calls this directly.
+// The `session` module is otherwise private to `actions`, so this single re-export is
+// the only surface. (Plain attach no longer resumes; resume is the picker's job.)
+pub(in crate::app::runtime) use session::create_session_for_pwd;
 mod settings_creds;
 
 /// Apply one `Action` (the decoded result of a keystroke) by mutating state and,
