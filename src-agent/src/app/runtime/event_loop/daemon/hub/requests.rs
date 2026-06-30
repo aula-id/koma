@@ -66,6 +66,16 @@ impl DaemonHub {
             } => {
                 // First enrolled client is the single writer (DECISIONS).
                 let is_controller = self.clients.is_empty();
+                // Seed this client's per-client foreground pointer (C1.5 infra) to the
+                // session at the current GLOBAL foreground, addressed by stable UUID — so
+                // every client starts on the same session the single global view shows.
+                // `None` only when no session is live to point at. Render still uses the
+                // global index in C1.5; C2 swaps onto this per-client pointer.
+                let foreground = state
+                    .rest
+                    .sessions
+                    .get(state.rest.foreground)
+                    .map(|s| s.id.clone());
                 self.clients.push(super::core::HubClient {
                     id: client_id,
                     frame_tx,
@@ -74,6 +84,10 @@ impl DaemonHub {
                     last_seq: 0,
                     // Not delta-eligible until its Attach seeds this baseline.
                     last_snapshot: None,
+                    foreground,
+                    // Per-client mode cache: empty until this client's first stream tick
+                    // builds it (the daemon-freeze fix, held per-client now).
+                    mode_snapshot_cache: None,
                 });
             }
             HubInbound::Request { client_id, req } => {
@@ -296,7 +310,7 @@ impl DaemonHub {
                 match state.rest.sessions.iter().position(|s| s.id == session_id) {
                     Some(target) => {
                         state.rest.sessions[target].close();
-                        super::core::repoint_foreground_off_closed(state);
+                        self.repoint_foreground_off_closed(state);
                         self.send_to(idx, DaemonEvent::Ack);
                     }
                     None => self.send_to(

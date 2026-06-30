@@ -70,6 +70,30 @@ pub(super) struct HubClient {
     /// baseline — can never swallow deltas an already-attached client still owes:
     /// each client's deltas are diffed against exactly what THAT client last saw.
     pub(super) last_snapshot: Option<crate::ipc::proto::StateSnapshot>,
+    /// PER-CLIENT foreground pointer: the stable UUID ([`SessionRuntime::id`]) of the
+    /// session THIS client views, addressed by id (never `Vec` index — tombstoning
+    /// shifts indices, see `ipc::proto` critique #2). Initialised on `Register` to the
+    /// session at the current GLOBAL `state.rest.foreground` so every client starts on
+    /// the same session the single global view shows. `None` only when no session is
+    /// live to point at. In C1.5 this is WRITTEN (initialised here + repointed off a
+    /// closed session) and READ (by `repoint_foreground_off_closed`), but render still
+    /// uses the global `state.rest.foreground`, so behaviour is identical at one client.
+    /// C2 swaps rendering onto this per-client pointer.
+    pub(super) foreground: Option<String>,
+    /// PER-CLIENT cached mode payload for the streaming projection (moved off the hub-
+    /// global slot so each client diffs against ITS OWN baseline). Reused across ticks
+    /// so the EXPENSIVE per-mode snapshot build (`/usage` ledger query, `/agents`
+    /// catalogue clone, `/mcp` mutex + status map) is not paid on every ~8ms streaming
+    /// tick — the daemon-freeze fix, now preserved PER CLIENT.
+    ///
+    /// Holds `(mode discriminant, built-at instant, payload)`. [`mode_snapshot_cached`](
+    /// DaemonHub::mode_snapshot_cached) REUSES it while the mode VARIANT is unchanged AND
+    /// the entry is younger than [`MODE_SNAPSHOT_TTL`]; it REBUILDS (and restamps) when the
+    /// variant changes — giving instant open/close/switch response — or the TTL elapses,
+    /// so live in-mode updates still refresh ~10x/sec. `None` until this client's first
+    /// build. Mode is still GLOBAL in C1.5, so every client's cache holds the same value →
+    /// byte-identical output; C3 makes mode per-client.
+    pub(super) mode_snapshot_cache: Option<(Discriminant<Mode>, Instant, ModeSnapshot)>,
 }
 
 /// The sync-loop <-> per-client-task bridge + the render-state streaming engine
@@ -99,21 +123,6 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// gap between that fresh on-disk fingerprint and this stored one is exactly the
     /// stale-daemon skew the handshake exists to catch.
     pub(super) version: String,
-    /// Cached mode payload for the per-tick streaming projection, reused across ticks so
-    /// the EXPENSIVE per-mode snapshot build (`/usage` ledger query, `/agents` catalogue
-    /// clone, `/mcp` mutex + status map) is not paid on every ~8ms streaming tick — which
-    /// starved input polling and froze the heavy full-screen pages while the chat iterated.
-    ///
-    /// Holds `(mode discriminant, built-at instant, payload)`. [`mode_snapshot_cached`](
-    /// Self::mode_snapshot_cached) REUSES it while the mode VARIANT is unchanged AND the
-    /// entry is younger than [`MODE_SNAPSHOT_TTL`]; it REBUILDS (and restamps) when the
-    /// variant changes — giving instant open/close/switch response — or the TTL elapses,
-    /// so live in-mode updates still refresh ~10x/sec. `None` until the first build.
-    ///
-    /// Only the streaming path is cached; the rarer attach/resync snapshots build a fresh
-    /// mode (they go through the plain `build_snapshot`), so they never serve a stale page
-    /// to a just-attached client and never pollute this cache.
-    pub(super) mode_snapshot_cache: Option<(Discriminant<Mode>, Instant, ModeSnapshot)>,
 }
 
 impl DaemonHub {
@@ -135,17 +144,17 @@ impl DaemonHub {
                 clients: Vec::new(),
                 shutdown: false,
                 version: crate::model::store::build_fingerprint(),
-                mode_snapshot_cache: None,
             },
             msg_tx,
         )
     }
 
-    /// Build the mode payload for this tick's streaming projection, REUSING the cached
-    /// [`ModeSnapshot`] when it is still fresh so the expensive per-mode build is capped
-    /// at ~10Hz instead of paid every ~8ms streaming tick (the daemon-freeze fix).
+    /// Build the mode payload for client `idx`'s streaming projection, REUSING THAT
+    /// client's cached [`ModeSnapshot`] when it is still fresh so the expensive per-mode
+    /// build is capped at ~10Hz per client instead of paid every ~8ms streaming tick (the
+    /// daemon-freeze fix, now held PER CLIENT on [`HubClient::mode_snapshot_cache`]).
     ///
-    /// Rebuilds (and restamps the cache) when EITHER:
+    /// Rebuilds (and restamps that client's cache) when EITHER:
     /// - the mode VARIANT changed — `discriminant(&state.mode)` differs from the cached
     ///   one — so opening / closing / switching a full-screen page renders INSTANTLY (no
     ///   throttle delay on a transition), OR
@@ -155,16 +164,19 @@ impl DaemonHub {
     /// Otherwise it CLONES the cached payload. Reusing the identical payload for ≤100ms
     /// means consecutive snapshots carry an EQUAL `global.mode`, so the per-client diff
     /// sees no mode change and stays on the cheap path; a rebuild that actually differs
-    /// yields one `needs_full` and a single full snapshot — the intended behaviour.
-    pub(super) fn mode_snapshot_cached(&mut self, state: &AppState) -> ModeSnapshot {
+    /// yields one `needs_full` and a single full snapshot — the intended behaviour. Mode is
+    /// still global in C1.5, so every client's cache holds the same payload → byte-identical
+    /// output; only the cache STORAGE moved per-client. Index validity is the caller's
+    /// contract (it iterates known client indices).
+    pub(super) fn mode_snapshot_cached(&mut self, idx: usize, state: &AppState) -> ModeSnapshot {
         let disc = std::mem::discriminant(&state.mode);
-        if let Some((cached_disc, built_at, snap)) = &self.mode_snapshot_cache {
+        if let Some((cached_disc, built_at, snap)) = &self.clients[idx].mode_snapshot_cache {
             if *cached_disc == disc && built_at.elapsed() < MODE_SNAPSHOT_TTL {
                 return snap.clone();
             }
         }
         let snap = crate::ipc::snapshot::mode_snapshot(state);
-        self.mode_snapshot_cache = Some((disc, Instant::now(), snap.clone()));
+        self.clients[idx].mode_snapshot_cache = Some((disc, Instant::now(), snap.clone()));
         snap
     }
 
@@ -201,39 +213,77 @@ impl DaemonHub {
             }
         }
     }
-}
 
-/// Repoint `foreground` off a CLOSED (tombstoned) session onto a still-live one
-/// (daemon stage 10, item 5). If the current foreground is not closed, this is a
-/// no-op. Otherwise it picks the FIRST non-closed session as the new foreground so
-/// render / `service_session` never touch a tombstone. If NO session is live (every
-/// one is closed) it leaves `foreground` as-is: the daemon is about to self-exit
-/// anyway, and `service_session` skips the closed foreground regardless, so a
-/// tombstone foreground is harmless in that terminal window. Never goes out of
-/// range (only ever set to a valid EXISTING index — we never reorder/remove the
-/// Vec, so this can't cross-wire index-routed async).
-pub(in crate::app::runtime::event_loop::daemon) fn repoint_foreground_off_closed(state: &mut AppState) {
-    let fg = state.rest.foreground;
-    // Current foreground still live → nothing to do.
-    if !state.rest.sessions.get(fg).map(|s| s.closed).unwrap_or(false) {
-        return;
-    }
-    if let Some(live) = state.rest.sessions.iter().position(|s| !s.closed) {
-        state.rest.foreground = live;
-    }
-    // else: every session closed → leave fg; the daemon self-exits and
-    // service_session skips the closed foreground meanwhile.
-}
+    /// Repoint foreground off a CLOSED (tombstoned) session onto a still-live one
+    /// (daemon stage 10, item 5), for BOTH the global pointer AND every per-client one.
+    ///
+    /// GLOBAL (unchanged from C1, still what render reads in C1.5): if the current
+    /// `state.rest.foreground` is not closed, the global pointer is left as-is; otherwise
+    /// it picks the FIRST non-closed session so render / `service_session` never touch a
+    /// tombstone. If NO session is live (every one is closed) it leaves the global index
+    /// as-is — the daemon is about to self-exit anyway, and `service_session` skips the
+    /// closed foreground regardless. Never goes out of range (only ever set to a valid
+    /// EXISTING index — the Vec is never reordered/removed, so this can't cross-wire
+    /// index-routed async).
+    ///
+    /// PER-CLIENT (C1.5 infra): for each [`HubClient`] whose `foreground` UUID resolves to
+    /// a session that is now closed — or to no session at all — repoint it to the FIRST
+    /// live session's UUID, or `None` when none are live. Keying on "this client's pointer
+    /// is stale" (not on a single just-closed id) keeps it self-contained and correct for
+    /// the close-ALL path too. At ONE client this exactly mirrors the global repoint above,
+    /// so behaviour is byte-identical; it gives `HubClient::foreground` its genuine read +
+    /// write site. The live UUID is computed FIRST (borrowing `state.rest.sessions`), then
+    /// the clients are mutated, so the session borrow never overlaps the `&mut` on clients.
+    pub(in crate::app::runtime::event_loop::daemon) fn repoint_foreground_off_closed(&mut self, state: &mut AppState) {
+        // --- global pointer (render still uses this in C1.5 — keep identical) ---
+        let fg = state.rest.foreground;
+        // Current foreground still live → leave the global index untouched.
+        if state.rest.sessions.get(fg).map(|s| s.closed).unwrap_or(false) {
+            if let Some(live) = state.rest.sessions.iter().position(|s| !s.closed) {
+                state.rest.foreground = live;
+            }
+            // else: every session closed → leave fg; the daemon self-exits and
+            // service_session skips the closed foreground meanwhile.
+        }
 
-/// Close (tombstone) EVERY session — the daemon-side "kill all" used by the `/quit`
-/// `[k]` path (daemon stage 10, item 4). Each session's `close()` aborts its stream
-/// and sub-agents, drops receivers, and releases its lock; the slots stay in place so
-/// no index shifts. Foreground is repointed afterwards — it lands on a tombstone since
-/// all are closed, which is harmless: the grace-timed self-exit then fires because
-/// `all_sessions_closed` is now true and no further live work can start.
-pub(in crate::app::runtime::event_loop::daemon) fn close_all_sessions(state: &mut AppState) {
-    for s in &mut state.rest.sessions {
-        s.close();
+        // --- per-client pointers (C1.5: written here, read on render in C2) ---
+        // Compute the first-live UUID up front so the immutable borrow of
+        // `state.rest.sessions` ends before the `&mut self.clients` mutation below.
+        let first_live_id: Option<String> = state
+            .rest
+            .sessions
+            .iter()
+            .find(|s| !s.closed)
+            .map(|s| s.id.clone());
+        for c in &mut self.clients {
+            // A client's pointer is stale if it names a session that is now closed, or
+            // names no session we still hold. Live pointers are left exactly as they are.
+            let stale = match &c.foreground {
+                Some(id) => state
+                    .rest
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.closed)
+                    .unwrap_or(true),
+                None => false,
+            };
+            if stale {
+                c.foreground = first_live_id.clone();
+            }
+        }
     }
-    repoint_foreground_off_closed(state);
+
+    /// Close (tombstone) EVERY session — the daemon-side "kill all" used by the `/quit`
+    /// `[k]` path (daemon stage 10, item 4). Each session's `close()` aborts its stream
+    /// and sub-agents, drops receivers, and releases its lock; the slots stay in place so
+    /// no index shifts. Foreground is repointed afterwards — it lands on a tombstone since
+    /// all are closed, which is harmless: the grace-timed self-exit then fires because
+    /// `all_sessions_closed` is now true and no further live work can start.
+    pub(in crate::app::runtime::event_loop::daemon) fn close_all_sessions(&mut self, state: &mut AppState) {
+        for s in &mut state.rest.sessions {
+            s.close();
+        }
+        self.repoint_foreground_off_closed(state);
+    }
 }

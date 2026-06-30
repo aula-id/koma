@@ -8,7 +8,6 @@
 
 use super::*;
 use crate::app::mode::Mode;
-use crate::app::runtime::event_loop::daemon::hub::close_all_sessions;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, KeyCodeWire, KeyWire, StateDelta, key_mods};
 
 /// A keyless client + a current-thread tokio runtime — the minimal context the
@@ -305,7 +304,11 @@ fn close_all_then_all_closed_true() {
     let _id2 = push_session(&mut state);
     assert!(!all_sessions_closed(&state), "not closed before kill-all");
 
-    close_all_sessions(&mut state);
+    // `close_all_sessions` is now a method on the hub (C1.5: it also repoints the
+    // per-client foreground pointers). With no clients enrolled the per-client repoint
+    // is a no-op, so the `state` outcome asserted here is identical to before.
+    let (mut hub, _runner_tx) = DaemonHub::new();
+    hub.close_all_sessions(&mut state);
 
     assert!(all_sessions_closed(&state), "every session closed after kill-all");
     assert!(state.rest.sessions.iter().all(|s| !s.is_working()), "no tombstone reads as working");
@@ -316,11 +319,12 @@ fn close_all_then_all_closed_true() {
 fn should_quit_flag_drives_close_all() {
     let mut state = AppState::new(Mode::Chat);
     let _id1 = push_session(&mut state);
+    let (mut hub, _runner_tx) = DaemonHub::new();
 
     state.rest.should_quit = true;
 
     if state.rest.should_quit {
-        close_all_sessions(&mut state);
+        hub.close_all_sessions(&mut state);
         state.rest.should_quit = false;
     }
 

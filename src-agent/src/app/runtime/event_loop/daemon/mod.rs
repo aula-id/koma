@@ -313,7 +313,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     `close_all_sessions`. (Detach `[d]` leaves sessions live and is a CLIENT-
         //     side exit — it never reaches here as a daemon close.)
         if state.rest.should_quit {
-            hub::close_all_sessions(state);
+            hub.close_all_sessions(state);
             state.rest.should_quit = false;
         }
 
