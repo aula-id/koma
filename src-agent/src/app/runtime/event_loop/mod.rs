@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, MouseEventKind};
+use ratatui::crossterm::event::{self, Event, MouseButton, MouseEventKind};
 
 use crate::app::mode::Mode;
 use crate::app::state::AppState;
@@ -137,6 +137,34 @@ pub(super) fn run_loop(
                                     dirty = true;
                                 }
                                 _ => {}
+                            }
+                        } else if let Mode::QuitConfirm(s) = &state.mode {
+                            // Quit-confirm overlay: a LEFT click on one of the three
+                            // option rows runs the same action its key does. Hit-test
+                            // the rects the draw fn recorded (index 0=kill, 1=detach,
+                            // 2=cancel), then dispatch through the SHARED `apply_action`
+                            // path the keyboard uses so the click and the key can never
+                            // diverge. The immutable `&state.mode` borrow ends with this
+                            // block, before the mutable dispatch below.
+                            let clicked = if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+                                let rects = s.button_rects.get();
+                                rects.iter().position(|r| {
+                                    m.column >= r.x
+                                        && m.column < r.x.saturating_add(r.width)
+                                        && m.row >= r.y
+                                        && m.row < r.y.saturating_add(r.height)
+                                })
+                            } else {
+                                None
+                            };
+                            if let Some(idx) = clicked {
+                                let action = match idx {
+                                    0 => controller::input::Action::QuitKillAll,
+                                    1 => controller::input::Action::QuitDetach,
+                                    _ => controller::input::Action::QuitCancel,
+                                };
+                                apply_action(action, state, client, handle)?;
+                                dirty = true;
                             }
                         }
                     }

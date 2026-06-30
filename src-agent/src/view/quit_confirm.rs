@@ -8,14 +8,19 @@
 //! 2. An adaptive header line:
 //!    - working > 0: "N session(s) still cooking — keep them running or kill all?"
 //!    - working == 0: "Keep your N session(s) for next time, or close them?"
-//! 3. The three keyed choices, each on its own line, the key accented.
-//! 4. A one-line honesty note about Phase-1 detach (no daemon yet).
+//! 3. The three keyed choices, each on its own line, the key rendered as a small
+//!    filled "chip" so the row reads as a clickable button.
+//! 4. A one-line note clarifying that detach persists conversations but does not
+//!    keep work running after exit.
 //!
 //! No selection cursor: the choices are bound to distinct keys (k / d / Esc),
-//! handled in [`crate::controller::input::handle_quit_confirm`].
+//! handled in [`crate::controller::input::handle_quit_confirm`]. Each option row
+//! is ALSO clickable — its on-screen [`ratatui::layout::Rect`] is recorded into
+//! [`QuitConfirmState::button_rects`] here so the event loop can hit-test a
+//! left-click and dispatch the matching action.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph},
@@ -67,15 +72,21 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
         format!("Keep your {} {plural} for next time, or close them?", s.total)
     };
 
-    // Each choice: an accented key glyph + a dim description. The accent colour
-    // marks the actionable key; the rest stays neutral.
-    let key = |c: &'static str| Span::styled(
+    // Each choice renders as a small filled "chip" (the key, reversed onto the
+    // accent colour) followed by a neutral description — so the whole row reads
+    // as a clickable button. `sel_fg` is the palette's on-accent foreground
+    // (true-black / true-white), legible even under BOLD; it matches the footer +
+    // selection inverse-text treatment used elsewhere.
+    let chip = |c: &'static str| Span::styled(
         c,
         Style::default()
-            .fg(palette.accent)
+            .bg(palette.accent)
+            .fg(palette.sel_fg)
             .add_modifier(Modifier::BOLD),
     );
     let desc = |t: &'static str| Span::styled(t, Style::default().fg(palette.fg));
+    // A single space gap between the chip and its label.
+    let gap = || Span::raw(" ");
 
     let lines: Vec<Line> = vec![
         Line::from(Span::styled(
@@ -84,30 +95,53 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
         )),
         Line::from(""),
         Line::from(vec![
-            key("[k] "),
+            chip(" k "),
+            gap(),
             desc("kill all & quit  — abort every session's in-flight work, then exit"),
         ]),
         Line::from(vec![
-            key("[d] "),
+            chip(" d "),
+            gap(),
             desc("detach & quit    — leave conversations on disk (resumable), then exit"),
         ]),
         Line::from(vec![
-            key("[esc] "),
+            chip(" esc "),
+            gap(),
             desc("cancel           — back to chat, keep everything running"),
         ]),
         Line::from(""),
-        // Honesty note: Phase 1 has no daemon, so detach can't keep cooking
-        // headless — the work dies with the process. Be explicit about it.
+        // Note: detach persists each conversation so it can be resumed later, but
+        // there is no headless background mode — the work stops when koma exits.
         Line::from(Span::styled(
-            "note: detach leaves sessions resumable but does NOT keep them \
-             running headless — that arrives with the daemon (Phase 2).",
+            "note: detach saves each conversation to disk to resume later — \
+             in-flight work still stops when koma exits.",
             Style::default().fg(palette.dim),
         )),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 
+    // Record the three option rows as full-width click targets. The Paragraph
+    // lines are laid out top-down (header=0, blank=1, k=2, d=3, esc=4), so each
+    // button is a 1-row band at `inner.y + ROW`. Full-row width is a forgiving
+    // hit target. Guard tiny terminals: if `inner` can't fit all five rows we
+    // leave the rects empty (Rect::ZERO) so nothing is clickable rather than
+    // pointing clicks at off-screen / overlapping rows. Order: kill, detach,
+    // cancel — matching `button_rects`' documented index order.
+    let rects = if inner.width > 0 && inner.height >= 5 {
+        let row = |r: u16| Rect {
+            x: inner.x,
+            y: inner.y + r,
+            width: inner.width,
+            height: 1,
+        };
+        [row(2), row(3), row(4)]
+    } else {
+        [Rect::ZERO; 3]
+    };
+    s.button_rects.set(rects);
+
     // --- Keybinding hint ---
-    let hint = "k kill all · d detach · Esc cancel";
+    let hint = "k kill all · d detach · Esc cancel · click to choose";
     let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));
     frame.render_widget(instructions, chunks[2]);
 }
