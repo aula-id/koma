@@ -503,15 +503,15 @@ pub(crate) fn process_tools(
                         state.rest.sessions[sess_idx].status = format!("approve {}? [y/n]", call.function.name);
                         return;
                     } else {
-                        // Classifier unavailable. `verdict.reason` now carries the
-                        // REAL cause (e.g. "classifier error: 402 …", "classifier
-                        // timeout", "unparseable verdict: …") — surface it so the
+                        // Classifier unavailable. `verdict.reason` carries the REAL
+                        // cause (e.g. "classifier not configured …", "classifier
+                        // error: 402 …", "classifier timeout") — surface it so the
                         // user sees the actual diagnostic, not a generic string.
                         // Normal: degrade to a human y/n prompt (human decides).
-                        // Auto: fail-open — user has delegated decisions; a
-                        //       classifier outage must not halt or interrupt them.
-                        //       Run inline and surface a toast so the degradation
-                        //       is visible.
+                        // Auto: fail-CLOSED — do NOT run the tool. Push a synthetic
+                        //       "not executed" result and bounce to the model, which
+                        //       re-decides with the outage surfaced. A classifier
+                        //       outage must never let an unverified mutation run.
                         if mode == AgentMode::Normal {
                             state.rest.sessions[sess_idx].approval_reason =
                                 Some(verdict.reason.clone());
@@ -520,12 +520,29 @@ pub(crate) fn process_tools(
                                 format!("approve {}? [y/n]", call.function.name);
                             return;
                         }
-                        // Auto + unavailable → run inline, no prompt.
-                        state.rest.sessions[sess_idx].set_toast(format!(
-                            "harness: {} — auto-ran {}",
-                            verdict.reason, call.function.name
+                        // Auto + unavailable → bounce to model (fail-closed).
+                        // Do NOT run the tool. Push a synthetic "not executed"
+                        // result so finish_tool_round re-streams it to the model,
+                        // which re-decides with full context. The mutation never
+                        // silently runs when the classifier is down.
+                        state.rest.sessions[sess_idx].tool_results.push((
+                            call.id.clone(),
+                            format!(
+                                "not executed: classifier unavailable — {}. \
+                                The safety classifier could not verify this call, \
+                                so it was NOT run. If the user explicitly requested \
+                                this change, tell them to configure or fix the \
+                                safeguard classifier in /settings or switch agent \
+                                mode; otherwise do not retry.",
+                                verdict.reason
+                            ),
                         ));
-                        // fall through to run_tool below
+                        state.rest.sessions[sess_idx].tool_idx += 1;
+                        state.rest.sessions[sess_idx].set_toast(
+                            "harness: classifier unavailable — not run, bounced to model"
+                                .to_string(),
+                        );
+                        continue;
                     }
                 }
                 // Classifier disabled → original behaviour: Normal asks, Auto runs.
