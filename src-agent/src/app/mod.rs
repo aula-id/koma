@@ -37,6 +37,6 @@ pub use runtime::run;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
 pub use runtime::{
-    daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand,
+    any_daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand,
 };
 pub use update::run_update;

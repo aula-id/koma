@@ -122,6 +122,14 @@ pub struct Opts {
     /// When `true`, stop the running daemon then run the installer to fetch the
     /// latest release binary, then exit (`koma update` positional verb).
     pub update: bool,
+    /// The session UUID this invocation is bound to (`--session <id>`).
+    ///
+    /// Daemon-per-session: a fresh `koma` MINTS this on the CLIENT side, then spawns its
+    /// daemon with `--daemon --session <id>` and connects to the matching keyed socket
+    /// (`run/<id>.sock`). On the DAEMON side it is REQUIRED — the daemon binds that
+    /// socket and create-or-loads exactly session `<id>`. `None` on a bare `koma` until
+    /// `main` mints one; a stray `--session` on a path that ignores it is harmless.
+    pub session: Option<String>,
 }
 
 /// Parse command-line arguments into [`Opts`].
@@ -161,6 +169,16 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--attach"                       => opts.attach = true,
             "--local"                        => opts.local = true,
             _                                => {}
+        }
+    }
+
+    // `--session <id>` takes a VALUE, so it can't be handled in the value-less match
+    // above. Scan consecutive pairs and capture the token AFTER `--session` (last one
+    // wins). The value is not validated here — the daemon/client treat it as an opaque
+    // socket key; a missing value (trailing `--session`) leaves `session = None`.
+    for pair in all.windows(2) {
+        if pair[0] == "--session" {
+            opts.session = Some(pair[1].clone());
         }
     }
 

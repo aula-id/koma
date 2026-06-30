@@ -9,7 +9,7 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, StateSnapshot};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::actions::{apply_action, create_session_for_pwd};
+use crate::app::runtime::actions::apply_action;
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -174,36 +174,15 @@ impl DaemonHub {
     ) {
         match req {
             // --- read-only / control (honoured for everyone) ---
-            ClientRequest::Attach { cwd, .. } => {
-                // FRESH-on-attach (C5): a plain `koma` attach ALWAYS creates a brand-new
-                // session rooted at the ATTACHING CLIENT's cwd — it never resumes a live
-                // or on-disk session for that dir. (The old pwd-aware resume was the bug:
-                // reopening `koma` in a dir landed on the OLD session — stale chat, even a
-                // stale /quit page. Resume / cooking / history is reached only via
-                // `koma --resume` / `koma agents`, which fire `OpenSessionHub` to open the
-                // picker OVER this fresh base.)
+            ClientRequest::Attach { .. } => {
+                // Daemon-per-session: the daemon ALREADY OWNS its one session (created or
+                // loaded at startup, keyed to its socket — see `install_daemon_session`),
+                // so Attach NO LONGER creates a session. The `cwd` the client carries is
+                // ignored here (the daemon's session is already rooted at the cwd it
+                // inherited at spawn). Attach is now purely: Hello + Snapshot + mark
+                // attached + seed this client's baseline. Re-attach / resync from an
+                // already-attached client is unchanged (it just re-snapshots).
                 //
-                // GUARDED to the FIRST attach for this client (`!attached`, still false
-                // here since `attached` is flipped true only AFTER the snapshot below):
-                // a re-attach / resync from an already-attached client must NOT spawn a
-                // second session — it just re-snapshots that client's existing foreground.
-                // Runs for EVERY first-attaching client (C2): the C2 LOAD/STORE bracket
-                // scopes the create's foreground move to THIS client's view and the post-
-                // attach STORE persists the new session's UUID onto its OWN per-client
-                // pointer, so each window gets (and keeps) its own independent fresh
-                // session without disturbing any other client's view. A client that sent
-                // no `cwd` just keeps its current foreground (nothing to root a session
-                // at). Any create error is swallowed (surfaced via status, never aborts
-                // the loop) so a bad create can't wedge the attach handshake; the snapshot
-                // below still goes out, reflecting whatever foreground resulted.
-                if !self.clients[idx].attached {
-                    if let Some(cwd) = cwd {
-                        let cwd = std::path::PathBuf::from(cwd);
-                        if let Err(e) = create_session_for_pwd(state, client, handle, &cwd) {
-                            state.rest.fg_mut().status = format!("attach create error: {e:#}");
-                        }
-                    }
-                }
                 // Build-skew handshake (task #142): emit the daemon's startup
                 // fingerprint as the FIRST frame this client receives, BEFORE its
                 // initial Snapshot. A client built from different code restarts this
@@ -218,8 +197,7 @@ impl DaemonHub {
                 // Only this client's baseline is (re)seeded (blocker #2) — never a
                 // hub-global one — so a late attach can't swallow deltas another
                 // already-attached client still owes; that client diffs against its
-                // own untouched baseline. Built AFTER pwd selection so this client's very
-                // first snapshot already reflects the resolved (possibly new) foreground.
+                // own untouched baseline. Reflects the daemon's single owned session.
                 let snap = build_snapshot(state);
                 self.send_to(idx, DaemonEvent::Snapshot(Box::new(snap.clone())));
                 self.clients[idx].attached = true;

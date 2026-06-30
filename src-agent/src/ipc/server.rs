@@ -49,11 +49,11 @@ pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
     UnixListener::bind(path)
 }
 
-/// Convenience over [`store::daemon_sock_path`] + [`bind`]: resolve the canonical
-/// daemon socket path and bind it.
+/// Convenience over [`store::daemon_sock_path`] + [`bind`]: resolve a SESSION's keyed
+/// daemon socket path (`run/<session_id>.sock`) and bind it.
 #[allow(dead_code)] // wired in daemon stage 3+ (spawn-or-attach)
-pub fn bind_default() -> anyhow::Result<UnixListener> {
-    let path = store::daemon_sock_path()?;
+pub fn bind_default(session_id: &str) -> anyhow::Result<UnixListener> {
+    let path = store::daemon_sock_path(session_id)?;
     Ok(bind(&path)?)
 }
 

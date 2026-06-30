@@ -148,11 +148,13 @@ fn main() -> anyhow::Result<()> {
     }
 
     // --- explicit thin-client path: attach to an ALREADY-running daemon ---
-    // Connects to ~/.koma/daemon.sock, renders the daemon's foreground session from
-    // streamed snapshots/deltas, and forwards input. Detaching (Ctrl-C) leaves the
-    // daemon running. Unlike the default path below, `--attach` does NOT spawn a daemon:
-    // it surfaces "no daemon up" as an error (the operator asked to attach to one that
-    // should already exist).
+    // Daemon-per-session: connects to the keyed socket `run/<id>.sock` of the session
+    // named by `--session <id>` (REQUIRED here — there is no longer a single global
+    // socket to default to), renders that daemon's foreground session from streamed
+    // snapshots/deltas, and forwards input. Detaching (Ctrl-C) leaves the daemon running.
+    // Unlike the default path below, `--attach` does NOT spawn a daemon: a missing daemon
+    // (or a missing `--session`) surfaces as an error (the operator asked to attach to one
+    // that should already exist).
     if opts.attach {
         return app::client_run(opts);
     }
@@ -165,7 +167,7 @@ fn main() -> anyhow::Result<()> {
     // corrupts the locks. Direct the user to attach (plain `koma`) or kill the daemon
     // first, and exit non-zero. With no daemon up, run the standalone TUI normally.
     if opts.local {
-        if app::daemon_alive() {
+        if app::any_daemon_alive() {
             eprintln!(
                 "error: a koma daemon is running; use `koma` to attach to it, \
                  or `koma daemon kill` first (refusing to run a standalone local TUI \
@@ -192,9 +194,24 @@ fn main() -> anyhow::Result<()> {
     // mode, which the client now renders (#122) — the user enters creds via the client,
     // forwarded to the daemon. So a first-ever `koma` (no prior creds) reaches a usable
     // KeyInput screen through the client, not a crash.
-    if let Err(e) = app::ensure_daemon_running(opts.resume) {
+    //
+    // Daemon-per-session: a fresh `koma` MINTS a new session UUID on the CLIENT side,
+    // spawns its OWN daemon bound to `run/<id>.sock` via `--daemon --session <id>`, then
+    // connects to that same keyed socket. Two `koma` in two terminals mint two different
+    // ids → two fully independent daemons. The minted id is always new, so the daemon's
+    // create-or-load always takes the CREATE branch here (resume/load is a later commit).
+    //
+    // TODO(hub): --resume opens the daemon swapper — wired in a later commit. For now a
+    // `--resume` / `koma agents` launch behaves like a plain fresh `koma`: it still mints
+    // a new session and spawns a fresh session-daemon (the `resume` bit is kept plumbed
+    // end-to-end so the later hub commit can divert here instead of spawning).
+    let mut opts = opts;
+    let session_id = uuid::Uuid::new_v4().to_string();
+    if let Err(e) = app::ensure_daemon_running(&session_id, opts.resume) {
         eprintln!("error: could not start the koma daemon: {e:#} — try `koma --local`");
         std::process::exit(1);
     }
+    // Hand the minted id to the client so it connects to THIS session's keyed socket.
+    opts.session = Some(session_id);
     app::client_run(opts)
 }

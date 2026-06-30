@@ -65,19 +65,37 @@ const KILL_GRACE: Duration = Duration::from_secs(3);
 /// process to die / the socket to disappear.
 const SIGNAL_GRACE: Duration = Duration::from_secs(2);
 
-/// Stop any running daemon, then spawn a fresh one — the PUBLIC restart primitive
-/// the thin client uses to recover from a build-skew (task #142).
+/// Stop the SESSION-daemon for `session_id`, then spawn a fresh one — the PUBLIC restart
+/// primitive the thin client uses to recover from a build-skew (task #142).
 ///
-/// This is the EXACT `koma daemon restart` path: it delegates straight to
-/// [`cmd_restart`], reusing its full graceful→SIGTERM→SIGKILL stop escalation AND its
+/// Daemon-per-session: this restarts ONLY the daemon owning `session_id` (the one the
+/// client is attached to), not every daemon. It reuses the full
+/// graceful→SIGTERM→SIGKILL stop escalation ([`stop_session_daemon`]) AND the
 /// [`ensure_daemon_and_connect`] spawn-and-confirm (poll-connect until the new daemon
 /// accepts), so the auto-restart never reinvents the kill or the spawn. It returns
 /// `Ok(())` once a fresh daemon is confirmed accepting (or surfaces the spawn error);
-/// the caller then reconnects to the new daemon. Like the CLI verb it prints a couple
-/// of plain status lines, which is harmless here — the client's handshake runs BEFORE
-/// the alt-screen is entered, so the lines scroll away when the TUI opens.
-pub fn restart_daemon() -> Result<()> {
-    cmd_restart()
+/// the caller then reconnects to the new daemon. It prints a couple of plain status
+/// lines, which is harmless here — the client's handshake runs BEFORE the alt-screen is
+/// entered, so the lines scroll away when the TUI opens.
+pub fn restart_daemon(session_id: &str) -> Result<()> {
+    // Stop whatever owns this session (prints its own outcome). A kill error shouldn't
+    // block the restart — surface it but continue to the spawn.
+    if let Err(e) = stop_session_daemon(session_id) {
+        eprintln!("koma daemon: warning during stop phase of restart: {e:#}");
+    }
+
+    // Spawn + wait for it to accept (false: we just killed it). Confirm-only stream.
+    let stream = ensure_daemon_and_connect(session_id)
+        .context("failed to start the new daemon")?;
+    drop(stream); // we only needed to confirm it is accepting
+
+    match read_pidfile(session_id) {
+        Some(pid) => println!("koma daemon: restarted session {session_id} (pid {pid})"),
+        None => println!(
+            "koma daemon: restarted session {session_id} (pid unknown — pidfile not yet written)"
+        ),
+    }
+    Ok(())
 }
 
 /// Entry point for `koma daemon <verb>` — dispatch to the matching handler.
@@ -111,16 +129,72 @@ pub fn print_daemon_usage() -> i32 {
 
 // ─── discovery (bind-as-oracle) ──────────────────────────────────────────────
 
-/// Whether a daemon is currently ALIVE, decided by the bind-as-oracle rule
-/// (critique #2): try to CONNECT to the socket. A successful connect proves a real
-/// daemon is accepting; `ECONNREFUSED` (stale socket file, nobody listening) or
-/// `ENOENT` (no socket at all) proves it is not. The pidfile is NEVER consulted here
-/// — PID reuse would make it lie.
-pub fn daemon_alive() -> bool {
-    let Ok(path) = store::daemon_sock_path() else {
+/// Whether the SESSION-daemon for `session_id` is currently ALIVE, decided by the
+/// bind-as-oracle rule (critique #2): try to CONNECT to its keyed socket
+/// (`run/<session_id>.sock`). A successful connect proves a real daemon is accepting;
+/// `ECONNREFUSED` (stale socket file, nobody listening) or `ENOENT` (no socket at all)
+/// proves it is not. The pidfile is NEVER consulted here — PID reuse would make it lie.
+pub fn daemon_alive(session_id: &str) -> bool {
+    let Ok(path) = store::daemon_sock_path(session_id) else {
         return false;
     };
     UnixStream::connect(&path).is_ok()
+}
+
+/// Whether ANY session-daemon is currently alive, by probing every `*.sock` in the run
+/// dir (bind-as-oracle per socket). Used by the explicit `--local` guard, which refuses
+/// to run a standalone TUI while any daemon owns a session (a second writer would
+/// corrupt that session's locks). A missing/empty run dir ⇒ `false`.
+pub fn any_daemon_alive() -> bool {
+    live_session_sockets()
+        .map(|live| !live.is_empty())
+        .unwrap_or(false)
+}
+
+/// Probe whether ONE socket file currently accepts a connection (bind-as-oracle for a
+/// specific path). `true` only on a successful connect; any error (refused / not-found /
+/// permissions) reads as not-live.
+fn sock_path_alive(path: &Path) -> bool {
+    UnixStream::connect(path).is_ok()
+}
+
+/// Enumerate the session sockets under [`store::run_dir`], returning each `*.sock`
+/// path paired with whether a daemon is currently accepting on it.
+///
+/// Best-effort: an unreadable/absent run dir yields an empty list (no daemons), never an
+/// error from the directory walk itself — only [`store::run_dir`] resolution can fail.
+/// The `session_id` is the socket file stem (`<id>.sock`), the same key the daemon was
+/// spawned with. Drives the `koma daemon …` admin verbs (which now act over ALL
+/// sessions) without consulting any pidfile for liveness.
+fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, bool)>> {
+    let dir = store::run_dir()?;
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        // No run dir yet ⇒ no daemons. Not an error for the admin verbs.
+        Err(_) => return Ok(out),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("sock") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let alive = sock_path_alive(&path);
+        out.push((id.to_string(), path, alive));
+    }
+    Ok(out)
+}
+
+/// The subset of [`list_session_sockets`] whose daemon is currently ACCEPTING, as
+/// `(session_id, socket_path)` pairs. Stale sockets (dead daemon) are dropped.
+fn live_session_sockets() -> Result<Vec<(String, std::path::PathBuf)>> {
+    Ok(list_session_sockets()?
+        .into_iter()
+        .filter_map(|(id, path, alive)| alive.then_some((id, path)))
+        .collect())
 }
 
 /// Spawn a DETACHED `koma --daemon` child and return its PID.
@@ -139,13 +213,19 @@ pub fn daemon_alive() -> bool {
 /// When `resume` is `true`, the `--resume` flag is forwarded to the spawned daemon
 /// so `build_startup()` opens the session picker instead of eagerly creating a
 /// session.
-fn spawn_daemon(resume: bool) -> Result<u32> {
+///
+/// `session_id` is passed through as `--daemon --session <id>`: the daemon binds the
+/// matching keyed socket (`run/<id>.sock`) and create-or-loads exactly that session, so
+/// the spawning client (which minted `id`) and the daemon agree on the session/socket.
+fn spawn_daemon(session_id: &str, resume: bool) -> Result<u32> {
     // Re-launch THIS binary with `--daemon`. `current_exe` is the running koma binary,
     // so a renamed/installed binary still respawns itself correctly.
     let exe = std::env::current_exe().context("cannot resolve current executable path")?;
 
     let mut cmd = Command::new(exe);
     cmd.arg("--daemon")
+        .arg("--session")
+        .arg(session_id)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -216,13 +296,19 @@ fn probe_or_clear(path: &Path) -> Result<bool> {
 ///
 /// When `resume` is `true`, the spawned daemon receives `--resume` so
 /// `build_startup()` opens the session picker instead of eagerly creating a session.
-pub fn ensure_daemon_running(resume: bool) -> Result<()> {
-    let path = store::daemon_sock_path()?;
+///
+/// `session_id` keys the whole operation: the probe + spawn target the session's keyed
+/// socket (`run/<session_id>.sock`), and the spawned daemon is told `--session
+/// <session_id>` so it owns exactly that session. For a fresh `koma` the id was just
+/// minted (so the socket never exists yet and this always spawns); the probe branch
+/// still matters for a resume that re-targets an already-live session-daemon later.
+pub fn ensure_daemon_running(session_id: &str, resume: bool) -> Result<()> {
+    let path = store::daemon_sock_path(session_id)?;
     if probe_or_clear(&path)? {
         return Ok(()); // already live — attach to the existing one
     }
     // Nothing live → spawn a detached daemon and wait until it accepts.
-    spawn_and_wait_until_alive(&path, resume)
+    spawn_and_wait_until_alive(session_id, &path, resume)
 }
 
 /// Spawn-or-attach: return a connected blocking [`UnixStream`] to a LIVE daemon,
@@ -242,8 +328,11 @@ pub fn ensure_daemon_running(resume: bool) -> Result<()> {
 /// Note: the daemon's own `server::bind` ALSO unlinks a stale socket before binding,
 /// so step 2's unlink is belt-and-suspenders; doing it here too keeps the contract
 /// explicit and avoids racing a bind that hasn't happened yet.
-pub fn ensure_daemon_and_connect() -> Result<UnixStream> {
-    let path = store::daemon_sock_path()?;
+///
+/// `session_id` keys the socket + the spawned daemon's `--session`, so this confirms a
+/// live session-daemon for exactly that session.
+pub fn ensure_daemon_and_connect(session_id: &str) -> Result<UnixStream> {
+    let path = store::daemon_sock_path(session_id)?;
 
     if probe_or_clear(&path)? {
         // Already live — reconnect for the caller (the probe stream was dropped).
@@ -252,7 +341,7 @@ pub fn ensure_daemon_and_connect() -> Result<UnixStream> {
     }
 
     // Nothing live → spawn + wait until it accepts, then connect for the caller.
-    spawn_and_wait_until_alive(&path, false)?;
+    spawn_and_wait_until_alive(session_id, &path, false)?;
     UnixStream::connect(&path)
         .with_context(|| format!("connect to spawned daemon socket {}", path.display()))
 }
@@ -265,8 +354,8 @@ pub fn ensure_daemon_and_connect() -> Result<UnixStream> {
 /// [`ensure_daemon_and_connect`] (restart): both need "spawn, then wait until alive";
 /// only the latter additionally returns a connected stream. The wait is the SAME
 /// connect-probe as [`daemon_alive`], so "alive" means exactly "the socket accepts".
-fn spawn_and_wait_until_alive(path: &Path, resume: bool) -> Result<()> {
-    let pid = spawn_daemon(resume)?;
+fn spawn_and_wait_until_alive(session_id: &str, path: &Path, resume: bool) -> Result<()> {
+    let pid = spawn_daemon(session_id, resume)?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
         match UnixStream::connect(path) {
@@ -330,58 +419,62 @@ fn connect_managed(path: &Path) -> Result<(UnixStream, FrameReader)> {
     Ok((stream, FrameReader::new()))
 }
 
-/// Read the advisory PID from the pidfile, if present and parseable. Used ONLY for
-/// human-facing messaging and as the last-resort `kill` target — NEVER for liveness
-/// (that is the socket's job, per the bind-as-oracle rule).
-fn read_pidfile() -> Option<u32> {
-    let path = store::daemon_pid_path().ok()?;
+/// Read the advisory PID from the pidfile for `session_id`, if present and parseable.
+/// Used ONLY for human-facing messaging and as the last-resort `kill` target — NEVER for
+/// liveness (that is the socket's job, per the bind-as-oracle rule).
+fn read_pidfile(session_id: &str) -> Option<u32> {
+    let path = store::daemon_pid_path(session_id).ok()?;
     let contents = std::fs::read_to_string(path).ok()?;
     contents.trim().parse::<u32>().ok()
 }
 
-/// Best-effort unlink of the socket + pidfile (the "turds" a crash can leave). Each
-/// removal ignores a missing file; any other IO error is swallowed — these are
+/// Best-effort unlink of one session's socket + pidfile (the "turds" a crash can leave).
+/// Each removal ignores a missing file; any other IO error is swallowed — these are
 /// cleanup, never a hard failure.
-fn unlink_daemon_files() {
-    if let Ok(sock) = store::daemon_sock_path() {
+fn unlink_daemon_files(session_id: &str) {
+    if let Ok(sock) = store::daemon_sock_path(session_id) {
         let _ = std::fs::remove_file(sock);
     }
-    if let Ok(pid) = store::daemon_pid_path() {
+    if let Ok(pid) = store::daemon_pid_path(session_id) {
         let _ = std::fs::remove_file(pid);
     }
 }
 
 // ─── subcommands ─────────────────────────────────────────────────────────────
 
-/// `koma daemon status` — report liveness via the bind-as-oracle probe.
+/// `koma daemon status` — report liveness for EVERY session-daemon via the bind-as-oracle
+/// probe.
 ///
-/// If a daemon is live: print "running", its PID (from the pidfile, advisory) and the
-/// socket path, then best-effort ask it for a session count via `ListSessions` and
-/// print that too (a failure to get the count never fails the command — liveness is
-/// already established). If not live: print "not running".
+/// Daemon-per-session: enumerates the live `run/<id>.sock` daemons and prints one block
+/// per session — its session id, advisory PID (from that session's pidfile), socket
+/// path, and a best-effort session count from the daemon's own `ListSessions` snapshot
+/// (failure to get the count never fails the command — liveness is already established).
+/// With no live daemons it prints "no daemons running".
 fn cmd_status() -> Result<()> {
-    let sock = store::daemon_sock_path()?;
-
-    if !daemon_alive() {
-        println!("koma daemon: not running");
+    let live = live_session_sockets()?;
+    if live.is_empty() {
+        println!("koma daemon: no daemons running");
         return Ok(());
     }
 
-    // Live. PID is advisory (the pidfile may be missing/stale even while the socket is
-    // up — they are written/removed at slightly different moments), so word it as such.
-    let pid_str = match read_pidfile() {
-        Some(pid) => format!("pid {pid}"),
-        None => "pid unknown (no pidfile)".to_string(),
-    };
-    println!("koma daemon: running ({pid_str})");
-    println!("  socket: {}", sock.display());
+    println!("koma daemon: {} session daemon(s) running", live.len());
+    for (id, sock) in live {
+        // PID is advisory (the pidfile may be missing/stale even while the socket is up —
+        // they are written/removed at slightly different moments), so word it as such.
+        let pid_str = match read_pidfile(&id) {
+            Some(pid) => format!("pid {pid}"),
+            None => "pid unknown (no pidfile)".to_string(),
+        };
+        println!("  session {id} ({pid_str})");
+        println!("    socket: {}", sock.display());
 
-    // Best-effort session count. ListSessions answers with a full Snapshot; read
-    // frames until one arrives (Acks/Errors are skipped) and count its sessions. Any
-    // failure here is non-fatal — we already know the daemon is up.
-    match daemon_session_count(&sock) {
-        Ok(n) => println!("  sessions: {n}"),
-        Err(e) => println!("  sessions: unknown ({e})"),
+        // Best-effort session count from THIS daemon's snapshot. (At this commit a
+        // daemon owns exactly one session, so this is normally 1; kept because the wire
+        // reply still carries the full set.) Any failure is non-fatal.
+        match daemon_session_count(&sock) {
+            Ok(n) => println!("    sessions: {n}"),
+            Err(e) => println!("    sessions: unknown ({e})"),
+        }
     }
 
     Ok(())
@@ -406,25 +499,25 @@ fn daemon_session_count(sock: &Path) -> Result<usize> {
     Err(anyhow!("no snapshot in reply"))
 }
 
-/// `koma daemon kill` — stop a running daemon, escalating only if it won't go.
+/// Stop the SESSION-daemon owning `session_id`, escalating only if it won't go. The
+/// per-session stop PRIMITIVE shared by `koma daemon kill` (looped over every live
+/// session) and [`restart_daemon`]. Prints exactly one outcome line tagged with the
+/// session id, and is best-effort throughout (it never fails the caller).
 ///
-/// 1. If not alive: report "no daemon running" and sweep any stale socket/pidfile.
-/// 2. Alive: connect + send `QuitDaemon` (the graceful path — the daemon releases all
-///    locks, unlinks its own socket/pidfile, and exits). Wait up to [`KILL_GRACE`] for
-///    the socket to stop accepting.
-/// 3. Still up after the grace window: fall back to the pidfile PID and SIGTERM it,
-///    wait, then SIGKILL if needed.
-/// 4. Finally unlink the socket + pidfile if anything is still present, and report
-///    what happened.
-fn cmd_kill() -> Result<()> {
-    if !daemon_alive() {
-        println!("koma daemon: no daemon running");
+/// 1. Not alive: sweep any stale socket/pidfile for this session and report.
+/// 2. Alive: connect + send `QuitDaemon` (graceful — the daemon releases its lock,
+///    unlinks its own socket/pidfile, exits). Wait up to [`KILL_GRACE`].
+/// 3. Still up: fall back to this session's pidfile PID — SIGTERM, wait, then SIGKILL.
+/// 4. Finally unlink this session's socket + pidfile if present, and report.
+fn stop_session_daemon(session_id: &str) -> Result<()> {
+    if !daemon_alive(session_id) {
         // Sweep any leftover turds from a previous crash so the next start is clean.
-        unlink_daemon_files();
+        unlink_daemon_files(session_id);
+        println!("koma daemon: session {session_id} not running");
         return Ok(());
     }
 
-    let sock = store::daemon_sock_path()?;
+    let sock = store::daemon_sock_path(session_id)?;
 
     // --- graceful: QuitDaemon ---
     // A connect/send failure here is non-fatal: it just means we go straight to the
@@ -448,105 +541,144 @@ fn cmd_kill() -> Result<()> {
         Err(_) => false,
     };
 
-    if graceful_sent && wait_until_dead(KILL_GRACE) {
+    if graceful_sent && wait_until_dead(session_id, KILL_GRACE) {
         // The daemon's own teardown unlinks the socket + pidfile; sweep defensively in
         // case it didn't get that far, then report.
-        unlink_daemon_files();
-        println!("koma daemon: stopped (graceful QuitDaemon)");
+        unlink_daemon_files(session_id);
+        println!("koma daemon: stopped session {session_id} (graceful QuitDaemon)");
         return Ok(());
     }
 
     // --- fallback: signal the pidfile PID ---
     // Bind-as-oracle says it's still accepting (or graceful failed). Use the pidfile
     // ONLY as the signal target — if it's missing we can't signal, so just nuke files.
-    let Some(pid) = read_pidfile() else {
-        unlink_daemon_files();
+    let Some(pid) = read_pidfile(session_id) else {
+        unlink_daemon_files(session_id);
         println!(
-            "koma daemon: still up but no pidfile to signal; removed stale socket/pidfile. \
-             If a daemon is still running, stop it manually."
+            "koma daemon: session {session_id} still up but no pidfile to signal; removed \
+             stale socket/pidfile. If a daemon is still running, stop it manually."
         );
         return Ok(());
     };
 
     // SIGTERM (graceful at the OS level), then wait.
     send_signal(pid, libc::SIGTERM);
-    if wait_until_dead(SIGNAL_GRACE) {
-        unlink_daemon_files();
-        println!("koma daemon: stopped (SIGTERM to pid {pid})");
+    if wait_until_dead(session_id, SIGNAL_GRACE) {
+        unlink_daemon_files(session_id);
+        println!("koma daemon: stopped session {session_id} (SIGTERM to pid {pid})");
         return Ok(());
     }
 
     // SIGKILL (last resort), then wait.
     send_signal(pid, libc::SIGKILL);
-    let died = wait_until_dead(SIGNAL_GRACE);
-    unlink_daemon_files();
+    let died = wait_until_dead(session_id, SIGNAL_GRACE);
+    unlink_daemon_files(session_id);
     if died {
-        println!("koma daemon: killed (SIGKILL to pid {pid})");
+        println!("koma daemon: killed session {session_id} (SIGKILL to pid {pid})");
     } else {
         println!(
-            "koma daemon: sent SIGKILL to pid {pid} but the socket is still up; \
-             removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
+            "koma daemon: sent SIGKILL to pid {pid} (session {session_id}) but the socket is \
+             still up; removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
         );
     }
     Ok(())
 }
 
-/// `koma daemon restart` — kill any running daemon, then spawn a fresh detached one
-/// and report its PID.
+/// `koma daemon kill` — stop EVERY live session-daemon, escalating per session only if
+/// one won't go.
 ///
-/// Reuses `cmd_kill`'s full graceful→signal escalation for the stop, then the
-/// [`ensure_daemon_and_connect`] spawn path (poll-connecting until the new daemon is
-/// accepting) so "restart" is "a working daemon is up afterwards", not just "a child
-/// was forked". The connection opened to confirm liveness is dropped immediately.
-fn cmd_restart() -> Result<()> {
-    // Stop whatever is running (prints its own outcome). A kill error shouldn't block
-    // the restart — surface it but continue to the spawn.
-    if let Err(e) = cmd_kill() {
-        eprintln!("koma daemon: warning during stop phase of restart: {e:#}");
+/// Daemon-per-session: enumerates the live `run/<id>.sock` daemons and calls
+/// [`stop_session_daemon`] on each (which prints its own per-session outcome). Each stop
+/// is best-effort — one wedged session never blocks stopping the rest. A run dir with no
+/// live daemons reports "no daemons running" (and still sweeps any stale turds).
+fn cmd_kill() -> Result<()> {
+    let live = live_session_sockets()?;
+    if live.is_empty() {
+        println!("koma daemon: no daemons running");
+        // Sweep any stale socket/pidfiles left by crashed daemons.
+        sweep_stale_files();
+        return Ok(());
     }
+    for (id, _path) in live {
+        let _ = stop_session_daemon(&id);
+    }
+    Ok(())
+}
 
-    // Spawn + wait for it to accept. `ensure_daemon_and_connect` connects (false here,
-    // since we just killed it), unlinks any stale socket, spawns, and poll-connects.
-    let stream = ensure_daemon_and_connect().context("failed to start the new daemon")?;
-    drop(stream); // we only needed to confirm it is accepting
-
-    // Report the new PID from the freshly-written pidfile (advisory). It may not be
-    // visible for a few ms after accept; the poll-connect above usually outlasts that,
-    // but tolerate a miss rather than fail the whole restart.
-    match read_pidfile() {
-        Some(pid) => println!("koma daemon: restarted (pid {pid})"),
-        None => println!("koma daemon: restarted (pid unknown — pidfile not yet written)"),
+/// `koma daemon restart` — stop EVERY live session-daemon, then respawn one per session
+/// (each on its own keyed socket) and report the new PIDs.
+///
+/// Reuses [`restart_daemon`] (the per-session graceful→signal stop + spawn-and-confirm)
+/// for each currently-live session, so "restart" is "a working daemon is up afterwards
+/// for every session that was running", not just "children were forked". A restart error
+/// for one session is surfaced but never blocks the others. With nothing live there is
+/// nothing to restart (a fresh `koma` is how you start a daemon — restart only re-spawns
+/// sessions that were already running).
+fn cmd_restart() -> Result<()> {
+    let live = live_session_sockets()?;
+    if live.is_empty() {
+        println!("koma daemon: no daemons running to restart (start one with `koma`)");
+        return Ok(());
+    }
+    for (id, _path) in live {
+        if let Err(e) = restart_daemon(&id) {
+            eprintln!("koma daemon: failed to restart session {id}: {e:#}");
+        }
     }
     Ok(())
 }
 
 /// `koma daemon clean` — the "OS shit happened, nuke the turds" escape hatch.
 ///
-/// REFUSES to run while a daemon is alive (removing a live daemon's socket would
-/// orphan it with a dangling socket file) — directing the user to `kill` instead.
-/// Only when nothing is accepting does it unlink the stale socket + pidfile and report
-/// what it removed.
+/// Daemon-per-session: scans every `run/<id>.sock`. For each socket whose daemon is DEAD
+/// (bind-as-oracle probe refused) it unlinks that socket + its pidfile; sockets with a
+/// LIVE daemon are left untouched (removing a live daemon's socket would orphan it). Then
+/// it also sweeps any orphan `*.pid` whose `*.sock` is already gone. Reports exactly
+/// which files it removed, and — when some daemons are still live — names them so the
+/// user can `koma daemon kill` instead.
 fn cmd_clean() -> Result<()> {
-    if daemon_alive() {
-        return Err(anyhow!(
-            "daemon is running; use `koma daemon kill` (clean only removes stale files \
-             when no daemon is running)"
-        ));
-    }
+    let socks = list_session_sockets()?;
+    let live: Vec<String> = socks
+        .iter()
+        .filter(|(_, _, alive)| *alive)
+        .map(|(id, _, _)| id.clone())
+        .collect();
 
-    // Nothing live — remove whatever stale files exist and report precisely which.
     let mut removed: Vec<String> = Vec::new();
-    if let Ok(sock) = store::daemon_sock_path() {
-        if std::fs::remove_file(&sock).is_ok() {
-            removed.push(sock.display().to_string());
+    // Remove every DEAD session's socket + pidfile; never touch a live one.
+    for (id, path, alive) in &socks {
+        if *alive {
+            continue;
+        }
+        if std::fs::remove_file(path).is_ok() {
+            removed.push(path.display().to_string());
+        }
+        if let Ok(pid) = store::daemon_pid_path(id) {
+            if std::fs::remove_file(&pid).is_ok() {
+                removed.push(pid.display().to_string());
+            }
         }
     }
-    if let Ok(pid) = store::daemon_pid_path() {
+
+    // Sweep orphan pidfiles whose socket is already gone (a crash that lost the socket
+    // but left the pid). Skip any pid that belongs to a still-live session.
+    for (id, pid) in orphan_pidfiles()? {
+        if live.contains(&id) {
+            continue;
+        }
         if std::fs::remove_file(&pid).is_ok() {
             removed.push(pid.display().to_string());
         }
     }
 
+    if !live.is_empty() {
+        println!(
+            "koma daemon: {} session daemon(s) still running ({}); left their files in place — \
+             use `koma daemon kill` to stop them",
+            live.len(),
+            live.join(", ")
+        );
+    }
     if removed.is_empty() {
         println!("koma daemon: nothing to clean (no stale socket/pidfile)");
     } else {
@@ -556,6 +688,57 @@ fn cmd_clean() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Best-effort sweep of stale socket/pidfiles for sessions whose daemon is DEAD, across
+/// the whole run dir. Used by `cmd_kill`'s no-live-daemons branch to clean crash turds.
+/// Live daemons are never touched. Errors are swallowed (pure cleanup).
+fn sweep_stale_files() {
+    if let Ok(socks) = list_session_sockets() {
+        for (id, path, alive) in socks {
+            if alive {
+                continue;
+            }
+            let _ = std::fs::remove_file(&path);
+            if let Ok(pid) = store::daemon_pid_path(&id) {
+                let _ = std::fs::remove_file(pid);
+            }
+        }
+    }
+    if let Ok(orphans) = orphan_pidfiles() {
+        for (_id, pid) in orphans {
+            let _ = std::fs::remove_file(pid);
+        }
+    }
+}
+
+/// Enumerate `*.pid` files in the run dir whose matching `*.sock` does NOT exist (an
+/// orphan pidfile from a crash that lost its socket), as `(session_id, pid_path)` pairs.
+/// Best-effort: an unreadable run dir yields an empty list.
+fn orphan_pidfiles() -> Result<Vec<(String, std::path::PathBuf)>> {
+    let dir = store::run_dir()?;
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(out),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("pid") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Only an orphan if there is no corresponding socket file.
+        let sock_gone = store::daemon_sock_path(id)
+            .map(|s| !s.exists())
+            .unwrap_or(true);
+        if sock_gone {
+            out.push((id.to_string(), path));
+        }
+    }
+    Ok(out)
 }
 
 // ─── signal + wait helpers ───────────────────────────────────────────────────
@@ -571,14 +754,14 @@ fn send_signal(pid: u32, sig: libc::c_int) {
     }
 }
 
-/// Poll the bind-as-oracle liveness until the daemon stops accepting or `timeout`
-/// elapses. Returns `true` if the daemon went down within the window, `false` if it
-/// is still accepting when time ran out. Uses the SAME connect-probe as
-/// [`daemon_alive`], so "dead" here means exactly "the socket no longer accepts".
-fn wait_until_dead(timeout: Duration) -> bool {
+/// Poll the bind-as-oracle liveness of the SESSION-daemon for `session_id` until it stops
+/// accepting or `timeout` elapses. Returns `true` if it went down within the window,
+/// `false` if it is still accepting when time ran out. Uses the SAME connect-probe as
+/// [`daemon_alive`], so "dead" here means exactly "the keyed socket no longer accepts".
+fn wait_until_dead(session_id: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if !daemon_alive() {
+        if !daemon_alive(session_id) {
             return true;
         }
         if Instant::now() >= deadline {

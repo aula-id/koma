@@ -71,7 +71,15 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     // or anywhere downstream (lock ownership belongs to the daemon — see the
     // module header): the only `store` calls are these two lock-free path helpers.
     store::ensure_dirs()?;
-    let sock_path = store::daemon_sock_path()?;
+
+    // Daemon-per-session: this client owns exactly one session-daemon, keyed by the
+    // session UUID `main` minted (or `--attach --session <id>`). It connects to that
+    // session's keyed socket (`run/<id>.sock`) and restarts only THAT daemon on a
+    // build-skew. The id is REQUIRED here — without it there is no socket to reach.
+    let session_id = opts.session.clone().ok_or_else(|| {
+        anyhow::anyhow!("internal: client_run requires a session id (--session <id>)")
+    })?;
+    let sock_path = store::daemon_sock_path(&session_id)?;
 
     // A small multi-thread runtime drives the two socket tasks. The render loop runs
     // on THIS thread (synchronous), exactly like the local TUI's `run_loop`.
@@ -115,9 +123,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         drop(conn.req_tx);
         drop(conn.frame_rx);
 
-        // Reuse the EXACT `koma daemon restart` path (kill escalation + spawn-and-
-        // confirm). A failure here is fatal — we can't recover a usable daemon.
-        super::manage::restart_daemon()
+        // Restart ONLY this session's stale daemon (kill escalation + spawn-and-confirm,
+        // keyed by session id). A failure here is fatal — we can't recover a usable daemon.
+        super::manage::restart_daemon(&session_id)
             .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
 
         // Reconnect to the freshly-spawned daemon and re-handshake.
