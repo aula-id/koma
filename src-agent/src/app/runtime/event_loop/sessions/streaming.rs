@@ -130,15 +130,24 @@ pub(super) fn drain_stream(
     //      user is looking at. take() the receiver so the arm can mutate
     //      `state.rest`; put it back unless the PC task finished / delivered.
     if let Some(mut hrx) = state.rest.sessions[idx].harness_rx.take() {
-        let is_fg = idx == state.rest.foreground;
+        // VIEWED BY SOME client this tick (C2)? The advisory toast is a single GLOBAL
+        // surface, so only a session a client is actually looking at may raise it; a
+        // session viewed by NOBODY drains its verdict silently (the old foreground-only
+        // rule, generalised from the transient `foreground` cursor to the viewed set).
+        let is_viewed = state
+            .rest
+            .sessions
+            .get(idx)
+            .map(|s| state.rest.viewed_sessions.contains(&s.id))
+            .unwrap_or(false);
         let mut keep = true;
         while let Ok(event) = hrx.try_recv() {
             if let StreamEvent::HarnessVerdict { allow, reason } = event {
                 if !allow {
-                    // Foreground only: surface the advisory toast. Background
-                    // verdicts are drained but parked silently (dirty still set so
-                    // the channel teardown is reflected, but no visible toast).
-                    if is_fg {
+                    // Viewed-by-some-client only: surface the advisory toast. A verdict
+                    // for a session no client is looking at is drained but parked silently
+                    // (dirty still set so the channel teardown is reflected, no visible toast).
+                    if is_viewed {
                         let reason = if reason.is_empty() { "flagged".into() } else { reason };
                         state.rest.set_toast(format!("harness flagged: {reason}"));
                     }

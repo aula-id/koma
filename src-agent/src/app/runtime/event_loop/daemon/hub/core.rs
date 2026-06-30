@@ -180,6 +180,33 @@ impl DaemonHub {
         snap
     }
 
+    /// Refresh `state.rest.viewed_sessions` from the hub (C2): the set of session UUIDs
+    /// CURRENTLY VIEWED by some ATTACHED client. Called by the daemon loop at the TOP of
+    /// each tick, BEFORE `service_all_sessions`, so the per-tick session gates (background-
+    /// finish toast, finished-unseen clear, harness-verdict toast, stream-start status)
+    /// test "viewed by ANY client" instead of the transient `foreground` cursor (which is
+    /// stale scratch outside a client bracket).
+    ///
+    /// Each attached client's persistent UUID pointer is resolved the SAME way
+    /// `stream_deltas` projects it (`resolve_foreground`: pointer → index, fallback first-
+    /// live → 0), then the resolved session's UUID is inserted — so what counts as "viewed"
+    /// exactly matches what each client actually SEES. Enrolled-but-not-yet-attached clients
+    /// see nothing and are excluded. The set is REPLACED (cleared + rebuilt) each call.
+    /// Resolved UUIDs are gathered into a local first so the immutable borrow of
+    /// `state.rest.sessions` ends before the `viewed_sessions` mutation.
+    pub(in crate::app::runtime::event_loop::daemon) fn refresh_viewed_sessions(&self, state: &mut AppState) {
+        let viewed: std::collections::HashSet<String> = self
+            .clients
+            .iter()
+            .filter(|c| c.attached)
+            .filter_map(|c| {
+                let idx = state.rest.resolve_foreground(c.foreground.as_deref());
+                state.rest.sessions.get(idx).map(|s| s.id.clone())
+            })
+            .collect();
+        state.rest.viewed_sessions = viewed;
+    }
+
     /// Whether a controller asked the daemon to quit ([`ClientRequest::QuitDaemon`]).
     /// The [`daemon_loop`] checks this each tick and breaks so the shared teardown
     /// runs.

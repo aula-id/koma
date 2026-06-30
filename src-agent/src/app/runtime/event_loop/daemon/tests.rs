@@ -42,7 +42,7 @@ fn attach_then_change_emits_snapshot_then_seqd_delta() {
     assert!(matches!(f1.event, DaemonEvent::Snapshot(_)), "attach emits a Snapshot after Hello, got {:?}", f1.event);
 
     state.rest.status = "streaming".into();
-    hub.stream_deltas(&state);
+    hub.stream_deltas(&mut state);
     let f2 = frame_rx.try_recv().expect("delta frame after change");
     assert_eq!(f2.seq, 3, "delta seq is N+1");
     match f2.event {
@@ -53,7 +53,7 @@ fn attach_then_change_emits_snapshot_then_seqd_delta() {
         other => panic!("expected StatusChanged delta, got {other:?}"),
     }
 
-    hub.stream_deltas(&state);
+    hub.stream_deltas(&mut state);
     assert!(frame_rx.try_recv().is_err(), "no frame emitted when state is unchanged");
 }
 
@@ -73,7 +73,7 @@ fn structural_change_emits_full_snapshot() {
     let _snap = frame_rx.try_recv().expect("attach snapshot");
 
     state.rest.fg_mut().awaiting_approval = true;
-    hub.stream_deltas(&state);
+    hub.stream_deltas(&mut state);
     let f = frame_rx.try_recv().expect("frame after structural change");
     assert_eq!(f.seq, 3);
     assert!(matches!(f.event, DaemonEvent::Snapshot(_)), "structural change must resync with a full Snapshot, got {:?}", f.event);

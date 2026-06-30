@@ -274,6 +274,14 @@ pub(in crate::app::runtime) fn daemon_loop(
     let mut quiesce_ticks: u32 = 0;
 
     loop {
+        // 0. Refresh the per-tick VIEWED set (C2) from the hub BEFORE servicing sessions:
+        //    the UUIDs every attached client currently views. `service_all_sessions` runs
+        //    OUTSIDE any client bracket, so `state.rest.foreground` is stale scratch there;
+        //    its per-session gates (background-finish toast, finished-unseen clear, harness
+        //    toast, stream-start status) test `viewed_sessions` instead. A session viewed
+        //    by NOBODY behaves as a pure background session.
+        hub.refresh_viewed_sessions(state);
+
         // 1. Service EVERY session: drain each session's stream / tool-task /
         //    sub-agent channels and advance its turn. Identical to the TUI loop —
         //    the `dirty` return is irrelevant headless (nothing is drawn). Closed

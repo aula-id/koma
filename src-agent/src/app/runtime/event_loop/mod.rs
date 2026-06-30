@@ -42,6 +42,18 @@ pub(super) fn run_loop(
 ) -> Result<()> {
     let mut dirty = true; // paint once on entry
     loop {
+        // Keep the per-tick VIEWED set (C2) in sync with the single global foreground so
+        // the per-session gates in `service_all_sessions` behave identically to before in
+        // local mode: exactly the foreground session counts as "viewed", everything else
+        // is background. (The daemon refreshes this from its attached clients instead.)
+        // Recomputed each tick so a foreground switch / `/new` is reflected immediately.
+        state.rest.viewed_sessions = state
+            .rest
+            .sessions
+            .get(state.rest.foreground)
+            .map(|s| std::iter::once(s.id.clone()).collect())
+            .unwrap_or_default();
+
         // Perform a pending /select hand-off: drop to the normal terminal and
         // dump the conversation, then suppress TUI painting until a key returns.
         if state.rest.select_pending {

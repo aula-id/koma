@@ -20,7 +20,24 @@ pub struct AppStateRest {
     /// the multi-session machinery is carved but not yet wired.
     pub sessions: Vec<SessionRuntime>,
     /// Index of the active session in `sessions` (always in range).
+    ///
+    /// In the daemon (C2) this is a TRANSIENT "currently-acting view cursor": it is
+    /// only meaningful while bracketed by ONE client's request (load/store in
+    /// `handle_request`) or ONE client's snapshot projection (`stream_deltas`). The
+    /// persistent per-client foreground lives on `HubClient::foreground` (a UUID). NO
+    /// per-tick background code may rely on this index for per-client correctness —
+    /// `service_all_sessions` runs OUTSIDE any client bracket, so it reads `viewed_sessions`
+    /// instead. In the LOCAL (single-view) TUI this is still the one true foreground.
     pub foreground: usize,
+    /// The set of session UUIDs CURRENTLY VIEWED by some client (C2). Refreshed once
+    /// per tick BEFORE `service_all_sessions`: in the DAEMON, from every attached
+    /// client's resolved foreground UUID; in the LOCAL loop, the single global
+    /// foreground session's UUID. Replaces the stale `idx == foreground` gates in the
+    /// per-tick session servicing (background-finish toast / finished-unseen clear /
+    /// harness-verdict toast / stream-start status), which must reflect "viewed by ANY
+    /// client", not the transient `foreground` cursor. A session viewed by NOBODY
+    /// behaves as a pure background session.
+    pub viewed_sessions: std::collections::HashSet<String>,
     /// Saved (session) before a /new or reconfigure prompt; restored on cancel.
     pub prev_session: Option<crate::model::session::Session>,
     /// True while a `/new`-spawned PARALLEL session (freshly appended to
@@ -259,9 +276,16 @@ impl AppStateRest {
         // event-loop tick into `latest_version`. Holding the sender for the app's
         // lifetime keeps the drain from ever seeing a premature `Disconnected`.
         let (vtx, vrx) = tokio::sync::mpsc::unbounded_channel();
+        let first = SessionRuntime::new();
+        // Seed the viewed set with the sole session's UUID so the per-tick gates treat
+        // it as foreground from tick zero (the local loop re-derives this each tick; the
+        // daemon refreshes from its attached clients — but a freshly-built state always
+        // has its one session "viewed" until a loop overwrites it).
+        let viewed_sessions = std::iter::once(first.id.clone()).collect();
         Self {
-            sessions: vec![SessionRuntime::new()],
+            sessions: vec![first],
             foreground: 0,
+            viewed_sessions,
             prev_session: None,
             spawn_pending: false,
             spawn_prev_fg: 0,
@@ -321,6 +345,37 @@ impl AppStateRest {
     pub fn fg_mut(&mut self) -> &mut SessionRuntime {
         let i = self.foreground;
         &mut self.sessions[i]
+    }
+
+    /// Resolve a per-client foreground POINTER (a stable session UUID, or `None`) to a
+    /// concrete index into `sessions` (C2). Sessions are append+tombstone and addressed
+    /// by UUID, so the index is resolved at the point of use. Fallback when the UUID is
+    /// `None` or no longer resolvable: the FIRST non-closed session, else `0` (there is
+    /// always at least one slot). Used to bracket each client's request / snapshot so the
+    /// existing `fg()`-based handlers and the snapshot projection act on THAT client's view.
+    pub fn resolve_foreground(&self, id: Option<&str>) -> usize {
+        if let Some(id) = id {
+            if let Some(i) = self.sessions.iter().position(|s| s.id == id) {
+                return i;
+            }
+        }
+        self.sessions
+            .iter()
+            .position(|s| !s.closed)
+            .unwrap_or(0)
+    }
+
+    /// Reset the scroll/follow of session `idx` itself (snap it to the bottom), instead of
+    /// the foreground session (C2). `scroll`/`follow` are PER-SESSION (C1), so a stream
+    /// that starts on session `idx` snaps ITS OWN view to the newest line regardless of
+    /// which client is currently the acting cursor — preserving the original visible
+    /// effect (the client viewing `idx` sees the snap-to-bottom) while never yanking an
+    /// unrelated session's scroll. Mirrors [`reset_scroll`] but targets `sessions[idx]`.
+    pub fn reset_scroll_at(&mut self, idx: usize) {
+        if let Some(s) = self.sessions.get_mut(idx) {
+            s.follow = true;
+            s.scroll = 0;
+        }
     }
 
     /// Seed session `sess_idx`'s cumulative token/cost counters from its sqlite

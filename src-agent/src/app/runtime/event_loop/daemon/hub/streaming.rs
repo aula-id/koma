@@ -62,7 +62,13 @@ impl DaemonHub {
     /// missing — never a shared baseline that one client's reseed could shortcut.
     /// Each emitted frame bumps the receiving client's own seq (blocker #1). No-op
     /// for a client whose baseline already equals `next`.
-    pub(in crate::app::runtime::event_loop::daemon) fn stream_deltas(&mut self, state: &AppState) {
+    ///
+    /// `state` is `&mut` (C2) so each client's snapshot can be projected from ITS OWN
+    /// foreground: before building client `i`'s snapshot we point the transient
+    /// `state.rest.foreground` cursor at that client's persistent UUID pointer, so
+    /// `build_snapshot_with_mode` reads THAT client's composer / scroll / foreground_id.
+    /// No live runtime state is mutated — only the view cursor is swapped per client.
+    pub(in crate::app::runtime::event_loop::daemon) fn stream_deltas(&mut self, state: &mut AppState) {
         // Nothing to do until at least one client has attached. Enrolled-but-not-
         // attached clients have no baseline and receive nothing (critique #2).
         if !self.clients.iter().any(|c| c.attached) {
@@ -73,6 +79,15 @@ impl DaemonHub {
             if !self.clients[i].attached {
                 continue;
             }
+
+            // Project THIS client's foreground (C2): resolve its persistent UUID pointer
+            // to a live index (fallback: first non-closed, else 0) and point the transient
+            // cursor at it BEFORE the build, so the snapshot carries this client's own
+            // composer / scroll / follow / foreground_id. Clone the UUID into a local
+            // first so the immutable borrow of `clients[i]` ends before the `&mut state`
+            // assignment. Mode is still global (C3), so the cache below is unaffected.
+            let fg_id = self.clients[i].foreground.clone();
+            state.rest.foreground = state.rest.resolve_foreground(fg_id.as_deref());
 
             // Build THIS client's live projection. The (expensive) mode payload comes
             // from THIS client's OWN discriminant+TTL cache (moved off the hub-global
