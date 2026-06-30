@@ -42,7 +42,7 @@ pub(crate) fn handle_new(
     let mut sess = match store::create_session() {
         Ok(s) => s,
         Err(e) => {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
     };
@@ -86,16 +86,19 @@ pub(crate) fn handle_new(
     state.rest.sessions.push(runtime);
     state.rest.foreground = state.rest.sessions.len() - 1;
 
-    // Reset the FLAT foreground-UI fields (shared on AppStateRest) for a clean
-    // slate on the new tab: empty composer + caret, pinned-to-bottom scroll, no
-    // staged attachments, and a fresh (empty) transcript so the new conversation
-    // renders instead of the previous tab's cached blocks.
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view state for a clean slate on the new
+    // tab: empty composer + caret, pinned-to-bottom scroll, no staged
+    // attachments, and a fresh (empty) transcript so the new conversation renders
+    // instead of the previous tab's cached blocks.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     // Fresh session → seed ITS OWN counters from its (empty) ledger, i.e. 0. No
     // global counter to reset: the new session carries its own totals, and the
     // previous foreground keeps its counters intact in its own slot.
@@ -116,7 +119,7 @@ pub(crate) fn handle_new(
         // freshly-appended session and restores the previous foreground.
         *client = None;
         state.rest.spawn_pending = true;
-        state.mode = Mode::KeyInput(KeyInputForm::prefilled(
+        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
             String::new(),
             DEFAULT_MODEL.to_string(),
             false, // Esc -> CancelKeyInput (which pops the spawned session)
@@ -143,7 +146,7 @@ pub(crate) fn handle_new(
         // may upgrade the mode to `Mode::Loading` (animated splash) when it
         // has warm work to spawn, so it must run LAST to get the final word.
         // With no warm work it leaves the mode as the Chat we just set.
-        state.mode = Mode::Chat;
+        *state.mode_mut() = Mode::Chat;
         // Warm the new foreground session: reindex its workspace + (async) fetch
         // the catalogue and awareness summary so /new is primed like a cold boot.
         // `warm_session` -> `reconcile_session_lock` only ever touches the
@@ -275,20 +278,21 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
         return Ok(());
     }
 
-    state.mode = Mode::SessionHub(Box::new(build_session_hub(state)));
+    let hub = build_session_hub(state);
+    *state.mode_mut() = Mode::SessionHub(Box::new(hub));
     Ok(())
 }
 
 /// Handle the `/rename <name>` command: rename the current session.
 pub(super) fn handle_rename(state: &mut AppState, name: String) -> Result<()> {
     if name.trim().is_empty() {
-        state.rest.status = "usage: /rename <name>".into();
+        state.rest.fg_mut().status = "usage: /rename <name>".into();
         return Ok(());
     }
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         match store::rename_session(sess, &name) {
-            Ok(()) => state.rest.status = format!("renamed to {}", sess.name),
-            Err(e) => state.rest.status = format!("error: {e}"),
+            Ok(()) => state.rest.fg_mut().status = format!("renamed to {}", sess.name),
+            Err(e) => state.rest.fg_mut().status = format!("error: {e}"),
         }
     }
     Ok(())

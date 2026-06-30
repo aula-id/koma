@@ -1,167 +1,90 @@
-//! Input-editing and history methods on [`super::AppStateRest`].
+//! Composer wrappers on [`super::AppStateRest`].
 //!
-//! The caret (`cursor`) is a CHAR index into `input`. `byte_at` maps a char
-//! index to the byte offset `String::insert`/`remove` need, so non-ASCII input
-//! can never panic on a non-char-boundary. `char_len` is the count edits clamp
-//! against.
+//! The composer state (`input`, `cursor`, `pending_attachments`, `hist_idx`,
+//! `input_stash`) now lives on the foreground [`SessionRuntime`], so the actual
+//! caret/history editing methods are defined on that type. The wrappers here
+//! delegate to `fg_mut()` and additionally reset the GLOBAL `/` palette
+//! selection (`palette_sel`, which stays on `AppStateRest`) for the edits that
+//! used to clear it — keeping the observable behaviour byte-identical to when
+//! these methods lived directly on `AppStateRest`.
 
 use super::rest::AppStateRest;
 
 impl AppStateRest {
-    /// Char count of the current input (the caret's upper bound).
-    fn char_len(&self) -> usize {
-        self.input.chars().count()
-    }
-
-    /// Byte offset of char index `idx` (== input length when `idx >= char_len`).
-    fn byte_at(&self, idx: usize) -> usize {
-        self.input
-            .char_indices()
-            .nth(idx)
-            .map(|(b, _)| b)
-            .unwrap_or(self.input.len())
-    }
-
-    /// Insert `c` at the caret and advance it (mid-text editing supported).
+    /// Insert `c` at the caret (foreground composer) and reset the `/` palette
+    /// selection. See [`super::SessionRuntime::push_char`].
     pub fn push_char(&mut self, c: char) {
-        let at = self.byte_at(self.cursor);
-        self.input.insert(at, c);
-        self.cursor += 1;
+        self.fg_mut().push_char(c);
         self.palette_sel = 0;
-        self.hist_idx = None;
     }
 
-    /// Delete the char BEFORE the caret and retreat it; no-op at the start.
+    /// Delete the char BEFORE the caret and reset the `/` palette selection.
+    /// See [`super::SessionRuntime::backspace`].
     pub fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        self.cursor -= 1;
-        let at = self.byte_at(self.cursor);
-        self.input.remove(at);
+        self.fg_mut().backspace();
         self.palette_sel = 0;
-        self.hist_idx = None;
     }
 
-    /// Delete the char AT the caret (forward delete, the Delete key); no-op at the
-    /// end of the input. Mirrors [`Self::backspace`] but does not move the caret.
+    /// Forward-delete the char AT the caret and reset the `/` palette selection.
+    /// See [`super::SessionRuntime::delete_forward`].
     pub fn delete_forward(&mut self) {
-        if self.cursor >= self.char_len() {
-            return;
-        }
-        let at = self.byte_at(self.cursor);
-        self.input.remove(at);
+        self.fg_mut().delete_forward();
         self.palette_sel = 0;
-        self.hist_idx = None;
     }
 
     /// Move the caret one char left (no-op at the start).
     pub fn cursor_left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
+        self.fg_mut().cursor_left();
     }
 
     /// Move the caret one char right (capped at the input length).
     pub fn cursor_right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.char_len());
+        self.fg_mut().cursor_right();
     }
 
     /// Jump the caret to the start of the input.
     pub fn cursor_home(&mut self) {
-        self.cursor = 0;
+        self.fg_mut().cursor_home();
     }
 
     /// Jump the caret to the end of the input. Also called after any bulk replace
     /// (history recall, command/file completion) so the caret never dangles past
     /// the new (possibly shorter) text.
     pub fn cursor_end(&mut self) {
-        self.cursor = self.char_len();
+        self.fg_mut().cursor_end();
     }
 
-    /// Move the caret up one visual line within a multi-line input.
-    ///
-    /// Returns `true` when the caret moved (so the caller can suppress history
-    /// recall), or `false` when the caret is already on the first line (single-
-    /// line input always returns `false`, preserving the existing history-recall
-    /// behaviour).
+    /// Move the caret up one visual line within a multi-line input. Returns
+    /// `true` when the caret moved (so the caller can suppress history recall).
     pub fn cursor_up(&mut self) -> bool {
-        // Walk chars up to cursor to compute (line, col) in char units.
-        let mut line: usize = 0;
-        let mut col: usize = 0;
-        for ch in self.input.chars().take(self.cursor) {
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-        if line == 0 {
-            return false; // already on the first line → let caller do history
-        }
-        // Collect char lengths per line (split on '\n').
-        let line_lens: Vec<usize> = self.input.split('\n').map(|l| l.chars().count()).collect();
-        let target_line = line - 1;
-        let target_col = col.min(line_lens[target_line]);
-        // Convert (target_line, target_col) back to a flat char index.
-        self.cursor = line_lens[..target_line].iter().sum::<usize>()
-            + target_line  // one '\n' per consumed line break
-            + target_col;
-        true
+        self.fg_mut().cursor_up()
     }
 
-    /// Move the caret down one visual line within a multi-line input.
-    ///
-    /// Returns `true` when the caret moved, `false` when already on the last
-    /// line (single-line input always returns `false`).
+    /// Move the caret down one visual line within a multi-line input. Returns
+    /// `true` when the caret moved.
     pub fn cursor_down(&mut self) -> bool {
-        let line_lens: Vec<usize> = self.input.split('\n').map(|l| l.chars().count()).collect();
-        let last_line = line_lens.len() - 1;
-        // Walk chars up to cursor to compute (line, col).
-        let mut line: usize = 0;
-        let mut col: usize = 0;
-        for ch in self.input.chars().take(self.cursor) {
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-        if line == last_line {
-            return false; // already on the last line → let caller do history
-        }
-        let target_line = line + 1;
-        let target_col = col.min(line_lens[target_line]);
-        self.cursor = line_lens[..target_line].iter().sum::<usize>()
-            + target_line  // one '\n' per consumed line break
-            + target_col;
-        true
+        self.fg_mut().cursor_down()
     }
 
+    /// Take the input buffer and reset the `/` palette selection. See
+    /// [`super::SessionRuntime::take_input`].
     pub fn take_input(&mut self) -> String {
+        let taken = self.fg_mut().take_input();
         self.palette_sel = 0;
-        self.hist_idx = None;
-        self.cursor = 0;
-        std::mem::take(&mut self.input)
+        taken
     }
 
-    /// Insert the literal marker string `s` (e.g. `"[Image #3]"`) at the caret,
-    /// advancing it past the inserted run. Mirrors [`Self::push_char`]'s caret /
-    /// palette / history discipline so a bulk marker insert behaves like typing.
+    /// Insert the literal marker string `s` at the caret and reset the `/`
+    /// palette selection. See [`super::SessionRuntime::insert_marker`].
     pub fn insert_marker(&mut self, s: &str) {
-        let at = self.byte_at(self.cursor);
-        self.input.insert_str(at, s);
-        self.cursor += s.chars().count();
+        self.fg_mut().insert_marker(s);
         self.palette_sel = 0;
-        self.hist_idx = None;
     }
 
-    /// Move the staged composer attachments out for the message being submitted,
-    /// leaving `pending_attachments` empty. Called at submit, paired with
-    /// `take_input()`, so the markers and their attachment records travel
-    /// together onto the user message.
+    /// Move the staged composer attachments out for the message being submitted.
+    /// See [`super::SessionRuntime::take_attachments`].
     pub fn take_attachments(&mut self) -> Vec<crate::dto::chat::Attachment> {
-        std::mem::take(&mut self.pending_attachments)
+        self.fg_mut().take_attachments()
     }
 
     /// Ingest the image file at `path` into the active session's `images/` dir,
@@ -182,7 +105,7 @@ impl AppStateRest {
         ) {
             Ok((att, marker)) => {
                 self.insert_marker(&marker);
-                self.pending_attachments.push(att);
+                self.fg_mut().pending_attachments.push(att);
                 true
             }
             Err(_) => false,
@@ -209,7 +132,7 @@ impl AppStateRest {
         ) {
             Ok((att, marker)) => {
                 self.insert_marker(&marker);
-                self.pending_attachments.push(att);
+                self.fg_mut().pending_attachments.push(att);
                 true
             }
             Err(_) => false,
@@ -219,37 +142,12 @@ impl AppStateRest {
     /// Recall the previous (older) sent user message into the input. `users` is
     /// the session's user messages oldest-first.
     pub fn history_prev(&mut self, users: &[String]) {
-        if users.is_empty() {
-            return;
-        }
-        let next = match self.hist_idx {
-            None => {
-                self.input_stash = self.input.clone();
-                users.len() - 1
-            }
-            Some(0) => return, // already at the oldest
-            Some(i) => i - 1,
-        };
-        self.hist_idx = Some(next);
-        self.input = users[next].clone();
-        self.cursor = self.char_len();
+        self.fg_mut().history_prev(users);
     }
 
     /// Recall the next (newer) sent user message; past the newest, restore the
     /// stashed live input and leave recall mode.
     pub fn history_next(&mut self, users: &[String]) {
-        match self.hist_idx {
-            Some(i) if i + 1 < users.len() => {
-                self.hist_idx = Some(i + 1);
-                self.input = users[i + 1].clone();
-                self.cursor = self.char_len();
-            }
-            Some(_) => {
-                self.hist_idx = None;
-                self.input = std::mem::take(&mut self.input_stash);
-                self.cursor = self.char_len();
-            }
-            None => {}
-        }
+        self.fg_mut().history_next(users);
     }
 }

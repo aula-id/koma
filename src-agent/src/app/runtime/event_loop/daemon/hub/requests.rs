@@ -9,7 +9,7 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, StateSnapshot};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::actions::{apply_action, attach_select_for_pwd};
+use crate::app::runtime::actions::{apply_action, create_session_for_pwd};
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -66,6 +66,16 @@ impl DaemonHub {
             } => {
                 // First enrolled client is the single writer (DECISIONS).
                 let is_controller = self.clients.is_empty();
+                // Seed this client's per-client foreground pointer (C1.5 infra) to the
+                // session at the current GLOBAL foreground, addressed by stable UUID — so
+                // every client starts on the same session the single global view shows.
+                // `None` only when no session is live to point at. Render still uses the
+                // global index in C1.5; C2 swaps onto this per-client pointer.
+                let foreground = state
+                    .rest
+                    .sessions
+                    .get(state.rest.foreground)
+                    .map(|s| s.id.clone());
                 self.clients.push(super::core::HubClient {
                     id: client_id,
                     frame_tx,
@@ -74,6 +84,10 @@ impl DaemonHub {
                     last_seq: 0,
                     // Not delta-eligible until its Attach seeds this baseline.
                     last_snapshot: None,
+                    foreground,
+                    // Per-client mode cache: empty until this client's first stream tick
+                    // builds it (the daemon-freeze fix, held per-client now).
+                    mode_snapshot_cache: None,
                 });
             }
             HubInbound::Request { client_id, req } => {
@@ -90,8 +104,21 @@ impl DaemonHub {
     }
 
     /// Route one [`ClientRequest`] from `client_id`. Read-only requests
-    /// (Attach / Resync / ListSessions / Detach) are honoured for any client;
-    /// mutating requests are rejected for observers (single-writer).
+    /// (Attach / Resync / ListSessions / Detach) are honoured for any client; any
+    /// client may now drive ITS OWN foreground session (C2), so the only mutation kept
+    /// controller-only is the daemon-wide `QuitDaemon` (enforced in `dispatch_request`).
+    ///
+    /// # Per-client foreground bracket (C2)
+    ///
+    /// Each request is bracketed by a LOAD/STORE around `state.rest.foreground` (the
+    /// transient acting-view cursor): LOAD points it at THIS client's persistent
+    /// `HubClient::foreground` (UUID → index) so every existing `fg()`/`fg_mut()`-based
+    /// handler acts on this client's view; STORE captures back any foreground MOVE the
+    /// client's own action caused (`/new`, picker LiveSwitch, `attach_select_for_pwd`,
+    /// SwitchForeground) onto its pointer. The STORE re-finds the client by `client_id`
+    /// (not the possibly-stale `idx`) and clamps the index, so a request that REMOVED the
+    /// acting client (`Detach`) or its acting session (`QuitSession` of its own
+    /// foreground) can never write a stale index or panic.
     fn handle_request(
         &mut self,
         client_id: u64,
@@ -106,25 +133,74 @@ impl DaemonHub {
             return;
         };
 
+        // --- LOAD: point the transient cursor at THIS client's view (C2) ---
+        // Resolve this client's persistent UUID pointer to a live index (fallback: first
+        // non-closed session, else 0). All the `fg()`-based handlers below then mutate
+        // exactly the session this client is looking at. Read-only requests get the same
+        // bracket — harmless, and it keeps `foreground` correct for the snapshot they build.
+        let load_id = self.clients[idx].foreground.clone();
+        state.rest.foreground = state.rest.resolve_foreground(load_id.as_deref());
+
+        self.dispatch_request(idx, req, state, client, handle);
+
+        // --- STORE: persist any foreground move this client's action caused (C2) ---
+        // Re-find the client by its STABLE id: a `Detach` in `dispatch_request` removed it
+        // (so `idx` may now name a different client or be out of range). Capture the UUID
+        // at the — possibly clamped — acting cursor back onto this client's pointer. If the
+        // acting session was just removed/closed (e.g. QuitSession of its own foreground),
+        // `sessions.get` yields `None` and the pointer becomes `None`; the next request (or
+        // `repoint_foreground_off_closed`) re-resolves it via the first-live fallback.
+        if let Some(pos) = self.clients.iter().position(|c| c.id == client_id) {
+            self.clients[pos].foreground = state
+                .rest
+                .sessions
+                .get(state.rest.foreground)
+                .map(|s| s.id.clone());
+        }
+    }
+
+    /// Dispatch the request body (the part bracketed by the C2 LOAD/STORE in
+    /// [`handle_request`]). Read-only requests (Attach / Resync / ListSessions / Detach)
+    /// are honoured for any client; the daemon-wide `QuitDaemon` is rejected for observers;
+    /// every other mutation is allowed for any client (each drives its OWN foreground,
+    /// projected per-client in `stream_deltas`).
+    fn dispatch_request(
+        &mut self,
+        idx: usize,
+        req: ClientRequest,
+        state: &mut AppState,
+        client: &mut Option<Arc<OpenRouterClient>>,
+        handle: &tokio::runtime::Handle,
+    ) {
         match req {
             // --- read-only / control (honoured for everyone) ---
             ClientRequest::Attach { cwd, .. } => {
-                // pwd-AWARE attach selection (stage 3): BEFORE snapshotting, point the
-                // foreground at a session for the ATTACHING CLIENT's working directory,
-                // so launching `koma` from a NEW dir lands on a session for THAT dir —
-                // not the daemon's unrelated last session. Runs ONLY for the controller
-                // (the single writer): session selection mutates state (it can SWAP /
-                // LOAD / CREATE a session), which an observer must not do. An observer,
-                // or a controller that sent no `cwd`, just gets the current foreground.
-                // Last-attach-wins on foreground (single-client assumption — DECISIONS).
-                // Any handler error is swallowed (surfaced via status, never aborts the
-                // loop) so a bad selection can't wedge the attach handshake; the snapshot
+                // FRESH-on-attach (C5): a plain `koma` attach ALWAYS creates a brand-new
+                // session rooted at the ATTACHING CLIENT's cwd — it never resumes a live
+                // or on-disk session for that dir. (The old pwd-aware resume was the bug:
+                // reopening `koma` in a dir landed on the OLD session — stale chat, even a
+                // stale /quit page. Resume / cooking / history is reached only via
+                // `koma --resume` / `koma agents`, which fire `OpenSessionHub` to open the
+                // picker OVER this fresh base.)
+                //
+                // GUARDED to the FIRST attach for this client (`!attached`, still false
+                // here since `attached` is flipped true only AFTER the snapshot below):
+                // a re-attach / resync from an already-attached client must NOT spawn a
+                // second session — it just re-snapshots that client's existing foreground.
+                // Runs for EVERY first-attaching client (C2): the C2 LOAD/STORE bracket
+                // scopes the create's foreground move to THIS client's view and the post-
+                // attach STORE persists the new session's UUID onto its OWN per-client
+                // pointer, so each window gets (and keeps) its own independent fresh
+                // session without disturbing any other client's view. A client that sent
+                // no `cwd` just keeps its current foreground (nothing to root a session
+                // at). Any create error is swallowed (surfaced via status, never aborts
+                // the loop) so a bad create can't wedge the attach handshake; the snapshot
                 // below still goes out, reflecting whatever foreground resulted.
-                if self.clients[idx].is_controller {
+                if !self.clients[idx].attached {
                     if let Some(cwd) = cwd {
                         let cwd = std::path::PathBuf::from(cwd);
-                        if let Err(e) = attach_select_for_pwd(state, client, handle, &cwd) {
-                            state.rest.status = format!("attach select error: {e:#}");
+                        if let Err(e) = create_session_for_pwd(state, client, handle, &cwd) {
+                            state.rest.fg_mut().status = format!("attach create error: {e:#}");
                         }
                     }
                 }
@@ -166,26 +242,37 @@ impl DaemonHub {
                 self.deregister(idx);
             }
 
-            // --- mutating (single-writer: observers are rejected) ---
+            // --- mutating: each client drives its OWN foreground (C2) ---
+            // The single-writer gate is RELAXED: any client may now submit / send keys /
+            // paste / approve / `/new` / switch / attach-select against its own foreground
+            // session (the C2 LOAD/STORE bracket scoped that mutation to this client's view,
+            // and `stream_deltas` projects each client's own foreground). The ONE exception
+            // is `QuitDaemon` — a daemon-wide teardown — which stays CONTROLLER-ONLY so a
+            // non-controller can't kill the whole daemon out from under the other clients; a
+            // non-controller `QuitDaemon` is rejected with an Error + no-op. (QuitConfirm `[k]`
+            // is now PER-WINDOW (C4): it sends `QuitSession` of this client's own foreground
+            // + `Detach`, both allowed for any client below — never `QuitDaemon` — so a
+            // non-controller closing ITS window is fine and touches no other window.)
+            ClientRequest::QuitDaemon if !self.clients[idx].is_controller => {
+                self.send_to(
+                    idx,
+                    DaemonEvent::Error(
+                        "read-only: only the controlling client can shut down the daemon".into(),
+                    ),
+                );
+            }
             req => {
-                if !self.clients[idx].is_controller {
-                    self.send_to(
-                        idx,
-                        DaemonEvent::Error(
-                            "read-only: another client controls this daemon".into(),
-                        ),
-                    );
-                    return;
-                }
                 self.handle_controller_mutation(idx, req, state, client, handle);
             }
         }
     }
 
-    /// Handle a MUTATING request from the controller by translating it to the SAME
-    /// [`Action`] / slash-command the local TUI uses and funnelling it through
-    /// [`apply_action`] — so the daemon never forks the submit / key / approval /
-    /// new-session logic. UUID-keyed control resolves the id to an index FIRST and
+    /// Handle a MUTATING request by translating it to the SAME [`Action`] / slash-command
+    /// the local TUI uses and funnelling it through [`apply_action`] — so the daemon never
+    /// forks the submit / key / approval / new-session logic. In C2 this runs for ANY
+    /// client (each drives its own foreground, scoped by the LOAD/STORE bracket in
+    /// [`handle_request`]); only `QuitDaemon` was gated to the controller before reaching
+    /// here. UUID-keyed control resolves the id to an index FIRST and
     /// rejects an unknown id with an `Error` + no-op (critique #5: never a panic,
     /// never a wrong-index switch). Each applied request gets an `Ack`; errors get an
     /// `Error`. `apply_action`'s `Result` is surfaced as an `Error` frame rather than
@@ -296,7 +383,7 @@ impl DaemonHub {
                 match state.rest.sessions.iter().position(|s| s.id == session_id) {
                     Some(target) => {
                         state.rest.sessions[target].close();
-                        super::core::repoint_foreground_off_closed(state);
+                        self.repoint_foreground_off_closed(state);
                         self.send_to(idx, DaemonEvent::Ack);
                     }
                     None => self.send_to(
@@ -327,7 +414,7 @@ impl DaemonHub {
             // width the client renders. Only meaningful when the daemon is in the
             // agents full-screen editor; a no-op Ack otherwise.
             ClientRequest::EditorWrapW(n) => {
-                if let Mode::Agents(ref a) = state.mode {
+                if let Mode::Agents(ref a) = state.mode() {
                     if let Some((_, ref ed)) = a.editor {
                         ed.wrap_w.set(n);
                     }

@@ -99,10 +99,10 @@ pub fn handle_mcp(s: &mut McpState, rest: &mut AppStateRest, key: KeyEvent) -> A
                     // that can never connect.
                     KeyCode::Char('s') | KeyCode::Char('S') => {
                         if s.draft_name.trim().is_empty() {
-                            rest.status = "name required".into();
+                            rest.fg_mut().status = "name required".into();
                             Action::None
                         } else if let Some(missing) = missing_required(s) {
-                            rest.status = missing.into();
+                            rest.fg_mut().status = missing.into();
                             Action::None
                         } else if s.mode == McpSubMode::Create {
                             Action::CreateMcp

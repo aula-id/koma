@@ -86,13 +86,17 @@ pub(super) fn drain_deferred_and_resume(
             }
             // Park ends: a fresh `!`/Submit is allowed again.
             state.rest.sessions[idx].awaiting_shell = false;
-            // Foreground-only UI: surface the new entry + the command's exit
-            // status (the captured output's last line is `exit code: N`).
-            if idx == state.rest.foreground {
-                state.rest.reset_scroll();
-                let exit_line = output.lines().last().unwrap_or("done");
-                state.rest.status = format!("$ {cmd} — {exit_line}");
-            }
+            // Snap THIS session's OWN view to the newest line (C2): scroll is per-session,
+            // so resetting `sessions[idx]`'s scroll when its own shell output lands is
+            // correct regardless of which client is the acting cursor — the client viewing
+            // `idx` sees the snap-to-bottom, an unrelated session's view is untouched.
+            state.rest.reset_scroll_at(idx);
+            // Status is per-session now (C6): write it on `sessions[idx]` itself. The
+            // projection reads `fg().status` after the per-client foreground swap, so this
+            // surfaces ONLY in the client(s) viewing `idx` — a background session's
+            // `!`-shell completion can no longer yank an unrelated window's status line.
+            let exit_line = output.lines().last().unwrap_or("done");
+            state.rest.sessions[idx].status = format!("$ {cmd} — {exit_line}");
             dirty = true;
         }
     }
@@ -129,7 +133,13 @@ pub(super) fn drain_deferred_and_resume(
                     crate::app::bgbash::BashJobStatus::Error(msg) => format!("error: {msg}"),
                 });
             if let Some(label) = label {
-                state.rest.set_toast_info(format!("bash-{id} finished: {label}"));
+                // The bg-bash completion toast is about THIS session's job, and the drain
+                // runs unbracketed (fg() is stale scratch here), so raise it on
+                // `sessions[idx]` itself (C6) — it surfaces only in the client(s) viewing idx.
+                state
+                    .rest
+                    .sessions[idx]
+                    .set_toast_info(format!("bash-{id} finished: {label}"));
                 state.rest.sessions[idx].pending_bash_nudges.push((id, label));
                 dirty = true;
             }
@@ -210,11 +220,14 @@ pub(super) fn drain_deferred_and_resume(
             rt.pending_tool_tasks.clear();
             rt.awaiting_tool_tasks = false;
         }
-        // Foreground-only UI cues (don't yank a background session's transcript).
-        if idx == state.rest.foreground {
-            state.rest.reset_scroll();
-            state.rest.status = "thinking".into();
-        }
+        // Snap THIS session's OWN view to the newest line as its auto-wake stream starts
+        // (C2): scroll is per-session, so this only affects `sessions[idx]` — a client
+        // viewing `idx` sees the snap-to-bottom, an unrelated session's view is untouched.
+        state.rest.reset_scroll_at(idx);
+        // Status is per-session now (C6): write "thinking" on `sessions[idx]` itself. The
+        // projection sources `fg().status` per client, so a background auto-wake only
+        // shows in the client(s) viewing idx — never overwriting another window's status.
+        state.rest.sessions[idx].status = "thinking".into();
         super::super::super::stream::start_stream_task(history, state, idx, client, handle);
         dirty = true;
     }
@@ -223,42 +236,62 @@ pub(super) fn drain_deferred_and_resume(
 }
 
 /// Detect the working→ready edge for `idx` and emit a background-finish toast.
-/// Also clears the sticky `finished_unseen` marker when the session comes into
-/// the foreground. Updates `was_working` for the next tick.
+/// Also clears the sticky `finished_unseen` marker when the session is VIEWED BY SOME
+/// client (C2: `state.rest.viewed_sessions`), not merely the transient foreground.
+/// Updates `was_working` for the next tick.
 /// Returns true if any state changed (toast or marker).
 pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool {
     let mut dirty = false;
 
+    // Is this session VIEWED BY SOME client this tick (C2)? Computed once up front so the
+    // gates below test "viewed by ANY client" instead of the transient `foreground` cursor
+    // (which is stale scratch in this per-tick service). A session viewed by NOBODY behaves
+    // exactly like the old "not foreground" background session: it earns a finish toast +
+    // sticky-unseen marker, and never has that marker cleared until some client views it.
+    // The immutable borrow of `sessions[idx].id` + `viewed_sessions` is released here.
+    let viewed = state
+        .rest
+        .sessions
+        .get(idx)
+        .map(|s| state.rest.viewed_sessions.contains(&s.id))
+        .unwrap_or(false);
+
     // --- background-finish nudge ---
     // Detect this session's working→ready edge for THIS tick. When a session that
-    // was working last tick is now idle AND it is NOT the foreground (so the user
-    // can't already see it finish), pop an info toast naming it. Borrows are
-    // ordered: read the edge inputs + name into locals FIRST (immutable borrow of
-    // the session), then set the toast on `rest`, then write `was_working` — so no
-    // borrow of `sessions[idx]` overlaps the `rest`-level toast mutation.
+    // was working last tick is now idle AND is VIEWED BY NOBODY (so no client can
+    // already see it finish), pop an info toast naming it. Borrows are ordered: read
+    // the edge inputs + name into locals FIRST (immutable borrow of the session), then
+    // set the toast on `rest`, then write `was_working` — so no borrow of `sessions[idx]`
+    // overlaps the `rest`-level toast mutation.
     let now_working = state.rest.sessions[idx].is_working();
     let edge_finished = state.rest.sessions[idx].was_working
         && !now_working
-        && idx != state.rest.foreground;
+        && !viewed;
     if edge_finished {
         let name = state.rest.sessions[idx]
             .session
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| format!("session {idx}"));
-        state.rest.set_toast_info(format!("session {name} ready"));
+        // Per-session toast (C6): raise it on `sessions[idx]` itself. The edge fired for
+        // a session VIEWED BY NOBODY, so a client foregrounding it later will project
+        // ITS toast (`fg().toast`) and see the "ready" notice — instead of the toast
+        // landing on whatever the stale `foreground` cursor happened to point at.
+        state
+            .rest
+            .sessions[idx]
+            .set_toast_info(format!("session {name} ready"));
         // STICKY counterpart of the TTL toast (daemon critique #3): latch the
         // unseen marker so a DETACHED client still learns this background session
         // finished once it reattaches, long after the toast would have expired.
         state.rest.sessions[idx].finished_unseen = true;
         dirty = true;
     }
-    // Clear the sticky marker the moment this session is the one being looked at
-    // (it is the foreground). Covers the local TUI (always has a foreground) and a
-    // client that foregrounds this session: switching INTO it counts as "seen". A
-    // later switch-handler stage may also clear on an explicit view; this keeps the
-    // marker honest for the common foreground==idx case with no extra plumbing.
-    if idx == state.rest.foreground && state.rest.sessions[idx].finished_unseen {
+    // Clear the sticky marker the moment this session is VIEWED BY SOME client (C2).
+    // Covers the local TUI (the single foreground is the only viewed session) and any
+    // daemon client that foregrounds this session: a session appearing in some client's
+    // view counts as "seen". Keeps the marker honest with no extra plumbing.
+    if viewed && state.rest.sessions[idx].finished_unseen {
         state.rest.sessions[idx].finished_unseen = false;
         dirty = true;
     }

@@ -1,4 +1,4 @@
 {
-  "version": "0.1.7",
-  "message": "background bash jobs are now killed with Ctrl+X (koma's standard kill key) instead of k; the /bash panel header stays clean and Ctrl+X is documented in /help."
+  "version": "0.1.8",
+  "message": "each koma window is now fully independent: launching koma in a new directory opens its OWN fresh session with its own chat, composer, and overlays instead of mirroring the first window. Per-window quit ([k]) closes only that window, toasts no longer leak across windows, and the /bash job timer freezes when a job finishes."
 }

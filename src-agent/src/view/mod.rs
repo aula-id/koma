@@ -64,7 +64,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
     // (`no models — type an id`).
     let cache = state.rest.models_cache.as_deref().unwrap_or(&[]);
     let cache_endpoint = state.rest.models_cache_endpoint.as_deref();
-    match &state.mode {
+    match state.mode() {
         Mode::Chat => {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);

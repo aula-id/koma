@@ -74,7 +74,7 @@ pub(super) fn handle_save_creds(
         match store::create_session() {
             Ok(s) => state.rest.fg_mut().session = Some(s),
             Err(e) => {
-                state.rest.status = format!("error: {e}");
+                state.rest.fg_mut().status = format!("error: {e}");
                 return Ok(());
             }
         }
@@ -140,7 +140,7 @@ pub(super) fn handle_save_creds(
             });
         }
         if let Err(e) = state.rest.config.save() {
-            state.rest.status = format!("config save failed: {e}");
+            state.rest.fg_mut().status = format!("config save failed: {e}");
         }
     }
     // Routing slug is empty for the wizard path (config drives routing).
@@ -172,8 +172,8 @@ pub(super) fn handle_save_creds(
     // upgrade the mode to `Mode::Loading` (animated splash) when it has warm
     // work to spawn, so it must run LAST to get the final word. With no warm
     // work it leaves the mode as the Chat we just set.
-    state.mode = Mode::Chat;
-    state.rest.status = "ready".into();
+    *state.mode_mut() = Mode::Chat;
+    state.rest.fg_mut().status = "ready".into();
     // Warm the confirmed session: reindex its workspace + (async) fetch the
     // catalogue and awareness summary so it's primed like a cold boot.
     super::super::warm_session(state, client, handle);

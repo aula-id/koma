@@ -10,8 +10,6 @@ use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::build_client;
 
-use super::picker::open_disk_session;
-
 /// Handle `Action::LiveSwitch`: switch the foreground to the live session at
 /// `idx` (the session hub's COOKING-pane Enter, and the daemon's UUID-keyed
 /// `SwitchForeground` resolved to an index). Sets `foreground = idx` and resets
@@ -27,19 +25,29 @@ pub fn handle_live_switch(
     // live `sessions`, and `sessions` is only ever appended to this stage, so a
     // stale index can't normally occur — but never panic).
     if idx >= state.rest.sessions.len() {
-        state.mode = Mode::Chat;
-        state.rest.status = "session unavailable".into();
+        // Still on the (unchanged) current foreground here — reset ITS mode to Chat.
+        *state.mode_mut() = Mode::Chat;
+        state.rest.fg_mut().status = "session unavailable".into();
         return Ok(());
     }
+    // Per-session mode (C3): the picker/hub that triggered this switch set the CURRENT
+    // (leaving) foreground's mode to SessionHub/SessionPicker. Reset THAT session's mode to
+    // Chat BEFORE repointing, so switching back to it later doesn't resurrect the stale
+    // overlay. The session we switch TO keeps its OWN stored mode (normally Chat) — we do
+    // NOT overwrite it, so a target that was itself mid-overlay would be preserved.
+    state.rest.fg_mut().mode = Mode::Chat;
     state.rest.foreground = idx;
-    // Reset the flat foreground-UI for the newly-shown session: empty composer +
-    // caret, pinned-to-bottom scroll, no staged attachments, and a fresh (empty)
-    // transcript cache so the target's conversation renders instead of the
-    // previous tab's cached blocks.
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view for the newly-shown session: empty
+    // composer + caret, pinned-to-bottom scroll, no staged attachments, and a
+    // fresh (empty) transcript cache so the target's conversation renders instead
+    // of the previous tab's cached blocks.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
     // NO token reseed on a foreground switch: each session now carries its OWN
     // token/cost counters in its slot, so switching foreground just renders fg()'s
@@ -62,20 +70,21 @@ pub fn handle_live_switch(
             .is_some_and(|r| !r.api_key.is_empty())
         });
     *client = if usable { Some(build_client()) } else { None };
-    // Reflect the now-foreground session's live state in the status line.
-    state.rest.status = if state.rest.fg().is_working() {
-        "working".into()
-    } else {
-        "ready".into()
-    };
-    state.mode = Mode::Chat;
+    // Reflect the now-foreground session's live state in the status line. Per-session
+    // (C6): compute the working flag (immutable `sessions` borrow) first, then write
+    // the foreground session's own status.
+    let working = state.rest.fg().is_working();
+    state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
+    // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
+    // the repoint above; the now-foreground session shows its OWN stored mode (normally
+    // Chat). Forcing Chat here would clobber a target that legitimately had its own overlay.
     Ok(())
 }
 
 /// Handle `Action::CloseSessionHub`: discard the session hub and return to the
 /// unchanged Chat view. No session state, foreground, or lock is touched.
 pub fn handle_close_session_hub(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
+    *state.mode_mut() = Mode::Chat;
     Ok(())
 }
 
@@ -103,7 +112,7 @@ pub fn handle_hub_kill_confirm(
     // 1. Resolve the armed target out of the hub state (the `pending_kill` position
     //    in `cooking` → that row's `sessions` index + kind). Borrow released before
     //    we mutate `state` below.
-    let target = if let Mode::SessionHub(hub) = &state.mode {
+    let target = if let Mode::SessionHub(hub) = state.mode() {
         hub.pending_kill
             .and_then(|ci| hub.cooking.get(ci))
             .map(|e| (e.idx, e.kind))
@@ -112,7 +121,7 @@ pub fn handle_hub_kill_confirm(
     };
 
     // Preserve the user's view (focus + search) across the rebuild.
-    let (prev_focus, prev_query) = if let Mode::SessionHub(hub) = &state.mode {
+    let (prev_focus, prev_query) = if let Mode::SessionHub(hub) = state.mode() {
         (hub.focus, hub.history_query.clone())
     } else {
         (crate::app::mode::HubPane::Cooking, String::new())
@@ -134,14 +143,12 @@ pub fn handle_hub_kill_confirm(
             // Working → stop the turn but KEEP the session (goes idle). Foreground
             // is untouched — interrupting a background session leaves it live.
             state.rest.sessions[session_idx].interrupt();
-            // Mirror handle_interrupt: the compaction animation/timer is rest-global
-            // and tied to the FOREGROUND session, so clear it when we interrupt the
-            // foreground (a background session can't be mid-/compact).
-            if session_idx == state.rest.foreground {
-                state.rest.compact_anim_start = None;
-                state.rest.compact_apply_at = None;
-                state.rest.compact_pending = None;
-            }
+            // Compaction anim/timer is PER-SESSION now (C4), so clear it on the very
+            // session we just interrupted — no foreground check needed (a background
+            // session CAN be mid-/compact in the daemon).
+            state.rest.sessions[session_idx].compact_anim_start = None;
+            state.rest.sessions[session_idx].compact_apply_at = None;
+            state.rest.sessions[session_idx].compact_pending = None;
         } else {
             // Idle → tombstone it. The slot stays in place (no index shift).
             state.rest.sessions[session_idx].close();
@@ -216,94 +223,18 @@ fn rebuild_hub(
         .cooking_selected
         .min(hub.cooking.len().saturating_sub(1));
     hub.pending_kill = None;
-    state.mode = Mode::SessionHub(Box::new(hub));
+    *state.mode_mut() = Mode::SessionHub(Box::new(hub));
     Ok(())
 }
 
-/// pwd-AWARE attach selection (stage 3): point the daemon's foreground at a session
-/// for the ATTACHING CLIENT's working directory (`cwd`), so relaunching `koma` from a
-/// NEW directory lands on a session for THAT directory — not the daemon's unrelated
-/// last session. Driven by the controller's [`ClientRequest::Attach`] `cwd` field.
-///
-/// Resolution order (Agung's spec — "same pwd → resume last active; new pwd → fresh
-/// session for the new pwd"), keyed by the directory's `pwd_hash`:
-///
-/// 1. **A LIVE session already exists for that pwd** (a non-closed `sessions` slot
-///    whose `Session::pwd_hash` matches) → SWAP foreground onto it via the shared
-///    [`handle_live_switch`] path (same flat-UI reset a cooking-pane switch does). The
-///    LAST such slot is chosen so a relaunch resumes the MOST-RECENTLY-opened session
-///    for that dir. No reload, no lock churn — it is already ours.
-/// 2. **An ON-DISK session exists for that pwd** (registry rows for the bucket, newest
-///    first) → load the most-recent one that ISN'T locked by another live process,
-///    through the shared [`open_disk_session`] path (append a fresh tab + acquire its
-///    lock + warm). A row locked by another process is skipped (its lock is another
-///    PID's — see `open_disk_session` case 2); if every row is foreign-locked we fall
-///    through to a fresh create rather than refuse.
-/// 3. **Otherwise CREATE a fresh session targeting that pwd** — rooted at `cwd`
-///    (`workdir = cwd`, bucket = its `pwd_hash`), appended + foregrounded + warmed,
-///    inheriting last-used creds exactly like `/new` (but pwd-EXPLICIT, so it buckets
-///    under the CLIENT's dir, not the daemon's spawn cwd).
-///
-/// `pub(in crate::app::runtime)` so the daemon's `Attach` handler (in the sibling
-/// `event_loop::daemon` module) can call it directly — attach is NOT a keystroke, so it
-/// does not route through `apply_action`; it reuses these same session handlers instead
-/// of forking the load/switch/create logic. Single-client / last-attach-wins on
-/// foreground is fine (the daemon only invokes this for the controller).
-pub(in crate::app::runtime) fn attach_select_for_pwd(
-    state: &mut AppState,
-    client: &mut Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-    cwd: &std::path::Path,
-) -> Result<()> {
-    // Don't disturb the session tail mid /new-KeyInput confirmation (mirrors the
-    // picker-select / hub guards). The pending session resolves first; a re-attach
-    // then re-runs this selection cleanly.
-    if state.rest.spawn_pending {
-        return Ok(());
-    }
-
-    let target_hash = store::pwd_hash(cwd);
-
-    // --- 1. LIVE session for that pwd → resume the most-recent one (SWAP foreground).
-    // Scan back-to-front so the LAST (most-recently-appended) matching slot wins, which
-    // matches "resume the last active session for that pwd". Closed (tombstoned) slots
-    // are skipped — they are not resumable.
-    if let Some(idx) = state
-        .rest
-        .sessions
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, rt)| {
-            !rt.closed
-                && rt
-                    .session
-                    .as_ref()
-                    .map(|s| s.pwd_hash == target_hash)
-                    .unwrap_or(false)
-        })
-        .map(|(i, _)| i)
-    {
-        return handle_live_switch(idx, state, client);
-    }
-
-    // --- 2. ON-DISK session for that pwd → load the newest unlocked one.
-    // `list_sessions_for` returns the bucket's rows newest-first; pick the first that
-    // isn't locked by ANOTHER live process. (A row locked by US can't appear here —
-    // step 1 already foregrounded any of our live sessions for this pwd.)
-    if let Ok(metas) = store::list_sessions_for(&target_hash) {
-        if let Some(meta) = metas.into_iter().find(|m| !store::is_locked(&m.path)) {
-            return open_disk_session(state, client, handle, meta.path);
-        }
-    }
-
-    // --- 3. Nothing for that pwd → CREATE a fresh session rooted at the client's cwd.
-    create_session_for_pwd(state, client, handle, cwd)
-}
-
 /// Create a brand-new session rooted at `cwd` (pwd-EXPLICIT), append it as a new tab,
-/// foreground it, and warm it — the pwd-aware-attach fallback when no live OR on-disk
-/// session exists for the attaching client's directory.
+/// foreground it, and warm it — the per-client FRESH session a plain `koma` attach
+/// always lands on (one fresh session per window, rooted at THAT window's cwd).
+///
+/// Plain attach NEVER resumes (the prior live/on-disk resume on attach was the bug:
+/// reopening `koma` in a dir landed on the OLD session — stale chat, even a stale /quit
+/// page). Resume / cooking / history is reached only via `koma --resume` / `koma agents`,
+/// which open the session picker OVER this fresh base.
 ///
 /// Mirrors [`super::super::super::commands::new_session::handle_new`] beat-for-beat (inherit
 /// last-used creds, acquire the new session's lock, APPEND + foreground, reset the flat
@@ -315,16 +246,31 @@ pub(in crate::app::runtime) fn attach_select_for_pwd(
 ///
 /// If the inherited creds are empty this opens KeyInput for the new session (marking it
 /// `spawn_pending` so an Esc pops it), exactly as `/new` does.
-fn create_session_for_pwd(
+///
+/// `pub(in crate::app::runtime)` so the daemon's `Attach` handler (in the sibling
+/// `event_loop::daemon` module) can call it directly — attach is NOT a keystroke, so it
+/// does not route through `apply_action`; it reuses this same session creator instead of
+/// forking the create logic. The handler guards it behind the client's first-attach flag
+/// so a re-attach/resync from an already-attached client does NOT spawn a second session.
+pub(in crate::app::runtime) fn create_session_for_pwd(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
     cwd: &std::path::Path,
 ) -> Result<()> {
+    // Don't disturb the session tail mid /new-KeyInput confirmation (a prior creds-less
+    // `/new` left `spawn_pending` + KeyInput up). Pushing a fresh tab on top would bury
+    // that prompt; the pending session resolves first. (Carried over from the old
+    // attach-select guard — in practice never fires on a brand-new client's first attach,
+    // since that client has created nothing yet.)
+    if state.rest.spawn_pending {
+        return Ok(());
+    }
+
     let mut sess = match store::create_session_in(cwd) {
         Ok(s) => s,
         Err(e) => {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
     };
@@ -361,13 +307,16 @@ fn create_session_for_pwd(
     state.rest.sessions.push(runtime);
     state.rest.foreground = state.rest.sessions.len() - 1;
 
-    // Reset the flat foreground-UI for a clean slate on the new tab (mirror /new).
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view for a clean slate on the new tab (mirror /new).
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
 
     // Fresh session → seed ITS OWN counters from its (empty) ledger, i.e. 0.
     let new_fg = state.rest.foreground;
@@ -377,7 +326,7 @@ fn create_session_for_pwd(
         // No creds yet — prompt FOR THE NEW SESSION. spawn_pending so Esc pops it.
         *client = None;
         state.rest.spawn_pending = true;
-        state.mode = Mode::KeyInput(KeyInputForm::prefilled(
+        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
             state.rest.last_key.clone().unwrap_or_default(),
             state
                 .rest
@@ -391,7 +340,7 @@ fn create_session_for_pwd(
         state.rest.spawn_pending = false;
         *client = Some(build_client());
         // Land in Chat first, THEN warm (warm_session may upgrade to Loading).
-        state.mode = Mode::Chat;
+        *state.mode_mut() = Mode::Chat;
         super::super::super::warm_session(state, client, handle);
     }
     Ok(())

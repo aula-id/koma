@@ -1,18 +1,19 @@
 //! [`AppStateRest`] struct definition and its constructor/default impl.
 //!
-//! The mode-independent "rest of the world" state: input buffer, status line,
-//! scroll, model-catalogue cache, and the foreground session set. The
-//! per-session token/cost counters and EXECUTION state (the active [`Session`], the
-//! streaming machinery, the tool-approval / sub-agent state machines, …) lives
-//! in [`SessionRuntime`]; `sessions` always holds at least one and `foreground`
-//! indexes the active one. Methods are split into sibling submodules (input,
-//! scroll, misc); the streaming-lifecycle methods live on `SessionRuntime`.
+//! The mode-independent "rest of the world" state: the model-catalogue cache, the
+//! global config/managers, and the foreground session set. The per-session
+//! token/cost counters, the status line + toast (C6), and EXECUTION state (the
+//! active [`Session`], the streaming machinery, the tool-approval / sub-agent state
+//! machines, …) live in [`SessionRuntime`]; `sessions` always holds at least one and
+//! `foreground` indexes the active one. Methods are split into sibling submodules
+//! (input, scroll, misc); the streaming-lifecycle + toast methods live on
+//! `SessionRuntime`.
 
 use std::cell::RefCell;
 use crate::model::app_config::AppConfig;
 use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
-use super::types::{AgentMode, CataloguePending, ToastKind, TranscriptCache};
+use super::types::{AgentMode, CataloguePending, TranscriptCache};
 
 pub struct AppStateRest {
     /// The foreground session set. Always non-empty; `foreground` is always a
@@ -20,7 +21,24 @@ pub struct AppStateRest {
     /// the multi-session machinery is carved but not yet wired.
     pub sessions: Vec<SessionRuntime>,
     /// Index of the active session in `sessions` (always in range).
+    ///
+    /// In the daemon (C2) this is a TRANSIENT "currently-acting view cursor": it is
+    /// only meaningful while bracketed by ONE client's request (load/store in
+    /// `handle_request`) or ONE client's snapshot projection (`stream_deltas`). The
+    /// persistent per-client foreground lives on `HubClient::foreground` (a UUID). NO
+    /// per-tick background code may rely on this index for per-client correctness —
+    /// `service_all_sessions` runs OUTSIDE any client bracket, so it reads `viewed_sessions`
+    /// instead. In the LOCAL (single-view) TUI this is still the one true foreground.
     pub foreground: usize,
+    /// The set of session UUIDs CURRENTLY VIEWED by some client (C2). Refreshed once
+    /// per tick BEFORE `service_all_sessions`: in the DAEMON, from every attached
+    /// client's resolved foreground UUID; in the LOCAL loop, the single global
+    /// foreground session's UUID. Replaces the stale `idx == foreground` gates in the
+    /// per-tick session servicing (background-finish toast / finished-unseen clear /
+    /// harness-verdict toast / stream-start status), which must reflect "viewed by ANY
+    /// client", not the transient `foreground` cursor. A session viewed by NOBODY
+    /// behaves as a pure background session.
+    pub viewed_sessions: std::collections::HashSet<String>,
     /// Saved (session) before a /new or reconfigure prompt; restored on cancel.
     pub prev_session: Option<crate::model::session::Session>,
     /// True while a `/new`-spawned PARALLEL session (freshly appended to
@@ -34,39 +52,9 @@ pub struct AppStateRest {
     /// cancelled (see `spawn_pending`). Set in `handle_new` just before the new
     /// session is appended + made foreground. Only meaningful while `spawn_pending`.
     pub spawn_prev_fg: usize,
-    pub input: String,
-    /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
-    /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
-    /// paints the block cursor here instead of always at the end. Kept in char
-    /// units so multibyte input never splits a code point; converted to a byte
-    /// offset only at the `String::insert`/`remove` call site. Reset to the end
-    /// on any bulk replace (submit/clear, history recall, completion).
-    pub cursor: usize,
-    /// Image attachments staged by the composer (path-paste / `@`-picker) that
-    /// have NOT yet been submitted. Each was produced by the ingest core (its
-    /// bytes are already on disk under `<session>/images/`) and matches an
-    /// `[Image #N]` marker inserted into `input`. On submit, these are MOVED onto
-    /// the user `ChatMessage` and this is cleared; a `/clear` or take_input that
-    /// drops the text also clears them so a stray marker can't outlive its image.
-    pub pending_attachments: Vec<crate::dto::chat::Attachment>,
-    /// Bash-style input history: index into the sent-user-message list while
-    /// recalling (None = editing live input).
-    pub hist_idx: Option<usize>,
-    /// Live input stashed when history recall starts; restored on recall past
-    /// the newest entry.
-    pub input_stash: String,
     /// Selected row in the `/` command palette (index into the filtered list).
     pub palette_sel: usize,
-    pub status: String,
-    /// Transient toast: (message, expiry instant, kind). Shown at the top of the
-    /// transcript and auto-dismissed once the instant passes. `kind` selects the
-    /// box style (red "error" vs neutral "info").
-    pub toast: Option<(String, std::time::Instant, ToastKind)>,
     pub should_quit: bool,
-    pub scroll: u16,
-    /// When true, the transcript stays pinned to the bottom (auto-follows new
-    /// content). Cleared when the user scrolls up; re-set on reaching bottom.
-    pub follow: bool,
     /// Max scroll offset (content_lines - viewport) from the LAST render. The
     /// renderer writes it (via interior mutability through a shared ref); the
     /// key/mouse scroll handlers read it to clamp + detect "at bottom". Single-
@@ -173,20 +161,6 @@ pub struct AppStateRest {
     /// spawns the fetch; cleared by the `warm_rx` drain when the result lands.
     /// `None` when nothing is being fetched.
     pub catalogue_fetching: Option<String>,
-    /// Start instant of the `/compact` animation. `Some` only while a compaction
-    /// is in flight (set in `Command::Compact`, cleared once the result is
-    /// applied). The renderer uses it to draw the spinner + elapsed + indeterminate
-    /// bar, and the event loop uses it both to keep redrawing each tick (so the
-    /// animation actually animates) and to enforce the cosmetic minimum duration.
-    pub compact_anim_start: Option<std::time::Instant>,
-    /// Earliest instant the stashed compaction result may be applied. Set when a
-    /// fast `StreamEvent::Compacted` arrives before the minimum animation duration
-    /// has elapsed; the event loop applies `compact_pending` once `now >= this`.
-    pub compact_apply_at: Option<std::time::Instant>,
-    /// Stashed `(summary, kept_tail)` awaiting the minimum-duration gate. Held
-    /// only when a compaction finished faster than the minimum so the apply is
-    /// deferred (non-blocking) rather than slept on. Applied by the event loop.
-    pub compact_pending: Option<(String, Vec<crate::dto::chat::ChatMessage>)>,
     /// Start instant of the current WORKING wait — the moment the app entered a
     /// model/tool/fold wait that should shimmer (i.e. `waiting && !awaiting_approval`).
     /// Drives the status-line "comet" animation's elapsed counter and its travelling
@@ -284,23 +258,21 @@ impl AppStateRest {
         // event-loop tick into `latest_version`. Holding the sender for the app's
         // lifetime keeps the drain from ever seeing a premature `Disconnected`.
         let (vtx, vrx) = tokio::sync::mpsc::unbounded_channel();
+        let first = SessionRuntime::new();
+        // Seed the viewed set with the sole session's UUID so the per-tick gates treat
+        // it as foreground from tick zero (the local loop re-derives this each tick; the
+        // daemon refreshes from its attached clients — but a freshly-built state always
+        // has its one session "viewed" until a loop overwrites it).
+        let viewed_sessions = std::iter::once(first.id.clone()).collect();
         Self {
-            sessions: vec![SessionRuntime::new()],
+            sessions: vec![first],
             foreground: 0,
+            viewed_sessions,
             prev_session: None,
             spawn_pending: false,
             spawn_prev_fg: 0,
-            input: String::new(),
-            cursor: 0,
-            pending_attachments: Vec::new(),
-            hist_idx: None,
-            input_stash: String::new(),
             palette_sel: 0,
-            status: "ready".into(),
-            toast: None,
             should_quit: false,
-            scroll: 0,
-            follow: true,
             last_max_scroll: std::cell::Cell::new(0),
             last_key: None,
             last_esc: None,
@@ -324,9 +296,6 @@ impl AppStateRest {
             models_cache_endpoint: None,
             catalogue_pending: None,
             catalogue_fetching: None,
-            compact_anim_start: None,
-            compact_apply_at: None,
-            compact_pending: None,
             work_since: None,
             warned_missing_roots: Vec::new(),
             subagents_open: false,
@@ -353,6 +322,37 @@ impl AppStateRest {
     pub fn fg_mut(&mut self) -> &mut SessionRuntime {
         let i = self.foreground;
         &mut self.sessions[i]
+    }
+
+    /// Resolve a per-client foreground POINTER (a stable session UUID, or `None`) to a
+    /// concrete index into `sessions` (C2). Sessions are append+tombstone and addressed
+    /// by UUID, so the index is resolved at the point of use. Fallback when the UUID is
+    /// `None` or no longer resolvable: the FIRST non-closed session, else `0` (there is
+    /// always at least one slot). Used to bracket each client's request / snapshot so the
+    /// existing `fg()`-based handlers and the snapshot projection act on THAT client's view.
+    pub fn resolve_foreground(&self, id: Option<&str>) -> usize {
+        if let Some(id) = id {
+            if let Some(i) = self.sessions.iter().position(|s| s.id == id) {
+                return i;
+            }
+        }
+        self.sessions
+            .iter()
+            .position(|s| !s.closed)
+            .unwrap_or(0)
+    }
+
+    /// Reset the scroll/follow of session `idx` itself (snap it to the bottom), instead of
+    /// the foreground session (C2). `scroll`/`follow` are PER-SESSION (C1), so a stream
+    /// that starts on session `idx` snaps ITS OWN view to the newest line regardless of
+    /// which client is currently the acting cursor — preserving the original visible
+    /// effect (the client viewing `idx` sees the snap-to-bottom) while never yanking an
+    /// unrelated session's scroll. Mirrors [`reset_scroll`] but targets `sessions[idx]`.
+    pub fn reset_scroll_at(&mut self, idx: usize) {
+        if let Some(s) = self.sessions.get_mut(idx) {
+            s.follow = true;
+            s.scroll = 0;
+        }
     }
 
     /// Seed session `sess_idx`'s cumulative token/cost counters from its sqlite

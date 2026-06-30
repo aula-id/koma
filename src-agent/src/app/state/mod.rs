@@ -1,8 +1,10 @@
 //! Application state: the single source of truth the UI renders from.
 //!
 //! [`AppState`] = the current [`Mode`] (which screen + its form/picker data)
-//! plus [`AppStateRest`], the mode-independent rest of the world: the active
-//! session, input buffer, status line, scroll, and the streaming machinery.
+//! plus [`AppStateRest`], the mode-independent rest of the world: the
+//! model-catalogue cache, global config/managers, and the foreground session set.
+//! The active session's input buffer, status line + toast, scroll, and the streaming
+//! machinery live per-session on [`SessionRuntime`].
 //!
 //! Data flow: a keystroke becomes an `Action` (controller), the runtime applies
 //! that `Action` by mutating this state, and `view::draw` reads it. Async
@@ -17,7 +19,7 @@
 //! - `runtime` – [`SessionRuntime`]: the per-session execution state + stream methods
 //! - `input`   – input-editing and history `impl` blocks
 //! - `scroll`  – scroll `impl` block
-//! - `misc`    – credentials, catalogue requests, toast `impl` block
+//! - `misc`    – credentials, catalogue requests `impl` block
 
 mod types;
 mod rest;
@@ -38,15 +40,51 @@ pub use rest::AppStateRest;
 pub use runtime::SessionRuntime;
 
 pub struct AppState {
-    pub mode: Mode,
     pub rest: AppStateRest,
 }
 
 impl AppState {
+    /// Construct a fresh `AppState` whose SOLE (foreground) session starts in `mode`.
+    ///
+    /// `mode` is PER-SESSION now (C3): it lives on each [`SessionRuntime`], reached via
+    /// the foreground in [`mode`](Self::mode) / [`mode_mut`](Self::mode_mut). The
+    /// constructor builds the rest (which seeds one session) and writes `mode` onto that
+    /// first session, so a freshly-built state renders `mode` exactly as before the move.
     pub fn new(mode: Mode) -> Self {
-        Self {
-            mode,
-            rest: AppStateRest::new(),
-        }
+        let mut rest = AppStateRest::new();
+        rest.fg_mut().mode = mode;
+        Self { rest }
+    }
+
+    /// The CURRENT mode = the FOREGROUND session's mode (C3). Mode is per-session, so
+    /// every read routes through the foreground; in the daemon the per-client foreground
+    /// is swapped in before each per-client request/projection, making overlays per-client.
+    pub fn mode(&self) -> &Mode {
+        &self.rest.fg().mode
+    }
+
+    /// Mutable handle to the FOREGROUND session's mode (C3).
+    ///
+    /// NOTE: this borrows `self.rest` mutably for as long as the returned reference is
+    /// alive, so a site that needs `state.rest.<field>` WHILE pattern-matching the mode
+    /// must use [`take_mode`](Self::take_mode) + [`set_mode`](Self::set_mode) instead (the
+    /// take/put-back pattern) to avoid an overlapping `&mut state.rest` borrow.
+    pub fn mode_mut(&mut self) -> &mut Mode {
+        &mut self.rest.fg_mut().mode
+    }
+
+    /// Take the foreground session's mode OUT, leaving a cheap [`Mode::Chat`] placeholder,
+    /// and return the old value. Paired with [`set_mode`](Self::set_mode) for the
+    /// mixed-borrow sites: own the mode in a local so `state.rest` is free to be borrowed
+    /// alongside it, then write the (possibly mutated) mode back. `Mode::Chat` is a unit
+    /// variant, so the placeholder is allocation-free.
+    pub fn take_mode(&mut self) -> Mode {
+        std::mem::replace(&mut self.rest.fg_mut().mode, Mode::Chat)
+    }
+
+    /// Write `mode` onto the foreground session (the put-back half of the take/put-back
+    /// pattern; also the plain setter for a write that needs no concurrent `state.rest`).
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.rest.fg_mut().mode = mode;
     }
 }

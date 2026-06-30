@@ -50,7 +50,7 @@ pub(super) fn exit_select(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
-/// Apply a finished compaction to the active session and finalize the UI.
+/// Apply a finished compaction to session `idx` and finalize its UI.
 ///
 /// This is the single apply path shared by both the immediate case (the model
 /// already took >= the minimum animation time) and the deferred case (a fast
@@ -59,11 +59,18 @@ pub(super) fn exit_select(terminal: &mut Term) -> Result<()> {
 /// - refreshes the project-awareness summary (best-effort, gated by the setting),
 /// - invalidates the transcript cache so the same-length REPLACE doesn't leave a
 ///   stale prefix (the summary is the new first block),
-/// - scrolls to the TOP so the user sees the fresh summary,
+/// - scrolls that session to the TOP so the user sees the fresh summary,
 /// - surfaces the summary text as a neutral (info) toast under the finish, and
-/// - clears the waiting/animation state.
+/// - clears that session's waiting/animation state.
+///
+/// `idx` is the session whose `/compact` just finished (C4) — NOT the transient
+/// foreground cursor. Both call sites know it: the immediate path
+/// (`StreamEvent::Compacted`) is per-session and the deferred path iterates
+/// sessions whose own `compact_apply_at` is due. Operating by index keeps two
+/// clients compacting different sessions from cross-corrupting each other.
 pub(super) fn apply_compaction_result(
     state: &mut AppState,
+    idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
     summary: String,
@@ -76,7 +83,12 @@ pub(super) fn apply_compaction_result(
     // final-answer paths already apply to assistant content.
     let summary = crate::dto::chat::strip_tool_call_tags(&summary);
 
-    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+    if let Some(sess) = state
+        .rest
+        .sessions
+        .get_mut(idx)
+        .and_then(|rt| rt.session.as_mut())
+    {
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);
         sess.rebuild_system();
@@ -87,7 +99,10 @@ pub(super) fn apply_compaction_result(
     // compaction" requirement. Best-effort; gated by `awareness_enabled` inside
     // `summarize`. Clone the inputs out first (including `config` for the role
     // resolution) so the `block_on` doesn't hold a borrow of `state.rest`.
-    let aware_inputs = match (client.as_ref(), state.rest.fg().session.as_ref()) {
+    let aware_inputs = match (
+        client.as_ref(),
+        state.rest.sessions.get(idx).and_then(|rt| rt.session.as_ref()),
+    ) {
         (Some(c), Some(sess)) if sess.settings.awareness_enabled => Some((
             Arc::clone(c),
             state.rest.config.clone(),
@@ -133,31 +148,48 @@ pub(super) fn apply_compaction_result(
                     &workdir,
                 )),
             };
-            state.rest.fg_mut().awareness_summary = s;
+            if let Some(rt) = state.rest.sessions.get_mut(idx) {
+                rt.awareness_summary = s;
+            }
         }
     }
 
     // The transcript cache only rebuilds on a length SHRINK; compaction can be a
     // same-length REPLACE, which would leave a stale prefix. Force a full rebuild
-    // so the new summary (first Assistant block) + kept tail render correctly.
+    // so the new summary (first Assistant block) + kept tail render correctly. The
+    // cache is a single GLOBAL view scratch keyed to whatever session is rendered;
+    // clearing it just forces the next paint to rebuild, harmless for any other
+    // rendered session (it re-derives its own blocks).
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    // Jump to the top of the transcript so the freshly-written summary is what the
-    // user sees once the animation clears (instead of the kept tail at the bottom).
-    state.rest.follow = false;
-    state.rest.scroll = 0;
+    // Jump to the top of the COMPACTED session's transcript so the freshly-written
+    // summary is what the user sees once the animation clears (instead of the kept
+    // tail at the bottom). Transcript view state is per-session — target `idx`, not
+    // the transient foreground.
+    if let Some(rt) = state.rest.sessions.get_mut(idx) {
+        rt.follow = false;
+        rt.scroll = 0;
+    }
 
     // Surface the generated summary "under the finish animation" as a neutral,
-    // multi-line info toast (capped so a long summary stays contained).
+    // multi-line info toast (capped so a long summary stays contained). Toast is
+    // per-session now (C6) and this applies per-session unbracketed, so raise it on
+    // `sessions[idx]` — the session that compacted — not the stale foreground.
     state
         .rest
+        .sessions[idx]
         .set_toast_info(format!("compacted ✓\n{}", cap_summary(&summary, 400)));
 
-    state.rest.fg_mut().waiting = false;
-    state.rest.status = "ready".into();
-    // Animation is done: stop the per-tick redraw + drop any deferral bookkeeping.
-    state.rest.compact_anim_start = None;
-    state.rest.compact_apply_at = None;
-    state.rest.compact_pending = None;
+    // Clear THIS session's waiting + animation/deferral bookkeeping (per-session, C4):
+    // the animation is done, so stop the per-tick redraw + drop any deferral state for
+    // exactly the session that finished — never the transient foreground.
+    if let Some(rt) = state.rest.sessions.get_mut(idx) {
+        rt.waiting = false;
+        rt.compact_anim_start = None;
+        rt.compact_apply_at = None;
+        rt.compact_pending = None;
+        // Per-session status (C6): "ready" belongs on the compacted session's slot.
+        rt.status = "ready".into();
+    }
 }
 
 /// Trim and cap a summary for toast display: collapse leading/trailing

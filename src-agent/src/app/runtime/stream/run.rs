@@ -19,12 +19,13 @@ pub(crate) fn abort_current(rest: &mut AppStateRest) {
     }
     rt.active_rx = None;
     rt.waiting = false;
-    // Tear down any in-flight compaction animation / deferred apply so an
+    // Tear down THIS session's in-flight compaction animation / deferred apply so an
     // interrupt (Esc) or `/new` mid-compact doesn't leave the spinner stuck (and
-    // forcing a per-tick redraw) forever.
-    rest.compact_anim_start = None;
-    rest.compact_apply_at = None;
-    rest.compact_pending = None;
+    // forcing a per-tick redraw) forever. Per-session now (C4) — clear it on the same
+    // foreground runtime we just aborted.
+    rt.compact_anim_start = None;
+    rt.compact_apply_at = None;
+    rt.compact_pending = None;
 }
 
 /// Spawn a streaming task for `history`. Opens a fresh channel, stashes the

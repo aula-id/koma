@@ -153,9 +153,13 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
     };
 
     // Polite detach so the daemon passes the controller seat promptly (the socket
-    // close would also trigger it, but this is cleaner). If the `/quit` overlay's
-    // `[k]` kill-all path ran, a `QuitDaemon` was ALSO queued ahead of this — both
-    // MUST reach the daemon or it is left orphaned (socket open, no controller).
+    // close would also trigger it, but this is cleaner). The `/quit` overlay's `[k]`
+    // (close-window) and `[d]` (detach) paths ALREADY queued their own `Detach` (and,
+    // for `[k]`, a `QuitSession` ahead of it) before the loop returned; this extra
+    // `Detach` is then a harmless no-op (the daemon already deregistered this client by
+    // id, so a second Detach finds no matching client and returns). For a plain exit
+    // (Ctrl-C / EOF) this is the primary detach. All queued requests MUST reach the
+    // daemon or it could be left orphaned (socket open, no controller).
     let _ = req_tx.send(ClientRequest::Detach);
 
     // Deterministic flush of the final frame(s) before the runtime dies. Dropping

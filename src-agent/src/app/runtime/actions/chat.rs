@@ -21,14 +21,14 @@ pub(super) fn handle_submit(
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     if client.is_none() || state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     // Busy guard: block while a turn is streaming OR a `!` shell is draining
     // off-thread — a Submit landing during the latter would race the shell entry
     // into the same conversation tail.
     if state.rest.fg().waiting || state.rest.fg().awaiting_shell {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     // Prompt-classifier (PC): keep a copy of the user's prompt to
@@ -59,7 +59,7 @@ pub(super) fn handle_submit(
         let _ = msglog::append(&sess.path, Role::User, &text, None);
         sess.conversation.push_user_with_attachments(text, attachments);
         if let Err(e) = sess.save() {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
         sess.conversation.history()
@@ -83,7 +83,7 @@ pub(super) fn handle_submit(
         if !capable {
             crate::app::runtime::stream::push_image_unsupported_notice(&mut state.rest);
             state.rest.reset_scroll();
-            state.rest.status = "ready".into();
+            state.rest.fg_mut().status = "ready".into();
             return Ok(());
         }
     }
@@ -104,7 +104,7 @@ pub(super) fn handle_submit(
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.
-    state.rest.status = "thinking".into();
+    state.rest.fg_mut().status = "thinking".into();
     // Active session this submit drives (always foreground; captured into a local
     // before the call so it isn't read while a `&mut state.rest` is live).
     let fgi = state.rest.foreground;
@@ -173,7 +173,7 @@ pub(super) fn handle_submit(
 /// entry is persisted to the msglog so it survives resume.
 pub(super) fn handle_shell(text: String, state: &mut AppState) -> Result<()> {
     if state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     // Waiting guard (mirrors `handle_submit` / `handle_resend`): never start a `!`
@@ -184,12 +184,12 @@ pub(super) fn handle_shell(text: String, state: &mut AppState) -> Result<()> {
     // next turn. The controller already declines to route a `!` while busy; this is
     // the daemon-side backstop (the daemon drives the same handler over IPC).
     if state.rest.fg().waiting || state.rest.fg().awaiting_shell {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     let cmd = text.trim().to_string();
     if cmd.is_empty() {
-        state.rest.status = "usage: !<command>".into();
+        state.rest.fg_mut().status = "usage: !<command>".into();
         return Ok(());
     }
     let fgi = state.rest.foreground;
@@ -220,7 +220,7 @@ pub(super) fn handle_shell(text: String, state: &mut AppState) -> Result<()> {
     // clears it. Phase label names the affordance so the shimmering status surfaces
     // what's running.
     state.rest.sessions[fgi].awaiting_shell = true;
-    state.rest.status = "running shell".into();
+    state.rest.fg_mut().status = "running shell".into();
     Ok(())
 }
 
@@ -234,16 +234,16 @@ pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
     // `SessionRuntime::interrupt()` so the session hub's Ctrl+X can reuse it on
     // ANY session; here it runs on the foreground.
     if state.rest.fg().waiting {
-        state.rest.fg_mut().interrupt();
-        // Rest-GLOBAL compaction cleanup (NOT per-session, so it stays here — it
-        // was previously folded into `abort_current`): tear down any in-flight
-        // compaction animation / deferred apply so an interrupt mid-compact
+        let fg = state.rest.fg_mut();
+        fg.interrupt();
+        // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
+        // in-flight compaction animation / deferred apply so an interrupt mid-compact
         // doesn't leave the spinner stuck forever.
-        state.rest.compact_anim_start = None;
-        state.rest.compact_apply_at = None;
-        state.rest.compact_pending = None;
+        fg.compact_anim_start = None;
+        fg.compact_apply_at = None;
+        fg.compact_pending = None;
     }
-    state.rest.status = "interrupted".into();
+    state.rest.fg_mut().status = "interrupted".into();
     Ok(())
 }
 
@@ -255,17 +255,17 @@ pub(super) fn handle_resend(
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     if state.rest.fg().waiting || state.rest.fg().awaiting_shell {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     if client.is_none() || state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     let history = {
         let sess = state.rest.fg_mut().session.as_mut().unwrap();
         if sess.conversation.last_user_content().is_none() {
-            state.rest.status = "nothing to resend".into();
+            state.rest.fg_mut().status = "nothing to resend".into();
             return Ok(());
         }
         sess.conversation.pop_trailing_assistants();
@@ -275,7 +275,7 @@ pub(super) fn handle_resend(
     state.rest.reset_scroll();
     state.rest.fg_mut().begin_stream();
     state.rest.fg_mut().waiting = true;
-    state.rest.status = "thinking".into();
+    state.rest.fg_mut().status = "thinking".into();
     let fgi = state.rest.foreground;
     start_stream_task(history, state, fgi, client, handle);
     Ok(())
@@ -369,6 +369,6 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
     state.rest.fg_mut().abort_running_subagents();
     state.rest.fg_mut().pending_tool_tasks.clear();
     state.rest.fg_mut().awaiting_tool_tasks = false;
-    state.rest.status = "denied — stopped".into();
+    state.rest.fg_mut().status = "denied — stopped".into();
     Ok(())
 }

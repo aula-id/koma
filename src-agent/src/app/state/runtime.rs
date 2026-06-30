@@ -20,11 +20,14 @@ use std::time::Instant;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::AbortHandle;
 
+use crate::app::mode::Mode;
 use crate::app::subagent::{PendingSubagent, SubAgent};
 use crate::dto::chat::ToolCall;
 use crate::model::session::Session;
 use crate::service::StreamEvent;
 use crate::tool::DirCache;
+
+use super::types::ToastKind;
 
 /// Per-session execution state. Always non-empty in [`super::AppStateRest::sessions`];
 /// the foreground one is reached through `fg()` / `fg_mut()`.
@@ -36,6 +39,58 @@ pub struct SessionRuntime {
     /// critique #2). Purely additive; the single-process TUI ignores it for now.
     #[allow(dead_code)] // read by the daemon IPC layer in stage 2+
     pub id: String,
+    /// This session's CURRENT UI mode (C3): the screen it shows — `Chat` or one of the
+    /// slash overlays / pickers (`Settings`, `Help`, `SessionHub`, `Loading`, …) with its
+    /// form/picker data. Moved OUT of [`super::AppState`] and onto the session so each
+    /// session carries its own overlay state; reached through [`super::AppState::mode`] /
+    /// [`mode_mut`](super::AppState::mode_mut), which index the foreground. In the daemon
+    /// the per-client foreground is swapped in before each request/projection (C2), so a
+    /// client in `/help` over session A no longer forces a client in Chat over session B
+    /// into `/help`. A fresh session defaults to `Chat` (see [`Self::new`]); the
+    /// spawn/startup flows set the right initial mode on the right session.
+    pub mode: Mode,
+    /// THIS session's status-line text (C6). Moved off the GLOBAL [`super::AppStateRest`]
+    /// so that in the daemon a status flash fired by one session's processing
+    /// (`streaming`, `thinking`, `$ cmd — exit`, an error line, …) is projected ONLY into
+    /// the client(s) viewing that session — the snapshot reads `fg().status` after the
+    /// per-client foreground swap, so each window shows its own. In the single-window TUI
+    /// `fg()` is the only session, so behaviour is byte-identical to the old global field.
+    /// Defaults to `"ready"`.
+    pub status: String,
+    /// THIS session's transient toast: `(message, expiry instant, kind)`. Moved off the
+    /// GLOBAL [`super::AppStateRest`] for the same reason as [`status`](Self::status) — a
+    /// toast a session raises (bash-N finished, session ready, harness flagged, …) is
+    /// projected only into the client(s) viewing that session (snapshot reads `fg().toast`).
+    /// Shown at the top of the transcript and auto-dismissed once the instant passes;
+    /// `kind` selects the box style (red "error" vs neutral "info"). Expiry is swept
+    /// PER-SESSION (each session ticks its own toast). `None` when no toast is showing.
+    pub toast: Option<(String, std::time::Instant, ToastKind)>,
+    pub input: String,
+    /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
+    /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
+    /// paints the block cursor here instead of always at the end. Kept in char
+    /// units so multibyte input never splits a code point; converted to a byte
+    /// offset only at the `String::insert`/`remove` call site. Reset to the end
+    /// on any bulk replace (submit/clear, history recall, completion).
+    pub cursor: usize,
+    /// Image attachments staged by the composer (path-paste / `@`-picker) that
+    /// have NOT yet been submitted. Each was produced by the ingest core (its
+    /// bytes are already on disk under `<session>/images/`) and matches an
+    /// `[Image #N]` marker inserted into `input`. On submit, these are MOVED onto
+    /// the user `ChatMessage` and this is cleared; a `/clear` or take_input that
+    /// drops the text also clears them so a stray marker can't outlive its image.
+    pub pending_attachments: Vec<crate::dto::chat::Attachment>,
+    /// Bash-style input history: index into the sent-user-message list while
+    /// recalling (None = editing live input).
+    pub hist_idx: Option<usize>,
+    /// Live input stashed when history recall starts; restored on recall past
+    /// the newest entry.
+    pub input_stash: String,
+    /// Transcript scroll offset (top visual line) used only while NOT following.
+    pub scroll: u16,
+    /// When true, the transcript stays pinned to the bottom (auto-follows new
+    /// content). Cleared when the user scrolls up; re-set on reaching bottom.
+    pub follow: bool,
     pub session: Option<Session>,
     pub waiting: bool,
     pub streaming: Option<String>,
@@ -228,6 +283,23 @@ pub struct SessionRuntime {
     /// `None` when awareness is disabled, no docs exist, or the call failed —
     /// it is recomputed per session, never persisted.
     pub awareness_summary: Option<String>,
+    /// Start instant of THIS session's `/compact` animation. `Some` only while a
+    /// compaction is in flight for this session (set in `Command::Compact`, cleared
+    /// once the result is applied). The renderer reads the FOREGROUND session's value
+    /// to draw the spinner + elapsed + indeterminate bar; the event loop reads it both
+    /// to keep redrawing each tick (so the animation actually animates) and to enforce
+    /// the cosmetic minimum duration. Per-session (C4) so two clients compacting
+    /// different sessions can't cross-corrupt each other's apply.
+    pub compact_anim_start: Option<Instant>,
+    /// Earliest instant THIS session's stashed compaction result may be applied. Set
+    /// when a fast `StreamEvent::Compacted` arrives before the minimum animation
+    /// duration has elapsed; the event loop applies `compact_pending` once `now >= this`.
+    pub compact_apply_at: Option<Instant>,
+    /// Stashed `(summary, kept_tail)` for THIS session awaiting the minimum-duration
+    /// gate. Held only when a compaction finished faster than the minimum so the apply
+    /// is deferred (non-blocking) rather than slept on. Applied by the event loop to
+    /// this session by index.
+    pub compact_pending: Option<(String, Vec<crate::dto::chat::ChatMessage>)>,
     /// Path of the session whose on-disk `session.lock` THIS instance currently
     /// holds (its active session's directory). `reconcile_session_lock` keeps it
     /// in lock-step with the active session: it releases this lock when switching
@@ -300,6 +372,22 @@ impl SessionRuntime {
             // session in `AppStateRest::new` and each `/new` spawn) routes
             // through here, so every session is uniquely keyed automatically.
             id: uuid::Uuid::new_v4().to_string(),
+            // Fresh session default (C3): a brand-new live session lands in Chat. The
+            // spawn/startup flows (KeyInput on a creds-less spawn, Loading on a warming
+            // startup session, SessionPicker on --resume) overwrite this on the RIGHT
+            // session after construction.
+            mode: Mode::Chat,
+            // Per-session status line (C6); same default the old global field carried.
+            status: "ready".into(),
+            // Per-session toast (C6): none on a fresh session.
+            toast: None,
+            input: String::new(),
+            cursor: 0,
+            pending_attachments: Vec::new(),
+            hist_idx: None,
+            input_stash: String::new(),
+            scroll: 0,
+            follow: true,
             session: None,
             waiting: false,
             streaming: None,
@@ -338,6 +426,9 @@ impl SessionRuntime {
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             awareness_summary: None,
+            compact_anim_start: None,
+            compact_apply_at: None,
+            compact_pending: None,
             held_lock: None,
             provider_caches: false,
             summarizing: false,
@@ -384,6 +475,40 @@ impl SessionRuntime {
         }
     }
 
+    // ----- toast management (per-session in C6; was `impl AppStateRest`) -----
+
+    /// Show an error toast (red box) for ~6 seconds on THIS session.
+    pub fn set_toast(&mut self, msg: String) {
+        self.toast = Some((
+            msg,
+            std::time::Instant::now() + std::time::Duration::from_secs(6),
+            ToastKind::Error,
+        ));
+    }
+
+    /// Show an informational toast (neutral box) for ~8 seconds on THIS session.
+    /// Used for non-failure notices like the post-compaction summary, which is
+    /// multi-line and shouldn't read as an error.
+    pub fn set_toast_info(&mut self, msg: String) {
+        self.toast = Some((
+            msg,
+            std::time::Instant::now() + std::time::Duration::from_secs(8),
+            ToastKind::Info,
+        ));
+    }
+
+    /// Clear THIS session's toast if it has expired. Returns true if it was just
+    /// cleared (so the caller can mark the frame dirty). Swept per-session each tick.
+    pub fn tick_toast(&mut self) -> bool {
+        if let Some((_, until, _)) = &self.toast {
+            if std::time::Instant::now() >= *until {
+                self.toast = None;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Allocate the next background-bash job id, advancing the counter. Ids are
     /// monotonic and never reused, so a finished job's id stays a stable handle
     /// for later `bash_output` polls (the job is kept in `bash_jobs`).
@@ -391,6 +516,208 @@ impl SessionRuntime {
         let id = self.next_bash_job_id;
         self.next_bash_job_id += 1;
         id
+    }
+
+    // ----- composer editing (the caret `cursor` is a CHAR index into `input`;
+    // `byte_at` maps it to the byte offset `String::insert`/`remove` need, so
+    // non-ASCII input can never panic on a non-char-boundary). -----
+
+    /// Char count of the current input (the caret's upper bound).
+    fn char_len(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    /// Byte offset of char index `idx` (== input length when `idx >= char_len`).
+    fn byte_at(&self, idx: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(idx)
+            .map(|(b, _)| b)
+            .unwrap_or(self.input.len())
+    }
+
+    /// Insert `c` at the caret and advance it (mid-text editing supported).
+    ///
+    /// The `palette_sel = 0` / `hist_idx = None` reset for the `/` palette is the
+    /// caller's job ([`super::AppStateRest::push_char`] resets the GLOBAL
+    /// `palette_sel` after delegating here); this clears only the per-session
+    /// `hist_idx`.
+    pub fn push_char(&mut self, c: char) {
+        let at = self.byte_at(self.cursor);
+        self.input.insert(at, c);
+        self.cursor += 1;
+        self.hist_idx = None;
+    }
+
+    /// Delete the char BEFORE the caret and retreat it; no-op at the start.
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.cursor -= 1;
+        let at = self.byte_at(self.cursor);
+        self.input.remove(at);
+        self.hist_idx = None;
+    }
+
+    /// Delete the char AT the caret (forward delete, the Delete key); no-op at the
+    /// end of the input. Mirrors [`Self::backspace`] but does not move the caret.
+    pub fn delete_forward(&mut self) {
+        if self.cursor >= self.char_len() {
+            return;
+        }
+        let at = self.byte_at(self.cursor);
+        self.input.remove(at);
+        self.hist_idx = None;
+    }
+
+    /// Move the caret one char left (no-op at the start).
+    pub fn cursor_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    /// Move the caret one char right (capped at the input length).
+    pub fn cursor_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.char_len());
+    }
+
+    /// Jump the caret to the start of the input.
+    pub fn cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Jump the caret to the end of the input. Also called after any bulk replace
+    /// (history recall, command/file completion) so the caret never dangles past
+    /// the new (possibly shorter) text.
+    pub fn cursor_end(&mut self) {
+        self.cursor = self.char_len();
+    }
+
+    /// Move the caret up one visual line within a multi-line input.
+    ///
+    /// Returns `true` when the caret moved (so the caller can suppress history
+    /// recall), or `false` when the caret is already on the first line (single-
+    /// line input always returns `false`, preserving the existing history-recall
+    /// behaviour).
+    pub fn cursor_up(&mut self) -> bool {
+        // Walk chars up to cursor to compute (line, col) in char units.
+        let mut line: usize = 0;
+        let mut col: usize = 0;
+        for ch in self.input.chars().take(self.cursor) {
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        if line == 0 {
+            return false; // already on the first line → let caller do history
+        }
+        // Collect char lengths per line (split on '\n').
+        let line_lens: Vec<usize> = self.input.split('\n').map(|l| l.chars().count()).collect();
+        let target_line = line - 1;
+        let target_col = col.min(line_lens[target_line]);
+        // Convert (target_line, target_col) back to a flat char index.
+        self.cursor = line_lens[..target_line].iter().sum::<usize>()
+            + target_line  // one '\n' per consumed line break
+            + target_col;
+        true
+    }
+
+    /// Move the caret down one visual line within a multi-line input.
+    ///
+    /// Returns `true` when the caret moved, `false` when already on the last
+    /// line (single-line input always returns `false`).
+    pub fn cursor_down(&mut self) -> bool {
+        let line_lens: Vec<usize> = self.input.split('\n').map(|l| l.chars().count()).collect();
+        let last_line = line_lens.len() - 1;
+        // Walk chars up to cursor to compute (line, col).
+        let mut line: usize = 0;
+        let mut col: usize = 0;
+        for ch in self.input.chars().take(self.cursor) {
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        if line == last_line {
+            return false; // already on the last line → let caller do history
+        }
+        let target_line = line + 1;
+        let target_col = col.min(line_lens[target_line]);
+        self.cursor = line_lens[..target_line].iter().sum::<usize>()
+            + target_line  // one '\n' per consumed line break
+            + target_col;
+        true
+    }
+
+    /// Take the input buffer, resetting the caret + per-session history index.
+    /// The GLOBAL `palette_sel` reset is the caller's job (see
+    /// [`super::AppStateRest::take_input`]).
+    pub fn take_input(&mut self) -> String {
+        self.hist_idx = None;
+        self.cursor = 0;
+        std::mem::take(&mut self.input)
+    }
+
+    /// Insert the literal marker string `s` (e.g. `"[Image #3]"`) at the caret,
+    /// advancing it past the inserted run. Mirrors [`Self::push_char`]'s caret /
+    /// history discipline so a bulk marker insert behaves like typing; the GLOBAL
+    /// `palette_sel` reset is the caller's job (see
+    /// [`super::AppStateRest::insert_marker`]).
+    pub fn insert_marker(&mut self, s: &str) {
+        let at = self.byte_at(self.cursor);
+        self.input.insert_str(at, s);
+        self.cursor += s.chars().count();
+        self.hist_idx = None;
+    }
+
+    /// Move the staged composer attachments out for the message being submitted,
+    /// leaving `pending_attachments` empty. Called at submit, paired with
+    /// `take_input()`, so the markers and their attachment records travel
+    /// together onto the user message.
+    pub fn take_attachments(&mut self) -> Vec<crate::dto::chat::Attachment> {
+        std::mem::take(&mut self.pending_attachments)
+    }
+
+    /// Recall the previous (older) sent user message into the input. `users` is
+    /// the session's user messages oldest-first.
+    pub fn history_prev(&mut self, users: &[String]) {
+        if users.is_empty() {
+            return;
+        }
+        let next = match self.hist_idx {
+            None => {
+                self.input_stash = self.input.clone();
+                users.len() - 1
+            }
+            Some(0) => return, // already at the oldest
+            Some(i) => i - 1,
+        };
+        self.hist_idx = Some(next);
+        self.input = users[next].clone();
+        self.cursor = self.char_len();
+    }
+
+    /// Recall the next (newer) sent user message; past the newest, restore the
+    /// stashed live input and leave recall mode.
+    pub fn history_next(&mut self, users: &[String]) {
+        match self.hist_idx {
+            Some(i) if i + 1 < users.len() => {
+                self.hist_idx = Some(i + 1);
+                self.input = users[i + 1].clone();
+                self.cursor = self.char_len();
+            }
+            Some(_) => {
+                self.hist_idx = None;
+                self.input = std::mem::take(&mut self.input_stash);
+                self.cursor = self.char_len();
+            }
+            None => {}
+        }
     }
 
     /// Kill every still-running sub-agent that belongs to THIS session, drop

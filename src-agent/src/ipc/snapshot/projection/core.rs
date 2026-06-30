@@ -147,11 +147,11 @@ fn pending_subagent_snapshot(
 /// [`mode_snapshot`], so there is no separate `global_snapshot` wrapper.
 pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> GlobalSnapshot {
     GlobalSnapshot {
-        input: state.rest.input.clone(),
-        cursor: state.rest.cursor,
-        scroll: state.rest.scroll,
-        follow: state.rest.follow,
-        status: state.rest.status.clone(),
+        input: state.rest.fg().input.clone(),
+        cursor: state.rest.fg().cursor,
+        scroll: state.rest.fg().scroll,
+        follow: state.rest.fg().follow,
+        status: state.rest.fg().status.clone(),
         work_elapsed_ms: state
             .rest
             .work_since
@@ -159,7 +159,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         theme: theme_token(&state.rest.config.theme).to_string(),
         accent: state.rest.config.accent.clone(),
         mode,
-        toast: state.rest.toast.as_ref().map(|(msg, _until, kind)| {
+        toast: state.rest.fg().toast.as_ref().map(|(msg, _until, kind)| {
             let kind = match kind {
                 crate::app::state::ToastKind::Error => "error".to_string(),
                 crate::app::state::ToastKind::Info => "info".to_string(),
@@ -174,7 +174,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         subagents_open: state.rest.subagents_open,
         subagent_sel: state.rest.subagent_sel,
         palette_sel: state.rest.palette_sel,
-        pending_attachments: state.rest.pending_attachments.clone(),
+        pending_attachments: state.rest.fg().pending_attachments.clone(),
         file_palette: file_palette_matches(state),
         agent_mode: match state.rest.agent_mode {
             crate::app::state::AgentMode::Auto => "auto",
@@ -189,7 +189,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
 const FILE_PAL_MAX: usize = 10;
 
 fn file_palette_matches(state: &AppState) -> Option<Vec<String>> {
-    let partial = crate::controller::input::file_ref_partial(&state.rest.input)?;
+    let partial = crate::controller::input::file_ref_partial(&state.rest.fg().input)?;
     let matches = state
         .rest
         .fg()

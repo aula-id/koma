@@ -7,7 +7,7 @@
 //! 1. Top+bottom rule title bar — ` quit ` on the TOP rule.
 //! 2. A clean question line ("Do you want to quit?"); when work is in flight a
 //!    dim sub-line warns that in-flight work will be lost.
-//! 3. A navigable horizontal BUTTON ROW: `[quit & kill]  [minimize]  [cancel]`.
+//! 3. A navigable horizontal BUTTON ROW: `[close window]  [minimize]  [cancel]`.
 //!    The focused button (index `s.selected`) is highlighted; the others are
 //!    subdued. Each button is laid out as a chip and its on-screen
 //!    [`ratatui::layout::Rect`] is recorded into [`QuitConfirmState::button_rects`]
@@ -28,14 +28,17 @@ use crate::app::mode::QuitConfirmState;
 use crate::view::theme::Palette;
 
 /// The three button labels, left→right, in `button_rects`/`selected` index order
-/// (`0` = quit & kill, `1` = minimize, `2` = cancel). The chip is the label wrapped
-/// in literal brackets with inner padding (`[ quit & kill ]`) — koma button style — so the chip width is
+/// (`0` = close window, `1` = minimize, `2` = cancel). The chip is the label wrapped
+/// in literal brackets with inner padding (`[ close window ]`) — koma button style — so the chip width is
 /// `label.len() + 4`, matching the click-rect math below.
-const LABELS: [&str; 3] = ["quit & kill", "minimize", "cancel"];
+const LABELS: [&str; 3] = ["close window", "minimize", "cancel"];
 
 /// One-line description for each button, same index order as [`LABELS`].
+/// `close window` is per-window under the daemon (close THIS window's session, then
+/// detach it; other windows keep running) and the last window closing exits koma — so
+/// the copy reads correctly for both the multi-window daemon and the lone window.
 const DESCS: [&str; 3] = [
-    "Abort every session's in-flight work, then exit koma.",
+    "Stop this window's work and close it. The last window closing exits koma.",
     "Save each conversation to disk to resume later, then exit koma. \
      In-flight work still stops on exit.",
     "Back to chat — keep everything running.",
@@ -140,7 +143,7 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     let chip_w = |idx: usize| LABELS[idx].len() as u16 + 4;
 
     // Record each button's on-screen Rect as a chip-width horizontal segment on
-    // the button row, in index order (0 = quit & kill, 1 = minimize, 2 = cancel)
+    // the button row, in index order (0 = close window, 1 = minimize, 2 = cancel)
     // so click hit-testing matches `button_rects`' documented order. Walk the row
     // accumulating chip widths + gaps from `inner.x`, mirroring the render above.
     // Guard tiny terminals: if the row is off-screen (not enough height) or the

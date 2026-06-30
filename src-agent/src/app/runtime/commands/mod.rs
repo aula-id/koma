@@ -54,7 +54,7 @@ pub(super) fn apply_slash(
         Command::AddDir(path) => cd::handle_adddir(path, state)?,
         Command::Internet(target) => internet::handle_internet(target, state)?,
         Command::Unknown(s) => {
-            state.rest.status = format!("unknown command: /{s}");
+            state.rest.fg_mut().status = format!("unknown command: /{s}");
         }
     }
     Ok(())

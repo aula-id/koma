@@ -30,12 +30,12 @@ pub fn handle_picker_select(
     // rest/mode below). The picked path is the canonical identity: a session dir
     // is `sessions/<pwd_hash>/<uuid>`, so equal paths ⇒ equal id, and every
     // lock/load API here is already path-keyed.
-    let path = match &state.mode {
+    let path = match state.mode() {
         Mode::SessionPicker(p) => p.selected_meta().map(|m| m.path.clone()),
         _ => None,
     };
     let Some(path) = path else {
-        state.rest.status = "no session selected".into();
+        state.rest.fg_mut().status = "no session selected".into();
         return Ok(());
     };
 
@@ -62,12 +62,12 @@ pub fn handle_hub_open_history(
     }
 
     // Pull the row's path out of the hub state (borrow released before mutating).
-    let path = match &state.mode {
+    let path = match state.mode() {
         Mode::SessionHub(h) => h.history.get(idx).map(|e| e.path.clone()),
         _ => None,
     };
     let Some(path) = path else {
-        state.rest.status = "no session selected".into();
+        state.rest.fg_mut().status = "no session selected".into();
         return Ok(());
     };
 
@@ -107,15 +107,24 @@ pub fn open_disk_session(
         .iter()
         .position(|rt| rt.session.as_ref().map(|s| &s.path) == Some(&path))
     {
+        // Per-session mode (C3): this swap is reached from the open SessionPicker /
+        // SessionHub, so the CURRENT (leaving) foreground's mode is that overlay. Reset it
+        // to Chat BEFORE repointing so switching back doesn't resurrect the picker/hub; the
+        // target keeps its OWN stored mode (mirrors `handle_live_switch`).
+        state.rest.fg_mut().mode = Mode::Chat;
         state.rest.foreground = idx;
-        // Flat foreground-UI reset for the now-shown tab (mirror handle_live_switch):
-        // empty composer + caret, pinned-to-bottom scroll, no staged attachments, and
-        // a fresh transcript cache so the target's conversation renders instead of the
-        // previous tab's cached blocks. No token reseed — each slot owns its counters.
-        state.rest.input.clear();
-        state.rest.cursor = 0;
+        // Per-session composer + view reset for the now-shown tab (mirror
+        // handle_live_switch): empty composer + caret, pinned-to-bottom scroll, no
+        // staged attachments, and a fresh transcript cache so the target's
+        // conversation renders instead of the previous tab's cached blocks. No
+        // token reseed — each slot owns its counters.
+        {
+            let fg = state.rest.fg_mut();
+            fg.input.clear();
+            fg.cursor = 0;
+            fg.pending_attachments.clear();
+        }
         state.rest.reset_scroll();
-        state.rest.pending_attachments.clear();
         state.rest.transcript_cache.borrow_mut().blocks.clear();
         // KEYLESS client → rebuild for a fresh plan_word at this session boundary,
         // gated on the target having a usable Main route (no-client-no-send).
@@ -134,12 +143,12 @@ pub fn open_disk_session(
                 .is_some_and(|r| !r.api_key.is_empty())
             });
         *client = if usable { Some(build_client()) } else { None };
-        state.rest.status = if state.rest.fg().is_working() {
-            "working".into()
-        } else {
-            "ready".into()
-        };
-        state.mode = Mode::Chat;
+        // Per-session status (C6): compute the working flag first (it borrows
+        // `sessions` immutably), then write the foreground session's own status.
+        let working = state.rest.fg().is_working();
+        state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
+        // No `mode = Chat` on the target (C3): it shows its OWN stored mode. The leaving
+        // session was reset to Chat above before the repoint.
         return Ok(());
     }
 
@@ -150,7 +159,7 @@ pub fn open_disk_session(
     // necessarily another process's (`is_locked` does the PID-liveness check and
     // sweeps stale locks). Stay in the picker; the row already shows the marker.
     if store::is_locked(&path) {
-        state.rest.status = "session in use by another process".into();
+        state.rest.fg_mut().status = "session in use by another process".into();
         return Ok(());
     }
 
@@ -158,7 +167,7 @@ pub fn open_disk_session(
     let sess = match Session::load(&path) {
         Ok(s) => s,
         Err(e) => {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
     };
@@ -190,15 +199,19 @@ pub fn open_disk_session(
     state.rest.sessions.push(runtime);
     state.rest.foreground = state.rest.sessions.len() - 1;
 
-    // Reset the flat foreground-UI for a clean slate on the new tab (mirror /new):
-    // empty composer + caret, pinned-to-bottom scroll, no staged attachments (so the
-    // previous session's images don't leak in), fresh transcript cache.
-    state.rest.input.clear();
-    state.rest.cursor = 0;
+    // Reset the per-session composer + view for a clean slate on the new tab
+    // (mirror /new): empty composer + caret, pinned-to-bottom scroll, no staged
+    // attachments (so the previous session's images don't leak in), fresh
+    // transcript cache.
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
     state.rest.reset_scroll();
-    state.rest.pending_attachments.clear();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
 
     // Existing session: seed THIS (new foreground) slot's OWN counters from its full
     // sqlite log so the readout reflects prior usage. Never touches another slot.
@@ -219,7 +232,7 @@ pub fn open_disk_session(
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         *client = None;
         state.rest.spawn_pending = true;
-        state.mode = Mode::KeyInput(KeyInputForm::prefilled(lk, lm, false, false));
+        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(lk, lm, false, false));
     } else {
         state.rest.spawn_pending = false;
         let (key, model, provider) = state
@@ -245,7 +258,7 @@ pub fn open_disk_session(
         // as the Chat we just set. warm_session -> reconcile_session_lock only ever
         // touches the (new) foreground's lock, which already matches the on-disk
         // lock we just wrote — a no-op for locks; no other session's lock is freed.
-        state.mode = Mode::Chat;
+        *state.mode_mut() = Mode::Chat;
         super::super::super::warm_session(state, client, handle);
     }
     Ok(())

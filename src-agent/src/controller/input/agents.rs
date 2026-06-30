@@ -270,16 +270,16 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
                     KeyCode::Char('s') | KeyCode::Char('S') => {
                         if s.mode == AgentSubMode::Create {
                             if s.draft_name.trim().is_empty() {
-                                rest.status = "name required".into();
+                                rest.fg_mut().status = "name required".into();
                                 Action::None
                             } else if s.draft_description.trim().is_empty() {
-                                rest.status = "description required".into();
+                                rest.fg_mut().status = "description required".into();
                                 Action::None
                             } else {
                                 Action::CreateAgent
                             }
                         } else if s.draft_description.trim().is_empty() {
-                            rest.status = "description required".into();
+                            rest.fg_mut().status = "description required".into();
                             Action::None
                         } else {
                             Action::SaveAgent
@@ -304,7 +304,7 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
             KeyCode::Enter | KeyCode::Right => {
                 match s.current_agent().map(|a| a.source) {
                     Some(AgentSource::Builtin) => {
-                        rest.status = "built-in agents are read-only".into();
+                        rest.fg_mut().status = "built-in agents are read-only".into();
                         Action::None
                     }
                     Some(_) => {
@@ -321,7 +321,7 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 match s.current_agent().map(|a| a.source) {
                     Some(AgentSource::Builtin) => {
-                        rest.status = "cannot delete a built-in agent".into();
+                        rest.fg_mut().status = "cannot delete a built-in agent".into();
                         Action::None
                     }
                     Some(_) => {

@@ -129,13 +129,18 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
             });
             if last_user_had_image && is_image_input_error(&e) {
                 push_image_unsupported_notice(rest);
-                rest.status = "ready".into();
+                rest.sessions[sess_idx].status = "ready".into();
             } else {
-                rest.set_toast(e.clone());
-                rest.status = format!("error: {e}");
+                // Status + toast are per-session now (C6), and `finish_stream` runs
+                // per-session unbracketed (fg() is stale here), so write them on
+                // `sessions[sess_idx]` — the slot whose turn just finished. The
+                // projection sources `fg().status`/`fg().toast` per client, so the
+                // error only surfaces in the client(s) viewing this session.
+                rest.sessions[sess_idx].set_toast(e.clone());
+                rest.sessions[sess_idx].status = format!("error: {e}");
             }
         }
-        None => rest.status = "ready".into(),
+        None => rest.sessions[sess_idx].status = "ready".into(),
     }
 }
 
@@ -261,13 +266,17 @@ pub(crate) fn advance_turn(
         state.rest.sessions[sess_idx].waiting = false;
         state.rest.sessions[sess_idx].current_task = None;
         state.rest.sessions[sess_idx].agent_steps = 0;
-        state.rest.status = match save_err {
+        // Status + toast are per-session (C6); this runs per-session unbracketed, so
+        // write them on `sessions[sess_idx]` — the projection shows them only to the
+        // client(s) viewing this session.
+        let status = match save_err {
             Some(e) => {
-                state.rest.set_toast(e.clone());
+                state.rest.sessions[sess_idx].set_toast(e.clone());
                 format!("error: {e}")
             }
             None => "ready".into(),
         };
+        state.rest.sessions[sess_idx].status = status;
         return;
     }
 
@@ -298,8 +307,12 @@ pub(crate) fn advance_turn(
         });
     if wc_blocked {
         super::tools::deny_all_pending(state, sess_idx, "workspace not in allowed folders");
-        state.rest.set_toast("workspace not in allowed folders".into());
-        state.rest.status = "stopped: workspace not allowed".into();
+        // Per-session status + toast (C6): write them on the blocked session's own slot.
+        state
+            .rest
+            .sessions[sess_idx]
+            .set_toast("workspace not in allowed folders".into());
+        state.rest.sessions[sess_idx].status = "stopped: workspace not allowed".into();
         return;
     }
 

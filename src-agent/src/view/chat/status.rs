@@ -21,10 +21,12 @@ use super::helpers::{comet_spans, fmt_count};
 /// The cumulative token/cost readout is right-aligned when non-zero.
 pub(super) fn render_status(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
     let status_area = chunk.inner(Margin { horizontal: 2, vertical: 0 });
+    // Status line is per-session (C6): render the FOREGROUND session's status.
+    let status = &rest.fg().status;
     let status_line: Line<'static> = match rest.work_since {
         Some(since) => {
             let elapsed_ms = since.elapsed().as_millis();
-            let mut spans = comet_spans(&rest.status, elapsed_ms, palette);
+            let mut spans = comet_spans(status, elapsed_ms, palette);
             // Dim elapsed counter, e.g. `thinking · 3s`. Whole seconds so it ticks
             // calmly (the comet supplies the fast motion).
             spans.push(Span::styled(
@@ -34,7 +36,7 @@ pub(super) fn render_status(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
             Line::from(spans)
         }
         None => Line::from(Span::styled(
-            rest.status.clone(),
+            status.clone(),
             Style::default().fg(palette.dim),
         )),
     };

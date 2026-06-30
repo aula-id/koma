@@ -12,8 +12,8 @@ use crate::app::state::AppState;
 
 /// Handle `Action::CloseBash`: return to Chat.
 pub(super) fn handle_close_bash(state: &mut AppState) -> Result<()> {
-    state.mode = Mode::Chat;
-    state.rest.status = "ready".into();
+    *state.mode_mut() = Mode::Chat;
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }
 
@@ -29,8 +29,8 @@ pub(super) fn handle_bash_kill(id: usize, state: &mut AppState) -> Result<()> {
     let job = state.rest.fg().bash_jobs.iter().find(|j| j.id == id);
     if let Some(job) = job {
         crate::app::bgbash::kill_bash_job(job);
-        state.rest.status = format!("killed bash-{id}");
-        state.rest.set_toast_info(format!("killed bash-{id}"));
+        state.rest.fg_mut().status = format!("killed bash-{id}");
+        state.rest.fg_mut().set_toast_info(format!("killed bash-{id}"));
     }
     Ok(())
 }

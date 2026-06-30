@@ -27,26 +27,31 @@ fn paste_single_line(text: &str, mut sink: impl FnMut(char)) {
 /// Contexts with no text field (the role/provider pickers, the session/effort
 /// pickers, the loading splash) ignore the paste.
 pub fn handle_paste(state: &mut AppState, text: &str) {
-    match &mut state.mode {
+    // `mode` is per-session now (C3) and reached through `state.rest`, but the arms also
+    // mutate `state.rest` (e.g. `push_char` / `request_catalogue`). Take the foreground
+    // session's mode out (cheap `Chat` placeholder), route the paste against the owned
+    // local — freeing `state.rest` — then put it back with its in-place edits.
+    let mut mode = state.take_mode();
+    match &mut mode {
         Mode::Chat => {
             // Image-path paste: if the WHOLE pasted text is a path to an existing
             // image file, route it through the ingest core — copy it into the
             // session's images/ dir, stage the attachment, and insert an
             // `[Image #N]` marker — instead of dumping the raw path into the input.
             // Non-image / non-path / multi-token pastes fall through to the verbatim
-            // text insert below, exactly as before.
-            if let Some(path) = image_path_paste(text) {
-                if state.rest.try_attach_image_path(&path) {
-                    return;
+            // text insert below, exactly as before. (An `if/else` — not an early
+            // `return` — because the surrounding take/put-back must reach `set_mode`.)
+            let attached = image_path_paste(text)
+                .is_some_and(|path| state.rest.try_attach_image_path(&path));
+            if !attached {
+                // Multiline verbatim: '\n' is kept (newline in the input, never a
+                // submit). NORMALIZE line endings first so bracketed paste that
+                // delivers breaks as CRLF or bare CR still lands as real newlines
+                // (a bare `\r` used to be dropped, collapsing the paste onto one line).
+                let cleaned = text.replace("\r\n", "\n").replace('\r', "\n");
+                for c in cleaned.chars() {
+                    state.rest.push_char(c);
                 }
-            }
-            // Multiline verbatim: '\n' is kept (newline in the input, never a
-            // submit). NORMALIZE line endings first so bracketed paste that
-            // delivers breaks as CRLF or bare CR still lands as real newlines
-            // (a bare `\r` used to be dropped, collapsing the paste onto one line).
-            let cleaned = text.replace("\r\n", "\n").replace('\r', "\n");
-            for c in cleaned.chars() {
-                state.rest.push_char(c);
             }
         }
         Mode::KeyInput(form) => {
@@ -167,6 +172,8 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         | Mode::Security(_)
         | Mode::Bash(_) => {}
     }
+    // Put the (possibly edited) mode back onto the foreground session.
+    state.set_mode(mode);
 }
 
 /// If the pasted `text` is a path to an existing image file, return the cleaned
