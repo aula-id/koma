@@ -9,7 +9,7 @@
 //! - `Ctrl+C`        → `Action::Quit`
 //! - `Up`            → move the LIST cursor up
 //! - `Down`          → move the LIST cursor down
-//! - `k`/`K`         → `Action::BashKillJob(id)` for the selected job, ONLY when
+//! - `Ctrl+X`        → `Action::BashKillJob(id)` for the selected job, ONLY when
 //!   it is still running (a no-op on a finished/killed/errored job)
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -36,6 +36,17 @@ pub fn handle_bash(s: &mut BashState, rest: &mut AppStateRest, key: KeyEvent) ->
         return Action::Quit;
     }
 
+    // Ctrl+X kills the selected running job — koma's kill convention (matches the
+    // sub-agent abort in chat, the session hub, etc.). No-op on a finished/killed/
+    // errored job (no signal, no toast). Checked before the keycode match because
+    // is_ctrl inspects modifiers.
+    if is_ctrl(&key, 'x') {
+        return match s.current() {
+            Some(job) if job.running => Action::BashKillJob(job.id),
+            _ => Action::None,
+        };
+    }
+
     match key.code {
         KeyCode::Esc => Action::CloseBash,
         KeyCode::Up => {
@@ -46,12 +57,6 @@ pub fn handle_bash(s: &mut BashState, rest: &mut AppStateRest, key: KeyEvent) ->
             s.move_down();
             Action::None
         }
-        // Kill the selected job — only meaningful while it is still running. On a
-        // finished/killed/errored job this is a no-op (no signal, no toast).
-        KeyCode::Char('k') | KeyCode::Char('K') => match s.current() {
-            Some(job) if job.running => Action::BashKillJob(job.id),
-            _ => Action::None,
-        },
         // Any other key closes the panel (mirrors the /task sub-agents overlay,
         // which dismisses on any non-navigation key so the next keystroke types).
         _ => Action::CloseBash,

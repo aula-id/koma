@@ -49,6 +49,7 @@ pub const KEYBINDINGS: &[(&str, &str)] = &[
     ("Ctrl+E", "toggle internet mode (simple / full)"),
     ("Ctrl+J", "insert a newline"),
     ("Ctrl+V", "paste an image from the clipboard"),
+    ("Ctrl+X", "kill the selected bash job / sub-agent"),
     ("Esc", "interrupt while busy"),
     ("Esc Esc", "edit a previous message (rewind)"),
     ("Up/Down/wheel", "scroll the transcript"),
