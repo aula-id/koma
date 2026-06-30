@@ -1,8 +1,10 @@
 //! Application state: the single source of truth the UI renders from.
 //!
 //! [`AppState`] = the current [`Mode`] (which screen + its form/picker data)
-//! plus [`AppStateRest`], the mode-independent rest of the world: the active
-//! session, input buffer, status line, scroll, and the streaming machinery.
+//! plus [`AppStateRest`], the mode-independent rest of the world: the
+//! model-catalogue cache, global config/managers, and the foreground session set.
+//! The active session's input buffer, status line + toast, scroll, and the streaming
+//! machinery live per-session on [`SessionRuntime`].
 //!
 //! Data flow: a keystroke becomes an `Action` (controller), the runtime applies
 //! that `Action` by mutating this state, and `view::draw` reads it. Async
@@ -17,7 +19,7 @@
 //! - `runtime` – [`SessionRuntime`]: the per-session execution state + stream methods
 //! - `input`   – input-editing and history `impl` blocks
 //! - `scroll`  – scroll `impl` block
-//! - `misc`    – credentials, catalogue requests, toast `impl` block
+//! - `misc`    – credentials, catalogue requests `impl` block
 
 mod types;
 mod rest;

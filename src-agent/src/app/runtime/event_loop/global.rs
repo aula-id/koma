@@ -131,7 +131,9 @@ pub(super) fn service_global(
                 dirty = true;
             }
             Ok(Err(e)) => {
-                state.rest.set_toast(format!("security health probe failed: {e}"));
+                // Toast is per-session (C6); a health-probe failure is a global notice —
+                // surface it on the foreground session (single-window: the only session).
+                state.rest.fg_mut().set_toast(format!("security health probe failed: {e}"));
                 for s in security_states(state) {
                     s.health_fetching = false;
                 }
@@ -293,11 +295,14 @@ pub(super) fn service_global(
                 let attached =
                     state.rest.try_attach_image_bytes(bytes, "image/png", "pasted.png");
                 if attached {
+                    // The image attached to the FOREGROUND session (`try_attach_image_bytes`
+                    // targets `fg()`), so its toast belongs on the foreground too (C6).
                     state
                         .rest
+                        .fg_mut()
                         .set_toast_info("image attached from clipboard".to_string());
                 } else {
-                    state.rest.set_toast(
+                    state.rest.fg_mut().set_toast(
                         "clipboard image: no active session or ingest failed".to_string(),
                     );
                 }
@@ -305,7 +310,7 @@ pub(super) fn service_global(
                 dirty = true;
             }
             Ok(Err(reason)) => {
-                state.rest.set_toast(format!("clipboard image: {reason}"));
+                state.rest.fg_mut().set_toast(format!("clipboard image: {reason}"));
                 state.rest.clipboard_rx = None;
                 dirty = true;
             }
@@ -401,7 +406,9 @@ pub(super) fn service_global(
     };
     if !indexing_now && missing_now != state.rest.warned_missing_roots {
         if !missing_now.is_empty() {
-            state.rest.set_toast_info(format!(
+            // The missing-roots check reads the FOREGROUND session's dir_cache (above), so
+            // its warning toast belongs on the foreground session (C6).
+            state.rest.fg_mut().set_toast_info(format!(
                 "workspace root(s) not found on disk:\n{}\nfix the path in /settings",
                 missing_now.join("\n")
             ));
@@ -464,9 +471,15 @@ pub(super) fn service_global(
         dirty = true;
     }
 
-    // Auto-dismiss an expired error toast.
-    if state.rest.tick_toast() {
-        dirty = true;
+    // Auto-dismiss expired toasts. Toast is per-session now (C6), and this runs
+    // OUTSIDE any client bracket, so sweep EVERY session's toast — a background
+    // session's toast must expire on its own clock even while no client views it
+    // (otherwise it would linger until that session is foregrounded). Each
+    // session's `tick_toast` clears its own expired toast and reports it.
+    for rt in state.rest.sessions.iter_mut() {
+        if rt.tick_toast() {
+            dirty = true;
+        }
     }
 
     dirty

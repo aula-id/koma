@@ -171,9 +171,12 @@ pub(super) fn apply_compaction_result(
     }
 
     // Surface the generated summary "under the finish animation" as a neutral,
-    // multi-line info toast (capped so a long summary stays contained).
+    // multi-line info toast (capped so a long summary stays contained). Toast is
+    // per-session now (C6) and this applies per-session unbracketed, so raise it on
+    // `sessions[idx]` — the session that compacted — not the stale foreground.
     state
         .rest
+        .sessions[idx]
         .set_toast_info(format!("compacted ✓\n{}", cap_summary(&summary, 400)));
 
     // Clear THIS session's waiting + animation/deferral bookkeeping (per-session, C4):
@@ -184,8 +187,9 @@ pub(super) fn apply_compaction_result(
         rt.compact_anim_start = None;
         rt.compact_apply_at = None;
         rt.compact_pending = None;
+        // Per-session status (C6): "ready" belongs on the compacted session's slot.
+        rt.status = "ready".into();
     }
-    state.rest.status = "ready".into();
 }
 
 /// Trim and cap a summary for toast display: collapse leading/trailing

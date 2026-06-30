@@ -484,7 +484,7 @@ pub(crate) fn process_tools(
                             state.rest.sessions[sess_idx].approval_reason =
                                 Some(format!("classifier: ok — {}", verdict.reason));
                             state.rest.sessions[sess_idx].awaiting_approval = true;
-                            state.rest.status =
+                            state.rest.sessions[sess_idx].status =
                                 format!("approve {}? [y/n]", call.function.name);
                             return;
                         }
@@ -500,7 +500,7 @@ pub(crate) fn process_tools(
                         }
                         state.rest.sessions[sess_idx].approval_reason = Some(verdict.reason);
                         state.rest.sessions[sess_idx].awaiting_approval = true;
-                        state.rest.status = format!("approve {}? [y/n]", call.function.name);
+                        state.rest.sessions[sess_idx].status = format!("approve {}? [y/n]", call.function.name);
                         return;
                     } else {
                         // Classifier unavailable. `verdict.reason` now carries the
@@ -516,12 +516,12 @@ pub(crate) fn process_tools(
                             state.rest.sessions[sess_idx].approval_reason =
                                 Some(verdict.reason.clone());
                             state.rest.sessions[sess_idx].awaiting_approval = true;
-                            state.rest.status =
+                            state.rest.sessions[sess_idx].status =
                                 format!("approve {}? [y/n]", call.function.name);
                             return;
                         }
                         // Auto + unavailable → run inline, no prompt.
-                        state.rest.set_toast(format!(
+                        state.rest.sessions[sess_idx].set_toast(format!(
                             "harness: {} — auto-ran {}",
                             verdict.reason, call.function.name
                         ));
@@ -532,7 +532,7 @@ pub(crate) fn process_tools(
                 None => {
                     if mode == AgentMode::Normal {
                         state.rest.sessions[sess_idx].awaiting_approval = true;
-                        state.rest.status = format!("approve {}? [y/n]", call.function.name);
+                        state.rest.sessions[sess_idx].status = format!("approve {}? [y/n]", call.function.name);
                         return;
                     }
                     // Auto + classifier disabled → fall through and run inline.
@@ -563,7 +563,7 @@ pub(crate) fn process_tools(
             return;
         }
         // Instant tool: name the tool for the comet phase label and run it inline.
-        state.rest.status = format!("running {}", call.function.name);
+        state.rest.sessions[sess_idx].status = format!("running {}", call.function.name);
         let result = super::dispatch::run_tool(state, sess_idx, &call);
         state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
         state.rest.sessions[sess_idx].tool_idx += 1;
@@ -592,13 +592,13 @@ pub(crate) fn process_tools(
         // existing wording is unchanged); otherwise show the fetch is in flight.
         if has_subagents {
             let n = state.rest.sessions[sess_idx].pending_subagent_calls.len();
-            state.rest.status = if n == 1 {
+            state.rest.sessions[sess_idx].status = if n == 1 {
                 "delegating… (1 sub-agent)".into()
             } else {
                 format!("delegating… ({n} sub-agents)")
             };
         } else {
-            state.rest.status = "fetching…".into();
+            state.rest.sessions[sess_idx].status = "fetching…".into();
         }
         return;
     }

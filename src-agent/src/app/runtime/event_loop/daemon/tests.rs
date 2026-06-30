@@ -41,7 +41,7 @@ fn attach_then_change_emits_snapshot_then_seqd_delta() {
     assert_eq!(f1.seq, 2, "snapshot follows hello");
     assert!(matches!(f1.event, DaemonEvent::Snapshot(_)), "attach emits a Snapshot after Hello, got {:?}", f1.event);
 
-    state.rest.status = "streaming".into();
+    state.rest.fg_mut().status = "streaming".into();
     hub.stream_deltas(&mut state);
     let f2 = frame_rx.try_recv().expect("delta frame after change");
     assert_eq!(f2.seq, 3, "delta seq is N+1");

@@ -200,7 +200,7 @@ impl DaemonHub {
                     if let Some(cwd) = cwd {
                         let cwd = std::path::PathBuf::from(cwd);
                         if let Err(e) = create_session_for_pwd(state, client, handle, &cwd) {
-                            state.rest.status = format!("attach create error: {e:#}");
+                            state.rest.fg_mut().status = format!("attach create error: {e:#}");
                         }
                     }
                 }

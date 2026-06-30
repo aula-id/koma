@@ -40,7 +40,7 @@ pub(crate) fn kick_off_health_probe(rest: &mut AppStateRest) -> bool {
 /// state faithfully so the user can see why tools aren't appearing).
 pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     // Read live status from the manager; fall back to Default (not installed,

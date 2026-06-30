@@ -1,18 +1,19 @@
 //! [`AppStateRest`] struct definition and its constructor/default impl.
 //!
-//! The mode-independent "rest of the world" state: input buffer, status line,
-//! scroll, model-catalogue cache, and the foreground session set. The
-//! per-session token/cost counters and EXECUTION state (the active [`Session`], the
-//! streaming machinery, the tool-approval / sub-agent state machines, …) lives
-//! in [`SessionRuntime`]; `sessions` always holds at least one and `foreground`
-//! indexes the active one. Methods are split into sibling submodules (input,
-//! scroll, misc); the streaming-lifecycle methods live on `SessionRuntime`.
+//! The mode-independent "rest of the world" state: the model-catalogue cache, the
+//! global config/managers, and the foreground session set. The per-session
+//! token/cost counters, the status line + toast (C6), and EXECUTION state (the
+//! active [`Session`], the streaming machinery, the tool-approval / sub-agent state
+//! machines, …) live in [`SessionRuntime`]; `sessions` always holds at least one and
+//! `foreground` indexes the active one. Methods are split into sibling submodules
+//! (input, scroll, misc); the streaming-lifecycle + toast methods live on
+//! `SessionRuntime`.
 
 use std::cell::RefCell;
 use crate::model::app_config::AppConfig;
 use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
-use super::types::{AgentMode, CataloguePending, ToastKind, TranscriptCache};
+use super::types::{AgentMode, CataloguePending, TranscriptCache};
 
 pub struct AppStateRest {
     /// The foreground session set. Always non-empty; `foreground` is always a
@@ -53,11 +54,6 @@ pub struct AppStateRest {
     pub spawn_prev_fg: usize,
     /// Selected row in the `/` command palette (index into the filtered list).
     pub palette_sel: usize,
-    pub status: String,
-    /// Transient toast: (message, expiry instant, kind). Shown at the top of the
-    /// transcript and auto-dismissed once the instant passes. `kind` selects the
-    /// box style (red "error" vs neutral "info").
-    pub toast: Option<(String, std::time::Instant, ToastKind)>,
     pub should_quit: bool,
     /// Max scroll offset (content_lines - viewport) from the LAST render. The
     /// renderer writes it (via interior mutability through a shared ref); the
@@ -276,8 +272,6 @@ impl AppStateRest {
             spawn_pending: false,
             spawn_prev_fg: 0,
             palette_sel: 0,
-            status: "ready".into(),
-            toast: None,
             should_quit: false,
             last_max_scroll: std::cell::Cell::new(0),
             last_key: None,

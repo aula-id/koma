@@ -125,18 +125,20 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
 
     // Composer + transcript-view fields now live on the foreground session
     // (per-session in C1; still the single global foreground), so copy them onto
-    // the shadow's foreground runtime via `fg_mut()`. `status` stays rest-global.
+    // the shadow's foreground runtime via `fg_mut()`. `status` + `toast` are per-session
+    // too (C6) — the snapshot's `global.status`/`global.toast` were projected from the
+    // daemon's `fg()`, so they belong on THIS client's foreground session here.
     {
         let fg = shadow.rest.fg_mut();
         fg.input = global.input;
         fg.cursor = global.cursor;
         fg.scroll = global.scroll;
         fg.follow = global.follow;
+        fg.status = global.status;
+        fg.toast = global.toast.map(|(kind, text)| {
+            (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
+        });
     }
-    shadow.rest.status = global.status;
-    shadow.rest.toast = global.toast.map(|(kind, text)| {
-        (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
-    });
     // The on-demand model catalogue + the endpoint it was fetched for. The Settings
     // model modal + KeyInput step-1 search render their omnisearch dropdowns from
     // these; without them a remote client's dropdown would sit on `searching
@@ -324,10 +326,11 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             false
         }
         StateDelta::StatusChanged { session_id, text } => match session_id {
-            // Session-scoped status is not separately rendered today (the status line
-            // is global); a `None` (global) status updates the rendered status line.
+            // The status line is rendered from the foreground session (C6). The daemon's
+            // global status delta was diffed off ITS foreground's status, so apply it onto
+            // the shadow's foreground session — the window the user is looking at.
             None => {
-                shadow.rest.status = text;
+                shadow.rest.fg_mut().status = text;
                 true
             }
             Some(_) => false,
@@ -404,7 +407,10 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             false
         }
         StateDelta::Toast { kind, text } => {
-            shadow.rest.toast = Some((text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
+            // Toast is per-session (C6); the daemon diffed it off its foreground, so raise
+            // it on the shadow's foreground session — the one this client is viewing.
+            shadow.rest.fg_mut().toast =
+                Some((text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
             true
         }
     }

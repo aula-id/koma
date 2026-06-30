@@ -151,7 +151,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         cursor: state.rest.fg().cursor,
         scroll: state.rest.fg().scroll,
         follow: state.rest.fg().follow,
-        status: state.rest.status.clone(),
+        status: state.rest.fg().status.clone(),
         work_elapsed_ms: state
             .rest
             .work_since
@@ -159,7 +159,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         theme: theme_token(&state.rest.config.theme).to_string(),
         accent: state.rest.config.accent.clone(),
         mode,
-        toast: state.rest.toast.as_ref().map(|(msg, _until, kind)| {
+        toast: state.rest.fg().toast.as_ref().map(|(msg, _until, kind)| {
             let kind = match kind {
                 crate::app::state::ToastKind::Error => "error".to_string(),
                 crate::app::state::ToastKind::Info => "info".to_string(),

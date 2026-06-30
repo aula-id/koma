@@ -190,12 +190,12 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         state.rest.config.providers = provider_conns;
         state.rest.config.models = model_entries;
         if let Err(e) = state.rest.config.save() {
-            state.rest.status = format!("config save failed: {e}");
+            state.rest.fg_mut().status = format!("config save failed: {e}");
         }
         // c) Persist the session's settings.json.
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             if let Err(e) = sess.save() {
-                state.rest.status = format!("error: {e}");
+                state.rest.fg_mut().status = format!("error: {e}");
             }
         }
         // c2) Reindex the dir cache against the (possibly changed) workdirs.
@@ -218,7 +218,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         if needs_rename {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 if let Err(e) = store::rename_session(sess, name.trim()) {
-                    state.rest.status = format!("rename failed: {e}");
+                    state.rest.fg_mut().status = format!("rename failed: {e}");
                 }
             }
         }
@@ -233,9 +233,9 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         if old_internet.is_some_and(|old| old != internet_mode) {
             let (status, toast) =
                 crate::app::runtime::commands::internet::internet_feedback(internet_mode);
-            state.rest.status = status;
+            state.rest.fg_mut().status = status;
             if let Some(t) = toast {
-                state.rest.set_toast_info(t);
+                state.rest.fg_mut().set_toast_info(t);
             }
         }
     }
@@ -255,11 +255,11 @@ pub(super) fn handle_save_effort(choice: String, state: &mut AppState) -> Result
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.settings.effort = effort.clone();
         if let Err(e) = sess.save() {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
         }
     }
     let label = if effort.is_empty() { "default" } else { &effort };
-    state.rest.status = format!("effort: {label}");
+    state.rest.fg_mut().status = format!("effort: {label}");
     *state.mode_mut() = Mode::Chat;
     Ok(())
 }

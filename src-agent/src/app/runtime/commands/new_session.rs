@@ -42,7 +42,7 @@ pub(crate) fn handle_new(
     let mut sess = match store::create_session() {
         Ok(s) => s,
         Err(e) => {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
     };
@@ -98,7 +98,7 @@ pub(crate) fn handle_new(
     }
     state.rest.reset_scroll();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     // Fresh session → seed ITS OWN counters from its (empty) ledger, i.e. 0. No
     // global counter to reset: the new session carries its own totals, and the
     // previous foreground keeps its counters intact in its own slot.
@@ -286,13 +286,13 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
 /// Handle the `/rename <name>` command: rename the current session.
 pub(super) fn handle_rename(state: &mut AppState, name: String) -> Result<()> {
     if name.trim().is_empty() {
-        state.rest.status = "usage: /rename <name>".into();
+        state.rest.fg_mut().status = "usage: /rename <name>".into();
         return Ok(());
     }
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         match store::rename_session(sess, &name) {
-            Ok(()) => state.rest.status = format!("renamed to {}", sess.name),
-            Err(e) => state.rest.status = format!("error: {e}"),
+            Ok(()) => state.rest.fg_mut().status = format!("renamed to {}", sess.name),
+            Err(e) => state.rest.fg_mut().status = format!("error: {e}"),
         }
     }
     Ok(())

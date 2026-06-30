@@ -244,7 +244,7 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseUsage => {
             *state.mode_mut() = crate::app::mode::Mode::Chat;
-            state.rest.status = "ready".into();
+            state.rest.fg_mut().status = "ready".into();
         }
 
         Action::OpenRewind => {

@@ -174,7 +174,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                     rest.agent_viewer_scroll = 0;
                     rest.agent_viewer_follow = true; // open pinned to the bottom
                 } else {
-                    rest.status = "sub-agent queued — not started yet".into();
+                    rest.fg_mut().status = "sub-agent queued — not started yet".into();
                 }
             }
             // Esc or any non-nav key closes the panel.
@@ -229,7 +229,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     if is_ctrl(&key, 'v') {
         if !rest.fg().waiting {
             super::request_clipboard_image(rest);
-            rest.set_toast_info("reading image from clipboard…".to_string());
+            rest.fg_mut().set_toast_info("reading image from clipboard…".to_string());
         }
         return Action::None;
     }
@@ -247,17 +247,17 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 Ok(()) => {
                     let (status, toast) =
                         crate::app::runtime::commands::internet::internet_feedback(new_mode);
-                    rest.status = status;
+                    rest.fg_mut().status = status;
                     if let Some(t) = toast {
-                        rest.set_toast_info(t);
+                        rest.fg_mut().set_toast_info(t);
                     }
                 }
                 Err(e) => {
-                    rest.set_toast(format!("error saving settings: {e}"));
+                    rest.fg_mut().set_toast(format!("error saving settings: {e}"));
                 }
             }
         } else {
-            rest.set_toast("no active session".to_string());
+            rest.fg_mut().set_toast("no active session".to_string());
         }
         return Action::None;
     }
@@ -464,7 +464,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         // from the /security panel does the cycle include Yolo (Auto→Normal→Yolo→Auto).
         KeyCode::BackTab => {
             rest.agent_mode = rest.agent_mode.cycle(rest.yolo_armed);
-            rest.status = format!("mode: {}", rest.agent_mode.label());
+            // Per-session status (C6): label into a local (disjoint `agent_mode` read)
+            // before the `fg_mut()` borrow.
+            let label = rest.agent_mode.label();
+            rest.fg_mut().status = format!("mode: {label}");
             Action::None
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {

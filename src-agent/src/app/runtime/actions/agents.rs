@@ -10,7 +10,7 @@ use crate::app::state::AppState;
 pub(super) fn handle_close_agents(state: &mut AppState) -> Result<()> {
     // Discard any in-flight drafts; the dashboard never wrote them.
     *state.mode_mut() = Mode::Chat;
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }
 
@@ -61,10 +61,10 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
-            state.rest.status = format!("agent created: {}", def.name);
+            state.rest.fg_mut().status = format!("agent created: {}", def.name);
         }
         Err(e) => {
-            state.rest.status = format!("create failed: {e}");
+            state.rest.fg_mut().status = format!("create failed: {e}");
         }
     }
     Ok(())
@@ -95,7 +95,7 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
         AgentSource::Session => DefScope::Session(&session_dir),
         AgentSource::Builtin => {
             // Defensive: the UI never offers Edit on a built-in.
-            state.rest.status = "built-in agents are read-only".into();
+            state.rest.fg_mut().status = "built-in agents are read-only".into();
             return Ok(());
         }
     };
@@ -123,10 +123,10 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
-            state.rest.status = format!("agent updated: {}", def.name);
+            state.rest.fg_mut().status = format!("agent updated: {}", def.name);
         }
         Err(e) => {
-            state.rest.status = format!("save failed: {e}");
+            state.rest.fg_mut().status = format!("save failed: {e}");
         }
     }
     Ok(())
@@ -156,7 +156,7 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
         AgentSource::Global => DefScope::Global,
         AgentSource::Session => DefScope::Session(&session_dir),
         AgentSource::Builtin => {
-            state.rest.status = "cannot delete a built-in agent".into();
+            state.rest.fg_mut().status = "cannot delete a built-in agent".into();
             if let Mode::Agents(a) = state.mode_mut() {
                 a.cancel();
             }
@@ -183,10 +183,10 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
-            state.rest.status = format!("agent deleted: {name}");
+            state.rest.fg_mut().status = format!("agent deleted: {name}");
         }
         Err(e) => {
-            state.rest.status = format!("delete failed: {e}");
+            state.rest.fg_mut().status = format!("delete failed: {e}");
             if let Mode::Agents(a) = state.mode_mut() {
                 a.cancel();
             }

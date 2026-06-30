@@ -26,7 +26,7 @@ pub(super) fn handle_open_rewind(state: &mut AppState) -> Result<()> {
             *state.mode_mut() = Mode::MessageRewind(Box::new(rw));
         }
         None => {
-            state.rest.status = "nothing to edit".into();
+            state.rest.fg_mut().status = "nothing to edit".into();
         }
     }
     Ok(())
@@ -132,7 +132,7 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
     }
     state.rest.cursor_end();
     state.rest.palette_sel = 0;
-    state.rest.status = "rewound - edit and press Enter to resend".into();
+    state.rest.fg_mut().status = "rewound - edit and press Enter to resend".into();
     *state.mode_mut() = Mode::Chat;
     Ok(())
 }

@@ -16,11 +16,11 @@ pub(super) fn handle_compact(
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     if client.is_none() || state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     let (to_sum, kept_tail) = {
@@ -29,7 +29,7 @@ pub(super) fn handle_compact(
         sess.conversation.split_for_compaction(pn)
     };
     if to_sum.is_empty() {
-        state.rest.status = "nothing to compact".into();
+        state.rest.fg_mut().status = "nothing to compact".into();
         return Ok(());
     }
     let mut req = vec![ChatMessage::new(
@@ -38,7 +38,7 @@ pub(super) fn handle_compact(
     )];
     req.extend(to_sum);
     state.rest.fg_mut().waiting = true;
-    state.rest.status = "compacting...".into();
+    state.rest.fg_mut().status = "compacting...".into();
     // Start THIS session's compaction animation clock (per-session, C4 — set on the
     // acting session, which in a client bracket is `fg()`). The renderer reads the
     // foreground session's value to draw the spinner/elapsed/bar; the event loop reads

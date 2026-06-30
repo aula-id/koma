@@ -31,12 +31,12 @@ pub(super) fn handle_cd(
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     if state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     let path = path.trim();
     if path.is_empty() {
-        state.rest.status = "usage: /cd <path>".into();
+        state.rest.fg_mut().status = "usage: /cd <path>".into();
         return Ok(());
     }
     let fgi = state.rest.foreground;
@@ -47,7 +47,7 @@ pub(super) fn handle_cd(
     let resolved = match crate::tool::cd::resolve_cd_target(path, &cwd, &workspaces) {
         Ok(p) => p,
         Err(e) => {
-            state.rest.status = format!("cd: {e}");
+            state.rest.fg_mut().status = format!("cd: {e}");
             return Ok(());
         }
     };
@@ -55,17 +55,17 @@ pub(super) fn handle_cd(
     let canonical = match crate::tool::cd::canonicalize_existing(&resolved) {
         Ok(p) => p,
         Err(e) => {
-            state.rest.status = format!("cd: {e}");
+            state.rest.fg_mut().status = format!("cd: {e}");
             return Ok(());
         }
     };
     if !canonical.is_dir() {
-        state.rest.status = format!("cd: '{}' is not a directory", canonical.display());
+        state.rest.fg_mut().status = format!("cd: '{}' is not a directory", canonical.display());
         return Ok(());
     }
     // Apply via the shared primitive (sets cwd, reindexes, recomputes awareness).
     super::super::stream::apply_workspace_change(state, fgi, canonical.clone(), client, handle);
-    state.rest.status = format!("cwd: {}", canonical.display());
+    state.rest.fg_mut().status = format!("cwd: {}", canonical.display());
     Ok(())
 }
 
@@ -78,12 +78,12 @@ pub(super) fn handle_cd(
 /// subsequent MODEL `cd`/tool runs reach the new root.
 pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
     if state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     let path = path.trim();
     if path.is_empty() {
-        state.rest.status = "usage: /adddir <path>".into();
+        state.rest.fg_mut().status = "usage: /adddir <path>".into();
         return Ok(());
     }
     // Resolve relative to the current cwd (shell-like); absolute paths as-is.
@@ -95,12 +95,12 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
     let canonical = match crate::tool::cd::canonicalize_existing(&candidate) {
         Ok(p) => p,
         Err(e) => {
-            state.rest.status = format!("adddir: {e}");
+            state.rest.fg_mut().status = format!("adddir: {e}");
             return Ok(());
         }
     };
     if !canonical.is_dir() {
-        state.rest.status = format!("adddir: '{}' is not a directory", canonical.display());
+        state.rest.fg_mut().status = format!("adddir: '{}' is not a directory", canonical.display());
         return Ok(());
     }
     let canonical_str = canonical.display().to_string();
@@ -115,13 +115,13 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
         })
     });
     if already {
-        state.rest.status = format!("adddir: already a root: {canonical_str}");
+        state.rest.fg_mut().status = format!("adddir: already a root: {canonical_str}");
         return Ok(());
     }
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.settings.workdir.push(canonical_str.clone());
         if let Err(e) = sess.save() {
-            state.rest.status = format!("adddir: save failed: {e}");
+            state.rest.fg_mut().status = format!("adddir: save failed: {e}");
             return Ok(());
         }
     }
@@ -131,6 +131,6 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
     if let Some(r) = roots {
         crate::tool::dircache::reindex(r, dir_cache);
     }
-    state.rest.status = format!("added workspace root: {canonical_str}");
+    state.rest.fg_mut().status = format!("added workspace root: {canonical_str}");
     Ok(())
 }

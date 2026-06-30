@@ -31,16 +31,19 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
             if state.rest.yolo_armed {
                 state.rest.agent_mode = AgentMode::Yolo;
             } else {
-                state.rest.status = "yolo locked — enable it in /security first".into();
+                state.rest.fg_mut().status = "yolo locked — enable it in /security first".into();
                 return Ok(());
             }
         }
         Some(other) => {
-            state.rest.status = format!("unknown mode: {other} (auto | normal | yolo)");
+            state.rest.fg_mut().status = format!("unknown mode: {other} (auto | normal | yolo)");
             return Ok(());
         }
     }
-    state.rest.status = format!("mode: {}", state.rest.agent_mode.label());
+    // Per-session status (C6): `agent_mode` is a disjoint `rest` field; read its label
+    // into a local first so it doesn't overlap the `fg_mut()` borrow.
+    let label = state.rest.agent_mode.label();
+    state.rest.fg_mut().status = format!("mode: {label}");
     Ok(())
 }
 
@@ -50,7 +53,7 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
 /// request is in flight, mirroring the /compact guard.
 pub(super) fn handle_settings(state: &mut AppState) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     // No catalogue prefetch here anymore: the Models Select modal's
@@ -59,7 +62,7 @@ pub(super) fn handle_settings(state: &mut AppState) -> Result<()> {
     // `controller::input::handle_settings`. A boot prefetch keyed to the
     // Main endpoint was wrong for editing a model on a DIFFERENT provider.
     let Some(session) = state.rest.fg().session.as_ref() else {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     };
     let st = SettingsState::from(session, &state.rest.config);
@@ -73,11 +76,11 @@ pub(super) fn handle_settings(state: &mut AppState) -> Result<()> {
 /// while a request is in flight, mirroring the /settings + /compact guards.
 pub(super) fn handle_agents(state: &mut AppState) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     let Some(session) = state.rest.fg().session.as_ref() else {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     };
     let st = AgentsState::from(session);
@@ -88,11 +91,11 @@ pub(super) fn handle_agents(state: &mut AppState) -> Result<()> {
 /// Handle the `/select` command: arm text-selection mode.
 pub(super) fn handle_select(state: &mut AppState) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     if state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     state.rest.select_pending = true;

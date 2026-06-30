@@ -20,7 +20,7 @@ use crate::app::state::AppState;
 /// Handle `Action::CloseMcp`: discard any in-flight drafts and return to Chat.
 pub(super) fn handle_close_mcp(state: &mut AppState) -> Result<()> {
     *state.mode_mut() = Mode::Chat;
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }
 
@@ -119,10 +119,10 @@ fn persist_and_finish(state: &mut AppState, select_uuid: &str, ok_status: String
             if let Some(m) = state.rest.mcp_manager.as_ref() {
                 m.reconnect(&servers);
             }
-            state.rest.status = ok_status;
+            state.rest.fg_mut().status = ok_status;
         }
         Err(e) => {
-            state.rest.status = format!("save failed: {e}");
+            state.rest.fg_mut().status = format!("save failed: {e}");
         }
     }
 }

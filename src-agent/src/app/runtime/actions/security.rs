@@ -28,7 +28,7 @@ use crate::app::state::{AgentMode, AppState};
 /// Handle `Action::CloseSecurity`: return to Chat.
 pub(super) fn handle_close_security(state: &mut AppState) -> Result<()> {
     *state.mode_mut() = Mode::Chat;
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }
 
@@ -41,7 +41,7 @@ pub(super) fn handle_security_start(state: &mut AppState) -> Result<()> {
     if let Some(m) = state.rest.sec_manager.as_ref() {
         m.start(state.rest.sec_token.clone());
     }
-    state.rest.status = "security: starting daemon…".into();
+    state.rest.fg_mut().status = "security: starting daemon…".into();
     refresh_security_state(state, None);
     Ok(())
 }
@@ -58,7 +58,7 @@ pub(super) fn handle_security_stop(state: &mut AppState) -> Result<()> {
         m.stop();
     }
     disarm_yolo_for_stop(state);
-    state.rest.status = "security: daemon stopped".into();
+    state.rest.fg_mut().status = "security: daemon stopped".into();
     refresh_security_state(state, None);
     Ok(())
 }
@@ -87,7 +87,7 @@ pub(super) fn handle_security_restart(state: &mut AppState) -> Result<()> {
         m.restart(state.rest.sec_token.clone());
     }
     disarm_yolo_for_stop(state);
-    state.rest.status = "security: restarting daemon…".into();
+    state.rest.fg_mut().status = "security: restarting daemon…".into();
     refresh_security_state(state, None);
     Ok(())
 }
@@ -170,18 +170,18 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
             if !running {
                 // Daemon stopped: refuse the arm (YOLO requires a running daemon). Leave
                 // `yolo_armed` untouched and tell the user what to do.
-                state.rest.status = "yolo locked — start the daemon first".into();
+                state.rest.fg_mut().status = "yolo locked — start the daemon first".into();
             } else {
                 state.rest.yolo_armed = !state.rest.yolo_armed;
                 if state.rest.yolo_armed {
-                    state.rest.status = "yolo armed — switch with /mode yolo or Shift+Tab".into();
+                    state.rest.fg_mut().status = "yolo armed — switch with /mode yolo or Shift+Tab".into();
                 } else {
                     // Disarmed: if we're sitting in Yolo right now, fall straight back to
                     // Auto so the bypass turns off the instant it's disarmed.
                     if state.rest.agent_mode == AgentMode::Yolo {
                         state.rest.agent_mode = AgentMode::Auto;
                     }
-                    state.rest.status = "yolo disarmed".into();
+                    state.rest.fg_mut().status = "yolo disarmed".into();
                 }
             }
         }
@@ -189,10 +189,10 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
         Some(ToggleTarget::Tool(name)) => {
             if state.rest.sec_inactive.contains(&name) {
                 state.rest.sec_inactive.remove(&name);
-                state.rest.status = format!("security: {name} enabled");
+                state.rest.fg_mut().status = format!("security: {name} enabled");
             } else {
                 state.rest.sec_inactive.insert(name.clone());
-                state.rest.status = format!("security: {name} disabled");
+                state.rest.fg_mut().status = format!("security: {name} disabled");
             }
         }
         // Tool row whose index didn't resolve (stale cursor), or nothing selected: no-op.
@@ -240,16 +240,16 @@ pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> 
             for n in &names {
                 state.rest.sec_inactive.insert(n.clone());
             }
-            state.rest.status = format!("security: domain [{domain}] disabled");
+            state.rest.fg_mut().status = format!("security: domain [{domain}] disabled");
         } else {
             for n in &names {
                 state.rest.sec_inactive.remove(n);
             }
-            state.rest.status = format!("security: domain [{domain}] enabled");
+            state.rest.fg_mut().status = format!("security: domain [{domain}] enabled");
         }
     } else {
         // No tool row selected (the YOLO checkbox has no domain).
-        state.rest.status = "security: no domain selected".into();
+        state.rest.fg_mut().status = "security: no domain selected".into();
     }
     refresh_security_state(state, None);
     Ok(())
@@ -268,15 +268,21 @@ pub(super) fn handle_security_toggle_domain(state: &mut AppState) -> Result<()> 
 /// IPC hiccup.
 pub(super) fn handle_security_install(key: String, state: &mut AppState) -> Result<()> {
     let fresh: Option<Vec<InstallHealthEntry>> = if let Some(m) = state.rest.sec_manager.as_ref() {
-        match m.install(&key) {
-            Ok(msg) => state.rest.status = format!("security: {msg}"),
-            Err(e) => state.rest.status = format!("security: install '{key}' failed: {e}"),
-        }
+        // Capture the install outcome + re-probe BEFORE writing status: `m` holds an
+        // immutable borrow of `state.rest`, and the per-session status write (C6) needs a
+        // mutable `fg_mut()` borrow — so resolve everything that touches `m` first, drop
+        // the borrow, then update the foreground session's status.
+        let install_status = match m.install(&key) {
+            Ok(msg) => format!("security: {msg}"),
+            Err(e) => format!("security: install '{key}' failed: {e}"),
+        };
         // Re-probe install-health regardless of the install's outcome — even a failed
         // install may have changed what is present, and a success certainly did.
-        m.health().ok()
+        let health = m.health().ok();
+        state.rest.fg_mut().status = install_status;
+        health
     } else {
-        state.rest.status = format!("security: install '{key}' failed: no daemon");
+        state.rest.fg_mut().status = format!("security: install '{key}' failed: no daemon");
         None
     };
     refresh_security_state(state, fresh);

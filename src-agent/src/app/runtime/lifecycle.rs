@@ -128,7 +128,8 @@ fn build_startup(
                 }
                 Err(e) => {
                     // Couldn't create the session dir — fall back to the prompt.
-                    st.rest.status = format!("error: {e}");
+                    // Per-session status (C6); startup has the single foreground session.
+                    st.rest.fg_mut().status = format!("error: {e}");
                     *st.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
                         lk.clone().unwrap_or_default(),
                         lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),

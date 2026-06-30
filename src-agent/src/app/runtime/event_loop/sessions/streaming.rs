@@ -24,13 +24,16 @@ pub(super) fn drain_stream(
             match event {
                 StreamEvent::Token(t) => {
                     state.rest.sessions[idx].append_token(&t);
-                    state.rest.status = "streaming".into();
+                    // Status is per-session (C6): set it on THIS session's slot. The
+                    // projection reads `fg().status` per client, so a background session's
+                    // stream only flashes "streaming" in the client(s) viewing it.
+                    state.rest.sessions[idx].status = "streaming".into();
                 }
                 StreamEvent::Reasoning(t) => {
                     // Accumulate the model's thinking into the parallel buffer;
                     // `dirty` is already set so it animates in like content.
                     state.rest.sessions[idx].append_reasoning(&t);
-                    state.rest.status = "thinking".into();
+                    state.rest.sessions[idx].status = "thinking".into();
                 }
                 StreamEvent::Usage { prompt_tokens, completion_tokens, cached_tokens, cost } => {
                     // Stash for the assistant-commit step; do NOT break — usage
@@ -123,36 +126,25 @@ pub(super) fn drain_stream(
 
     // 1.5. Drain THIS session's advisory prompt-classifier (PC) verdict channel.
     //      Fully independent of streaming: a BLOCK verdict never cancels the turn
-    //      (it already proceeded) — it only raises an advisory toast. This is now
+    //      (it already proceeded) — it only raises an advisory toast. This is
     //      PER-SESSION so a background session's verdict is drained promptly
-    //      instead of being stuck until the user swaps to it. The toast is a
-    //      GLOBAL/foreground UI surface, so it is shown ONLY for the foreground
-    //      session; a non-foreground session's verdict is drained + parked
-    //      silently (no toast, no mode change) so it can't hijack the screen the
-    //      user is looking at. take() the receiver so the arm can mutate
+    //      instead of being stuck until the user swaps to it. The advisory toast is
+    //      now per-session too (C6): raise it on `sessions[idx]` itself so the
+    //      projection (`fg().toast`) surfaces it ONLY in the client(s) viewing this
+    //      session — a verdict for a session no one is looking at lands on that
+    //      session's slot and is shown when (if) a client foregrounds it, never
+    //      hijacking another window. take() the receiver so the arm can mutate
     //      `state.rest`; put it back unless the PC task finished / delivered.
     if let Some(mut hrx) = state.rest.sessions[idx].harness_rx.take() {
-        // VIEWED BY SOME client this tick (C2)? The advisory toast is a single GLOBAL
-        // surface, so only a session a client is actually looking at may raise it; a
-        // session viewed by NOBODY drains its verdict silently (the old foreground-only
-        // rule, generalised from the transient `foreground` cursor to the viewed set).
-        let is_viewed = state
-            .rest
-            .sessions
-            .get(idx)
-            .map(|s| state.rest.viewed_sessions.contains(&s.id))
-            .unwrap_or(false);
         let mut keep = true;
         while let Ok(event) = hrx.try_recv() {
             if let StreamEvent::HarnessVerdict { allow, reason } = event {
                 if !allow {
-                    // Viewed-by-some-client only: surface the advisory toast. A verdict
-                    // for a session no client is looking at is drained but parked silently
-                    // (dirty still set so the channel teardown is reflected, no visible toast).
-                    if is_viewed {
-                        let reason = if reason.is_empty() { "flagged".into() } else { reason };
-                        state.rest.set_toast(format!("harness flagged: {reason}"));
-                    }
+                    let reason = if reason.is_empty() { "flagged".into() } else { reason };
+                    state
+                        .rest
+                        .sessions[idx]
+                        .set_toast(format!("harness flagged: {reason}"));
                     dirty = true;
                 }
                 // One verdict per turn; stop listening on this channel.

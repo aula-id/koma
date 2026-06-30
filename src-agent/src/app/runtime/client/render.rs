@@ -55,8 +55,9 @@ pub(super) fn render_loop(
     // a neutral Chat with a single empty session; the first Snapshot replaces it.
     let mut shadow = AppState::new(Mode::Chat);
     // Until the first Snapshot lands the shadow is empty — show a clear status so
-    // the screen isn't a blank "ready".
-    shadow.rest.status = "attaching…".into();
+    // the screen isn't a blank "ready". Status is per-session (C6); the shadow has a
+    // single placeholder session here, so write it on the foreground.
+    shadow.rest.fg_mut().status = "attaching…".into();
 
     // Tracks the last wrap width we sent to the daemon for the agents editor, so we
     // only send `EditorWrapW` when it changes and always re-send on a fresh editor open
@@ -160,10 +161,13 @@ pub(super) fn render_loop(
         advance_local_animations(&mut shadow);
 
         // Expire a locally-reconstructed toast once its TTL passes (the daemon never
-        // sends a "toast cleared" delta; the client owns its own dismissal timer).
-        if let Some((_, until, _)) = shadow.rest.toast.as_ref() {
+        // sends a "toast cleared" delta; the client owns its own dismissal timer). The
+        // toast is per-session (C6); the rendered toast is the foreground session's, so
+        // sweep that one.
+        let fg = shadow.rest.fg_mut();
+        if let Some((_, until, _)) = fg.toast.as_ref() {
             if Instant::now() >= *until {
-                shadow.rest.toast = None;
+                fg.toast = None;
             }
         }
 

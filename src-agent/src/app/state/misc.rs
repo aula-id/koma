@@ -1,8 +1,8 @@
-//! Miscellaneous methods on [`super::AppStateRest`]: credentials, model-catalogue
-//! requests, and toast management.
+//! Miscellaneous methods on [`super::AppStateRest`]: credentials and model-catalogue
+//! requests. (Toast management moved onto [`super::SessionRuntime`] in C6.)
 
 use super::rest::AppStateRest;
-use super::types::{CataloguePending, ToastKind};
+use super::types::CataloguePending;
 
 impl AppStateRest {
     pub fn remember_creds(&mut self, key: &str, model: &str, provider: &str) {
@@ -42,37 +42,5 @@ impl AppStateRest {
             api_key: api_key.to_string(),
             due: std::time::Instant::now() + std::time::Duration::from_millis(300),
         });
-    }
-
-    /// Show an error toast (red box) for ~6 seconds.
-    pub fn set_toast(&mut self, msg: String) {
-        self.toast = Some((
-            msg,
-            std::time::Instant::now() + std::time::Duration::from_secs(6),
-            ToastKind::Error,
-        ));
-    }
-
-    /// Show an informational toast (neutral box) for ~8 seconds. Used for
-    /// non-failure notices like the post-compaction summary, which is multi-line
-    /// and shouldn't read as an error.
-    pub fn set_toast_info(&mut self, msg: String) {
-        self.toast = Some((
-            msg,
-            std::time::Instant::now() + std::time::Duration::from_secs(8),
-            ToastKind::Info,
-        ));
-    }
-
-    /// Clear the toast if it has expired. Returns true if it was just cleared
-    /// (so the caller can mark the frame dirty).
-    pub fn tick_toast(&mut self) -> bool {
-        if let Some((_, until, _)) = &self.toast {
-            if std::time::Instant::now() >= *until {
-                self.toast = None;
-                return true;
-            }
-        }
-        false
     }
 }

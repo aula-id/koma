@@ -145,7 +145,8 @@ pub(super) fn render_toast(
     rest: &AppStateRest,
     palette: &Palette,
 ) {
-    if let Some((msg, _, kind)) = rest.toast.as_ref() {
+    // Toast is per-session (C6): render the FOREGROUND session's toast.
+    if let Some((msg, _, kind)) = rest.fg().toast.as_ref() {
         let (border_color, title, max_rows) = match kind {
             crate::app::state::ToastKind::Error => (Color::Rgb(255, 90, 90), " error ", 6u16),
             crate::app::state::ToastKind::Info => (palette.accent, " info ", 10u16),

@@ -31,7 +31,7 @@ pub(super) fn handle_task(
     }
     // Guard: needs an active client + session.
     if client.is_none() || state.rest.fg().session.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
     // Split the first whitespace token as the agent name; the rest is
@@ -40,7 +40,7 @@ pub(super) fn handle_task(
     let agent_name = tokens.next().unwrap_or("").trim().to_string();
     let task_text = tokens.next().unwrap_or("").trim().to_string();
     if agent_name.is_empty() || task_text.is_empty() {
-        state.rest.status = "usage: /task <agent> <task>".into();
+        state.rest.fg_mut().status = "usage: /task <agent> <task>".into();
         return Ok(());
     }
     // Spawn now if a slot is free, else ENQUEUE (unlimited pending; at most
@@ -54,17 +54,19 @@ pub(super) fn handle_task(
         super::super::stream::SpawnOutcome::Spawned(id) => {
             state
                 .rest
+                .fg_mut()
                 .set_toast_info(format!("started sub-agent #{id} ({agent_name})"));
-            state.rest.status = format!("started sub-agent #{id} ({agent_name})");
+            state.rest.fg_mut().status = format!("started sub-agent #{id} ({agent_name})");
         }
         super::super::stream::SpawnOutcome::Queued(id) => {
             state
                 .rest
+                .fg_mut()
                 .set_toast_info(format!("queued sub-agent #{id} ({agent_name})"));
-            state.rest.status = format!("queued sub-agent #{id} ({agent_name})");
+            state.rest.fg_mut().status = format!("queued sub-agent #{id} ({agent_name})");
         }
         super::super::stream::SpawnOutcome::Failed => {
-            state.rest.status = format!("unknown agent: {agent_name}");
+            state.rest.fg_mut().status = format!("unknown agent: {agent_name}");
         }
     }
     Ok(())

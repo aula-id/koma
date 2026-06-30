@@ -35,7 +35,7 @@ pub fn handle_picker_select(
         _ => None,
     };
     let Some(path) = path else {
-        state.rest.status = "no session selected".into();
+        state.rest.fg_mut().status = "no session selected".into();
         return Ok(());
     };
 
@@ -67,7 +67,7 @@ pub fn handle_hub_open_history(
         _ => None,
     };
     let Some(path) = path else {
-        state.rest.status = "no session selected".into();
+        state.rest.fg_mut().status = "no session selected".into();
         return Ok(());
     };
 
@@ -143,11 +143,10 @@ pub fn open_disk_session(
                 .is_some_and(|r| !r.api_key.is_empty())
             });
         *client = if usable { Some(build_client()) } else { None };
-        state.rest.status = if state.rest.fg().is_working() {
-            "working".into()
-        } else {
-            "ready".into()
-        };
+        // Per-session status (C6): compute the working flag first (it borrows
+        // `sessions` immutably), then write the foreground session's own status.
+        let working = state.rest.fg().is_working();
+        state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
         // No `mode = Chat` on the target (C3): it shows its OWN stored mode. The leaving
         // session was reset to Chat above before the repoint.
         return Ok(());
@@ -160,7 +159,7 @@ pub fn open_disk_session(
     // necessarily another process's (`is_locked` does the PID-liveness check and
     // sweeps stale locks). Stay in the picker; the row already shows the marker.
     if store::is_locked(&path) {
-        state.rest.status = "session in use by another process".into();
+        state.rest.fg_mut().status = "session in use by another process".into();
         return Ok(());
     }
 
@@ -168,7 +167,7 @@ pub fn open_disk_session(
     let sess = match Session::load(&path) {
         Ok(s) => s,
         Err(e) => {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
     };
@@ -212,7 +211,7 @@ pub fn open_disk_session(
     }
     state.rest.reset_scroll();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
 
     // Existing session: seed THIS (new foreground) slot's OWN counters from its full
     // sqlite log so the readout reflects prior usage. Never touches another slot.

@@ -52,7 +52,7 @@ pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &To
     let tx = state.rest.sessions[sess_idx].tool_task_tx.as_ref().unwrap().clone();
     // Phase label for the comet: name the tool running off-thread so the
     // shimmering status surfaces what the agent is doing while it's parked.
-    state.rest.status = format!("running {}", call.function.name);
+    state.rest.sessions[sess_idx].status = format!("running {}", call.function.name);
     std::thread::spawn(move || {
         let result = crate::tool::execute_tool(&ctx, &call_cloned);
         let _ = tx.send((id, result));
@@ -123,12 +123,12 @@ pub(super) fn finish_tool_round(
         state.rest.sessions[sess_idx].waiting = false;
         state.rest.sessions[sess_idx].current_task = None;
         state.rest.sessions[sess_idx].agent_steps = 0;
-        state.rest.status = "no active session".into();
+        state.rest.sessions[sess_idx].status = "no active session".into();
         return;
     };
     // The tool round is done; this re-stream is a model wait, so label it the same
     // "thinking" phase the comet sweeps (not a tool run).
-    state.rest.status = "thinking".into();
+    state.rest.sessions[sess_idx].status = "thinking".into();
     state.rest.sessions[sess_idx].begin_stream();
     super::super::run::start_stream_task(history, state, sess_idx, client, handle);
 }

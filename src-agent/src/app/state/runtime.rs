@@ -27,6 +27,8 @@ use crate::model::session::Session;
 use crate::service::StreamEvent;
 use crate::tool::DirCache;
 
+use super::types::ToastKind;
+
 /// Per-session execution state. Always non-empty in [`super::AppStateRest::sessions`];
 /// the foreground one is reached through `fg()` / `fg_mut()`.
 pub struct SessionRuntime {
@@ -47,6 +49,22 @@ pub struct SessionRuntime {
     /// into `/help`. A fresh session defaults to `Chat` (see [`Self::new`]); the
     /// spawn/startup flows set the right initial mode on the right session.
     pub mode: Mode,
+    /// THIS session's status-line text (C6). Moved off the GLOBAL [`super::AppStateRest`]
+    /// so that in the daemon a status flash fired by one session's processing
+    /// (`streaming`, `thinking`, `$ cmd — exit`, an error line, …) is projected ONLY into
+    /// the client(s) viewing that session — the snapshot reads `fg().status` after the
+    /// per-client foreground swap, so each window shows its own. In the single-window TUI
+    /// `fg()` is the only session, so behaviour is byte-identical to the old global field.
+    /// Defaults to `"ready"`.
+    pub status: String,
+    /// THIS session's transient toast: `(message, expiry instant, kind)`. Moved off the
+    /// GLOBAL [`super::AppStateRest`] for the same reason as [`status`](Self::status) — a
+    /// toast a session raises (bash-N finished, session ready, harness flagged, …) is
+    /// projected only into the client(s) viewing that session (snapshot reads `fg().toast`).
+    /// Shown at the top of the transcript and auto-dismissed once the instant passes;
+    /// `kind` selects the box style (red "error" vs neutral "info"). Expiry is swept
+    /// PER-SESSION (each session ticks its own toast). `None` when no toast is showing.
+    pub toast: Option<(String, std::time::Instant, ToastKind)>,
     pub input: String,
     /// Caret position within `input`, as a CHAR index (0..=char_count). Edits
     /// (insert / backspace) and the Left/Right/Home/End keys move it; the view
@@ -359,6 +377,10 @@ impl SessionRuntime {
             // startup session, SessionPicker on --resume) overwrite this on the RIGHT
             // session after construction.
             mode: Mode::Chat,
+            // Per-session status line (C6); same default the old global field carried.
+            status: "ready".into(),
+            // Per-session toast (C6): none on a fresh session.
+            toast: None,
             input: String::new(),
             cursor: 0,
             pending_attachments: Vec::new(),
@@ -451,6 +473,40 @@ impl SessionRuntime {
         } else {
             Some(std::mem::take(&mut self.stream_reasoning))
         }
+    }
+
+    // ----- toast management (per-session in C6; was `impl AppStateRest`) -----
+
+    /// Show an error toast (red box) for ~6 seconds on THIS session.
+    pub fn set_toast(&mut self, msg: String) {
+        self.toast = Some((
+            msg,
+            std::time::Instant::now() + std::time::Duration::from_secs(6),
+            ToastKind::Error,
+        ));
+    }
+
+    /// Show an informational toast (neutral box) for ~8 seconds on THIS session.
+    /// Used for non-failure notices like the post-compaction summary, which is
+    /// multi-line and shouldn't read as an error.
+    pub fn set_toast_info(&mut self, msg: String) {
+        self.toast = Some((
+            msg,
+            std::time::Instant::now() + std::time::Duration::from_secs(8),
+            ToastKind::Info,
+        ));
+    }
+
+    /// Clear THIS session's toast if it has expired. Returns true if it was just
+    /// cleared (so the caller can mark the frame dirty). Swept per-session each tick.
+    pub fn tick_toast(&mut self) -> bool {
+        if let Some((_, until, _)) = &self.toast {
+            if std::time::Instant::now() >= *until {
+                self.toast = None;
+                return true;
+            }
+        }
+        false
     }
 
     /// Allocate the next background-bash job id, advancing the counter. Ids are

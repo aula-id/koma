@@ -74,7 +74,7 @@ pub fn handle_cancel_key_input(
         // The restored foreground already holds its own lock (untouched); no
         // reconcile needed (and reconcile must not release any other session's lock).
         *state.mode_mut() = Mode::Chat;
-        state.rest.status = if client.is_some() {
+        state.rest.fg_mut().status = if client.is_some() {
             "ready".into()
         } else {
             "no active session".into()
@@ -114,9 +114,9 @@ pub fn handle_cancel_key_input(
     state.rest.reset_scroll();
     *state.mode_mut() = Mode::Chat;
     if client.is_none() {
-        state.rest.status = "no active session".into();
+        state.rest.fg_mut().status = "no active session".into();
     } else {
-        state.rest.status = "ready".into();
+        state.rest.fg_mut().status = "ready".into();
     }
     Ok(())
 }
@@ -138,7 +138,7 @@ pub fn handle_cancel_key_input_to_picker(
     *client = None;
     state.rest.reset_scroll();
     *state.mode_mut() = Mode::SessionPicker(PickerState::new(store::list_sessions()?));
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }
 
@@ -161,6 +161,6 @@ pub fn handle_skip_loading(state: &mut AppState) -> Result<()> {
     // here). The session/chat state was already set up by the activation
     // path that opened the splash, so we only swap the mode.
     *state.mode_mut() = Mode::Chat;
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
     Ok(())
 }

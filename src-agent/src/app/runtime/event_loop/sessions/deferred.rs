@@ -91,19 +91,12 @@ pub(super) fn drain_deferred_and_resume(
             // correct regardless of which client is the acting cursor — the client viewing
             // `idx` sees the snap-to-bottom, an unrelated session's view is untouched.
             state.rest.reset_scroll_at(idx);
-            // The status line is a single GLOBAL surface, so only overwrite it when this
-            // session is VIEWED BY SOME client (C2) — a background session's `!`-shell
-            // completion must not yank the status the viewing client(s) read.
-            let viewed = state
-                .rest
-                .sessions
-                .get(idx)
-                .map(|s| state.rest.viewed_sessions.contains(&s.id))
-                .unwrap_or(false);
-            if viewed {
-                let exit_line = output.lines().last().unwrap_or("done");
-                state.rest.status = format!("$ {cmd} — {exit_line}");
-            }
+            // Status is per-session now (C6): write it on `sessions[idx]` itself. The
+            // projection reads `fg().status` after the per-client foreground swap, so this
+            // surfaces ONLY in the client(s) viewing `idx` — a background session's
+            // `!`-shell completion can no longer yank an unrelated window's status line.
+            let exit_line = output.lines().last().unwrap_or("done");
+            state.rest.sessions[idx].status = format!("$ {cmd} — {exit_line}");
             dirty = true;
         }
     }
@@ -140,7 +133,13 @@ pub(super) fn drain_deferred_and_resume(
                     crate::app::bgbash::BashJobStatus::Error(msg) => format!("error: {msg}"),
                 });
             if let Some(label) = label {
-                state.rest.set_toast_info(format!("bash-{id} finished: {label}"));
+                // The bg-bash completion toast is about THIS session's job, and the drain
+                // runs unbracketed (fg() is stale scratch here), so raise it on
+                // `sessions[idx]` itself (C6) — it surfaces only in the client(s) viewing idx.
+                state
+                    .rest
+                    .sessions[idx]
+                    .set_toast_info(format!("bash-{id} finished: {label}"));
                 state.rest.sessions[idx].pending_bash_nudges.push((id, label));
                 dirty = true;
             }
@@ -225,18 +224,10 @@ pub(super) fn drain_deferred_and_resume(
         // (C2): scroll is per-session, so this only affects `sessions[idx]` — a client
         // viewing `idx` sees the snap-to-bottom, an unrelated session's view is untouched.
         state.rest.reset_scroll_at(idx);
-        // "thinking" is the single GLOBAL status surface, so only set it when this session
-        // is VIEWED BY SOME client (C2) — a background auto-wake must not overwrite the
-        // status the viewing client(s) read.
-        let viewed = state
-            .rest
-            .sessions
-            .get(idx)
-            .map(|s| state.rest.viewed_sessions.contains(&s.id))
-            .unwrap_or(false);
-        if viewed {
-            state.rest.status = "thinking".into();
-        }
+        // Status is per-session now (C6): write "thinking" on `sessions[idx]` itself. The
+        // projection sources `fg().status` per client, so a background auto-wake only
+        // shows in the client(s) viewing idx — never overwriting another window's status.
+        state.rest.sessions[idx].status = "thinking".into();
         super::super::super::stream::start_stream_task(history, state, idx, client, handle);
         dirty = true;
     }
@@ -282,7 +273,14 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| format!("session {idx}"));
-        state.rest.set_toast_info(format!("session {name} ready"));
+        // Per-session toast (C6): raise it on `sessions[idx]` itself. The edge fired for
+        // a session VIEWED BY NOBODY, so a client foregrounding it later will project
+        // ITS toast (`fg().toast`) and see the "ready" notice — instead of the toast
+        // landing on whatever the stale `foreground` cursor happened to point at.
+        state
+            .rest
+            .sessions[idx]
+            .set_toast_info(format!("session {name} ready"));
         // STICKY counterpart of the TTL toast (daemon critique #3): latch the
         // unseen marker so a DETACHED client still learns this background session
         // finished once it reattaches, long after the toast would have expired.

@@ -13,7 +13,7 @@ use crate::app::state::AppState;
 /// of session state. The dashboard seeds from `state.rest.config.mcp_servers`.
 pub(super) fn handle_mcp(state: &mut AppState) -> Result<()> {
     if state.rest.fg().waiting {
-        state.rest.status = "busy — wait for response".into();
+        state.rest.fg_mut().status = "busy — wait for response".into();
         return Ok(());
     }
     let st = McpState::from(&state.rest.config.mcp_servers);

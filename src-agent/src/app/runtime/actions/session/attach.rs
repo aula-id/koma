@@ -27,7 +27,7 @@ pub fn handle_live_switch(
     if idx >= state.rest.sessions.len() {
         // Still on the (unchanged) current foreground here — reset ITS mode to Chat.
         *state.mode_mut() = Mode::Chat;
-        state.rest.status = "session unavailable".into();
+        state.rest.fg_mut().status = "session unavailable".into();
         return Ok(());
     }
     // Per-session mode (C3): the picker/hub that triggered this switch set the CURRENT
@@ -70,12 +70,11 @@ pub fn handle_live_switch(
             .is_some_and(|r| !r.api_key.is_empty())
         });
     *client = if usable { Some(build_client()) } else { None };
-    // Reflect the now-foreground session's live state in the status line.
-    state.rest.status = if state.rest.fg().is_working() {
-        "working".into()
-    } else {
-        "ready".into()
-    };
+    // Reflect the now-foreground session's live state in the status line. Per-session
+    // (C6): compute the working flag (immutable `sessions` borrow) first, then write
+    // the foreground session's own status.
+    let working = state.rest.fg().is_working();
+    state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
     // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
     // the repoint above; the now-foreground session shows its OWN stored mode (normally
     // Chat). Forcing Chat here would clobber a target that legitimately had its own overlay.
@@ -271,7 +270,7 @@ pub(in crate::app::runtime) fn create_session_for_pwd(
     let mut sess = match store::create_session_in(cwd) {
         Ok(s) => s,
         Err(e) => {
-            state.rest.status = format!("error: {e}");
+            state.rest.fg_mut().status = format!("error: {e}");
             return Ok(());
         }
     };
@@ -317,7 +316,7 @@ pub(in crate::app::runtime) fn create_session_for_pwd(
     }
     state.rest.reset_scroll();
     state.rest.transcript_cache.borrow_mut().blocks.clear();
-    state.rest.status = "ready".into();
+    state.rest.fg_mut().status = "ready".into();
 
     // Fresh session → seed ITS OWN counters from its (empty) ledger, i.e. 0.
     let new_fg = state.rest.foreground;
