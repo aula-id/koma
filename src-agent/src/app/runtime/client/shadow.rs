@@ -81,7 +81,10 @@ pub(super) fn apply_frame(
         // already verified at connect time, so just advance the seq and render nothing.
         DaemonEvent::Hello { .. } => false,
         // Non-visual control replies. (A future refinement could toast an Error.)
-        DaemonEvent::Ack | DaemonEvent::Error(_) => false,
+        // `Status` is a discovery-only reply consumed by the SYNC `probe_status` path,
+        // never the async attach client — but a frame is a frame, so handle it as a
+        // non-visual no-op here for exhaustiveness rather than panic.
+        DaemonEvent::Ack | DaemonEvent::Error(_) | DaemonEvent::Status(_) => false,
     }
 }
 

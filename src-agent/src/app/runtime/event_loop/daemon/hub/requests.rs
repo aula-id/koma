@@ -5,7 +5,7 @@ use crate::app::mode::Mode;
 use crate::app::state::AppState;
 use crate::controller::command::Command;
 use crate::controller::input::{handle_key, handle_paste, Action};
-use crate::ipc::proto::{ClientRequest, DaemonEvent, StateSnapshot};
+use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus, StateSnapshot};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
 
@@ -214,6 +214,40 @@ impl DaemonHub {
                 self.clients[idx].attached = true;
                 self.clients[idx].last_snapshot = Some(snap);
             }
+            // Live-session DISCOVERY probe (daemon-per-session): answer with a single
+            // metadata frame for this daemon's ONE owned session and nothing else. This
+            // is the data source the hub/swapper consumes to enumerate live daemons
+            // WITHOUT attaching. It is strictly READ-ONLY — it must NOT create/attach a
+            // session, must NOT touch the foreground, and must NOT flip `attached` or
+            // seed `last_snapshot` (so a transient connect→Status→close never registers
+            // this connection as an attached client owing deltas, and never disturbs
+            // another client's baseline). It just reads metadata off the foreground
+            // runtime (the daemon's single session; `fg()` IS that session) and sends one
+            // `Status` frame. The C2 LOAD/STORE bracket around this in `handle_request`
+            // only moves the transient acting cursor (Status moves no foreground), so it
+            // adds no observable side effect here.
+            ClientRequest::Status => {
+                let rt = state.rest.fg();
+                let status = SessionStatus {
+                    session_id: rt.id.clone(),
+                    // The session's display name (empty before a session is installed).
+                    name: rt
+                        .session
+                        .as_ref()
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default(),
+                    // The session's effective working dir — the live `cd` override, else
+                    // its configured workdir; empty when no session is installed yet
+                    // (guarded on `session` so we don't leak the daemon's process cwd).
+                    pwd: rt
+                        .session
+                        .as_ref()
+                        .map(|_| rt.effective_cwd().display().to_string())
+                        .unwrap_or_default(),
+                    working: rt.is_working(),
+                };
+                self.send_to(idx, DaemonEvent::Status(status));
+            }
             ClientRequest::Detach => {
                 // Polite leave: drop the client + pass the controller seat to the
                 // next attached client (single-writer controller-passing, DECISIONS).
@@ -402,11 +436,14 @@ impl DaemonHub {
 
             // Read-only / already-handled variants never reach here (handle_request
             // dispatches them); treat any residual as a no-op Ack so the match is
-            // exhaustive without a spurious error.
+            // exhaustive without a spurious error. `Status` is among these — it is
+            // answered in `dispatch_request` with its own one-shot frame and never falls
+            // through to a mutation, so it must NOT reach this Ack path in practice.
             ClientRequest::Attach { .. }
             | ClientRequest::Detach
             | ClientRequest::Resync
-            | ClientRequest::ListSessions => {
+            | ClientRequest::ListSessions
+            | ClientRequest::Status => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }
