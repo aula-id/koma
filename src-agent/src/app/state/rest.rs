@@ -102,6 +102,15 @@ pub struct AppStateRest {
     /// `/security` panel. Starts `false` so the daemon stays off by default even when
     /// installed. The panel's toggle key (`t`) flips this and starts/stops the daemon.
     pub security_enabled: bool,
+    /// Layer-1 ARM flag for YOLO mode. `false` by default: until the user explicitly
+    /// arms YOLO from the `/security` panel (its "Enable YOLO mode" checkbox row, toggled
+    /// with Space/Enter), the `Yolo` agent mode is unreachable — Shift+Tab / `/mode` cycle
+    /// Auto<->Normal only. While armed, the user may then ENTER `Yolo` (Layer 2) via
+    /// `/mode yolo` or the toggle. Disarming it while currently in `Yolo` drops
+    /// `agent_mode` back to `Auto` (see `handle_security_toggle_tool`'s YOLO branch).
+    /// Mirrors `security_enabled`'s lifecycle; rides to the thin client in the
+    /// `/security` panel's snapshot like `sec_inactive`.
+    pub yolo_armed: bool,
     /// Tool names the user has explicitly DISABLED from the `/security` panel (the
     /// inactive set). Empty by default = every tool active, so the stream's
     /// advertise-fold behaves byte-identically to before this feature when nothing has
@@ -251,6 +260,15 @@ pub struct AppStateRest {
     /// loop (alongside `warm_rx`/`endpoints_rx`). Each `try_recv`'d `VersionInfo` is
     /// stored into `latest_version`. Non-blocking: never awaited.
     pub version_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::version::VersionInfo>>,
+    /// Receiver for an in-flight NON-BLOCKING security health probe. `Some` while a
+    /// `SecDaemonManager::health_async` fetch is pending; drained each tick in
+    /// `service_global` and folded into the open [`crate::app::mode::SecurityState`]
+    /// (`install_health`), then cleared. Mirrors `version_rx`. `None` when no probe is
+    /// in flight. Kept out of the IPC snapshot — only the daemon owns the manager, so
+    /// only the daemon ever drives a probe; the client animates from the projected
+    /// `health_fetching` / `health_frame` instead.
+    pub sec_health_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<crate::app::sec::InstallHealthEntry>, String>>>,
 }
 
 impl Default for AppStateRest {
@@ -293,6 +311,7 @@ impl AppStateRest {
             sec_manager: None,
             sec_token: String::new(),
             security_enabled: false,
+            yolo_armed: false,
             sec_inactive: std::collections::HashSet::new(),
             select_pending: false,
             select_active: false,
@@ -321,6 +340,7 @@ impl AppStateRest {
             latest_version: None,
             version_tx: Some(vtx),
             version_rx: Some(vrx),
+            sec_health_rx: None,
         }
     }
 

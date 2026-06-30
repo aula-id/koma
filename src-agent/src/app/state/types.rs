@@ -1,6 +1,6 @@
 //! Auxiliary types used by [`super::AppStateRest`] and the rest of the app.
 //!
-//! - [`AgentMode`]       – tool-approval policy (auto vs. normal)
+//! - [`AgentMode`]       – tool-approval policy (auto / normal / yolo)
 //! - [`ToastKind`]       – visual style of a transient toast box
 //! - [`TranscriptCache`] – per-frame rendered-lines cache
 //! - [`CataloguePending`] – debounced model-catalogue fetch request
@@ -14,6 +14,11 @@ use crate::view::theme::Palette;
 ///   behaviour.
 /// - `Normal`: *risky* tools (write/delete) pause the turn for a `y/n` user
 ///   approval; *safe* tools (read/dir_list/dir_cache_update) still run inline.
+/// - `Yolo`: *risky* tools run inline with NO classifier call and NO `y/n`
+///   prompt — the harness is fully bypassed. The deterministic workspace path
+///   guard (WC) still applies, so writes stay inside the project. This mode is
+///   double-gated: it can only be ENTERED while `yolo_armed` is set (armed from
+///   the `/security` panel), so it can never be reached by accident.
 ///
 /// Toggled with Shift+Tab or `/mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -21,6 +26,7 @@ pub enum AgentMode {
     #[default]
     Auto,
     Normal,
+    Yolo,
 }
 
 impl AgentMode {
@@ -29,13 +35,30 @@ impl AgentMode {
         match self {
             AgentMode::Auto => "auto",
             AgentMode::Normal => "normal",
+            AgentMode::Yolo => "yolo",
         }
     }
-    /// The opposite mode (for the toggle key / command).
-    pub fn toggled(self) -> Self {
-        match self {
-            AgentMode::Auto => AgentMode::Normal,
-            AgentMode::Normal => AgentMode::Auto,
+    /// Advance to the next mode for the interactive toggle (Shift+Tab / bare
+    /// `/mode`), respecting the YOLO arm gate.
+    ///
+    /// - `yolo_armed == true`:  Auto → Normal → Yolo → Auto (full three-way cycle).
+    /// - `yolo_armed == false`: Auto → Normal → Auto (Yolo is skipped). If `self`
+    ///   is somehow `Yolo` while unarmed (shouldn't happen — disarming drops the
+    ///   mode), it folds straight back to Auto so the user can never linger there.
+    pub fn cycle(self, yolo_armed: bool) -> Self {
+        if yolo_armed {
+            match self {
+                AgentMode::Auto => AgentMode::Normal,
+                AgentMode::Normal => AgentMode::Yolo,
+                AgentMode::Yolo => AgentMode::Auto,
+            }
+        } else {
+            match self {
+                AgentMode::Auto => AgentMode::Normal,
+                AgentMode::Normal => AgentMode::Auto,
+                // Unarmed + Yolo (defensive): drop back to Auto.
+                AgentMode::Yolo => AgentMode::Auto,
+            }
         }
     }
 }

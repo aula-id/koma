@@ -499,6 +499,11 @@ pub struct SecuritySnapshot {
     /// model's advertised tools.
     #[serde(default)]
     pub inactive: Vec<String>,
+    /// Layer-1 YOLO arm flag, mirrored from `state.rest.yolo_armed` so the thin client's
+    /// panel renders the ARMED/locked status row faithfully. `#[serde(default)]` keeps
+    /// an older client decoding a newer daemon (and vice-versa) safe (defaults false).
+    #[serde(default)]
+    pub yolo_armed: bool,
     /// Per-dependency install-health, carried VERBATIM from the open mode state (NOT
     /// re-fetched at snapshot time — `health()` is a heavy IPC round-trip and the
     /// projection runs every frame). Empty when the daemon is stopped.
@@ -510,6 +515,16 @@ pub struct SecuritySnapshot {
     /// Selected index into `install_health` (the dependency-pane cursor).
     #[serde(default)]
     pub health_selected: usize,
+    /// `true` while a non-blocking health probe is in flight on the daemon. Projected so
+    /// the thin client renders the same "checking dependencies…" spinner state on the
+    /// daemon info line. `#[serde(default)]` keeps version-skewed peers safe (false).
+    #[serde(default)]
+    pub health_fetching: bool,
+    /// Braille spinner frame counter for the in-flight probe. MUST be projected (it is
+    /// advanced daemon-side every tick) so the client's spinner actually animates rather
+    /// than sitting on a single frame. `#[serde(default)]` keeps version-skewed peers safe.
+    #[serde(default)]
+    pub health_frame: u64,
 }
 
 /// A serde-safe projection of ONE background bash job for the `/bash` panel.

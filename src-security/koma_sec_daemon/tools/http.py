@@ -17,7 +17,8 @@ DESCRIPTOR = {
     "name": "sec_http",
     "description": (
         "Perform a single HTTP request and return the status line, "
-        "response headers, and body (body capped at 100 000 chars)."
+        "response headers, and body (body capped at 100 000 chars). "
+        "TLS certificate verification is disabled, so self-signed certs are accepted."
     ),
     "parameters": {
         "type": "object",
@@ -57,6 +58,12 @@ DESCRIPTOR = {
 def _handler(args: dict, sessions) -> str:
     # Lazy import — keeps registry loadable without requests installed
     import requests  # noqa: PLC0415
+    import urllib3  # noqa: PLC0415
+
+    # Pentest targets (HTB/CTF boxes) are routinely self-signed, so TLS cert
+    # verification is intentionally disabled — accept any certificate. Silence the
+    # resulting urllib3 InsecureRequestWarning so it doesn't pollute the response.
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     url = args["url"]
     method = args.get("method", "GET").upper()
@@ -72,6 +79,7 @@ def _handler(args: dict, sessions) -> str:
             data=body.encode() if body else None,
             allow_redirects=follow_redirects,
             timeout=30,
+            verify=False,
         )
     except Exception as exc:
         return f"error: {exc}"

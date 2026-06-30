@@ -191,18 +191,9 @@ pub(in crate::app::runtime) fn apply_action(
             security::handle_close_security(state)?;
         }
 
-        Action::SecurityToggle => {
-            security::handle_security_toggle(state)?;
-        }
-
-        Action::SecurityStart => {
-            security::handle_security_start(state)?;
-        }
-
-        Action::SecurityStop => {
-            security::handle_security_stop(state)?;
-        }
-
+        // Daemon start/stop/toggle no longer have their own Actions — the Daemon checkbox
+        // (handled inside `SecurityToggleTool`) starts/stops the daemon directly, calling
+        // `handle_security_start` / `handle_security_stop`. Only restart keeps a key (`r`).
         Action::SecurityRestart => {
             security::handle_security_restart(state)?;
         }
