@@ -111,6 +111,13 @@ pub struct AppStateRest {
     pub select_pending: bool,
     /// True while the conversation is dumped to the normal terminal for copying.
     pub select_active: bool,
+    /// Set by `/resume` (and the `OpenSessionHub` request) in the DAEMON: the hub
+    /// drains this next tick into a one-shot [`crate::ipc::proto::DaemonEvent::OpenSwapper`]
+    /// to the controlling client, mirroring `select_pending` → `EnterSelect`. The
+    /// daemon never enters a hub mode itself — the swapper is a purely client-side
+    /// overlay — so this is a transient signal, not a UI state. Standalone (no-daemon)
+    /// builds never set it: `handle_resume` opens `Mode::SessionHub` directly there.
+    pub resume_pending: bool,
     /// Cache of each committed message's rendered visual lines, reused across
     /// frames so markdown/syntect highlighting doesn't re-run every redraw.
     /// Borrowed mutably by the chat renderer through a shared `&rest` (the UI is
@@ -287,6 +294,7 @@ impl AppStateRest {
             sec_inactive: std::collections::HashSet::new(),
             select_pending: false,
             select_active: false,
+            resume_pending: false,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),

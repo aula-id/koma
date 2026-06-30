@@ -99,6 +99,13 @@ pub enum DaemonEvent {
     Error(String),
     /// One-shot: the controller asked for the `/select` transcript dump.
     EnterSelect,
+    /// One-shot: signal the foreground client to open its LOCAL daemon swapper
+    /// (the `/resume` picker). Mirrors [`EnterSelect`] — a daemon-side `/resume`
+    /// (or `OpenSessionHub`) emits this to the requesting client INSTEAD of building
+    /// a daemon-side `Mode::SessionHub`, so the daemon never changes its own mode.
+    /// Handled entirely client-side in `render_loop` (it detaches + runs the swapper
+    /// standalone); the shadow treats it as a non-visual no-op.
+    OpenSwapper,
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.

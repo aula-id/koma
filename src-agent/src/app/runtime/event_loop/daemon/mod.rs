@@ -323,6 +323,16 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     a render delta, and its seq is independent of the snapshot stream.
         hub.drain_select_pending(state);
 
+        // 3a-pre2. `/resume` hand-off (daemon-per-session swapper): a just-drained
+        //     `/resume` slash-command (or an `OpenSessionHub` attach-request) set
+        //     `state.rest.resume_pending` INSTEAD of building a daemon-side hub mode.
+        //     Mirror `/select`: signal the CONTROLLER client to open its OWN local
+        //     swapper via a one-shot `DaemonEvent::OpenSwapper`, leaving the daemon's
+        //     own mode untouched (it stays in Chat). Consume the flag here, right after
+        //     `drain_select_pending`, so it observes a same-tick `/resume` and rides the
+        //     same control-frame seam BEFORE `stream_deltas`.
+        hub.drain_resume_pending(state);
+
         // 3a. Daemon-side `should_quit` sweep: if anything daemon-side ever sets
         //     `should_quit` (via `handle_quit_kill_all`), translate it to "close every
         //     session" (NOT an abrupt loop break — that is the LOCAL standalone TUI's

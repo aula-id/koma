@@ -34,16 +34,20 @@ pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// Why [`render_loop`] returned — i.e. what the client run-loop in
 /// [`super::client_run`] should do next.
 ///
-/// Today there is exactly ONE outcome: leave the client (detach, the `/quit`
-/// overlay's ExitClient choice, or the daemon's socket closing). This enum is the
-/// seam the NEXT commit grows: a `Swap(session_id)` variant will let the render
-/// loop ask `client_run` to drop the current connection and re-attach to a
-/// DIFFERENT session-daemon's socket without tearing down the runtime. Until then
-/// every exit path maps to [`ClientTransition::Exit`], so behavior is unchanged.
+/// Two outcomes:
+/// - [`Exit`](ClientTransition::Exit): leave the client (detach, the `/quit` overlay's
+///   ExitClient choice, or the daemon's socket closing).
+/// - [`OpenSwapper`](ClientTransition::OpenSwapper): the daemon sent a
+///   [`crate::ipc::proto::DaemonEvent::OpenSwapper`] (a `/resume` hand-off), so
+///   `client_run` should DETACH from the current daemon (leave it cooking) and run the
+///   local session swapper standalone; on pick it attaches to the chosen daemon, on
+///   cancel it reconnects to the one it just left.
 pub(super) enum ClientTransition {
     /// Tear the client down and return from `client_run` (detach / ExitClient /
     /// frame channel disconnected).
     Exit,
+    /// Detach from the current daemon and open the local daemon swapper (`/resume`).
+    OpenSwapper,
 }
 
 /// The synchronous render loop, decoupled from the socket and paced at ~60fps.
@@ -58,15 +62,14 @@ pub(super) enum ClientTransition {
 /// animations still advance. Returns when the user detaches (Ctrl-C) or the socket
 /// closes.
 ///
-/// Returns a [`ClientTransition`] telling [`super::client_run`] what to do next.
-/// TODAY that is always [`ClientTransition::Exit`] (the loop only ever leaves the
-/// client); the next commit adds a swap outcome here.
+/// Returns a [`ClientTransition`] telling [`super::client_run`] what to do next:
+/// [`ClientTransition::Exit`] to leave the client, or [`ClientTransition::OpenSwapper`]
+/// when the daemon signals a `/resume` (so `client_run` detaches + opens the swapper).
 pub(super) fn render_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     frame_rx: &Receiver<DaemonFrame>,
     req_tx: &Sender<ClientRequest>,
     prebuffered: Vec<DaemonFrame>,
-    resume: bool,
 ) -> Result<ClientTransition> {
     use std::sync::mpsc::TryRecvError;
 
@@ -84,9 +87,6 @@ pub(super) fn render_loop(
     // the shadow is NOT in the agents full-screen editor so each fresh open re-sends.
     let mut last_sent_wrap_w: Option<usize> = None;
 
-    // Fire once after the first full snapshot lands when launched with --resume.
-    let mut resume_fired = false;
-
     // Per-connection seq tracking (critique #1). `expected` is the seq the NEXT
     // frame should carry. `0` means "not yet seeded" — the first frame seeds it.
     let mut expected: u64 = 0;
@@ -99,11 +99,13 @@ pub(super) fn render_loop(
     // `Hello` (task #142) BEFORE the live drain, through the SAME `apply_frame` path so
     // seq seeding + snapshot/delta handling are identical. Normally empty (the daemon
     // sends `Hello` first), so usually a no-op; when non-empty these are the lowest-seq
-    // frames and must be folded first to keep the seq stream gap-free. An `EnterSelect`
-    // can't occur this early (it needs a forwarded `/select` first), so a throwaway
-    // `select_requested` here is never acted on.
+    // frames and must be folded first to keep the seq stream gap-free. Neither an
+    // `EnterSelect` nor an `OpenSwapper` can occur this early (each needs a forwarded
+    // `/select` / `/resume` first), so the throwaway `select_requested` /
+    // `open_swapper_requested` here are never acted on.
     {
         let mut select_requested = false;
+        let mut open_swapper_requested = false;
         for frame in prebuffered {
             apply_frame(
                 frame,
@@ -112,6 +114,7 @@ pub(super) fn render_loop(
                 &mut seeded,
                 &mut awaiting_resync,
                 &mut select_requested,
+                &mut open_swapper_requested,
                 req_tx,
             );
         }
@@ -125,6 +128,10 @@ pub(super) fn render_loop(
         // pass: the daemon asked THIS (controller) client to run the `/select` transcript
         // dump on its own terminal. Acted on AFTER the drain (we own `terminal` here).
         let mut select_requested = false;
+        // Latched by `apply_frame` on a `DaemonEvent::OpenSwapper` (the `/resume` hand-off):
+        // the daemon asked this client to open its local swapper. Checked AFTER the drain,
+        // where we return `OpenSwapper` so `client_run` detaches + runs the swapper.
+        let mut open_swapper_requested = false;
 
         // --- (a) drain every queued incoming frame (NON-BLOCKING) ---
         // try_recv never blocks, so a quiet daemon can't stall the paint below. The
@@ -140,6 +147,7 @@ pub(super) fn render_loop(
                         &mut seeded,
                         &mut awaiting_resync,
                         &mut select_requested,
+                        &mut open_swapper_requested,
                         req_tx,
                     );
                 }
@@ -150,12 +158,13 @@ pub(super) fn render_loop(
             }
         }
 
-        // Fire OpenSessionHub once after the first full snapshot lands when the client
-        // was launched with --resume / koma agents. Gated on the shadow having a real
-        // session so we don't fire against the initial empty placeholder state.
-        if resume && !resume_fired && shadow.rest.fg().session.is_some() {
-            resume_fired = true;
-            let _ = req_tx.send(ClientRequest::OpenSessionHub);
+        // `/resume` hand-off: the daemon signalled `OpenSwapper` this drain pass. Hand
+        // control back to `client_run` so it DETACHES from this daemon (leaving it
+        // cooking) and runs the local swapper standalone — we must NOT keep rendering this
+        // daemon's frames underneath the swapper. Returned BEFORE any further work this
+        // frame; `client_run` owns the detach + swapper + reconnect.
+        if open_swapper_requested {
+            return Ok(ClientTransition::OpenSwapper);
         }
 
         // --- (a-bis) `/select` transcript dump (controller-side) ---

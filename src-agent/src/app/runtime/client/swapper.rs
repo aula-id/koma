@@ -1,20 +1,37 @@
-//! Client-side session-hub builder for the daemon swapper.
+//! Client-side session swapper for daemon-per-session (`--resume` / `/resume`).
 //!
 //! The thin attach client connects to ONE session-daemon's socket. To let the
-//! user switch among LIVE session-daemons on `--resume` / `/resume`, the client
-//! needs its OWN [`SessionHub`] sourced from cross-daemon DISCOVERY rather than
-//! from a single daemon's `AppStateRest::sessions` (which only knows its own one
-//! session). [`build_local_hub`] mirrors the SHAPE of the daemon-side
+//! user switch among LIVE session-daemons, the client needs its OWN [`SessionHub`]
+//! sourced from cross-daemon DISCOVERY rather than from a single daemon's
+//! `AppStateRest::sessions` (which only knows its own one session). [`build_local_hub`]
+//! mirrors the SHAPE of the daemon-side
 //! [`crate::app::runtime::commands::new_session::build_session_hub`] but draws
 //! its COOKING rows from [`super::super::manage::list_live_sessions`] and keys
 //! each row by the session UUID (the swapper's addressing key) instead of a Vec
 //! index.
 //!
-//! The consumer (the `/resume` swap that reconnects the client to the chosen
-//! daemon) lands in the NEXT commit, so this builder is currently unused.
+//! [`run_swapper`] is the standalone render+input loop the client run-loop drives while
+//! detached from any daemon: it renders the hub through the EXISTING renderer (a throwaway
+//! shadow `AppState` carrying `Mode::SessionHub`) and mirrors the daemon-side hub key
+//! handler ([`crate::controller::input::handle_session_hub`]) so the picker feels
+//! identical. It returns a [`SwapperOutcome`] — `Pick(session_id)` or `Cancel` — that
+//! `client_run` turns into an attach (the chosen daemon, spawned if needed) or a
+//! reconnect-back / exit.
 
-use crate::app::mode::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
+use std::io::Stdout;
+
+use anyhow::Result;
+use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+
+use crate::app::mode::{CookingEntry, HistoryEntry, HubPane, Mode, SessionHub, SessionKind};
+use crate::app::state::AppState;
 use crate::model::store;
+use crate::view;
+
+use super::input::is_detach;
+use super::render::FRAME_BUDGET;
 
 /// Build a CLIENT-side [`SessionHub`] from cross-daemon discovery.
 ///
@@ -33,7 +50,6 @@ use crate::model::store;
 ///
 /// Mirrors the daemon builder's defaults exactly: focus on the cooking pane,
 /// cursors at 0, empty history query, identity history filter, no pending kill.
-#[allow(dead_code)] // consumed by the `/resume` swap in the next commit
 pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
     // Discover the live session-daemons once: this drives the COOKING rows AND
     // the live-id set used to dedup HISTORY below.
@@ -98,5 +114,191 @@ pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
         history_query: String::new(),
         history_filtered,
         pending_kill: None,
+    }
+}
+
+/// What [`run_swapper`] resolved to — the instruction [`super::client_run`] acts on.
+pub(super) enum SwapperOutcome {
+    /// Attach to the session with this UUID (spawning its daemon if needed). For a
+    /// `[+ new session]` pick this is a freshly-minted UUID; for a live cooking row it
+    /// is that session's id; for a history row it is the on-disk session's id.
+    Pick(String),
+    /// The user cancelled (Esc / Ctrl+C). `client_run` reconnects to the previously
+    /// attached session, or exits if there was none (a `--resume` cold start).
+    Cancel,
+}
+
+/// Run the local daemon swapper: render the hub through the EXISTING renderer and drive
+/// it with the SAME key semantics as the daemon-side hub, returning the user's choice.
+///
+/// This runs DETACHED from any daemon (no connection feeds it), so the user can pick a
+/// different session-daemon without the source daemon's snapshots clobbering this local
+/// hub. It owns the terminal for the duration. Each iteration:
+///   1. snapshot `hub` into a throwaway shadow `AppState` carrying `Mode::SessionHub` and
+///      repaint via [`view::draw`] (the renderer is pure-from-snapshot, so a clone is all
+///      it needs — no daemon, no live runtime);
+///   2. drain every buffered key event, mutating `hub` exactly as
+///      [`crate::controller::input::handle_session_hub`] would (Up/Down move the focused
+///      pane's cursor; Tab/BackTab toggle focus; Backspace + printable keys edit the
+///      history search while the History pane is focused; Esc/Ctrl+C cancel; Enter
+///      selects), returning a [`SwapperOutcome`] the moment one is resolved;
+///   3. pace to ~60fps off the shared [`FRAME_BUDGET`].
+///
+/// NOTE (deferred): killing a session from the swapper (`Ctrl+X` / `pending_kill`) is NOT
+/// wired here — that is a later concern (it must stop the target's daemon, not just drop a
+/// row). `Ctrl+X` and the kill-confirm keys are intentionally inert; `pending_kill` is
+/// never set, so the confirm bar never shows. The rest of the picker is faithful.
+pub(super) fn run_swapper(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    hub: &mut SessionHub,
+) -> Result<SwapperOutcome> {
+    use std::time::Instant;
+
+    // Throwaway shadow built ONCE (not per frame): `view::draw` dispatches on
+    // `state.mode()`, so writing this hub onto the shadow's foreground mode each frame
+    // renders it identically to a live `/resume`. Reusing the shadow avoids re-allocating a
+    // whole `AppState` (+ its version-check channel) at 60fps; only the small hub is cloned.
+    let mut shadow = AppState::new(Mode::Chat);
+
+    loop {
+        let frame_start = Instant::now();
+
+        // (1) Repaint: refresh the shadow's foreground mode to the current hub (cloned —
+        // the hub is a couple of short Vecs of metadata) and draw.
+        shadow.set_mode(Mode::SessionHub(Box::new(hub.clone())));
+        terminal.draw(|f| view::draw(f, &shadow))?;
+
+        // (2) Drain every buffered key event this frame (fast typing / nav never lags).
+        while event::poll(std::time::Duration::ZERO)? {
+            if let Event::Key(key) = event::read()? {
+                if let Some(outcome) = handle_swapper_key(hub, &key) {
+                    return Ok(outcome);
+                }
+            }
+            // Non-key events (resize / mouse / paste) are irrelevant to the picker; the
+            // next unconditional repaint relayouts on a resize.
+        }
+
+        // (3) Pace to ~60fps (skip the sleep if a frame overran the budget).
+        if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+}
+
+/// Apply one key to the swapper's `hub`, returning `Some(outcome)` if it resolves the
+/// swapper (Enter/Esc/Ctrl+C) or `None` if it was a navigation/edit key (state mutated
+/// in place, keep looping).
+///
+/// Mirrors [`crate::controller::input::handle_session_hub`]'s key → hub-state mutations
+/// so the swapper feels identical to today's `/resume` picker, with two deliberate
+/// differences for the client-side, cross-daemon context:
+///   - Enter resolves to a SESSION UUID ([`SwapperOutcome::Pick`]) instead of a daemon-
+///     side `Action` (LiveSwitch by Vec index / HubOpenHistory by `history` index): a
+///     cooking `[+ new session]` row mints a fresh UUID, a real cooking row uses its
+///     `session_id`, and a history row derives its UUID from the on-disk path's final
+///     component (the session dir name == its id);
+///   - the kill path (`Ctrl+X` / `pending_kill` confirm) is DEFERRED (inert) — see
+///     [`run_swapper`].
+fn handle_swapper_key(hub: &mut SessionHub, key: &KeyEvent) -> Option<SwapperOutcome> {
+    // Ctrl+C cancels (the daemon-side handler maps it to `Action::Quit`; in the detached
+    // swapper "quit the picker" is a cancel — `client_run` decides reconnect vs exit).
+    // Reuse the client's existing Ctrl+C detector so the gesture matches the rest of the
+    // client exactly.
+    if is_detach(key) {
+        return Some(SwapperOutcome::Cancel);
+    }
+
+    match key.code {
+        // Esc → cancel back (reconnect to the previous session, or exit on a cold start).
+        KeyCode::Esc => Some(SwapperOutcome::Cancel),
+
+        // Tab / Shift+Tab → toggle the focused pane (cursor of the other pane preserved).
+        KeyCode::Tab | KeyCode::BackTab => {
+            hub.toggle_focus();
+            None
+        }
+
+        // Up / Down → move the focused pane's cursor (History scrolls the FILTERED view).
+        KeyCode::Up => {
+            hub.move_up();
+            None
+        }
+        KeyCode::Down => {
+            hub.move_down();
+            None
+        }
+
+        // Enter → resolve the focused selection to a target session UUID.
+        KeyCode::Enter => resolve_enter(hub),
+
+        // Backspace → delete from the history search (History pane only), then refilter.
+        KeyCode::Backspace => {
+            if matches!(hub.focus, HubPane::History) {
+                hub.history_query.pop();
+                hub.refilter_history();
+            }
+            None
+        }
+
+        // Printable key (NOT a Ctrl chord — those are intercepted before reaching the
+        // search). The daemon handler interleaves its Ctrl+C / Ctrl+X chord guards ahead
+        // of the Char arm; here we guard inline so a Ctrl+X (deferred kill) / any Ctrl
+        // combo never leaks a literal char into the history query.
+        //   - History pane: feed the live search query (push + refilter).
+        //   - Cooking pane: inert. (The daemon handler treats n/N as the `/new` shortcut;
+        //     here the `[+ new session]` row is Enter-selectable, so no shortcut is needed
+        //     and stray letters on the cooking pane do nothing.)
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if matches!(hub.focus, HubPane::History) {
+                hub.history_query.push(c);
+                hub.refilter_history();
+            }
+            None
+        }
+
+        // DEFERRED: kill-a-session from the swapper (Ctrl+X / pending_kill confirm) is a
+        // later concern — it must stop the target daemon, not just drop a row — so the
+        // kill keys are inert here (no `pending_kill` is ever set). Any other key —
+        // including a Ctrl chord that fell through the guard above: ignore.
+        _ => None,
+    }
+}
+
+/// Resolve an Enter press in the swapper to a target session UUID (or `None` to stay in
+/// the picker when the focused pane has nothing actionable). Pure read of `hub`.
+fn resolve_enter(hub: &SessionHub) -> Option<SwapperOutcome> {
+    match hub.focus {
+        HubPane::Cooking => match hub.selected_cooking() {
+            // "[+ new session]" → mint a brand-new session UUID; `client_run` spawns its
+            // daemon (create branch) and attaches.
+            Some(entry) if entry.kind == SessionKind::NewSession => {
+                Some(SwapperOutcome::Pick(uuid::Uuid::new_v4().to_string()))
+            }
+            // A real live session → attach to its already-running daemon by its id. A
+            // real row always carries `Some(id)`; the `?`-less guard degrades a (never-
+            // expected) `None` to staying in the picker rather than picking a blank id.
+            Some(entry) => entry
+                .session_id
+                .clone()
+                .map(SwapperOutcome::Pick),
+            // Empty cooking pane (can't happen — the synthetic row is always present) →
+            // stay in the picker.
+            None => None,
+        },
+        HubPane::History => match hub.selected_history_real_idx() {
+            // A history row → derive the session UUID from the on-disk dir name (the path's
+            // final component IS the session id), then `client_run` create-or-LOADs it.
+            // A path with no final component (shouldn't happen for a real session dir) →
+            // stay in the picker rather than pick a bogus id.
+            Some(real) => hub
+                .history
+                .get(real)
+                .and_then(|h| h.path.file_name())
+                .and_then(|n| n.to_str())
+                .map(|id| SwapperOutcome::Pick(id.to_string())),
+            // Empty filtered history (e.g. a search that matched nothing) → stay.
+            None => None,
+        },
     }
 }
