@@ -587,11 +587,17 @@ pub(crate) fn shadow_security(s: SecuritySnapshot) -> SecurityState {
         // The projected inactive set rides as a sorted Vec; rebuild the HashSet the
         // view + render path read from.
         inactive: s.inactive.into_iter().collect(),
+        // YOLO arm flag rides verbatim so the client's panel renders the armed row.
+        yolo_armed: s.yolo_armed,
         // Install-health + the pane toggle + its cursor ride verbatim so the client
         // renders the same dependency pane the daemon would.
         install_health: s.install_health,
         health_view: s.health_view,
         health_selected: s.health_selected,
+        // Spinner state rides verbatim — the client renders + animates the
+        // "checking dependencies…" line from the daemon's projected frame counter.
+        health_fetching: s.health_fetching,
+        health_frame: s.health_frame,
     }
 }
 

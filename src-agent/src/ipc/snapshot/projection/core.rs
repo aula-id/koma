@@ -179,6 +179,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         agent_mode: match state.rest.agent_mode {
             crate::app::state::AgentMode::Auto => "auto",
             crate::app::state::AgentMode::Normal => "normal",
+            crate::app::state::AgentMode::Yolo => "yolo",
         }
         .to_string(),
     }

@@ -106,19 +106,43 @@ pub(crate) fn warm_session(
     // Awareness task: read the depth-1 docs + summarize on the resolved Awareness
     // route. Move the owned route + the cloned settings/workdir in; `summarize`
     // returns `None` on no docs / failure, which the drain renders as the
-    // appropriate terminal step.
+    // appropriate terminal step. Also resolve the Main route as a fallback: when
+    // the Awareness model call itself fails (e.g. bad/typo'd model name) we retry
+    // once on the trusted Main route before giving up.
     if let (Some(c), Some(route)) = (client.as_ref(), aware_route) {
         let c = Arc::clone(c);
+        // Resolve the Main route for fallback; cheap (no I/O). `None` is safe —
+        // `summarize_with_fallback` skips the retry when the routes are equal or
+        // Main is unavailable.
+        let main_route = resolve_role(&config, &settings, ModelRole::Main);
         handle.spawn(async move {
-            let summary = crate::app::awareness::summarize(
-                &c,
-                &settings,
-                route.conn(),
-                &route.model_id,
-                route.provider(),
-                &workdir,
-            )
-            .await;
+            let summary = match main_route {
+                Some(ref m) => {
+                    crate::app::awareness::summarize_with_fallback(
+                        &c,
+                        &settings,
+                        route.conn(),
+                        &route.model_id,
+                        route.provider(),
+                        &workdir,
+                        m.conn(),
+                        &m.model_id,
+                        m.provider(),
+                    )
+                    .await
+                }
+                None => {
+                    crate::app::awareness::summarize(
+                        &c,
+                        &settings,
+                        route.conn(),
+                        &route.model_id,
+                        route.provider(),
+                        &workdir,
+                    )
+                    .await
+                }
+            };
             let _ = tx.send(WarmEvent::WarmAwareness(summary));
         });
     }

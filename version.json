@@ -1,4 +1,4 @@
 {
-  "version": "0.1.4",
-  "message": "Backspace now works in QEMU/serial consoles (^H); forward-Delete supported in the composer."
+  "version": "0.1.5",
+  "message": "YOLO agent mode (lossless harness bypass, two-layer armed from /security); harness falls back to the main model instead of failing open on a misconfigured classifier; /security panel reworked — vertical daemon + YOLO checkboxes, fixed list navigation, per-tool [!!] missing-dependency markers with a non-blocking animated health probe; sec_http accepts self-signed certs; daemon augments PATH with standard bin dirs (Linux/macOS) and maps each tool's real binaries."
 }

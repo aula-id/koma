@@ -34,7 +34,7 @@ pub mod bash;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
-pub use security::SecurityState;
+pub use security::{SecSel, SecurityState};
 pub use bash::BashState;
 // `HelpEntry` is part of the module's public surface and will be consumed by the
 // daemon Help projection (follow-up); re-exported now so that lands without

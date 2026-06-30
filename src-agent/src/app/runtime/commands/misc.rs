@@ -4,13 +4,42 @@
 use anyhow::Result;
 
 use crate::app::mode::{AgentsState, HelpState, Mode, SettingsState};
-use crate::app::state::AppState;
+use crate::app::state::{AgentMode, AppState};
 use crate::app::version;
 use crate::model::store;
 
-/// Handle the `/mode` command: toggle chat ↔ agentic mode.
-pub(super) fn handle_mode(state: &mut AppState) -> Result<()> {
-    state.rest.agent_mode = state.rest.agent_mode.toggled();
+/// Handle the `/mode` command.
+///
+/// `arg` (the token after `/mode`, already lowercased):
+/// - `None` → armed-aware CYCLE (Auto→Normal→[Yolo when armed]→Auto), the same
+///   transition as Shift+Tab.
+/// - `Some("auto")` / `Some("normal")` → explicitly set that mode (always allowed).
+/// - `Some("yolo")` → enter YOLO **only when armed** (Layer 2). When NOT armed it
+///   REFUSES: the mode is left unchanged and the status explains how to unlock it.
+/// - any other token → leave the mode unchanged and report the bad argument.
+pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<()> {
+    match arg.as_deref() {
+        None => {
+            // Bare `/mode`: armed-aware cycle (identical to the Shift+Tab toggle).
+            state.rest.agent_mode = state.rest.agent_mode.cycle(state.rest.yolo_armed);
+        }
+        Some("auto") => state.rest.agent_mode = AgentMode::Auto,
+        Some("normal") => state.rest.agent_mode = AgentMode::Normal,
+        Some("yolo") => {
+            // Layer-2 gate: only an ARMED YOLO may be entered. Unarmed → refuse and
+            // leave the mode untouched.
+            if state.rest.yolo_armed {
+                state.rest.agent_mode = AgentMode::Yolo;
+            } else {
+                state.rest.status = "yolo locked — enable it in /security first".into();
+                return Ok(());
+            }
+        }
+        Some(other) => {
+            state.rest.status = format!("unknown mode: {other} (auto | normal | yolo)");
+            return Ok(());
+        }
+    }
     state.rest.status = format!("mode: {}", state.rest.agent_mode.label());
     Ok(())
 }

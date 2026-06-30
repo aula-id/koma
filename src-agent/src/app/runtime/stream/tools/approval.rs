@@ -443,7 +443,23 @@ pub(crate) fn process_tools(
         // authorization to test their own target, so the TAC classifier (built to
         // block unrequested mutations) would only block legit offensive steps. The
         // tool's `risk` metadata is still shown in the /security panel as a label.
-        if tool_is_risky(&call.function.name) {
+        //
+        // YOLO mode bypasses the harness ENTIRELY: a risky call skips the classifier
+        // network call AND every `y/n` prompt, running inline exactly as Auto does on
+        // a definite-allow. Only the classifier + prompts are bypassed — the
+        // deterministic workspace path guard (WC) inside the tools still applies, so
+        // writes stay in the project dir. Gate it FIRST so no `tac_inputs` /
+        // `block_on(classify_toolcall)` ever fires in Yolo; clear any stale approval
+        // reason and fall through to the dispatch block below (which advances
+        // `tool_idx`). The classifier/approval branches below are reached only for the
+        // Auto/Normal modes.
+        // Yolo + risky: explicit no-op gate. Clear any stale approval reason and fall
+        // straight through to dispatch (no classifier, no prompt). Kept as its own
+        // branch so the bypass is unmistakable in the control flow.
+        if tool_is_risky(&call.function.name) && mode == AgentMode::Yolo {
+            state.rest.sessions[sess_idx].approval_reason = None;
+        }
+        if tool_is_risky(&call.function.name) && mode != AgentMode::Yolo {
             match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
                 Some((c, config, settings)) => {

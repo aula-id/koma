@@ -109,3 +109,87 @@ pub async fn summarize(
         Err(_) => None,
     }
 }
+
+/// Like [`summarize`] but retries once with a fallback connection/model/provider
+/// when the primary call fails (i.e. the model call itself errored, not a disabled
+/// flag or missing docs). Only retries when the fallback differs from the primary
+/// (`fallback_model != model` OR `fallback_conn.endpoint != conn.endpoint`).
+///
+/// All early-return `None` cases (disabled, no docs) are preserved unchanged.
+/// The fallback is only attempted when the primary network/parse call actually
+/// errored, so a no-docs `None` is never retried.
+#[allow(clippy::too_many_arguments)]
+pub async fn summarize_with_fallback(
+    client: &OpenRouterClient,
+    settings: &Settings,
+    conn: Conn<'_>,
+    model: &str,
+    provider: &str,
+    workdir: &std::path::Path,
+    fallback_conn: Conn<'_>,
+    fallback_model: &str,
+    fallback_provider: &str,
+) -> Option<String> {
+    if !settings.awareness_enabled {
+        return None;
+    }
+
+    // Gather the docs corpus (same as `summarize`).
+    let mut corpus = String::new();
+    for name in DOC_FILES {
+        if corpus.len() >= CORPUS_CAP {
+            break;
+        }
+        let path = workdir.join(name);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let body = cap_chars(raw.trim(), PER_FILE_CAP);
+        if body.trim().is_empty() {
+            continue;
+        }
+        let section = format!("## {name}\n{body}\n\n");
+        let remaining = CORPUS_CAP - corpus.len();
+        corpus.push_str(&cap_chars(&section, remaining));
+    }
+
+    let corpus = corpus.trim();
+    if corpus.is_empty() {
+        return None; // no docs — nothing to retry
+    }
+
+    let messages = vec![
+        ChatMessage::new(Role::System, SUMMARY_SYSTEM),
+        ChatMessage::new(Role::User, corpus),
+    ];
+
+    // Primary attempt.
+    match client.complete_with(conn, model, provider, messages.clone()).await {
+        Ok(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        Err(_) => {
+            // Primary call failed. Retry with the fallback route when it is
+            // meaningfully different (avoids a guaranteed-duplicate failure).
+            let same =
+                fallback_model == model && fallback_conn.endpoint == conn.endpoint;
+            if !same {
+                if let Ok(s) = client
+                    .complete_with(fallback_conn, fallback_model, fallback_provider, messages)
+                    .await
+                {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        return Some(s.to_string());
+                    }
+                }
+            }
+            None
+        }
+    }
+}

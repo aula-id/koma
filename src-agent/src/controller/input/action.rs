@@ -152,22 +152,21 @@ pub enum Action {
     // --- Security daemon control panel actions ---
     /// Esc from the `/security` panel — return to Chat.
     CloseSecurity,
-    /// `t` in the `/security` panel — toggle the security-enabled flag: if now enabled,
-    /// start the daemon; if now disabled, stop it. Refreshes the panel status.
-    SecurityToggle,
-    /// `s` in the `/security` panel — start the daemon (no-op when already running).
-    SecurityStart,
-    /// `x` in the `/security` panel — stop the daemon (no-op when not running).
-    SecurityStop,
-    /// `r` in the `/security` panel — restart the daemon (stop then start).
+    /// `r` in the `/security` panel — restart the daemon (stop then start). Daemon
+    /// start/stop/toggle no longer have their own keys/Actions: the top `[x] Daemon
+    /// running` checkbox owns them (toggled via `SecurityToggleTool`).
     SecurityRestart,
-    /// `Enter`/`Space` in the `/security` panel — toggle the currently-selected tool's
-    /// active state (flip its membership in `state.rest.sec_inactive`). A disabled tool
-    /// is no longer advertised to the model; re-enabling restores it. Refreshes the panel.
+    /// `Enter`/`Space` in the `/security` panel — toggle the currently-SELECTED row. The
+    /// tools pane mixes the daemon checkbox (row 0) and the YOLO checkbox (row 1) with the
+    /// tool inventory: the daemon checkbox starts/stops the daemon; the YOLO checkbox
+    /// arms/disarms the Layer-1 YOLO flag (`state.rest.yolo_armed`, gated on the daemon
+    /// running; disarming while in `Yolo` drops `agent_mode` back to `Auto`); a tool row
+    /// flips its membership in `state.rest.sec_inactive` (a disabled tool is no longer
+    /// advertised to the model). Refreshes the panel.
     SecurityToggleTool,
     /// `d` in the `/security` panel — toggle every tool sharing the selected tool's
     /// domain: if all of that domain are currently active, disable them all; otherwise
-    /// enable them all. Refreshes the panel.
+    /// enable them all. A no-op when the YOLO checkbox is selected. Refreshes the panel.
     SecurityToggleDomain,
     /// `i` in the `/security` panel's DEPENDENCY pane — install/repair the selected
     /// dependency. Inner string is its manifest key (the argument to
