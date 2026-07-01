@@ -1,4 +1,4 @@
 {
-  "version": "0.2.3",
-  "message": "Ctrl+C is disabled — it no longer quits or detaches koma, so a stray keystroke can't drop you out; use /quit to leave deliberately. Esc now carries interrupt: while the model is still thinking, one Esc stops the turn AND pulls your last prompt back into the composer to edit and resend. Double-Esc clears the composer when it holds text, or opens the message-history picker when it's empty — and that picker is now a scrollable overlay (newest at the bottom) instead of a full-screen page. Finally, agent-created git worktrees now live in a shadow dir outside your repo (~/.koma/sessions/<id>/worktrees): create drops you into the new worktree, remove returns you to the repo root and cleans up, and git_operator routes worktree commands to the dedicated git_worktree tool instead of choking on them."
+  "version": "0.2.4",
+  "message": "koma now reads before it writes: the agent must have seen a file's current content in this conversation before it can edit it (or overwrite an existing file). If it hasn't read the file, the edit is held back with a nudge to read it first — so edits never fire blind against stale assumptions. Reading, writing, or a prior edit all count as having seen it, and creating a brand-new file needs no prior read."
 }
