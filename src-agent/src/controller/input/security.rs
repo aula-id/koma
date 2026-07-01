@@ -5,7 +5,7 @@
 //!
 //! Key map:
 //! - `Esc`      → `Action::CloseSecurity` (return to Chat)
-//! - `Ctrl+C`   → `Action::Quit`
+//! - `Ctrl+C`   → `Action::None` (fully inert — koma disables Ctrl+C)
 //! - `Up`       → move cursor up in the ACTIVE pane (tools or deps)
 //! - `Down`     → move cursor down in the ACTIVE pane (tools or deps)
 //! - `h`/`H`    → toggle the body pane (tools ⇄ dependencies); mode-state only
@@ -58,8 +58,9 @@ pub fn handle_security(s: &mut SecurityState, rest: &mut AppStateRest, key: KeyE
     // Same for the YOLO arm flag — mirror the authoritative `rest.yolo_armed` so the
     // checkbox row reflects the live state on every key.
     s.yolo_armed = rest.yolo_armed;
+    // Ctrl+C is fully inert (koma disables it); Esc still closes the panel.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     match key.code {

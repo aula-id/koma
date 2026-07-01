@@ -115,7 +115,15 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             });
             usage::draw(frame, &state.rest, nav, &data, &palette);
         }
-        Mode::MessageRewind(rw) => message_rewind::draw(frame, rw, &palette),
+        Mode::MessageRewind(rw) => {
+            // Draw the normal chat view first, THEN the rewind overlay on top —
+            // exactly how the `/bash` overlay layers over chat (same input/transcript
+            // rects from `layout_chunks`).
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            let chunks = chat::layout_chunks(&state.rest, frame.area());
+            message_rewind::draw(frame, chunks[3], chunks[1], rw, &palette);
+        }
         Mode::QuitConfirm(s) => quit_confirm::draw(frame, s, &palette),
     }
 }

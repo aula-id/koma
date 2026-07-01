@@ -1,9 +1,9 @@
 //! State for the message-rewind picker (double-Esc "edit a previous message").
 //!
-//! Lists the conversation's prior USER messages, NEWEST-FIRST, so the top row
-//! is the most-recent message. Selecting one (Enter) rewinds the conversation
-//! to just before it and loads its text into the composer. Selection state lives
-//! here; keystroke handling lives in [`controller::input::handle_rewind`].
+//! Lists the conversation's prior USER messages in CHRONOLOGICAL order (oldest at
+//! the top, newest at the BOTTOM, pre-selected). Selecting one (Enter) rewinds the
+//! conversation to just before it and loads its text into the composer. Selection
+//! state lives here; keystroke handling lives in [`controller::input::handle_rewind`].
 
 /// A single rewindable user message: its index in the conversation's message
 /// vec (so truncation knows exactly where to cut) and a clone of its text.
@@ -19,12 +19,13 @@ pub struct RewindEntry {
 
 /// State for the message-rewind picker.
 ///
-/// `entries` holds the conversation's user messages NEWEST-FIRST (entry 0 is the
-/// most-recent user message). `selected` is an index into `entries`. The list is
-/// not searchable — it is just a navigable list.
+/// `entries` holds the conversation's user messages in CHRONOLOGICAL order (entry 0
+/// is the OLDEST user message; the last entry is the most-recent, rendered at the
+/// BOTTOM). `selected` is an index into `entries`. The list is not searchable — it
+/// is just a navigable list.
 pub struct RewindState {
-    /// User messages, newest-first. Always non-empty when this mode is active
-    /// (the open path refuses to enter with zero user messages).
+    /// User messages, chronological (oldest-first). Always non-empty when this mode
+    /// is active (the open path refuses to enter with zero user messages).
     pub entries: Vec<RewindEntry>,
     /// Cursor position within `entries`.
     pub selected: usize,
@@ -32,10 +33,11 @@ pub struct RewindState {
 
 impl RewindState {
     /// Build the picker from a conversation's messages, keeping only `User`-role
-    /// turns and reversing so the newest is first. Returns `None` when there are
-    /// no user messages (nothing to rewind to).
+    /// turns in CHRONOLOGICAL order (oldest→newest) so the newest sits at the
+    /// bottom, and pre-selecting that newest (bottom) entry. Returns `None` when
+    /// there are no user messages (nothing to rewind to).
     pub fn from_messages(messages: &[crate::dto::chat::ChatMessage]) -> Option<Self> {
-        let mut entries: Vec<RewindEntry> = messages
+        let entries: Vec<RewindEntry> = messages
             .iter()
             .enumerate()
             .filter(|(_, m)| m.role == crate::dto::chat::Role::User)
@@ -47,12 +49,9 @@ impl RewindState {
         if entries.is_empty() {
             return None;
         }
-        // Newest user message first (top of the list).
-        entries.reverse();
-        Some(Self {
-            entries,
-            selected: 0,
-        })
+        // Chronological (oldest→newest); pre-select the newest/bottom entry.
+        let selected = entries.len().saturating_sub(1);
+        Some(Self { entries, selected })
     }
 
     /// Move the cursor up one row (clamps at 0).

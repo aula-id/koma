@@ -90,6 +90,32 @@ pub(super) fn tac_inputs(
     }
 }
 
+/// True if `target_abs` was read/written/edited earlier in the conversation
+/// (i.e. the model has seen or authored its current content). Scans history for
+/// read/write/edit tool_calls whose "path" arg resolves to the same abs path.
+fn file_known_in_history(
+    messages: &[crate::dto::chat::ChatMessage],
+    workspaces: &[std::path::PathBuf],
+    target_abs: &std::path::Path,
+) -> bool {
+    for msg in messages {
+        let Some(tcs) = msg.tool_calls.as_ref() else { continue };
+        for tc in tcs {
+            if matches!(tc.function.name.as_str(), "read" | "write" | "edit") {
+                let sanitized = crate::dto::chat::sanitize_tool_arguments(&tc.function.arguments);
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&sanitized) {
+                    if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+                        if let Ok(abs) = crate::tool::resolve(workspaces, p) {
+                            if abs == target_abs { return true; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Drive the tool-approval state machine for the current round.
 ///
 /// Walks `pending_tool_calls` from `tool_idx`, running each call and collecting
@@ -375,18 +401,27 @@ pub(crate) fn process_tools(
             continue;
         }
         // Intercept the model-callable `git_worktree` tool BEFORE the generic
-        // dispatch path. `enter` and `exit` mutate session state (cwd + allowed
-        // roots), which a read-only `ToolCtx` can't do. The tool's `run` does the
-        // pure validation/resolution and returns a sentinel-tagged string; here we
-        // apply the state change via `apply_workspace_change` (same primitive as `cd`).
+        // dispatch path. `create`, `remove`, `enter`, and `exit` mutate session
+        // state (cwd + allowed roots), which a read-only `ToolCtx` can't do. The
+        // tool's `run` does the pure validation/resolution and returns a
+        // sentinel-tagged string; here we apply the state change via
+        // `apply_workspace_change` (same primitive as `cd`).
         //
-        // `enter` result: starts with `GIT_WT_ENTER_PREFIX` + canonical path.
+        // `create` result: starts with `GIT_WT_CREATE_PREFIX` + shadow path.
+        //   → same state work as enter (push path into `settings.workdir`, persist,
+        //     apply_workspace_change), but returns a create-specific confirmation so
+        //     no model misreads it as a failure.
+        // `enter` result: starts with `GIT_WT_ENTER_PREFIX` + shadow path.
         //   → push the path into `settings.workdir` (if not already present),
         //     persist, then call `apply_workspace_change`.
         // `exit` result: exactly `GIT_WT_EXIT_PREFIX`.
         //   → resolve the primary workdir (first `settings.workdir` entry) and
         //     call `apply_workspace_change` to return there.
-        // Anything else (list/create/remove output, or an `error:` string):
+        // `remove` result: starts with `GIT_WT_REMOVE_PREFIX` + removed shadow path
+        // (remove AUTO-EXITS: the worktree is already gone, git ran from the repo root).
+        //   → de-register the path from `settings.workdir`; if the live cwd was
+        //     inside the removed worktree, snap it back to the primary workdir.
+        // Anything else (list output, or an `error:` string):
         //   → pass through to the model verbatim.
         //
         // Borrow structure mirrors the `cd` arm: extract the path string + run
@@ -396,6 +431,36 @@ pub(crate) fn process_tools(
             let result = super::dispatch::run_tool(state, sess_idx, &call);
             let final_result =
                 if let Some(target) =
+                    result.strip_prefix(crate::tool::git_worktree::GIT_WT_CREATE_PREFIX)
+                {
+                    // `create` succeeded: target is the shadow path string.
+                    // Same state work as enter: register the path + persist + switch cwd.
+                    let new_cwd = std::path::PathBuf::from(target);
+                    let target_str = target.to_string();
+                    {
+                        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            if !sess.settings.workdir.contains(&target_str) {
+                                sess.settings.workdir.push(target_str.clone());
+                            }
+                            let _ = sess.save();
+                        }
+                    }
+                    super::super::spawn::apply_workspace_change(
+                        state, sess_idx, new_cwd.clone(), client, handle,
+                    );
+                    // Emit a clear "created + entered" confirmation so no model
+                    // misreads this as a failure (unlike the bare "entered worktree"
+                    // string the old enter sentinel would have produced).
+                    let name = std::path::Path::new(target)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(target);
+                    format!(
+                        "created worktree '{name}' at {target} and switched into it \
+                         — you are now working inside the new worktree. \
+                         Use git_worktree({{\"action\":\"exit\"}}) to return to the repo root."
+                    )
+                } else if let Some(target) =
                     result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
                 {
                     // `enter` succeeded: target is the canonical path string.
@@ -431,13 +496,96 @@ pub(crate) fn process_tools(
                         state, sess_idx, primary.clone(), client, handle,
                     );
                     format!("exited to {}", primary.display())
+                } else if let Some(removed) =
+                    result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
+                {
+                    // `remove` succeeded: the worktree is already deleted (git ran
+                    // from the repo root). Two cleanups:
+                    // (1) de-register the path from settings.workdir; (2) if the
+                    // session's live cwd was inside the removed worktree it now
+                    // points at a dead dir — snap it back to the primary workdir
+                    // (repo root). Capture the primary path in the same scoped
+                    // borrow, then apply outside it (apply_workspace_change also
+                    // borrows state mutably).
+                    let removed = removed.to_string();
+                    let primary;
+                    {
+                        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            sess.settings.workdir.retain(|p| p != &removed);
+                            let _ = sess.save();
+                            primary = sess.workdir();
+                        } else {
+                            primary = std::path::PathBuf::from(".");
+                        }
+                    }
+                    let stale = state.rest.sessions[sess_idx]
+                        .active_cwd
+                        .as_ref()
+                        .is_some_and(|c| !c.is_dir());
+                    if stale {
+                        super::super::spawn::apply_workspace_change(
+                            state, sess_idx, primary.clone(), client, handle,
+                        );
+                    }
+                    format!("worktree removed: {removed}")
                 } else {
-                    // list/create/remove output, or an error: — pass through.
+                    // list output, or an error: — pass through.
                     result
                 };
             state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
             state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
+        }
+        // Read-before-edit/overwrite guard: the model must have READ (or written/
+        // edited) a file earlier in this conversation before it can `edit` it, or
+        // `write`-overwrite an existing file. A write to a brand-new path is always
+        // allowed. If the path can't be parsed or resolved we skip the guard and let
+        // the tool fail on its own terms.
+        if matches!(call.function.name.as_str(), "edit" | "write") {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                let path_str = path_str.to_string();
+                // Build workspaces the same way the tools do.
+                let ctx = super::super::spawn::build_tool_ctx(state, sess_idx);
+                if let Ok(target_abs) = crate::tool::resolve(&ctx.workspaces, &path_str) {
+                    let is_edit = call.function.name == "edit";
+                    // write only guards when OVERWRITING an existing file; new file is exempt.
+                    let must_check = is_edit || target_abs.exists();
+                    if must_check {
+                        // Scope the immutable borrow of session so it ends before
+                        // we mutate state below (push result / advance tool_idx).
+                        let known = {
+                            let msgs = state.rest.sessions[sess_idx]
+                                .session
+                                .as_ref()
+                                .map(|s| s.conversation.messages())
+                                .unwrap_or(&[]);
+                            file_known_in_history(msgs, &ctx.workspaces, &target_abs)
+                        };
+                        if !known {
+                            let verb = if is_edit { "editing" } else { "overwriting" };
+                            let nudge = format!(
+                                "error: read '{path_str}' before {verb} it — call \
+                                 read({{\"path\":\"{path_str}\"}}) first so you're working \
+                                 against the current file, then retry. \
+                                 (Creating a brand-new file needs no prior read.)"
+                            );
+                            // Mirror exactly how the TAC classifier DENIES a call in
+                            // Auto mode (definite block): push a synthetic result for
+                            // this call id, advance tool_idx, and continue the loop
+                            // without running the tool.
+                            state.rest.sessions[sess_idx]
+                                .tool_results
+                                .push((call.id.clone(), nudge));
+                            state.rest.sessions[sess_idx].tool_idx += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
         // `sec_*` tools are harness-EXEMPT: security mode is explicit user
         // authorization to test their own target, so the TAC classifier (built to

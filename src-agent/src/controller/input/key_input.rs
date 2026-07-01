@@ -28,8 +28,9 @@ use super::{is_ctrl, Action};
 pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     use crate::app::mode::filter_models;
 
+    // Ctrl+C is fully inert (koma disables it); Esc still walks back / cancels.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     // --- Step 1 (model) on a fetchable endpoint: live catalogue omnisearch ---

@@ -36,8 +36,9 @@ use super::{is_ctrl, Action};
 pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     use crate::app::mode::{filter_models, SettingField};
 
+    // Ctrl+C is fully inert (koma disables it); Esc still saves/closes or backs out.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     // --- Role checkbox picker (DEEPEST level: a modal-on-modal over the model

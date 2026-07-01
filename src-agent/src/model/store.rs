@@ -162,6 +162,11 @@ pub fn pwd_bucket_dir(pwd_hash: &str) -> Result<PathBuf> {
     Ok(sessions_dir()?.join(pwd_hash))
 }
 
+/// The worktrees directory for a pwd bucket: `~/.koma/sessions/<pwd_hash>/worktrees/`.
+pub fn worktrees_dir(pwd_hash: &str) -> Result<PathBuf> {
+    Ok(pwd_bucket_dir(pwd_hash)?.join("worktrees"))
+}
+
 /// Shared per-dir settings path: `<pwd_bucket_dir>/settings.json`. Holds the
 /// [`LocalConfig`](crate::model::settings::LocalConfig) (model setup) common to
 /// all sessions in this working directory.

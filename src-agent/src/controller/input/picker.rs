@@ -9,15 +9,13 @@ use super::{is_ctrl, Action};
 ///
 /// Typing characters updates the live search query and triggers `refilter`.
 /// Typing `/new` + Enter spawns a fresh session and drops into Chat.
-/// Esc/Ctrl+C return to Chat when an active session exists (opened via /resume),
-/// or quit when there is no session (opened by the --resume startup flag).
+/// Esc returns to Chat when an active session exists (opened via /resume), or quits
+/// when there is no session (opened by the --resume startup flag). Ctrl+C is inert.
 pub fn handle_picker(p: &mut PickerState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // Ctrl+C is fully inert (koma disables it); Esc keeps its behavior intact
+    // (cancel to Chat when a session exists, else quit the --resume startup picker).
     if is_ctrl(&key, 'c') {
-        return if rest.fg().session.is_some() {
-            Action::CancelPickerToChat
-        } else {
-            Action::Quit
-        };
+        return Action::None;
     }
 
     match key.code {

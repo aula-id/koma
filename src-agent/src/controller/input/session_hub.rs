@@ -1,8 +1,8 @@
 //! Key handler for the unified session hub (`/resume`, `Mode::SessionHub`).
 //!
 //! Tab toggles the focused pane (cooking <-> history); Up/Down move the selection
-//! within the focused pane; Enter acts on the focused pane's selection; Esc/Ctrl+C
-//! close back to Chat without touching any session state.
+//! within the focused pane; Enter acts on the focused pane's selection; Esc
+//! closes back to Chat without touching any session state (Ctrl+C is inert).
 //!
 //! - Enter on a COOKING row -> [`Action::LiveSwitch`] carrying that session's
 //!   `sessions` index (REUSES the `/swap` foreground-switch path verbatim).
@@ -34,7 +34,7 @@ fn new_session_action() -> Action {
 
 /// Handle a key press inside the session hub.
 ///
-/// Order matters (see the module docs): Ctrl+C quits; a pending kill confirm
+/// Order matters (see the module docs): Ctrl+C is inert; a pending kill confirm
 /// short-circuits to confirm/cancel; Ctrl+X arms a kill on a cooking real-session
 /// row; then Esc/Tab/arrows/Enter; then Backspace + printable keys feed the
 /// history search (cooking-pane `n`/`N` stays the `/new` shortcut).
@@ -43,11 +43,9 @@ pub fn handle_session_hub(
     _rest: &mut AppStateRest,
     key: KeyEvent,
 ) -> Action {
-    // 1. Ctrl+C → quit the whole app (changed from the old CloseSessionHub, so Ctrl+C
-    //    is consistent with the rest of the app; the quit-confirm overlay still guards
-    //    it when sessions are working).
+    // 1. Ctrl+C is fully inert (koma disables it); Esc still closes the hub back to Chat.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     // 2. CONFIRM MODE: while a kill is armed, accept ONLY confirm or cancel and
