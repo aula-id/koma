@@ -69,7 +69,6 @@ impl Tool for WebDownload {
         };
 
         let full_path = download_dir.join(save_name);
-        let media_dir_display = download_dir.display().to_string();
 
         let (tx, rx) = mpsc::channel::<Result<(u16, u64), String>>();
         let url_owned = url.to_string();
@@ -111,11 +110,19 @@ impl Tool for WebDownload {
             let _ = tx.send(result);
         });
 
+        // The MEDIA_WORKDIR sentinel tells finish_tool_round to add the media/
+        // directory (the parent of downloads/) to workspaces so @-autocomplete
+        // sees the downloads/ subdirectory.
+        let media_root = download_dir
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| download_dir.display().to_string());
+
         match rx.recv_timeout(Duration::from_secs(90)) {
             Ok(Ok((_status, bytes))) => {
                 let saved = full_path.display().to_string();
                 Ok(format!(
-                    "MEDIA_WORKDIR:{media_dir_display}\nsaved: {saved}\nsize: {bytes} bytes"
+                    "MEDIA_WORKDIR:{media_root}\nsaved: {saved}\nsize: {bytes} bytes"
                 ))
             }
             Ok(Err(e)) => Ok(format!("error: {e}")),
