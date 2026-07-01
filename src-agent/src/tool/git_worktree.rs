@@ -47,6 +47,13 @@ pub const GIT_WT_EXIT_PREFIX: &str = "__git_wt_exit__";
 /// deleted worktree — snaps it back to the primary workdir. The model never sees it.
 pub const GIT_WT_REMOVE_PREFIX: &str = "__git_wt_remove__::";
 
+/// Sentinel prefix emitted by `create` on success (worktree spawned AND entered).
+/// Distinct from `GIT_WT_ENTER_PREFIX` so the runtime can emit a confirmation that
+/// clearly states BOTH the creation and the entry — weaker models won't misread the
+/// result as a failure. The runtime strips this prefix, registers the path in
+/// `settings.workdir`, persists, and calls `apply_workspace_change`.
+pub const GIT_WT_CREATE_PREFIX: &str = "__git_wt_create__::";
+
 /// Manage git worktrees: list, create, remove, and enter/exit.
 pub struct GitWorktree;
 
@@ -154,10 +161,11 @@ impl Tool for GitWorktree {
                 }
                 let output = run_git(&git_args, &repo_root, 120_000);
 
-                // On success, auto-enter: hand the runtime the ENTER sentinel so it
-                // adds the shadow path to settings.workdir AND switches cwd into it.
+                // On success, auto-enter: hand the runtime the CREATE sentinel so it
+                // adds the shadow path to settings.workdir AND switches cwd into it,
+                // then emits a clear "created + entered" confirmation to the model.
                 if output.contains("exit code: 0") {
-                    Ok(format!("{GIT_WT_ENTER_PREFIX}{}", shadow.display()))
+                    Ok(format!("{GIT_WT_CREATE_PREFIX}{}", shadow.display()))
                 } else {
                     Ok(output)
                 }
