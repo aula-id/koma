@@ -1,4 +1,4 @@
 {
-  "version": "0.2.1",
-  "message": "The command palette (/) and @ mentions — plus screens like /settings, /bash, /mcp, /security, /agents and the /resume swapper — now open even while a turn or subagent is still cooking, instead of being silently swallowed. And the /task subagent panel no longer traps your keystrokes: pressing / or @ closes it and opens the palette, so those stay reachable."
+  "version": "0.2.2",
+  "message": "Clipboard image paste (Ctrl+V) now works while a turn or subagent is still cooking, instead of being silently swallowed — staging an image is composer input, so a mid-turn paste just attaches to your next message. And deleting an [Image #N] token now removes its attachment: the image card disappears and that picture is no longer sent, so a stray marker can't ship an image you meant to drop."
 }
