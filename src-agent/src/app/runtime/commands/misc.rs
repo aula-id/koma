@@ -49,13 +49,10 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
 
 /// Handle the `/settings` command: open the settings modal.
 ///
-/// Needs an active session (drafts seed from it); also blocked while a
-/// request is in flight, mirroring the /compact guard.
+/// Needs an active session (drafts seed from it). Opening a panel is always
+/// safe mid-stream (read-only view; the turn keeps streaming), so there is no
+/// busy guard here.
 pub(super) fn handle_settings(state: &mut AppState) -> Result<()> {
-    if state.rest.fg().waiting {
-        state.rest.fg_mut().status = "busy — wait for response".into();
-        return Ok(());
-    }
     // No catalogue prefetch here anymore: the Models Select modal's
     // omnisearch fetches the EDITED provider's `/models` on demand
     // (debounced) the first time it opens / a key is typed — see
@@ -72,13 +69,10 @@ pub(super) fn handle_settings(state: &mut AppState) -> Result<()> {
 
 /// Handle the `/agents` command: open the agents modal.
 ///
-/// Needs an active session (the registry loads from it); also blocked
-/// while a request is in flight, mirroring the /settings + /compact guards.
+/// Needs an active session (the registry loads from it). Opening a panel is
+/// always safe mid-stream (read-only view; the turn keeps streaming), so there
+/// is no busy guard here.
 pub(super) fn handle_agents(state: &mut AppState) -> Result<()> {
-    if state.rest.fg().waiting {
-        state.rest.fg_mut().status = "busy — wait for response".into();
-        return Ok(());
-    }
     let Some(session) = state.rest.fg().session.as_ref() else {
         state.rest.fg_mut().status = "no active session".into();
         return Ok(());
@@ -89,11 +83,9 @@ pub(super) fn handle_agents(state: &mut AppState) -> Result<()> {
 }
 
 /// Handle the `/select` command: arm text-selection mode.
+///
+/// Opens the session select/swapper — a view; safe mid-stream, no busy guard.
 pub(super) fn handle_select(state: &mut AppState) -> Result<()> {
-    if state.rest.fg().waiting {
-        state.rest.fg_mut().status = "busy — wait for response".into();
-        return Ok(());
-    }
     if state.rest.fg().session.is_none() {
         state.rest.fg_mut().status = "no active session".into();
         return Ok(());
