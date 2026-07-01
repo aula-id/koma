@@ -1,4 +1,4 @@
 {
-  "version": "0.2.2",
-  "message": "Clipboard image paste (Ctrl+V) now works while a turn or subagent is still cooking, instead of being silently swallowed — staging an image is composer input, so a mid-turn paste just attaches to your next message. And deleting an [Image #N] token now removes its attachment: the image card disappears and that picture is no longer sent, so a stray marker can't ship an image you meant to drop."
+  "version": "0.2.4",
+  "message": "koma now reads before it writes: the agent must have seen a file's current content in this conversation before it can edit it (or overwrite an existing file). If it hasn't read the file, the edit is held back with a nudge to read it first — so edits never fire blind against stale assumptions. Reading, writing, or a prior edit all count as having seen it, and creating a brand-new file needs no prior read."
 }

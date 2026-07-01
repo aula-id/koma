@@ -53,6 +53,9 @@ pub struct ToolCtx {
     /// The per-PROJECT memory directory (`<pwd_bucket_dir>/memory/`), shared across
     /// every session opened from the same working dir. `None` when no session is active.
     pub memory_dir: Option<PathBuf>,
+    /// The shadow worktree dir for this session's pwd bucket
+    /// (`~/.koma/sessions/<pwd_hash>/worktrees/`). `None` when no session is active.
+    pub worktrees_dir: Option<std::path::PathBuf>,
     /// The session's active internet tier. `web_fetch` reads this to decide
     /// between the simple raw-HTTP path and the Full browser backend (scrapion);
     /// defaults to `Simple` when no session is available.

@@ -106,11 +106,12 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
 ///
 /// Up/Down move the selection; Enter confirms the highlighted option (the
 /// runtime stores it, rebuilds the client, and returns to Chat); Esc cancels
-/// back to Chat; Ctrl+C quits. `_rest` is accepted for handler-signature
-/// consistency but unused.
+/// back to Chat; Ctrl+C is inert (koma disables it). `_rest` is accepted for
+/// handler-signature consistency but unused.
 fn handle_effort(e: &mut EffortPickerState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // Ctrl+C is fully inert (koma disables it); Esc still cancels the picker.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     match key.code {

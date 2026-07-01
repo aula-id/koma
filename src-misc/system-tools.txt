@@ -94,6 +94,21 @@ bash — run a shell command in the workspace (git, cargo, build, tests, etc.).
     intended and let the user decide.
   - Output is capped to the last ~400 000 chars; exit code is appended.
 
+git_worktree — manage git worktrees (list/create/remove/enter/exit). Worktrees live
+  OUTSIDE your repo in a shadow dir (`~/.koma/sessions/<id>/worktrees/<name>`) so they
+  never clutter the project.
+  Arguments: { "action": "list|create|remove|enter|exit", "name": "short-name",
+               "path": "for enter only", "branch": "optional (create)",
+               "force": true|false (remove) }
+  - create: pass a `name` (a short name, NOT a path) and optionally `branch`. Spawns
+    the worktree under the shadow dir and switches you INTO it automatically.
+    Example: git_worktree({"action": "create", "name": "feature-x"})
+  - remove: pass the `name`. Deletes that worktree and returns you to the repo root.
+    Add "force": true to remove one with uncommitted/untracked files.
+  - enter: switch into an EXISTING worktree by `path` (adds it to your allowed roots).
+  - exit: return to the primary workdir (the repo root).
+  Do worktree ops through THIS tool, never raw `git worktree` via git_operator/bash.
+
 web_search — search the web (DuckDuckGo); returns result titles, URLs, and snippets.
   Arguments: { "query": "search terms", "region": "us-en (optional DDG region code)" }
   Example:   web_search({"query": "ratatui paragraph wrap"})
@@ -146,4 +161,4 @@ For write: pass BOTH "path" AND "content" (the entire new file) in ONE call.
 
 ## Multiple workspaces
 When file listings show a [N] prefix (e.g. [1]src/main.rs), the project has several workspace roots indexed as [0], [1], [2]. ALWAYS copy the [N] prefix exactly when you pass a path to any tool (read, write, edit, grep, glob, dir_list). A bare path with no prefix targets workspace [0]. Writing or editing a file in a non-zero workspace REQUIRES the [N] prefix.
-Workspaces are not git worktrees. A workspace is simply one of the configured project directory roots ([0], [1], ...) and has nothing to do with `git worktree`. Never run `git worktree` commands or inspect the git index to locate a workspace file. If a path is not found, it is a plain filesystem issue (check the [N] prefix and the path spelling), not a worktree problem.
+Workspaces are not git worktrees. A workspace is simply one of the configured project directory roots ([0], [1], ...) and has nothing to do with `git worktree`. Never inspect the git index to locate a workspace file: if a path is not found, it is a plain filesystem issue (check the [N] prefix and the path spelling), not a worktree problem. When you DO want actual git worktrees, do it through the `git_worktree` tool (NOT raw `git worktree` via git_operator or bash — git_operator now redirects `worktree` subcommands there); it manages the shadow worktree dir and keeps your workspace roots + cwd in sync.

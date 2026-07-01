@@ -34,6 +34,13 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
             crate::model::store::memory_dir(&s.pwd_hash)
                 .unwrap_or_else(|_| s.path.join("memory"))
         });
+    // The shadow worktree dir (`<pwd_bucket_dir>/worktrees/`) for this session's
+    // pwd bucket, mirrored from `memory_dir`. `git_worktree` create/remove resolve
+    // `<worktrees_dir>/<name>` so worktrees live OUTSIDE the repo. `None` when the
+    // bucket dir can't be resolved (no session).
+    let worktrees_dir = session_ref
+        .as_ref()
+        .and_then(|s| crate::model::store::worktrees_dir(&s.pwd_hash).ok());
     // The active internet tier drives `web_fetch`'s backend choice (Full →
     // scrapion browser, else raw HTTP). No session ⇒ default Simple.
     let internet_mode = session_ref
@@ -58,6 +65,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         workspaces,
         dir_cache: rt.dir_cache.clone(),
         memory_dir,
+        worktrees_dir,
         internet_mode,
         ssh_key,
         mcp_manager,

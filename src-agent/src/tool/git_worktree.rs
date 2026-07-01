@@ -1,13 +1,24 @@
 //! The `git_worktree` tool: manage git worktrees (list/create/remove/enter/exit).
 //!
-//! `list`, `create`, and `remove` are pure git operations: they exec git directly and
-//! return plain output. They do NOT mutate session state and can complete inline.
+//! Worktrees live in a SHADOW dir OUTSIDE the repo
+//! (`~/.koma/sessions/<pwd_hash>/worktrees/<name>`) so they never clutter the
+//! project tree. `create` and `remove` are name-based: the tool computes the shadow
+//! path from the session's `worktrees_dir` and runs git from the repo root (never a
+//! doomed cwd), then hands the runtime a sentinel so the workspace roots + live cwd
+//! stay in sync.
 //!
-//! `enter` and `exit` change the session's working directory (like `cd`) and must be
-//! intercepted by the runtime (`process_tools`) before the generic dispatch path.
-//! `enter` also pushes the worktree path into `settings.workdir` so it becomes an
-//! allowed workspace root for the model. `exit` returns to the primary workdir
-//! (the first entry in `settings.workdir`).
+//! `list` is a pure git operation: it execs git directly and returns plain output.
+//!
+//! `create`, `remove`, `enter`, and `exit` all change the session's working
+//! directory and/or allowed roots (like `cd`) and must be intercepted by the runtime
+//! (`process_tools`) before the generic dispatch path:
+//! - `create` adds the worktree AND auto-enters it (via the enter sentinel), which
+//!   pushes the path into `settings.workdir` and switches cwd into it.
+//! - `remove` deletes the worktree AND auto-exits (via the remove sentinel), which
+//!   de-registers the path and snaps cwd back to the repo root if it was inside.
+//! - `enter` pushes the worktree path into `settings.workdir` so it becomes an
+//!   allowed workspace root, and switches cwd into it.
+//! - `exit` returns to the primary workdir (the first entry in `settings.workdir`).
 //!
 //! The runtime interception mirrors the `cd` arm: the tool's `run` method does the
 //! pure validation work and returns a sentinel-tagged result on success, which
@@ -30,6 +41,19 @@ pub const GIT_WT_ENTER_PREFIX: &str = "__git_wt_enter__::";
 /// the session's primary workdir, and calls `apply_workspace_change` to return there.
 pub const GIT_WT_EXIT_PREFIX: &str = "__git_wt_exit__";
 
+/// Sentinel prefix emitted by `remove` on success (git already ran from the repo
+/// root, so the worktree is gone). The runtime strips this prefix, de-registers the
+/// path from `settings.workdir`, and — if the session's live cwd was inside the now
+/// deleted worktree — snaps it back to the primary workdir. The model never sees it.
+pub const GIT_WT_REMOVE_PREFIX: &str = "__git_wt_remove__::";
+
+/// Sentinel prefix emitted by `create` on success (worktree spawned AND entered).
+/// Distinct from `GIT_WT_ENTER_PREFIX` so the runtime can emit a confirmation that
+/// clearly states BOTH the creation and the entry — weaker models won't misread the
+/// result as a failure. The runtime strips this prefix, registers the path in
+/// `settings.workdir`, persists, and calls `apply_workspace_change`.
+pub const GIT_WT_CREATE_PREFIX: &str = "__git_wt_create__::";
+
 /// Manage git worktrees: list, create, remove, and enter/exit.
 pub struct GitWorktree;
 
@@ -39,12 +63,16 @@ impl Tool for GitWorktree {
     }
 
     fn description(&self) -> &'static str {
-        "Manage git worktrees — list/create/remove, and enter/exit. \
-         `enter` switches your working directory into the worktree AND adds it to \
-         your allowed workspace roots so subsequent tool calls work inside it. \
-         `exit` returns you to the primary workdir (the first configured workspace root). \
-         `create` and `remove` run git directly and return plain output. \
-         After creating a new worktree, use `enter` to switch into it."
+        "Manage git worktrees — list/create/remove, and enter/exit. Worktrees live \
+         OUTSIDE your repo in a shadow dir (`~/.koma/sessions/<id>/worktrees/<name>`) \
+         so they never clutter the project. \
+         `create` takes a `name` (NOT a path): it spawns the worktree under the shadow \
+         dir and switches you into it (adds it to your allowed workspace roots too). \
+         `remove` takes a `name`: it deletes that worktree and returns you to the repo \
+         root. \
+         `enter` switches your working directory into an existing worktree AND adds it \
+         to your allowed workspace roots so subsequent tool calls work inside it. \
+         `exit` returns you to the primary workdir (the first configured workspace root)."
     }
 
     fn parameters(&self) -> Value {
@@ -54,15 +82,19 @@ impl Tool for GitWorktree {
                 "action": {
                     "type": "string",
                     "enum": ["list", "create", "remove", "enter", "exit"],
-                    "description": "Action to perform: list (show all worktrees), create (add a new worktree), remove (remove a worktree), enter (switch cwd into a worktree and add it to allowed roots), exit (return to the primary workdir)."
+                    "description": "Action to perform: list (show all worktrees), create (spawn a new worktree under the shadow dir and switch into it), remove (delete a worktree and return to the repo root), enter (switch cwd into an existing worktree and add it to allowed roots), exit (return to the primary workdir)."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The worktree's short name (NOT a path). Required for create and remove. The tool computes the shadow path `~/.koma/sessions/<id>/worktrees/<name>` from it, so a bare name like \"feature-x\" is all you pass."
                 },
                 "path": {
                     "type": "string",
-                    "description": "Worktree path. Required for create, remove, and enter. For enter: may be absolute or relative to the current workspace; will be canonicalized. For create/remove: passed directly to git."
+                    "description": "Worktree path. Required for enter only (use `name` for create/remove). For enter: may be absolute or relative to the current workspace; will be canonicalized."
                 },
                 "branch": {
                     "type": "string",
-                    "description": "Branch or commit to check out in the new worktree (optional, only used by create). If omitted, git picks a new branch name matching the last path component."
+                    "description": "Branch or commit to check out in the new worktree (optional, only used by create). If omitted, git picks a new branch name matching the worktree name."
                 },
                 "force": {
                     "type": "boolean",
@@ -81,51 +113,108 @@ impl Tool for GitWorktree {
 
         match action {
             "list" => {
-                Ok(run_git(&["worktree", "list"], &ctx.workspace, 120_000))
+                // Run from the repo root (first configured workspace root) so the
+                // listing is correct even when the live cwd is inside a worktree.
+                let repo_root = ctx
+                    .workspaces
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| ctx.workspace.clone());
+                Ok(run_git(&["worktree", "list"], &repo_root, 120_000))
             }
 
             "create" => {
-                let path = args
-                    .get("path")
+                // Name-based: spawn the worktree under the shadow dir so it lives
+                // OUTSIDE the repo. The tool computes the path from `name`.
+                let name = args
+                    .get("name")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("missing required string argument 'path' for create"))?;
+                    .ok_or_else(|| anyhow::anyhow!("missing required string argument 'name' for create"))?;
 
-                let mut git_args: Vec<&str> = vec!["worktree", "add", path];
+                let base = ctx.worktrees_dir.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("no active session — cannot resolve worktree dir")
+                })?;
+                let shadow = base.join(name);
+
+                // Ensure the `worktrees/` parent exists before git adds into it.
+                if let Err(e) = std::fs::create_dir_all(base) {
+                    return Ok(format!(
+                        "error: cannot create worktrees dir '{}': {e}",
+                        base.display()
+                    ));
+                }
+
+                // Run git from the REPO ROOT so it never spawns in a doomed cwd
+                // (e.g. a just-removed worktree the session's live cwd sat in).
+                let repo_root = ctx
+                    .workspaces
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| ctx.workspace.clone());
+
+                let shadow_str = shadow.to_string_lossy().into_owned();
+                let mut git_args: Vec<&str> = vec!["worktree", "add", &shadow_str];
                 let branch_val;
                 if let Some(b) = args.get("branch").and_then(Value::as_str) {
                     branch_val = b.to_string();
                     git_args.push(&branch_val);
                 }
-                let output = run_git(&git_args, &ctx.workspace, 120_000);
+                let output = run_git(&git_args, &repo_root, 120_000);
 
-                // Append hint on apparent success (exit code 0 in the output).
+                // On success, auto-enter: hand the runtime the CREATE sentinel so it
+                // adds the shadow path to settings.workdir AND switches cwd into it,
+                // then emits a clear "created + entered" confirmation to the model.
                 if output.contains("exit code: 0") {
-                    Ok(format!(
-                        "{output}\nhint: use git_worktree action=\"enter\" path=\"{path}\" to switch into this worktree."
-                    ))
+                    Ok(format!("{GIT_WT_CREATE_PREFIX}{}", shadow.display()))
                 } else {
                     Ok(output)
                 }
             }
 
             "remove" => {
-                let path = args
-                    .get("path")
+                // Name-based: resolve the same shadow path `create` used.
+                let name = args
+                    .get("name")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("missing required string argument 'path' for remove"))?;
+                    .ok_or_else(|| anyhow::anyhow!("missing required string argument 'name' for remove"))?;
+
+                let base = ctx.worktrees_dir.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("no active session — cannot resolve worktree dir")
+                })?;
+                let shadow = base.join(name);
 
                 let force = args
                     .get("force")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
 
+                // Run git from the REPO ROOT — safe even if the session's live cwd is
+                // inside the worktree being removed (removing your own cwd from within
+                // it fails otherwise).
+                let repo_root = ctx
+                    .workspaces
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| ctx.workspace.clone());
+
+                let shadow_str = shadow.to_string_lossy().into_owned();
                 let mut git_args: Vec<&str> = vec!["worktree", "remove"];
                 if force {
                     git_args.push("--force");
                 }
-                git_args.push(path);
+                git_args.push(&shadow_str);
 
-                Ok(run_git(&git_args, &ctx.workspace, 120_000))
+                let output = run_git(&git_args, &repo_root, 120_000);
+
+                // On success, auto-exit: hand the runtime the REMOVE sentinel so it
+                // de-registers the path and snaps cwd back to the repo root if needed.
+                if output.contains("exit code: 0") {
+                    Ok(format!("{GIT_WT_REMOVE_PREFIX}{}", shadow.display()))
+                } else {
+                    // e.g. "contains modified or untracked files, use --force" — the
+                    // model can retry with force:true.
+                    Ok(output)
+                }
             }
 
             "enter" => {
@@ -195,6 +284,11 @@ impl Tool for GitWorktree {
 /// NOTE: worktree ops are LOCAL — we do NOT inject `GIT_SSH_COMMAND`. That env
 /// var is only needed for SSH remote operations and is handled by `git_operator`.
 fn run_git(args: &[&str], cwd: &Path, timeout_ms: u64) -> String {
+    // Guard: a dead cwd (e.g. a removed worktree the session's live cwd sat in)
+    // would make git fail obscurely — bail with a clear message instead.
+    if !cwd.is_dir() {
+        return format!("error: git working directory '{}' does not exist", cwd.display());
+    }
     let child = match Command::new("git")
         .args(args)
         .current_dir(cwd)

@@ -249,6 +249,43 @@ pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
+/// Handle `Action::InterruptRewind`: early-Esc auto-rewind. The model is still
+/// THINKING (no content token / tool call yet), so a single Esc interrupts the
+/// turn AND pulls the just-sent prompt back into the composer, physically
+/// truncating the turn (no restore) so the user can edit + resend in one key.
+///
+/// Steps:
+/// 1. Run the existing interrupt path (aborts the stream via
+///    `SessionRuntime::interrupt()`; for early-thinking the content buffer is
+///    empty, so nothing is committed).
+/// 2. Find the index of the LAST `Role::User` message in the live conversation. If
+///    there is none, the plain interrupt already happened — return.
+/// 3. Cut to just before that user turn and load its text into the composer via the
+///    shared rewind core (`super::rewind::rewind_to_vec_index`).
+pub(super) fn handle_interrupt_rewind(state: &mut AppState) -> Result<()> {
+    // 1. Plain interrupt first (idempotent + safe on an idle session).
+    handle_interrupt(state)?;
+
+    // 2. Locate the last user message; nothing to rewind to → the interrupt stands.
+    let last_user_idx = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|s| {
+            s.conversation
+                .messages()
+                .iter()
+                .rposition(|m| m.role == Role::User)
+        });
+    let Some(idx) = last_user_idx else {
+        return Ok(());
+    };
+
+    // 3. Truncate to before that turn + load its text into the composer.
+    super::rewind::rewind_to_vec_index(state, idx)
+}
+
 /// Handle `Action::Resend`: pop trailing assistant messages and re-stream the
 /// last user turn.
 pub(super) fn handle_resend(

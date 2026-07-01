@@ -36,7 +36,6 @@ use crate::model::store;
 use crate::view;
 
 use super::super::manage;
-use super::input::is_detach;
 use super::render::FRAME_BUDGET;
 
 /// Build a CLIENT-side [`SessionHub`] from cross-daemon discovery.
@@ -461,13 +460,8 @@ fn handle_swapper_key(
         // Fall through: the key is handled normally this same press.
     }
 
-    // Ctrl+C cancels (the daemon-side handler maps it to `Action::Quit`; in the detached
-    // swapper "quit the picker" is a cancel — `client_run` decides reconnect vs exit).
-    // Reuse the client's existing Ctrl+C detector so the gesture matches the rest of the
-    // client exactly.
-    if is_detach(key) {
-        return Some(SwapperOutcome::Cancel);
-    }
+    // Ctrl+C is fully inert now (koma disables it): it no longer cancels the swapper.
+    // Esc is the sole cancel gesture (handled in the match below).
 
     match key.code {
         // Esc → cancel back (reconnect to the previous session, or exit on a cold start).
@@ -518,7 +512,7 @@ fn handle_swapper_key(
         }
 
         // Any other key — including a Ctrl chord that fell through the guards above (Ctrl+X
-        // is handled at the top; Ctrl+C by `is_detach`): ignore.
+        // is handled at the top; Ctrl+C is fully inert now): ignore.
         _ => None,
     }
 }
