@@ -79,7 +79,17 @@ pub(super) fn handle_submit(
             )
         });
         let capable = match (state.rest.models_cache.as_deref(), main.as_ref()) {
-            (Some(models), Some(m)) => crate::service::openrouter::model_takes_images(models, &m.model_id),
+            // Only trust the catalogue when it was fetched for THIS model's
+            // endpoint. After a mid-session provider/model swap the cache may
+            // still hold the old endpoint's models (missing the new model) —
+            // treating that as "can't see images" wrongly blocks the send. If
+            // the cache is cold or for a different endpoint, assume capable and
+            // never wrongly block (a fresh catalogue re-fetch corrects it).
+            (Some(models), Some(m))
+                if state.rest.models_cache_endpoint.as_deref() == Some(m.endpoint.as_str()) =>
+            {
+                crate::service::openrouter::model_takes_images(models, &m.model_id)
+            }
             _ => true,
         };
         if !capable {
@@ -337,6 +347,17 @@ pub(super) fn handle_approve_tool(
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
     if let Some(call) = state.rest.fg().pending_tool_calls.get(state.rest.fg().tool_idx).cloned() {
+        // `git_worktree` is intercepted in `process_tools` and needs its special
+        // post-processing (workdir de-registration + cwd snap-back); the generic
+        // `run_tool` path below would push a raw sentinel string and skip that
+        // cleanup. So for an approved git_worktree call, mark it approved and
+        // re-enter the machine, which runs the interception (skipping the gate for
+        // this one call).
+        if call.function.name == "git_worktree" {
+            state.rest.fg_mut().approved_worktree_call = Some(call.id.clone());
+            process_tools(state, fgi, client, handle);
+            return Ok(());
+        }
         // The approved call is a risky tool (write/edit/delete/bash) — all of which
         // are heavy/blocking and live in `DEFERRED_TOOLS`. Run it OFF the UI thread
         // and PARK rather than running it inline here: an approved large write would
