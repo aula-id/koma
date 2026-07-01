@@ -8,12 +8,19 @@
 //! real [`McpManager`], and session-daemons ask it (via [`crate::ipc::mcp_proto`]) to
 //! list/dispatch/reconnect/report.
 //!
-//! # This commit builds the daemon + its IPC only
+//! # Idle self-reap (lifecycle)
 //!
-//! Nothing wires session-daemons to it yet — they still build their own `McpManager`
-//! in `build_startup` (unchanged). The proxy that makes a session-daemon talk to this
-//! process instead lands in the NEXT commit. Here we build: the process entry point,
-//! the accept + per-connection request loop, and the four request handlers.
+//! Session-daemons now PROXY here (each `koma --daemon` connects a `McpManager::Proxy`
+//! to this process), so this daemon can outlive the session that first spawned it. To
+//! avoid a lingering process holding heavyweight servers (e.g. `serena`) after every
+//! session has closed, a background reaper watches [`store::run_dir`] for live
+//! session-daemon sockets (`run/*.sock`): once there are NONE for a sustained grace
+//! window it flips the same `shutting_down` flag a SIGTERM would, and the normal
+//! teardown drops the runtime (terminating every MCP child) + unlinks the socket/pid.
+//! It is deliberately biased toward STAYING ALIVE — an initial grace covers a
+//! just-spawned session that hasn't bound its socket yet, and it never exits while any
+//! `run/*.sock` exists — because a false exit merely means the next session respawns
+//! this daemon, whereas a false STAY is harmless.
 //!
 //! # Shape mirrors `run_daemon`
 //!
@@ -56,11 +63,9 @@ use super::signals::install_daemon_signals;
 /// observed (via the polled `shutting_down` flag); the teardown then drops the runtime
 /// (terminating every MCP child) and unlinks the socket + pidfile.
 ///
-/// LIFECYCLE: for THIS commit the daemon just PERSISTS until killed — there is no
-/// auto-exit.
-// TODO(mcp-lifecycle): the NEXT commit makes this exit once no session-daemons remain
-// (e.g. an idle-timeout sweep of the run dir, or a refcount over proxy connections),
-// so a torn-down last session doesn't leave the global MCP daemon running forever.
+/// LIFECYCLE: the daemon persists until killed OR until the idle-reaper observes no
+/// live session-daemon sockets for a sustained grace window (see [`reaper_loop`]),
+/// at which point it flips `shutting_down` and tears down like a SIGTERM would.
 pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
     // Critique #10 parity with run_daemon: a dead client write must never kill the
     // daemon. Ignore SIGPIPE process-wide BEFORE any socket IO so a broken-pipe write
@@ -94,6 +99,17 @@ pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
     // terminal can't kill it.
     let shutting_down = install_daemon_signals(&handle);
 
+    // Idle self-reap: watch the run dir for live session-daemon sockets and flip the
+    // SAME `shutting_down` flag once none remain for a sustained grace window, so an
+    // idle global daemon doesn't linger holding heavy servers after every session
+    // closed. Spawned on the runtime; it observes the same flag the accept loop polls,
+    // so its trip ends the accept loop and the normal teardown runs. Biased toward
+    // staying alive (see `reaper_loop`).
+    {
+        let flag = std::sync::Arc::clone(&shutting_down);
+        handle.spawn(reaper_loop(flag));
+    }
+
     // Record the advisory pidfile (diagnostics / `kill`). Best-effort: a write failure
     // must not stop the daemon (the bound socket, not this file, is the liveness
     // oracle). The teardown unlinks it.
@@ -123,6 +139,100 @@ pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
     let _ = std::fs::remove_file(&pid_path);
 
     Ok(())
+}
+
+/// How often the idle-reaper scans the run dir for live session-daemon sockets.
+const REAPER_POLL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Initial grace before the reaper's FIRST scan. Covers the window where the very
+/// session that spawned this daemon has not yet bound its `run/<id>.sock` — without
+/// it, a daemon spawned by a starting session could see an empty run dir and reap
+/// itself out from under that session. Sized to comfortably exceed the session
+/// daemon's spawn→bind latency (sub-second in practice; #142's spawn poll budget is
+/// 3s).
+const REAPER_INITIAL_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Consecutive empty scans required before the reaper trips. TWO empty polls
+/// (≈`REAPER_POLL` apart) means the run dir has held no session sockets for a
+/// sustained window, not just a momentary blip between a client detaching and the
+/// next attaching — biasing toward staying alive.
+const REAPER_EMPTY_STREAK_TO_EXIT: u32 = 2;
+
+/// Watch the run dir for live session-daemon sockets and flip `shutting_down` once
+/// none remain for a sustained grace window, so an idle global MCP daemon reaps
+/// itself instead of lingering with heavyweight servers loaded.
+///
+/// Biased HARD toward staying alive:
+/// - an initial [`REAPER_INITIAL_GRACE`] delay before the first scan covers a
+///   just-spawned session that has not bound its socket yet;
+/// - it requires [`REAPER_EMPTY_STREAK_TO_EXIT`] CONSECUTIVE empty scans, so a brief
+///   gap while one client detaches and another attaches does not trip it;
+/// - "empty" means the run dir contains ZERO `*.sock` FILES (presence, not a connect
+///   probe) — while any session socket exists on disk, this daemon never exits, so a
+///   momentarily-wedged session still keeps its shared servers alive.
+///
+/// A false exit is harmless (the next session's `ensure_mcp_daemon_running` respawns
+/// this daemon); a false STAY is likewise harmless (a spare idle process). If the run
+/// dir can't be read the scan treats it as NON-empty (streak resets) — never a reason
+/// to exit. Returns (ending the task) as soon as it trips the flag; the accept loop
+/// observes the same flag and the normal teardown runs.
+async fn reaper_loop(shutting_down: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+
+    // Initial grace: give the spawning session time to bind its socket before the
+    // first scan, and bail early if a signal already asked us to stop.
+    tokio::time::sleep(REAPER_INITIAL_GRACE).await;
+
+    let mut empty_streak: u32 = 0;
+    loop {
+        if shutting_down.load(Ordering::Relaxed) {
+            return; // a signal (or a prior trip) already latched shutdown
+        }
+
+        // Count session sockets by FILE PRESENCE (bias to stay alive: any socket on
+        // disk ⇒ not empty). An unreadable run dir is treated as non-empty so a
+        // transient stat error never triggers a reap.
+        let has_session_socket = run_dir_has_socket();
+        if has_session_socket {
+            empty_streak = 0;
+        } else {
+            empty_streak = empty_streak.saturating_add(1);
+            if empty_streak >= REAPER_EMPTY_STREAK_TO_EXIT {
+                // Sustained-idle: latch shutdown so the accept loop returns and the
+                // normal teardown drops the runtime + unlinks the socket/pid.
+                shutting_down.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+
+        tokio::time::sleep(REAPER_POLL).await;
+    }
+}
+
+/// Whether the run dir currently contains ANY `*.sock` file (a session-daemon
+/// rendezvous socket). Presence-only — it does NOT connect-probe, because a socket
+/// file existing at all is enough to keep the shared MCP daemon alive (bias toward
+/// staying alive). An unreadable/absent run dir returns `true` (treated as "sessions
+/// may exist") so a transient error never causes a reap.
+fn run_dir_has_socket() -> bool {
+    let dir = match store::run_dir() {
+        Ok(d) => d,
+        // Can't resolve the run dir → assume sessions may exist; never reap on this.
+        Err(_) => return true,
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        // Unreadable/absent run dir: on a genuinely-absent dir there are no sessions,
+        // but a transient read error must NOT trigger a reap, so bias to "not empty".
+        Err(_) => return true,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("sock") {
+            return true;
+        }
+    }
+    false
 }
 
 /// How long a single `accept` waits before we re-check the `shutting_down` flag. Short

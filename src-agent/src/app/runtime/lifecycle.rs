@@ -175,16 +175,28 @@ fn build_startup(
     // `state.rest.config.mcp_servers` is unchanged. No second AppConfig::load().
     state.rest.config = config;
 
-    // Build the GLOBAL MCP client manager from the configured servers and stash it
-    // in AppStateRest (cloned into every ToolCtx so `mcp__*` calls can dispatch).
-    // NON-BLOCKING: `connect_all` returns immediately and connects each enabled
-    // server in a background task on the runtime; tools appear once a server is
-    // ready. With no `mcp_servers` configured this spawns nothing and advertises no
-    // tools — behaviour is identical to a build without MCP.
-    state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
-        &handle,
-        &state.rest.config.mcp_servers,
-    ));
+    // Build the MCP client manager from the configured servers and stash it in
+    // AppStateRest (cloned into every ToolCtx so `mcp__*` calls can dispatch).
+    //
+    // In DAEMON mode this is left `None` here: `run_daemon` sets it up right after,
+    // PROXYING to the global MCP daemon (with a local fallback) so N session-daemons
+    // share one copy of every heavyweight server instead of each spawning their own.
+    // Building a LOCAL manager here too would spawn a duplicate set that the proxy
+    // then supersedes — so skip it for `--daemon` and let `run_daemon` decide.
+    //
+    // In the STANDALONE/`--local` (and returning-user TUI) path there is no global
+    // daemon, so build the LOCAL manager exactly as before. NON-BLOCKING: `connect_all`
+    // returns immediately and connects each enabled server in a background task; tools
+    // appear once a server is ready. With no `mcp_servers` configured this spawns
+    // nothing and advertises no tools — identical to a build without MCP.
+    if opts.daemon {
+        state.rest.mcp_manager = None;
+    } else {
+        state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
+            &handle,
+            &state.rest.config.mcp_servers,
+        ));
+    }
 
     // Build the security-daemon client. Mint a per-process token and, if the
     // daemon is installed, auto-start it (M1: gated only on install; a later
@@ -455,6 +467,34 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // session keyed to its socket. Attach no longer creates a session (the daemon
     // already owns this one); see the hub `Attach` handler.
     install_daemon_session(&mut state, &mut client, &handle, &session_id);
+
+    // MCP for the session-daemon: PROXY to the global MCP daemon when possible, with a
+    // LOCAL fallback that is never worse than today. `build_startup` left
+    // `mcp_manager = None` in daemon mode so this is the sole owner of the decision.
+    //
+    // - No `mcp_servers` configured → leave it `None` (no manager, no global daemon
+    //   spawned): byte-identical to a build without MCP.
+    // - Servers configured → ensure the singleton global MCP daemon is up and connect a
+    //   PROXY to it, so N session-daemons share ONE copy of every heavyweight server
+    //   (e.g. `serena`) instead of each spawning their own. If EITHER the ensure/spawn OR
+    //   the proxy connect fails, FALL BACK to a LOCAL `connect_all` — MCP must always
+    //   work; a missing/broken global daemon degrades to today's per-session behaviour.
+    if !state.rest.config.mcp_servers.is_empty() {
+        let proxy = crate::model::store::mcp_daemon_sock_path().and_then(|sock| {
+            super::manage::ensure_mcp_daemon_running()
+                .and_then(|()| crate::app::mcp::McpManager::connect_proxy(&handle, sock))
+        });
+        state.rest.mcp_manager = Some(match proxy {
+            // Proxying to the shared global daemon: the dedup win.
+            Ok(proxy) => proxy,
+            // FALLBACK: any ensure/connect failure ⇒ own the connections locally, so
+            // this daemon still has working MCP (just not shared).
+            Err(e) => {
+                eprintln!("mcp: global daemon unavailable ({e:#}); using local servers");
+                crate::app::mcp::McpManager::connect_all(&handle, &state.rest.config.mcp_servers)
+            }
+        });
+    }
 
     // Install the SIGHUP-survive + graceful/double-SIGTERM signal handling and get
     // the flag the SYNC loop polls. Done BEFORE binding the socket so a signal that
