@@ -8,9 +8,13 @@
 
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::io::Read;
 use std::sync::mpsc;
 use std::time::Duration;
 use super::{Tool, ToolCtx};
+
+/// Hard cap on how many bytes may be downloaded in a single call.
+const MAX_DOWNLOAD_BYTES: u64 = 500 * 1024 * 1024; // 500 MiB
 
 /// Download a file from a URL and save it to the session media directory.
 pub struct WebDownload;
@@ -96,12 +100,30 @@ impl Tool for WebDownload {
                     return Err(format!("HTTP {status} for {url_owned}"));
                 }
 
-                let bytes = resp
-                    .bytes()
-                    .map_err(|e| format!("failed to read body: {e}"))?;
+                // Content-Length pre-check: reject before reading if the
+                // declared size already exceeds the cap.
+                if let Some(len) = resp.content_length() {
+                    if len > MAX_DOWNLOAD_BYTES {
+                        return Err(format!(
+                            "download too large ({len} bytes, max {MAX_DOWNLOAD_BYTES})"
+                        ));
+                    }
+                }
 
-                let size = bytes.len() as u64;
-                std::fs::write(&path_owned, &bytes)
+                // Bounded read: cap RAM usage even without a Content-Length.
+                // reqwest::blocking::Response implements std::io::Read.
+                let mut buf = Vec::new();
+                resp.take(MAX_DOWNLOAD_BYTES + 1)
+                    .read_to_end(&mut buf)
+                    .map_err(|e| format!("failed to read body: {e}"))?;
+                if buf.len() as u64 > MAX_DOWNLOAD_BYTES {
+                    return Err(format!(
+                        "download too large (>{MAX_DOWNLOAD_BYTES} bytes, max {MAX_DOWNLOAD_BYTES})"
+                    ));
+                }
+
+                let size = buf.len() as u64;
+                std::fs::write(&path_owned, &buf)
                     .map_err(|e| format!("failed to write file: {e}"))?;
 
                 Ok((status, size))
