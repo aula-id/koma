@@ -92,6 +92,46 @@ pub(super) fn finish_tool_round(
         }
     }
 
+    // Drain any MEDIA_WORKDIR: workdir requests from web_download results.
+    // Each successful download prefixes its result with
+    // `MEDIA_WORKDIR:<path>\n` — scan for these and append the directory to
+    // the session's workdir list so the file appears in @-autocomplete.
+    {
+        let media_dirs: Vec<String> = state.rest.sessions[sess_idx]
+            .tool_results
+            .iter()
+            .filter_map(|(_, result)| {
+                result
+                    .lines()
+                    .next()
+                    .and_then(|line| line.strip_prefix("MEDIA_WORKDIR:"))
+                    .map(|p| p.to_string())
+            })
+            .collect();
+        if !media_dirs.is_empty() {
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                let mut changed = false;
+                for dir in &media_dirs {
+                    if !sess.settings.workdir.contains(dir) {
+                        sess.settings.workdir.push(dir.clone());
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let _ = sess.save();
+                    // Reindex the full workdir list so @-autocomplete picks up
+                    // the new media directory.
+                    let roots: Vec<std::path::PathBuf> =
+                        sess.settings.workdir.iter().map(std::path::PathBuf::from).collect();
+                    crate::tool::dircache::reindex(
+                        roots,
+                        state.rest.sessions[sess_idx].dir_cache.clone(),
+                    );
+                }
+            }
+        }
+    }
+
     // Live reload: if `remember` or `forget` ran this round, re-inject the updated
     // MEMORY.md into messages[0] so the model sees the change immediately.
     // (`recall` is read-only and must NOT trigger a rebuild.)
