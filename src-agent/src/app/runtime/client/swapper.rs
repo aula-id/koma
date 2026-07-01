@@ -19,6 +19,9 @@
 //! reconnect-back / exit.
 
 use std::io::Stdout;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
@@ -27,9 +30,12 @@ use ratatui::Terminal;
 
 use crate::app::mode::{CookingEntry, HistoryEntry, HubPane, Mode, SessionHub, SessionKind};
 use crate::app::state::AppState;
+use crate::controller::input::is_ctrl;
+use crate::ipc::proto::SessionStatus;
 use crate::model::store;
 use crate::view;
 
+use super::super::manage;
 use super::input::is_detach;
 use super::render::FRAME_BUDGET;
 
@@ -51,10 +57,23 @@ use super::render::FRAME_BUDGET;
 /// Mirrors the daemon builder's defaults exactly: focus on the cooking pane,
 /// cursors at 0, empty history query, identity history filter, no pending kill.
 pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
-    // Discover the live session-daemons once: this drives the COOKING rows AND
-    // the live-id set used to dedup HISTORY below.
-    let live = super::super::manage::list_live_sessions();
+    // Discover the live session-daemons once (this call blocks on a per-socket Status
+    // probe, so it is done HERE on the caller's thread only for the initial synchronous
+    // build; the live refresh feeds `hub_from_snapshot` a snapshot gathered off-thread —
+    // see `run_swapper`). Drives the COOKING rows AND the HISTORY dedup below.
+    let live = manage::list_live_sessions();
+    hub_from_snapshot(live, current_session_id)
+}
 
+/// Build a client-side [`SessionHub`] from an ALREADY-GATHERED discovery snapshot.
+///
+/// The pure, non-blocking core of [`build_local_hub`]: given the `live` [`SessionStatus`]
+/// set (however it was obtained — a synchronous sweep for the first paint, or the
+/// background probe thread's latest send for a live refresh), it assembles the two panes
+/// with the hub's default cursors/focus. [`build_local_hub`] is just this plus the
+/// blocking [`manage::list_live_sessions`] sweep; [`apply_snapshot`] wraps this to
+/// PRESERVE the user's position across a live rebuild.
+fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>) -> SessionHub {
     // The set of LIVE session UUIDs, used to hide already-live sessions from the
     // HISTORY pane. `SessionStatus::session_id` and `SessionMeta::id` are the SAME
     // UUID namespace (both the on-disk session dir name / socket key), so a string
@@ -128,14 +147,20 @@ pub(super) enum SwapperOutcome {
     Cancel,
 }
 
-/// Rebuild `hub` from fresh cross-daemon discovery, preserving the user's UI position.
+/// Rebuild `hub` from an ALREADY-GATHERED discovery snapshot, preserving the user's UI
+/// position.
 ///
 /// Captures the focused pane, the selected item identity (by session_id for cooking, by
-/// path for history), the history query, and `pending_kill`; rebuilds via
-/// [`build_local_hub`]; then restores all of those onto the fresh hub so the working/done
-/// status and session list update silently without jumping the cursor or clearing the
-/// history search.
-fn refresh_hub(hub: &mut SessionHub, current_id: Option<&str>) {
+/// path for history), the history query, and `pending_kill`; rebuilds the panes from
+/// `fresh` via [`hub_from_snapshot`]; then restores all of those onto the fresh hub so the
+/// working/done status and session list update silently without jumping the cursor or
+/// clearing the history search.
+///
+/// `fresh` is passed IN (not discovered here) so the ~1s blocking discovery sweep runs on
+/// the background probe thread, never on the input/render thread — the caller
+/// ([`run_swapper`]) hands over whatever the probe thread last produced. The SAME function
+/// backs both the live merge and the immediate post-kill refresh.
+fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: Option<&str>) {
     // Capture focus + selection identity before rebuild.
     let saved_focus = hub.focus;
     let saved_query = hub.history_query.clone();
@@ -161,8 +186,8 @@ fn refresh_hub(hub: &mut SessionHub, current_id: Option<&str>) {
         .and_then(|idx| hub.cooking.get(idx))
         .map(|e| e.session_id.clone());
 
-    // Rebuild from fresh discovery.
-    let mut fresh = build_local_hub(current_id);
+    // Rebuild the panes from the handed-in snapshot (no blocking discovery on this thread).
+    let mut fresh = hub_from_snapshot(fresh, current_id);
 
     // Restore focus.
     fresh.focus = saved_focus;
@@ -223,28 +248,47 @@ fn refresh_hub(hub: &mut SessionHub, current_id: Option<&str>) {
 ///
 /// This runs DETACHED from any daemon (no connection feeds it), so the user can pick a
 /// different session-daemon without the source daemon's snapshots clobbering this local
-/// hub. It owns the terminal for the duration. Each iteration:
+/// hub. It owns the terminal for the duration.
+///
+/// # Discovery runs OFF the input thread (fixes navigation lag)
+///
+/// Cross-daemon discovery ([`manage::list_live_sessions`]) synchronously connects to each
+/// live session socket and `Status`-pings it with a per-socket timeout, so with N live
+/// sessions a sweep can block for a while. Running it inline on the render loop once a
+/// second made arrow-key nav stutter. Instead, a BACKGROUND probe thread loops
+/// "sweep → send the raw [`SessionStatus`] set → sleep ~1s", and the input loop only ever
+/// CONSUMES the freshest snapshot non-blocking. Hub BUILDING stays on this thread (so it
+/// merges with the live cursor/focus via [`apply_snapshot`]); the thread ships raw
+/// discovery results, never a built hub. The first paint is still correct because the hub
+/// was built synchronously by the caller before we were entered.
+///
+/// Each iteration:
 ///   1. snapshot `hub` into a throwaway shadow `AppState` carrying `Mode::SessionHub` and
 ///      repaint via [`view::draw`] (the renderer is pure-from-snapshot, so a clone is all
 ///      it needs — no daemon, no live runtime);
-///   2. drain every buffered key event, mutating `hub` exactly as
+///   2. poll ONE key event with a short timeout (so nav is responsive) and, if present,
+///      handle it immediately — mutating `hub` exactly as
 ///      [`crate::controller::input::handle_session_hub`] would (Up/Down move the focused
 ///      pane's cursor; Tab/BackTab toggle focus; Backspace + printable keys edit the
-///      history search while the History pane is focused; Esc/Ctrl+C cancel; Enter
-///      selects), returning a [`SwapperOutcome`] the moment one is resolved;
-///   3. if [`REFRESH_INTERVAL`] has elapsed since the last refresh, re-poll live sessions
-///      via [`refresh_hub`] to update working/done status and any sessions that appeared or
-///      vanished — preserving the user's cursor position, pane focus, and history query;
-///   4. pace to ~60fps off the shared [`FRAME_BUDGET`].
+///      history search while the History pane is focused; Esc/Ctrl+C cancel; Enter selects;
+///      Ctrl+X arms/confirms a session nuke), returning a [`SwapperOutcome`] the moment one
+///      is resolved;
+///   3. drain the probe channel to the NEWEST snapshot (non-blocking); if one arrived,
+///      merge it via [`apply_snapshot`] to refresh working/done status + the session list
+///      while preserving cursor, focus, history query, and `pending_kill` by identity.
 ///
-/// `current_id` is the session the client is currently (or was previously) attached to;
-/// it is passed to [`build_local_hub`] on each refresh so the `is_foreground` flag stays
+/// # Clean shutdown (no leaked threads)
+///
+/// The swapper opens and closes repeatedly within ONE long-lived client process, so a
+/// thread leaked per open would accumulate. The probe thread watches an
+/// [`Arc<AtomicBool>`] stop flag and sleeps in small increments so it observes a stop
+/// promptly; EVERY return path out of the loop (pick / cancel / render error) sets the flag
+/// and `join`s the thread before returning. A [`ProbeGuard`] enforces this even on the `?`
+/// early-return: its `Drop` signals + joins, so no exit can orphan the thread.
+///
+/// `current_id` is the session the client is currently (or was previously) attached to; it
+/// is passed to [`hub_from_snapshot`] on each refresh so the `is_foreground` flag stays
 /// correct across rebuilds.
-///
-/// NOTE (deferred): killing a session from the swapper (`Ctrl+X` / `pending_kill`) is NOT
-/// wired here — that is a later concern (it must stop the target's daemon, not just drop a
-/// row). `Ctrl+X` and the kill-confirm keys are intentionally inert; `pending_kill` is
-/// never set, so the confirm bar never shows. The rest of the picker is faithful.
 pub(super) fn run_swapper(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     hub: &mut SessionHub,
@@ -252,16 +296,61 @@ pub(super) fn run_swapper(
 ) -> Result<SwapperOutcome> {
     use std::time::{Duration, Instant};
 
-    /// How often to re-poll live sessions and refresh the hub in place.
-    const REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
+    /// How often the BACKGROUND probe thread re-sweeps live-session discovery. The input
+    /// thread never waits on this — it just consumes whatever the thread last sent.
+    const PROBE_INTERVAL: Duration = Duration::from_millis(1000);
+
+    /// Granularity of the probe thread's interruptible sleep, so a stop request is honored
+    /// within ~100ms instead of after a whole `PROBE_INTERVAL`.
+    const PROBE_SLEEP_STEP: Duration = Duration::from_millis(100);
+
+    /// Input poll timeout per iteration: short enough that navigation feels immediate,
+    /// long enough that we are not busy-spinning when idle.
+    const INPUT_POLL: Duration = Duration::from_millis(50);
+
+    // --- spawn the background discovery probe ---
+    // The thread sweeps `list_live_sessions()` (the blocking part), sends the raw result,
+    // then sleeps ~1s in `PROBE_SLEEP_STEP` increments checking `stop`. Bounded channel is
+    // unnecessary — the receiver drains to the newest each frame, so at most a few stale
+    // snapshots ever queue.
+    let stop = Arc::new(AtomicBool::new(false));
+    let (snap_tx, snap_rx) = mpsc::channel::<Vec<SessionStatus>>();
+    let probe = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || loop {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            // The blocking sweep — done HERE, never on the input thread.
+            let live = manage::list_live_sessions();
+            // A send failure means the receiver hung up (loop returning) — stop.
+            if snap_tx.send(live).is_err() {
+                return;
+            }
+            // Interruptible sleep: wake early if a stop was requested mid-interval.
+            let mut slept = Duration::ZERO;
+            while slept < PROBE_INTERVAL {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(PROBE_SLEEP_STEP);
+                slept += PROBE_SLEEP_STEP;
+            }
+        })
+    };
+
+    // RAII guard: on ANY exit (normal return OR a `?` propagation from `terminal.draw` /
+    // `event::poll`), signal the probe thread and join it so no thread is ever orphaned.
+    let _probe_guard = ProbeGuard {
+        stop: Arc::clone(&stop),
+        handle: Some(probe),
+    };
 
     // Throwaway shadow built ONCE (not per frame): `view::draw` dispatches on
     // `state.mode()`, so writing this hub onto the shadow's foreground mode each frame
     // renders it identically to a live `/resume`. Reusing the shadow avoids re-allocating a
     // whole `AppState` (+ its version-check channel) at 60fps; only the small hub is cloned.
     let mut shadow = AppState::new(Mode::Chat);
-
-    let mut last_refresh = Instant::now();
 
     loop {
         let frame_start = Instant::now();
@@ -271,10 +360,12 @@ pub(super) fn run_swapper(
         shadow.set_mode(Mode::SessionHub(Box::new(hub.clone())));
         terminal.draw(|f| view::draw(f, &shadow))?;
 
-        // (2) Drain every buffered key event this frame (fast typing / nav never lags).
-        while event::poll(std::time::Duration::ZERO)? {
+        // (2) Poll ONE key with a short timeout and handle it immediately (nav stays
+        // responsive; we no longer block the loop on discovery). A resolved outcome returns
+        // here — the `_probe_guard` drop stops+joins the probe thread on the way out.
+        if event::poll(INPUT_POLL)? {
             if let Event::Key(key) = event::read()? {
-                if let Some(outcome) = handle_swapper_key(hub, &key) {
+                if let Some(outcome) = handle_swapper_key(hub, &key, current_id) {
                     return Ok(outcome);
                 }
             }
@@ -282,16 +373,46 @@ pub(super) fn run_swapper(
             // next unconditional repaint relayouts on a resize.
         }
 
-        // (3) Periodic live refresh: re-poll session discovery once per REFRESH_INTERVAL,
-        // updating working/done flags + session list without disturbing the user's cursor.
-        if last_refresh.elapsed() >= REFRESH_INTERVAL {
-            refresh_hub(hub, current_id);
-            last_refresh = Instant::now();
+        // (3) Live refresh OFF the input thread: drain the probe channel to the NEWEST
+        // snapshot (non-blocking) and, if one arrived, merge it — updating working/done
+        // flags + the session list without disturbing the user's cursor, focus, query, or
+        // pending kill.
+        let mut latest: Option<Vec<SessionStatus>> = None;
+        while let Ok(snap) = snap_rx.try_recv() {
+            latest = Some(snap);
+        }
+        if let Some(snap) = latest {
+            apply_snapshot(hub, snap, current_id);
         }
 
-        // (4) Pace to ~60fps (skip the sleep if a frame overran the budget).
+        // (4) Pace to ~60fps (skip the sleep if a frame overran the budget). The input poll
+        // above already yields when idle, so this only trims a fast frame.
         if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
             std::thread::sleep(rem);
+        }
+    }
+}
+
+/// RAII shutdown for the swapper's background discovery probe thread.
+///
+/// [`run_swapper`] returns on pick / cancel / render error, and the render/poll calls can
+/// `?`-propagate — so a bare `join` at the bottom of the loop would be skipped on those
+/// paths and leak a thread each time the swapper reopens (it reopens repeatedly within one
+/// long-lived client). This guard's `Drop` runs on EVERY exit: it sets the stop flag (the
+/// thread's interruptible sleep observes it within ~100ms) and joins, guaranteeing the
+/// thread is gone before `run_swapper` returns.
+struct ProbeGuard {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            // The thread checks `stop` every `PROBE_SLEEP_STEP`, so this join is prompt. A
+            // panicked probe thread just yields `Err` here — nothing to do but move on.
+            let _ = handle.join();
         }
     }
 }
@@ -308,9 +429,38 @@ pub(super) fn run_swapper(
 ///     cooking `[+ new session]` row mints a fresh UUID, a real cooking row uses its
 ///     `session_id`, and a history row derives its UUID from the on-disk path's final
 ///     component (the session dir name == its id);
-///   - the kill path (`Ctrl+X` / `pending_kill` confirm) is DEFERRED (inert) — see
-///     [`run_swapper`].
-fn handle_swapper_key(hub: &mut SessionHub, key: &KeyEvent) -> Option<SwapperOutcome> {
+///   - `Ctrl+X` is a two-step NUKE on the focused live session (arm → confirm), reaping
+///     that session's daemon so it drops out of COOKING and reappears in HISTORY — see the
+///     `Ctrl+X` arm below.
+///
+/// `current_id` is threaded through only so the post-nuke inline refresh
+/// ([`apply_snapshot`]) keeps the `is_foreground` flag correct.
+fn handle_swapper_key(
+    hub: &mut SessionHub,
+    key: &KeyEvent,
+    current_id: Option<&str>,
+) -> Option<SwapperOutcome> {
+    // --- Ctrl+X: two-step nuke (arm → confirm) on the focused live session ---
+    // koma's kill convention (matches /bash, the sub-agent abort, the daemon-side hub).
+    // Checked FIRST because `is_ctrl` inspects modifiers, and because a confirming second
+    // Ctrl+X must NOT be treated as a disarm below.
+    if is_ctrl(key, 'x') {
+        return handle_ctrl_x_nuke(hub, current_id);
+    }
+
+    // --- disarm: any key OTHER than a confirming Ctrl+X cancels a pending nuke ---
+    // The nuke fires only on Ctrl+X immediately followed by Ctrl+X on the SAME row; moving
+    // the selection or pressing anything else disarms. We clear here, then process the key
+    // normally below — EXCEPT `Esc`, which is swallowed (it only disarms; a SECOND Esc then
+    // exits the swapper as usual, per the spec).
+    if hub.pending_kill.is_some() {
+        hub.pending_kill = None;
+        if matches!(key.code, KeyCode::Esc) && !key.modifiers.contains(KeyModifiers::CONTROL) {
+            return None;
+        }
+        // Fall through: the key is handled normally this same press.
+    }
+
     // Ctrl+C cancels (the daemon-side handler maps it to `Action::Quit`; in the detached
     // swapper "quit the picker" is a cancel — `client_run` decides reconnect vs exit).
     // Reuse the client's existing Ctrl+C detector so the gesture matches the rest of the
@@ -367,12 +517,68 @@ fn handle_swapper_key(hub: &mut SessionHub, key: &KeyEvent) -> Option<SwapperOut
             None
         }
 
-        // DEFERRED: kill-a-session from the swapper (Ctrl+X / pending_kill confirm) is a
-        // later concern — it must stop the target daemon, not just drop a row — so the
-        // kill keys are inert here (no `pending_kill` is ever set). Any other key —
-        // including a Ctrl chord that fell through the guard above: ignore.
+        // Any other key — including a Ctrl chord that fell through the guards above (Ctrl+X
+        // is handled at the top; Ctrl+C by `is_detach`): ignore.
         _ => None,
     }
+}
+
+/// Handle a `Ctrl+X` press in the swapper: the two-step session NUKE.
+///
+/// Guard: acts ONLY when the COOKING pane is focused and the highlighted row is a REAL live
+/// session (`SessionKind::Session` carrying `Some(session_id)`). On the History pane, the
+/// synthetic `[+ new session]` row, or a row with no id, it returns `None` and arms nothing
+/// (there is no daemon to reap).
+///
+/// Two-step (mirrors the daemon-side hub's arm→confirm):
+///   - not yet armed on THIS row → arm: set `pending_kill` to the focused cooking index and
+///     stay in the picker (the confirm bar renders from `pending_kill`);
+///   - already armed AND still pointing at the focused row → CONFIRM = nuke: reap that
+///     session's daemon ([`manage::nuke_session_daemon`], a SILENT graceful `QuitDaemon`
+///     that is alt-screen safe — unlike `stop_session_daemon`, which prints), clear the
+///     arm, and force an IMMEDIATE discovery refresh so the killed session leaves COOKING
+///     and shows up in HISTORY right away instead of waiting for the ~1s probe tick.
+///
+/// Always returns `None` — a nuke never resolves the swapper; the user keeps picking.
+fn handle_ctrl_x_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<SwapperOutcome> {
+    // Only the cooking pane has killable rows.
+    if !matches!(hub.focus, HubPane::Cooking) {
+        return None;
+    }
+
+    // Resolve the focused row + its session id; bail (arm nothing) on the synthetic
+    // new-session row or any row without an id.
+    let target_id = match hub.selected_cooking() {
+        Some(entry) if entry.kind == SessionKind::Session => match &entry.session_id {
+            Some(id) => id.clone(),
+            None => return None,
+        },
+        _ => return None,
+    };
+
+    // Is a kill already armed AND still aimed at the row we're on? (Selection could have
+    // moved since arming — then this Ctrl+X re-arms on the new row instead of confirming.)
+    let armed_here = hub.pending_kill == Some(hub.cooking_selected);
+
+    if !armed_here {
+        // First press → ARM. The confirm bar renders from `pending_kill`.
+        hub.pending_kill = Some(hub.cooking_selected);
+        return None;
+    }
+
+    // Second press on the same row → CONFIRM = NUKE.
+    // Silent graceful QuitDaemon (alt-screen safe); blocking is fine for a one-off keypress.
+    manage::nuke_session_daemon(&target_id);
+    hub.pending_kill = None;
+
+    // Force an IMMEDIATE refresh so the nuked session leaves COOKING and lands in HISTORY
+    // now, rather than after the next ~1s probe tick. One inline (blocking) sweep here is an
+    // acceptable one-off cost on a deliberate keypress. `apply_snapshot` preserves the
+    // cursor/focus/query by identity and clamps `cooking_selected` back into range.
+    let fresh = manage::list_live_sessions();
+    apply_snapshot(hub, fresh, current_id);
+
+    None
 }
 
 /// Resolve an Enter press in the swapper to a target session UUID (or `None` to stay in
