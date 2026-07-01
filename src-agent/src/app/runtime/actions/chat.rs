@@ -51,7 +51,9 @@ pub(super) fn handle_submit(
     // Move the staged composer attachments (from path-paste / @-picker) AND the
     // scan-backstop attachments onto THIS user message. Ingested bytes are already
     // on disk under `<session>/images/`; the wire builder re-reads at send time.
-    let mut attachments = state.rest.take_attachments();
+    // Pass the finalised `text` so a deleted / broken `[Image #N]` marker drops its
+    // staged attachment instead of shipping a marker-less image.
+    let mut attachments = state.rest.take_attachments(&text);
     attachments.extend(scan_attachments);
     let had_image = !attachments.is_empty();
     let history = {
