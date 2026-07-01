@@ -558,6 +558,9 @@ impl SessionRuntime {
         let at = self.byte_at(self.cursor);
         self.input.remove(at);
         self.hist_idx = None;
+        // A backspace may have deleted (part of) an `[Image #N]` marker; drop any
+        // staged attachment whose marker is now gone so the card can't outlive it.
+        self.reconcile_attachments();
     }
 
     /// Delete the char AT the caret (forward delete, the Delete key); no-op at the
@@ -569,6 +572,9 @@ impl SessionRuntime {
         let at = self.byte_at(self.cursor);
         self.input.remove(at);
         self.hist_idx = None;
+        // Mirror `backspace`: a forward-delete may have removed (part of) an
+        // `[Image #N]` marker, so re-sync the staged attachments to the text.
+        self.reconcile_attachments();
     }
 
     /// Move the caret one char left (no-op at the start).
@@ -675,11 +681,64 @@ impl SessionRuntime {
         self.hist_idx = None;
     }
 
+    /// Re-sync `pending_attachments` to the `[Image #N]` markers still present in
+    /// `input`: drop any staged attachment whose marker number no longer appears
+    /// in the composer text. Called from the char-removal paths (`backspace` /
+    /// `delete_forward`) so deleting an `[Image #N]` token live-drops its
+    /// attachment card.
+    ///
+    /// Deliberately NOT called from insert paths (`push_char` / `insert_marker` /
+    /// the attach helpers): an image's [`Attachment`] record is pushed a beat
+    /// AFTER its marker is inserted, so reconciling on insert could drop a
+    /// just-staged image before its record lands.
+    pub fn reconcile_attachments(&mut self) {
+        if self.pending_attachments.is_empty() {
+            return; // nothing staged → nothing to drop (skips the scan on every keystroke)
+        }
+        let present = Self::marker_numbers(&self.input);
+        self.pending_attachments
+            .retain(|a| present.contains(&a.marker_n));
+    }
+
+    /// Collect the set of `N` values from every literal `[Image #N]` token in
+    /// `text` — the exact format produced by `model::attachment`
+    /// (`format!("[Image #{n}]")`). A run of ASCII digits sitting between the
+    /// `[Image #` prefix and a closing `]` counts; a broken / half-typed marker
+    /// matches nothing, so its attachment reconciles away.
+    fn marker_numbers(text: &str) -> std::collections::HashSet<usize> {
+        const PREFIX: &str = "[Image #";
+        let mut out = std::collections::HashSet::new();
+        for (i, _) in text.match_indices(PREFIX) {
+            let after_prefix = &text[i + PREFIX.len()..];
+            let digits: String = after_prefix
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if digits.is_empty() || !after_prefix[digits.len()..].starts_with(']') {
+                continue;
+            }
+            if let Ok(n) = digits.parse::<usize>() {
+                out.insert(n);
+            }
+        }
+        out
+    }
+
     /// Move the staged composer attachments out for the message being submitted,
     /// leaving `pending_attachments` empty. Called at submit, paired with
     /// `take_input()`, so the markers and their attachment records travel
     /// together onto the user message.
-    pub fn take_attachments(&mut self) -> Vec<crate::dto::chat::Attachment> {
+    ///
+    /// `submitted_text` is the text being sent (the composer `input` has already
+    /// been emptied by `take_input` at this point, so we reconcile against the
+    /// SUBMITTED text, not `self.input`). This is the send-time backstop: an
+    /// attachment whose `[Image #N]` marker did not survive into the sent message
+    /// — a marker broken by mid-token typing, or dropped by a history-recall
+    /// replace — is discarded here so a marker-less image can never ship.
+    pub fn take_attachments(&mut self, submitted_text: &str) -> Vec<crate::dto::chat::Attachment> {
+        let present = Self::marker_numbers(submitted_text);
+        self.pending_attachments
+            .retain(|a| present.contains(&a.marker_n));
         std::mem::take(&mut self.pending_attachments)
     }
 

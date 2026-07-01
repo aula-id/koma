@@ -81,10 +81,11 @@ impl AppStateRest {
         self.palette_sel = 0;
     }
 
-    /// Move the staged composer attachments out for the message being submitted.
-    /// See [`super::SessionRuntime::take_attachments`].
-    pub fn take_attachments(&mut self) -> Vec<crate::dto::chat::Attachment> {
-        self.fg_mut().take_attachments()
+    /// Move the staged composer attachments out for the message being submitted,
+    /// reconciled against `submitted_text` (the composer `input` is already empty
+    /// at submit). See [`super::SessionRuntime::take_attachments`].
+    pub fn take_attachments(&mut self, submitted_text: &str) -> Vec<crate::dto::chat::Attachment> {
+        self.fg_mut().take_attachments(submitted_text)
     }
 
     /// Ingest the image file at `path` into the active session's `images/` dir,
