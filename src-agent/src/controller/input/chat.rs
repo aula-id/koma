@@ -235,13 +235,13 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Ctrl+V: paste image from the OS clipboard (Wayland / X11). Shells out to
     // `wl-paste --type image/png` or `xclip` on a background thread (non-blocking);
     // the result lands in `rest.clipboard_rx` and is drained by the event loop on
-    // the next tick. No-op when a fetch is already in flight or when waiting for a
-    // model response (to avoid attaching images mid-turn).
+    // the next tick. NOT gated on `waiting`: staging an image is composer input and,
+    // like bracketed text-paste, must work mid-turn / mid-subagent — the cooking turn
+    // already took its attachments at submit, so a freshly pasted image just stages
+    // for the NEXT message. Only SUBMITTING a turn is gated by cooking, never staging.
     if is_ctrl(&key, 'v') {
-        if !rest.fg().waiting {
-            super::request_clipboard_image(rest);
-            rest.fg_mut().set_toast_info("reading image from clipboard…".to_string());
-        }
+        super::request_clipboard_image(rest);
+        rest.fg_mut().set_toast_info("reading image from clipboard…".to_string());
         return Action::None;
     }
     // Ctrl+E: toggle internet mode (Simple <-> Full), persist, and set status.
