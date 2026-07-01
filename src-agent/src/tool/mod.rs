@@ -56,6 +56,9 @@ pub struct ToolCtx {
     /// The shadow worktree dir for this session's pwd bucket
     /// (`~/.koma/sessions/<pwd_hash>/worktrees/`). `None` when no session is active.
     pub worktrees_dir: Option<std::path::PathBuf>,
+    /// The per-session media download directory (`<pwd_bucket_dir>/media/`),
+    /// where `web_download` saves files. `None` when no session is active.
+    pub download_dir: Option<PathBuf>,
     /// The session's active internet tier. `web_fetch` reads this to decide
     /// between the simple raw-HTTP path and the Full browser backend (scrapion);
     /// defaults to `Simple` when no session is available.
@@ -126,6 +129,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(task::Task),
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),
+        Box::new(internet::WebDownload),
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
         Box::new(git_worktree::GitWorktree),
@@ -169,7 +173,7 @@ const INTERNAL_ONLY: &[&str] = &[];
 pub const DEFERRED_TOOLS: &[&str] = &[
     "read", "write", "edit", "delete", "bash", "grep", "glob",
     "remember", "forget", "recall",
-    "web_fetch", "web_search",
+    "web_fetch", "web_search", "web_download",
     "git_operator",
 ];
 

@@ -202,6 +202,13 @@ pub fn session_images_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
     Ok(session_dir(pwd_hash, uuid)?.join("images"))
 }
 
+/// A session's media directory: `<pwd_bucket_dir>/media/`. Holds downloaded
+/// files from the `web_download` tool. Lives inside the pwd bucket so
+/// downloads are shared across sessions in the same working directory.
+pub fn session_media_dir(pwd_hash: &str) -> Result<PathBuf> {
+    Ok(pwd_bucket_dir(pwd_hash)?.join("media"))
+}
+
 /// Create a session's `images/` dir (and parents) if absent. Best-effort, called
 /// the same place the scratch dir is set up; a failure just means the first
 /// ingest will retry the create.
