@@ -1,4 +1,4 @@
 {
-  "version": "0.2.8",
-  "message": "revert the 0.2.7 history() trailing-assistant strip: it did not fix the prefill 400 on strict backends (llama.cpp/vLLM) and it degraded reasoning continuity, since the assistant-prefill is load-bearing for thinking models; a backend-aware fix is pending."
+  "version": "0.2.10",
+  "message": "fix: git_worktree runs git in the active working directory (ctx.workspace / effective_cwd) instead of the launch-time workspace root, so worktree create/list/remove work after cd-ing into a git repo nested under a non-git parent dir — now consistent with bash and git_operator."
 }

@@ -113,13 +113,9 @@ impl Tool for GitWorktree {
 
         match action {
             "list" => {
-                // Run from the repo root (first configured workspace root) so the
-                // listing is correct even when the live cwd is inside a worktree.
-                let repo_root = ctx
-                    .workspaces
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| ctx.workspace.clone());
+                // Run from the session's effective working directory (ctx.workspace,
+                // honors `cd`); `git worktree list` is correct from anywhere in the repo.
+                let repo_root = ctx.workspace.clone();
                 Ok(run_git(&["worktree", "list"], &repo_root, 120_000))
             }
 
@@ -144,13 +140,9 @@ impl Tool for GitWorktree {
                     ));
                 }
 
-                // Run git from the REPO ROOT so it never spawns in a doomed cwd
-                // (e.g. a just-removed worktree the session's live cwd sat in).
-                let repo_root = ctx
-                    .workspaces
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| ctx.workspace.clone());
+                // Run git from the session's effective working directory (ctx.workspace,
+                // honors `cd`) — consistent with bash / git_operator.
+                let repo_root = ctx.workspace.clone();
 
                 let shadow_str = shadow.to_string_lossy().into_owned();
                 let mut git_args: Vec<&str> = vec!["worktree", "add", &shadow_str];
@@ -188,14 +180,9 @@ impl Tool for GitWorktree {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
 
-                // Run git from the REPO ROOT — safe even if the session's live cwd is
-                // inside the worktree being removed (removing your own cwd from within
-                // it fails otherwise).
-                let repo_root = ctx
-                    .workspaces
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| ctx.workspace.clone());
+                // Run git from the session's effective working directory (ctx.workspace,
+                // honors `cd`) — consistent with bash / git_operator.
+                let repo_root = ctx.workspace.clone();
 
                 let shadow_str = shadow.to_string_lossy().into_owned();
                 let mut git_args: Vec<&str> = vec!["worktree", "remove"];
