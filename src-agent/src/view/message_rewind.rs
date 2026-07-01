@@ -1,22 +1,26 @@
 //! View – message-rewind picker (MessageRewind mode).
 //!
-//! Displays the conversation's prior user messages, NEWEST-FIRST, so the user
-//! can pick one to rewind to and edit. Layout (top to bottom):
+//! Rendered as a bordered FLOATING OVERLAY anchored just above the input box
+//! (mirroring the `/bash` panel, [`crate::view::bash::render_bash_overlay`]), NOT
+//! as a full-screen replacement — the chat transcript stays visible behind it.
 //!
-//! 1. Top+bottom rule title bar — ` edit a previous message ` on the TOP rule.
-//! 2. Flat (borderless) message list — one truncated preview line per entry.
-//!    The selected row is highlighted with `palette.sel_fg` on `palette.sel_bg`.
-//!    The list scrolls to keep the selection visible.
-//! 3. One-line keybinding hint.
+//! The overlay lists the conversation's prior user messages in CHRONOLOGICAL order
+//! (oldest at the top, newest at the BOTTOM, pre-selected), so the user can pick one
+//! to rewind to and edit. Inside the box (top to bottom):
 //!
-//! Selection state lives in [`app::mode::RewindState`]. Keystroke handling lives
-//! in [`controller::input::handle_rewind`].
+//! 1. Message list — one truncated preview line per entry, oldest→newest. The
+//!    selected row is highlighted with `palette.sel_fg` on `palette.sel_bg`. The
+//!    list bottom-anchors its scroll to keep the selection visible.
+//! 2. One-line keybinding hint.
+//!
+//! Selection state lives in [`crate::app::mode::RewindState`]. Keystroke handling
+//! lives in [`crate::controller::input::handle_rewind`].
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Clear, Paragraph},
     Frame,
 };
 use crate::app::mode::RewindState;
@@ -43,62 +47,79 @@ fn preview(s: &str, max: usize) -> String {
     }
 }
 
-/// Render the message-rewind picker for `rw` using the given colour `palette`.
-pub fn draw(frame: &mut Frame, rw: &RewindState, palette: &Palette) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // title: top+bottom rules
-            Constraint::Min(1),    // flat message list
-            Constraint::Length(1), // keybinding hint line
-        ])
-        .split(frame.area());
+/// Render the message-rewind picker as a bordered overlay anchored just above
+/// `input_chunk`, drawn on top of the chat transcript. Mirrors the `/bash` overlay's
+/// sizing (up to ~12 rows, clamped to the space above the input, width = input width).
+///
+/// `input_chunk` / `transcript_chunk` are the same chat layout rects the bash overlay
+/// receives (`layout_chunks[3]` and `layout_chunks[1]`): the box is anchored to the
+/// input's top edge and clamped so it never overruns the transcript above.
+pub fn draw(
+    frame: &mut Frame,
+    input_chunk: Rect,
+    transcript_chunk: Rect,
+    rw: &RewindState,
+    palette: &Palette,
+) {
+    // Box sizing: up to ~12 rows, clamped to the space above the input (matches bash).
+    let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
+    let h = 12u16.min(avail.max(3));
+    let y = input_chunk.y.saturating_sub(h);
+    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
 
-    // --- Title bar ---
-    // Top+bottom rules only — title sits on the TOP rule, dim style.
-    let title_block = Block::new()
-        .borders(Borders::TOP | Borders::BOTTOM)
+    let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
         .title(Span::styled(
             " edit a previous message ",
             Style::default().fg(palette.dim),
-        ))
-        .padding(Padding::horizontal(1));
+        ));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
 
-    let title_inner = title_block.inner(chunks[0]);
-
-    let note = Line::from(Span::styled(
-        "pick the message to rewind to — the top entry is the last message",
-        Style::default().fg(palette.dim),
-    ));
-    frame.render_widget(title_block, chunks[0]);
-    frame.render_widget(Paragraph::new(note), title_inner);
-
-    // --- Message list (flat, no borders) ---
-    // Render rows directly into the inset area (1 char horizontal margin).
-    let inner = chunks[1].inner(Margin { horizontal: 1, vertical: 0 });
-    let inner_w = inner.width as usize;
-
-    let mut lines: Vec<Line> = Vec::new();
-    for (i, entry) in rw.entries.iter().enumerate() {
-        // Whole inner width is available for the preview (minus a 1-char gutter).
-        let text = preview(&entry.content, inner_w.saturating_sub(1).max(1));
-        let style = if i == rw.selected {
-            Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-        } else {
-            Style::default().fg(palette.fg)
-        };
-        lines.push(Line::styled(text, style));
+    if inner.width == 0 || inner.height == 0 {
+        // The bordered box itself is the whole signal.
+        return;
     }
 
-    // Scroll so the selected row stays visible within the inner height.
-    let list_height = inner.height as usize;
-    let scroll = rw.selected.saturating_sub(list_height.saturating_sub(1)) as u16;
+    // Split the box interior into the message list (fills) + a one-line hint at the
+    // bottom. When the box is a single row tall, the list collapses to nothing and
+    // only the hint shows.
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(inner);
 
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
+    // --- Message list (flat, chronological: oldest→newest, newest at the bottom) ---
+    let list = rows[0].inner(Margin { horizontal: 1, vertical: 0 });
+    if list.width > 0 && list.height > 0 {
+        let list_w = list.width as usize;
+        let mut lines: Vec<Line> = Vec::with_capacity(rw.entries.len());
+        for (i, entry) in rw.entries.iter().enumerate() {
+            // Whole inner width is available for the preview (minus a 1-char gutter).
+            let text = preview(&entry.content, list_w.saturating_sub(1).max(1));
+            let style = if i == rw.selected {
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
+            } else {
+                Style::default().fg(palette.fg)
+            };
+            lines.push(Line::styled(text, style));
+        }
+
+        // Bottom-anchor the scroll so the selection stays visible within the list
+        // height (same calc the old full-screen list used).
+        let list_height = list.height as usize;
+        let scroll = rw.selected.saturating_sub(list_height.saturating_sub(1)) as u16;
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), list);
+    }
 
     // --- Keybinding hint ---
-    let hint = "↑↓ select · Enter edit · Esc cancel";
-    let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));
-    frame.render_widget(instructions, chunks[2]);
+    let hint = rows[1].inner(Margin { horizontal: 1, vertical: 0 });
+    if hint.width > 0 && hint.height > 0 {
+        frame.render_widget(
+            Paragraph::new("↑↓ select · Enter rewind · Esc cancel")
+                .style(Style::default().fg(palette.dim)),
+            hint,
+        );
+    }
 }

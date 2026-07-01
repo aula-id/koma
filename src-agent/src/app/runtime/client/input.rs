@@ -64,16 +64,6 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
     }
 }
 
-/// Is this key the client's local DETACH gesture (Ctrl-C)?
-///
-/// Detaching the client leaves the daemon — and every session — running. Every
-/// OTHER key (including Esc, which is meaningful to the remote session's modes) is
-/// forwarded to the daemon, so the client never steals a key the session needs.
-pub(super) fn is_detach(key: &KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-}
-
 /// What a key handled inside the mirrored `/quit` overlay tells the render loop to do.
 pub(super) enum QuitConfirmKey {
     /// Tear down the client process (the request to act on it was already queued).
@@ -113,9 +103,9 @@ pub(super) enum QuitConfirmKey {
 ///     and keeps its session COOKING headless), then exit ONLY the client. The live
 ///     session → it reappears in the swapper's COOKING pane and a resume reattaches to
 ///     the live process.
-///   - `Esc` / `Ctrl-C` cancel — forward an `Esc` so the daemon's `handle_quit_confirm`
+///   - `Esc` cancel — forward an `Esc` so the daemon's `handle_quit_confirm`
 ///     runs `QuitCancel` and returns to Chat; the resulting snapshot flips the shadow
-///     back. The client stays attached.
+///     back. The client stays attached. (`Ctrl-C` is fully inert now.)
 ///
 /// Every other key is swallowed (the overlay has no text entry — mirrors the daemon's
 /// own `handle_quit_confirm`, which returns `Action::None` for anything else).
@@ -131,12 +121,8 @@ pub(super) fn handle_quit_confirm_key(
     req_tx: &Sender<ClientRequest>,
     selected: usize,
 ) -> QuitConfirmKey {
-    // Ctrl-C in the overlay means "cancel", NOT the global detach — match the daemon's
-    // `handle_quit_confirm`, which treats Ctrl-C like Esc.
-    if is_detach(key) {
-        send_overlay_cancel(req_tx);
-        return QuitConfirmKey::Stay;
-    }
+    // Ctrl-C is fully inert now (koma disables it): it is no longer handled here
+    // (Esc still cancels the overlay via the arm below).
     match key.code {
         // --- Navigation: the daemon owns `selected`, so forward and let its
         // `handle_quit_confirm` move focus; the next snapshot reflects it. ---

@@ -1,4 +1,4 @@
 {
-  "version": "0.2.2",
-  "message": "Clipboard image paste (Ctrl+V) now works while a turn or subagent is still cooking, instead of being silently swallowed — staging an image is composer input, so a mid-turn paste just attaches to your next message. And deleting an [Image #N] token now removes its attachment: the image card disappears and that picture is no longer sent, so a stray marker can't ship an image you meant to drop."
+  "version": "0.2.3",
+  "message": "Ctrl+C is disabled — it no longer quits or detaches koma, so a stray keystroke can't drop you out; use /quit to leave deliberately. Esc now carries interrupt: while the model is still thinking, one Esc stops the turn AND pulls your last prompt back into the composer to edit and resend. Double-Esc clears the composer when it holds text, or opens the message-history picker when it's empty — and that picker is now a scrollable overlay (newest at the bottom) instead of a full-screen page. Finally, agent-created git worktrees now live in a shadow dir outside your repo (~/.koma/sessions/<id>/worktrees): create drops you into the new worktree, remove returns you to the repo root and cleans up, and git_operator routes worktree commands to the dedicated git_worktree tool instead of choking on them."
 }

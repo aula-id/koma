@@ -16,7 +16,7 @@ use crate::dto::chat::Role;
 use crate::ipc::proto::{ClientRequest, DaemonFrame, KeyWire};
 use crate::view;
 
-use super::input::{handle_quit_confirm_key, is_detach, local_echo, send_overlay_cancel, QuitConfirmKey};
+use super::input::{handle_quit_confirm_key, local_echo, send_overlay_cancel, QuitConfirmKey};
 use super::shadow::{apply_frame, reconcile_work_clock};
 
 /// Local TTL for a toast reconstructed from a [`StateDelta::Toast`]. The daemon's
@@ -66,8 +66,8 @@ pub(super) enum ClientTransition {
 /// ratatui buffer diff makes an unchanged frame ~free); (d) poll terminal input with
 /// a ZERO timeout and handle it (local echo for the plain composer edits, forward the
 /// rest). The loop NEVER blocks on the socket: if no frame arrived it still paints and
-/// animations still advance. Returns when the user detaches (Ctrl-C) or the socket
-/// closes.
+/// animations still advance. Returns when the client detaches (via the `/quit`
+/// overlay) or the socket closes. (Ctrl-C is fully inert now.)
 ///
 /// Returns a [`ClientTransition`] telling [`super::client_run`] what to do next:
 /// [`ClientTransition::Exit`] to leave the client, or [`ClientTransition::OpenSwapper`]
@@ -276,11 +276,10 @@ pub(super) fn render_loop(
                         }
                         continue;
                     }
-                    // Outside the overlay: the ONE locally-interpreted gesture is
-                    // Ctrl-C, which detaches the client (leaves the daemon running).
-                    if is_detach(&key) {
-                        return Ok(ClientTransition::Exit);
-                    }
+                    // Ctrl-C is fully inert now (koma disables it): it no longer
+                    // detaches/exits the client. Detach is ONLY via /quit. Every key
+                    // (including Ctrl-C, which the daemon-side handlers swallow) is
+                    // forwarded to the daemon.
                     // Render-ahead: apply the plain composer edits to the shadow NOW
                     // (the daemon's authoritative InputChanged reconciles later), then
                     // forward the key verbatim for the daemon to interpret. Only the

@@ -375,18 +375,24 @@ pub(crate) fn process_tools(
             continue;
         }
         // Intercept the model-callable `git_worktree` tool BEFORE the generic
-        // dispatch path. `enter` and `exit` mutate session state (cwd + allowed
-        // roots), which a read-only `ToolCtx` can't do. The tool's `run` does the
-        // pure validation/resolution and returns a sentinel-tagged string; here we
-        // apply the state change via `apply_workspace_change` (same primitive as `cd`).
+        // dispatch path. `create`, `remove`, `enter`, and `exit` mutate session
+        // state (cwd + allowed roots), which a read-only `ToolCtx` can't do. The
+        // tool's `run` does the pure validation/resolution and returns a
+        // sentinel-tagged string; here we apply the state change via
+        // `apply_workspace_change` (same primitive as `cd`).
         //
-        // `enter` result: starts with `GIT_WT_ENTER_PREFIX` + canonical path.
+        // `create`/`enter` result: starts with `GIT_WT_ENTER_PREFIX` + shadow path
+        // (create AUTO-ENTERS the freshly-added worktree via the same sentinel).
         //   → push the path into `settings.workdir` (if not already present),
         //     persist, then call `apply_workspace_change`.
         // `exit` result: exactly `GIT_WT_EXIT_PREFIX`.
         //   → resolve the primary workdir (first `settings.workdir` entry) and
         //     call `apply_workspace_change` to return there.
-        // Anything else (list/create/remove output, or an `error:` string):
+        // `remove` result: starts with `GIT_WT_REMOVE_PREFIX` + removed shadow path
+        // (remove AUTO-EXITS: the worktree is already gone, git ran from the repo root).
+        //   → de-register the path from `settings.workdir`; if the live cwd was
+        //     inside the removed worktree, snap it back to the primary workdir.
+        // Anything else (list output, or an `error:` string):
         //   → pass through to the model verbatim.
         //
         // Borrow structure mirrors the `cd` arm: extract the path string + run
@@ -431,8 +437,40 @@ pub(crate) fn process_tools(
                         state, sess_idx, primary.clone(), client, handle,
                     );
                     format!("exited to {}", primary.display())
+                } else if let Some(removed) =
+                    result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
+                {
+                    // `remove` succeeded: the worktree is already deleted (git ran
+                    // from the repo root). Two cleanups:
+                    // (1) de-register the path from settings.workdir; (2) if the
+                    // session's live cwd was inside the removed worktree it now
+                    // points at a dead dir — snap it back to the primary workdir
+                    // (repo root). Capture the primary path in the same scoped
+                    // borrow, then apply outside it (apply_workspace_change also
+                    // borrows state mutably).
+                    let removed = removed.to_string();
+                    let primary;
+                    {
+                        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            sess.settings.workdir.retain(|p| p != &removed);
+                            let _ = sess.save();
+                            primary = sess.workdir();
+                        } else {
+                            primary = std::path::PathBuf::from(".");
+                        }
+                    }
+                    let stale = state.rest.sessions[sess_idx]
+                        .active_cwd
+                        .as_ref()
+                        .is_some_and(|c| !c.is_dir());
+                    if stale {
+                        super::super::spawn::apply_workspace_change(
+                            state, sess_idx, primary.clone(), client, handle,
+                        );
+                    }
+                    format!("worktree removed: {removed}")
                 } else {
-                    // list/create/remove output, or an error: — pass through.
+                    // list output, or an error: — pass through.
                     result
                 };
             state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));

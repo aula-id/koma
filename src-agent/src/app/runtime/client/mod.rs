@@ -15,7 +15,7 @@
 //! | `connect`   | `Connection` struct + `connect_attach_and_handshake` (sync)     |
 //! | `render`    | `render_loop`, `advance_local_animations`, frame-pacing consts  |
 //! | `shadow`    | `apply_frame`, `apply_snapshot`, `apply_delta`, seq-gap, clock  |
-//! | `input`     | `local_echo`, `is_detach`, `QuitConfirmKey`, quit overlay keys  |
+//! | `input`     | `local_echo`, `QuitConfirmKey`, quit overlay keys               |
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 
 #![allow(unused_imports)]
