@@ -1071,6 +1071,62 @@ fn orphan_pidfiles() -> Result<Vec<(String, std::path::PathBuf)>> {
     Ok(out)
 }
 
+// ─── legacy-daemon migration ──────────────────────────────────────────────────
+
+/// Reap a pre-0.2.0 global daemon left over from an upgrade, if one exists.
+///
+/// Pre-0.2.0 koma ran a single global daemon that bound `<base_dir>/daemon.sock`
+/// and recorded its PID in `<base_dir>/daemon.pid`. 0.2.0 switched to
+/// daemon-per-session (`run/<id>.sock`); it NEVER writes a bare `daemon.sock`, so
+/// the presence of that file is unambiguous proof of a pre-0.2.0 leftover.
+///
+/// Behavior (entirely best-effort — never panics, never blocks startup):
+/// - If neither `daemon.sock` nor `daemon.pid` exists → return immediately.
+/// - Read and parse `daemon.pid` → SIGTERM the old daemon (it has a graceful SIGTERM
+///   handler that releases locks and unlinks its own files). Poll up to ~1 s for the
+///   socket to disappear.
+/// - Unlink both files regardless (the old daemon may have already done so).
+/// - Print ONE line to stderr only when something was actually reaped; silent otherwise.
+pub fn migrate_legacy_daemon() {
+    let base = match crate::model::store::base_dir() {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let legacy_sock = base.join("daemon.sock");
+    let legacy_pid  = base.join("daemon.pid");
+
+    // Fast-path: nothing to do (the common case on 0.2.0-only installs).
+    if !legacy_sock.exists() && !legacy_pid.exists() {
+        return;
+    }
+
+    // Try to signal the old daemon via its pidfile.
+    let signalled = legacy_pid
+        .exists()
+        .then(|| std::fs::read_to_string(&legacy_pid).ok())
+        .flatten()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .inspect(|&pid| {
+            // SAFETY: kill(2) with a real signal is async-signal-safe; types match libc.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        });
+
+    // Poll up to ~1 s for the socket to disappear (the old daemon's SIGTERM handler
+    // unlinks it). Non-fatal if it lingers — we'll unlink it below anyway.
+    if signalled.is_some() && legacy_sock.exists() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while legacy_sock.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    // Best-effort cleanup: unlink whatever survived.
+    let _ = std::fs::remove_file(&legacy_sock);
+    let _ = std::fs::remove_file(&legacy_pid);
+
+    eprintln!("koma: reaped a pre-0.2.0 daemon (upgrade cleanup)");
+}
+
 // ─── signal + wait helpers ───────────────────────────────────────────────────
 
 /// Send `sig` to `pid`, best-effort. A failure (ESRCH = already gone, EPERM = not

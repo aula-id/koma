@@ -82,6 +82,16 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // --- upgrade migration: reap any pre-0.2.0 global daemon on first 0.2.0 launch ---
+    // The old 0.1.x daemon bound a bare `<base_dir>/daemon.sock`. 0.2.0 never creates
+    // that path; its presence means a pre-0.2.0 orphan is still running. We SIGTERM it
+    // here (best-effort) so it releases any session write-locks it holds and vacates disk.
+    // Skip in the daemon/mcp-daemon children — they are spawned AFTER this migration runs
+    // in the parent, and a child re-running migrate would be a no-op race anyway.
+    if !opts.daemon && !opts.mcp_daemon {
+        app::migrate_legacy_daemon();
+    }
+
     // --- short-circuit: `koma update` — stop daemon + run installer (no TUI) ---
     if opts.update {
         return match crate::app::run_update() {

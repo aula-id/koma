@@ -51,7 +51,8 @@ pub use client::client_run;
 // `ensure_daemon_running(session_id, …)` is the default path's "connect if up, else spawn
 // a detached daemon and wait until it accepts" primitive (the thin client then attaches).
 pub use manage::{
-    any_daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand,
+    any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
+    run_daemon_subcommand,
 };
 
 // Re-export lifecycle entry points (previously free fns in this file).
