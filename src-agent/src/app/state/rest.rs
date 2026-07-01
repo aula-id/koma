@@ -111,6 +111,27 @@ pub struct AppStateRest {
     pub select_pending: bool,
     /// True while the conversation is dumped to the normal terminal for copying.
     pub select_active: bool,
+    /// Set by `/resume` (and the `OpenSessionHub` request) in the DAEMON: the hub
+    /// drains this next tick into a one-shot [`crate::ipc::proto::DaemonEvent::OpenSwapper`]
+    /// to the controlling client, mirroring `select_pending` → `EnterSelect`. The
+    /// daemon never enters a hub mode itself — the swapper is a purely client-side
+    /// overlay — so this is a transient signal, not a UI state. Standalone (no-daemon)
+    /// builds never set it: `handle_resume` opens `Mode::SessionHub` directly there.
+    pub resume_pending: bool,
+    /// Set by `/new` in the DAEMON: a transient "spawn a brand-new session-daemon"
+    /// request, drained next tick by the hub into a one-shot
+    /// [`crate::ipc::proto::DaemonEvent::NewSession`] to the controlling client (which
+    /// detaches — or kills, then detaches — the current daemon and attaches a freshly
+    /// minted one). The inner `bool` is the KILL flag: `Some(true)` = `/new kill` (the
+    /// current session-daemon is torn down first via `QuitDaemon`); `Some(false)` = plain
+    /// `/new` (the current daemon is left cooking, resumable via the swapper). Exactly
+    /// mirrors `resume_pending` → `OpenSwapper`: a transient signal, never a UI state. In
+    /// the DAEMON-PER-SESSION world a daemon owns ONE session, so `/new` no longer appends
+    /// a tab — it makes another DAEMON. Standalone (`--local`, no daemon) NEVER routes here
+    /// as a signal: the local loop drains it into
+    /// [`crate::app::runtime::commands::new_session::apply_new_session_local`] (the legacy
+    /// append-a-session path) so `--local` `/new` behaves exactly as before.
+    pub new_pending: Option<bool>,
     /// Cache of each committed message's rendered visual lines, reused across
     /// frames so markdown/syntect highlighting doesn't re-run every redraw.
     /// Borrowed mutably by the chat renderer through a shared `&rest` (the UI is
@@ -287,6 +308,8 @@ impl AppStateRest {
             sec_inactive: std::collections::HashSet::new(),
             select_pending: false,
             select_active: false,
+            resume_pending: false,
+            new_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),

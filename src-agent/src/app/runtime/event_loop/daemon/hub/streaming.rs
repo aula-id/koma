@@ -51,6 +51,41 @@ impl DaemonHub {
         }
     }
 
+    /// Drain a pending `/resume` request by signalling the CONTROLLER client to open
+    /// its LOCAL daemon swapper (the `/resume` picker). The daemon-side `/resume` slash
+    /// command (and the `OpenSessionHub` attach-request) set `state.rest.resume_pending`
+    /// INSTEAD of building a daemon-side `Mode::SessionHub`; this consumes that flag and
+    /// emits exactly one [`DaemonEvent::OpenSwapper`] to the controller. This is the
+    /// EXACT mirror of [`drain_select_pending`] → `EnterSelect`: a one-shot daemon →
+    /// controller control frame, payload-free (the client builds the swapper from its OWN
+    /// cross-daemon discovery), the daemon's own mode is left untouched (it stays in Chat,
+    /// cooking) so a later cancel-back doesn't find it stuck in a hub mode and re-fire. If
+    /// no controller is enrolled the flag is still cleared (the signal is dropped — there
+    /// is no client to open a swapper on) so it can't re-fire spuriously on the next attach.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_resume_pending(&mut self, state: &mut AppState) {
+        if state.rest.resume_pending {
+            state.rest.resume_pending = false;
+            self.send_to_controller(DaemonEvent::OpenSwapper);
+        }
+    }
+
+    /// Drain a pending `/new` request by signalling the CONTROLLER client to spawn + attach
+    /// a BRAND-NEW session-daemon. The daemon-side `/new` slash command set
+    /// `state.rest.new_pending = Some(kill)` INSTEAD of creating a session itself (a daemon
+    /// owns exactly ONE session, so a NEW session means another DAEMON — a client-side act);
+    /// this consumes that flag and emits exactly one [`DaemonEvent::NewSession { kill }`] to
+    /// the controller. The EXACT mirror of [`drain_resume_pending`] → `OpenSwapper`: a
+    /// one-shot daemon → controller control frame carrying the `/new kill` flag, the daemon's
+    /// own mode left untouched (it stays in Chat, cooking, until the client either detaches —
+    /// plain `/new` — or sends `QuitDaemon` — `/new kill`). If no controller is enrolled the
+    /// flag is still cleared (the signal is dropped — there is no client to act on it) so it
+    /// can't re-fire spuriously on the next attach.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_new_pending(&mut self, state: &mut AppState) {
+        if let Some(kill) = state.rest.new_pending.take() {
+            self.send_to_controller(DaemonEvent::NewSession { kill });
+        }
+    }
+
     /// Stream this tick's render-state changes to every ATTACHED client.
     ///
     /// Builds ONE fresh snapshot from live `state`, then for EACH attached client

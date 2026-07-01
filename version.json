@@ -1,4 +1,4 @@
 {
-  "version": "0.1.8",
-  "message": "each koma window is now fully independent: launching koma in a new directory opens its OWN fresh session with its own chat, composer, and overlays instead of mirroring the first window. Per-window quit ([k]) closes only that window, toasts no longer leak across windows, and the /bash job timer freezes when a job finishes."
+  "version": "0.2.0",
+  "message": "koma is now daemon-per-session: every window runs as its own independent process, so two directories are fully isolated with no cross-talk. /resume is a swapper across all live sessions — [d] detach leaves a session cooking and reattaches live later, [k] closes the window. /new spawns another session (/new kill replaces the current). MCP servers now run once in a shared global daemon instead of once per window. And the safety harness fails closed: when the classifier can't be reached it bounces the tool call back to the model instead of silently running it."
 }

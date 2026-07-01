@@ -39,6 +39,51 @@ pub(crate) fn handle_new(
     handle: &tokio::runtime::Handle,
     mode: crate::controller::command::NewMode,
 ) -> Result<()> {
+    // Daemon-per-session world: `/new` no longer creates/appends a session HERE. A daemon
+    // owns exactly ONE session, so `/new` must make another DAEMON, which is a CLIENT-side
+    // act (detach/kill the current daemon, attach a fresh one). The daemon can't do that
+    // to itself, so — exactly like `/resume` → `resume_pending` — set a transient flag the
+    // hub drains next tick into a one-shot `DaemonEvent::NewSession { kill }` to the
+    // controlling client. The bool is the KILL flag (`/new kill` tears the current daemon
+    // down first; plain `/new` leaves it cooking).
+    //
+    // The `--local` (no-daemon) loop NEVER reaches this signal: it drains `new_pending`
+    // into `apply_new_session_local` below (the legacy append-a-session path), so
+    // standalone `/new` behaves exactly as before. The (state, client, handle) params are
+    // kept so the dispatch signature is unchanged and the standalone drain can hand them
+    // straight to `apply_new_session_local`.
+    let _ = (client, handle);
+    state.rest.new_pending = Some(matches!(mode, crate::controller::command::NewMode::Kill));
+    Ok(())
+}
+
+/// Spawn a fresh PARALLEL session IN-PROCESS — the legacy `/new` body, used ONLY by the
+/// STANDALONE (`--local`, no-daemon) loop (the daemon-per-session path signals the client
+/// via `new_pending` instead; see [`handle_new`]).
+///
+/// The current foreground session is left UNTOUCHED — it keeps its lock, its in-flight
+/// turn, and all of its execution state, still cooking in the background in its own
+/// `sessions` slot. A brand-new [`Session`] is created (inheriting last-used creds), given
+/// its OWN lock, wrapped in a fresh [`SessionRuntime`], APPENDED to `state.rest.sessions`,
+/// and made the new foreground. The flat foreground-UI fields (composer, scroll,
+/// attachments, transcript cache, status) are reset for a clean slate on the new tab.
+///
+/// If no creds are known yet, this opens the KeyInput prompt for the new session;
+/// cancelling it pops the just-appended session back off (the `handle_cancel_key_input`
+/// action keys off the `spawn_pending` flag set here).
+///
+/// `kill` is the `/new kill` flag: when set AND a live previous foreground exists on the
+/// creds-present path, the previous foreground is tombstoned as the new session opens.
+///
+/// INVARIANT (this stage): `sessions` is only ever APPENDED to here and never
+/// reordered/removed (in-flight async routes by Vec index), and the previous foreground's
+/// lock is NEVER released — every live session holds its own lock for its whole lifetime.
+pub(crate) fn apply_new_session_local(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+    kill: bool,
+) -> Result<()> {
     let mut sess = match store::create_session() {
         Ok(s) => s,
         Err(e) => {
@@ -133,7 +178,7 @@ pub(crate) fn handle_new(
         // deferring the close here means `/new kill` behaves like `/new swap` in
         // the (near-impossible) no-creds case, avoiding a tombstoned foreground
         // that the cancel handler would try to restore.
-        if mode == crate::controller::command::NewMode::Kill
+        if kill
             && prev_fg < state.rest.sessions.len()
             && prev_fg != state.rest.foreground
             && state.rest.sessions[prev_fg].session.is_some()
@@ -194,6 +239,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         name: "[+ new session]".to_string(),
         working: false,
         is_foreground: false,
+        session_id: None,
     });
     for (raw_idx, rt) in state.rest.sessions.iter().enumerate() {
         // Skip the initial empty placeholder AND any closed/tombstoned slot — the
@@ -212,6 +258,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
                 .unwrap_or_default(),
             working: rt.is_working(),
             is_foreground: raw_idx == state.rest.foreground,
+            session_id: Some(rt.id.clone()),
         });
     }
 
@@ -265,12 +312,23 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
     }
 }
 
-/// Handle the `/resume` command: open the unified two-pane session hub.
+/// Handle the `/resume` command: SIGNAL that the session hub / swapper should open.
 ///
-/// Delegates the list-building to [`build_session_hub`] (the single source of
-/// truth, shared with the hub's kill rebuild) and swaps the mode to it. We do NOT
-/// clear the current session/client — Esc out of the hub returns to the active
-/// chat unchanged.
+/// This sets the transient `resume_pending` flag rather than swapping the mode
+/// itself, mirroring how `/select` sets `select_pending` and lets each loop act on
+/// it. The two loops diverge on what "open the picker" means:
+///
+/// - **Daemon (daemon-per-session):** the hub drains `resume_pending` into a one-shot
+///   [`crate::ipc::proto::DaemonEvent::OpenSwapper`] to the controlling client, which
+///   opens its OWN cross-daemon swapper locally (it detaches first, so the daemon's
+///   snapshots can't clobber the client's local hub). The daemon's own mode is left in
+///   Chat — it never enters a hub mode — so a cancel-back never finds it stuck mid-hub.
+/// - **Standalone (`--local`, no daemon):** there is no client to signal, so the local
+///   event loop drains `resume_pending` by opening `Mode::SessionHub` directly from
+///   [`build_session_hub`] (its in-memory sessions are the only source — no discovery).
+///
+/// We do NOT clear the current session/client — Esc out of the swapper/hub returns to
+/// the active chat unchanged.
 pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
     // Don't open the hub mid /new-KeyInput confirmation (mirror the picker-select
     // guard): the session tail is unstable until the new session's creds resolve.
@@ -278,8 +336,11 @@ pub(crate) fn handle_resume(state: &mut AppState) -> Result<()> {
         return Ok(());
     }
 
-    let hub = build_session_hub(state);
-    *state.mode_mut() = Mode::SessionHub(Box::new(hub));
+    // Transient signal only — the active loop (daemon vs standalone) converts it to the
+    // appropriate picker next tick. NEVER build `Mode::SessionHub` here: in the daemon
+    // that would put the daemon itself into a hub mode (clobbered by/clobbering the
+    // client) instead of signalling the client to open its local swapper.
+    state.rest.resume_pending = true;
     Ok(())
 }
 

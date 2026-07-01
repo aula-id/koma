@@ -25,11 +25,11 @@ pub async fn connect(path: &Path) -> std::io::Result<UnixStream> {
     UnixStream::connect(path).await
 }
 
-/// Convenience over [`store::daemon_sock_path`] + [`connect`]: resolve the
-/// canonical daemon socket path and connect to it.
+/// Convenience over [`store::daemon_sock_path`] + [`connect`]: resolve a SESSION's keyed
+/// daemon socket path (`run/<session_id>.sock`) and connect to it.
 #[allow(dead_code)] // wired in daemon stage 3+ (spawn-or-attach)
-pub async fn connect_default() -> anyhow::Result<UnixStream> {
-    let path = store::daemon_sock_path()?;
+pub async fn connect_default(session_id: &str) -> anyhow::Result<UnixStream> {
+    let path = store::daemon_sock_path(session_id)?;
     Ok(connect(&path).await?)
 }
 

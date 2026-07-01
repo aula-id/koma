@@ -23,6 +23,22 @@ use serde::{Deserialize, Serialize};
 #[allow(dead_code)]
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
+// ─── lightweight session metadata ────────────────────────────────────────────
+
+/// A NON-attaching snapshot of one session-daemon's single owned session — the data
+/// the hub/swapper collects when DISCOVERING live daemons (it probes each
+/// `run/<id>.sock` for this, never opening a full attach/snapshot stream). Carries
+/// only the few fields the picker needs: which session it is, its display name, its
+/// working dir (to disambiguate two sessions of the same name in the hub), and whether
+/// its agent is currently cooking.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionStatus {
+    pub session_id: String,
+    pub name: String,
+    pub pwd: String,     // the session's working dir, for disambiguation in the hub
+    pub working: bool,   // is the session's agent currently cooking?
+}
+
 // ─── client -> daemon ────────────────────────────────────────────────────────
 
 /// A request sent from a TUI client to the daemon over the unix socket.
@@ -35,6 +51,11 @@ pub enum ClientRequest {
     },
     Detach,
     ListSessions,
+    /// Lightweight metadata probe used by live-session DISCOVERY: ask the daemon for a
+    /// one-shot [`DaemonEvent::Status`] describing its single owned session, with NO
+    /// attach and NO snapshot stream. The daemon must answer this WITHOUT mutating any
+    /// session state (no create/attach, no foreground change, no Hello/Snapshot).
+    Status,
     Resync,
     SwitchForeground { session_id: String },
     SubmitInput { text: String },
@@ -78,6 +99,27 @@ pub enum DaemonEvent {
     Error(String),
     /// One-shot: the controller asked for the `/select` transcript dump.
     EnterSelect,
+    /// One-shot: signal the foreground client to open its LOCAL daemon swapper
+    /// (the `/resume` picker). Mirrors [`EnterSelect`] — a daemon-side `/resume`
+    /// (or `OpenSessionHub`) emits this to the requesting client INSTEAD of building
+    /// a daemon-side `Mode::SessionHub`, so the daemon never changes its own mode.
+    /// Handled entirely client-side in `render_loop` (it detaches + runs the swapper
+    /// standalone); the shadow treats it as a non-visual no-op.
+    OpenSwapper,
+    /// One-shot: signal the foreground client to spawn + attach a BRAND-NEW
+    /// session-daemon (the `/new` hand-off). Mirrors [`OpenSwapper`] — a daemon-side
+    /// `/new` sets `new_pending` and the hub emits this to the controlling client INSTEAD
+    /// of creating a session itself (a daemon owns exactly ONE session). `kill` is the
+    /// `/new kill` flag: `true` tears the CURRENT session-daemon down (`QuitDaemon`) before
+    /// attaching the new one; `false` leaves it cooking (resumable via the swapper). Handled
+    /// entirely client-side in `render_loop`/`client_run` (it detaches — or kills, then
+    /// detaches — and attaches a freshly minted id); the shadow treats it as a non-visual
+    /// no-op.
+    NewSession { kill: bool },
+    /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
+    /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
+    /// any snapshot — the connection is expected to close right after.
+    Status(SessionStatus),
 }
 
 // ─── mode discriminant ───────────────────────────────────────────────────────
