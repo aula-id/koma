@@ -37,12 +37,10 @@ pub(crate) fn kick_off_health_probe(rest: &mut AppStateRest) -> bool {
 /// Does NOT require an active session — the control panel is global state
 /// (daemon lifecycle), not session-scoped. Opens regardless of whether the
 /// daemon is installed or running (it shows the "not installed" / "stopped"
-/// state faithfully so the user can see why tools aren't appearing).
+/// state faithfully so the user can see why tools aren't appearing). Opening
+/// a panel is always safe mid-stream (read-only view; the turn keeps streaming),
+/// so there is no busy guard here.
 pub(super) fn handle_security(state: &mut AppState) -> Result<()> {
-    if state.rest.fg().waiting {
-        state.rest.fg_mut().status = "busy — wait for response".into();
-        return Ok(());
-    }
     // Read live status from the manager; fall back to Default (not installed,
     // not running, no tools) when there is no manager.
     let status = state
