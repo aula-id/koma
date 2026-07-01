@@ -151,8 +151,8 @@ fn draw_cooking(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
             entry.name.clone()
         } else {
             let state_marker = if entry.working { "● working" } else { "○ ready  " };
-            let current = if entry.is_foreground { "  (current)" } else { "" };
-            let right = format!("{state_marker}{current}");
+            let current = if entry.is_foreground { "(current)  " } else { "" };
+            let right = format!("{current}{state_marker}");
             let name_w = inner_w.saturating_sub(right.chars().count() + 2).max(4);
             let name = truncate(&entry.name, name_w);
             format!("{name:<name_w$}  {right}")
