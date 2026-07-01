@@ -59,6 +59,10 @@ pub struct SessionMeta {
     /// so a stale lock from a crashed instance reads as unlocked. The picker
     /// shows a lock marker and refuses to enter a locked session.
     pub locked: bool,
+    /// The working directory this session was opened from (as stored in the registry).
+    pub workdir: String,
+    /// The pwd_hash bucket this session belongs to.
+    pub pwd_hash: String,
 }
 
 /// Returns `~/.koma/` (the application data root).
@@ -409,10 +413,68 @@ pub fn list_sessions_for(pwd_hash: &str) -> Result<Vec<SessionMeta>> {
             modified,
             message_count,
             locked,
+            workdir: row.workdir.clone(),
+            pwd_hash: pwd_hash.to_string(),
         });
     }
 
     Ok(metas)
+}
+
+/// List ALL sessions across every working-directory bucket, most-recently updated first.
+///
+/// Like [`list_sessions_for`] but without a pwd filter: every session in the registry
+/// is returned regardless of which directory it was opened from. Each `SessionMeta`
+/// carries `workdir` and `pwd_hash` so callers can label and sort by directory.
+pub fn list_all_sessions() -> Result<Vec<SessionMeta>> {
+    let rows = session_registry::list_all()?;
+    let mut metas: Vec<SessionMeta> = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        // Use the stored pwd_hash directly — do NOT re-canonicalize/re-hash the
+        // workdir, which could differ on a machine where the path no longer exists.
+        let path = session_dir(&row.pwd_hash, &row.uuid)?;
+
+        let messages_path = path.join("messages.json");
+        let message_count = match std::fs::read(&messages_path) {
+            Ok(bytes) => serde_json::from_slice::<Vec<crate::dto::chat::ChatMessage>>(&bytes)
+                .map(|msgs| msgs.iter().filter(|m| m.role != crate::dto::chat::Role::System).count())
+                .unwrap_or(0),
+            Err(_) => 0,
+        };
+
+        let modified = row
+            .updated_at
+            .try_into()
+            .ok()
+            .map(|secs| SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+
+        let locked = is_locked(&path);
+
+        metas.push(SessionMeta {
+            id: row.uuid,
+            name: row.name,
+            path,
+            modified,
+            message_count,
+            locked,
+            workdir: row.workdir,
+            pwd_hash: row.pwd_hash,
+        });
+    }
+
+    Ok(metas)
+}
+
+/// Return the last path segment (basename) of `workdir` as a display label.
+/// Returns an empty string if the path has no filename component.
+pub(crate) fn dir_basename(workdir: &str) -> String {
+    std::path::Path::new(workdir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Create a brand-new session with a UUID id, bucketed by the current working
