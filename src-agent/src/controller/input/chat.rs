@@ -141,8 +141,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
 
     // The sub-agents panel is modal: Up/Down move the selection, Enter opens the
     // full-screen viewer for a spawned row, Ctrl+X kills the selected one (abrupt
-    // abort), Esc or any other key closes it. Mirrors the help-overlay modal
-    // handling above.
+    // abort). Esc closes the panel and swallows the key. Any OTHER key (printable
+    // chars like `/` or `@`, Backspace, etc.) closes the panel and FALLS THROUGH
+    // to the normal chat key handling below so the key reaches the composer — `/`
+    // opens the command palette, `@` opens file mentions.
     if rest.subagents_open {
         let count = rest.fg().subagents.len();
         if is_ctrl(&key, 'x') {
@@ -156,11 +158,13 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Up => {
                 rest.subagent_sel = rest.subagent_sel.saturating_sub(1);
+                return Action::None;
             }
             KeyCode::Down => {
                 if count > 0 {
                     rest.subagent_sel = (rest.subagent_sel + 1).min(count - 1);
                 }
+                return Action::None;
             }
             // Enter opens the full-screen viewer for the selected SPAWNED sub-agent
             // (any of running/done/killed/error — it has structured `messages`).
@@ -176,13 +180,20 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 } else {
                     rest.fg_mut().status = "sub-agent queued — not started yet".into();
                 }
+                return Action::None;
             }
-            // Esc or any non-nav key closes the panel.
+            // Esc: close the panel, swallow the key.
+            KeyCode::Esc => {
+                rest.subagents_open = false;
+                return Action::None;
+            }
+            // Any other key (printable `/`, `@`, Backspace, etc.): close the panel
+            // and fall through so the key reaches the normal chat composer below.
             _ => {
                 rest.subagents_open = false;
+                // fall through — do NOT return
             }
         }
-        return Action::None;
     }
 
     // Tool-approval modal: while a risky call is paused, only y/n/Esc matter.
