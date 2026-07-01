@@ -407,8 +407,11 @@ pub(crate) fn process_tools(
         // sentinel-tagged string; here we apply the state change via
         // `apply_workspace_change` (same primitive as `cd`).
         //
-        // `create`/`enter` result: starts with `GIT_WT_ENTER_PREFIX` + shadow path
-        // (create AUTO-ENTERS the freshly-added worktree via the same sentinel).
+        // `create` result: starts with `GIT_WT_CREATE_PREFIX` + shadow path.
+        //   → same state work as enter (push path into `settings.workdir`, persist,
+        //     apply_workspace_change), but returns a create-specific confirmation so
+        //     no model misreads it as a failure.
+        // `enter` result: starts with `GIT_WT_ENTER_PREFIX` + shadow path.
         //   → push the path into `settings.workdir` (if not already present),
         //     persist, then call `apply_workspace_change`.
         // `exit` result: exactly `GIT_WT_EXIT_PREFIX`.
@@ -428,6 +431,36 @@ pub(crate) fn process_tools(
             let result = super::dispatch::run_tool(state, sess_idx, &call);
             let final_result =
                 if let Some(target) =
+                    result.strip_prefix(crate::tool::git_worktree::GIT_WT_CREATE_PREFIX)
+                {
+                    // `create` succeeded: target is the shadow path string.
+                    // Same state work as enter: register the path + persist + switch cwd.
+                    let new_cwd = std::path::PathBuf::from(target);
+                    let target_str = target.to_string();
+                    {
+                        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            if !sess.settings.workdir.contains(&target_str) {
+                                sess.settings.workdir.push(target_str.clone());
+                            }
+                            let _ = sess.save();
+                        }
+                    }
+                    super::super::spawn::apply_workspace_change(
+                        state, sess_idx, new_cwd.clone(), client, handle,
+                    );
+                    // Emit a clear "created + entered" confirmation so no model
+                    // misreads this as a failure (unlike the bare "entered worktree"
+                    // string the old enter sentinel would have produced).
+                    let name = std::path::Path::new(target)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(target);
+                    format!(
+                        "created worktree '{name}' at {target} and switched into it \
+                         — you are now working inside the new worktree. \
+                         Use git_worktree({{\"action\":\"exit\"}}) to return to the repo root."
+                    )
+                } else if let Some(target) =
                     result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
                 {
                     // `enter` succeeded: target is the canonical path string.
