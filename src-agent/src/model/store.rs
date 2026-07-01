@@ -242,6 +242,38 @@ pub fn write_daemon_pid(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Path to the GLOBAL MCP daemon's unix-domain socket: `~/.koma/mcp.sock`.
+///
+/// UNLIKE the per-SESSION daemon sockets under [`run_dir`] (`run/<id>.sock`, one per
+/// session), the MCP daemon is a SINGLETON: exactly one process owns every configured
+/// MCP server connection so N session-daemons proxy to it instead of each spawning
+/// their own copies of a heavyweight server (e.g. `serena`). It therefore lives
+/// directly under [`base_dir`] (`~/.koma`), not keyed by any session. Whoever binds
+/// this socket IS the live MCP daemon (bind-as-oracle, same rule as the session
+/// sockets); the session-daemon MCP proxy (next commit) connects here.
+pub fn mcp_daemon_sock_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("mcp.sock"))
+}
+
+/// Path to the GLOBAL MCP daemon's PID file: `~/.koma/mcp.pid`.
+///
+/// Advisory only — recorded for diagnostics / `koma daemon kill` — NOT the liveness
+/// oracle (PIDs get reused; the bound [`mcp_daemon_sock_path`] socket is the oracle).
+/// Singleton, so it lives directly under [`base_dir`] alongside the socket rather than
+/// under [`run_dir`].
+pub fn mcp_daemon_pid_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("mcp.pid"))
+}
+
+/// Write the running MCP daemon's PID into [`mcp_daemon_pid_path`], overwriting any
+/// stale one. Best-effort + advisory (diagnostics / `kill`); an IO error is returned
+/// but callers treat it as non-fatal — the bound socket, not this file, is the
+/// liveness oracle. The MCP daemon's graceful-shutdown teardown unlinks it.
+pub fn write_mcp_daemon_pid() -> Result<()> {
+    std::fs::write(mcp_daemon_pid_path()?, std::process::id().to_string())?;
+    Ok(())
+}
+
 /// A stable identity string for the CURRENTLY-RUNNING executable, used as the
 /// daemon<->client build-skew handshake (task #142).
 ///

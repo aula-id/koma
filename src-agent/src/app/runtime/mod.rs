@@ -29,6 +29,7 @@ pub(crate) mod commands;
 mod shortsend;
 
 mod lifecycle;
+mod mcp_daemon;
 mod signals;
 mod session_mgmt;
 
@@ -55,6 +56,11 @@ pub use manage::{
 
 // Re-export lifecycle entry points (previously free fns in this file).
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
+
+// Re-export the GLOBAL MCP daemon entry so `main` can dispatch `koma --mcp-daemon`
+// (built in the `mcp_daemon` submodule). Additive: no session-daemon path uses it yet
+// — the session-daemon MCP proxy in the next commit will.
+pub use mcp_daemon::run_mcp_daemon;
 
 // Re-export session management helpers at the `runtime` level so sibling
 // submodules that use `crate::app::runtime::build_client` / `super::warm_session`
