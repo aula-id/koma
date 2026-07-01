@@ -1,4 +1,4 @@
 {
-  "version": "0.2.5",
-  "message": "worktree enter/exit now swaps the primary workspace root (workdir[0]) instead of appending, so edits land in the worktree instead of the repo root; manually-added extra roots are preserved."
+  "version": "0.2.6",
+  "message": "add web_download: fetch a URL and save it to the session media directory, surfaced in @-autocomplete; downloads are capped at 500 MiB and the save path is traversal- and sentinel-validated."
 }
