@@ -33,12 +33,16 @@ pub mod task;
 
 pub use dircache::DirCache;
 
-/// True for built-in tools that mutate the workspace (or run arbitrary shell
-/// commands) and therefore require approval in Normal mode. Deterministic,
-/// name-based — no classifier / network call. Canonical single-source definition
-/// used by both the interactive approval gate and the sub-agent engine.
+/// True for built-in tools that mutate the workspace, run arbitrary shell
+/// commands, mutate git state (local or remote, e.g. `git_operator` push /
+/// reset), or fetch from the network and write the result to disk
+/// (`web_download`) — and therefore require approval in Normal mode.
+/// Deterministic, name-based — no classifier / network call. Canonical
+/// single-source definition used by both the interactive approval gate and the
+/// sub-agent engine. NOTE: `git_worktree remove` is gated separately, inside its
+/// interception in `process_tools` (it never reaches this generic gate).
 pub(crate) fn tool_is_risky(name: &str) -> bool {
-    matches!(name, "write" | "delete" | "edit" | "bash")
+    matches!(name, "write" | "delete" | "edit" | "bash" | "git_operator" | "web_download")
 }
 
 /// Shared context handed to every tool invocation.
