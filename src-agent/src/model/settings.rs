@@ -202,6 +202,14 @@ pub struct Settings {
     /// as `vec!["…"]`; arrays load verbatim. Always serialised as an array.
     #[serde(default, deserialize_with = "string_or_vec")]
     pub workdir: Vec<String>,
+
+    /// While inside a git_worktree (entered or created via the `git_worktree`
+    /// tool), holds the base PRIMARY root (`workdir[0]`) to restore on exit.
+    /// `None` = at the base root (not inside a worktree). Only slot `[0]` swaps
+    /// to the worktree; manually-added extra roots in `workdir[1..]` are
+    /// preserved across enter/exit.
+    #[serde(default)]
+    pub workdir_saved: Option<String>,
     /// Whether the project-awareness summary is generated and injected into the
     /// system prompt. When false, no secondary-model call is made.
     #[serde(default = "default_awareness_enabled")]
@@ -345,6 +353,7 @@ impl Default for Settings {
             provider: DEFAULT_PROVIDER.to_string(),
             effort: String::new(),
             workdir: Vec::new(),
+            workdir_saved: None,
             awareness_enabled: default_awareness_enabled(),
             awareness_inherit: default_awareness_inherit(),
             awareness_model: DEFAULT_AWARENESS_MODEL.to_string(),
@@ -364,6 +373,44 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Enter a worktree: stash the current primary root once, then swap slot
+    /// `[0]` to `worktree`. Extra roots in `[1..]` are preserved (any lingering
+    /// duplicate of the worktree is dropped). Idempotent on `workdir_saved`:
+    /// entering a second worktree keeps the ORIGINAL base as the restore point.
+    pub fn enter_worktree(&mut self, worktree: String) {
+        if self.workdir_saved.is_none() {
+            self.workdir_saved = Some(self.workdir.first().cloned().unwrap_or_default());
+        }
+        if self.workdir.is_empty() {
+            self.workdir.push(worktree.clone());
+        } else {
+            self.workdir[0] = worktree.clone();
+        }
+        // Drop any duplicate of the worktree lingering in the extra roots.
+        let mut i = 1;
+        while i < self.workdir.len() {
+            if self.workdir[i] == worktree {
+                self.workdir.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Exit a worktree: restore the stashed base primary root into slot `[0]`.
+    /// Extra roots in `[1..]` stay. No-op if not inside a worktree.
+    pub fn exit_worktree(&mut self) {
+        if let Some(root) = self.workdir_saved.take() {
+            if self.workdir.is_empty() {
+                if !root.is_empty() {
+                    self.workdir.push(root);
+                }
+            } else {
+                self.workdir[0] = root;
+            }
+        }
+    }
+
     /// Deserialise from a `settings.json` file at `path`.
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
