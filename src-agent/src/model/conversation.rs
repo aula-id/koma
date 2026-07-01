@@ -173,16 +173,6 @@ impl Conversation {
                 _ => out.push(m.clone()),
             }
         }
-
-        // Never end the request on an assistant message: a trailing role=assistant is
-        // an "assistant prefill", which strict OpenAI-compatible backends (llama.cpp,
-        // vLLM, LiteLLM) reject (a 400, esp. with thinking enabled). No-op in the
-        // normal case (history ends on user/tool); only fires on the orphaned-assistant
-        // edge (e.g. an interrupted tool round).
-        while out.last().is_some_and(|m| m.role == Role::Assistant) {
-            out.pop();
-        }
-
         out
     }
 
