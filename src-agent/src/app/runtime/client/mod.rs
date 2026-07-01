@@ -309,7 +309,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
             }
 
             // --- SWAPPER: the detached `/resume` picker ---
-            ClientState::Swapper(mut hub) => match run_swapper(&mut terminal, &mut hub)? {
+            ClientState::Swapper(mut hub) => match run_swapper(&mut terminal, &mut hub, prev_session.as_deref())? {
                 // Picked a target session: attach to its daemon (spawning if needed). On
                 // success it becomes the foreground; on failure DEGRADE to the swapper
                 // rebuilt from fresh discovery (the dead/unreachable session drops out)

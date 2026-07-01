@@ -128,6 +128,96 @@ pub(super) enum SwapperOutcome {
     Cancel,
 }
 
+/// Rebuild `hub` from fresh cross-daemon discovery, preserving the user's UI position.
+///
+/// Captures the focused pane, the selected item identity (by session_id for cooking, by
+/// path for history), the history query, and `pending_kill`; rebuilds via
+/// [`build_local_hub`]; then restores all of those onto the fresh hub so the working/done
+/// status and session list update silently without jumping the cursor or clearing the
+/// history search.
+fn refresh_hub(hub: &mut SessionHub, current_id: Option<&str>) {
+    // Capture focus + selection identity before rebuild.
+    let saved_focus = hub.focus;
+    let saved_query = hub.history_query.clone();
+
+    // Cooking identity: the session_id of the currently selected cooking row (None for
+    // the synthetic "[+ new session]" row).
+    let saved_cooking_id: Option<Option<String>> = hub
+        .cooking
+        .get(hub.cooking_selected)
+        .map(|e| e.session_id.clone());
+
+    // History identity: the path of the currently selected history row (resolved through
+    // the filtered view, since history_selected indexes history_filtered).
+    let saved_history_path: Option<std::path::PathBuf> = hub
+        .history_filtered
+        .get(hub.history_selected)
+        .and_then(|&real| hub.history.get(real))
+        .map(|e| e.path.clone());
+
+    // Capture pending_kill by cooking session_id so we can re-resolve it after rebuild.
+    let saved_kill_id: Option<Option<String>> = hub
+        .pending_kill
+        .and_then(|idx| hub.cooking.get(idx))
+        .map(|e| e.session_id.clone());
+
+    // Rebuild from fresh discovery.
+    let mut fresh = build_local_hub(current_id);
+
+    // Restore focus.
+    fresh.focus = saved_focus;
+
+    // Restore history query + refilter the fresh history list against it.
+    fresh.history_query = saved_query;
+    fresh.refilter_history();
+
+    // Relocate cooking_selected: find the row in the fresh list whose session_id matches
+    // the captured identity. Fall back to clamping at the last valid index.
+    if let Some(captured_id) = saved_cooking_id {
+        let found = fresh
+            .cooking
+            .iter()
+            .position(|e| e.session_id == captured_id);
+        fresh.cooking_selected = found.unwrap_or_else(|| {
+            fresh.cooking_selected.min(fresh.cooking.len().saturating_sub(1))
+        });
+    } else {
+        fresh.cooking_selected = fresh
+            .cooking_selected
+            .min(fresh.cooking.len().saturating_sub(1));
+    }
+
+    // Relocate history_selected: find the entry in the fresh filtered view whose
+    // underlying history path matches the captured path. Clamp if gone.
+    if let Some(ref path) = saved_history_path {
+        let found = fresh.history_filtered.iter().position(|&real| {
+            fresh.history.get(real).map(|e| &e.path) == Some(path)
+        });
+        fresh.history_selected = found.unwrap_or_else(|| {
+            fresh
+                .history_selected
+                .min(fresh.history_filtered.len().saturating_sub(1))
+        });
+    } else {
+        fresh.history_selected = fresh
+            .history_selected
+            .min(fresh.history_filtered.len().saturating_sub(1));
+    }
+
+    // Re-resolve pending_kill: keep it only if the targeted session is still present in
+    // the fresh cooking list; clear it otherwise so the confirm bar doesn't dangle.
+    fresh.pending_kill = if let Some(kill_id) = saved_kill_id {
+        fresh
+            .cooking
+            .iter()
+            .position(|e| e.session_id == kill_id)
+    } else {
+        None
+    };
+
+    *hub = fresh;
+}
+
 /// Run the local daemon swapper: render the hub through the EXISTING renderer and drive
 /// it with the SAME key semantics as the daemon-side hub, returning the user's choice.
 ///
@@ -142,7 +232,14 @@ pub(super) enum SwapperOutcome {
 ///      pane's cursor; Tab/BackTab toggle focus; Backspace + printable keys edit the
 ///      history search while the History pane is focused; Esc/Ctrl+C cancel; Enter
 ///      selects), returning a [`SwapperOutcome`] the moment one is resolved;
-///   3. pace to ~60fps off the shared [`FRAME_BUDGET`].
+///   3. if [`REFRESH_INTERVAL`] has elapsed since the last refresh, re-poll live sessions
+///      via [`refresh_hub`] to update working/done status and any sessions that appeared or
+///      vanished — preserving the user's cursor position, pane focus, and history query;
+///   4. pace to ~60fps off the shared [`FRAME_BUDGET`].
+///
+/// `current_id` is the session the client is currently (or was previously) attached to;
+/// it is passed to [`build_local_hub`] on each refresh so the `is_foreground` flag stays
+/// correct across rebuilds.
 ///
 /// NOTE (deferred): killing a session from the swapper (`Ctrl+X` / `pending_kill`) is NOT
 /// wired here — that is a later concern (it must stop the target's daemon, not just drop a
@@ -151,14 +248,20 @@ pub(super) enum SwapperOutcome {
 pub(super) fn run_swapper(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     hub: &mut SessionHub,
+    current_id: Option<&str>,
 ) -> Result<SwapperOutcome> {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    /// How often to re-poll live sessions and refresh the hub in place.
+    const REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
 
     // Throwaway shadow built ONCE (not per frame): `view::draw` dispatches on
     // `state.mode()`, so writing this hub onto the shadow's foreground mode each frame
     // renders it identically to a live `/resume`. Reusing the shadow avoids re-allocating a
     // whole `AppState` (+ its version-check channel) at 60fps; only the small hub is cloned.
     let mut shadow = AppState::new(Mode::Chat);
+
+    let mut last_refresh = Instant::now();
 
     loop {
         let frame_start = Instant::now();
@@ -179,7 +282,14 @@ pub(super) fn run_swapper(
             // next unconditional repaint relayouts on a resize.
         }
 
-        // (3) Pace to ~60fps (skip the sleep if a frame overran the budget).
+        // (3) Periodic live refresh: re-poll session discovery once per REFRESH_INTERVAL,
+        // updating working/done flags + session list without disturbing the user's cursor.
+        if last_refresh.elapsed() >= REFRESH_INTERVAL {
+            refresh_hub(hub, current_id);
+            last_refresh = Instant::now();
+        }
+
+        // (4) Pace to ~60fps (skip the sleep if a frame overran the budget).
         if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
             std::thread::sleep(rem);
         }
