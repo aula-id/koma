@@ -63,16 +63,14 @@ pub(super) fn preselect_effort(options: &[String], effort: &str) -> usize {
 /// Handle the `/effort` command: open the effort picker for the current model.
 ///
 /// Needs an active session + client (the menu is per-model and the
-/// catalogue fetch uses the client). Blocked while a request is in flight,
-/// mirroring the /settings + /compact guards.
+/// catalogue fetch uses the client). Opening a picker overlay is always safe
+/// mid-stream (read-only view; the turn keeps streaming), so there is no busy
+/// guard here. The effort value is only written when the user CONFIRMS a
+/// selection inside the picker, which is a separate handler.
 pub(super) fn handle_effort(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
 ) -> Result<()> {
-    if state.rest.fg().waiting {
-        state.rest.fg_mut().status = "busy — wait for response".into();
-        return Ok(());
-    }
     // `_c` only gates "is there a usable client?"; the catalogue is now
     // fetched on demand by the debounced tick, not here.
     let (Some(_c), Some(settings)) = (
