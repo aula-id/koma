@@ -1,18 +1,19 @@
 //! Key handler for the `/quit` confirm overlay (`Mode::QuitConfirm`).
 //!
-//! The overlay is a navigable horizontal button row — `[close window]`,
-//! `[minimize]`, `[cancel]` (indices 0/1/2). Two ways to drive it:
+//! The overlay is a navigable horizontal button row — `[close window (quit)]`,
+//! `[detach]`, `[cancel]` (indices 0/1/2). Two ways to drive it:
 //!
 //!   * NAVIGATE then activate: Left/Right (or `h`/`l`) and Tab/Shift+Tab move
 //!     focus across the row (mutating `s.selected`); Enter activates the focused
 //!     button.
-//!   * DIRECT shortcuts: `k` close window, `d` minimize/detach, `Esc`/`Ctrl+C`
+//!   * DIRECT shortcuts: `k` close window (quit), `d` detach, `Esc`/`Ctrl+C`
 //!     cancel — fire their action immediately regardless of focus.
 //!
 //! NOTE: this LOCAL handler runs only in the single-process TUI (and the headless
 //! daemon, which never has a TTY in the overlay) — an ATTACHED client intercepts
 //! these keys client-side in `client::input::handle_quit_confirm_key`, where `[k]`
-//! means "close THIS window" (per-window, C4), not the local whole-process kill.
+//! KILLS this window's session-daemon (daemon-per-session) and `[d]` detaches it,
+//! rather than the local whole-process quit this handler performs.
 //!
 //! Activation maps the focused index to an action:
 //!   `0` → [`Action::QuitKillAll`], `1` → [`Action::QuitDetach`],
@@ -27,7 +28,7 @@ use crate::app::state::AppStateRest;
 use super::{is_ctrl, Action};
 
 /// Map a focused button index to its action. Order matches the view + the
-/// event-loop click hit-test: `0` = close window, `1` = minimize (detach),
+/// event-loop click hit-test: `0` = close window (quit), `1` = minimize (detach),
 /// `2` = cancel. Out-of-range falls back to the safe cancel.
 fn action_for(idx: usize) -> Action {
     match idx {

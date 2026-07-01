@@ -261,7 +261,7 @@ fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool 
 ///   - LOCAL TUI: there is no IPC; the forwarded-key story does not apply. The `[k]` key
 ///     runs through `handle_key` -> `QuitKillAll` -> `handle_quit_kill_all`, which sets
 ///     `state.rest.should_quit`. In the standalone `run_loop` that simply breaks the loop
-///     and the process exits (one window, so "close window" == quit koma). NOTE: this
+///     and the process exits (one window, so "close window (quit)" == quit koma). NOTE: this
 ///     `should_quit` -> `close_all_sessions` translation BELOW is effectively dormant for
 ///     clients now (no client sets `should_quit` on the daemon); it remains only as a
 ///     defensive sweep in case a future daemon-side path ever sets the flag.
@@ -322,6 +322,28 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     `/select`) BEFORE `stream_deltas` — the EnterSelect is a control frame, not
         //     a render delta, and its seq is independent of the snapshot stream.
         hub.drain_select_pending(state);
+
+        // 3a-pre2. `/resume` hand-off (daemon-per-session swapper): a just-drained
+        //     `/resume` slash-command (or an `OpenSessionHub` attach-request) set
+        //     `state.rest.resume_pending` INSTEAD of building a daemon-side hub mode.
+        //     Mirror `/select`: signal the CONTROLLER client to open its OWN local
+        //     swapper via a one-shot `DaemonEvent::OpenSwapper`, leaving the daemon's
+        //     own mode untouched (it stays in Chat). Consume the flag here, right after
+        //     `drain_select_pending`, so it observes a same-tick `/resume` and rides the
+        //     same control-frame seam BEFORE `stream_deltas`.
+        hub.drain_resume_pending(state);
+
+        // 3a-pre3. `/new` hand-off (daemon-per-session spawn): a just-drained `/new`
+        //     slash-command set `state.rest.new_pending = Some(kill)` INSTEAD of creating a
+        //     session (a daemon owns ONE session, so `/new` makes another DAEMON — a
+        //     client-side act). Mirror `/resume`: signal the CONTROLLER client to spawn +
+        //     attach a brand-new session-daemon via a one-shot
+        //     `DaemonEvent::NewSession { kill }`, leaving the daemon's own mode untouched (it
+        //     stays in Chat, cooking, until the client detaches — plain `/new` — or sends
+        //     `QuitDaemon` — `/new kill`). Consume the flag here, right after
+        //     `drain_resume_pending`, so it observes a same-tick `/new` and rides the same
+        //     control-frame seam BEFORE `stream_deltas`.
+        hub.drain_new_pending(state);
 
         // 3a. Daemon-side `should_quit` sweep: if anything daemon-side ever sets
         //     `should_quit` (via `handle_quit_kill_all`), translate it to "close every

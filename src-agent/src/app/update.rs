@@ -58,7 +58,12 @@ pub fn run_update() -> Result<()> {
         ));
     }
 
-    // 3. Done.
+    // 3. Reap any surviving daemons — covers a pre-0.2.0 global daemon that was running
+    //    alongside 0.2.0 daemons (or a first upgrade FROM 0.1.x where step 1 killed
+    //    nothing). Best-effort: a reap failure must never block a successful update.
+    super::migrate_legacy_daemon();
+
+    // 4. Done.
     println!("koma updated. Run 'koma' to start.");
     Ok(())
 }

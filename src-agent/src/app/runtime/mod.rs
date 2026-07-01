@@ -29,6 +29,7 @@ pub(crate) mod commands;
 mod shortsend;
 
 mod lifecycle;
+mod mcp_daemon;
 mod signals;
 mod session_mgmt;
 
@@ -44,14 +45,23 @@ pub use client::client_run;
 // `koma daemon <verb>` before the TUI (defined in the `manage` submodule, #118).
 //
 // `daemon_alive` + `ensure_daemon_running` are the spawn-or-attach mechanism the
-// default-launch flip (Stage 7) consumes: `daemon_alive` is the bind-as-oracle probe
-// the `--local` guard uses to REFUSE running a second writer against a live daemon;
-// `ensure_daemon_running` is the default path's "connect if up, else spawn a detached
-// daemon and wait until it accepts" primitive (the thin client then attaches itself).
-pub use manage::{daemon_alive, ensure_daemon_running, print_daemon_usage, run_daemon_subcommand};
+// default-launch flip (Stage 7) consumes: `daemon_alive(session_id)` is the per-session
+// bind-as-oracle probe; `any_daemon_alive` is its any-session twin, which the `--local`
+// guard uses to REFUSE running a second writer while ANY session-daemon is live;
+// `ensure_daemon_running(session_id, …)` is the default path's "connect if up, else spawn
+// a detached daemon and wait until it accepts" primitive (the thin client then attaches).
+pub use manage::{
+    any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
+    run_daemon_subcommand,
+};
 
 // Re-export lifecycle entry points (previously free fns in this file).
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
+
+// Re-export the GLOBAL MCP daemon entry so `main` can dispatch `koma --mcp-daemon`
+// (built in the `mcp_daemon` submodule). Additive: no session-daemon path uses it yet
+// — the session-daemon MCP proxy in the next commit will.
+pub use mcp_daemon::run_mcp_daemon;
 
 // Re-export session management helpers at the `runtime` level so sibling
 // submodules that use `crate::app::runtime::build_client` / `super::warm_session`

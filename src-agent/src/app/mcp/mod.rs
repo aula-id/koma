@@ -20,7 +20,26 @@
 //! name is a stable, model-safe identifier. The manager keeps the reverse map
 //! `namespaced -> (server uuid, original tool name)` so a call can be dispatched.
 //!
-//! ## Concurrency model
+//! ## Two backends: Local vs Proxy
+//!
+//! [`McpManager`] is a thin facade over an internal [`McpBackend`]:
+//!
+//! - **`Local`** — the manager OWNS the `rmcp` connections (the behaviour described
+//!   below). Built by [`McpManager::connect_all`]; used by the standalone `--local`
+//!   TUI and as the session-daemon's fallback when the global MCP daemon is
+//!   unreachable.
+//! - **`Proxy`** — the manager owns NO connections; it forwards every request over
+//!   the shared frame codec to the GLOBAL MCP daemon (`koma --mcp-daemon`), which
+//!   owns the one real `Local` manager. Built by [`McpManager::connect_proxy`]; used
+//!   by session-daemons so N sessions share ONE copy of every heavyweight MCP server
+//!   instead of each spawning their own. `tool_defs`/`tool_names` are served from a
+//!   cache populated at connect (and refreshed on `reconnect`); `execute_blocking`
+//!   /`server_status` do a fresh connect-per-call to the daemon socket.
+//!
+//! Every public method matches on the backend, so the call sites (ToolCtx dispatch,
+//! the `/mcp` panel, the reconnect handler) are identical for both.
+//!
+//! ## Concurrency model (Local backend)
 //!
 //! The `rmcp` connections are async and must live on the app's tokio runtime (a
 //! stdio connection owns the child process; dropping the service kills the child).
@@ -43,6 +62,9 @@
 //!   that runtime).
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream as StdUnixStream;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -52,6 +74,8 @@ use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioC
 use rmcp::ServiceExt;
 
 use crate::dto::openrouter::{ToolDef, ToolFunctionDef};
+use crate::ipc::frame::FrameReader;
+use crate::ipc::mcp_proto::{McpRequest, McpResponse};
 use crate::model::app_config::{McpServerEntry, McpTransport};
 
 /// How long a single server connect (spawn + MCP initialize + first tool list)
@@ -113,18 +137,48 @@ struct Snapshot {
     generation: u64,
 }
 
-/// The global MCP client manager.
+/// How long the [`McpBackend::Proxy`] waits for the global MCP daemon to answer a
+/// single request before giving up. Sized to just outrun the daemon's own
+/// [`CALL_TIMEOUT`] on a `Call` (the daemon returns a timeout string of its own at
+/// 60s, so the proxy's read should not fire first), with a small margin for the
+/// round-trip. A hung/vanished daemon then surfaces as an error string to the model
+/// instead of hanging the tool thread forever.
+const PROXY_IO_TIMEOUT: Duration = Duration::from_secs(65);
+
+/// The internal backend of an [`McpManager`]: either it OWNS the connections
+/// (`Local`) or it forwards to the global MCP daemon that does (`Proxy`). See the
+/// module docs ("Two backends").
+enum McpBackend {
+    /// This manager owns the live `rmcp` connections. Holds the runtime [`Handle`]
+    /// (so async work can be spawned from sync code) and a mutex-guarded
+    /// [`Snapshot`] of live connections + discovered tools.
+    Local {
+        handle: tokio::runtime::Handle,
+        snapshot: Mutex<Snapshot>,
+    },
+    /// This manager owns NO connections; it proxies to the global MCP daemon at
+    /// `sock`. `cache` holds the `(defs, names)` fetched at connect (and refreshed
+    /// on `reconnect`) so the hot advertise accessors (`tool_defs`/`tool_names`)
+    /// answer WITHOUT a socket round-trip; `execute_blocking`/`server_status` do a
+    /// fresh connect-per-call.
+    Proxy {
+        sock: PathBuf,
+        cache: Mutex<(Vec<ToolDef>, Vec<String>)>,
+    },
+}
+
+/// The global MCP client manager — a facade over an [`McpBackend`].
 ///
-/// Holds the runtime [`Handle`] (so async work can be spawned from sync code) and a
-/// mutex-guarded [`Snapshot`] of live connections + discovered tools. Cloned cheaply
-/// via the `Arc` returned by [`Self::connect_all`].
+/// A `Local` backend owns the `rmcp` connections (the runtime [`Handle`] + a
+/// mutex-guarded [`Snapshot`]); a `Proxy` backend forwards to the global MCP daemon.
+/// Every public method matches on the backend, so call sites are backend-agnostic.
+/// Cloned cheaply via the `Arc` returned by [`Self::connect_all`] / [`Self::connect_proxy`].
 pub struct McpManager {
-    handle: tokio::runtime::Handle,
-    snapshot: Mutex<Snapshot>,
+    backend: McpBackend,
 }
 
 impl McpManager {
-    /// Build the manager and kick off a background connect for every ENABLED
+    /// Build a LOCAL manager and kick off a background connect for every ENABLED
     /// server. Returns immediately — connecting never blocks startup.
     ///
     /// With no enabled servers this is effectively a no-op constructor: the
@@ -135,8 +189,10 @@ impl McpManager {
         servers: &[McpServerEntry],
     ) -> Arc<Self> {
         let manager = Arc::new(Self {
-            handle: handle.clone(),
-            snapshot: Mutex::new(Snapshot::default()),
+            backend: McpBackend::Local {
+                handle: handle.clone(),
+                snapshot: Mutex::new(Snapshot::default()),
+            },
         });
 
         for server in servers {
@@ -150,6 +206,41 @@ impl McpManager {
         }
 
         manager
+    }
+
+    /// Build a PROXY manager pointed at the global MCP daemon listening on `sock`
+    /// (`~/.koma/mcp.sock`). Fetches the daemon's advertised `(defs, names)` up front
+    /// via [`McpRequest::List`] and seeds the cache so the hot advertise accessors
+    /// answer without a round-trip.
+    ///
+    /// Returns `Err` if the daemon can't be reached (or answers something other than
+    /// [`McpResponse::Tools`]); the caller (`run_daemon`) uses that to FALL BACK to a
+    /// `Local` manager, so a missing/broken daemon is never worse than today.
+    ///
+    /// A `handle` is accepted for signature symmetry with [`Self::connect_all`] (and
+    /// so a future async-proxy variant can spawn on it); the current proxy is fully
+    /// synchronous connect-per-call, so it is not stored.
+    pub fn connect_proxy(
+        _handle: &tokio::runtime::Handle,
+        sock: PathBuf,
+    ) -> anyhow::Result<Arc<Self>> {
+        // Prime the advertise cache from the daemon. A connect/list failure here is
+        // the fallback trigger — surface it so the caller drops to a Local manager.
+        let (defs, names) = match proxy_request(&sock, &McpRequest::List)? {
+            McpResponse::Tools { defs, names } => (defs, names),
+            other => {
+                return Err(anyhow::anyhow!(
+                    "global MCP daemon answered List with an unexpected response: {other:?}"
+                ))
+            }
+        };
+
+        Ok(Arc::new(Self {
+            backend: McpBackend::Proxy {
+                sock,
+                cache: Mutex::new((defs, names)),
+            },
+        }))
     }
 
     /// Apply a NEW server set live: tear down the current connections (so their
@@ -168,13 +259,42 @@ impl McpManager {
     /// (via [`Self::spawn_connect`]). The lock is never held across an `.await` or
     /// across a spawn.
     pub fn reconnect(self: &Arc<Self>, servers: &[McpServerEntry]) {
+        // PROXY: the global daemon owns the real connections, so forward the new
+        // server set to IT and then refresh our local advertise cache from a fresh
+        // List. Best-effort: on any daemon error the cache is left as-is (stale but
+        // usable) — a failed live-reconnect is never worse than the prior state.
+        let (handle, snapshot) = match &self.backend {
+            McpBackend::Local { handle, snapshot } => (handle, snapshot),
+            McpBackend::Proxy { sock, cache } => {
+                match proxy_request(sock, &McpRequest::Reconnect { servers: servers.to_vec() }) {
+                    Ok(McpResponse::Ack) => {}
+                    Ok(other) => eprintln!(
+                        "mcp proxy: reconnect got an unexpected response ({other:?}); \
+                         cache left unchanged"
+                    ),
+                    Err(e) => eprintln!("mcp proxy: reconnect to global daemon failed: {e:#}"),
+                }
+                // Refresh the advertise cache so the panel/advertise reflect the new
+                // set once the daemon has applied it. A List failure leaves the old
+                // cache in place.
+                match proxy_request(sock, &McpRequest::List) {
+                    Ok(McpResponse::Tools { defs, names }) => {
+                        *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("mcp proxy: post-reconnect List failed: {e:#}"),
+                }
+                return;
+            }
+        };
+
         // Take the old connections out under the lock, then drop the guard BEFORE
         // doing any async teardown. `tools` is cleared here so stale tools stop
         // being advertised immediately; the new tools repopulate as servers
         // reconnect. (Holding the lock across the teardown await would violate the
         // no-lock-across-await rule and could deadlock the sync readers.)
         let old_conns: Vec<ServerConn> = {
-            let mut snap = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+            let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
             snap.tools.clear();
             // Bump the generation under the SAME lock that clears conns+tools, so any
             // connect task spawned for the OLD config (which captured the previous
@@ -190,7 +310,7 @@ impl McpManager {
         // Best-effort — a failed cancel still drops the service, whose drop guard
         // aborts it. We do NOT block the caller on this.
         if !old_conns.is_empty() {
-            self.handle.spawn(async move {
+            handle.spawn(async move {
                 for conn in old_conns {
                     if let Err(e) = conn.service.cancel().await {
                         eprintln!("mcp: teardown of a connection failed: {e}");
@@ -242,13 +362,27 @@ impl McpManager {
     /// (tools dropped, conn discarded) rather than advertise tools it can't dispatch
     /// correctly. This check is synchronous, under the same insert lock.
     fn spawn_connect(self: &Arc<Self>, server: McpServerEntry) {
+        // spawn_connect is only ever reached on a Local backend (connect_all /
+        // reconnect). Extract the runtime handle to spawn on; a Proxy manager has no
+        // connections to spawn, so it is a no-op guard.
+        let handle = match &self.backend {
+            McpBackend::Local { handle, .. } => handle.clone(),
+            McpBackend::Proxy { .. } => return,
+        };
         let mgr = Arc::clone(self);
-        self.handle.spawn(async move {
+        handle.spawn(async move {
+            // The snapshot lives on the Local backend; bail if this manager is a Proxy
+            // (unreachable — spawn_connect returned early above — but keeps the match
+            // total without an unwrap).
+            let snapshot = match &mgr.backend {
+                McpBackend::Local { snapshot, .. } => snapshot,
+                McpBackend::Proxy { .. } => return,
+            };
             // Capture the CURRENT generation under a brief lock BEFORE the connect
             // await. If a reconnect bumps it while we're connecting, the post-await
             // re-check below will see the mismatch and discard this result.
             let gen_at_start = {
-                let snap = mgr.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
                 snap.generation
             };
 
@@ -270,7 +404,7 @@ impl McpManager {
                     {
                         // Lock taken only now (post-await), released at end of this
                         // block — never held across an await.
-                        let mut snap = mgr.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
 
                         if snap.generation != gen_at_start {
                             // A reconnect happened mid-connect: this result belongs to
@@ -324,26 +458,42 @@ impl McpManager {
     /// `tools` array. Empty when nothing has connected yet (or no servers are
     /// configured), so the advertise path pays nothing.
     pub fn tool_defs(&self) -> Vec<ToolDef> {
-        let snap = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
-        snap.tools
-            .iter()
-            .map(|t| ToolDef {
-                kind: "function".into(),
-                function: ToolFunctionDef {
-                    name: t.namespaced.clone(),
-                    description: t.description.clone(),
-                    parameters: t.parameters.clone(),
-                },
-            })
-            .collect()
+        match &self.backend {
+            McpBackend::Local { snapshot, .. } => {
+                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                snap.tools
+                    .iter()
+                    .map(|t| ToolDef {
+                        kind: "function".into(),
+                        function: ToolFunctionDef {
+                            name: t.namespaced.clone(),
+                            description: t.description.clone(),
+                            parameters: t.parameters.clone(),
+                        },
+                    })
+                    .collect()
+            }
+            // Proxy: serve from the cache primed at connect / refreshed on reconnect.
+            McpBackend::Proxy { cache, .. } => {
+                cache.lock().unwrap_or_else(|p| p.into_inner()).0.clone()
+            }
+        }
     }
 
     /// The namespaced names of every discovered tool, for the advertise allow-list
     /// (the stream filter keeps only tools whose name is in the advertise set, so
     /// the MCP names must be appended there or they would be dropped).
     pub fn tool_names(&self) -> Vec<String> {
-        let snap = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
-        snap.tools.iter().map(|t| t.namespaced.clone()).collect()
+        match &self.backend {
+            McpBackend::Local { snapshot, .. } => {
+                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                snap.tools.iter().map(|t| t.namespaced.clone()).collect()
+            }
+            // Proxy: serve the cached names (kept in lockstep with the cached defs).
+            McpBackend::Proxy { cache, .. } => {
+                cache.lock().unwrap_or_else(|p| p.into_inner()).1.clone()
+            }
+        }
     }
 
     /// Per-server discovered-tool count, keyed by server uuid.
@@ -356,40 +506,84 @@ impl McpManager {
     /// flattened `tools` list, tallied by `server_uuid`. Best-effort + cheap: it
     /// just locks the snapshot and walks two small collections.
     pub fn server_status(&self) -> std::collections::HashMap<String, usize> {
-        let snap = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
-        // Seed every CONNECTED server at 0 so one with no tools still shows as
-        // connected; then tally the discovered tools by their owning server.
-        let mut counts: std::collections::HashMap<String, usize> =
-            snap.conns.keys().map(|uuid| (uuid.clone(), 0)).collect();
-        for t in &snap.tools {
-            *counts.entry(t.server_uuid.clone()).or_insert(0) += 1;
+        match &self.backend {
+            McpBackend::Local { snapshot, .. } => {
+                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                // Seed every CONNECTED server at 0 so one with no tools still shows as
+                // connected; then tally the discovered tools by their owning server.
+                let mut counts: std::collections::HashMap<String, usize> =
+                    snap.conns.keys().map(|uuid| (uuid.clone(), 0)).collect();
+                for t in &snap.tools {
+                    *counts.entry(t.server_uuid.clone()).or_insert(0) += 1;
+                }
+                counts
+            }
+            // Proxy: ask the global daemon for the live per-server map. Best-effort —
+            // any connect/decode failure (or an unexpected reply) reads as an EMPTY map
+            // so the `/mcp` panel degrades to "no live status" rather than erroring.
+            McpBackend::Proxy { sock, .. } => match proxy_request(sock, &McpRequest::Status) {
+                Ok(McpResponse::Status(map)) => map,
+                _ => std::collections::HashMap::new(),
+            },
         }
-        counts
     }
 
-    /// THE SYNC→ASYNC BRIDGE. Execute a namespaced MCP tool call and return its
-    /// flattened text result.
+    /// Execute a namespaced MCP tool call and return its flattened text result.
     ///
-    /// Looks up `(server, original tool name)` for `namespaced_name`, clones the
-    /// owning server's `Peer`, then runs the async `call_tool` ON the runtime handle
-    /// and blocks this (synchronous, possibly-in-runtime) thread on an
-    /// `mpsc::recv_timeout`. We deliberately do NOT use `Handle::block_on` because
-    /// `Tool::run` may already be executing inside the tokio runtime, where
-    /// `block_on` panics.
-    ///
-    /// The [`rmcp::model::CallToolResult`] content blocks are flattened into one
-    /// string (text blocks concatenated; non-text blocks noted). A result the
-    /// server flagged as an error (`is_error == Some(true)`) is returned as
-    /// `Err(...)` so the caller surfaces it as a tool error.
+    /// - **Local** — THE SYNC→ASYNC BRIDGE: looks up `(server, original tool name)`
+    ///   for `namespaced_name`, clones the owning server's `Peer`, runs the async
+    ///   `call_tool` ON the runtime handle, and blocks this (synchronous,
+    ///   possibly-in-runtime) thread on an `mpsc::recv_timeout`. We deliberately do
+    ///   NOT use `Handle::block_on` because `Tool::run` may already be executing
+    ///   inside the tokio runtime, where `block_on` panics. The
+    ///   [`rmcp::model::CallToolResult`] content blocks are flattened into one string;
+    ///   a server-flagged error (`is_error == Some(true)`) is returned as `Err(...)`.
+    /// - **Proxy** — forwards a [`McpRequest::Call`] to the global MCP daemon over the
+    ///   shared frame codec (a fresh connect-per-call: simple + robust; the daemon
+    ///   fans concurrent connections out itself) and returns its [`McpResponse`].
+    ///   The read is bounded by [`PROXY_IO_TIMEOUT`] so a hung daemon surfaces an
+    ///   error string instead of hanging the tool thread forever. The daemon folds a
+    ///   tool-level error into [`McpResponse::CallResult`] (so it comes back as `Ok`,
+    ///   exactly as the model expects a tool error); a PROTOCOL fault comes back as
+    ///   [`McpResponse::Error`] → `Err`.
     pub fn execute_blocking(
         &self,
         namespaced_name: &str,
         args: &serde_json::Value,
     ) -> Result<String, String> {
+        let (handle, snapshot) = match &self.backend {
+            McpBackend::Local { handle, snapshot } => (handle, snapshot),
+            // PROXY: forward the call to the global daemon. `server_uuid` is left
+            // empty — the daemon resolves the owning server from the namespaced
+            // `tool` name (matching the in-process resolution below).
+            McpBackend::Proxy { sock, .. } => {
+                let req = McpRequest::Call {
+                    server_uuid: String::new(),
+                    tool: namespaced_name.to_string(),
+                    args: args.to_string(),
+                };
+                return match proxy_request(sock, &req) {
+                    // The daemon already folded any tool-level error into the result
+                    // string, so a CallResult is always the model-facing tool output.
+                    Ok(McpResponse::CallResult(s)) => Ok(s),
+                    // A protocol fault (malformed args, etc.) is a real error.
+                    Ok(McpResponse::Error(e)) => Err(e),
+                    Ok(other) => Err(format!(
+                        "MCP tool '{namespaced_name}': unexpected daemon response {other:?}"
+                    )),
+                    // Connect/timeout/decode failure talking to the daemon.
+                    Err(e) => Err(format!(
+                        "MCP tool '{namespaced_name}': global daemon call failed: {e:#}"
+                    )),
+                };
+            }
+        };
+
+        // --- Local dispatch (unchanged) ---
         // Resolve the owning server + original tool name, and clone the Peer so the
         // async closure owns it (and we drop the snapshot lock before spawning).
         let (peer, original) = {
-            let snap = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+            let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
             let tool = snap
                 .tools
                 .iter()
@@ -414,7 +608,7 @@ impl McpManager {
         // (where the connection lives) instead of a fresh OS thread.
         let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
         let original_for_task = original.clone();
-        self.handle.spawn(async move {
+        handle.spawn(async move {
             let mut params = CallToolRequestParams::new(original_for_task);
             if let Some(map) = arguments {
                 params = params.with_arguments(map);
@@ -439,6 +633,76 @@ impl McpManager {
                 "MCP tool '{namespaced_name}' task dropped before result (runtime shut down?)"
             )),
         }
+    }
+}
+
+/// Send ONE [`McpRequest`] to the global MCP daemon at `sock` and block until its
+/// single [`McpResponse`] frame arrives (or the read times out).
+///
+/// The sync twin of the async accept loop's per-request cycle: a fresh blocking
+/// [`std::os::unix::net::UnixStream`] with [`PROXY_IO_TIMEOUT`] read/write timeouts,
+/// one length-prefixed JSON frame written (the SAME 4-byte-BE-len codec
+/// [`crate::ipc::frame`] defines), then one frame read back and decoded. Connect-
+/// per-call keeps it simple and robust — no long-lived connection state to manage,
+/// no shared mutable stream, and the daemon already parallelises across connections.
+///
+/// Runtime-free (plain std sockets), so it is safe to call from the synchronous tool
+/// dispatch thread whether or not a tokio runtime is in scope. Every failure
+/// (connect refused, write/read IO error, timeout, decode error) is surfaced as an
+/// `Err` the caller maps to a model-facing tool error or (for `connect_proxy`) a
+/// fallback trigger.
+fn proxy_request(sock: &std::path::Path, req: &McpRequest) -> anyhow::Result<McpResponse> {
+    use anyhow::Context;
+
+    // Connect (blocking). A refused/absent socket means the daemon isn't accepting.
+    let mut stream = StdUnixStream::connect(sock)
+        .with_context(|| format!("connect to global MCP daemon socket {}", sock.display()))?;
+    // Bound both directions so a wedged daemon can never hang the tool thread. The
+    // read timeout is the primary guard (a slow tool); the write side is naturally
+    // tiny but is bounded for symmetry.
+    stream
+        .set_read_timeout(Some(PROXY_IO_TIMEOUT))
+        .context("set MCP proxy read timeout")?;
+    stream
+        .set_write_timeout(Some(PROXY_IO_TIMEOUT))
+        .context("set MCP proxy write timeout")?;
+
+    proxy_send(&mut stream, req)?;
+    proxy_recv(&mut stream)
+}
+
+/// Write one [`McpRequest`] to `stream` as a length-prefixed JSON frame (4-byte
+/// big-endian payload length + payload — the shared [`crate::ipc::frame`] codec).
+/// The sync `McpRequest` twin of [`crate::app::runtime`]'s `send_request`.
+fn proxy_send(stream: &mut StdUnixStream, req: &McpRequest) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let payload = serde_json::to_vec(req).context("serialise McpRequest")?;
+    let prefix = (payload.len() as u32).to_be_bytes();
+    stream.write_all(&prefix).context("write MCP frame prefix")?;
+    stream.write_all(&payload).context("write MCP frame payload")?;
+    stream.flush().context("flush MCP frame")?;
+    Ok(())
+}
+
+/// Block until ONE complete [`McpResponse`] frame arrives on `stream`, reassembling
+/// via the shared [`FrameReader`] (so a frame split across reads — or coalesced with
+/// a following one — is handled identically to the async path). The stream's read
+/// timeout bounds the wait. The sync `McpResponse` twin of [`crate::app::runtime`]'s
+/// `recv_frame`.
+fn proxy_recv(stream: &mut StdUnixStream) -> anyhow::Result<McpResponse> {
+    use anyhow::{anyhow, Context};
+    let mut reader = FrameReader::new();
+    loop {
+        // A previous read may have buffered a whole frame already.
+        if let Some(bytes) = reader.next_frame().context("MCP frame reassembly")? {
+            return serde_json::from_slice(&bytes).context("decode McpResponse");
+        }
+        let mut chunk = [0u8; 8192];
+        let n = stream.read(&mut chunk).context("read from global MCP daemon socket")?;
+        if n == 0 {
+            return Err(anyhow!("global MCP daemon closed the connection mid-frame"));
+        }
+        reader.push(&chunk[..n]);
     }
 }
 

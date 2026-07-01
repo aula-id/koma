@@ -42,6 +42,7 @@ pub enum SessionKind {
 
 /// One row in the COOKING pane: a snapshot of a single live session, or a
 /// synthetic action row.
+#[derive(Clone)]
 pub struct CookingEntry {
     /// Index of this session in `AppStateRest::sessions`. Carried out on Enter so
     /// the foreground switch sets `foreground = idx` directly. Stable for the
@@ -62,9 +63,18 @@ pub struct CookingEntry {
     /// Whether this is the current foreground session, tagged `(current)`.
     /// Ignored for `NewSession` entries.
     pub is_foreground: bool,
+    /// The session's UUID (the on-disk dir name / socket key), used by the
+    /// client-side swapper to address the chosen session-daemon directly. The
+    /// synthetic `NewSession` row carries `None`; a real session carries
+    /// `Some(uuid)`.
+    // Populated now (daemon builder + client `build_local_hub`) but not yet READ —
+    // the swapper that consumes it lands next commit. Allow until then.
+    #[allow(dead_code)]
+    pub session_id: Option<String>,
 }
 
 /// One row in the HISTORY pane: an on-disk session not currently live.
+#[derive(Clone)]
 pub struct HistoryEntry {
     /// The session's on-disk directory path — the canonical identity used to load
     /// it (and to re-check its lock) when Enter opens it.
@@ -81,6 +91,10 @@ pub struct HistoryEntry {
 /// the on-disk sessions minus the live ones. `focus` is the active pane; each
 /// pane carries its OWN cursor so switching focus preserves where you were.
 /// Neither list is searchable — both are short navigable lists.
+///
+/// `Clone` is derived so the client-side swapper can snapshot a hub into a throwaway
+/// shadow `AppState` for the existing pure-from-snapshot renderer each frame.
+#[derive(Clone)]
 pub struct SessionHub {
     /// LIVE in-memory sessions, in `AppStateRest::sessions` order.
     pub cooking: Vec<CookingEntry>,
