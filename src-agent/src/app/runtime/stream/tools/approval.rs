@@ -90,6 +90,32 @@ pub(super) fn tac_inputs(
     }
 }
 
+/// True if `target_abs` was read/written/edited earlier in the conversation
+/// (i.e. the model has seen or authored its current content). Scans history for
+/// read/write/edit tool_calls whose "path" arg resolves to the same abs path.
+fn file_known_in_history(
+    messages: &[crate::dto::chat::ChatMessage],
+    workspaces: &[std::path::PathBuf],
+    target_abs: &std::path::Path,
+) -> bool {
+    for msg in messages {
+        let Some(tcs) = msg.tool_calls.as_ref() else { continue };
+        for tc in tcs {
+            if matches!(tc.function.name.as_str(), "read" | "write" | "edit") {
+                let sanitized = crate::dto::chat::sanitize_tool_arguments(&tc.function.arguments);
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&sanitized) {
+                    if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+                        if let Ok(abs) = crate::tool::resolve(workspaces, p) {
+                            if abs == target_abs { return true; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Drive the tool-approval state machine for the current round.
 ///
 /// Walks `pending_tool_calls` from `tool_idx`, running each call and collecting
@@ -476,6 +502,57 @@ pub(crate) fn process_tools(
             state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
             state.rest.sessions[sess_idx].tool_idx += 1;
             continue;
+        }
+        // Read-before-edit/overwrite guard: the model must have READ (or written/
+        // edited) a file earlier in this conversation before it can `edit` it, or
+        // `write`-overwrite an existing file. A write to a brand-new path is always
+        // allowed. If the path can't be parsed or resolved we skip the guard and let
+        // the tool fail on its own terms.
+        if matches!(call.function.name.as_str(), "edit" | "write") {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                let path_str = path_str.to_string();
+                // Build workspaces the same way the tools do.
+                let ctx = super::super::spawn::build_tool_ctx(state, sess_idx);
+                if let Ok(target_abs) = crate::tool::resolve(&ctx.workspaces, &path_str) {
+                    let is_edit = call.function.name == "edit";
+                    // write only guards when OVERWRITING an existing file; new file is exempt.
+                    let must_check = is_edit || target_abs.exists();
+                    if must_check {
+                        // Scope the immutable borrow of session so it ends before
+                        // we mutate state below (push result / advance tool_idx).
+                        let known = {
+                            let msgs = state.rest.sessions[sess_idx]
+                                .session
+                                .as_ref()
+                                .map(|s| s.conversation.messages())
+                                .unwrap_or(&[]);
+                            file_known_in_history(msgs, &ctx.workspaces, &target_abs)
+                        };
+                        if !known {
+                            let verb = if is_edit { "editing" } else { "overwriting" };
+                            let nudge = format!(
+                                "error: read '{path_str}' before {verb} it — call \
+                                 read({{\"path\":\"{path_str}\"}}) first so you're working \
+                                 against the current file, then retry. \
+                                 (Creating a brand-new file needs no prior read.)"
+                            );
+                            // Mirror exactly how the TAC classifier DENIES a call in
+                            // Auto mode (definite block): push a synthetic result for
+                            // this call id, advance tool_idx, and continue the loop
+                            // without running the tool.
+                            state.rest.sessions[sess_idx]
+                                .tool_results
+                                .push((call.id.clone(), nudge));
+                            state.rest.sessions[sess_idx].tool_idx += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
         // `sec_*` tools are harness-EXEMPT: security mode is explicit user
         // authorization to test their own target, so the TAC classifier (built to
