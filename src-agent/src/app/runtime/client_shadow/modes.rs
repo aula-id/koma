@@ -97,6 +97,8 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
             path: std::path::PathBuf::new(), // daemon-side load target; not rendered
             name: e.name,
             last_active: std::time::UNIX_EPOCH + Duration::from_secs(e.last_active_secs),
+            dir_label: String::new(),  // not projected over the wire; labels shown on daemon side
+            is_current_dir: false,
         })
         .collect();
     // The projected history is already filtered → identity filter over it.
@@ -119,6 +121,8 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 // own index, not by id). The client swapper sources its addressing
                 // id from `build_local_hub`/discovery, never from this path.
                 session_id: None,
+                dir_label: String::new(),  // not projected over the wire
+                is_current_dir: false,
             })
             .collect(),
         history,
@@ -288,6 +292,8 @@ pub(crate) fn shadow_picker(p: PickerSnapshot) -> PickerState {
                 modified: std::time::UNIX_EPOCH + Duration::from_secs(m.modified_secs),
                 message_count: m.message_count,
                 locked: m.locked,
+                workdir: String::new(),  // not projected over the wire
+                pwd_hash: String::new(),
             })
             .collect(),
         filtered_idx: p.filtered_idx,
