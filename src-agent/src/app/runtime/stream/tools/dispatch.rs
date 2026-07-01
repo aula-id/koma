@@ -78,17 +78,94 @@ pub(super) fn finish_tool_round(
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
-    // Push the collected tool results into the conversation + log them. Bind the
-    // session runtime once so `session` (mut) + `tool_results` (read) are
-    // disjoint field borrows of the same `SessionRuntime`.
+    // Drain any MEDIA_WORKDIR: workdir requests from web_download results FIRST,
+    // before pushing into the conversation. Each successful download prefixes its
+    // result with `MEDIA_WORKDIR:<path>\n` — collect the sentinel paths for the
+    // workdir side effect, and build a cleaned copy of each result (sentinel line
+    // stripped) that is what the model will see. Fix 1: model never sees the raw
+    // sentinel. Fix 3: validate the extracted path before mutating workdir.
+    let cleaned_results: Vec<(String, String)> = state.rest.sessions[sess_idx]
+        .tool_results
+        .iter()
+        .map(|(id, result)| {
+            if let Some(first_line) = result.lines().next() {
+                if first_line.starts_with("MEDIA_WORKDIR:") {
+                    // Strip the sentinel line: everything after the first '\n'.
+                    let body = result
+                        .find('\n')
+                        .map(|pos| &result[pos + 1..])
+                        .unwrap_or("")
+                        .to_string();
+                    return (id.clone(), body);
+                }
+            }
+            (id.clone(), result.clone())
+        })
+        .collect();
+
+    // Collect validated sentinel paths for the workdir side effect (Fix 3).
+    let media_dirs: Vec<String> = state.rest.sessions[sess_idx]
+        .tool_results
+        .iter()
+        .filter_map(|(_, result)| {
+            result
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("MEDIA_WORKDIR:"))
+                .and_then(|p| {
+                    // Fix 3: validate the extracted path is absolute and ends with
+                    // a "media" path component — matching how session_media_dir()
+                    // generates it (`<pwd_bucket_dir>/media/`). Reject anything
+                    // that doesn't fit this pattern.
+                    let path = std::path::Path::new(p);
+                    if path.is_absolute()
+                        && path.components().next_back()
+                            == Some(std::path::Component::Normal("media".as_ref()))
+                    {
+                        Some(p.to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect();
+
+    // Push the CLEANED tool results (sentinel stripped) into the conversation +
+    // log them. Bind the session runtime once so `session` (mut) + `tool_results`
+    // (read) are disjoint field borrows of the same `SessionRuntime`.
     {
         let rt = &mut state.rest.sessions[sess_idx];
         if let Some(sess) = rt.session.as_mut() {
-            for (id, result) in &rt.tool_results {
+            for (id, result) in &cleaned_results {
                 let _ = crate::model::msglog::append(&sess.path, Role::Tool, result, None);
                 sess.conversation.push_tool(id.clone(), result.clone());
             }
             let _ = sess.save();
+        }
+    }
+
+    // Apply the validated workdir side effect: append each media dir so the
+    // downloaded file appears in @-autocomplete.
+    if !media_dirs.is_empty() {
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+            let mut changed = false;
+            for dir in &media_dirs {
+                if !sess.settings.workdir.contains(dir) {
+                    sess.settings.workdir.push(dir.clone());
+                    changed = true;
+                }
+            }
+            if changed {
+                let _ = sess.save();
+                // Reindex the full workdir list so @-autocomplete picks up
+                // the new media directory.
+                let roots: Vec<std::path::PathBuf> =
+                    sess.settings.workdir.iter().map(std::path::PathBuf::from).collect();
+                crate::tool::dircache::reindex(
+                    roots,
+                    state.rest.sessions[sess_idx].dir_cache.clone(),
+                );
+            }
         }
     }
 

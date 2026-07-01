@@ -1,4 +1,4 @@
 {
-  "version": "0.2.5",
-  "message": "worktree enter/exit now swaps the primary workspace root (workdir[0]) instead of appending, so edits land in the worktree instead of the repo root; manually-added extra roots are preserved."
+  "version": "0.2.7",
+  "message": "session hub: /resume is now global — it lists sessions from every directory (current dir first), each labelled with its project; the working marker animates like a running sub-agent and the current session's title is italic+underlined."
 }

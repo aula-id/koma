@@ -135,6 +135,14 @@ fn draw_cooking(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
     let inner = pane_inner(frame, area, &format!("cooking ({real_sessions})"), focused, palette);
     let inner_w = inner.width as usize;
 
+    // Animated spinner frame — ticks every 80ms.
+    const SA_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let glyph = SA_SPINNER[((now_ms / 80) as usize) % SA_SPINNER.len()];
+
     let mut lines: Vec<Line> = Vec::new();
     for (i, entry) in hub.cooking.iter().enumerate() {
         let style = if focused && i == hub.cooking_selected {
@@ -147,18 +155,31 @@ fn draw_cooking(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
             Style::default().fg(palette.dim)
         };
 
-        let row = if entry.kind == SessionKind::NewSession {
-            entry.name.clone()
+        if entry.kind == SessionKind::NewSession {
+            lines.push(Line::styled(entry.name.clone(), style));
         } else {
-            let state_marker = if entry.working { "● working" } else { "○ ready  " };
-            let current = if entry.is_foreground { "(current)  " } else { "" };
-            let right = format!("{current}{state_marker}");
+            let marker = if entry.working {
+                format!("{glyph} working")
+            } else {
+                "○ ready  ".to_string()
+            };
+            let dir = truncate(&entry.dir_label, 14);
+            let right = if dir.is_empty() { marker.clone() } else { format!("{dir}  {marker}") };
             let name_w = inner_w.saturating_sub(right.chars().count() + 2).max(4);
             let name = truncate(&entry.name, name_w);
-            format!("{name:<name_w$}  {right}")
-        };
-
-        lines.push(Line::styled(row, style));
+            let name_style = if entry.is_foreground {
+                style.add_modifier(Modifier::ITALIC | Modifier::UNDERLINED)
+            } else {
+                style
+            };
+            let pad = name_w.saturating_sub(name.chars().count());
+            let line = Line::from(vec![
+                Span::styled(name, name_style),
+                Span::styled(" ".repeat(pad + 2), style),
+                Span::styled(right, style),
+            ]);
+            lines.push(line);
+        }
     }
 
     // Scroll so the selected row stays visible within this pane's height (only the
@@ -227,10 +248,12 @@ fn draw_history(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
             let Some(entry) = hub.history.get(real_idx) else {
                 continue;
             };
+            let dir = truncate(&entry.dir_label, 14);
             let age = fmt_age(entry.last_active);
-            let name_w = inner_w.saturating_sub(age.chars().count() + 2).max(4);
+            let right = if dir.is_empty() { age.clone() } else { format!("{dir}  {age}") };
+            let name_w = inner_w.saturating_sub(right.chars().count() + 2).max(4);
             let name = truncate(&entry.name, name_w);
-            let row = format!("{name:<name_w$}  {age:>}");
+            let row = format!("{name:<name_w$}  {right}");
 
             let style = if focused && i == hub.history_selected {
                 Style::default().fg(palette.sel_fg).bg(palette.sel_bg)

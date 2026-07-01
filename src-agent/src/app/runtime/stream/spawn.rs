@@ -41,6 +41,22 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     let worktrees_dir = session_ref
         .as_ref()
         .and_then(|s| crate::model::store::worktrees_dir(&s.pwd_hash).ok());
+    // The media download directory for web_download files: `<media>/downloads/`.
+    // Created on access so the tool can write into it without a separate
+    // create_dir_all. The MEDIA_WORKDIR: sentinel points at the parent `media/`
+    // dir so @-autocomplete shows the `downloads/` subdirectory.
+    let download_dir = session_ref
+        .as_ref()
+        .and_then(|s| {
+            crate::model::store::session_media_dir(&s.pwd_hash)
+                .ok()
+                .map(|m| m.join("downloads"))
+        });
+
+    // Ensure the downloads dir exists so web_download can write into it.
+    if let Some(ref dir) = download_dir {
+        let _ = std::fs::create_dir_all(dir);
+    }
     // The active internet tier drives `web_fetch`'s backend choice (Full →
     // scrapion browser, else raw HTTP). No session ⇒ default Simple.
     let internet_mode = session_ref
@@ -66,6 +82,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         dir_cache: rt.dir_cache.clone(),
         memory_dir,
         worktrees_dir,
+        download_dir,
         internet_mode,
         ssh_key,
         mcp_manager,
