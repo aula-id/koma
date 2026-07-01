@@ -451,7 +451,6 @@ fn spawn_mcp_and_wait_until_alive(path: &Path) -> Result<()> {
 /// socket and spawn a detached `koma --mcp-daemon`, polling until it accepts. Bounded
 /// by [`SPAWN_CONNECT_TIMEOUT`]. Takes no session id — one MCP daemon serves every
 /// session.
-#[allow(dead_code)] // consumed by the session-daemon MCP proxy in the next commit
 pub fn ensure_mcp_daemon_running() -> Result<()> {
     let path = store::mcp_daemon_sock_path()?;
     if probe_or_clear(&path)? {
