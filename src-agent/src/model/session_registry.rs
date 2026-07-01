@@ -23,18 +23,15 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::model::store::registry_path;
 
-/// One registry row as listed for a working directory. `pwd_hash` is implied by
-/// the query (`list_by_pwd` already filters on it), so it isn't repeated here.
+/// One registry row as listed for a working directory.
 ///
 /// Mirrors the selected columns one-to-one; `list_sessions` consumes `uuid`,
-/// `name`, and `updated_at`. `workdir` is carried for completeness (the
-/// effective workdir is read from the session's own settings) — hence the
-/// field-level `allow`.
+/// `name`, `pwd_hash`, `workdir`, and `updated_at`.
 #[derive(Debug, Clone)]
 pub struct RegRow {
     pub uuid: String,
+    pub pwd_hash: String,
     pub name: String,
-    #[allow(dead_code)] // selected for completeness; workdir is read from settings
     pub workdir: String,
     pub updated_at: i64,
 }
@@ -131,15 +128,38 @@ pub fn touch(uuid: &str) -> Result<()> {
 pub fn list_by_pwd(pwd_hash: &str) -> Result<Vec<RegRow>> {
     let conn = open()?;
     let mut stmt = conn.prepare(
-        "SELECT uuid, name, workdir, updated_at FROM sessions
+        "SELECT uuid, pwd_hash, name, workdir, updated_at FROM sessions
          WHERE pwd_hash = ?1 ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map(rusqlite::params![pwd_hash], |r| {
         Ok(RegRow {
             uuid: r.get(0)?,
-            name: r.get(1)?,
-            workdir: r.get(2)?,
-            updated_at: r.get(3)?,
+            pwd_hash: r.get(1)?,
+            name: r.get(2)?,
+            workdir: r.get(3)?,
+            updated_at: r.get(4)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// All sessions across ALL working directories, most-recently updated first.
+pub fn list_all() -> Result<Vec<RegRow>> {
+    let conn = open()?;
+    let mut stmt = conn.prepare(
+        "SELECT uuid, pwd_hash, name, workdir, updated_at FROM sessions ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(RegRow {
+            uuid: r.get(0)?,
+            pwd_hash: r.get(1)?,
+            name: r.get(2)?,
+            workdir: r.get(3)?,
+            updated_at: r.get(4)?,
         })
     })?;
     let mut out = Vec::new();
