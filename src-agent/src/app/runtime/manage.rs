@@ -372,6 +372,95 @@ fn spawn_and_wait_until_alive(session_id: &str, path: &Path, resume: bool) -> Re
     }
 }
 
+// ─── GLOBAL MCP daemon spawn/ensure (singleton, not session-keyed) ───────────
+
+/// Whether the GLOBAL MCP daemon is currently ALIVE, by the same bind-as-oracle rule
+/// as [`daemon_alive`]: try to CONNECT to its singleton socket
+/// ([`store::mcp_daemon_sock_path`], `~/.koma/mcp.sock`). A successful connect proves
+/// a real MCP daemon is accepting; refused / not-found proves it is not. The pidfile
+/// is never consulted (PID reuse would make it lie). UNLIKE [`daemon_alive`] this
+/// takes no session id — the MCP daemon is a singleton owning every MCP connection for
+/// every session.
+#[allow(dead_code)] // consumed by the session-daemon MCP proxy in the next commit
+pub fn mcp_daemon_alive() -> bool {
+    let Ok(path) = store::mcp_daemon_sock_path() else {
+        return false;
+    };
+    UnixStream::connect(&path).is_ok()
+}
+
+/// Spawn a DETACHED `koma --mcp-daemon` child and return its PID.
+///
+/// The MCP twin of [`spawn_daemon`], detached identically (setsid → own session, stdio
+/// → `/dev/null`, not `wait`ed so init reaps it). The ONLY difference is the argv: it
+/// passes `--mcp-daemon` and NO `--session` (the MCP daemon is a singleton, not keyed
+/// to a session). Liveness is still the socket, via [`mcp_daemon_alive`] /
+/// the poll-connect in [`spawn_mcp_and_wait_until_alive`].
+fn spawn_mcp_daemon() -> Result<u32> {
+    // Re-launch THIS binary with `--mcp-daemon`. `current_exe` is the running koma
+    // binary, so a renamed/installed binary still respawns itself correctly.
+    let exe = std::env::current_exe().context("cannot resolve current executable path")?;
+
+    let mut cmd = Command::new(exe);
+    cmd.arg("--mcp-daemon")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    // SAFETY: `setsid()` is async-signal-safe and the canonical way to detach a child
+    // into its own session; it touches no Rust state and only runs in the forked child
+    // between fork and exec. A failure is ignored (best-effort detach) — the daemon
+    // still runs; it just shares our process group, which the SIGHUP handler tolerates.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn().context("failed to spawn `koma --mcp-daemon`")?;
+    Ok(child.id())
+}
+
+/// Spawn a detached `koma --mcp-daemon` and POLL the bind-as-oracle liveness until it
+/// accepts, up to [`SPAWN_CONNECT_TIMEOUT`]. The MCP twin of
+/// [`spawn_and_wait_until_alive`], keyed to the singleton [`store::mcp_daemon_sock_path`]
+/// instead of a per-session socket.
+fn spawn_mcp_and_wait_until_alive(path: &Path) -> Result<()> {
+    let pid = spawn_mcp_daemon()?;
+    let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
+    loop {
+        match UnixStream::connect(path) {
+            Ok(_stream) => return Ok(()), // accepting — probe stream dropped
+            Err(_) if Instant::now() < deadline => std::thread::sleep(SPAWN_POLL_INTERVAL),
+            Err(e) => {
+                return Err(anyhow!(
+                    "spawned MCP daemon (pid {pid}) did not start accepting on {} within {:?}: {e}",
+                    path.display(),
+                    SPAWN_CONNECT_TIMEOUT
+                ));
+            }
+        }
+    }
+}
+
+/// Ensure the GLOBAL MCP daemon is RUNNING and accepting on its singleton socket,
+/// spawning a detached one if none is up. The MCP twin of [`ensure_daemon_running`]:
+/// probe [`store::mcp_daemon_sock_path`]; if a daemon is already live, return (a
+/// session-daemon proxy attaches to the existing one); otherwise clear any stale
+/// socket and spawn a detached `koma --mcp-daemon`, polling until it accepts. Bounded
+/// by [`SPAWN_CONNECT_TIMEOUT`]. Takes no session id — one MCP daemon serves every
+/// session.
+#[allow(dead_code)] // consumed by the session-daemon MCP proxy in the next commit
+pub fn ensure_mcp_daemon_running() -> Result<()> {
+    let path = store::mcp_daemon_sock_path()?;
+    if probe_or_clear(&path)? {
+        return Ok(()); // already live — proxy attaches to the existing one
+    }
+    // Nothing live → spawn a detached MCP daemon and wait until it accepts.
+    spawn_mcp_and_wait_until_alive(&path)
+}
+
 // ─── blocking framed request/reply ───────────────────────────────────────────
 
 /// Send one [`ClientRequest`] on `stream` as a length-prefixed JSON frame (4-byte
@@ -437,6 +526,89 @@ fn unlink_daemon_files(session_id: &str) {
     }
     if let Ok(pid) = store::daemon_pid_path(session_id) {
         let _ = std::fs::remove_file(pid);
+    }
+}
+
+/// Read the advisory PID from the GLOBAL MCP daemon's pidfile, if present + parseable.
+/// The MCP twin of [`read_pidfile`]; used ONLY for messaging and as the `kill` signal
+/// target — never for liveness (that is [`mcp_daemon_alive`]'s job).
+fn read_mcp_pidfile() -> Option<u32> {
+    let path = store::mcp_daemon_pid_path().ok()?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    contents.trim().parse::<u32>().ok()
+}
+
+/// Best-effort unlink of the GLOBAL MCP daemon's socket + pidfile. The MCP twin of
+/// [`unlink_daemon_files`]; a missing file is ignored.
+fn unlink_mcp_daemon_files() {
+    if let Ok(sock) = store::mcp_daemon_sock_path() {
+        let _ = std::fs::remove_file(sock);
+    }
+    if let Ok(pid) = store::mcp_daemon_pid_path() {
+        let _ = std::fs::remove_file(pid);
+    }
+}
+
+/// Poll the GLOBAL MCP daemon's bind-as-oracle liveness until it stops accepting or
+/// `timeout` elapses. The MCP twin of [`wait_until_dead`], keyed to the singleton
+/// socket. Returns `true` if it went down within the window.
+fn mcp_wait_until_dead(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !mcp_daemon_alive() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(SPAWN_POLL_INTERVAL);
+    }
+}
+
+/// Stop the GLOBAL MCP daemon (best-effort), for `koma daemon kill`. The MCP daemon
+/// has NO graceful-quit IPC verb (its request protocol is the MCP proxy, not the
+/// session control protocol), so — unlike [`stop_session_daemon`] — this goes straight
+/// to signalling its pidfile PID: SIGTERM, wait, then SIGKILL. Finally unlinks its
+/// socket + pidfile. Prints one outcome line and never fails the caller.
+fn stop_mcp_daemon() {
+    if !mcp_daemon_alive() {
+        // Sweep any leftover turds from a previous crash so the next start is clean.
+        unlink_mcp_daemon_files();
+        println!("koma daemon: MCP daemon not running");
+        return;
+    }
+
+    // Alive but no graceful-quit channel: signal the pidfile PID. If it's missing we
+    // can't signal, so just nuke the files.
+    let Some(pid) = read_mcp_pidfile() else {
+        unlink_mcp_daemon_files();
+        println!(
+            "koma daemon: MCP daemon still up but no pidfile to signal; removed stale \
+             socket/pidfile. If a process is still running, stop it manually."
+        );
+        return;
+    };
+
+    // SIGTERM (graceful at the OS level; the signal task runs the orderly teardown),
+    // then wait.
+    send_signal(pid, libc::SIGTERM);
+    if mcp_wait_until_dead(SIGNAL_GRACE) {
+        unlink_mcp_daemon_files();
+        println!("koma daemon: stopped MCP daemon (SIGTERM to pid {pid})");
+        return;
+    }
+
+    // SIGKILL (last resort), then wait.
+    send_signal(pid, libc::SIGKILL);
+    let died = mcp_wait_until_dead(SIGNAL_GRACE);
+    unlink_mcp_daemon_files();
+    if died {
+        println!("koma daemon: killed MCP daemon (SIGKILL to pid {pid})");
+    } else {
+        println!(
+            "koma daemon: sent SIGKILL to pid {pid} (MCP daemon) but the socket is still up; \
+             removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
+        );
     }
 }
 
@@ -561,12 +733,18 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
 /// With no live daemons it prints "no daemons running".
 fn cmd_status() -> Result<()> {
     let live = live_session_sockets()?;
-    if live.is_empty() {
+    let mcp_live = mcp_daemon_alive();
+
+    if live.is_empty() && !mcp_live {
         println!("koma daemon: no daemons running");
         return Ok(());
     }
 
-    println!("koma daemon: {} session daemon(s) running", live.len());
+    if live.is_empty() {
+        println!("koma daemon: no session daemons running");
+    } else {
+        println!("koma daemon: {} session daemon(s) running", live.len());
+    }
     for (id, sock) in live {
         // PID is advisory (the pidfile may be missing/stale even while the socket is up —
         // they are written/removed at slightly different moments), so word it as such.
@@ -583,6 +761,18 @@ fn cmd_status() -> Result<()> {
         match daemon_session_count(&sock) {
             Ok(n) => println!("    sessions: {n}"),
             Err(e) => println!("    sessions: unknown ({e})"),
+        }
+    }
+
+    // Report the GLOBAL MCP daemon (singleton) too, so it is manageable/visible.
+    if mcp_live {
+        let pid_str = match read_mcp_pidfile() {
+            Some(pid) => format!("pid {pid}"),
+            None => "pid unknown (no pidfile)".to_string(),
+        };
+        println!("  MCP daemon ({pid_str})");
+        if let Ok(sock) = store::mcp_daemon_sock_path() {
+            println!("    socket: {}", sock.display());
         }
     }
 
@@ -702,14 +892,23 @@ fn stop_session_daemon(session_id: &str) -> Result<()> {
 /// live daemons reports "no daemons running" (and still sweeps any stale turds).
 fn cmd_kill() -> Result<()> {
     let live = live_session_sockets()?;
-    if live.is_empty() {
+    let mcp_live = mcp_daemon_alive();
+
+    if live.is_empty() && !mcp_live {
         println!("koma daemon: no daemons running");
         // Sweep any stale socket/pidfiles left by crashed daemons.
         sweep_stale_files();
+        unlink_mcp_daemon_files();
         return Ok(());
     }
     for (id, _path) in live {
         let _ = stop_session_daemon(&id);
+    }
+    // Stop the GLOBAL MCP daemon too (best-effort; prints its own outcome). Only bother
+    // when it's live — a dead one just gets its stale files swept below via its own
+    // not-running path.
+    if mcp_live {
+        stop_mcp_daemon();
     }
     Ok(())
 }
@@ -780,12 +979,35 @@ fn cmd_clean() -> Result<()> {
         }
     }
 
+    // GLOBAL MCP daemon: only clean its files when it is DEAD (bind-as-oracle refused);
+    // a live one is left untouched (removing its socket would orphan it). It has no
+    // orphan-pid sweep of its own — the socket+pid pair is nuked together when dead.
+    let mcp_live = mcp_daemon_alive();
+    if !mcp_live {
+        if let Ok(sock) = store::mcp_daemon_sock_path() {
+            if std::fs::remove_file(&sock).is_ok() {
+                removed.push(sock.display().to_string());
+            }
+        }
+        if let Ok(pid) = store::mcp_daemon_pid_path() {
+            if std::fs::remove_file(&pid).is_ok() {
+                removed.push(pid.display().to_string());
+            }
+        }
+    }
+
     if !live.is_empty() {
         println!(
             "koma daemon: {} session daemon(s) still running ({}); left their files in place — \
              use `koma daemon kill` to stop them",
             live.len(),
             live.join(", ")
+        );
+    }
+    if mcp_live {
+        println!(
+            "koma daemon: MCP daemon still running; left its files in place — \
+             use `koma daemon kill` to stop it"
         );
     }
     if removed.is_empty() {

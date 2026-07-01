@@ -21,6 +21,7 @@
 pub mod client;
 pub mod conn;
 pub mod frame;
+pub mod mcp_proto;
 pub mod proto;
 pub mod selftest;
 pub mod server;

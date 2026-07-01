@@ -105,6 +105,13 @@ pub struct Opts {
     /// When `true`, run the headless koma-daemon event loop with no terminal
     /// (`--daemon` flag). Owns the agent runtime; a TUI attaches as a client.
     pub daemon: bool,
+    /// When `true`, run the GLOBAL MCP daemon with no terminal (`--mcp-daemon` flag):
+    /// a singleton process that owns every configured MCP server connection so
+    /// session-daemons can proxy to it (`~/.koma/mcp.sock`) instead of each spawning
+    /// their own copies. No `--session` — it is not keyed to any session. Spawned by
+    /// `ensure_mcp_daemon_running`; consumed by the session-daemon MCP proxy in the
+    /// next commit.
+    pub mcp_daemon: bool,
     /// When `true`, run as a thin client that attaches to a running daemon
     /// (`--attach` flag): connect to `~/.koma/daemon.sock`, render the daemon's
     /// foreground session from streamed snapshots/deltas, and forward input.
@@ -166,6 +173,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--ipc-selftest"                 => opts.ipc_selftest = true,
             "--daemon-selftest"              => opts.daemon_selftest = true,
             "--daemon"                       => opts.daemon = true,
+            "--mcp-daemon"                   => opts.mcp_daemon = true,
             "--attach"                       => opts.attach = true,
             "--local"                        => opts.local = true,
             _                                => {}

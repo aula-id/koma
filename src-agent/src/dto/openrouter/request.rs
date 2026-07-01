@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use crate::dto::chat::ChatMessage;
 
 // ---------------------------------------------------------------------------
@@ -368,7 +368,13 @@ pub struct ReasoningConfig {
 /// JSON-Schema description of one tool's `function`, as required by the
 /// OpenAI/OpenRouter `tools` request field. `parameters` is the tool's raw
 /// JSON-Schema object (taken verbatim from `Tool::parameters`).
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` is derived alongside `Serialize` (all fields are already
+/// `Deserialize`) so this type can ALSO ride the private MCP-proxy IPC in both
+/// directions: the global MCP daemon serialises the advertised tool defs it
+/// discovered, and a session-daemon deserialises them back (see
+/// [`crate::ipc::mcp_proto`]). The request-side serialisation is untouched.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolFunctionDef {
     pub name: String,
     pub description: String,
@@ -376,7 +382,12 @@ pub struct ToolFunctionDef {
 }
 
 /// One entry in the request `tools` array. `kind` is always `"function"`.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` is derived for the same reason as [`ToolFunctionDef`]: the
+/// MCP-proxy IPC carries a `Vec<ToolDef>` from the global MCP daemon back to each
+/// session-daemon, which must decode it. The `#[serde(rename = "type")]` on `kind`
+/// round-trips symmetrically, so the decoded form matches what was sent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
     #[serde(rename = "type")]
     pub kind: String,

@@ -140,6 +140,16 @@ fn main() -> anyhow::Result<()> {
         app::run_daemon_selftest();
     }
 
+    // --- headless path: run the GLOBAL MCP daemon (no TUI) ---
+    // A singleton process that owns every configured MCP server connection so
+    // session-daemons proxy to it (`~/.koma/mcp.sock`) instead of each spawning their
+    // own copies of a heavyweight server (e.g. `serena`). No `--session`; it is not
+    // keyed to any session. Persists until signalled. Checked BEFORE `--daemon` so a
+    // stray combination can't accidentally take the session-daemon branch.
+    if opts.mcp_daemon {
+        return app::run_mcp_daemon(opts);
+    }
+
     // --- headless path: run the koma-daemon event loop (no TUI) ---
     // Owns the agent runtime with no terminal; a TUI attaches as a thin client via
     // `--attach`. Stays in this branch (loops forever) until QuitDaemon / Ctrl-C.
