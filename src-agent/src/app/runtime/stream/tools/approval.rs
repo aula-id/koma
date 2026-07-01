@@ -439,9 +439,7 @@ pub(crate) fn process_tools(
                     let target_str = target.to_string();
                     {
                         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                            if !sess.settings.workdir.contains(&target_str) {
-                                sess.settings.workdir.push(target_str.clone());
-                            }
+                            sess.settings.enter_worktree(target_str.clone());
                             let _ = sess.save();
                         }
                     }
@@ -466,14 +464,13 @@ pub(crate) fn process_tools(
                     // `enter` succeeded: target is the canonical path string.
                     let new_cwd = std::path::PathBuf::from(target);
                     let target_str = target.to_string();
-                    // Push the new root into settings.workdir if not already there,
-                    // then persist. Scoped so the mutable sess borrow ends before
-                    // we call apply_workspace_change (which also borrows state mut).
+                    // Swap slot [0] to the worktree root (stashing the current
+                    // primary root for restore on exit), then persist. Scoped so
+                    // the mutable sess borrow ends before we call
+                    // apply_workspace_change (which also borrows state mut).
                     {
                         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                            if !sess.settings.workdir.contains(&target_str) {
-                                sess.settings.workdir.push(target_str.clone());
-                            }
+                            sess.settings.enter_worktree(target_str.clone());
                             let _ = sess.save();
                         }
                     }
@@ -482,15 +479,17 @@ pub(crate) fn process_tools(
                     );
                     format!("entered worktree: {}", new_cwd.display())
                 } else if result.starts_with(crate::tool::git_worktree::GIT_WT_EXIT_PREFIX) {
-                    // `exit`: return to the primary workdir (first workdir entry).
-                    // Extract the primary path in a scoped borrow, then call
-                    // apply_workspace_change outside it.
+                    // `exit`: restore the base primary root (swap slot [0] back) and return
+                    // to it. Extra roots in workdir[1..] are preserved. Mutate + save in a
+                    // scoped borrow, then call apply_workspace_change outside it.
                     let primary = {
-                        state.rest.sessions[sess_idx]
-                            .session
-                            .as_ref()
-                            .map(|sess| sess.workdir())
-                            .unwrap_or_else(|| std::path::PathBuf::from("."))
+                        if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            sess.settings.exit_worktree();
+                            let _ = sess.save();
+                            sess.workdir()
+                        } else {
+                            std::path::PathBuf::from(".")
+                        }
                     };
                     super::super::spawn::apply_workspace_change(
                         state, sess_idx, primary.clone(), client, handle,
@@ -511,7 +510,20 @@ pub(crate) fn process_tools(
                     let primary;
                     {
                         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                            sess.settings.workdir.retain(|p| p != &removed);
+                            // Removing the worktree we're standing in → restore the base
+                            // root (swap slot [0] back). Removing a different worktree/dir
+                            // by name → just drop it wherever it sits in the list.
+                            let in_removed = sess
+                                .settings
+                                .workdir
+                                .first()
+                                .map(|p| p == &removed)
+                                .unwrap_or(false);
+                            if in_removed {
+                                sess.settings.exit_worktree();
+                            } else {
+                                sess.settings.workdir.retain(|p| p != &removed);
+                            }
                             let _ = sess.save();
                             primary = sess.workdir();
                         } else {

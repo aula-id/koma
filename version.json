@@ -1,4 +1,4 @@
 {
-  "version": "0.2.4",
-  "message": "koma now reads before it writes: the agent must have seen a file's current content in this conversation before it can edit it (or overwrite an existing file). If it hasn't read the file, the edit is held back with a nudge to read it first — so edits never fire blind against stale assumptions. Reading, writing, or a prior edit all count as having seen it, and creating a brand-new file needs no prior read."
+  "version": "0.2.5",
+  "message": "worktree enter/exit now swaps the primary workspace root (workdir[0]) instead of appending, so edits land in the worktree instead of the repo root; manually-added extra roots are preserved."
 }
