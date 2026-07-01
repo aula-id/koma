@@ -15,6 +15,7 @@ use crate::service::StreamEvent;
 use super::helpers::{clean_error, emit, provider_routing_for, reasoning_config, sanitize_tool_acc};
 use super::client::OpenRouterClient;
 use super::types::Conn;
+use super::think_split::{Emit as ThinkEmit, ThinkSplit};
 
 impl OpenRouterClient {
     /// Streaming chat completion over Server-Sent Events.
@@ -121,6 +122,10 @@ impl OpenRouterClient {
 
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
+        // Splits a leading <think>…</think> block out of delta.content, routing
+        // it to the Reasoning channel instead of the Token channel. One instance
+        // per stream call so state persists across all delta chunks of this turn.
+        let mut think = ThinkSplit::new();
         // Tool calls stream across many frames, one (or more) per `index`. Each
         // frame contributes the id / name once and appends argument fragments;
         // we merge them here and emit the assembled set at finalisation.
@@ -153,6 +158,20 @@ impl OpenRouterClient {
                     None => continue, // comments/keepalive
                 };
                 if data == "[DONE]" {
+                    // Flush any buffered think-tag tail (e.g. reasoning text
+                    // held back waiting for a partial closer, or a partial
+                    // opener that never completed).
+                    for e in think.finish() {
+                        match e {
+                            ThinkEmit::Content(s) if !s.is_empty() => {
+                                emit(&tx, StreamEvent::Token(s));
+                            }
+                            ThinkEmit::Reasoning(s) if !s.is_empty() => {
+                                emit(&tx, StreamEvent::Reasoning(s));
+                            }
+                            _ => {}
+                        }
+                    }
                     // Finalise: any accumulated tool calls go out just before
                     // Done so the runtime can run them. The `finished_tool_calls`
                     // flag (finish_reason == "tool_calls") is the protocol-level
@@ -180,8 +199,20 @@ impl OpenRouterClient {
                             finished_tool_calls = true;
                         }
                         if let Some(t) = &choice.delta.content {
-                            if !t.is_empty() {
-                                emit(&tx, StreamEvent::Token(t.clone()));
+                            // Route through the think-tag splitter so a leading
+                            // <think>…</think> block is emitted as Reasoning
+                            // rather than Token, even when the tag is split
+                            // across SSE chunks.
+                            for e in think.push(t) {
+                                match e {
+                                    ThinkEmit::Content(s) if !s.is_empty() => {
+                                        emit(&tx, StreamEvent::Token(s));
+                                    }
+                                    ThinkEmit::Reasoning(s) if !s.is_empty() => {
+                                        emit(&tx, StreamEvent::Reasoning(s));
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         // Reasoning rides a separate delta channel (present only
@@ -239,9 +270,21 @@ impl OpenRouterClient {
                 // unparseable JSON (partial keepalive) is ignored
             }
         }
-        // Stream ended without an explicit [DONE]: same finalisation order —
-        // tool calls (if any), then Done. Same argument repair as the [DONE]
-        // path so a non-delta provider that never sends [DONE] is also covered.
+        // Stream ended without an explicit [DONE]: flush the think-tag buffer
+        // first (same as the [DONE] path), then tool calls, then Done.
+        for e in think.finish() {
+            match e {
+                ThinkEmit::Content(s) if !s.is_empty() => {
+                    emit(&tx, StreamEvent::Token(s));
+                }
+                ThinkEmit::Reasoning(s) if !s.is_empty() => {
+                    emit(&tx, StreamEvent::Reasoning(s));
+                }
+                _ => {}
+            }
+        }
+        // Same argument repair as the [DONE] path so a non-delta provider that
+        // never sends [DONE] is also covered.
         if !tool_acc.is_empty() || finished_tool_calls {
             sanitize_tool_acc(&mut tool_acc);
             emit(&tx, StreamEvent::ToolCalls(tool_acc.clone()));

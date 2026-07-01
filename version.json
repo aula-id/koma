@@ -1,4 +1,4 @@
 {
-  "version": "0.2.8",
-  "message": "revert the 0.2.7 history() trailing-assistant strip: it did not fix the prefill 400 on strict backends (llama.cpp/vLLM) and it degraded reasoning continuity, since the assistant-prefill is load-bearing for thinking models; a backend-aware fix is pending."
+  "version": "0.2.9",
+  "message": "robust thinking capture: reasoning field aliases (reasoning_content / thinking) so DeepSeek/vLLM/llama.cpp/MiMo thinking is caught, plus a streaming splitter that peels inline <think>/<thinking>/<thought> blocks out of content into the reasoning channel (Qwen, Gemma-3 fine-tunes). receive-side only, request unchanged."
 }

@@ -50,7 +50,7 @@ pub struct ResponseMessage {
     pub role: String,
     #[serde(default)]
     pub content: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "reasoning_content", alias = "thinking")]
     pub reasoning: Option<String>,
 }
 
@@ -98,7 +98,7 @@ pub struct Delta {
     /// (via `/effort`). Accumulated into the assistant message's display-only
     /// reasoning block; never echoed back to the API. `None` on frames the model
     /// doesn't think on (and absent entirely for non-reasoning models).
-    #[serde(default)]
+    #[serde(default, alias = "reasoning_content", alias = "thinking")]
     pub reasoning: Option<String>,
     /// Incremental tool-call fragments. The model streams a tool call across
     /// several frames: the first carries the `id` + function `name`, subsequent
