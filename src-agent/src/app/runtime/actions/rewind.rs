@@ -77,7 +77,30 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
         abort_current(&mut state.rest);
         state.rest.fg_mut().waiting = false;
     }
+    // 2-5. The post-selection core (snapshot → resolve cut id → truncate live +
+    //       sqlite → load composer) is shared with the early-Esc auto-rewind.
+    rewind_to_vec_index(state, idx)
+}
 
+/// The reusable post-selection core of the rewind flow: cut the conversation to
+/// JUST BEFORE the message at vec index `idx` and load its text into the composer
+/// for editing. Shared by [`handle_rewind_to_message`] (the picker's Enter) and by
+/// [`super::chat::handle_interrupt_rewind`] (early-Esc auto-rewind).
+///
+/// Does NOT abort any in-flight stream — the caller owns that (the picker aborts
+/// beforehand; the early-Esc path already interrupted). Steps:
+///
+/// 1. Snapshot the selected message's text and resolve the sqlite cut id while the
+///    message is still live. A missing session, or an `idx` that isn't a user turn,
+///    is a clean no-op: just return to `Mode::Chat`.
+/// 2. `truncate_to_before_index(idx)` drops that message and everything after it
+///    from the live `Conversation` (and, via `save()`, from `messages.json`).
+/// 3. Cap the append-only sqlite archive at the same boundary so the short-send
+///    reshaper can never resurrect a rewound message (see the wrinkle note on
+///    [`handle_rewind_to_message`]).
+/// 4. Load the snapshot into the composer (caret to end), clearing history-recall
+///    and palette state, then return to `Mode::Chat`. The message is NOT re-sent.
+pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()> {
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
         // No active session to rewind — just leave the picker. (`sess` is None here, so
         // the `fg_mut()` borrow has ended — writing mode through `rest` is unconflicted.)
@@ -85,7 +108,7 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
         return Ok(());
     };
 
-    // 2. Snapshot the selected message's text and resolve its sqlite cut id while
+    // 1. Snapshot the selected message's text and resolve its sqlite cut id while
     //    the message is still present in the live conversation. Resolve the text into an
     //    owned `Option` and DROP the `sess`/`messages` borrow before branching, so the
     //    "not a user turn" exit can write `mode` (which now goes through `state.rest`)
@@ -110,16 +133,16 @@ pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Resu
     let session_dir = sess.path.clone();
     let cut_id = msglog::user_message_ids(&session_dir).get(user_ordinal).copied();
 
-    // 3. Cut the live conversation + messages.json at the boundary.
+    // 2. Cut the live conversation + messages.json at the boundary.
     sess.conversation.truncate_to_before_index(idx);
     let _ = sess.save();
 
-    // 4. Cap the append-only sqlite archive at the same boundary (the wrinkle).
+    // 3. Cap the append-only sqlite archive at the same boundary (the wrinkle).
     if let Some(cut_id) = cut_id {
         let _ = msglog::truncate_after(&session_dir, cut_id);
     }
 
-    // 5. Load the message into the composer for editing; do NOT auto-send. Mirror
+    // 4. Load the message into the composer for editing; do NOT auto-send. Mirror
     //    the history-recall load: replace input, caret to end, and leave recall /
     //    palette state clean so the editor starts fresh. The composer fields live
     //    on the foreground session now; `palette_sel` stays rest-global.

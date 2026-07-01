@@ -28,8 +28,9 @@ use super::{is_ctrl, Action};
 /// the Help screen mutates only its own [`HelpState`] and routes closes/launches
 /// through the returned [`Action`] (the runtime owns `state.mode`).
 pub fn handle_help(st: &mut HelpState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // Ctrl+C is fully inert (koma disables it); Esc still closes back to Chat.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     match key.code {

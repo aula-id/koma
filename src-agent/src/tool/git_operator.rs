@@ -57,6 +57,10 @@ impl Tool for GitOperator {
                 "timeout_ms": {
                     "type": "number",
                     "description": "Timeout in milliseconds (default 120000)."
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional: run git in this directory instead of the session workspace (e.g. an existing worktree path). Must exist."
                 }
             },
             "required": ["args"]
@@ -99,10 +103,25 @@ impl Tool for GitOperator {
             ));
         }
 
+        // --- Route worktree ops to the dedicated tool -------------------------
+        // `git_worktree` manages the shadow worktree dir AND keeps the session's
+        // workspace roots + live cwd in sync; raw `git worktree` here would leave
+        // both stale (and could spawn in a doomed cwd). Redirect instead of running.
+        if git_args[0] == "worktree" {
+            return Ok("error: use the git_worktree tool for worktree operations (action: list/create/remove/enter/exit) — it manages the shadow worktree dir and keeps your workspace roots + cwd in sync. e.g. git_worktree({\"action\":\"create\",\"name\":\"feature-x\"}).".to_string());
+        }
+
         let confirm_destructive = args
             .get("confirm_destructive")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+
+        // Optional cwd override (e.g. an existing worktree path). Resolved +
+        // existence-checked below, just before spawning git.
+        let cwd_override = args
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(std::path::PathBuf::from);
 
         let timeout_ms: u64 = args
             .get("timeout_ms")
@@ -134,10 +153,30 @@ impl Tool for GitOperator {
             None
         };
 
+        // --- Resolve the run dir (existence-checked) ---------------------------
+        // Use the caller's `cwd` override when given, else the session workspace.
+        // If that dir is gone (e.g. a removed worktree the session's cwd sat in),
+        // fall back to the first EXISTING workspace root so git still has a valid
+        // cwd; only error when nothing usable remains.
+        let run_dir = cwd_override.clone().unwrap_or_else(|| ctx.workspace.clone());
+        let run_dir = if run_dir.is_dir() {
+            run_dir
+        } else {
+            match ctx.workspaces.iter().find(|d| d.is_dir()).cloned() {
+                Some(d) => d,
+                None => {
+                    return Ok(format!(
+                        "error: git working directory '{}' does not exist (a removed worktree?); pass a valid cwd or cd to an existing dir.",
+                        run_dir.display()
+                    ))
+                }
+            }
+        };
+
         // --- Spawn git directly (not via sh -c) --------------------------------
         let mut cmd = Command::new("git");
         cmd.args(&git_args)
-            .current_dir(&ctx.workspace)
+            .current_dir(&run_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // Never allow git to block on an interactive credential prompt.

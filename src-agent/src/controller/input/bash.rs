@@ -6,7 +6,7 @@
 //!
 //! Key map:
 //! - `Esc`           → `Action::CloseBash` (return to Chat)
-//! - `Ctrl+C`        → `Action::Quit`
+//! - `Ctrl+C`        → `Action::None` (fully inert — koma disables Ctrl+C)
 //! - `Up`            → move the LIST cursor up
 //! - `Down`          → move the LIST cursor down
 //! - `Ctrl+X`        → `Action::BashKillJob(id)` for the selected job, ONLY when
@@ -32,8 +32,10 @@ pub fn handle_bash(s: &mut BashState, rest: &mut AppStateRest, key: KeyEvent) ->
     // snapshot uses), so the panel and the daemon never diverge.
     s.refresh(crate::ipc::snapshot::bash_job_views(rest));
 
+    // Ctrl+C is fully inert (koma disables it): swallow it here so it can't
+    // fall through to any close/quit. Esc still closes the panel.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     // Ctrl+X kills the selected running job — koma's kill convention (matches the

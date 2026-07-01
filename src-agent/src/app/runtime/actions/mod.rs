@@ -88,6 +88,14 @@ pub(in crate::app::runtime) fn apply_action(
             chat::handle_interrupt(state)?;
         }
 
+        Action::InterruptRewind => {
+            chat::handle_interrupt_rewind(state)?;
+        }
+
+        Action::ClearComposer => {
+            state.rest.fg_mut().clear_composer();
+        }
+
         Action::Resend => {
             chat::handle_resend(state, client, handle)?;
         }

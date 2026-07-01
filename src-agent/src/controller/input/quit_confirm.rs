@@ -6,8 +6,8 @@
 //!   * NAVIGATE then activate: Left/Right (or `h`/`l`) and Tab/Shift+Tab move
 //!     focus across the row (mutating `s.selected`); Enter activates the focused
 //!     button.
-//!   * DIRECT shortcuts: `k` close window (quit), `d` detach, `Esc`/`Ctrl+C`
-//!     cancel — fire their action immediately regardless of focus.
+//!   * DIRECT shortcuts: `k` close window (quit), `d` detach, `Esc` cancel — fire
+//!     their action immediately regardless of focus. (`Ctrl+C` is fully inert.)
 //!
 //! NOTE: this LOCAL handler runs only in the single-process TUI (and the headless
 //! daemon, which never has a TTY in the overlay) — an ATTACHED client intercepts
@@ -42,7 +42,7 @@ fn action_for(idx: usize) -> Action {
 ///
 /// Navigation (Left/Right, `h`/`l`, Tab/Shift+Tab) mutates `s.selected` and
 /// returns [`Action::None`]; Enter activates the focused button; the direct
-/// `k`/`d`/`Esc`/`Ctrl+C` shortcuts fire immediately. Every other key is
+/// `k`/`d`/`Esc` shortcuts fire immediately (`Ctrl+C` is inert). Every other key is
 /// swallowed so a stray press can't leak into the chat input underneath or
 /// accidentally exit.
 pub fn handle_quit_confirm(
@@ -50,10 +50,9 @@ pub fn handle_quit_confirm(
     _rest: &mut AppStateRest,
     key: KeyEvent,
 ) -> Action {
-    // Ctrl+C here means "get me out of this overlay", NOT "force quit" — the user
-    // already has explicit kill/minimize choices, so treat it like Esc (cancel).
+    // Ctrl+C is fully inert (koma disables it); Esc still cancels the quit dialog.
     if is_ctrl(&key, 'c') {
-        return Action::QuitCancel;
+        return Action::None;
     }
 
     match key.code {

@@ -121,8 +121,10 @@ fn user_messages(rest: &AppStateRest) -> Vec<String> {
 
 /// Handle a key press while the app is in Chat mode.
 ///
-/// Ctrl+C and Esc both interrupt an in-flight request when `waiting` is true;
-/// when idle they quit the app.  Ctrl+R re-sends the last message (idle only).
+/// Ctrl+C is fully inert (koma disables it). Esc interrupts an in-flight request
+/// (and auto-rewinds the prompt if the model is still thinking); when idle a
+/// double-Esc clears the composer or opens the rewind overlay. Ctrl+R re-sends the
+/// last message (idle only).
 pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // The full-screen sub-agent VIEWER is the most modal surface: while it's open
     // every key routes to it. Up/Down/PgUp scroll; Esc closes it back to the still-
@@ -207,16 +209,10 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         };
     }
 
-    // Ctrl+C: interrupt if waiting OR a compaction animation is in flight
-    // (the animation keeps `compact_anim_start` set while the deferred apply
-    // is pending, and `waiting` may have already cleared if the model replied
-    // fast). Never quit mid-animation — that would leave the spinner stuck.
+    // Ctrl+C is fully inert everywhere (koma disables it): no quit, no detach,
+    // no interrupt. Esc handles interrupt/rewind now (see the Esc arm below).
     if is_ctrl(&key, 'c') {
-        return if rest.fg().waiting || rest.fg().compact_anim_start.is_some() {
-            Action::Interrupt
-        } else {
-            Action::None
-        };
+        return Action::None;
     }
     // Ctrl+R: resend (only when idle).
     if is_ctrl(&key, 'r') {
@@ -279,29 +275,43 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
 
     match key.code {
         KeyCode::Esc => {
-            // Interrupt if waiting OR a compaction animation is still running
-            // (compact_anim_start remains set during the deferred-apply window).
-            if rest.fg().waiting || rest.fg().compact_anim_start.is_some() {
-                // A live Esc cancels the in-flight turn; clear any pending
-                // idle-Esc so it can't pair with a later one across this turn.
+            // Turn in flight: Esc interrupts. If the model is still THINKING (no content
+            // token, no tool call yet), interrupt AND rewind the last prompt back into the
+            // composer so the user can edit + resend in one key.
+            //
+            // Read the flags into locals via `rest.fg()` BEFORE mutating `rest.last_esc`
+            // (which is rest-global, not per-session) so the immutable session borrow is
+            // released before the mutable write — keeps the borrow checker happy.
+            let waiting = rest.fg().waiting;
+            let compacting = rest.fg().compact_anim_start.is_some();
+            if waiting || compacting {
+                let early_thinking = {
+                    let fg = rest.fg();
+                    fg.pending_tool_calls.is_empty()
+                        && fg.agent_steps == 0
+                        && fg.tool_results.is_empty()
+                        && fg.streaming.as_ref().is_none_or(|s| s.is_empty())
+                };
                 rest.last_esc = None;
-                return Action::Interrupt;
+                return if early_thinking {
+                    Action::InterruptRewind // handler falls back to plain interrupt if no user msg
+                } else {
+                    Action::Interrupt
+                };
             }
-            // Idle Esc: double-Esc within ~400ms opens the message-rewind
-            // picker ("edit a previous message"); a lone Esc is otherwise a
-            // no-op (only /quit exits the app). Pair the two presses by
-            // recording the first's instant and comparing against it.
+            // Idle: double-Esc within ~400ms. With text in the composer → clear it;
+            // with an empty composer → open the history overlay. A lone Esc arms the timer.
             const DOUBLE_ESC_MS: u128 = 400;
             let now = std::time::Instant::now();
             match rest.last_esc.take() {
                 Some(prev) if now.duration_since(prev).as_millis() <= DOUBLE_ESC_MS => {
-                    // Second Esc in time: open the picker. The runtime builds
-                    // the RewindState and refuses to enter with no user message.
-                    Action::OpenRewind
+                    if rest.fg().input.is_empty() {
+                        Action::OpenRewind
+                    } else {
+                        Action::ClearComposer
+                    }
                 }
                 _ => {
-                    // First Esc (or the previous one was too long ago): arm the
-                    // timer and wait for a possible second press.
                     rest.last_esc = Some(now);
                     Action::None
                 }
