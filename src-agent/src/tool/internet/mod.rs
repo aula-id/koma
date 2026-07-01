@@ -13,9 +13,11 @@
 
 mod web_fetch;
 mod web_search;
+mod web_download;
 
 pub use web_fetch::WebFetch;
 pub use web_search::WebSearch;
+pub use web_download::WebDownload;
 
 use super::{Tool, ToolCtx};
 use std::sync::mpsc;
