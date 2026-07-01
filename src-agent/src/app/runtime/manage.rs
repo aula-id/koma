@@ -882,6 +882,50 @@ fn stop_session_daemon(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// SILENTLY reap the SESSION-daemon owning `session_id` from a caller that owns the
+/// alternate screen (the client-side swapper's `Ctrl+X` nuke).
+///
+/// This is the fire-and-forget twin of [`stop_session_daemon`], carved out for ONE
+/// reason: [`stop_session_daemon`] `println!`s its outcome, and the swapper runs inside
+/// the alt-screen TUI — printing there would smear the picker. So this stays MUTE: it
+/// opens a fresh blocking management connection (the same `run/<id>.sock` +
+/// [`connect_managed`] the admin path uses), sends a single controller-only
+/// [`ClientRequest::QuitDaemon`], and drains a couple of reply frames so the daemon sees
+/// our read side stay open until it tears down. The daemon then releases its lock, aborts
+/// its one session, unlinks its own socket, and exits — leaving the session ON DISK, so it
+/// reappears in the swapper's HISTORY pane (mirrors the `/new kill` reap in `client_run`).
+///
+/// Best-effort throughout: a dead/unreachable daemon (nothing to reap) or any I/O error is
+/// swallowed — the caller re-derives the outcome from a fresh discovery sweep right after.
+/// No signal escalation here: this is a deliberate one-off keypress on a live row, and the
+/// graceful `QuitDaemon` is what the client already relies on everywhere else; the periodic
+/// stale-sweep reclaims anything that somehow lingers.
+pub(crate) fn nuke_session_daemon(session_id: &str) {
+    // Nothing accepting ⇒ nothing to reap (the row will simply drop on the next sweep).
+    if !daemon_alive(session_id) {
+        return;
+    }
+    let Ok(sock) = store::daemon_sock_path(session_id) else {
+        return;
+    };
+    // Fresh connect + QuitDaemon, fire-and-forget. A connect/send failure is fine — the
+    // daemon may have died between the liveness check and now; discovery will catch up.
+    if let Ok((mut stream, mut reader)) = connect_managed(&sock) {
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+        if send_request(&mut stream, &ClientRequest::QuitDaemon).is_ok() {
+            // Drain a few frames so the Ack is consumed and our read side stays open
+            // until the daemon finishes tearing down. Ignore errors (socket close is
+            // the expected end state).
+            for _ in 0..4 {
+                if recv_frame(&mut stream, &mut reader).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// `koma daemon kill` — stop EVERY live session-daemon, escalating per session only if
 /// one won't go.
 ///

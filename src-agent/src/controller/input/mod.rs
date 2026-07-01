@@ -46,9 +46,10 @@ use crate::app::state::{AppState, AppStateRest};
 
 /// Returns `true` when `key` is the given ASCII `c` held with Ctrl.
 ///
-/// Used by every mode handler; exposed as `pub(super)` so sibling submodules
-/// can call it without importing from the parent.
-pub(super) fn is_ctrl(key: &KeyEvent, c: char) -> bool {
+/// Used by every mode handler; exposed as `pub(crate)` so sibling submodules AND
+/// the client-side swapper (`app::runtime::client::swapper`) can reuse the same
+/// Ctrl-chord detector instead of hand-rolling the modifier check.
+pub(crate) fn is_ctrl(key: &KeyEvent, c: char) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(key.code, KeyCode::Char(x) if x == c)
 }
