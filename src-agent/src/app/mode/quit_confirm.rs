@@ -12,7 +12,7 @@
 //! three choices, rendered as a navigable horizontal button row and handled in
 //! [`crate::controller::input::handle_quit_confirm`] (local TUI) /
 //! `client::input::handle_quit_confirm_key` (attached client):
-//!   [close window] — close THIS window's session, then exit this window. Local
+//!   [close window (quit)] — close THIS window's session, then exit this window. Local
 //!                    single-window: aborts every session + quits koma. Under the
 //!                    daemon: tombstones only this window's foreground session and
 //!                    detaches this client; other windows keep running (C4);
@@ -48,13 +48,13 @@ pub struct QuitConfirmState {
     /// Total number of sessions at open time. Display only.
     pub total: usize,
     /// Index of the currently focused button, in fixed order:
-    /// `0` = close window, `1` = minimize (detach), `2` = cancel. Moved by
+    /// `0` = close window (quit), `1` = minimize (detach), `2` = cancel. Moved by
     /// Left/Right + Tab/Shift+Tab (and a click sets it to the hit button);
     /// Enter activates it. Initialized to `2` (cancel) so an immediate Enter
     /// lands on the SAFE choice and can't accidentally close a window's session.
     pub selected: usize,
     /// On-screen hit-boxes for the three clickable buttons, in fixed order:
-    /// `[0]` = close window (k), `[1]` = minimize (d), `[2]` = cancel (esc).
+    /// `[0]` = close window (quit) (k), `[1]` = minimize (d), `[2]` = cancel (esc).
     /// Written by the `&self` draw via interior mutability each frame and read by
     /// the event loop on a left-click. The buttons are laid out as horizontal
     /// segments on one row, so each rect is a chip-width band. All-zero

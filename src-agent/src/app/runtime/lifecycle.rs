@@ -6,9 +6,11 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::app::mode::{KeyInputForm, Mode, PickerState};
 use crate::app::resolve::resolve_role;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, SessionRuntime};
 use crate::config::DEFAULT_MODEL;
 use crate::model::app_config::ModelRole;
+use crate::model::session::Session;
+use crate::model::session_registry;
 use crate::model::{app_config::AppConfig, settings::Settings, store};
 use crate::service::openrouter::OpenRouterClient;
 
@@ -77,7 +79,20 @@ fn build_startup(
     let config = AppConfig::load();
 
     // Decide initial state.
-    let mut state = if opts.resume {
+    let mut state = if opts.daemon {
+        // Daemon-per-session: `install_daemon_session` (called right after build_startup
+        // in run_daemon) owns create/load for this daemon's keyed session id. Do NOT
+        // create a throwaway returning-user session here (install would orphan it every
+        // launch) and do NOT run the resume picker / `list_sessions` scan — just stash
+        // last-used creds on a sessionless placeholder; install_daemon_session sets the
+        // real session + mode before the first tick, so the placeholder mode is moot.
+        let (lk, lm, lp) = prefill_creds();
+        let mut state = AppState::new(Mode::Chat);
+        state.rest.last_key = lk;
+        state.rest.last_model = lm;
+        state.rest.last_provider = lp;
+        state
+    } else if opts.resume {
         let metas = store::list_sessions()?;
         let (lk, lm, lp) = prefill_creds();
         let mut state = AppState::new(Mode::SessionPicker(PickerState::new(metas)));
@@ -160,16 +175,28 @@ fn build_startup(
     // `state.rest.config.mcp_servers` is unchanged. No second AppConfig::load().
     state.rest.config = config;
 
-    // Build the GLOBAL MCP client manager from the configured servers and stash it
-    // in AppStateRest (cloned into every ToolCtx so `mcp__*` calls can dispatch).
-    // NON-BLOCKING: `connect_all` returns immediately and connects each enabled
-    // server in a background task on the runtime; tools appear once a server is
-    // ready. With no `mcp_servers` configured this spawns nothing and advertises no
-    // tools — behaviour is identical to a build without MCP.
-    state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
-        &handle,
-        &state.rest.config.mcp_servers,
-    ));
+    // Build the MCP client manager from the configured servers and stash it in
+    // AppStateRest (cloned into every ToolCtx so `mcp__*` calls can dispatch).
+    //
+    // In DAEMON mode this is left `None` here: `run_daemon` sets it up right after,
+    // PROXYING to the global MCP daemon (with a local fallback) so N session-daemons
+    // share one copy of every heavyweight server instead of each spawning their own.
+    // Building a LOCAL manager here too would spawn a duplicate set that the proxy
+    // then supersedes — so skip it for `--daemon` and let `run_daemon` decide.
+    //
+    // In the STANDALONE/`--local` (and returning-user TUI) path there is no global
+    // daemon, so build the LOCAL manager exactly as before. NON-BLOCKING: `connect_all`
+    // returns immediately and connects each enabled server in a background task; tools
+    // appear once a server is ready. With no `mcp_servers` configured this spawns
+    // nothing and advertises no tools — identical to a build without MCP.
+    if opts.daemon {
+        state.rest.mcp_manager = None;
+    } else {
+        state.rest.mcp_manager = Some(crate::app::mcp::McpManager::connect_all(
+            &handle,
+            &state.rest.config.mcp_servers,
+        ));
+    }
 
     // Build the security-daemon client. Mint a per-process token and, if the
     // daemon is installed, auto-start it (M1: gated only on install; a later
@@ -216,6 +243,147 @@ fn build_startup(
     warm_session(&mut state, &client, &handle);
 
     Ok((rt, handle, state, client))
+}
+
+/// Create-or-LOAD the session `<id>` and install it as the daemon's SINGLE foreground
+/// session (daemon-per-session). Called once at daemon startup, AFTER [`build_startup`]
+/// and BEFORE the accept/daemon loops.
+///
+/// The daemon owns exactly one session — the one keyed to its socket. The client minted
+/// `session_id` and passed it via `--session`, so:
+/// - if the registry already has `session_id` → [`Session::load`] it from disk (resume,
+///   exercised by a LATER commit);
+/// - else → create a NEW session WITH THAT id via [`store::create_session_in_with_id`],
+///   rooted at the daemon's current working dir (it inherited the client's cwd at spawn,
+///   so `current_dir()` is the right pwd bucket). At THIS commit the minted id is always
+///   new, so only the create branch runs.
+///
+/// Construction MIRRORS the Attach-create path `create_session_for_pwd` (inherit
+/// last-used creds for a fresh session, acquire the session's lock into a fresh
+/// [`SessionRuntime`], reset the flat foreground UI, seed token counters, then either
+/// open KeyInput when no usable Main route resolves or land in Chat + warm) — with ONE
+/// structural difference: it REPLACES the single foreground slot (`sessions[0]`) instead
+/// of appending a tab, because the daemon serves one session, not a multiplexed set. Any
+/// lock `build_startup` already grabbed for its placeholder/returning-user session is
+/// released first so we never strand a stale lock.
+///
+/// Best-effort and infallible at the type level: a create/load error degrades to a
+/// status line + KeyInput rather than aborting daemon startup, so a bad session can
+/// never wedge the daemon before it can even report the problem to a client.
+fn install_daemon_session(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+) {
+    // Release any lock build_startup acquired (its placeholder / returning-user session);
+    // we are about to overwrite the foreground slot with OUR keyed session.
+    if let Some(old) = state.rest.fg_mut().held_lock.take() {
+        store::remove_lock(&old);
+    }
+
+    // NOTE: for a returning user, `build_startup` already minted a throwaway session
+    // (its `create_session()`), which this replace orphans on disk/registry. That extra
+    // empty session is a pre-existing wart (the global daemon's `build_startup` seeded one
+    // every launch too) and is harmless; the multiplexing-rip-out commit removes the
+    // shared `build_startup` seeding, so it is intentionally left as-is here.
+
+    // --- create-or-load resolution (quote-worthy: the create-vs-load oracle) ---
+    // The registry is the source of truth for "does this session already exist?". A
+    // present row → load from its on-disk dir; an absent row (or any registry error) →
+    // create fresh with this exact id, rooted at the daemon's cwd.
+    let loaded: Result<Session> = match session_registry::get(session_id) {
+        Ok(Some(row)) => store::session_dir(&row.pwd_hash, session_id)
+            .and_then(|dir| Session::load(&dir)),
+        _ => {
+            let workdir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            store::create_session_in_with_id(&workdir, session_id)
+        }
+    };
+
+    let mut sess = match loaded {
+        Ok(s) => s,
+        Err(e) => {
+            // Couldn't build the session — surface it on the (placeholder) foreground and
+            // drop into KeyInput so the client still reaches a usable screen.
+            state.rest.fg_mut().status = format!("error: could not open session: {e}");
+            *client = None;
+            *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
+                state.rest.last_key.clone().unwrap_or_default(),
+                state.rest.last_model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+                true,  // first_run framing
+                false, // not from picker
+            ));
+            return;
+        }
+    };
+
+    // A FRESH session inherits the last-used creds (so it drops straight into chat, same
+    // as `/new` and the attach-create path); a LOADED session already carries its own
+    // persisted creds, so only fill blanks from last-used as a convenience.
+    if sess.settings.api_key.is_empty() {
+        sess.settings.api_key = state.rest.last_key.clone().unwrap_or_default();
+    }
+    if sess.settings.provider.is_empty() {
+        sess.settings.provider = state.rest.last_provider.clone().unwrap_or_default();
+    }
+    if sess.settings.model.is_empty() {
+        sess.settings.model = state
+            .rest
+            .last_model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    }
+    let _ = sess.save();
+
+    // Acquire THIS session's lock into a fresh runtime keyed by the SAME uuid as the
+    // socket — so the SessionRuntime id, the session id, and the socket key all agree.
+    store::write_lock(&sess.path);
+    let mut runtime = SessionRuntime::new();
+    runtime.id = session_id.to_string();
+    runtime.held_lock = Some(sess.path.clone());
+
+    // KeyInput only when NO usable Main route resolves (global providers/models + legacy
+    // fallback), not just on an empty `api_key` — computed before `sess` moves in.
+    let no_creds = resolve_role(&state.rest.config, &sess.settings, ModelRole::Main)
+        .is_none_or(|r| r.api_key.is_empty());
+    let sess_path = sess.path.clone();
+    runtime.session = Some(sess);
+
+    // Install as the SINGLE foreground session (replace the slot; never append).
+    state.rest.sessions = vec![runtime];
+    state.rest.foreground = 0;
+
+    // Clean slate for the flat foreground UI (mirror create_session_for_pwd / /new).
+    {
+        let fg = state.rest.fg_mut();
+        fg.input.clear();
+        fg.cursor = 0;
+        fg.pending_attachments.clear();
+    }
+    state.rest.reset_scroll();
+    state.rest.transcript_cache.borrow_mut().blocks.clear();
+    state.rest.fg_mut().status = "ready".into();
+
+    // Seed this session's cumulative token counters from its own (possibly empty) ledger.
+    state.rest.load_token_totals(0, &sess_path);
+
+    if no_creds {
+        // No usable creds yet — prompt for them through the client. The client renders
+        // KeyInput and forwards the entered creds to the daemon (#122).
+        *client = None;
+        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
+            state.rest.last_key.clone().unwrap_or_default(),
+            state.rest.last_model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            true,  // first_run framing
+            false, // not from picker
+        ));
+    } else {
+        *client = Some(build_client());
+        // Land in Chat first, THEN warm (warm_session may upgrade to Loading).
+        *state.mode_mut() = Mode::Chat;
+        warm_session(state, client, handle);
+    }
 }
 
 /// Release every live session's on-disk lock, then drop the tokio runtime LAST.
@@ -281,8 +449,52 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 
+    // Daemon-per-session: `--session <id>` is REQUIRED. This daemon binds the keyed
+    // socket `run/<id>.sock` and owns exactly session `<id>` (the client minted the id
+    // and passed it here, so both agree on the key). Erroring clearly beats binding a
+    // wrong/global socket — the spawn machinery always passes it.
+    let session_id = opts.session.clone().ok_or_else(|| {
+        anyhow::anyhow!("`koma --daemon` requires `--session <id>` (daemon-per-session)")
+    })?;
+
     // Shared, terminal-independent startup — identical to the TUI path.
     let (rt, handle, mut state, mut client) = build_startup(&opts)?;
+
+    // Take ownership of session `<id>`: create-or-load it, wrap in a SessionRuntime,
+    // acquire its lock, and install it as the daemon's single foreground session —
+    // BEFORE the daemon loop / accept loop start. This REPLACES whatever placeholder /
+    // returning-user session `build_startup` seeded, so the daemon serves exactly the
+    // session keyed to its socket. Attach no longer creates a session (the daemon
+    // already owns this one); see the hub `Attach` handler.
+    install_daemon_session(&mut state, &mut client, &handle, &session_id);
+
+    // MCP for the session-daemon: PROXY to the global MCP daemon when possible, with a
+    // LOCAL fallback that is never worse than today. `build_startup` left
+    // `mcp_manager = None` in daemon mode so this is the sole owner of the decision.
+    //
+    // - No `mcp_servers` configured → leave it `None` (no manager, no global daemon
+    //   spawned): byte-identical to a build without MCP.
+    // - Servers configured → ensure the singleton global MCP daemon is up and connect a
+    //   PROXY to it, so N session-daemons share ONE copy of every heavyweight server
+    //   (e.g. `serena`) instead of each spawning their own. If EITHER the ensure/spawn OR
+    //   the proxy connect fails, FALL BACK to a LOCAL `connect_all` — MCP must always
+    //   work; a missing/broken global daemon degrades to today's per-session behaviour.
+    if !state.rest.config.mcp_servers.is_empty() {
+        let proxy = crate::model::store::mcp_daemon_sock_path().and_then(|sock| {
+            super::manage::ensure_mcp_daemon_running()
+                .and_then(|()| crate::app::mcp::McpManager::connect_proxy(&handle, sock))
+        });
+        state.rest.mcp_manager = Some(match proxy {
+            // Proxying to the shared global daemon: the dedup win.
+            Ok(proxy) => proxy,
+            // FALLBACK: any ensure/connect failure ⇒ own the connections locally, so
+            // this daemon still has working MCP (just not shared).
+            Err(e) => {
+                eprintln!("mcp: global daemon unavailable ({e:#}); using local servers");
+                crate::app::mcp::McpManager::connect_all(&handle, &state.rest.config.mcp_servers)
+            }
+        });
+    }
 
     // Install the SIGHUP-survive + graceful/double-SIGTERM signal handling and get
     // the flag the SYNC loop polls. Done BEFORE binding the socket so a signal that
@@ -291,11 +503,11 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // launching terminal can't kill it.
     let shutting_down = install_daemon_signals(&handle);
 
-    // Record the advisory pidfile (diagnostics / `kill`). Best-effort: a write
-    // failure must not stop the daemon (the bound socket, not this file, is the
-    // liveness oracle), so the error is swallowed. The teardown unlinks it.
-    let pid_path = crate::model::store::daemon_pid_path()?;
-    let _ = crate::model::store::write_daemon_pid();
+    // Record the advisory pidfile (diagnostics / `kill`), keyed by this session.
+    // Best-effort: a write failure must not stop the daemon (the bound socket, not this
+    // file, is the liveness oracle), so the error is swallowed. The teardown unlinks it.
+    let pid_path = crate::model::store::daemon_pid_path(&session_id)?;
+    let _ = crate::model::store::write_daemon_pid(&session_id);
 
     // Sync-loop <-> per-client-task bridge (critique #1/#6). The runner holds the
     // paired `req_tx` (which the accept loop clones into each connection task) for
@@ -307,8 +519,8 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // liveness oracle) and spawn the accept loop onto the tokio runtime. Each
     // accepted connection gets a per-client task bridging its socket to `req_tx`.
     // `UnixListener::bind` + `handle.spawn` need a tokio reactor in scope, so enter
-    // the runtime context for them. The socket path is unlinked at teardown below.
-    let sock_path = crate::model::store::daemon_sock_path()?;
+    // the runtime context for them. The keyed socket path is unlinked at teardown below.
+    let sock_path = crate::model::store::daemon_sock_path(&session_id)?;
     {
         let _enter = handle.enter();
         let listener = crate::ipc::server::bind(&sock_path)?;

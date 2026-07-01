@@ -215,7 +215,7 @@ pub enum Mode {
     MessageRewind(Box<RewindState>),
     /// Quit-confirm overlay: shown when the user asks to quit (the `/quit`
     /// command or the quit keybind) while at least one session still has work in
-    /// flight. Offers three keyed choices — `k` close window (LOCAL single-window:
+    /// flight. Offers three keyed choices — `k` close window (quit) (LOCAL single-window:
     /// abort every session, release all locks, exit; under the daemon: close only
     /// THIS window's session + detach this client, other windows keep running — C4),
     /// `d` detach & quit (leave conversations persisted on disk and exit without

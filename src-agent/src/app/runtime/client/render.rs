@@ -31,6 +31,32 @@ pub(super) const TOAST_TTL: Duration = Duration::from_secs(4);
 /// independent of the daemon's frame rate (the socket is drained non-blocking).
 pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 
+/// Why [`render_loop`] returned — i.e. what the client run-loop in
+/// [`super::client_run`] should do next.
+///
+/// Three outcomes:
+/// - [`Exit`](ClientTransition::Exit): leave the client (detach, the `/quit` overlay's
+///   ExitClient choice, or the daemon's socket closing).
+/// - [`OpenSwapper`](ClientTransition::OpenSwapper): the daemon sent a
+///   [`crate::ipc::proto::DaemonEvent::OpenSwapper`] (a `/resume` hand-off), so
+///   `client_run` should DETACH from the current daemon (leave it cooking) and run the
+///   local session swapper standalone; on pick it attaches to the chosen daemon, on
+///   cancel it reconnects to the one it just left.
+/// - [`NewSession`](ClientTransition::NewSession): the daemon sent a
+///   [`crate::ipc::proto::DaemonEvent::NewSession`] (a `/new` hand-off), so `client_run`
+///   should DETACH from the current daemon — or, on `kill`, send `QuitDaemon` first to reap
+///   it — and attach a freshly minted brand-new session-daemon.
+pub(super) enum ClientTransition {
+    /// Tear the client down and return from `client_run` (detach / ExitClient /
+    /// frame channel disconnected).
+    Exit,
+    /// Detach from the current daemon and open the local daemon swapper (`/resume`).
+    OpenSwapper,
+    /// Detach (or kill, on `kill`) the current daemon and attach a brand-new
+    /// session-daemon (`/new` / `/new kill`). The bool is the `/new kill` flag.
+    NewSession { kill: bool },
+}
+
 /// The synchronous render loop, decoupled from the socket and paced at ~60fps.
 ///
 /// Each frame, in order: (a) drain ALL pending [`DaemonFrame`]s non-blocking and
@@ -42,13 +68,16 @@ pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 /// rest). The loop NEVER blocks on the socket: if no frame arrived it still paints and
 /// animations still advance. Returns when the user detaches (Ctrl-C) or the socket
 /// closes.
+///
+/// Returns a [`ClientTransition`] telling [`super::client_run`] what to do next:
+/// [`ClientTransition::Exit`] to leave the client, or [`ClientTransition::OpenSwapper`]
+/// when the daemon signals a `/resume` (so `client_run` detaches + opens the swapper).
 pub(super) fn render_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     frame_rx: &Receiver<DaemonFrame>,
     req_tx: &Sender<ClientRequest>,
     prebuffered: Vec<DaemonFrame>,
-    resume: bool,
-) -> Result<()> {
+) -> Result<ClientTransition> {
     use std::sync::mpsc::TryRecvError;
 
     // The shadow is a real AppState reconstructed purely from frames. It starts in
@@ -65,9 +94,6 @@ pub(super) fn render_loop(
     // the shadow is NOT in the agents full-screen editor so each fresh open re-sends.
     let mut last_sent_wrap_w: Option<usize> = None;
 
-    // Fire once after the first full snapshot lands when launched with --resume.
-    let mut resume_fired = false;
-
     // Per-connection seq tracking (critique #1). `expected` is the seq the NEXT
     // frame should carry. `0` means "not yet seeded" — the first frame seeds it.
     let mut expected: u64 = 0;
@@ -80,11 +106,14 @@ pub(super) fn render_loop(
     // `Hello` (task #142) BEFORE the live drain, through the SAME `apply_frame` path so
     // seq seeding + snapshot/delta handling are identical. Normally empty (the daemon
     // sends `Hello` first), so usually a no-op; when non-empty these are the lowest-seq
-    // frames and must be folded first to keep the seq stream gap-free. An `EnterSelect`
-    // can't occur this early (it needs a forwarded `/select` first), so a throwaway
-    // `select_requested` here is never acted on.
+    // frames and must be folded first to keep the seq stream gap-free. Neither an
+    // `EnterSelect`, an `OpenSwapper`, nor a `NewSession` can occur this early (each needs a
+    // forwarded `/select` / `/resume` / `/new` first), so the throwaway `select_requested` /
+    // `open_swapper_requested` / `new_session_requested` here are never acted on.
     {
         let mut select_requested = false;
+        let mut open_swapper_requested = false;
+        let mut new_session_requested: Option<bool> = None;
         for frame in prebuffered {
             apply_frame(
                 frame,
@@ -93,6 +122,8 @@ pub(super) fn render_loop(
                 &mut seeded,
                 &mut awaiting_resync,
                 &mut select_requested,
+                &mut open_swapper_requested,
+                &mut new_session_requested,
                 req_tx,
             );
         }
@@ -106,6 +137,16 @@ pub(super) fn render_loop(
         // pass: the daemon asked THIS (controller) client to run the `/select` transcript
         // dump on its own terminal. Acted on AFTER the drain (we own `terminal` here).
         let mut select_requested = false;
+        // Latched by `apply_frame` on a `DaemonEvent::OpenSwapper` (the `/resume` hand-off):
+        // the daemon asked this client to open its local swapper. Checked AFTER the drain,
+        // where we return `OpenSwapper` so `client_run` detaches + runs the swapper.
+        let mut open_swapper_requested = false;
+        // Latched by `apply_frame` on a `DaemonEvent::NewSession { kill }` (the `/new`
+        // hand-off): the daemon asked this client to spawn + attach a brand-new
+        // session-daemon. `Some(kill)` carries the `/new kill` flag. Checked AFTER the drain,
+        // where we return `NewSession { kill }` so `client_run` detaches — or kills, then
+        // detaches — and attaches a freshly minted daemon.
+        let mut new_session_requested: Option<bool> = None;
 
         // --- (a) drain every queued incoming frame (NON-BLOCKING) ---
         // try_recv never blocks, so a quiet daemon can't stall the paint below. The
@@ -121,22 +162,35 @@ pub(super) fn render_loop(
                         &mut seeded,
                         &mut awaiting_resync,
                         &mut select_requested,
+                        &mut open_swapper_requested,
+                        &mut new_session_requested,
                         req_tx,
                     );
                 }
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed.
                 // Nothing more will ever arrive — leave the client.
-                Err(TryRecvError::Disconnected) => return Ok(()),
+                Err(TryRecvError::Disconnected) => return Ok(ClientTransition::Exit),
             }
         }
 
-        // Fire OpenSessionHub once after the first full snapshot lands when the client
-        // was launched with --resume / koma agents. Gated on the shadow having a real
-        // session so we don't fire against the initial empty placeholder state.
-        if resume && !resume_fired && shadow.rest.fg().session.is_some() {
-            resume_fired = true;
-            let _ = req_tx.send(ClientRequest::OpenSessionHub);
+        // `/resume` hand-off: the daemon signalled `OpenSwapper` this drain pass. Hand
+        // control back to `client_run` so it DETACHES from this daemon (leaving it
+        // cooking) and runs the local swapper standalone — we must NOT keep rendering this
+        // daemon's frames underneath the swapper. Returned BEFORE any further work this
+        // frame; `client_run` owns the detach + swapper + reconnect.
+        if open_swapper_requested {
+            return Ok(ClientTransition::OpenSwapper);
+        }
+
+        // `/new` hand-off: the daemon signalled `NewSession { kill }` this drain pass. Hand
+        // control back to `client_run` so it DETACHES from this daemon — or, on `kill`, sends
+        // `QuitDaemon` to reap it first — and attaches a freshly minted brand-new
+        // session-daemon. Like `OpenSwapper`, returned BEFORE any further work this frame; we
+        // must NOT keep rendering this daemon's frames once we are tearing the connection
+        // down. `client_run` owns the detach/kill + mint + attach.
+        if let Some(kill) = new_session_requested {
+            return Ok(ClientTransition::NewSession { kill });
         }
 
         // --- (a-bis) `/select` transcript dump (controller-side) ---
@@ -205,8 +259,8 @@ pub(super) fn render_loop(
                     // The `/quit` overlay's choices are CLIENT-process decisions, so
                     // when the shadow is in QuitConfirm (mirrored from the daemon's
                     // mode) the client intercepts its keys locally instead of
-                    // forwarding them (daemon stage 12). `Detach`/`Kill` ask the loop
-                    // to exit the client.
+                    // forwarding them (daemon stage 12). `[k]` kills this window's
+                    // daemon, `[d]` detaches it; both ask the loop to exit the client.
                     if matches!(shadow.mode(), Mode::QuitConfirm(_)) {
                         // The daemon owns the focus index; read the shadow's mirrored
                         // `selected` so Enter activates the focused button (and nav keys
@@ -216,18 +270,8 @@ pub(super) fn render_loop(
                         } else {
                             0
                         };
-                        // This window's foreground session id (from the shadow, which
-                        // mirrors THIS client's own per-client foreground projection): the
-                        // `[k]` "close this window" path tombstones exactly this session
-                        // (C4), not the whole daemon. `.get()` so an empty/out-of-range
-                        // foreground degrades to None (plain detach) instead of panicking.
-                        let fg_id = shadow
-                            .rest
-                            .sessions
-                            .get(shadow.rest.foreground)
-                            .map(|s| s.id.clone());
-                        match handle_quit_confirm_key(&key, req_tx, sel, fg_id.as_deref()) {
-                            QuitConfirmKey::ExitClient => return Ok(()),
+                        match handle_quit_confirm_key(&key, req_tx, sel) {
+                            QuitConfirmKey::ExitClient => return Ok(ClientTransition::Exit),
                             QuitConfirmKey::Stay => {}
                         }
                         continue;
@@ -235,7 +279,7 @@ pub(super) fn render_loop(
                     // Outside the overlay: the ONE locally-interpreted gesture is
                     // Ctrl-C, which detaches the client (leaves the daemon running).
                     if is_detach(&key) {
-                        return Ok(());
+                        return Ok(ClientTransition::Exit);
                     }
                     // Render-ahead: apply the plain composer edits to the shadow NOW
                     // (the daemon's authoritative InputChanged reconciles later), then

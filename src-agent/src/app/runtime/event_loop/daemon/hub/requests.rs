@@ -5,11 +5,11 @@ use crate::app::mode::Mode;
 use crate::app::state::AppState;
 use crate::controller::command::Command;
 use crate::controller::input::{handle_key, handle_paste, Action};
-use crate::ipc::proto::{ClientRequest, DaemonEvent, StateSnapshot};
+use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus, StateSnapshot};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::actions::{apply_action, create_session_for_pwd};
+use crate::app::runtime::actions::apply_action;
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -52,7 +52,7 @@ impl DaemonHub {
     }
 
     /// Apply one bridge message against the registry / emit its reply.
-    pub(super) fn handle_inbound(
+    pub(in crate::app::runtime::event_loop::daemon) fn handle_inbound(
         &mut self,
         msg: HubInbound,
         state: &mut AppState,
@@ -174,36 +174,15 @@ impl DaemonHub {
     ) {
         match req {
             // --- read-only / control (honoured for everyone) ---
-            ClientRequest::Attach { cwd, .. } => {
-                // FRESH-on-attach (C5): a plain `koma` attach ALWAYS creates a brand-new
-                // session rooted at the ATTACHING CLIENT's cwd — it never resumes a live
-                // or on-disk session for that dir. (The old pwd-aware resume was the bug:
-                // reopening `koma` in a dir landed on the OLD session — stale chat, even a
-                // stale /quit page. Resume / cooking / history is reached only via
-                // `koma --resume` / `koma agents`, which fire `OpenSessionHub` to open the
-                // picker OVER this fresh base.)
+            ClientRequest::Attach { .. } => {
+                // Daemon-per-session: the daemon ALREADY OWNS its one session (created or
+                // loaded at startup, keyed to its socket — see `install_daemon_session`),
+                // so Attach NO LONGER creates a session. The `cwd` the client carries is
+                // ignored here (the daemon's session is already rooted at the cwd it
+                // inherited at spawn). Attach is now purely: Hello + Snapshot + mark
+                // attached + seed this client's baseline. Re-attach / resync from an
+                // already-attached client is unchanged (it just re-snapshots).
                 //
-                // GUARDED to the FIRST attach for this client (`!attached`, still false
-                // here since `attached` is flipped true only AFTER the snapshot below):
-                // a re-attach / resync from an already-attached client must NOT spawn a
-                // second session — it just re-snapshots that client's existing foreground.
-                // Runs for EVERY first-attaching client (C2): the C2 LOAD/STORE bracket
-                // scopes the create's foreground move to THIS client's view and the post-
-                // attach STORE persists the new session's UUID onto its OWN per-client
-                // pointer, so each window gets (and keeps) its own independent fresh
-                // session without disturbing any other client's view. A client that sent
-                // no `cwd` just keeps its current foreground (nothing to root a session
-                // at). Any create error is swallowed (surfaced via status, never aborts
-                // the loop) so a bad create can't wedge the attach handshake; the snapshot
-                // below still goes out, reflecting whatever foreground resulted.
-                if !self.clients[idx].attached {
-                    if let Some(cwd) = cwd {
-                        let cwd = std::path::PathBuf::from(cwd);
-                        if let Err(e) = create_session_for_pwd(state, client, handle, &cwd) {
-                            state.rest.fg_mut().status = format!("attach create error: {e:#}");
-                        }
-                    }
-                }
                 // Build-skew handshake (task #142): emit the daemon's startup
                 // fingerprint as the FIRST frame this client receives, BEFORE its
                 // initial Snapshot. A client built from different code restarts this
@@ -218,8 +197,7 @@ impl DaemonHub {
                 // Only this client's baseline is (re)seeded (blocker #2) — never a
                 // hub-global one — so a late attach can't swallow deltas another
                 // already-attached client still owes; that client diffs against its
-                // own untouched baseline. Built AFTER pwd selection so this client's very
-                // first snapshot already reflects the resolved (possibly new) foreground.
+                // own untouched baseline. Reflects the daemon's single owned session.
                 let snap = build_snapshot(state);
                 self.send_to(idx, DaemonEvent::Snapshot(Box::new(snap.clone())));
                 self.clients[idx].attached = true;
@@ -235,6 +213,40 @@ impl DaemonHub {
                 self.send_to(idx, DaemonEvent::Snapshot(Box::new(snap.clone())));
                 self.clients[idx].attached = true;
                 self.clients[idx].last_snapshot = Some(snap);
+            }
+            // Live-session DISCOVERY probe (daemon-per-session): answer with a single
+            // metadata frame for this daemon's ONE owned session and nothing else. This
+            // is the data source the hub/swapper consumes to enumerate live daemons
+            // WITHOUT attaching. It is strictly READ-ONLY — it must NOT create/attach a
+            // session, must NOT touch the foreground, and must NOT flip `attached` or
+            // seed `last_snapshot` (so a transient connect→Status→close never registers
+            // this connection as an attached client owing deltas, and never disturbs
+            // another client's baseline). It just reads metadata off the foreground
+            // runtime (the daemon's single session; `fg()` IS that session) and sends one
+            // `Status` frame. The C2 LOAD/STORE bracket around this in `handle_request`
+            // only moves the transient acting cursor (Status moves no foreground), so it
+            // adds no observable side effect here.
+            ClientRequest::Status => {
+                let rt = state.rest.fg();
+                let status = SessionStatus {
+                    session_id: rt.id.clone(),
+                    // The session's display name (empty before a session is installed).
+                    name: rt
+                        .session
+                        .as_ref()
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default(),
+                    // The session's effective working dir — the live `cd` override, else
+                    // its configured workdir; empty when no session is installed yet
+                    // (guarded on `session` so we don't leak the daemon's process cwd).
+                    pwd: rt
+                        .session
+                        .as_ref()
+                        .map(|_| rt.effective_cwd().display().to_string())
+                        .unwrap_or_default(),
+                    working: rt.is_working(),
+                };
+                self.send_to(idx, DaemonEvent::Status(status));
             }
             ClientRequest::Detach => {
                 // Polite leave: drop the client + pass the controller seat to the
@@ -379,6 +391,13 @@ impl DaemonHub {
             // foreground, repoint foreground onto a still-live session so render/service
             // never touch a tombstone. The daemon self-exits later (grace-timed) once
             // EVERY session is closed AND no client is attached.
+            //
+            // Phase B (daemon-per-session): no client SENDS this anymore — the `/quit`
+            // overlay's `[k]` now sends the controller-only `QuitDaemon` (a window IS its
+            // own single-session daemon, so closing it kills the daemon, not just the
+            // session). The handler is kept wired + tested as the per-session tombstone
+            // primitive; Phase C removes it along with the rest of the multi-session
+            // machinery if nothing else picks it up.
             ClientRequest::QuitSession { session_id } => {
                 match state.rest.sessions.iter().position(|s| s.id == session_id) {
                     Some(target) => {
@@ -401,9 +420,13 @@ impl DaemonHub {
                 self.send_to(idx, DaemonEvent::Ack);
             }
 
-            // The client was launched with --resume / koma agents: open the session
-            // hub immediately, same as the /resume slash command. Ack on success or
-            // Error on failure (e.g. spawn_pending is set mid-/new).
+            // Legacy `--resume` open-the-hub request. Daemon-per-session: the client no
+            // longer sends this on `--resume` (it opens its swapper LOCALLY before/without
+            // attaching — see `client_run`). Kept compiling + honoured for any stray
+            // sender: it runs the SAME `handle_resume`, which now just sets
+            // `resume_pending`; the hub then signals this client with `OpenSwapper` next
+            // tick (it does NOT build a daemon-side hub mode). Ack on success or Error on
+            // failure (e.g. spawn_pending is set mid-/new).
             ClientRequest::OpenSessionHub => {
                 let result = crate::app::runtime::commands::new_session::handle_resume(state);
                 self.ack_or_error(idx, result);
@@ -424,11 +447,14 @@ impl DaemonHub {
 
             // Read-only / already-handled variants never reach here (handle_request
             // dispatches them); treat any residual as a no-op Ack so the match is
-            // exhaustive without a spurious error.
+            // exhaustive without a spurious error. `Status` is among these — it is
+            // answered in `dispatch_request` with its own one-shot frame and never falls
+            // through to a mutation, so it must NOT reach this Ack path in practice.
             ClientRequest::Attach { .. }
             | ClientRequest::Detach
             | ClientRequest::Resync
-            | ClientRequest::ListSessions => {
+            | ClientRequest::ListSessions
+            | ClientRequest::Status => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }

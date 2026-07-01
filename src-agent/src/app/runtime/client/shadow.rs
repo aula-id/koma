@@ -14,6 +14,7 @@ use super::render::TOAST_TTL;
 /// while `awaiting_resync` only a fresh `Snapshot` is applied (it reseeds the seq +
 /// clears the flag). `Ack` / `Error` frames advance the seq but are non-visual
 /// (an `Error` could surface as a toast in a later refinement).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_frame(
     frame: DaemonFrame,
     shadow: &mut AppState,
@@ -21,6 +22,8 @@ pub(super) fn apply_frame(
     seeded: &mut bool,
     awaiting_resync: &mut bool,
     select_requested: &mut bool,
+    open_swapper_requested: &mut bool,
+    new_session_requested: &mut Option<bool>,
     req_tx: &std::sync::mpsc::Sender<ClientRequest>,
 ) -> bool {
     // --- seq-gap detection (critique #1) ---
@@ -80,8 +83,29 @@ pub(super) fn apply_frame(
         // here (a re-attach mid-session re-emits it), it is non-visual: the version was
         // already verified at connect time, so just advance the seq and render nothing.
         DaemonEvent::Hello { .. } => false,
+        // The `/resume` hand-off: the daemon asked THIS client to open its LOCAL
+        // swapper. Latch the request so `render_loop` returns `ClientTransition::OpenSwapper`
+        // AFTER this drain pass — `apply_frame` owns no terminal / connection and can't
+        // detach itself. Non-visual to the shadow, so the redraw flag stays false.
+        DaemonEvent::OpenSwapper => {
+            *open_swapper_requested = true;
+            false
+        }
+        // The `/new` hand-off: the daemon asked THIS client to spawn + attach a brand-new
+        // session-daemon (detaching — or killing, then detaching — the current one). Latch
+        // the request (carrying the KILL flag) so `render_loop` returns
+        // `ClientTransition::NewSession { kill }` AFTER this drain pass — `apply_frame` owns
+        // no terminal / connection and can't tear itself down. Non-visual to the shadow, so
+        // the redraw flag stays false. Mirrors `OpenSwapper`.
+        DaemonEvent::NewSession { kill } => {
+            *new_session_requested = Some(kill);
+            false
+        }
         // Non-visual control replies. (A future refinement could toast an Error.)
-        DaemonEvent::Ack | DaemonEvent::Error(_) => false,
+        // `Status` is a discovery-only reply consumed by the SYNC `probe_status` path,
+        // never the async attach client — but a frame is a frame, so handle it as a
+        // non-visual no-op here for exhaustiveness rather than panic.
+        DaemonEvent::Ack | DaemonEvent::Error(_) | DaemonEvent::Status(_) => false,
     }
 }
 
