@@ -84,7 +84,7 @@ pub(super) enum QuitConfirmKey {
 
 /// Handle a key while the shadow mirrors the daemon's `/quit` confirm overlay
 /// (daemon stage 12). The overlay is a navigable horizontal button row —
-/// `[close window]` `[detach]` `[cancel]` (indices 0/1/2) — whose three choices
+/// `[close window (quit)]` `[detach]` `[cancel]` (indices 0/1/2) — whose three choices
 /// are CLIENT-process-lifecycle decisions. Two classes of key:
 ///
 /// NAVIGATION (`Left`/`Right`, `Tab`/`Shift+Tab`, `h`/`l`) — the daemon owns the focus
@@ -95,7 +95,7 @@ pub(super) enum QuitConfirmKey {
 ///
 /// ACTIVATION — the client acts on the lifecycle choice itself rather than letting it
 /// cross to the daemon, because closing/detaching tears down THIS process. `Enter`
-/// activates the CURRENTLY FOCUSED button (`selected`): 0 (close window) → like `k`,
+/// activates the CURRENTLY FOCUSED button (`selected`): 0 (close window (quit)) → like `k`,
 /// 1 (detach) → like `d`, 2/other → like `Esc`. The direct shortcuts fire regardless
 /// of focus:
 ///   - `[k]` CLOSE THIS WINDOW — KILL this window's daemon. A window now IS its own
@@ -152,7 +152,7 @@ pub(super) fn handle_quit_confirm_key(
         // --- Activate the focused button (same effect as its direct shortcut). ---
         KeyCode::Enter => match selected {
             0 => {
-                // close window — like `k`: kill this window's daemon, then detach.
+                // close window (quit) — like `k`: kill this window's daemon, then detach.
                 quit_daemon_and_detach(req_tx)
             }
             1 => {
@@ -189,7 +189,7 @@ pub(super) fn handle_quit_confirm_key(
     }
 }
 
-/// `[k]` (close window): KILL this window's daemon, then detach THIS client. A window
+/// `[k]` (close window (quit)): KILL this window's daemon, then detach THIS client. A window
 /// now IS its own single-session daemon (daemon-per-session), so closing the window ends
 /// the daemon — there is no other window or session sharing it to spare.
 ///

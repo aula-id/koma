@@ -261,7 +261,7 @@ fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool 
 ///   - LOCAL TUI: there is no IPC; the forwarded-key story does not apply. The `[k]` key
 ///     runs through `handle_key` -> `QuitKillAll` -> `handle_quit_kill_all`, which sets
 ///     `state.rest.should_quit`. In the standalone `run_loop` that simply breaks the loop
-///     and the process exits (one window, so "close window" == quit koma). NOTE: this
+///     and the process exits (one window, so "close window (quit)" == quit koma). NOTE: this
 ///     `should_quit` -> `close_all_sessions` translation BELOW is effectively dormant for
 ///     clients now (no client sets `should_quit` on the daemon); it remains only as a
 ///     defensive sweep in case a future daemon-side path ever sets the flag.
