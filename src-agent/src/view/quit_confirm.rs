@@ -7,7 +7,7 @@
 //! 1. Top+bottom rule title bar — ` quit ` on the TOP rule.
 //! 2. A clean question line ("Do you want to quit?"); when work is in flight a
 //!    dim sub-line warns that in-flight work will be lost.
-//! 3. A navigable horizontal BUTTON ROW: `[close window]  [detach]  [cancel]`.
+//! 3. A navigable horizontal BUTTON ROW: `[close window (quit)]  [detach]  [cancel]`.
 //!    The focused button (index `s.selected`) is highlighted; the others are
 //!    subdued. Each button is laid out as a chip and its on-screen
 //!    [`ratatui::layout::Rect`] is recorded into [`QuitConfirmState::button_rects`]
@@ -28,21 +28,20 @@ use crate::app::mode::QuitConfirmState;
 use crate::view::theme::Palette;
 
 /// The three button labels, left→right, in `button_rects`/`selected` index order
-/// (`0` = close window, `1` = detach, `2` = cancel). The chip is the label wrapped
-/// in literal brackets with inner padding (`[ close window ]`) — koma button style — so the chip width is
+/// (`0` = close window (quit), `1` = detach, `2` = cancel). The chip is the label wrapped
+/// in literal brackets with inner padding (`[ close window (quit) ]`) — koma button style — so the chip width is
 /// `label.len() + 4`, matching the click-rect math below.
-const LABELS: [&str; 3] = ["close window", "detach", "cancel"];
+const LABELS: [&str; 3] = ["quit", "detach", "cancel"];
 
 /// One-line description for each button, same index order as [`LABELS`].
-/// A window IS its own single-session daemon (daemon-per-session), so `close window`
+/// A window IS its own single-session daemon (daemon-per-session), so `close window (quit)`
 /// KILLS that daemon (the session ends, kept on disk → reloadable from the swapper's
 /// history), while `detach` leaves the daemon RUNNING and its session COOKING headless
 /// (→ resumable live from the swapper's cooking pane).
 const DESCS: [&str; 3] = [
-    "End this session and close the window. It stays on disk to reload later.",
-    "Minimize — leave this session running in the background, then exit. \
-     Resume to reattach to the live session.",
-    "Back to chat — keep everything running.",
+    "Quit session and stop current progress",
+    "Minimize — as usual agent keep cooking",
+    "Back to chat",
 ];
 
 /// Gap (in columns) rendered between adjacent buttons in the row.
@@ -144,7 +143,7 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     let chip_w = |idx: usize| LABELS[idx].len() as u16 + 4;
 
     // Record each button's on-screen Rect as a chip-width horizontal segment on
-    // the button row, in index order (0 = close window, 1 = detach, 2 = cancel)
+    // the button row, in index order (0 = close window (quit), 1 = detach, 2 = cancel)
     // so click hit-testing matches `button_rects`' documented order. Walk the row
     // accumulating chip widths + gaps from `inner.x`, mirroring the render above.
     // Guard tiny terminals: if the row is off-screen (not enough height) or the
