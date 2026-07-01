@@ -43,8 +43,16 @@ pub enum Action {
     Shell(String),
     /// User entered a `/slash` command; inner value is the parsed [`Command`].
     Slash(Command),
-    /// Abort an in-flight API request (Ctrl+C / Esc while `waiting = true`).
+    /// Abort an in-flight API request (Esc while `waiting = true`).
     Interrupt,
+    /// Esc while the model is still THINKING (early turn: no content token, no tool
+    /// call yet): interrupt the turn AND pull the just-sent prompt back into the
+    /// composer so it can be edited + resent in one key. Falls back to a plain
+    /// interrupt when there is no prior user message to rewind to.
+    InterruptRewind,
+    /// Clear the composer in place (idle double-Esc with text present): empty the
+    /// input, reset the caret, drop staged attachments, and leave history recall.
+    ClearComposer,
     /// Re-send the last user message (Ctrl+R while idle).
     Resend,
     /// Double-Esc while idle in Chat — open the message-rewind picker. The
@@ -52,8 +60,8 @@ pub enum Action {
     /// messages and swaps into `Mode::MessageRewind`. A no-op when there is no
     /// session or no prior user message.
     OpenRewind,
-    /// Esc/Ctrl+C in the message-rewind picker — discard it and return to Chat
-    /// unchanged (the conversation is untouched).
+    /// Esc in the message-rewind picker — discard it and return to Chat
+    /// unchanged (the conversation is untouched). Ctrl+C is inert.
     RewindCancel,
     /// Enter in the message-rewind picker: rewind the conversation to just
     /// before the highlighted user message (vec index = the inner `usize`) and
@@ -78,9 +86,9 @@ pub enum Action {
     /// the picker rather than pinning a no-client Chat.
     CancelKeyInputToPicker,
     // --- Picker actions ---
-    /// Esc/Ctrl+C in the session picker opened via /resume (an active session
+    /// Esc in the session picker opened via /resume (an active session
     /// exists) — discard the picker and return to the unchanged Chat. The
-    /// --resume startup picker has no session, so it Quits instead.
+    /// --resume startup picker has no session, so it Quits instead. Ctrl+C is inert.
     CancelPickerToChat,
     /// Enter on the `--resume` startup session picker — open the highlighted
     /// session (non-destructive: append-or-swap).
@@ -109,8 +117,8 @@ pub enum Action {
     /// The hub is then rebuilt in place (the killed/now-idle session reflected) so
     /// the overlay stays open. No-op if nothing valid is pending.
     HubKillConfirm,
-    /// Esc/Ctrl+C on the session hub — close it and return to the (unchanged) Chat
-    /// view. No session state is touched.
+    /// Esc on the session hub — close it and return to the (unchanged) Chat
+    /// view. No session state is touched. Ctrl+C is inert.
     CloseSessionHub,
     // --- Settings actions ---
     /// Esc on the settings dashboard (while navigating) — apply every draft and

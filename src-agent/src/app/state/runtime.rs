@@ -669,6 +669,17 @@ impl SessionRuntime {
         std::mem::take(&mut self.input)
     }
 
+    /// Clear the composer in place (idle double-Esc with text present): empty the
+    /// input, park the caret at 0, drop any staged attachments so a marker can't
+    /// outlive its image, and leave history recall (`hist_idx = None`). The GLOBAL
+    /// `palette_sel` reset, if any, is the caller's job.
+    pub fn clear_composer(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+        self.pending_attachments.clear();
+        self.hist_idx = None;
+    }
+
     /// Insert the literal marker string `s` (e.g. `"[Image #3]"`) at the caret,
     /// advancing it past the inserted run. Mirrors [`Self::push_char`]'s caret /
     /// history discipline so a bulk marker insert behaves like typing; the GLOBAL

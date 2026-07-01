@@ -5,7 +5,7 @@
 //! - `1`–`3` – set date range: Today / Week / Year (View A only).
 //! - `m`     – toggle metric: Cost / Tokens.
 //! - `Esc`   – close dashboard and return to Chat.
-//! - `Ctrl+C`– quit the application.
+//! - `Ctrl+C`– fully inert (koma disables Ctrl+C).
 //!
 //! All other keys are silently ignored.
 
@@ -19,8 +19,9 @@ use crate::app::mode::{UsageMetric, UsageNavState, UsageRange, UsageView};
 /// Mutates `nav` in place for navigation keys; returns the appropriate
 /// [`Action`] for keys that require runtime involvement.
 pub(super) fn handle_usage(nav: &mut UsageNavState, key: KeyEvent) -> Action {
+    // Ctrl+C is fully inert (koma disables it); Esc still closes the dashboard.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
     match key.code {
         KeyCode::Esc => Action::CloseUsage,

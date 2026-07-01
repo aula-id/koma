@@ -26,8 +26,9 @@ use super::{is_ctrl, Action};
 pub fn handle_mcp(s: &mut McpState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     use crate::app::mode::McpSubMode;
 
+    // Ctrl+C is fully inert (koma disables it); Esc still closes/cancels.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     match s.mode {

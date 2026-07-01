@@ -31,8 +31,9 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
     use crate::app::mode::{AgentEditField, AgentSubMode};
     use crate::model::agent_def::AgentSource;
 
+    // Ctrl+C is fully inert (koma disables it); Esc still closes/cancels.
     if is_ctrl(&key, 'c') {
-        return Action::Quit;
+        return Action::None;
     }
 
     // --- Full-screen field editor (TOP priority: intercepts ALL keys) ---

@@ -1,8 +1,9 @@
 //! Key handler for the message-rewind picker (`Mode::MessageRewind`).
 //!
-//! Opened by a double-Esc while idle in Chat. Up/Down navigate the list of
-//! prior user messages (newest-first); Esc cancels back to Chat unchanged;
-//! Enter selects the highlighted message to rewind to.
+//! Opened by a double-Esc while idle in Chat. Up/Down (and PageUp/PageDown)
+//! navigate the list of prior user messages (chronological — newest at the bottom,
+//! pre-selected); Esc cancels back to Chat unchanged; Enter selects the highlighted
+//! message to rewind to.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::app::mode::RewindState;
@@ -12,12 +13,16 @@ use super::{is_ctrl, Action};
 /// Handle a key press inside the message-rewind picker.
 ///
 /// `_rest` is accepted for handler-signature consistency with the other mode
-/// handlers but is unused here (the picker carries its own state). Ctrl+C and
-/// Esc both cancel back to Chat without changing the conversation.
+/// handlers but is unused here (the picker carries its own state). Ctrl+C is inert
+/// (koma disables it); Esc cancels back to Chat without changing the conversation.
 pub fn handle_rewind(rw: &mut RewindState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // Ctrl+C is fully inert (koma disables it); Esc still cancels back to Chat.
     if is_ctrl(&key, 'c') {
-        return Action::RewindCancel;
+        return Action::None;
     }
+
+    // How far PageUp / PageDown jump through the list (clamped by move_up/move_down).
+    const PAGE: usize = 10;
 
     match key.code {
         KeyCode::Esc => Action::RewindCancel,
@@ -27,6 +32,18 @@ pub fn handle_rewind(rw: &mut RewindState, _rest: &mut AppStateRest, key: KeyEve
         }
         KeyCode::Down => {
             rw.move_down();
+            Action::None
+        }
+        KeyCode::PageUp => {
+            for _ in 0..PAGE {
+                rw.move_up();
+            }
+            Action::None
+        }
+        KeyCode::PageDown => {
+            for _ in 0..PAGE {
+                rw.move_down();
+            }
             Action::None
         }
         KeyCode::Enter => match rw.selected_entry() {
