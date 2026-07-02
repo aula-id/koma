@@ -16,6 +16,7 @@ use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
 mod bash;
+mod todo;
 mod chat;
 mod mcp;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
@@ -222,6 +223,10 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseBash => {
             bash::handle_close_bash(state)?;
+        }
+
+        Action::CloseTodo => {
+            todo::handle_close_todo(state)?;
         }
 
         Action::BashKillJob(id) => {
