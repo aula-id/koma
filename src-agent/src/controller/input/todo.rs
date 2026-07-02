@@ -1,8 +1,7 @@
 //! Key handler for the `/todo` task-panel (`Mode::Todo`).
 //!
-//! A read-only master/detail panel — no sub-modes and no editing, so the
-//! dispatch is simple: navigate the item list, view the selected item's details,
-//! close.
+//! A master/detail panel — navigate the item list, view the selected item's
+//! details, reset items to pending via Enter, or close. No sub-modes.
 //!
 //! Key map:
 //! - `Esc`           → `Action::CloseTodo` (return to Chat)

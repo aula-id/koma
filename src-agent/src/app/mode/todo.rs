@@ -1,10 +1,11 @@
 //! Todo mode state: the working state for the `/todo` task-panel overlay.
 //!
-//! A READ-ONLY master/detail panel (modelled on `Mode::Bash`):
+//! A master/detail panel (modelled on `Mode::Bash`):
 //! the LEFT pane lists every todo item in the current session; the
 //! RIGHT pane shows the selected item's full content + status + priority.
-//! The user can navigate the list; the model reads/writes todos via the
-//! `todowrite` tool (writes to `memory/TODO.md`).
+//! The user can navigate the list and press Enter to reset an item to
+//! pending (signalling the model to redo it); the model reads/writes
+//! todos via the `todowrite` tool (writes to `memory/TODO.md`).
 
 use std::time::Instant;
 
@@ -243,7 +244,7 @@ impl TodoState {
     }
 
     /// The currently-selected item, if any.
-    #[allow(dead_code)] // public API; consumers index directly or use toggle_selected
+    #[allow(dead_code)] // public API; consumers index directly or use reset_to_pending
     pub fn current(&self) -> Option<&TodoItem> {
         self.items.get(self.selected)
     }
