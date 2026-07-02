@@ -1,4 +1,4 @@
-parameter name="new">//! Todo mode state: the working state for the `/todo` task-panel overlay.
+//! Todo mode state: the working state for the `/todo` task-panel overlay.
 //!
 //! A READ-ONLY master/detail panel (modelled on `Mode::Bash`):
 //! the LEFT pane lists every todo item in the current session; the
