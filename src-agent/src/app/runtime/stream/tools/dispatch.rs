@@ -180,6 +180,14 @@ pub(super) fn finish_tool_round(
         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
             sess.rebuild_system();
         }
+        // Snapshot the new mtime so the cross-instance poll doesn't fire a
+        // spurious "Memory updated by another session" toast for our own write.
+        if let Some(ref sess) = state.rest.sessions[sess_idx].session {
+            if let Ok(dir) = crate::model::store::memory_dir(&sess.pwd_hash) {
+                state.rest.sessions[sess_idx].last_memory_mtime =
+                    crate::model::memory::memory_mtime(&dir);
+            }
+        }
     }
 
     // Round done: clear the per-round machine before the next model call.
