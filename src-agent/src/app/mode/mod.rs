@@ -37,7 +37,7 @@ pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
 pub use security::{SecSel, SecurityState};
 pub use bash::BashState;
-pub use todo::TodoState;
+pub use todo::{parse_todo_file, TodoState};
 // `HelpEntry` is part of the module's public surface and will be consumed by the
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
