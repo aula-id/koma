@@ -172,7 +172,7 @@ pub(super) fn run_loop(
                     }
                     Event::Mouse(m) => {
                         // Wheel scrolls the chat transcript only.
-                        if matches!(state.mode(), Mode::Chat) {
+                        if matches!(state.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) {
                             match m.kind {
                                 MouseEventKind::ScrollUp => {
                                     for _ in 0..3 { state.rest.scroll_up(); }
