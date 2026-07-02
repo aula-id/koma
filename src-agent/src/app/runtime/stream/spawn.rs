@@ -233,6 +233,13 @@ fn spawn_task_with_id(
     if client.is_none() || state.rest.sessions[sess_idx].session.is_none() {
         return None;
     }
+    // Refresh global provider/model config at delegation time. Daemons can live
+    // longer than config.json edits made by another window; a stale in-memory
+    // catalogue would make agent `model_uuid` resolution miss and silently inherit
+    // Main. Keep the refreshed copy in rest so this daemon is warmed for the next
+    // settings-dependent operation too.
+    state.rest.config = crate::model::app_config::AppConfig::load();
+
     // Snapshot inputs before borrowing state mutably below — identical to the
     // `/task` command's construction so the two paths can never diverge. All
     // per-session inputs (workspace, session dir, settings, awareness, memory)
