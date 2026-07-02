@@ -168,6 +168,7 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         }),
         models_cache: state.rest.models_cache.clone(),
         models_cache_endpoint: state.rest.models_cache_endpoint.clone(),
+        models_cache_failed: state.rest.models_cache_failed.clone(),
         agent_viewer: state.rest.agent_viewer,
         agent_viewer_scroll: state.rest.agent_viewer_scroll,
         agent_viewer_follow: state.rest.agent_viewer_follow,

@@ -65,21 +65,39 @@ pub fn context_length_for(models: &[ModelInfo], model_id: &str) -> Option<u64> {
         })
 }
 
-/// Whether `model_id` can take image inputs, per a `GET /models` listing.
+/// Tri-state image-capability result from [`model_image_capability`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageCapability {
+    /// The catalogue positively confirms the model supports image input.
+    Supports,
+    /// The catalogue positively confirms the model does NOT support image input
+    /// (model found, but `architecture.input_modalities` lacks `"image"`).
+    DoesNotSupport,
+    /// The catalogue is unavailable, stale, or the model was not found — we
+    /// cannot tell. Callers should treat this as "assume capable" for sending.
+    Unknown,
+}
+
+/// Tri-state image-capability check for `model_id` against a `GET /models`
+/// listing.
 ///
-/// True iff the model's `architecture.input_modalities` array contains `"image"`.
-/// Mirrors [`context_length_for`]'s find-then-`and_then` shape. A model ABSENT
-/// from the listing (or one with no `architecture` object) yields `false` — but
-/// the SEND path treats a `None`/empty catalogue as "assume capable" upstream
-/// (it only calls this when a populated cache exists), so a never-fetched
-/// catalogue never wrongly strips an image. Pure read, never panics.
-pub fn model_takes_images(models: &[ModelInfo], model_id: &str) -> bool {
-    models
-        .iter()
-        .find(|m| m.id == model_id)
-        .and_then(|m| m.architecture.as_ref())
-        .map(|a| a.input_modalities.iter().any(|m| m == "image"))
-        .unwrap_or(false)
+/// Distinguishes "definitely no" from "don't know" so callers can fail-open:
+/// only block images when we have positive evidence the model can't read them.
+/// When the catalogue is missing, stale, or the model isn't listed, returns
+/// [`ImageCapability::Unknown`]. See also `ImageWireCtx` which carries the
+/// resolved boolean into the streaming task.
+pub fn model_image_capability(models: &[ModelInfo], model_id: &str) -> ImageCapability {
+    let Some(info) = models.iter().find(|m| m.id == model_id) else {
+        return ImageCapability::Unknown;
+    };
+    let Some(arch) = info.architecture.as_ref() else {
+        return ImageCapability::Unknown;
+    };
+    if arch.input_modalities.iter().any(|m| m == "image") {
+        ImageCapability::Supports
+    } else {
+        ImageCapability::DoesNotSupport
+    }
 }
 
 impl OpenRouterClient {

@@ -173,6 +173,11 @@ pub(super) fn service_global(
                     // `models_cache_endpoint` matches the active endpoint.
                     state.rest.models_cache = Some(models);
                     state.rest.models_cache_endpoint = Some(endpoint.clone());
+                    // Clear any previous failure for this endpoint so a later
+                    // `request_catalogue` call can re-fetch if needed.
+                    if state.rest.models_cache_failed.as_deref() == Some(endpoint.as_str()) {
+                        state.rest.models_cache_failed = None;
+                    }
                     // Clear the in-flight guard for this endpoint so a later
                     // endpoint change can fetch again.
                     if state.rest.catalogue_fetching.as_deref() == Some(endpoint.as_str()) {
@@ -181,12 +186,15 @@ pub(super) fn service_global(
                     dirty = true;
                 }
                 Ok(WarmEvent::WarmCatalogueFailed { endpoint }) => {
-                    // TERMINAL empty result for this endpoint: record an empty
-                    // catalogue keyed to it so the omnisearch degrades to manual
-                    // model-id entry and does NOT retry in a loop (the
-                    // request_catalogue no-op guard sees a matching endpoint).
-                    state.rest.models_cache = Some(Vec::new());
-                    state.rest.models_cache_endpoint = Some(endpoint.clone());
+                    // Record a FAILED fetch for this endpoint without poisoning
+                    // the cache: leave `models_cache` / `models_cache_endpoint`
+                    // untouched so the image-capability tri-state helper returns
+                    // `Unknown` (fail-open) instead of `DoesNotSupport` on an
+                    // empty cache. The `models_cache_failed` marker prevents
+                    // `request_catalogue` from re-fetching in a rapid loop; the
+                    // next user-driven re-trigger (keystroke / provider change)
+                    // clears the stale failure and retries.
+                    state.rest.models_cache_failed = Some(endpoint.clone());
                     if state.rest.catalogue_fetching.as_deref() == Some(endpoint.as_str()) {
                         state.rest.catalogue_fetching = None;
                     }
@@ -241,8 +249,8 @@ pub(super) fn service_global(
     // into one request. Fire here — where `handle` + `client` are in scope — once
     // `due` passes and nothing is already in flight. Reuse the shared `warm_rx`
     // channel (no new channel): the drain above folds the result into the
-    // per-endpoint cache. On failure send `WarmCatalogueFailed { endpoint }` so
-    // the drain records a terminal empty result (no infinite re-fetch).
+    // per-endpoint cache. On failure the drain records a `models_cache_failed`
+    // marker (no rapid re-fetch); the next user-driven re-trigger retries.
     if let Some(pending) = state.rest.catalogue_pending.as_ref() {
         if state.rest.catalogue_fetching.is_none() && std::time::Instant::now() >= pending.due {
             // Take the pending request and mark its endpoint in-flight.
@@ -262,8 +270,8 @@ pub(super) fn service_global(
             // Reuse the pinned client, or build a keyless one (the first-run
             // wizard fetches before any client is pinned — `Conn` carries the
             // endpoint+key, so a keyless client is enough). The fetch is just
-            // `GET {endpoint}/models`; on error send WarmCatalogueFailed so the
-            // drain records a terminal empty result (no infinite re-fetch).
+            // `GET {endpoint}/models`; on error the drain records a failure marker
+            // (no rapid re-fetch).
             let c = match client.as_ref() {
                 Some(c) => Arc::clone(c),
                 None => super::super::build_client(),
