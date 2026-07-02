@@ -7,12 +7,9 @@ use crate::app::state::AppState;
 
 /// Handle the `/todo` command: open the read-only task-panel overlay.
 ///
-/// Reads the current todo list from the foreground session's runtime (or
-/// loads from `memory/TODO.md` if the runtime doesn't have an in-memory
-/// list yet). The panel re-reads on every key press.
+/// Reads the current todo list from the foreground session's memory/TODO.md.
+/// The panel re-reads on every key press.
 pub(super) fn handle_todo(state: &mut AppState) -> Result<()> {
-    // For now, load from the session's memory dir if available.
-    // The todowrite tool writes to memory/TODO.md; we parse it here.
     let items = load_todos_from_session(state);
     let st = TodoState::new(items);
     *state.mode_mut() = Mode::Todo(Box::new(st));
@@ -34,7 +31,9 @@ fn load_todos_from_session(state: &AppState) -> Vec<crate::app::mode::todo::Todo
     let Some(session) = state.rest.fg().session.as_ref() else {
         return Vec::new();
     };
-    let path = session.path.join("memory").join("TODO.md");
+    let memory_dir = crate::model::store::memory_dir(&session.pwd_hash)
+        .unwrap_or_default();
+    let path = memory_dir.join("TODO.md");
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
