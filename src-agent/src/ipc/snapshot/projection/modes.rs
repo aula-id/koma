@@ -192,6 +192,11 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         model_sel: st.model_sel,
         model_delete_armed: st.model_delete_armed,
         model_modal: st.model_modal.as_ref().map(model_modal_snapshot),
+        model_filter: match st.model_filter {
+            crate::app::mode::settings::ModelFilterMode::All    => "all",
+            crate::app::mode::settings::ModelFilterMode::Local  => "local",
+            crate::app::mode::settings::ModelFilterMode::Global => "global",
+        }.to_string(),
     }
 }
 
@@ -247,6 +252,7 @@ pub fn model_modal_snapshot(m: &ModelModal) -> ModelModalSnapshot {
         }),
         endpoints_loading: m.endpoints_loading,
         endpoints_for: m.endpoints_for.clone(),
+        session_only: m.session_only,
     }
 }
 

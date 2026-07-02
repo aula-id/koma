@@ -20,7 +20,7 @@ use crate::view::theme::ACCENTS;
 
 use super::super::SettingField;
 use super::picker::PathPicker;
-use super::{ModelDraft, ModelModal, ProviderDraft, ProviderModal};
+use super::{ModelDraft, ModelFilterMode, ModelModal, ProviderDraft, ProviderModal};
 
 /// Working state for the in-app `/settings` dashboard.
 ///
@@ -106,13 +106,17 @@ pub struct SettingsState {
     pub prov_modal: Option<ProviderModal>,
     /// In-memory list of model drafts (stub only, not persisted).
     pub models: Vec<ModelDraft>,
-    /// Selected row in the models list. Index == `models.len()` means the
-    /// `[+ add model]` button row is highlighted.
+    /// Selected row in the models list (operates over the VISIBLE filtered set).
+    /// `0 .. visible_model_count()` selects a data row;
+    /// `visible_model_count()` highlights `[+add global]`;
+    /// `visible_model_count() + 1` highlights `[+add local]`.
     pub model_sel: usize,
     /// `true` after the first Ctrl+X on a model row: next Ctrl+X confirms.
     pub model_delete_armed: bool,
     /// Active add/edit-model modal, if open.
     pub model_modal: Option<ModelModal>,
+    /// Current scope filter for the models table display. Cycled with Left/Right.
+    pub model_filter: ModelFilterMode,
 }
 
 impl SettingsState {
@@ -217,6 +221,7 @@ impl SettingsState {
             model_sel: 0,
             model_delete_armed: false,
             model_modal: None,
+            model_filter: ModelFilterMode::All,
         }
     }
 

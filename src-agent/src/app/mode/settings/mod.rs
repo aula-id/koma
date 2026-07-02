@@ -15,5 +15,5 @@ pub use picker::{PathPicker, PickerMode, PICKER_MAX};
 pub use state::SettingsState;
 
 pub use field_types::{SettingField, SETTING_CATEGORIES};
-pub use model_types::{filter_models, ModelDraft, ModelField, ModelModal, RolePickerState};
+pub use model_types::{filter_models, ModelDraft, ModelField, ModelFilterMode, ModelModal, RolePickerState};
 pub use provider_types::{new_uuid, ModelRole, ProviderDraft, ProviderModal};

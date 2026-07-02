@@ -477,23 +477,37 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 KeyCode::Down | KeyCode::Tab => {
                     s.model_down();
                 }
-                // Opening the add modal: kick the on-demand catalogue fetch for the
-                // default provider so the Model omnisearch already has data when the
-                // user reaches it (debounced; no-op if the endpoint is blank).
+                // Left/Right cycle the scope filter (All / Local / Global).
+                KeyCode::Left => {
+                    s.model_filter_prev();
+                }
+                KeyCode::Right => {
+                    s.model_filter_next();
+                }
+                // `+` shortcut: open add-global modal (muscle-memory shortcut;
+                // local add is via the [+add local] button or Enter on it).
                 KeyCode::Char('+') => {
-                    s.open_model_modal_add();
+                    s.open_model_modal_add(false);
                     if let Some((ep, key)) = s.mm_provider_conn() {
                         rest.request_catalogue(&ep, &key);
                     }
                 }
                 KeyCode::Enter => {
-                    if s.model_on_add_button() {
-                        s.open_model_modal_add();
+                    if s.model_on_add_global() {
+                        // [+add global] button: open add modal scoped to global.
+                        s.open_model_modal_add(false);
                         if let Some((ep, key)) = s.mm_provider_conn() {
                             rest.request_catalogue(&ep, &key);
                         }
-                    } else {
-                        s.open_model_modal_edit(s.model_sel);
+                    } else if s.model_on_add_local() {
+                        // [+add local] button: open add modal scoped to session.
+                        s.open_model_modal_add(true);
+                        if let Some((ep, key)) = s.mm_provider_conn() {
+                            rest.request_catalogue(&ep, &key);
+                        }
+                    } else if let Some(real_idx) = s.selected_model_index() {
+                        // Data row: open edit modal using the real models index.
+                        s.open_model_modal_edit(real_idx);
                         // Prime the Model omnisearch for the edited provider's
                         // endpoint (any provider, debounced).
                         if let Some((ep, key)) = s.mm_provider_conn() {
