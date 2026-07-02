@@ -138,6 +138,7 @@ pub enum ModeSnapshot {
     Mcp(Box<McpSnapshot>),
     Security(Box<SecuritySnapshot>),
     Bash(Box<BashSnapshot>),
+    Todo(Box<TodoSnapshot>),
     Help(Box<HelpSnapshot>),
     Effort(EffortSnapshot),
     Usage(Box<UsageSnapshot>),
