@@ -170,7 +170,8 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         | Mode::SessionHub(_)
         | Mode::QuitConfirm(_)
         | Mode::Security(_)
-        | Mode::Bash(_) => {}
+        | Mode::Bash(_)
+        | Mode::Todo(_) => {}
     }
     // Put the (possibly edited) mode back onto the foreground session.
     state.set_mode(mode);

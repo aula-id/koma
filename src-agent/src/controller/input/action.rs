@@ -190,6 +190,9 @@ pub enum Action {
     /// foreground session's live registry and signals it; the panel stays open and
     /// refreshes on the next key. A no-op when the id is absent or already terminal.
     BashKillJob(usize),
+    // --- Todo panel actions ---
+    /// Esc from the `/todo` panel — return to Chat.
+    CloseTodo,
     // --- Help reference + launcher actions ---
     /// Esc in the `/help` screen (or Enter on a non-launchable keybinding row) —
     /// close the reference and return to Chat unchanged.
