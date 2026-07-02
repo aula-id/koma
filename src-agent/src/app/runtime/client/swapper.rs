@@ -193,11 +193,9 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
         .and_then(|&real| hub.history.get(real))
         .map(|e| e.path.clone());
 
-    // Capture pending_kill by cooking session_id so we can re-resolve it after rebuild.
-    let saved_kill_id: Option<Option<String>> = hub
-        .pending_kill
-        .and_then(|idx| hub.cooking.get(idx))
-        .map(|e| e.session_id.clone());
+    // Capture pending_kill (now a session UUID, not a Vec index) — it survives the
+    // rebuild unchanged since it's already an identity, not a position.
+    let saved_kill_id: Option<String> = hub.pending_kill.clone();
 
     // Rebuild the panes from the handed-in snapshot (no blocking discovery on this thread).
     let mut fresh = hub_from_snapshot(fresh, current_id);
@@ -242,16 +240,10 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
             .min(fresh.history_filtered.len().saturating_sub(1));
     }
 
-    // Re-resolve pending_kill: keep it only if the targeted session is still present in
-    // the fresh cooking list; clear it otherwise so the confirm bar doesn't dangle.
-    fresh.pending_kill = if let Some(kill_id) = saved_kill_id {
-        fresh
-            .cooking
-            .iter()
-            .position(|e| e.session_id == kill_id)
-    } else {
-        None
-    };
+    // Preserve pending_kill as-is: it's now a session UUID, not a Vec index, so it
+    // survives the rebuild. If the targeted session is gone, the confirm bar gracefully
+    // re-arms on the next Ctrl+X press (the UUID won't match any current row).
+    fresh.pending_kill = saved_kill_id;
 
     *hub = fresh;
 }
@@ -541,11 +533,12 @@ fn handle_swapper_key(
 /// Two-step (mirrors the daemon-side hub's arm→confirm):
 ///   - not yet armed on THIS row → arm: set `pending_kill` to the focused cooking index and
 ///     stay in the picker (the confirm bar renders from `pending_kill`);
-///   - already armed AND still pointing at the focused row → CONFIRM = nuke: reap that
-///     session's daemon ([`manage::nuke_session_daemon`], a SILENT graceful `QuitDaemon`
-///     that is alt-screen safe — unlike `stop_session_daemon`, which prints), clear the
-///     arm, and force an IMMEDIATE discovery refresh so the killed session leaves COOKING
-///     and shows up in HISTORY right away instead of waiting for the ~1s probe tick.
+///   - already armed AND still aimed at the same session UUID → CONFIRM = nuke: reap
+///     that session's daemon ([`manage::nuke_session_daemon`], a SILENT graceful
+///     `QuitDaemon` that is alt-screen safe — unlike `stop_session_daemon`, which
+///     prints), clear the arm, and force an IMMEDIATE discovery refresh so the killed
+///     session leaves COOKING and shows up in HISTORY right away instead of waiting
+///     for the ~1s probe tick.
 ///
 /// Always returns `None` — a nuke never resolves the swapper; the user keeps picking.
 fn handle_ctrl_x_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<SwapperOutcome> {
@@ -564,13 +557,14 @@ fn handle_ctrl_x_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<
         _ => return None,
     };
 
-    // Is a kill already armed AND still aimed at the row we're on? (Selection could have
-    // moved since arming — then this Ctrl+X re-arms on the new row instead of confirming.)
-    let armed_here = hub.pending_kill == Some(hub.cooking_selected);
+    // Is a kill already armed AND still aimed at this session? (Selection could
+    // have moved, or the background probe could have shifted the list — then this
+    // Ctrl+X re-arms on the new row instead of confirming.)
+    let armed_here = hub.pending_kill.as_deref() == Some(target_id.as_str());
 
     if !armed_here {
         // First press → ARM. The confirm bar renders from `pending_kill`.
-        hub.pending_kill = Some(hub.cooking_selected);
+        hub.pending_kill = Some(target_id);
         return None;
     }
 
