@@ -109,7 +109,7 @@ impl OpenRouterClient {
     /// supports. The endpoint needs no auth, but we send the bearer header
     /// anyway for consistency with the other calls. Returns the `data` array;
     /// clean errors, no panics. Callers treat any `Err` as "capabilities
-    /// unknown" and fall back to a generic menu.
+    /// unknown" and report that rather than opening a guessed capability menu.
     pub async fn list_models(&self, conn: Conn<'_>) -> Result<Vec<ModelInfo>> {
         let url = format!("{}/models", conn.endpoint);
         let response = self

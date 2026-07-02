@@ -222,8 +222,9 @@ impl AgentsState {
 
     // --- Sub-mode transitions ---
 
-    /// Enter EDIT for the selected agent, seeding drafts from it. The caller has
-    /// already verified the agent is file-backed (not a built-in).
+    /// Enter EDIT for the selected agent, seeding drafts from it. Built-in agents
+    /// can be edited; saving creates a session-scoped override that preserves
+    /// metadata fields not exposed in the editor.
     pub fn enter_edit(&mut self) {
         let Some(a) = self.current_agent().cloned() else {
             return;
@@ -383,6 +384,11 @@ impl AgentsState {
     /// dropping empties — only fields we know how to round-trip are written, so
     /// the on-disk file stays clean. The name is the create draft for Create, or
     /// the selected agent's name for Edit.
+    ///
+    /// For Edit mode, starts from the current agent to preserve metadata fields
+    /// (like `steps`) not exposed in the editor. Built-in agents save as session
+    /// overrides; global/session agents preserve their original source. For Create
+    /// mode, starts from defaults.
     pub fn to_agent_def(&self) -> AgentDef {
         let name = if self.mode == AgentSubMode::Create {
             self.draft_name.trim().to_string()
@@ -398,18 +404,38 @@ impl AgentsState {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
-        AgentDef {
-            name,
-            description: self.draft_description.trim().to_string(),
-            conditions: self.draft_conditions.trim().to_string(),
-            // The chosen registered model (None = inherit Main). The editor no
-            // longer writes the legacy `model` / `provider` / `provider_uuid`
-            // fields — they stay at their `None` default for new/edited agents.
-            model_uuid: self.draft_model_uuid.clone(),
-            tools,
-            prompt: self.draft_body.clone(),
-            ..AgentDef::default()
-        }
+        
+        // Start from the current agent for Edit mode (to preserve metadata),
+        // or from defaults for Create mode.
+        let mut def = if self.mode == AgentSubMode::Create {
+            AgentDef::default()
+        } else {
+            self.current_agent().cloned().unwrap_or_default()
+        };
+        
+        // Overwrite the editable fields from drafts.
+        def.name = name;
+        def.description = self.draft_description.trim().to_string();
+        def.conditions = self.draft_conditions.trim().to_string();
+        // The chosen registered model (None = inherit Main). The editor no
+        // longer writes the legacy `model` / `provider` / `provider_uuid`
+        // fields — they stay at their `None` default for new/edited agents.
+        def.model_uuid = self.draft_model_uuid.clone();
+        def.model = None;
+        def.provider = None;
+        def.provider_uuid = None;
+        def.tools = tools;
+        def.prompt = self.draft_body.clone();
+        def.source = if self.current_agent().is_some_and(|a| a.source == AgentSource::Builtin) {
+            AgentSource::Session
+        } else {
+            self.current_agent()
+                .map(|a| a.source)
+                .unwrap_or(AgentSource::Session)
+        };
+        def.file_path = None;
+        
+        def
     }
 }
 
