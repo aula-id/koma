@@ -134,19 +134,21 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
     lines.push(Line::from(vec![
         Span::styled("content:", Style::default().fg(palette.dim)),
     ]));
-    let content_spans: Vec<Span> = item
-        .content
-        .split_whitespace()
-        .enumerate()
-        .flat_map(|(i, word)| {
-            let mut spans = vec![Span::styled(word.to_string(), Style::default().fg(palette.fg))];
-            // Add a space between words, but not after the last word.
-            if i + 1 < item.content.split_whitespace().count() {
-                spans.push(Span::raw(" "));
-            }
-            spans
-        })
-        .collect();
+    let content_spans: Vec<Span> = {
+        let words: Vec<&str> = item.content.split_whitespace().collect();
+        let word_count = words.len();
+        words
+            .into_iter()
+            .enumerate()
+            .flat_map(|(i, word)| {
+                let mut spans = vec![Span::styled(word.to_string(), Style::default().fg(palette.fg))];
+                if i + 1 < word_count {
+                    spans.push(Span::raw(" "));
+                }
+                spans
+            })
+            .collect()
+    };
     if content_spans.is_empty() {
         lines.push(Line::from(""));
     } else {
