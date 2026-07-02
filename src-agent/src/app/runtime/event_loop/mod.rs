@@ -90,8 +90,10 @@ pub(super) fn run_loop(
         }
 
         // Refresh the todo overlay from disk when open (picked up by the draw below).
+        // When any item is InProgress, force dirty every tick so the braille spinner
+        // animates — spinner_glyph() uses wall-clock time but needs a redraw to cycle.
         if let Mode::Todo(t) = state.mode_mut() {
-            if t.maybe_refresh() {
+            if t.maybe_refresh() || t.items.iter().any(|i| i.status == crate::app::mode::todo::TodoStatus::InProgress) {
                 dirty = true;
             }
         }
