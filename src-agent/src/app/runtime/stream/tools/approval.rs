@@ -428,6 +428,103 @@ pub(crate) fn process_tools(
         // `sess.save()` in a scoped block so the `state` borrow is fully released
         // before calling `apply_workspace_change` (which also borrows `state` mutably).
         if call.function.name == "git_worktree" {
+            // Gate the destructive `remove` action behind the approval classifier —
+            // it deletes a worktree (hard to undo). The other actions (create /
+            // enter / exit / list) only move cwd/roots and are cheap to reverse, so
+            // they skip the gate. On the resume pass after the user approves,
+            // `approved_worktree_call` holds this call's id → skip re-gating and run
+            // the interception for real. Mirrors the generic risky gate below
+            // (~line 622+) but lives here because git_worktree is intercepted before
+            // that gate and can't reach it.
+            let wt_args: serde_json::Value = serde_json::from_str(
+                &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
+            )
+            .unwrap_or_default();
+            let is_remove =
+                wt_args.get("action").and_then(|a| a.as_str()) == Some("remove");
+            let pre_approved = state.rest.sessions[sess_idx]
+                .approved_worktree_call
+                .as_deref()
+                == Some(call.id.as_str());
+            if pre_approved {
+                // Consume the one-shot approval so a later un-approved remove re-gates.
+                state.rest.sessions[sess_idx].approved_worktree_call = None;
+            } else if is_remove && mode != AgentMode::Yolo {
+                match tac_inputs(state, sess_idx, client) {
+                    Some((c, config, settings)) => {
+                        let verdict = handle.block_on(
+                            crate::app::harness::classify_toolcall(
+                                &c,
+                                &config,
+                                &settings,
+                                &convo_context,
+                                &call.function.name,
+                                &call.function.arguments,
+                            ),
+                        );
+                        if verdict.available && verdict.allow {
+                            // Definite allow. Auto runs inline; Normal still asks.
+                            if mode == AgentMode::Normal {
+                                state.rest.sessions[sess_idx].approval_reason =
+                                    Some(format!("classifier: ok — {}", verdict.reason));
+                                state.rest.sessions[sess_idx].awaiting_approval = true;
+                                state.rest.sessions[sess_idx].status =
+                                    format!("approve {}? [y/n]", call.function.name);
+                                return;
+                            }
+                            // Auto + allow → fall through and run it inline.
+                        } else if verdict.available {
+                            // Definite block. Auto records + continues; Normal asks.
+                            if mode == AgentMode::Auto {
+                                state.rest.sessions[sess_idx].tool_results.push((
+                                    call.id.clone(),
+                                    format!("blocked by harness: {}", verdict.reason),
+                                ));
+                                state.rest.sessions[sess_idx].tool_idx += 1;
+                                continue;
+                            }
+                            state.rest.sessions[sess_idx].approval_reason =
+                                Some(verdict.reason);
+                            state.rest.sessions[sess_idx].awaiting_approval = true;
+                            state.rest.sessions[sess_idx].status =
+                                format!("approve {}? [y/n]", call.function.name);
+                            return;
+                        } else {
+                            // Classifier unavailable. Normal → human y/n; Auto →
+                            // fail-CLOSED (never delete a worktree unverified).
+                            if mode == AgentMode::Normal {
+                                state.rest.sessions[sess_idx].approval_reason =
+                                    Some(verdict.reason.clone());
+                                state.rest.sessions[sess_idx].awaiting_approval = true;
+                                state.rest.sessions[sess_idx].status =
+                                    format!("approve {}? [y/n]", call.function.name);
+                                return;
+                            }
+                            state.rest.sessions[sess_idx].tool_results.push((
+                                call.id.clone(),
+                                format!(
+                                    "not executed: classifier unavailable — {}. The \
+                                     safety classifier could not verify this \
+                                     git_worktree remove, so it was NOT run.",
+                                    verdict.reason
+                                ),
+                            ));
+                            state.rest.sessions[sess_idx].tool_idx += 1;
+                            continue;
+                        }
+                    }
+                    // Classifier disabled → Normal asks, Auto runs.
+                    None => {
+                        if mode == AgentMode::Normal {
+                            state.rest.sessions[sess_idx].awaiting_approval = true;
+                            state.rest.sessions[sess_idx].status =
+                                format!("approve {}? [y/n]", call.function.name);
+                            return;
+                        }
+                        // Auto + classifier disabled → fall through and run inline.
+                    }
+                }
+            }
             let result = super::dispatch::run_tool(state, sess_idx, &call);
             let final_result =
                 if let Some(target) =

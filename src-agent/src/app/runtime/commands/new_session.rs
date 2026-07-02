@@ -230,6 +230,9 @@ pub(crate) fn apply_new_session_local(
 /// a surfaced error — the cooking pane is still useful, and the caller owns the
 /// status line.
 pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
+    // Compute the current directory hash once for dir-label comparisons.
+    let cur_hash = store::pwd_hash(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
     // COOKING pane: a synthetic "[+ new session]" row at index 0, then one row per
     // LIVE session with a non-empty Session that ISN'T tombstoned.
     let mut cooking: Vec<CookingEntry> = Vec::with_capacity(state.rest.sessions.len() + 1);
@@ -240,6 +243,8 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         working: false,
         is_foreground: false,
         session_id: None,
+        dir_label: String::new(),
+        is_current_dir: false,
     });
     for (raw_idx, rt) in state.rest.sessions.iter().enumerate() {
         // Skip the initial empty placeholder AND any closed/tombstoned slot — the
@@ -248,6 +253,8 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         if rt.session.is_none() || rt.is_closed() {
             continue;
         }
+        let workdir = rt.effective_cwd().display().to_string();
+        let is_current_dir = store::pwd_hash(std::path::Path::new(&workdir)) == cur_hash;
         cooking.push(CookingEntry {
             idx: raw_idx,
             kind: SessionKind::Session,
@@ -259,6 +266,8 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
             working: rt.is_working(),
             is_foreground: raw_idx == state.rest.foreground,
             session_id: Some(rt.id.clone()),
+            dir_label: store::dir_basename(&workdir),
+            is_current_dir,
         });
     }
 
@@ -274,8 +283,8 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         .filter_map(|rt| rt.session.as_ref().map(|s| s.path.clone()))
         .collect();
 
-    // HISTORY pane: on-disk sessions MINUS the live ones (dedup).
-    let history: Vec<HistoryEntry> = match store::list_sessions() {
+    // HISTORY pane: on-disk sessions (all dirs) MINUS the live ones (dedup).
+    let mut history: Vec<HistoryEntry> = match store::list_all_sessions() {
         Ok(metas) => metas
             .into_iter()
             .filter(|m| !live_paths.contains(&m.path))
@@ -283,11 +292,15 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
                 path: m.path,
                 name: m.name,
                 last_active: m.modified,
+                dir_label: store::dir_basename(&m.workdir),
+                is_current_dir: m.pwd_hash == cur_hash,
             })
             .collect(),
         // A listing failure shouldn't block the hub — show an empty history pane.
         Err(_) => Vec::new(),
     };
+    // Sort: current-dir sessions first, then newest within each group.
+    history.sort_by(|a, b| b.is_current_dir.cmp(&a.is_current_dir).then(b.last_active.cmp(&a.last_active)));
 
     // Default the cooking cursor to the current foreground's row. Clamp defensively
     // (a closed foreground is filtered out, so its row may be absent → fall to 0).

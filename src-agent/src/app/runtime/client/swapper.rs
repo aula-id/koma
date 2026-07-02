@@ -73,6 +73,10 @@ pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
 /// blocking [`manage::list_live_sessions`] sweep; [`apply_snapshot`] wraps this to
 /// PRESERVE the user's position across a live rebuild.
 fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>) -> SessionHub {
+    // Compute the current directory hash once — this runs in the CLIENT process,
+    // so current_dir() is the user's launch dir, which is the correct reference.
+    let cur_hash = store::pwd_hash(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
     // The set of LIVE session UUIDs, used to hide already-live sessions from the
     // HISTORY pane. `SessionStatus::session_id` and `SessionMeta::id` are the SAME
     // UUID namespace (both the on-disk session dir name / socket key), so a string
@@ -91,10 +95,14 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
         working: false,
         is_foreground: false,
         session_id: None,
+        dir_label: String::new(),
+        is_current_dir: false,
     });
     for status in live {
         // Compute the foreground flag BEFORE moving the id/name out of `status`.
         let is_foreground = current_session_id == Some(status.session_id.as_str());
+        let is_current_dir = store::pwd_hash(std::path::Path::new(&status.pwd)) == cur_hash;
+        let dir_label = store::dir_basename(&status.pwd);
         cooking.push(CookingEntry {
             idx: usize::MAX,
             kind: SessionKind::Session,
@@ -102,12 +110,14 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
             working: status.working,
             is_foreground,
             session_id: Some(status.session_id),
+            dir_label,
+            is_current_dir,
         });
     }
 
-    // HISTORY pane: on-disk sessions MINUS the live ones (dedup by UUID). A listing
+    // HISTORY pane: on-disk sessions (all dirs) MINUS the live ones (dedup by UUID). A listing
     // failure shouldn't block the hub — show an empty history pane.
-    let history: Vec<HistoryEntry> = match store::list_sessions() {
+    let mut history: Vec<HistoryEntry> = match store::list_all_sessions() {
         Ok(metas) => metas
             .into_iter()
             .filter(|m| !live_ids.contains(&m.id))
@@ -115,10 +125,14 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
                 path: m.path,
                 name: m.name,
                 last_active: m.modified,
+                dir_label: store::dir_basename(&m.workdir),
+                is_current_dir: m.pwd_hash == cur_hash,
             })
             .collect(),
         Err(_) => Vec::new(),
     };
+    // Sort: current-dir sessions first, then newest within each group.
+    history.sort_by(|a, b| b.is_current_dir.cmp(&a.is_current_dir).then(b.last_active.cmp(&a.last_active)));
 
     // History starts fully visible: identity filter, empty query.
     let history_filtered: Vec<usize> = (0..history.len()).collect();

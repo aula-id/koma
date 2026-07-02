@@ -150,6 +150,14 @@ pub struct SessionRuntime {
     /// `None` for an approval that wasn't classifier-driven. Cleared when the
     /// approval resolves.
     pub approval_reason: Option<String>,
+    /// One-shot marker: the `call.id` of a `git_worktree` call the user just
+    /// approved at the y/n prompt. `git_worktree` is intercepted before the
+    /// generic risky gate and needs its special post-processing, so the approval
+    /// resume can't run it via the normal `run_tool` path. The resume instead
+    /// sets this id and re-enters `process_tools`, whose git_worktree arm sees the
+    /// match, skips re-gating, runs the interception, and clears it. `None`
+    /// normally.
+    pub approved_worktree_call: Option<String>,
     // --- deferred tool-task lane (parallel to the sub-agent lane below) ---
     /// Tool-call ids of DEFERRED tools (see [`crate::tool::DEFERRED_TOOLS`] — the
     /// heavy/blocking ones: read / write / edit / delete / bash / grep / glob /
@@ -406,6 +414,7 @@ impl SessionRuntime {
             tool_results: Vec::new(),
             awaiting_approval: false,
             approval_reason: None,
+            approved_worktree_call: None,
             pending_tool_tasks: Vec::new(),
             awaiting_tool_tasks: false,
             tool_task_rx: None,

@@ -71,6 +71,12 @@ pub struct CookingEntry {
     // the swapper that consumes it lands next commit. Allow until then.
     #[allow(dead_code)]
     pub session_id: Option<String>,
+    /// Basename of the session's working directory, used as a label in the cooking pane.
+    pub dir_label: String,
+    /// Whether the session's working directory matches the current process's working directory.
+    /// Populated for future use; cooking pane currently uses `is_foreground` for emphasis.
+    #[allow(dead_code)]
+    pub is_current_dir: bool,
 }
 
 /// One row in the HISTORY pane: an on-disk session not currently live.
@@ -83,6 +89,10 @@ pub struct HistoryEntry {
     pub name: String,
     /// Last-active time (the registry `updated_at`), shown as a relative age.
     pub last_active: SystemTime,
+    /// Basename of the session's working directory, shown as a label in the history pane.
+    pub dir_label: String,
+    /// Whether the session's working directory matches the current process's working directory.
+    pub is_current_dir: bool,
 }
 
 /// State for the two-pane session hub.
