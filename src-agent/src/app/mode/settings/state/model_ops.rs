@@ -12,41 +12,80 @@ impl SettingsState {
         super::super::SETTING_CATEGORIES[self.cat].name == "Models Select"
     }
 
+    /// Indices into `self.models` that pass the current filter, in order.
+    pub fn visible_model_indices(&self) -> Vec<usize> {
+        self.models
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| self.model_filter.matches(m.session_only))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Number of model rows visible under the current filter.
+    pub fn visible_model_count(&self) -> usize {
+        self.visible_model_indices().len()
+    }
+
+    /// `true` when the `[+add global]` button is highlighted.
+    pub fn model_on_add_global(&self) -> bool {
+        self.model_sel == self.visible_model_count()
+    }
+
+    /// `true` when the `[+add local]` button is highlighted.
+    pub fn model_on_add_local(&self) -> bool {
+        self.model_sel == self.visible_model_count() + 1
+    }
+
+    /// `true` when either add button is highlighted.
+    pub fn model_on_add_button(&self) -> bool {
+        self.model_on_add_global() || self.model_on_add_local()
+    }
+
+    /// Real index into `self.models` for the currently selected visible row, or
+    /// `None` when a button row is selected.
+    pub fn selected_model_index(&self) -> Option<usize> {
+        let vis = self.visible_model_indices();
+        vis.get(self.model_sel).copied()
+    }
+
+    /// Clamp `model_sel` to the valid range `0 ..= visible_model_count() + 1`.
+    pub fn clamp_model_sel(&mut self) {
+        let max = self.visible_model_count() + 1;
+        if self.model_sel > max {
+            self.model_sel = max;
+        }
+    }
+
     /// Move selection up in the models list; clears the delete-armed flag.
     pub fn model_up(&mut self) {
         self.model_sel = self.model_sel.saturating_sub(1);
         self.model_delete_armed = false;
     }
 
-    /// Move selection down in the models list (max index = models.len() which is
-    /// the add-button row); clears the delete-armed flag.
+    /// Move selection down in the models list (max index = visible_count + 1
+    /// which is the [+add local] button row); clears the delete-armed flag.
     pub fn model_down(&mut self) {
-        self.model_sel = (self.model_sel + 1).min(self.models.len());
+        let max = self.visible_model_count() + 1;
+        self.model_sel = (self.model_sel + 1).min(max);
         self.model_delete_armed = false;
     }
 
-    /// `true` when the `[+ add model]` button row is highlighted.
-    pub fn model_on_add_button(&self) -> bool {
-        self.model_sel == self.models.len()
-    }
-
     /// First Ctrl+X arms the delete; second Ctrl+X confirms it. No effect when
-    /// the add-button row is selected.
+    /// an add-button row is selected. Operates on the real model index.
     pub fn model_arm_or_delete(&mut self) {
         if self.model_on_add_button() {
             return;
         }
         if self.model_delete_armed {
-            // Confirm: remove the entry.
-            if self.model_sel < self.models.len() {
-                self.models.remove(self.model_sel);
+            // Compute the real index before mutating state.
+            let real_idx = self.selected_model_index();
+            if let Some(idx) = real_idx {
+                self.models.remove(idx);
             }
             self.model_delete_armed = false;
-            // Clamp selection to the new length (add-button index).
-            let max = self.models.len();
-            if self.model_sel > max {
-                self.model_sel = max;
-            }
+            // Clamp to new visible range.
+            self.clamp_model_sel();
         } else {
             self.model_delete_armed = true;
         }
@@ -57,12 +96,22 @@ impl SettingsState {
         self.model_delete_armed = false;
     }
 
-    /// Open the add-model modal with a blank draft (default provider index 0).
-    pub fn open_model_modal_add(&mut self) {
-        self.model_modal = Some(ModelModal::new_add(0));
+    /// Open the add-model modal with a blank draft.
+    ///
+    /// `session_only`: `false` = global scope (`[+add global]`),
+    /// `true` = session-local scope (`[+add local]`).
+    /// The save button matching the chosen scope is pre-focused so the user
+    /// can confirm without navigating (still able to switch via Left/Right).
+    pub fn open_model_modal_add(&mut self, session_only: bool) {
+        self.model_modal = Some(ModelModal::new_add(0, session_only));
+        self.mm_preselect_save();
     }
 
     /// Open the edit-model modal, prefilled from `models[idx]`.
+    ///
+    /// `idx` must be a REAL index into `self.models` (not a visible position).
+    /// The draft's `session_only` is carried into the modal so the save path
+    /// knows the original scope, and the matching save button is pre-focused.
     pub fn open_model_modal_edit(&mut self, idx: usize) {
         if let Some(m) = self.models.get(idx) {
             self.model_modal = Some(ModelModal {
@@ -83,8 +132,23 @@ impl SettingsState {
                 endpoints: None,
                 endpoints_loading: false,
                 endpoints_for: None,
+                // Inherit the original scope so Save/SaveSession default to it.
+                session_only: m.session_only,
             });
         }
+        self.mm_preselect_save();
+    }
+
+    /// Cycle the model filter forward (All → Local → Global → All) and clamp selection.
+    pub fn model_filter_next(&mut self) {
+        self.model_filter = self.model_filter.next();
+        self.clamp_model_sel();
+    }
+
+    /// Cycle the model filter backward (All → Global → Local → All) and clamp selection.
+    pub fn model_filter_prev(&mut self) {
+        self.model_filter = self.model_filter.prev();
+        self.clamp_model_sel();
     }
 
     /// Close the add/edit-model modal without saving.
@@ -155,12 +219,21 @@ impl SettingsState {
             if target_idx < self.models.len() {
                 // Replace in place (same-scope edit).
                 self.models[target_idx] = draft;
-                self.model_sel = target_idx;
             } else {
                 // Append (new entry or cross-scope copy).
                 self.models.push(draft);
-                self.model_sel = self.models.len().saturating_sub(1);
             }
+            // After mutating self.models, find the visible position of the
+            // affected real index and move the selection there; clamp to valid
+            // range if the saved entry is filtered out by the current filter.
+            let saved_real = if target_idx < self.models.len() {
+                target_idx
+            } else {
+                self.models.len().saturating_sub(1)
+            };
+            let vis = self.visible_model_indices();
+            self.model_sel = vis.iter().position(|&r| r == saved_real)
+                .unwrap_or_else(|| vis.len().min(self.model_sel));
         }
     }
 

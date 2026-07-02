@@ -1,7 +1,47 @@
 //! Model-related types: [`ModelField`], [`ModelDraft`], [`ModelModal`],
-//! [`RolePickerState`], and the [`filter_models`] omnisearch helper.
+//! [`RolePickerState`], [`ModelFilterMode`], and the [`filter_models`] omnisearch helper.
 
 use super::provider_types::{ModelRole, new_uuid};
+
+/// Scope filter for the models list display.
+///
+/// Controls which model entries are shown in the table. Cycled with Left/Right
+/// when focus is on the Models Select screen. Does not affect persistence.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModelFilterMode {
+    All,
+    Local,
+    Global,
+}
+
+impl ModelFilterMode {
+    /// Cycle to the next filter in order: All → Local → Global → All.
+    pub fn next(self) -> Self {
+        match self {
+            Self::All    => Self::Local,
+            Self::Local  => Self::Global,
+            Self::Global => Self::All,
+        }
+    }
+
+    /// Cycle to the previous filter: All → Global → Local → All.
+    pub fn prev(self) -> Self {
+        match self {
+            Self::All    => Self::Global,
+            Self::Global => Self::Local,
+            Self::Local  => Self::All,
+        }
+    }
+
+    /// Does a model with the given `session_only` flag pass this filter?
+    pub fn matches(self, session_only: bool) -> bool {
+        match self {
+            Self::All    => true,
+            Self::Local  => session_only,
+            Self::Global => !session_only,
+        }
+    }
+}
 
 /// A single navigable field within the add/edit-model modal.
 ///
@@ -99,8 +139,7 @@ pub struct ModelDraft {
     /// OpenRouter-served models; ignored for other providers.
     pub route: Option<String>,
     /// `true` = saved for this session only (not persisted globally);
-    /// `false` = global scope. Stub flag — persistence is not yet implemented.
-    #[allow(dead_code)]
+    /// `false` = global scope.
     pub session_only: bool,
 }
 
@@ -166,12 +205,22 @@ pub struct ModelModal {
     /// stale-guard in the drain so a rapid re-selection can't show a previous
     /// model's providers.
     pub endpoints_for: Option<String>,
+    /// Scope chosen at add time (or inherited from the edited draft): `false` =
+    /// global, `true` = session-local. The save path reads this when the user
+    /// presses a save button so both Save and SaveSession honour the scope
+    /// pre-selected when the modal was opened. (The user can still override by
+    /// navigating to the other save button — the explicit button press wins.)
+    pub session_only: bool,
 }
 
 impl ModelModal {
-    /// Blank ADD-mode modal targeting provider `provider_idx`. Mints a fresh
-    /// uuid so a model added in this session has a stable identity before save.
-    pub fn new_add(provider_idx: usize) -> Self {
+    /// Blank ADD-mode modal targeting provider `provider_idx`.
+    ///
+    /// `session_only` pre-selects the save scope: `false` = global (opened via
+    /// `[+add global]`), `true` = session-local (opened via `[+add local]`).
+    /// Mints a fresh uuid so a model added in this session has a stable identity
+    /// before save.
+    pub fn new_add(provider_idx: usize, session_only: bool) -> Self {
         Self {
             editing_idx: None,
             uuid: new_uuid(),
@@ -188,6 +237,7 @@ impl ModelModal {
             endpoints: None,
             endpoints_loading: false,
             endpoints_for: None,
+            session_only,
         }
     }
 

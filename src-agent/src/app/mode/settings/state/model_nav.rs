@@ -396,4 +396,25 @@ impl SettingsState {
             m.result_sel = (m.result_sel + 1).min(max);
         }
     }
+
+    /// Pre-select the save button that matches the modal's `session_only` flag.
+    ///
+    /// Called after opening add/edit modals so the highlighted save button
+    /// already matches the scope chosen at open time: `Save` for global,
+    /// `SaveSession` for local. The user can still navigate to the other button.
+    pub fn mm_preselect_save(&mut self) {
+        let target = self
+            .model_modal
+            .as_ref()
+            .map(|m| {
+                if m.session_only {
+                    ModelField::SaveSession
+                } else {
+                    ModelField::Save
+                }
+            });
+        if let Some(field) = target {
+            self.mm_focus_field(field);
+        }
+    }
 }

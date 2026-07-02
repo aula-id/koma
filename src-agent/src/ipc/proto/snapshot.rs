@@ -250,6 +250,8 @@ pub struct ModelModalSnapshot {
     pub endpoints: Option<Vec<ModelEndpointWire>>,
     pub endpoints_loading: bool,
     pub endpoints_for: Option<String>,
+    /// Scope chosen at open time: `false` = global, `true` = session-local.
+    pub session_only: bool,
 }
 
 /// A serde-safe projection of the filesystem directory picker overlay.
@@ -300,6 +302,8 @@ pub struct SettingsSnapshot {
     pub model_sel: usize,
     pub model_delete_armed: bool,
     pub model_modal: Option<ModelModalSnapshot>,
+    /// Wire token for [`ModelFilterMode`]: `"all"`, `"local"`, or `"global"`.
+    pub model_filter: String,
 }
 
 // -- mode payload projections (stage 3: secondary full-screen views) -----------

@@ -206,6 +206,11 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         model_sel: s.model_sel,
         model_delete_armed: s.model_delete_armed,
         model_modal: s.model_modal.map(shadow_model_modal),
+        model_filter: match s.model_filter.as_str() {
+            "local"  => crate::app::mode::settings::ModelFilterMode::Local,
+            "global" => crate::app::mode::settings::ModelFilterMode::Global,
+            _        => crate::app::mode::settings::ModelFilterMode::All,
+        },
     }
 }
 
@@ -248,6 +253,7 @@ fn shadow_model_modal(m: ModelModalSnapshot) -> ModelModal {
         }),
         endpoints_loading: m.endpoints_loading,
         endpoints_for: m.endpoints_for,
+        session_only: m.session_only,
     }
 }
 
