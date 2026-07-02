@@ -127,6 +127,7 @@ mod roundtrip_tests {
             toast: Some(("info".to_string(), "saved".to_string())),
             models_cache: None,
             models_cache_endpoint: None,
+            models_cache_failed: None,
             // Non-default sub-agent viewer + `$` panel state so the round-trip proves
             // these stage-3 global flags survive serialize -> deserialize.
             agent_viewer: Some(1),

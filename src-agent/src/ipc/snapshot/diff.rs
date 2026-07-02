@@ -121,6 +121,7 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
     // with the populated dropdown instead of a stale `searching models…`.
     if prev.global.models_cache != next.global.models_cache
         || prev.global.models_cache_endpoint != next.global.models_cache_endpoint
+        || prev.global.models_cache_failed != next.global.models_cache_failed
     {
         return DiffResult::full();
     }

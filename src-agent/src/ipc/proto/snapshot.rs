@@ -81,6 +81,7 @@ pub struct GlobalSnapshot {
     pub toast: Option<(String, String)>,
     pub models_cache: Option<Vec<crate::dto::openrouter::ModelInfo>>,
     pub models_cache_endpoint: Option<String>,
+    pub models_cache_failed: Option<String>,
     pub agent_viewer: Option<usize>,
     pub agent_viewer_scroll: u16,
     pub agent_viewer_follow: bool,
