@@ -30,13 +30,30 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Status symbol for a todo item.
+fn spinner_glyph() -> &'static str {
+    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    SPINNER[((now_ms / 80) as usize) % SPINNER.len()]
+}
+
+/// Status symbol for a todo item row.
 fn status_symbol(s: &TodoStatus) -> &'static str {
     match s {
         TodoStatus::Pending => "○",
         TodoStatus::InProgress => "◐",
         TodoStatus::Completed => "●",
         TodoStatus::Cancelled => "⊘",
+    }
+}
+
+/// Animated status symbol — spinner for InProgress, same as row for others.
+fn status_symbol_animated(s: &TodoStatus) -> String {
+    match s {
+        TodoStatus::InProgress => spinner_glyph().to_string(),
+        other => status_symbol(other).to_string(),
     }
 }
 
@@ -59,8 +76,8 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
         .saturating_sub(2) // "› " / "  " marker
         .saturating_sub(prio.chars().count() + 1) // " {prio}"
         .max(4);
-    let sym = status_symbol(&item.status);
-    let label = truncate(&item.content, label_w.saturating_sub(sym.len() + 1));
+    let sym = status_symbol_animated(&item.status);
+    let label = truncate(&item.content, label_w.saturating_sub(sym.chars().count() + 1));
 
     if selected {
         let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
