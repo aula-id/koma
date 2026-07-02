@@ -623,3 +623,17 @@ pub(crate) fn shadow_bash(s: BashSnapshot) -> BashState {
         selected: s.selected,
     }
 }
+
+pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mode::TodoState {
+    use crate::app::mode::todo::{TodoItem, TodoPriority, TodoStatus};
+    crate::app::mode::TodoState {
+        items: s.items.into_iter().map(|item| TodoItem {
+            content: item.content,
+            status: TodoStatus::from_str(&item.status),
+            priority: TodoPriority::from_str(&item.priority),
+        }).collect(),
+        selected: s.selected,
+        pwd_hash: s.pwd_hash,
+        last_refresh: std::time::Instant::now(),
+    }
+}

@@ -373,6 +373,17 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     tick's frames.
         let _ = service_approval_park_timeouts(state, hub.client_count() > 0);
 
+        // 3a-todo. Passive todo refresh: for every session whose mode is Todo,
+        //     re-read memory/TODO.md periodically (same 500ms cadence as the TUI).
+        //     This keeps the daemon's in-memory state current when the agent writes
+        //     todos via todowrite while the user has /open in a thin-client.
+        for s in state.rest.sessions.iter_mut() {
+            if s.closed { continue; }
+            if let crate::app::mode::Mode::Todo(t) = &mut s.mode {
+                t.maybe_refresh();
+            }
+        }
+
         // 3b. Stream this tick's render-state changes to every attached client as
         //     seq'd frames (after kill-all so a tombstoned set folds back).
         hub.stream_deltas(state);

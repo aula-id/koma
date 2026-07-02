@@ -562,6 +562,30 @@ pub struct BashSnapshot {
     pub selected: usize,
 }
 
+/// A serde-safe projection of one todo item for the `/todo` panel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct TodoItemSnapshot {
+    pub content: String,
+    /// Wire token: "pending" | "in_progress" | "completed" | "cancelled"
+    pub status: String,
+    /// Wire token: "high" | "medium" | "low"
+    pub priority: String,
+}
+
+/// A serde-safe projection of the `/todo` task-panel.
+///
+/// Mirrors [`BashSnapshot`]'s shape (list + cursor): the todo items + the LIST
+/// cursor. The client rebuilds [`crate::app::mode::TodoState`] from this verbatim
+/// and renders the same master/detail view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct TodoSnapshot {
+    pub items: Vec<TodoItemSnapshot>,
+    pub selected: usize,
+    pub pwd_hash: String,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

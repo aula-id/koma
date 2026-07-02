@@ -14,6 +14,7 @@
 
 pub mod agents;
 pub mod bash;
+pub mod todo;
 pub mod chat;
 pub mod mcp;
 pub mod security;
@@ -100,6 +101,12 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
             bash::render_bash_overlay(frame, chunks[3], chunks[1], &b.jobs, b.selected, &palette);
+        }
+        Mode::Todo(t) => {
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            let chunks = chat::layout_chunks(&state.rest, frame.area());
+            todo::render_todo_overlay(frame, chunks[3], chunks[1], &t.items, t.selected, t.completed_count(), &palette);
         }
         Mode::Help(h) => help::draw(frame, h, &palette),
         Mode::Effort(e) => effort::draw(frame, e, &palette),

@@ -30,6 +30,7 @@ pub mod pong;
 pub mod search;
 pub mod shell;
 pub mod task;
+pub mod todo;
 
 pub use dircache::DirCache;
 
@@ -131,6 +132,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Forget),
         Box::new(memory::Recall),
         Box::new(task::Task),
+        Box::new(todo::TodoWrite),
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),
         Box::new(internet::WebDownload),

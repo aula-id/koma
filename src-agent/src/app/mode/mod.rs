@@ -31,11 +31,13 @@ pub mod help;
 pub mod editor;
 pub mod security;
 pub mod bash;
+pub mod todo;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
 pub use security::{SecSel, SecurityState};
 pub use bash::BashState;
+pub use todo::{parse_todo_file, TodoState};
 // `HelpEntry` is part of the module's public surface and will be consumed by the
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
@@ -239,4 +241,9 @@ pub enum Mode {
     /// (live-projected) job list + the LIST cursor. Boxed to keep `Mode` small,
     /// consistent with the other full-screen variants.
     Bash(Box<BashState>),
+    /// Task/TODO panel (`/todo`): a READ-ONLY master/detail view of the session's
+    /// todo items. The LEFT pane lists items with status indicators; the RIGHT pane
+    /// shows the selected item's content, status, and priority. The model writes
+    /// todos via the `todowrite` tool; the user views them here.
+    Todo(Box<TodoState>),
 }

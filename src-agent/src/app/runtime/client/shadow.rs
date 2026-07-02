@@ -156,8 +156,12 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         let fg = shadow.rest.fg_mut();
         fg.input = global.input;
         fg.cursor = global.cursor;
-        fg.scroll = global.scroll;
-        fg.follow = global.follow;
+        // Don't reconcile scroll/follow from the daemon — the client owns its own
+        // scroll position. Mouse wheel scroll is a local view concern that gives
+        // immediate feedback without a round-trip (see render.rs). The daemon's
+        // scroll is authoritative only for the daemon's own TUI; the thin-client
+        // shadow manages its own offset independently. New content arrives via
+        // TokenAppended deltas and the client's renderer handles follow logic.
         fg.status = global.status;
         fg.toast = global.toast.map(|(kind, text)| {
             (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
@@ -295,6 +299,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Mcp(m) => Mode::Mcp(Box::new(shadow_mcp(*m))),
         ModeSnapshot::Security(s) => Mode::Security(Box::new(shadow_security(*s))),
         ModeSnapshot::Bash(b) => Mode::Bash(Box::new(shadow_bash(*b))),
+        ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Effort(e) => Mode::Effort(Box::new(shadow_effort(e))),
         ModeSnapshot::Usage(u) => {
@@ -370,17 +375,13 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             fg.cursor = cursor.min(fg.input.chars().count());
             true
         }
-        StateDelta::ScrollChanged { scroll, follow } => {
-            // Global transcript view state moved on the daemon (a forwarded scroll
-            // key, or new content re-pinning follow). Mirror it so the rendered
-            // offset tracks the daemon between full snapshots. The renderer clamps
-            // `scroll` against the live content height each draw, so an offset that
-            // momentarily exceeds the shadow's shorter content is self-correcting.
-            // Transcript view state now lives on the foreground session.
-            let fg = shadow.rest.fg_mut();
-            fg.scroll = scroll;
-            fg.follow = follow;
-            true
+        StateDelta::ScrollChanged { .. } => {
+            // Don't reconcile scroll from the daemon — the client owns its own
+            // scroll position (see apply_snapshot). Mouse wheel scroll is local;
+            // keyboard scroll (Up/Down/PageUp/PageDown/Home/End) is forwarded via
+            // SendKey and the daemon's response is ignored. This prevents the
+            // shadow's scroll from snapping back on every delta.
+            false
         }
         StateDelta::SessionStatusChanged {
             session_id,
