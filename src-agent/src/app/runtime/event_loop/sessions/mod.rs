@@ -70,5 +70,55 @@ fn service_session(
     // 4. Background-finish nudge + was_working update.
     dirty |= deferred::nudge_background_finish(state, idx);
 
+    // 5. Cross-instance memory sync: poll MEMORY.md mtime and rebuild the
+    //    system prompt if another koma instance updated the shared store.
+    dirty |= poll_memory_change(state, idx);
+
     dirty
+}
+
+/// Poll the mtime of the shared `MEMORY.md` and, if it changed since the last
+/// snapshot, rebuild the system prompt so this session sees the updated memory
+/// index. Fires an info toast to notify the user. Cheap: one `stat()` syscall
+/// per tick, no full re-parse unless mtime actually changed.
+fn poll_memory_change(state: &mut AppState, idx: usize) -> bool {
+    let pwd_hash = match state.rest.sessions[idx]
+        .session
+        .as_ref()
+        .map(|s| s.pwd_hash.clone())
+    {
+        Some(h) => h,
+        None => return false,
+    };
+    let mem_dir = match crate::model::store::memory_dir(&pwd_hash) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let current_mtime = crate::model::memory::memory_mtime(&mem_dir);
+    let prev_mtime = state.rest.sessions[idx].last_memory_mtime;
+
+    // Update the snapshot regardless (tracks both own writes and external).
+    state.rest.sessions[idx].last_memory_mtime = current_mtime;
+
+    // Detect change: mtime differs from previous snapshot, or this is the
+    // first poll (prev is None) and the file exists — seed without toast.
+    match (prev_mtime, current_mtime) {
+        (None, Some(_)) => {
+            // First poll: just seed. No toast — this is session init, not an
+            // external change.
+            if let Some(sess) = state.rest.sessions[idx].session.as_mut() {
+                sess.rebuild_system();
+            }
+            false
+        }
+        (Some(prev), Some(curr)) if prev != curr => {
+            // External write detected — rebuild and notify.
+            if let Some(sess) = state.rest.sessions[idx].session.as_mut() {
+                sess.rebuild_system();
+            }
+            state.rest.sessions[idx].set_toast_info("Memory updated by another session".into());
+            true
+        }
+        _ => false,
+    }
 }
