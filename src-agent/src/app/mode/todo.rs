@@ -6,7 +6,12 @@
 //! The user can navigate the list; the model reads/writes todos via the
 //! `todowrite` tool (writes to `memory/TODO.md`).
 
+use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
+
+/// Minimum interval between disk re-reads when the overlay is open.
+const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Status of a single todo item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,18 +164,33 @@ pub fn parse_todo_file(content: &str) -> Vec<TodoItem> {
 ///
 /// Holds the todo item list + the LIST cursor. No drafts, no sub-modes —
 /// read-only for the user; the model writes via the `todowrite` tool.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TodoState {
     /// Snapshot of the todo items (one row per item).
     pub items: Vec<TodoItem>,
     /// Selected index into `items` (the LIST cursor).
     pub selected: usize,
+    /// Session pwd_hash for disk reads (used by periodic refresh).
+    pub pwd_hash: String,
+    /// Timestamp of the last disk refresh.
+    pub last_refresh: Instant,
+}
+
+impl Default for TodoState {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            selected: 0,
+            pwd_hash: String::new(),
+            last_refresh: Instant::now(),
+        }
+    }
 }
 
 impl TodoState {
     /// Build the panel from an initial item list, cursor at the top.
-    pub fn new(items: Vec<TodoItem>) -> Self {
-        Self { items, selected: 0 }
+    pub fn new(items: Vec<TodoItem>, pwd_hash: String) -> Self {
+        Self { items, selected: 0, pwd_hash, last_refresh: Instant::now() }
     }
 
     /// Move the LIST cursor up (saturating at 0).
@@ -195,13 +215,23 @@ impl TodoState {
 
     /// Re-read `memory/TODO.md` from disk and refresh the item list in-place.
     /// The cursor stays on the same row index (clamped if the list shrank).
-    pub fn refresh_from_disk(&mut self, pwd_hash: &str) {
-        let items = crate::model::store::memory_dir(pwd_hash)
+    pub fn refresh_from_disk(&mut self) {
+        let items = crate::model::store::memory_dir(&self.pwd_hash)
             .ok()
             .and_then(|dir| std::fs::read_to_string(dir.join("TODO.md")).ok())
             .map(|c| parse_todo_file(&c))
             .unwrap_or_default();
         self.refresh(items);
+        self.last_refresh = Instant::now();
+    }
+
+    /// Periodic refresh: re-read from disk only if enough time has elapsed.
+    /// Called from the draw path so the overlay stays live when the agent
+    /// writes new todos via the todowrite tool.
+    pub fn maybe_refresh(&mut self) {
+        if self.last_refresh.elapsed() >= REFRESH_INTERVAL {
+            self.refresh_from_disk();
+        }
     }
 
     /// The currently-selected item, if any.
@@ -213,12 +243,12 @@ impl TodoState {
     /// Toggle the selected item's status (cycle: pending → in_progress → completed
     /// → cancelled → pending), write the updated list back to `memory/TODO.md`,
     /// and re-read from disk so the overlay reflects the change.
-    pub fn toggle_selected(&mut self, pwd_hash: &str) {
+    pub fn toggle_selected(&mut self) {
         if let Some(item) = self.items.get_mut(self.selected) {
             item.status = item.status.cycle();
         }
         // Write the full list back to disk.
-        let Ok(memory_dir) = crate::model::store::memory_dir(pwd_hash) else {
+        let Ok(memory_dir) = crate::model::store::memory_dir(&self.pwd_hash) else {
             return;
         };
         let path = memory_dir.join("TODO.md");
@@ -233,6 +263,11 @@ impl TodoState {
         let _ = std::fs::create_dir_all(&memory_dir);
         let _ = std::fs::write(&path, format!("{content}\n"));
         // Re-read to stay in sync with what's actually on disk.
-        self.refresh_from_disk(pwd_hash);
+        self.refresh_from_disk();
+    }
+
+    /// Count completed items (for the title display).
+    pub fn completed_count(&self) -> usize {
+        self.items.iter().filter(|i| i.status == TodoStatus::Completed).count()
     }
 }

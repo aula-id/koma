@@ -22,7 +22,7 @@ use super::{is_ctrl, Action};
 ///
 /// Re-reads the todo list from the session's memory on each key so the panel
 /// stays current if the model writes new todos via the todowrite tool.
-pub fn handle_todo(s: &mut TodoState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Ctrl+C is fully inert (koma disables it): swallow it here so it can't
     // fall through to any close/quit. Esc still closes the panel.
     if is_ctrl(&key, 'c') {
@@ -34,9 +34,7 @@ pub fn handle_todo(s: &mut TodoState, rest: &mut AppStateRest, key: KeyEvent) ->
         KeyCode::Enter => {
             // Cycle the selected item's status (pending → in_progress → completed
             // → cancelled → pending) and write back to disk.
-            if let Some(pwd_hash) = rest.fg().session.as_ref().map(|s| s.pwd_hash.as_str()) {
-                s.toggle_selected(pwd_hash);
-            }
+            s.toggle_selected();
             Action::None
         }
         KeyCode::Up | KeyCode::Char('k') => {
@@ -52,9 +50,7 @@ pub fn handle_todo(s: &mut TodoState, rest: &mut AppStateRest, key: KeyEvent) ->
     };
 
     // Re-read from disk after every key so the overlay stays live.
-    if let Some(pwd_hash) = rest.fg().session.as_ref().map(|s| s.pwd_hash.as_str()) {
-        s.refresh_from_disk(pwd_hash);
-    }
+    s.refresh_from_disk();
 
     action
 }
