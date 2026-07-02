@@ -6,10 +6,10 @@
 //!
 //! Key map:
 //! - `Esc`           → `Action::CloseTodo` (return to Chat)
+//! - `Enter`         → cycle the selected item's status and persist
 //! - `Ctrl+C`        → `Action::None` (fully inert — koma disables Ctrl+C)
-//! - `Up`            → move the LIST cursor up
-//! - `Down`          → move the LIST cursor down
-//! - `j`/`k`         → vim-style navigation (optional, mirrors chat scroll)
+//! - `Up`/`k`        → move the LIST cursor up
+//! - `Down`/`j`      → move the LIST cursor down
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
@@ -22,15 +22,23 @@ use super::{is_ctrl, Action};
 ///
 /// Re-reads the todo list from the session's memory on each key so the panel
 /// stays current if the model writes new todos via the todowrite tool.
-pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_todo(s: &mut TodoState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Ctrl+C is fully inert (koma disables it): swallow it here so it can't
     // fall through to any close/quit. Esc still closes the panel.
     if is_ctrl(&key, 'c') {
         return Action::None;
     }
 
-    match key.code {
+    let action = match key.code {
         KeyCode::Esc => Action::CloseTodo,
+        KeyCode::Enter => {
+            // Cycle the selected item's status (pending → in_progress → completed
+            // → cancelled → pending) and write back to disk.
+            if let Some(pwd_hash) = rest.fg().session.as_ref().map(|s| s.pwd_hash.as_str()) {
+                s.toggle_selected(pwd_hash);
+            }
+            Action::None
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             s.move_up();
             Action::None
@@ -41,5 +49,12 @@ pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -
         }
         // Any other key closes the panel (mirrors the /bash overlay).
         _ => Action::CloseTodo,
+    };
+
+    // Re-read from disk after every key so the overlay stays live.
+    if let Some(pwd_hash) = rest.fg().session.as_ref().map(|s| s.pwd_hash.as_str()) {
+        s.refresh_from_disk(pwd_hash);
     }
+
+    action
 }
