@@ -15,7 +15,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::AbortHandle;
@@ -365,6 +365,10 @@ pub struct SessionRuntime {
     /// safety valve against an immortal parked daemon holding a lock with nobody home.
     /// Starts `None`.
     pub park_started_at: Option<Instant>,
+    /// Mtime of `MEMORY.md` the last time this session read or wrote it. Used by
+    /// the cross-instance memory-sync poll to detect when another koma instance
+    /// updated the shared memory store. `None` until first snapshot.
+    pub last_memory_mtime: Option<SystemTime>,
 }
 
 impl Default for SessionRuntime {
@@ -446,6 +450,7 @@ impl SessionRuntime {
             finished_unseen: false,
             closed: false,
             park_started_at: None,
+            last_memory_mtime: None,
         }
     }
 

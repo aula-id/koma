@@ -87,8 +87,8 @@ fn shadow_warm_status(w: WarmStatusWire) -> WarmStatus {
 /// `history_filtered` is rebuilt as the identity over those rows (its render path
 /// indexes through it the same way) and `history_selected` passes through unchanged.
 /// `history_query` rides along only so the view can echo the search line; the client
-/// never re-filters (the daemon owns that). `pending_kill` indexes the cooking list,
-/// which is order-identical here, so the confirm bar resolves `cooking[pending_kill]`.
+/// never re-filters (the daemon owns that). `pending_kill` carries the targeted
+/// session's UUID, so the confirm bar searches `cooking` for a matching `session_id`.
 pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
     let history: Vec<HistoryEntry> = h
         .history
@@ -116,11 +116,10 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 name: c.name,
                 working: c.working,
                 is_foreground: c.is_foreground,
-                // The wire projection doesn't carry the session UUID, and this
-                // shadow hub is render-only (the daemon resolves the pick by its
-                // own index, not by id). The client swapper sources its addressing
-                // id from `build_local_hub`/discovery, never from this path.
-                session_id: None,
+                // Carried from the wire so the client-side confirm bar can resolve the
+                // armed target by session UUID (matching the daemon handler's identity-based
+                // `pending_kill`). None for the synthetic `[+ new session]` row.
+                session_id: c.session_id,
                 dir_label: String::new(),  // not projected over the wire
                 is_current_dir: false,
             })

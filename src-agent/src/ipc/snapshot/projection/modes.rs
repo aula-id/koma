@@ -120,7 +120,7 @@ pub fn session_hub_snapshot(h: &SessionHub) -> SessionHubSnapshot {
         cooking_selected: h.cooking_selected,
         history_selected: h.history_selected,
         history_query: h.history_query.clone(),
-        pending_kill: h.pending_kill,
+        pending_kill: h.pending_kill.clone(),
     }
 }
 
@@ -134,6 +134,7 @@ pub fn cooking_entry_snapshot(e: &CookingEntry) -> CookingEntrySnapshot {
         .to_string(),
         working: e.working,
         is_foreground: e.is_foreground,
+        session_id: e.session_id.clone(),
     }
 }
 

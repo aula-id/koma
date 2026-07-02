@@ -113,9 +113,11 @@ pub fn handle_hub_kill_confirm(
     //    in `cooking` → that row's `sessions` index + kind). Borrow released before
     //    we mutate `state` below.
     let target = if let Mode::SessionHub(hub) = state.mode() {
-        hub.pending_kill
-            .and_then(|ci| hub.cooking.get(ci))
-            .map(|e| (e.idx, e.kind))
+        hub.pending_kill.as_ref().and_then(|sid| {
+            hub.cooking.iter().find(|e| {
+                e.session_id.as_deref() == Some(sid.as_str())
+            })
+        }).map(|e| (e.idx, e.kind))
     } else {
         None
     };
