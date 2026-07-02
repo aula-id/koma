@@ -64,12 +64,9 @@ pub struct CookingEntry {
     /// Ignored for `NewSession` entries.
     pub is_foreground: bool,
     /// The session's UUID (the on-disk dir name / socket key), used by the
-    /// client-side swapper to address the chosen session-daemon directly. The
-    /// synthetic `NewSession` row carries `None`; a real session carries
-    /// `Some(uuid)`.
-    // Populated now (daemon builder + client `build_local_hub`) but not yet READ —
-    // the swapper that consumes it lands next commit. Allow until then.
-    #[allow(dead_code)]
+    /// client-side swapper to address the chosen session-daemon directly, and by
+    /// the confirm bar to resolve the armed target by identity. The synthetic
+    /// `NewSession` row carries `None`; a real session carries `Some(uuid)`.
     pub session_id: Option<String>,
     /// Basename of the session's working directory, used as a label in the cooking pane.
     pub dir_label: String,
@@ -124,10 +121,10 @@ pub struct SessionHub {
     /// Indices into `history` that match `history_query` (identity when empty).
     /// `history_selected` indexes into THIS, not `history`.
     pub history_filtered: Vec<usize>,
-    /// When set, a kill is awaiting confirmation: the value is the position in
-    /// `cooking` of the session to act on. While Some, the hub shows a confirm
-    /// bar and the input handler only accepts confirm/cancel.
-    pub pending_kill: Option<usize>,
+    /// When set, a kill is awaiting confirmation: the value is the targeted
+    /// session's UUID (from [`CookingEntry::session_id`]). While Some, the hub
+    /// shows a confirm bar and the input handler only accepts confirm/cancel.
+    pub pending_kill: Option<String>,
 }
 
 impl SessionHub {

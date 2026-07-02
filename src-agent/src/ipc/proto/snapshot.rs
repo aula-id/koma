@@ -142,6 +142,12 @@ pub struct CookingEntrySnapshot {
     pub kind: String,
     pub working: bool,
     pub is_foreground: bool,
+    /// The session's UUID, used by the client-side confirm bar to resolve the armed
+    /// target by identity. `None` for the synthetic `[+ new session]` row. Added so
+    /// the client renderer can search `cooking` by `session_id` (matching the daemon
+    /// handler's identity-based `pending_kill`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// A serde-safe projection of one HISTORY row in the session hub.
@@ -156,9 +162,9 @@ pub struct HistoryEntrySnapshot {
 ///
 /// `history` carries the ALREADY-FILTERED rows (the daemon projects only the rows
 /// matching `history_query`), so `history_selected` indexes straight into it on the
-/// client. `pending_kill` indexes the cooking list, which is order-identical on both
-/// sides, so the client's confirm bar resolves the target name + working flag from
-/// `cooking[pending_kill]`.
+/// client. `pending_kill` carries the targeted session's UUID (identity-based, not an
+/// index), so the client's confirm bar resolves the target by searching `cooking` for
+/// a matching `session_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SessionHubSnapshot {
@@ -168,7 +174,7 @@ pub struct SessionHubSnapshot {
     pub cooking_selected: usize,
     pub history_selected: usize,
     pub history_query: String,
-    pub pending_kill: Option<usize>,
+    pub pending_kill: Option<String>,
 }
 
 /// A serde-safe mirror of ModelEndpoint.

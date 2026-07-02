@@ -14,7 +14,8 @@
 //! The FOCUSED pane's header rule is accented and the selected row in it uses
 //! `palette.sel_*`; the unfocused pane is dim. A one-line keybinding hint sits at
 //! the bottom — REPLACED by a warning-styled confirm bar while a kill is armed
-//! (`pending_kill`), resolving the target name + working flag from `cooking[ci]`.
+//! (`pending_kill`), resolving the target name + working flag by searching
+//! `cooking` for a matching `session_id`.
 //!
 //! Selection/scroll state lives in [`crate::app::mode::SessionHub`]; keystroke
 //! handling lives in [`crate::controller::input::handle_session_hub`].
@@ -84,30 +85,31 @@ pub fn draw(frame: &mut Frame, hub: &SessionHub, palette: &Palette) {
     draw_history(frame, chunks[1], hub, palette);
 
     // --- Footer: confirm bar while a kill is armed, else the keybinding hint. ---
-    match hub.pending_kill {
-        Some(ci) => draw_confirm_bar(frame, chunks[2], hub, ci, palette),
-        None => {
-            let hint = "Tab switch · ↑/↓ select · Enter open · Ctrl+X kill · type to search history · Esc close";
-            let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));
-            frame.render_widget(instructions, chunks[2]);
-        }
+    if let Some(ref kill_id) = hub.pending_kill {
+        draw_confirm_bar(frame, chunks[2], hub, kill_id, palette);
+    } else {
+        let hint = "Tab switch · ↑/↓ select · Enter open · Ctrl+X kill · type to search history · Esc close";
+        let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));
+        frame.render_widget(instructions, chunks[2]);
     }
 }
 
 /// Render the kill-confirm bar into `area` (replacing the footer hint). Resolves
-/// the target's name + working flag from `cooking[ci]` — the cooking list is
-/// order-identical on the daemon and the client, so this works on both. Reuses the
-/// inverse `sel_fg`/`sel_bg` + BOLD style the help footer / tool-approval bar use as
-/// the palette's "warning" treatment (this palette has no dedicated warn colour).
-fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, ci: usize, palette: &Palette) {
+/// the target's name + working flag by searching `cooking` for the matching session
+/// UUID — the cooking list is order-identical on the daemon and the client, so this
+/// works on both. Reuses the inverse `sel_fg`/`sel_bg` + BOLD style the help
+/// footer / tool-approval bar use as the palette's "warning" treatment (this palette
+/// has no dedicated warn colour).
+fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, kill_id: &str, palette: &Palette) {
     if area.width == 0 {
         return;
     }
-    // Defensive: if the armed index is somehow stale, fall back to a generic prompt
-    // rather than panicking on a missing row.
+    // Defensive: if the armed session disappeared from cooking, fall back to a generic
+    // prompt rather than panicking on a missing row.
     let (name, working) = hub
         .cooking
-        .get(ci)
+        .iter()
+        .find(|e| e.session_id.as_deref() == Some(kill_id))
         .map(|e| (e.name.as_str(), e.working))
         .unwrap_or(("session", false));
     let text = if working {
