@@ -33,6 +33,16 @@ impl TodoStatus {
         }
     }
 
+    /// Human-readable display label for the UI (not the wire format).
+    pub fn display(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in progress",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
     pub fn from_str(s: &str) -> Self {
         match s {
             "in_progress" => Self::InProgress,

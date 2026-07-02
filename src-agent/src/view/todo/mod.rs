@@ -94,7 +94,7 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
     };
     lines.push(Line::from(vec![
         Span::styled("status: ", Style::default().fg(palette.dim)),
-        Span::styled(item.status.label().to_string(), status_style),
+        Span::styled(item.status.display().to_string(), status_style),
         Span::styled("   ·   ", Style::default().fg(palette.dim)),
         Span::styled("priority: ", Style::default().fg(palette.dim)),
         Span::styled(item.priority.label().to_string(), Style::default().fg(palette.fg)),
