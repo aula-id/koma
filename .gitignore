@@ -1,3 +1,4 @@
+.serena/
 /target
 .env
 **/*.pyc
