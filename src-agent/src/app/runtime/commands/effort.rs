@@ -89,9 +89,14 @@ pub(super) fn handle_effort(
     // `/effort` open has capabilities. This open uses a matching successful
     // cache if available; otherwise it reports loading/error and does NOT
     // open a guessed generic menu.
+    // Capture whether THIS endpoint had a prior fetch failure BEFORE we clear
+    // the marker below. The clear wipes it in this same call, so the status
+    // branch further down must read this captured flag, not the field.
+    let mut prev_fetch_failed = false;
     if let Some(r) = main.as_ref() {
         // Clear any prior fetch failure so user-triggered /effort retries.
         if state.rest.models_cache_failed.as_deref() == Some(r.endpoint.as_str()) {
+            prev_fetch_failed = true;
             state.rest.models_cache_failed = None;
         }
         // Only arm the fetch if we don't already have a pending/in-flight
@@ -138,9 +143,9 @@ pub(super) fn handle_effort(
     } else {
         // Cache not available or doesn't match Main endpoint.
         // Show a status instead of a generic menu.
-        let status = if let Some(endpoint) = main.as_ref().map(|r| r.endpoint.as_str()) {
-            if state.rest.models_cache_failed.as_deref() == Some(endpoint) {
-                "couldn't fetch model capabilities"
+        let status = if main.is_some() {
+            if prev_fetch_failed {
+                "couldn't fetch capabilities — retrying..."
             } else {
                 "fetching model capabilities..."
             }
