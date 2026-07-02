@@ -253,13 +253,17 @@ impl TodoState {
     /// the change. Only the user can do this — it signals the model to redo
     /// the todo.
     pub fn reset_to_pending(&mut self) {
+        // Re-read from disk first so we don't clobber writes the model made via
+        // todowrite since our last refresh.
+        self.refresh_from_disk();
         if let Some(item) = self.items.get_mut(self.selected) {
             if item.status == TodoStatus::Pending {
                 return; // Already pending — nothing to do.
             }
             item.status = TodoStatus::Pending;
         }
-        // Write the full list back to disk.
+        // Write the full list back to disk atomically (temp + rename) so a
+        // crash mid-write never leaves a truncated file.
         let Ok(memory_dir) = crate::model::store::memory_dir(&self.pwd_hash) else {
             return;
         };
@@ -271,7 +275,10 @@ impl TodoState {
             .collect::<Vec<_>>()
             .join("\n");
         let _ = std::fs::create_dir_all(&memory_dir);
-        let _ = std::fs::write(&path, format!("{content}\n"));
+        let tmp = path.with_extension("md.tmp");
+        if std::fs::write(&tmp, format!("{content}\n")).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
         self.refresh_from_disk();
     }
 
