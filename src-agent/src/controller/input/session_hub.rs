@@ -73,7 +73,7 @@ pub fn handle_session_hub(
         if matches!(hub.focus, HubPane::Cooking) {
             if let Some(entry) = hub.selected_cooking() {
                 if entry.kind == SessionKind::Session {
-                    hub.pending_kill = Some(hub.cooking_selected);
+                    hub.pending_kill = entry.session_id.clone();
                 }
             }
         }
