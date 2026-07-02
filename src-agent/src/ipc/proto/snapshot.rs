@@ -583,6 +583,7 @@ pub struct TodoItemSnapshot {
 pub struct TodoSnapshot {
     pub items: Vec<TodoItemSnapshot>,
     pub selected: usize,
+    pub pwd_hash: String,
 }
 
 /// A serde-safe projection of the /agents dashboard.

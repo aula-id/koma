@@ -633,5 +633,7 @@ pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mod
             priority: TodoPriority::from_str(&item.priority),
         }).collect(),
         selected: s.selected,
+        pwd_hash: s.pwd_hash,
+        last_refresh: std::time::Instant::now(),
     }
 }
