@@ -284,8 +284,8 @@ fn spawn_task_with_id(
         if crate::app::resolve::agent_declares_model(agent)
             && !crate::app::resolve::agent_model_resolves(&config, &settings, agent)
         {
-            state.rest.sessions[sess_idx].status =
-                format!("agent '{}' model unresolved — using main", agent_name);
+            state.rest.sessions[sess_idx]
+                .set_toast(format!("agent '{}' model unresolved — using main", agent_name));
         }
     }
     let client_arc = Arc::clone(client.as_ref().unwrap());

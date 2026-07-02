@@ -263,33 +263,24 @@ pub fn agent_declares_model(agent: &AgentDef) -> bool {
 /// session_models). The caller pairs this with [`agent_declares_model`]: warn when
 /// the agent declared a model but this returns false.
 pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &AgentDef) -> bool {
-    // Mirror resolve_agent's model_uuid + legacy branches; return true only when
-    // the declared model produced a route without reaching the Main fallback.
-
-    // 1a. Registered uuid branch.
+    // 1. Registered model uuid → resolvable entry+provider.
     if let Some(uuid) = agent.model_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
         if let Some(entry) = find_model_entry(config, settings, uuid) {
             if from_entry(config, settings, entry, ModelRole::Main).is_some() {
                 return true;
             }
         }
-        // uuid present but entry missing or provider dangling — does not resolve.
-        return false;
+        // uuid unresolved (deleted entry / dangling provider) → fall through to legacy.
     }
-
-    // 1b. Legacy model + provider_uuid branch.
-    if let Some(_model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
+    // 2. Legacy explicit model + resolvable provider connection.
+    if let Some(model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
+        let _ = model_id;
         if let Some(uuid) = agent.provider_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
             if config.providers.iter().any(|p| p.uuid == uuid) {
                 return true;
             }
         }
-        // Named model but provider absent/dangling — does not resolve.
-        return false;
     }
-
-    // No model declared at all → not resolved (caller should check declares_model
-    // first to distinguish "no model" from "unresolvable model").
     false
 }
 

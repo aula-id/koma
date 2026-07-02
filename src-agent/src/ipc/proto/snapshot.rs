@@ -251,6 +251,7 @@ pub struct ModelModalSnapshot {
     pub endpoints_loading: bool,
     pub endpoints_for: Option<String>,
     /// Scope chosen at open time: `false` = global, `true` = session-local.
+    #[serde(default)]
     pub session_only: bool,
 }
 
@@ -303,6 +304,7 @@ pub struct SettingsSnapshot {
     pub model_delete_armed: bool,
     pub model_modal: Option<ModelModalSnapshot>,
     /// Wire token for [`ModelFilterMode`]: `"all"`, `"local"`, or `"global"`.
+    #[serde(default)]
     pub model_filter: String,
 }
 
