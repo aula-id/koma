@@ -42,16 +42,6 @@ impl TodoStatus {
         }
     }
 
-    /// Cycle to the next status: Pending → InProgress → Completed → Cancelled → Pending.
-    pub fn cycle(&self) -> Self {
-        match self {
-            Self::Pending => Self::InProgress,
-            Self::InProgress => Self::Completed,
-            Self::Completed => Self::Cancelled,
-            Self::Cancelled => Self::Pending,
-        }
-    }
-
     /// Single-char shorthand for the markdown checkbox format.
     pub fn checkbox_char(&self) -> &'static str {
         match self {
@@ -248,12 +238,16 @@ impl TodoState {
         self.items.get(self.selected)
     }
 
-    /// Toggle the selected item's status (cycle: pending → in_progress → completed
-    /// → cancelled → pending), write the updated list back to `memory/TODO.md`,
-    /// and re-read from disk so the overlay reflects the change.
-    pub fn toggle_selected(&mut self) {
+    /// Reset the selected item's status to `Pending`, write the updated list
+    /// back to `memory/TODO.md`, and re-read from disk so the overlay reflects
+    /// the change. Only the user can do this — it signals the model to redo
+    /// the todo.
+    pub fn reset_to_pending(&mut self) {
         if let Some(item) = self.items.get_mut(self.selected) {
-            item.status = item.status.cycle();
+            if item.status == TodoStatus::Pending {
+                return; // Already pending — nothing to do.
+            }
+            item.status = TodoStatus::Pending;
         }
         // Write the full list back to disk.
         let Ok(memory_dir) = crate::model::store::memory_dir(&self.pwd_hash) else {
@@ -266,11 +260,8 @@ impl TodoState {
             .map(|item| item.to_line())
             .collect::<Vec<_>>()
             .join("\n");
-        // Ensure the directory exists (the model's todowrite tool creates it,
-        // but the user might toggle before any write has happened).
         let _ = std::fs::create_dir_all(&memory_dir);
         let _ = std::fs::write(&path, format!("{content}\n"));
-        // Re-read to stay in sync with what's actually on disk.
         self.refresh_from_disk();
     }
 

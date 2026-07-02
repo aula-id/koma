@@ -9,11 +9,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
-use crate::app::mode::todo::{TodoItem, TodoPriority, TodoStatus};
+use crate::app::mode::todo::{TodoItem, TodoStatus};
 use crate::view::theme::Palette;
 
 /// Truncate `s` to at most `max` chars, appending `…` if cut.
@@ -57,34 +57,17 @@ fn status_symbol_animated(s: &TodoStatus) -> String {
     }
 }
 
-/// Priority color label.
-fn priority_label(p: &TodoPriority) -> &'static str {
-    match p {
-        TodoPriority::High => "hi",
-        TodoPriority::Medium => "med",
-        TodoPriority::Low => "lo",
-    }
-}
-
-/// Build one sidebar row for a todo item. The status symbol + content take the
-/// left; the priority is a dim right-hand suffix. The selected row carries the
-/// inverse highlight.
+/// Build one sidebar row for a todo item. The status symbol + content fill the
+/// full width. The selected row carries the inverse highlight.
 fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette) -> Line<'a> {
-    let prio = priority_label(&item.priority);
-    // Reserve room for a space + the priority suffix.
-    let label_w = width
-        .saturating_sub(prio.chars().count() + 1) // " {prio}"
-        .max(4);
     let sym = status_symbol_animated(&item.status);
-    let label = truncate(&item.content, label_w.saturating_sub(sym.chars().count() + 1));
+    let label = truncate(&item.content, width.saturating_sub(sym.chars().count() + 1));
 
     if selected {
         let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
         Line::from(vec![
             Span::styled(format!("{sym} "), hl),
-            Span::styled(format!("{label:<label_w$}"), hl),
-            Span::styled(" ", Style::default()),
-            Span::styled(prio, Style::default().fg(palette.dim)),
+            Span::styled(label, hl),
         ])
     } else {
         let name_style = match item.status {
@@ -93,16 +76,14 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
         };
         Line::from(vec![
             Span::styled(format!("{sym} "), Style::default().fg(palette.dim)),
-            Span::styled(format!("{label:<label_w$}"), name_style),
-            Span::styled(" ", Style::default()),
-            Span::styled(prio, Style::default().fg(palette.dim)),
+            Span::styled(label, name_style),
         ])
     }
 }
 
 /// Build detail lines for a single todo item — status+priority at top,
 /// awaiting/state text, then content as description. Used by the right pane.
-fn detail_lines<'a>(item: &TodoItem, width: usize, palette: &Palette) -> Vec<Line<'a>> {
+fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
 
     // Status + priority at top
@@ -149,16 +130,28 @@ fn detail_lines<'a>(item: &TodoItem, width: usize, palette: &Palette) -> Vec<Lin
 
     lines.push(Line::from(""));
 
-    // Content as description header
+    // Content as description — each word is a separate span for natural wrapping.
     lines.push(Line::from(vec![
         Span::styled("content:", Style::default().fg(palette.dim)),
     ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            truncate(&item.content, width.max(4)),
-            Style::default().fg(palette.fg),
-        ),
-    ]));
+    let content_spans: Vec<Span> = item
+        .content
+        .split_whitespace()
+        .enumerate()
+        .flat_map(|(i, word)| {
+            let mut spans = vec![Span::styled(word.to_string(), Style::default().fg(palette.fg))];
+            // Add a space between words, but not after the last word.
+            if i + 1 < item.content.split_whitespace().count() {
+                spans.push(Span::raw(" "));
+            }
+            spans
+        })
+        .collect();
+    if content_spans.is_empty() {
+        lines.push(Line::from(""));
+    } else {
+        lines.push(Line::from(content_spans));
+    }
 
     lines
 }
@@ -242,7 +235,7 @@ pub fn render_todo_overlay(
         return;
     }
     frame.render_widget(
-        Paragraph::new(detail_lines(&items[sel], right.width as usize, palette)),
+        Paragraph::new(detail_lines(&items[sel], palette)).wrap(Wrap { trim: true }),
         right,
     );
 }
