@@ -1,4 +1,4 @@
 {
-  "version": "0.2.11",
-  "message": "security + fix: gate git_operator, web_download, and git_worktree remove behind the approval/TAC classifier so they prompt in Normal mode (and are classifier-checked in Auto) instead of running unguarded — a bare git push, an arbitrary web_download, or a worktree deletion no longer slips through; also make the image-capability guard endpoint-aware so switching to a vision-capable model mid-session no longer wrongly blocks image sends (the stale per-endpoint catalogue is trusted only when it matches the current model's endpoint)."
+  "version": "0.2.12",
+  "message": "fix: emit the OpenRouter-only reasoning sub-fields (reasoning.exclude / reasoning.enabled) ONLY for OpenRouter endpoints. OpenAI-native gateways (e.g. a codex/9router gateway) reject them with 400 'Unknown parameter: reasoning.exclude', which — now that git_operator routes through the classifier — fail-closed even read-only git calls. The classifier, fold, blob-router, and thinking-off paths now omit those fields for non-OpenRouter endpoints (effort, which is OpenAI-standard, is unchanged). Groq etc. keep working since they're reached through OpenRouter."
 }
