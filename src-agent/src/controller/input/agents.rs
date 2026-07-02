@@ -24,7 +24,7 @@ use super::{is_ctrl, Action};
 ///    whole flow back to Browse.
 ///
 /// 3. **Browse** – ↑/↓ move the LIST cursor; →/Enter open the selected agent
-///    for editing (built-ins are read-only → status note, no transition);
+///    for editing (built-ins save as session overrides);
 ///    `n` starts Create; `d` deletes the selected file-backed agent; Esc closes
 ///    the dashboard (`Action::CloseAgents`).
 pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
@@ -303,17 +303,10 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
                 Action::None
             }
             KeyCode::Enter | KeyCode::Right => {
-                match s.current_agent().map(|a| a.source) {
-                    Some(AgentSource::Builtin) => {
-                        rest.fg_mut().status = "built-in agents are read-only".into();
-                        Action::None
-                    }
-                    Some(_) => {
-                        s.enter_edit();
-                        Action::None
-                    }
-                    None => Action::None,
+                if s.current_agent().is_some() {
+                    s.enter_edit();
                 }
+                Action::None
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 s.enter_create();

@@ -75,8 +75,7 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
 ///
 /// The target scope is the selected agent's [`AgentSource`] — a session agent is
 /// re-saved into the session dir, a global agent into the global dir. A built-in
-/// can never reach this path (the input handler blocks Edit on built-ins), so an
-/// unexpected built-in source is treated as a no-op error.
+/// agent saves as a session override of the built-in.
 pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
     use crate::model::agent_def::{save_agent, AgentScope as DefScope, AgentSource};
 
@@ -92,12 +91,7 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
 
     let scope = match source {
         AgentSource::Global => DefScope::Global,
-        AgentSource::Session => DefScope::Session(&session_dir),
-        AgentSource::Builtin => {
-            // Defensive: the UI never offers Edit on a built-in.
-            state.rest.fg_mut().status = "built-in agents are read-only".into();
-            return Ok(());
-        }
+        AgentSource::Session | AgentSource::Builtin => DefScope::Session(&session_dir),
     };
     let result = save_agent(scope, &def);
 
@@ -123,7 +117,11 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
-            state.rest.fg_mut().status = format!("agent updated: {}", def.name);
+            state.rest.fg_mut().status = if source == AgentSource::Builtin {
+                format!("agent override created: {}", def.name)
+            } else {
+                format!("agent updated: {}", def.name)
+            };
         }
         Err(e) => {
             state.rest.fg_mut().status = format!("save failed: {e}");

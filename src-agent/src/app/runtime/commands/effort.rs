@@ -8,11 +8,6 @@ use crate::app::mode::{EffortPickerState, Mode};
 use crate::app::state::AppState;
 use crate::service::openrouter::OpenRouterClient;
 
-/// Generic effort menu used when the model catalogue can't be fetched (network
-/// failure). Covers the common tokens so the user can still set something; the
-/// accompanying note tells them capabilities are unknown.
-pub(super) const GENERIC_EFFORTS: &[&str] = &["default", "off", "low", "medium", "high", "max"];
-
 /// Append `opt` to `out` unless it's already present (case-sensitive). Keeps the
 /// option list deduped while preserving the order options are added in.
 pub(super) fn push_unique(out: &mut Vec<String>, opt: &str) {
@@ -90,13 +85,21 @@ pub(super) fn handle_effort(
         crate::model::app_config::ModelRole::Main,
     );
 
-    // The catalogue is fetched ON DEMAND now (no boot/disk cache, no
-    // block_on). Arm a debounced fetch for the Main endpoint so a SUBSEQUENT
-    // `/effort` open has capabilities; this open uses whatever `models_cache`
-    // already holds FOR THE MAIN ENDPOINT, else falls back to the generic
-    // menu. `request_catalogue` no-ops when the cache already covers it.
+    // Arm a debounced fetch for the Main endpoint so a SUBSEQUENT
+    // `/effort` open has capabilities. This open uses a matching successful
+    // cache if available; otherwise it reports loading/error and does NOT
+    // open a guessed generic menu.
     if let Some(r) = main.as_ref() {
-        state.rest.request_catalogue(&r.endpoint, &r.api_key);
+        // Only arm the fetch if we don't already have a pending/in-flight
+        // request for this endpoint — prevents rapid /effort opens from
+        // constantly pushing the debounce forward.
+        let already_pending = state.rest.catalogue_pending.as_ref()
+            .is_some_and(|p| p.endpoint == r.endpoint);
+        let already_fetching = state.rest.catalogue_fetching.as_deref()
+            == Some(r.endpoint.as_str());
+        if !already_pending && !already_fetching {
+            state.rest.request_catalogue(&r.endpoint, &r.api_key);
+        }
     }
     // Only trust `models_cache` when it was fetched for the Main endpoint;
     // a cache for some OTHER provider's endpoint must not drive THIS model's
@@ -129,11 +132,19 @@ pub(super) fn handle_effort(
             }
         }
     } else {
-        // Fetch failed (cache still None): generic fallback menu.
-        (
-            GENERIC_EFFORTS.iter().map(|s| s.to_string()).collect(),
-            "couldn't fetch model capabilities".to_string(),
-        )
+        // Cache not available or doesn't match Main endpoint.
+        // Show a status instead of a generic menu.
+        let status = if let Some(endpoint) = main.as_ref().map(|r| r.endpoint.as_str()) {
+            if state.rest.models_cache_failed.as_deref() == Some(endpoint) {
+                "couldn't fetch model capabilities"
+            } else {
+                "fetching model capabilities..."
+            }
+        } else {
+            "model capabilities unavailable"
+        };
+        state.rest.fg_mut().status = status.into();
+        return Ok(());
     };
 
     let stored = state
