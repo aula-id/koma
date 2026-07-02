@@ -101,13 +101,18 @@ pub(super) fn draw_providers(
 
 /// Render the Models Select interactive screen inside `area`.
 ///
-/// Mirrors [`draw_providers`]: a borderless table (header + one row per model)
-/// with TWO add buttons below it (`[+add global]`, `[+add local]`). The
-/// selected real row is inverse-highlighted; an armed-for-delete row is
-/// prefixed with "DEL? ". A scope-glyph prefix (`* ` dim = global, two spaces
-/// = local) is rendered at the left of each name cell.
+/// Layout (top to bottom):
+///   Line 0: `Model List   [+add global]  [+add local]`
+///   Line 1: `[X]all [ ]local [ ]global`  (radio; cursor + active filter independently shown)
+///   Line 2+: model table (header + visible data rows)
 ///
-/// A radio filter line (`[X]all [ ]local [ ]global`) appears above the table.
+/// The five control slots (add global=0, add local=1, filter all=2, filter
+/// local=3, filter global=4) share the same `model_sel` index as the data rows.
+/// A data row at visible position `p` is highlighted when `model_sel == 5 + p`.
+/// This mirrors [`crate::app::mode::settings::state::model_ops::MODEL_CTRL_SLOTS`].
+///
+/// An armed-for-delete data row is prefixed with "DEL? ". A scope-glyph prefix
+/// (`* ` dim = global, two spaces = local) is rendered at the left of each name cell.
 ///
 /// Columns: Name (12 = glyph 2 + name 10), Role (11), Model (flexible), Provider (12).
 pub(super) fn draw_models(
@@ -116,37 +121,81 @@ pub(super) fn draw_models(
     palette: &Palette,
     area: Rect,
 ) {
-    use crate::app::mode::settings::{ModelFilterMode, ModelRole};
+    use crate::app::mode::settings::{ModelFilterMode, ModelRole, MODEL_CTRL_SLOTS};
 
     if area.height == 0 || area.width == 0 {
         return;
     }
 
-    // --- Filter radio line (1 row above the table) ---
-    // Format: `Model List   [X]all [ ]local [ ]global`
-    // Each radio label is `[X]tag` or `[ ]tag` depending on active filter.
-    let filter = st.model_filter;
-    let mk_radio = |mode: ModelFilterMode, label: &str| -> String {
-        if filter == mode { format!("[X]{}", label) } else { format!("[ ]{}", label) }
-    };
-    let filter_line = Line::from(vec![
-        Span::styled("Model List   ", Style::default().fg(palette.dim)),
-        Span::styled(mk_radio(ModelFilterMode::All,    "all"),    Style::default().fg(palette.dim)),
-        Span::styled(" ",                                          Style::default()),
-        Span::styled(mk_radio(ModelFilterMode::Local,  "local"),  Style::default().fg(palette.dim)),
-        Span::styled(" ",                                          Style::default()),
-        Span::styled(mk_radio(ModelFilterMode::Global, "global"), Style::default().fg(palette.dim)),
-    ]);
+    let focused = st.in_detail;
+    let filter  = st.model_filter;
 
-    // The filter line takes the first row; table + 2 buttons share the rest.
-    let filter_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
-    frame.render_widget(Paragraph::new(filter_line), filter_area);
+    // ---- Line 0: title + inline add buttons -----------------------------------
+    // Format: `Model List   [+add global]  [+add local]`
+    {
+        let on_global = focused && st.model_sel == 0;
+        let on_local  = focused && st.model_sel == 1;
 
-    let remaining_y = area.y + 1;
-    let remaining_h = area.height.saturating_sub(1);
-    if remaining_h == 0 {
+        let btn_g_style = if on_global {
+            Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
+        } else {
+            Style::default().fg(palette.accent)
+        };
+        let btn_l_style = if on_local {
+            Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
+        } else {
+            Style::default().fg(palette.accent)
+        };
+
+        let title_line = Line::from(vec![
+            Span::styled("Model List   ", Style::default().fg(palette.dim)),
+            Span::styled("[+add global]", btn_g_style),
+            Span::raw("  "),
+            Span::styled("[+add local]", btn_l_style),
+        ]);
+        let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        frame.render_widget(Paragraph::new(title_line), title_area);
+    }
+
+    if area.height < 2 {
         return;
     }
+
+    // ---- Line 1: filter radio bar ---------------------------------------------
+    // Active filter shown with `[X]`; cursor highlight independently from `model_sel`.
+    // A filter option can simultaneously be the active one AND the cursor target.
+    {
+        // Helper: radio chip text — `[X]` when the active filter, `[ ]` otherwise.
+        let mk_radio = |mode: ModelFilterMode, label: &str| -> String {
+            if filter == mode { format!("[X]{}", label) } else { format!("[ ]{}", label) }
+        };
+        // Cursor highlight: sel==2 → All, sel==3 → Local, sel==4 → Global.
+        let cursor_style = |slot: usize| -> Style {
+            if focused && st.model_sel == slot {
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
+            } else {
+                Style::default().fg(palette.dim)
+            }
+        };
+
+        let radio_line = Line::from(vec![
+            Span::styled(mk_radio(ModelFilterMode::All,    "all"),    cursor_style(2)),
+            Span::raw(" "),
+            Span::styled(mk_radio(ModelFilterMode::Local,  "local"),  cursor_style(3)),
+            Span::raw(" "),
+            Span::styled(mk_radio(ModelFilterMode::Global, "global"), cursor_style(4)),
+        ]);
+        let radio_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 };
+        frame.render_widget(Paragraph::new(radio_line), radio_area);
+    }
+
+    if area.height < 3 {
+        return;
+    }
+
+    // ---- Lines 2+: model table -----------------------------------------------
+    let table_y = area.y + 2;
+    let table_h = area.height.saturating_sub(2);
 
     // Column widths: Name (12 total = 2 glyph + 10 name text), Role (11),
     // Model (flexible), Provider (12).
@@ -169,9 +218,10 @@ pub(super) fn draw_models(
     let vis_indices = st.visible_model_indices();
 
     // Data rows — iterate visible positions only.
+    // A data row at visible position `p` is highlighted when model_sel == MODEL_CTRL_SLOTS + p.
     let rows: Vec<Row> = vis_indices.iter().enumerate().map(|(vis_pos, &real_idx)| {
         let m = &st.models[real_idx];
-        let selected = st.in_detail && vis_pos == st.model_sel && !st.model_on_add_button();
+        let selected = focused && st.model_sel == MODEL_CTRL_SLOTS + vis_pos;
         let armed    = selected && st.model_delete_armed;
 
         // Name cell: dim glyph prefix + styled name text.
@@ -195,8 +245,8 @@ pub(super) fn draw_models(
         // Build a multi-span Line for the name cell so the glyph stays dim and
         // does NOT inherit the selection background (only the text span does).
         let name_line = Line::from(vec![
-            Span::styled(glyph,      Style::default().fg(palette.dim)),
-            Span::styled(name_text,  row_style),
+            Span::styled(glyph,     Style::default().fg(palette.dim)),
+            Span::styled(name_text, row_style),
         ]);
 
         // A model may hold several roles → comma-join their labels (truncated to
@@ -239,36 +289,7 @@ pub(super) fn draw_models(
         Constraint::Length(col_prov_w),
     ];
 
-    // Height for the table: header (1) + rows; leave 2 rows for the add buttons.
-    let table_h = remaining_h.saturating_sub(2).max(1);
-    let table_area  = Rect { x: area.x, y: remaining_y,              width: area.width, height: table_h };
-    let btn_g_area  = Rect { x: area.x, y: remaining_y + table_h,     width: area.width, height: 1 };
-    let btn_l_area  = Rect { x: area.x, y: remaining_y + table_h + 1, width: area.width, height: 1 };
-
+    let table_area = Rect { x: area.x, y: table_y, width: area.width, height: table_h };
     let table = Table::new(rows, widths).header(header);
     frame.render_widget(table, table_area);
-
-    // [+add global] button row.
-    let on_global = st.in_detail && st.model_on_add_global();
-    let btn_g_style = if on_global {
-        Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-    } else {
-        Style::default().fg(palette.accent)
-    };
-    frame.render_widget(
-        Paragraph::new(Span::styled("[+add global]", btn_g_style)),
-        btn_g_area,
-    );
-
-    // [+add local] button row.
-    let on_local = st.in_detail && st.model_on_add_local();
-    let btn_l_style = if on_local {
-        Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-    } else {
-        Style::default().fg(palette.accent)
-    };
-    frame.render_widget(
-        Paragraph::new(Span::styled("[+add local]", btn_l_style)),
-        btn_l_area,
-    );
 }

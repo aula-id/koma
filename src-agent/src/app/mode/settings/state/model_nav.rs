@@ -67,6 +67,10 @@ impl SettingsState {
     /// inserted when the provider is OpenRouter AND a model is selected (so the
     /// user can pin an upstream provider or leave it on Auto); a `Role` field is
     /// inserted in EDIT mode. The modal's `field` index addresses into this vec.
+    ///
+    /// The save scope (global / session-local) is determined by which add button
+    /// opened the modal (`session_only` on `ModelModal`), so there is only one
+    /// `Save` button — no `SaveSession`.
     pub fn model_modal_fields(&self) -> Vec<ModelField> {
         let mut v = vec![ModelField::Name, ModelField::Provider, ModelField::Model];
         if let Some(m) = &self.model_modal {
@@ -78,7 +82,6 @@ impl SettingsState {
             }
         }
         v.push(ModelField::Save);
-        v.push(ModelField::SaveSession);
         v.push(ModelField::Cancel);
         v
     }
@@ -119,7 +122,7 @@ impl SettingsState {
     /// Move left in the model modal, dispatching on the focused field:
     /// - Provider → cycle provider backward (wrapping, resets search), then
     ///   re-clamp `field` since the Route field may appear/disappear.
-    /// - Save/SaveSession/Cancel → step left within the button group, clamping at Save.
+    /// - Save/Cancel → step left within the button group, clamping at Save.
     /// - everything else (Name/Model/Route) → no-op.
     ///
     /// The Role field is NOT handled here: Enter on it opens the Role checkbox
@@ -137,12 +140,9 @@ impl SettingsState {
                 }
                 self.mm_clamp_field();
             }
-            // Button group: Save → SaveSession → Cancel; Left steps backward, clamping at Save.
-            Some(ModelField::SaveSession) => {
-                self.mm_focus_field(ModelField::Save);
-            }
+            // Button group: Save → Cancel; Left from Cancel steps back to Save.
             Some(ModelField::Cancel) => {
-                self.mm_focus_field(ModelField::SaveSession);
+                self.mm_focus_field(ModelField::Save);
             }
             Some(ModelField::Save) => {
                 // Already at the leftmost button — no-op.
@@ -154,7 +154,7 @@ impl SettingsState {
     /// Move right in the model modal, dispatching on the focused field:
     /// - Provider → cycle provider forward (wrapping, resets search), then
     ///   re-clamp `field` since the Route field may appear/disappear.
-    /// - Save/SaveSession/Cancel → step right within the button group, clamping at Cancel.
+    /// - Save/Cancel → step right within the button group, clamping at Cancel.
     /// - everything else (Name/Model/Route) → no-op.
     ///
     /// The Role field is NOT handled here — see [`Self::mm_left`].
@@ -171,11 +171,8 @@ impl SettingsState {
                 }
                 self.mm_clamp_field();
             }
-            // Button group: Save → SaveSession → Cancel; Right steps forward, clamping at Cancel.
+            // Button group: Save → Cancel; Right from Save steps forward to Cancel.
             Some(ModelField::Save) => {
-                self.mm_focus_field(ModelField::SaveSession);
-            }
-            Some(ModelField::SaveSession) => {
                 self.mm_focus_field(ModelField::Cancel);
             }
             Some(ModelField::Cancel) => {
@@ -397,24 +394,5 @@ impl SettingsState {
         }
     }
 
-    /// Pre-select the save button that matches the modal's `session_only` flag.
-    ///
-    /// Called after opening add/edit modals so the highlighted save button
-    /// already matches the scope chosen at open time: `Save` for global,
-    /// `SaveSession` for local. The user can still navigate to the other button.
-    pub fn mm_preselect_save(&mut self) {
-        let target = self
-            .model_modal
-            .as_ref()
-            .map(|m| {
-                if m.session_only {
-                    ModelField::SaveSession
-                } else {
-                    ModelField::Save
-                }
-            });
-        if let Some(field) = target {
-            self.mm_focus_field(field);
-        }
-    }
 }
+

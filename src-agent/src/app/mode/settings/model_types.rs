@@ -15,24 +15,6 @@ pub enum ModelFilterMode {
 }
 
 impl ModelFilterMode {
-    /// Cycle to the next filter in order: All → Local → Global → All.
-    pub fn next(self) -> Self {
-        match self {
-            Self::All    => Self::Local,
-            Self::Local  => Self::Global,
-            Self::Global => Self::All,
-        }
-    }
-
-    /// Cycle to the previous filter: All → Global → Local → All.
-    pub fn prev(self) -> Self {
-        match self {
-            Self::All    => Self::Global,
-            Self::Global => Self::Local,
-            Self::Local  => Self::All,
-        }
-    }
-
     /// Does a model with the given `session_only` flag pass this filter?
     pub fn matches(self, session_only: bool) -> bool {
         match self {
@@ -43,6 +25,26 @@ impl ModelFilterMode {
     }
 }
 
+/// Number of fixed control slots before the data rows in the models list:
+/// 0=add global, 1=add local, 2=filter all, 3=filter local, 4=filter global.
+///
+/// Single source of truth used by BOTH input dispatch and the view renderer.
+pub const MODEL_CTRL_SLOTS: usize = 5;
+
+/// Which logical element the `model_sel` index points at in the Models Select
+/// screen. Used by both the daemon input handler and the client renderer to
+/// guarantee they agree on the slot layout.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModelRowSel {
+    AddGlobal,
+    AddLocal,
+    FilterAll,
+    FilterLocal,
+    FilterGlobal,
+    /// Real index into `SettingsState::models`.
+    Data(usize),
+}
+
 /// A single navigable field within the add/edit-model modal.
 ///
 /// The concrete field SET is computed at runtime by
@@ -50,6 +52,10 @@ impl ModelFilterMode {
 /// `Route` appears only for an OpenRouter provider with a model selected, and
 /// `Role` appears only in EDIT mode. The modal's `field` index addresses into
 /// that computed `Vec<ModelField>`, so there are no hardcoded layout indices.
+///
+/// The save scope (global vs session-local) is now determined by which add
+/// button opened the modal (`session_only` on `ModelModal`), not by a separate
+/// `SaveSession` button — so there is only one `Save` button in the modal.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModelField {
     Name,
@@ -58,7 +64,6 @@ pub enum ModelField {
     Route,
     Role,
     Save,
-    SaveSession,
     Cancel,
 }
 
@@ -206,10 +211,8 @@ pub struct ModelModal {
     /// model's providers.
     pub endpoints_for: Option<String>,
     /// Scope chosen at add time (or inherited from the edited draft): `false` =
-    /// global, `true` = session-local. The save path reads this when the user
-    /// presses a save button so both Save and SaveSession honour the scope
-    /// pre-selected when the modal was opened. (The user can still override by
-    /// navigating to the other save button — the explicit button press wins.)
+    /// global, `true` = session-local. The single Save button reads this to
+    /// determine the persistence scope (set by which add button opened the modal).
     pub session_only: bool,
 }
 
