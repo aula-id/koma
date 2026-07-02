@@ -295,6 +295,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Mcp(m) => Mode::Mcp(Box::new(shadow_mcp(*m))),
         ModeSnapshot::Security(s) => Mode::Security(Box::new(shadow_security(*s))),
         ModeSnapshot::Bash(b) => Mode::Bash(Box::new(shadow_bash(*b))),
+        ModeSnapshot::Todo(t) => Mode::Todo(Box::new(shadow_todo(*t))),
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Effort(e) => Mode::Effort(Box::new(shadow_effort(e))),
         ModeSnapshot::Usage(u) => {
