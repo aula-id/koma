@@ -17,9 +17,9 @@
 //!     └── d (file-backed) ──▶ DeleteConfirm ── y ──▶ delete ──▶ Browse
 //! ```
 //!
-//! Built-in agents (`AgentSource::Builtin`, `file_path == None`) are read-only:
-//! the input handler refuses Edit/Delete on them; they are only overridable by
-//! creating a same-named session/global file.
+//! Built-in agents (`AgentSource::Builtin`, `file_path == None`) can be edited;
+//! saving creates a session-scoped override that shadows the built-in. They cannot
+//! be deleted directly (only disabled via a disable flag).
 
 mod picker;
 mod state;

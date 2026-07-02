@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::{AgentEditField, AgentSubMode, AgentsState};
+use crate::model::agent_def::AgentSource;
 use crate::model::app_config::AppConfig;
 use crate::model::settings::Settings;
 use crate::view::theme::Palette;
@@ -217,6 +218,19 @@ pub(super) fn editor_lines<'a>(
             Span::styled(st.create_scope.label(), Style::default().fg(palette.accent)),
             Span::styled("  (←/→ toggle)", Style::default().fg(palette.dim)),
         ]));
+    }
+
+    // Hint for built-in overrides in Edit mode.
+    if st.mode == AgentSubMode::Edit {
+        if let Some(a) = st.current_agent() {
+            if a.source == AgentSource::Builtin {
+                lines.push(Line::from(Span::styled(
+                    "saving creates a session override",
+                    Style::default().fg(palette.dim),
+                )));
+                lines.push(Line::from(""));
+            }
+        }
     }
 
     for &f in st.fields() {
