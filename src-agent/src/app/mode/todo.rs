@@ -104,6 +104,7 @@ impl TodoState {
     }
 
     /// Replace the item list and re-clamp the cursor.
+    #[allow(dead_code)]
     pub fn refresh(&mut self, items: Vec<TodoItem>) {
         self.items = items;
         if self.selected >= self.items.len() {
@@ -112,6 +113,7 @@ impl TodoState {
     }
 
     /// The currently-selected item, if any.
+    #[allow(dead_code)]
     pub fn current(&self) -> Option<&TodoItem> {
         self.items.get(self.selected)
     }
