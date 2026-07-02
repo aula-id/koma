@@ -47,6 +47,22 @@ const DESCS: [&str; 3] = [
 /// Gap (in columns) rendered between adjacent buttons in the row.
 const GAP: u16 = 3;
 
+/// Width (in columns) of the centered content column. Chosen to comfortably
+/// fit the button row (≈41 cols) with breathing room, and to look balanced on
+/// common terminal widths (80–120 cols).
+const CONTENT_WIDTH: u16 = 54;
+
+/// Compute a centered `Rect` of the given `w` × `h` inside `area`,
+/// clamped so it never exceeds the available space. Used exclusively by
+/// the quit-confirm body to float the question + buttons dead-center.
+fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(area.width);
+    let h = h.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect { x, y, width: w, height: h }
+}
+
 /// Render the quit-confirm overlay for `s` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     let chunks = Layout::default()
@@ -76,7 +92,7 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     frame.render_widget(Paragraph::new(note), title_inner);
 
     // --- Body: question + button row + focused-button description ---
-    let inner = chunks[1].inner(Margin { horizontal: 1, vertical: 0 });
+    // Build the lines first, then center based on actual count.
 
     // Clamp the focused index defensively so an out-of-range value (shouldn't
     // happen) never panics on array indexing below.
@@ -136,6 +152,12 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
         DESCS[sel],
         Style::default().fg(palette.dim),
     )));
+
+    // Center the content column both horizontally and vertically within the
+    // body area so the dialog floats dead-center on screen. Height is derived
+    // from the actual number of lines built above.
+    let body = centered_rect(chunks[1], CONTENT_WIDTH, lines.len() as u16);
+    let inner = body.inner(Margin { horizontal: 1, vertical: 0 });
     frame.render_widget(Paragraph::new(lines), inner);
 
     // On-screen width of a button chip: label plus the `[` and `]` bracket chars
