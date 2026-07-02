@@ -84,20 +84,12 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
     }
 }
 
-/// Build detail lines for a single todo item — the content header, status line,
-/// priority, spacer, then a description. Used by the right pane of the overlay.
+/// Build detail lines for a single todo item — status+priority at top,
+/// awaiting/state text, then content as description. Used by the right pane.
 fn detail_lines<'a>(item: &TodoItem, width: usize, palette: &Palette) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
 
-    // Content header
-    lines.push(Line::from(vec![
-        Span::styled(
-            truncate(&item.content, width.max(4)),
-            Style::default().fg(palette.accent),
-        ),
-    ]));
-
-    // Status line
+    // Status + priority at top
     let status_style = match item.status {
         TodoStatus::Completed | TodoStatus::Cancelled => Style::default().fg(palette.dim),
         TodoStatus::InProgress => Style::default().fg(palette.accent),
@@ -111,9 +103,7 @@ fn detail_lines<'a>(item: &TodoItem, width: usize, palette: &Palette) -> Vec<Lin
         Span::styled(item.priority.label().to_string(), Style::default().fg(palette.fg)),
     ]));
 
-    lines.push(Line::from(""));
-
-    // Description hint
+    // State hint text
     match item.status {
         TodoStatus::Pending => {
             lines.push(Line::from(Span::styled(
@@ -141,6 +131,19 @@ fn detail_lines<'a>(item: &TodoItem, width: usize, palette: &Palette) -> Vec<Lin
         }
     }
 
+    lines.push(Line::from(""));
+
+    // Content as description header
+    lines.push(Line::from(vec![
+        Span::styled("content:", Style::default().fg(palette.dim)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            truncate(&item.content, width.max(4)),
+            Style::default().fg(palette.fg),
+        ),
+    ]));
+
     lines
 }
 
@@ -153,6 +156,7 @@ pub fn render_todo_overlay(
     transcript_chunk: Rect,
     items: &[TodoItem],
     selected: usize,
+    completed_count: usize,
     palette: &Palette,
 ) {
     // Box sizing: up to ~12 rows, clamped to the space above the input.
@@ -161,9 +165,11 @@ pub fn render_todo_overlay(
     let y = input_chunk.y.saturating_sub(h);
     let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
 
+    let total = items.len();
+    let title = format!(" todo ({}/{}) ", completed_count, total);
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(" todo ", Style::default().fg(palette.dim)));
+        .title(Span::styled(title, Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
@@ -199,12 +205,20 @@ pub fn render_todo_overlay(
 
     let sel = selected.min(items.len().saturating_sub(1));
     let list_w = list_inner.width as usize;
+    let list_h = list_inner.height as usize;
     let list_lines: Vec<Line> = items
         .iter()
         .enumerate()
         .map(|(i, item)| todo_row(item, i == sel, list_w, palette))
         .collect();
-    frame.render_widget(Paragraph::new(list_lines), list_inner);
+    // Scroll so the selected row is always visible.
+    let scroll = if list_h > 0 {
+        let top = sel.saturating_sub(list_h.saturating_sub(1));
+        top as u16
+    } else {
+        0
+    };
+    frame.render_widget(Paragraph::new(list_lines).scroll((scroll, 0)), list_inner);
 
     // RIGHT: selected item detail.
     let right = cols[1].inner(Margin { horizontal: 1, vertical: 0 });
