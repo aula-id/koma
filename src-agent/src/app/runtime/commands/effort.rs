@@ -90,6 +90,10 @@ pub(super) fn handle_effort(
     // cache if available; otherwise it reports loading/error and does NOT
     // open a guessed generic menu.
     if let Some(r) = main.as_ref() {
+        // Clear any prior fetch failure so user-triggered /effort retries.
+        if state.rest.models_cache_failed.as_deref() == Some(r.endpoint.as_str()) {
+            state.rest.models_cache_failed = None;
+        }
         // Only arm the fetch if we don't already have a pending/in-flight
         // request for this endpoint — prevents rapid /effort opens from
         // constantly pushing the debounce forward.
