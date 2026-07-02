@@ -71,9 +71,8 @@ fn priority_label(p: &TodoPriority) -> &'static str {
 /// inverse highlight.
 fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette) -> Line<'a> {
     let prio = priority_label(&item.priority);
-    // Reserve room for a leading marker (2) + a space + the priority suffix.
+    // Reserve room for a space + the priority suffix.
     let label_w = width
-        .saturating_sub(2) // "› " / "  " marker
         .saturating_sub(prio.chars().count() + 1) // " {prio}"
         .max(4);
     let sym = status_symbol_animated(&item.status);
@@ -93,7 +92,7 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
             _ => Style::default().fg(palette.fg),
         };
         Line::from(vec![
-            Span::styled(format!("  {sym} "), Style::default().fg(palette.dim)),
+            Span::styled(format!("{sym} "), Style::default().fg(palette.dim)),
             Span::styled(format!("{label:<label_w$}"), name_style),
             Span::styled(" ", Style::default()),
             Span::styled(prio, Style::default().fg(palette.dim)),
