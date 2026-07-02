@@ -1,7 +1,7 @@
 //! Models Select screen helpers for [`SettingsState`]: open/save/delete and role
 //! picker operations.
 
-use super::super::{ModelDraft, ModelModal, RolePickerState};
+use super::super::{ModelDraft, ModelFilterMode, ModelModal, ModelRowSel, MODEL_CTRL_SLOTS, RolePickerState};
 use super::SettingsState;
 
 impl SettingsState {
@@ -27,31 +27,49 @@ impl SettingsState {
         self.visible_model_indices().len()
     }
 
-    /// `true` when the `[+add global]` button is highlighted.
-    pub fn model_on_add_global(&self) -> bool {
-        self.model_sel == self.visible_model_count()
-    }
-
-    /// `true` when the `[+add local]` button is highlighted.
-    pub fn model_on_add_local(&self) -> bool {
-        self.model_sel == self.visible_model_count() + 1
+    /// Map the raw `model_sel` index to the selected control/row.
+    ///
+    /// Single source of truth used by BOTH input dispatch and the view renderer.
+    pub fn model_selection(&self) -> ModelRowSel {
+        match self.model_sel {
+            0 => ModelRowSel::AddGlobal,
+            1 => ModelRowSel::AddLocal,
+            2 => ModelRowSel::FilterAll,
+            3 => ModelRowSel::FilterLocal,
+            4 => ModelRowSel::FilterGlobal,
+            n => {
+                let vis = self.visible_model_indices();
+                match vis.get(n - MODEL_CTRL_SLOTS) {
+                    Some(&real) => ModelRowSel::Data(real),
+                    None        => ModelRowSel::FilterGlobal, // clamp guard; shouldn't happen
+                }
+            }
+        }
     }
 
     /// `true` when either add button is highlighted.
     pub fn model_on_add_button(&self) -> bool {
-        self.model_on_add_global() || self.model_on_add_local()
+        self.model_sel == 0 || self.model_sel == 1
     }
 
-    /// Real index into `self.models` for the currently selected visible row, or
-    /// `None` when a button row is selected.
+    /// Real index into `self.models` for the currently selected visible data row,
+    /// or `None` when a control slot (add button / filter radio) is selected.
     pub fn selected_model_index(&self) -> Option<usize> {
-        let vis = self.visible_model_indices();
-        vis.get(self.model_sel).copied()
+        if self.model_sel >= MODEL_CTRL_SLOTS {
+            let vis = self.visible_model_indices();
+            vis.get(self.model_sel - MODEL_CTRL_SLOTS).copied()
+        } else {
+            None
+        }
     }
 
-    /// Clamp `model_sel` to the valid range `0 ..= visible_model_count() + 1`.
+    /// Clamp `model_sel` to the valid range
+    /// `0 ..= MODEL_CTRL_SLOTS - 1 + visible_model_count()`.
+    ///
+    /// With zero data rows the max is 4 (the last filter slot); the five control
+    /// slots are always reachable.
     pub fn clamp_model_sel(&mut self) {
-        let max = self.visible_model_count() + 1;
+        let max = MODEL_CTRL_SLOTS - 1 + self.visible_model_count();
         if self.model_sel > max {
             self.model_sel = max;
         }
@@ -63,12 +81,18 @@ impl SettingsState {
         self.model_delete_armed = false;
     }
 
-    /// Move selection down in the models list (max index = visible_count + 1
-    /// which is the [+add local] button row); clears the delete-armed flag.
+    /// Move selection down in the models list (max index =
+    /// `MODEL_CTRL_SLOTS - 1 + visible_model_count()`); clears the delete-armed flag.
     pub fn model_down(&mut self) {
-        let max = self.visible_model_count() + 1;
+        let max = MODEL_CTRL_SLOTS - 1 + self.visible_model_count();
         self.model_sel = (self.model_sel + 1).min(max);
         self.model_delete_armed = false;
+    }
+
+    /// Apply a filter mode and clamp `model_sel` to the new valid range.
+    pub fn model_filter_set(&mut self, f: ModelFilterMode) {
+        self.model_filter = f;
+        self.clamp_model_sel();
     }
 
     /// First Ctrl+X arms the delete; second Ctrl+X confirms it. No effect when
@@ -99,19 +123,17 @@ impl SettingsState {
     /// Open the add-model modal with a blank draft.
     ///
     /// `session_only`: `false` = global scope (`[+add global]`),
-    /// `true` = session-local scope (`[+add local]`).
-    /// The save button matching the chosen scope is pre-focused so the user
-    /// can confirm without navigating (still able to switch via Left/Right).
+    /// `true` = session-local scope (`[+add local]`). The scope is stored on the
+    /// modal and read back on save — no separate `SaveSession` button needed.
     pub fn open_model_modal_add(&mut self, session_only: bool) {
         self.model_modal = Some(ModelModal::new_add(0, session_only));
-        self.mm_preselect_save();
     }
 
     /// Open the edit-model modal, prefilled from `models[idx]`.
     ///
     /// `idx` must be a REAL index into `self.models` (not a visible position).
-    /// The draft's `session_only` is carried into the modal so the save path
-    /// knows the original scope, and the matching save button is pre-focused.
+    /// The draft's `session_only` is carried into the modal so the single Save
+    /// button knows the original scope.
     pub fn open_model_modal_edit(&mut self, idx: usize) {
         if let Some(m) = self.models.get(idx) {
             self.model_modal = Some(ModelModal {
@@ -132,23 +154,10 @@ impl SettingsState {
                 endpoints: None,
                 endpoints_loading: false,
                 endpoints_for: None,
-                // Inherit the original scope so Save/SaveSession default to it.
+                // Inherit the original scope so the single Save button honours it.
                 session_only: m.session_only,
             });
         }
-        self.mm_preselect_save();
-    }
-
-    /// Cycle the model filter forward (All → Local → Global → All) and clamp selection.
-    pub fn model_filter_next(&mut self) {
-        self.model_filter = self.model_filter.next();
-        self.clamp_model_sel();
-    }
-
-    /// Cycle the model filter backward (All → Global → Local → All) and clamp selection.
-    pub fn model_filter_prev(&mut self) {
-        self.model_filter = self.model_filter.prev();
-        self.clamp_model_sel();
     }
 
     /// Close the add/edit-model modal without saving.
@@ -226,14 +235,21 @@ impl SettingsState {
             // After mutating self.models, find the visible position of the
             // affected real index and move the selection there; clamp to valid
             // range if the saved entry is filtered out by the current filter.
+            // Data rows start at MODEL_CTRL_SLOTS in the new nav scheme.
             let saved_real = if target_idx < self.models.len() {
                 target_idx
             } else {
                 self.models.len().saturating_sub(1)
             };
             let vis = self.visible_model_indices();
-            self.model_sel = vis.iter().position(|&r| r == saved_real)
-                .unwrap_or_else(|| vis.len().min(self.model_sel));
+            self.model_sel = vis
+                .iter()
+                .position(|&r| r == saved_real)
+                .map(|vis_pos| MODEL_CTRL_SLOTS + vis_pos)
+                .unwrap_or_else(|| {
+                    // Saved entry filtered out — land on last control slot.
+                    (MODEL_CTRL_SLOTS + vis.len()).saturating_sub(1).max(MODEL_CTRL_SLOTS - 1)
+                });
         }
     }
 

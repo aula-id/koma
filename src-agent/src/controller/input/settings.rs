@@ -263,8 +263,13 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 }
                 KeyCode::Enter => {
                     match cur {
-                        Some(ModelField::Save) => s.save_model_modal(false),
-                        Some(ModelField::SaveSession) => s.save_model_modal(true),
+                        Some(ModelField::Save) => {
+                            // The scope is stored on the modal (set when it was
+                            // opened via [+add global] or [+add local]); the single
+                            // Save button reads it back.
+                            let so = s.model_modal.as_ref().map(|m| m.session_only).unwrap_or(false);
+                            s.save_model_modal(so);
+                        }
                         Some(ModelField::Cancel) => s.close_model_modal(),
                         // Name / Provider / Model: advance to the next field. When
                         // landing on (or already on) the Model field, prime the
@@ -463,6 +468,7 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
 
         // --- Models Select category: custom navigation for the models list ---
         if s.is_models_category() {
+            use crate::app::mode::settings::{ModelFilterMode, ModelRowSel};
             // Opening an existing OpenRouter model for edit arms its endpoints
             // load; the chosen id is returned to the runtime so it spawns the
             // fetch (an existing model's providers load on open).
@@ -477,15 +483,10 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 KeyCode::Down | KeyCode::Tab => {
                     s.model_down();
                 }
-                // Left/Right cycle the scope filter (All / Local / Global).
-                KeyCode::Left => {
-                    s.model_filter_prev();
-                }
-                KeyCode::Right => {
-                    s.model_filter_next();
-                }
+                // Left/Right are no-ops on the list level (filter is now selected
+                // via the nav chain + Enter on the radio slots).
                 // `+` shortcut: open add-global modal (muscle-memory shortcut;
-                // local add is via the [+add local] button or Enter on it).
+                // local add is via [+add local] or Enter on slot 1).
                 KeyCode::Char('+') => {
                     s.open_model_modal_add(false);
                     if let Some((ep, key)) = s.mm_provider_conn() {
@@ -493,32 +494,37 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                     }
                 }
                 KeyCode::Enter => {
-                    if s.model_on_add_global() {
-                        // [+add global] button: open add modal scoped to global.
-                        s.open_model_modal_add(false);
-                        if let Some((ep, key)) = s.mm_provider_conn() {
-                            rest.request_catalogue(&ep, &key);
+                    match s.model_selection() {
+                        ModelRowSel::AddGlobal => {
+                            s.open_model_modal_add(false);
+                            if let Some((ep, key)) = s.mm_provider_conn() {
+                                rest.request_catalogue(&ep, &key);
+                            }
                         }
-                    } else if s.model_on_add_local() {
-                        // [+add local] button: open add modal scoped to session.
-                        s.open_model_modal_add(true);
-                        if let Some((ep, key)) = s.mm_provider_conn() {
-                            rest.request_catalogue(&ep, &key);
+                        ModelRowSel::AddLocal => {
+                            s.open_model_modal_add(true);
+                            if let Some((ep, key)) = s.mm_provider_conn() {
+                                rest.request_catalogue(&ep, &key);
+                            }
                         }
-                    } else if let Some(real_idx) = s.selected_model_index() {
-                        // Data row: open edit modal using the real models index.
-                        s.open_model_modal_edit(real_idx);
-                        // Prime the Model omnisearch for the edited provider's
-                        // endpoint (any provider, debounced).
-                        if let Some((ep, key)) = s.mm_provider_conn() {
-                            rest.request_catalogue(&ep, &key);
-                        }
-                        // If the opened model's provider is OpenRouter and it has
-                        // a model id, arm the loading flags + fetch its providers.
-                        // Non-OpenRouter / empty id → no endpoints API, so this
-                        // returns None and the modal opens without a fetch.
-                        if let Some(id) = s.mm_arm_endpoints_load() {
-                            models_action = Action::FetchModelEndpoints(id);
+                        ModelRowSel::FilterAll    => s.model_filter_set(ModelFilterMode::All),
+                        ModelRowSel::FilterLocal  => s.model_filter_set(ModelFilterMode::Local),
+                        ModelRowSel::FilterGlobal => s.model_filter_set(ModelFilterMode::Global),
+                        ModelRowSel::Data(real_idx) => {
+                            // Open edit modal using the real models index.
+                            s.open_model_modal_edit(real_idx);
+                            // Prime the Model omnisearch for the edited provider's
+                            // endpoint (any provider, debounced).
+                            if let Some((ep, key)) = s.mm_provider_conn() {
+                                rest.request_catalogue(&ep, &key);
+                            }
+                            // If the opened model's provider is OpenRouter and it
+                            // has a model id, arm the loading flags + fetch its
+                            // providers. Non-OpenRouter / empty id → no endpoints
+                            // API, returns None and modal opens without a fetch.
+                            if let Some(id) = s.mm_arm_endpoints_load() {
+                                models_action = Action::FetchModelEndpoints(id);
+                            }
                         }
                     }
                 }

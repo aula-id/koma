@@ -442,23 +442,19 @@ pub(in crate::view::settings) fn draw_model_modal(
     // Blank line before the buttons.
     lines.push(Line::from(""));
 
-    // Button row: `[ Save ]  [ Save session ]  [ Cancel ]` centered together.
+    // Button row: `[ Save ]  [ Cancel ]` centered.
+    // The save scope (global / session-local) is determined by which add button
+    // opened the modal (`modal.session_only`) — no separate Save session button.
     // Only the chip text carries the highlight bg; inter-chip spacing uses plain
     // style so the background does not bleed across the modal width.
-    let save_text    = "[ Save ]";
-    let session_text = "[ Save session ]";
-    let cancel_text  = "[ Cancel ]";
-    let gap          = "  ";
-    let group_len    = save_text.len() + gap.len() + session_text.len() + gap.len() + cancel_text.len();
-    let inner_w      = inner.width as usize;
-    let pad_left     = inner_w.saturating_sub(group_len) / 2;
-    let pad_right    = inner_w.saturating_sub(group_len).saturating_sub(pad_left);
+    let save_text   = "[ Save ]";
+    let cancel_text = "[ Cancel ]";
+    let gap         = "  ";
+    let group_len   = save_text.len() + gap.len() + cancel_text.len();
+    let inner_w     = inner.width as usize;
+    let pad_left    = inner_w.saturating_sub(group_len) / 2;
+    let pad_right   = inner_w.saturating_sub(group_len).saturating_sub(pad_left);
     let save_style = if focused(ModelField::Save) {
-        Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-    } else {
-        Style::default().fg(palette.accent)
-    };
-    let session_style = if focused(ModelField::SaveSession) {
         Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
     } else {
         Style::default().fg(palette.accent)
@@ -471,8 +467,6 @@ pub(in crate::view::settings) fn draw_model_modal(
     lines.push(Line::from(vec![
         Span::raw(" ".repeat(pad_left)),
         Span::styled(save_text, save_style),
-        Span::raw(gap),
-        Span::styled(session_text, session_style),
         Span::raw(gap),
         Span::styled(cancel_text, cancel_style),
         Span::raw(" ".repeat(pad_right)),
