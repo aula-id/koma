@@ -251,11 +251,24 @@ fn spawn_task_with_id(
         let sess = rt.session.as_ref().unwrap();
         let session_dir = sess.path.clone();
         let config = state.rest.config.clone();
-        let settings = sess.settings.clone();
+        let mut settings = sess.settings.clone();
+        // Re-overlay session_models FRESH from the shared per-working-dir bucket.
+        // The in-memory sess.settings may be stale: the daemon lives longer than
+        // /model-set edits made by another window, and session_models is
+        // #[serde(skip)] so it is never re-read from the per-session file.
+        // Without this refresh, an agent whose model_uuid lives only in the shared
+        // LocalConfig would miss find_model_entry and silently inherit Main —
+        // identical rationale to the AppConfig::load() reload above.
+        let pwd_hash = sess.pwd_hash.clone();
+        if let Ok(shared) = crate::model::store::shared_settings_path(&pwd_hash) {
+            settings.session_models = crate::model::settings::LocalConfig::load(&shared)
+                .map(|c| c.session_models)
+                .unwrap_or_default();
+        }
         let awareness = rt.awareness_summary.clone().unwrap_or_default();
         // Sub-agents receive the per-PROJECT memory INDEX (pointers only), the
         // same text injected into the main system prompt. Empty when absent.
-        let memory_md = crate::model::store::memory_dir(&sess.pwd_hash)
+        let memory_md = crate::model::store::memory_dir(&pwd_hash)
             .ok()
             .and_then(|d| crate::model::memory::load_memory_index(&d))
             .unwrap_or_default();
@@ -263,6 +276,18 @@ fn spawn_task_with_id(
     };
 
     let registry = crate::model::agent_def::AgentRegistry::load(Some(&session_dir));
+
+    // Warn when the agent declared its own model but it failed to resolve after
+    // the fresh session_models overlay. The agent will run on Main — surface this
+    // so the user isn't left wondering why their chosen model wasn't used.
+    if let Some(agent) = registry.get(agent_name) {
+        if crate::app::resolve::agent_declares_model(agent)
+            && !crate::app::resolve::agent_model_resolves(&config, &settings, agent)
+        {
+            state.rest.sessions[sess_idx].status =
+                format!("agent '{}' model unresolved — using main", agent_name);
+        }
+    }
     let client_arc = Arc::clone(client.as_ref().unwrap());
 
     let sub = crate::app::subagent::spawn_subagent(

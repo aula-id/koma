@@ -247,6 +247,52 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
 /// inherited one. Returns `None` only when the agent has no usable model AND Main
 /// itself can't resolve — practically never, since Main has a legacy soft-fallback.
 ///
+/// True when `agent` declares its own model (model_uuid or legacy model field)
+/// that is non-empty. Does NOT test whether the model actually resolves; use
+/// [`agent_model_resolves`] for that. This is the "did the agent author set a
+/// model at all" predicate used to decide whether a fallback-to-Main is
+/// surprising (declared but unresolvable) or expected (no model declared).
+pub fn agent_declares_model(agent: &AgentDef) -> bool {
+    agent.model_uuid.as_deref().is_some_and(|u| !u.trim().is_empty())
+        || agent.model.as_deref().is_some_and(|m| !m.trim().is_empty())
+}
+
+/// True when `agent`'s declared model resolves to a concrete (non-Main-fallback)
+/// route. Returns false both when the agent declares NO model and when it declares
+/// one that can't be resolved (deleted entry / dangling provider / stale
+/// session_models). The caller pairs this with [`agent_declares_model`]: warn when
+/// the agent declared a model but this returns false.
+pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &AgentDef) -> bool {
+    // Mirror resolve_agent's model_uuid + legacy branches; return true only when
+    // the declared model produced a route without reaching the Main fallback.
+
+    // 1a. Registered uuid branch.
+    if let Some(uuid) = agent.model_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
+        if let Some(entry) = find_model_entry(config, settings, uuid) {
+            if from_entry(config, settings, entry, ModelRole::Main).is_some() {
+                return true;
+            }
+        }
+        // uuid present but entry missing or provider dangling — does not resolve.
+        return false;
+    }
+
+    // 1b. Legacy model + provider_uuid branch.
+    if let Some(_model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
+        if let Some(uuid) = agent.provider_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
+            if config.providers.iter().any(|p| p.uuid == uuid) {
+                return true;
+            }
+        }
+        // Named model but provider absent/dangling — does not resolve.
+        return false;
+    }
+
+    // No model declared at all → not resolved (caller should check declares_model
+    // first to distinguish "no model" from "unresolvable model").
+    false
+}
+
 /// Currently only called by the (Stage-1 inert) sub-agent spawn path, so it is
 /// unreferenced from the binary until that path is wired in — hence the allow.
 #[allow(dead_code)]
