@@ -8,7 +8,7 @@ use crate::dto::chat::{ChatMessage, Role};
 use crate::dto::openrouter::{
     to_wire, ChatRequest, ChatResponse, ReasoningConfig, UsageRequest,
 };
-use super::helpers::{clean_error, provider_routing_for};
+use super::helpers::{clean_error, is_openrouter, provider_routing_for};
 use super::client::OpenRouterClient;
 use super::types::Conn;
 
@@ -182,10 +182,11 @@ impl OpenRouterClient {
             usage: UsageRequest { include: true },
             // Classifier calls use no tools.
             tools: None,
-            // Thinking excluded: `exclude: true` keeps reasoning mandatory for
-            // endpoints that require it, but strips the `reasoning` field from the
-            // response — deterministic, fast, bleed-proof, verdict lands in `content`.
-            reasoning: Some(ReasoningConfig {
+            // `exclude: true` (strip reasoning, keep it mandatory for gateways that
+            // force it) is an OpenRouter-only extension — OpenAI-native gateways 400
+            // on it. Emit the `reasoning` object only for OpenRouter; elsewhere omit
+            // it and rely on the strict `response_format` JSON landing in `content`.
+            reasoning: is_openrouter(conn.endpoint).then_some(ReasoningConfig {
                 effort: None,
                 enabled: None,
                 exclude: Some(true),
@@ -292,12 +293,11 @@ impl OpenRouterClient {
             usage: UsageRequest { include: true },
             // Fold calls use no tools.
             tools: None,
-            // Thinking excluded: `exclude: true` keeps reasoning mandatory for
-            // endpoints that require it, but strips the `reasoning` field from the
-            // response. The summary is PERSISTED and replayed forever — a CoT bleed
-            // would poison the conversation permanently, so the `reasoning` fallback
-            // is intentionally absent here. Content-only, bleed-proof.
-            reasoning: Some(ReasoningConfig {
+            // `exclude: true` (strip reasoning, keep it mandatory for gateways that
+            // force it) is an OpenRouter-only extension — OpenAI-native gateways 400
+            // on it. Emit the `reasoning` object only for OpenRouter; elsewhere omit
+            // it and rely on the strict `response_format` JSON landing in `content`.
+            reasoning: is_openrouter(conn.endpoint).then_some(ReasoningConfig {
                 effort: None,
                 enabled: None,
                 exclude: Some(true),
@@ -411,10 +411,11 @@ impl OpenRouterClient {
             usage: UsageRequest { include: true },
             // Router calls use no tools.
             tools: None,
-            // Thinking excluded: `exclude: true` keeps reasoning mandatory for
-            // endpoints that require it, but strips the `reasoning` field from the
-            // response — deterministic, fast, bleed-proof, id list lands in `content`.
-            reasoning: Some(ReasoningConfig {
+            // `exclude: true` (strip reasoning, keep it mandatory for gateways that
+            // force it) is an OpenRouter-only extension — OpenAI-native gateways 400
+            // on it. Emit the `reasoning` object only for OpenRouter; elsewhere omit
+            // it and rely on the strict `response_format` JSON landing in `content`.
+            reasoning: is_openrouter(conn.endpoint).then_some(ReasoningConfig {
                 effort: None,
                 enabled: None,
                 exclude: Some(true),
