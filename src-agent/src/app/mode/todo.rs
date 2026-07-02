@@ -230,11 +230,11 @@ impl TodoState {
     pub fn maybe_refresh(&mut self) -> bool {
         if self.last_refresh.elapsed() >= REFRESH_INTERVAL {
             let old_hash: Vec<_> = self.items.iter()
-                .map(|i| (i.content.clone(), i.status.clone()))
+                .map(|i| (i.content.clone(), i.status.clone(), i.priority.clone()))
                 .collect();
             self.refresh_from_disk();
             let new_hash: Vec<_> = self.items.iter()
-                .map(|i| (i.content.clone(), i.status.clone()))
+                .map(|i| (i.content.clone(), i.status.clone(), i.priority.clone()))
                 .collect();
             old_hash != new_hash
         } else {
