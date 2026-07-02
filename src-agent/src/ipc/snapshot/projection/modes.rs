@@ -25,7 +25,8 @@ use crate::ipc::proto::{
     ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
     ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
     RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
-    TextEditorSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
+    TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
+    WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -54,6 +55,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // the foreground session every frame, like `/agents`) + the list cursor, so a
         // thin client renders the same master/detail view of current jobs.
         Mode::Bash(b) => ModeSnapshot::Bash(Box::new(bash_snapshot(b, &state.rest))),
+        Mode::Todo(t) => ModeSnapshot::Todo(Box::new(todo_snapshot(t))),
         // The `/help` reference projects a full wire snapshot, exactly like `/mcp`:
         // the query + entry list (each entry's kind as a wire token) + filtered subset
         // + cursor, so a thin client rebuilds and renders the searchable help screen
@@ -458,6 +460,19 @@ pub fn bash_snapshot(b: &crate::app::mode::BashState, rest: &AppStateRest) -> Ba
     BashSnapshot {
         jobs: bash_job_views(rest),
         selected: b.selected,
+    }
+}
+
+/// Project the `/todo` panel: the todo items + the list cursor.
+pub fn todo_snapshot(t: &crate::app::mode::TodoState) -> TodoSnapshot {
+    TodoSnapshot {
+        items: t.items.iter().map(|item| TodoItemSnapshot {
+            content: item.content.clone(),
+            status: item.status.label().to_string(),
+            priority: item.priority.label().to_string(),
+        }).collect(),
+        selected: t.selected,
+        pwd_hash: t.pwd_hash.clone(),
     }
 }
 

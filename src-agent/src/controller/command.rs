@@ -28,6 +28,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/security", "Security daemon control panel"),
     ("/task", "Run an agent on a task, or open the sub-agents viewer (no args)"),
     ("/bash", "Manage background bash jobs"),
+    ("/todo", "View the session task list"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),
@@ -115,6 +116,8 @@ pub enum Command {
     Task(String),
     /// Open the `/bash` background-job panel (read-only + kill). Takes no args.
     Bash,
+    /// Open the `/todo` task-panel (read-only view of session todos). Takes no args.
+    Todo,
     /// Change the session's working directory to the held path (Phase 8). The
     /// USER path is UNRESTRICTED — no workspace allow-list check (the user is
     /// trusted); resolution is shell-like (`[N]` / absolute / relative-to-cwd).
@@ -182,6 +185,7 @@ pub fn parse(line: &str) -> Command {
         "security" => Command::Security,
         "task" => Command::Task(rest.to_string()),
         "bash" => Command::Bash,
+        "todo" => Command::Todo,
         "cd" => Command::Cd(rest.to_string()),
         "adddir" => Command::AddDir(rest.to_string()),
         "internet" => Command::Internet(InternetMode::from_token(rest)),

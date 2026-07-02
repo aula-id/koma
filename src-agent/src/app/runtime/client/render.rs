@@ -292,7 +292,7 @@ pub(super) fn render_loop(
                 // gives immediate feedback without a round-trip). Bottom-pinning
                 // follow is reconstructed from snapshots, so a manual scroll just
                 // nudges the local offset for this render.
-                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat) => match m.kind {
+                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         for _ in 0..3 {
                             shadow.rest.scroll_up();

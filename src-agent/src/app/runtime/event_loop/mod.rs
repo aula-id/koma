@@ -89,6 +89,15 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
+        // Refresh the todo overlay from disk when open (picked up by the draw below).
+        // When any item is InProgress, force dirty every tick so the braille spinner
+        // animates — spinner_glyph() uses wall-clock time but needs a redraw to cycle.
+        if let Mode::Todo(t) = state.mode_mut() {
+            if t.maybe_refresh() || t.items.iter().any(|i| i.status == crate::app::mode::todo::TodoStatus::InProgress) {
+                dirty = true;
+            }
+        }
+
         if dirty && !state.rest.select_active {
             terminal.draw(|f| view::draw(f, state))?;
             dirty = false;
@@ -165,7 +174,7 @@ pub(super) fn run_loop(
                     }
                     Event::Mouse(m) => {
                         // Wheel scrolls the chat transcript only.
-                        if matches!(state.mode(), Mode::Chat) {
+                        if matches!(state.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) {
                             match m.kind {
                                 MouseEventKind::ScrollUp => {
                                     for _ in 0..3 { state.rest.scroll_up(); }
