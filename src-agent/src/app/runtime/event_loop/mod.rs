@@ -89,6 +89,11 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
+        // Refresh the todo overlay from disk when open (picked up by the draw below).
+        if let Mode::Todo(t) = state.mode_mut() {
+            t.maybe_refresh();
+        }
+
         if dirty && !state.rest.select_active {
             terminal.draw(|f| view::draw(f, state))?;
             dirty = false;
