@@ -61,14 +61,21 @@ fn status_symbol_animated(s: &TodoStatus) -> String {
 /// full width. The selected row carries the inverse highlight.
 fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette) -> Line<'a> {
     let sym = status_symbol_animated(&item.status);
-    let label = truncate(&item.content, width.saturating_sub(sym.chars().count() + 1));
+    let sym_width = sym.chars().count();
+    let label = truncate(&item.content, width.saturating_sub(sym_width + 1));
+    let used = sym_width + 1 + label.chars().count();
+    let pad = width.saturating_sub(used);
 
     if selected {
         let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(format!("{sym} "), hl),
             Span::styled(label, hl),
-        ])
+        ];
+        if pad > 0 {
+            spans.push(Span::styled(" ".repeat(pad), hl));
+        }
+        Line::from(spans)
     } else {
         let name_style = match item.status {
             TodoStatus::Completed | TodoStatus::Cancelled => Style::default().fg(palette.dim),
