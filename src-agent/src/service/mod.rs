@@ -94,16 +94,17 @@ pub enum StreamEvent {
 pub enum WarmEvent {
     /// The catalogue fetch for `endpoint` succeeded; carries the fetched models.
     /// The drain sets `models_cache = Some(models)` and
-    /// `models_cache_endpoint = Some(endpoint)`, then clears the in-flight guard.
+    /// `models_cache_endpoint = Some(endpoint)`, clears any `models_cache_failed`
+    /// for this endpoint, then clears the in-flight guard.
     WarmCatalogue {
         endpoint: String,
         models: Vec<crate::dto::openrouter::ModelInfo>,
     },
     /// The catalogue fetch for `endpoint` failed (network / non-OpenAI provider).
-    /// The drain records a TERMINAL empty result for that endpoint
-    /// (`models_cache = Some(vec![])`, `models_cache_endpoint = Some(endpoint)`)
-    /// so it is NOT retried in a loop; the omnisearch degrades to manual model-id
-    /// entry. The in-flight guard is cleared.
+    /// The drain records a `models_cache_failed` marker for that endpoint (so
+    /// `request_catalogue` doesn't re-fetch in a rapid loop) without poisoning
+    /// the cache — the tri-state image helper treats missing/stale cache as
+    /// "unknown" (fail-open). The in-flight guard is cleared.
     WarmCatalogueFailed { endpoint: String },
     /// The project-awareness summary resolved for the session identified by
     /// `session_id` (its stable [`crate::app::state::SessionRuntime`] UUID): `summary`

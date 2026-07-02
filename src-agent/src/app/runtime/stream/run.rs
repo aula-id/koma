@@ -272,20 +272,27 @@ over sec_remote (stateful socket).\n",
     // Image-attachment send context: the session dir (source of record for image
     // bytes), whether the resolved Main model can read images, and its id (named
     // in the strip-warning). Built BEFORE the spawn so the task holds no borrow of
-    // `state`. Capability: when the catalogue is populated, honour
-    // `model_takes_images`; when it's never been fetched (`None`), DEFAULT TO
-    // CAPABLE so a cold cache never wrongly strips an image. `None` (no session /
-    // no resolved Main) means the task sends without image handling.
+    // `state`. Capability: use the tri-state `model_image_capability` helper so
+    // an unknown/missing/stale catalogue never wrongly strips images (fail-open).
+    // Only trust `models_cache` when `models_cache_endpoint` matches this model's
+    // endpoint — otherwise assume capable (mirrors the submit-time guard).
     let image_ctx: Option<crate::dto::openrouter::ImageWireCtx> = match (
         state.rest.sessions[sess_idx].session.as_ref(),
         main.as_ref(),
     ) {
         (Some(sess), Some(m)) => {
             let takes = match state.rest.models_cache.as_deref() {
-                Some(models) => {
-                    crate::service::openrouter::model_takes_images(models, &m.model_id)
+                Some(models)
+                    if state.rest.models_cache_endpoint.as_deref()
+                        == Some(m.endpoint.as_str()) =>
+                {
+                    use crate::service::openrouter::ImageCapability;
+                    matches!(
+                        crate::service::openrouter::model_image_capability(models, &m.model_id),
+                        ImageCapability::Supports | ImageCapability::Unknown
+                    )
                 }
-                None => true, // catalogue not fetched yet → assume capable, never strip
+                _ => true, // cold/wrong-endpoint catalogue → assume capable
             };
             Some(crate::dto::openrouter::ImageWireCtx {
                 session_dir: sess.path.clone(),

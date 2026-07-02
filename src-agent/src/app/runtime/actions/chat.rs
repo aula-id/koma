@@ -69,7 +69,8 @@ pub(super) fn handle_submit(
     // Image-capability guard: if this message carries images and the resolved Main
     // model can't read them, DON'T spend an API call — post a friendly notice in the
     // chat and keep the image un-sent (the orange attachment tree still shows it).
-    // Capability mirrors run.rs: cold/None catalogue => assume capable (never wrongly block).
+    // Uses the tri-state `model_image_capability` so an unknown/missing/stale
+    // catalogue never wrongly blocks (fail-open: `Unknown` => allow).
     if had_image {
         let main = state.rest.fg().session.as_ref().and_then(|sess| {
             crate::app::resolve::resolve_role(
@@ -88,7 +89,11 @@ pub(super) fn handle_submit(
             (Some(models), Some(m))
                 if state.rest.models_cache_endpoint.as_deref() == Some(m.endpoint.as_str()) =>
             {
-                crate::service::openrouter::model_takes_images(models, &m.model_id)
+                use crate::service::openrouter::ImageCapability;
+                matches!(
+                    crate::service::openrouter::model_image_capability(models, &m.model_id),
+                    ImageCapability::Supports | ImageCapability::Unknown
+                )
             }
             _ => true,
         };

@@ -163,16 +163,22 @@ pub struct AppStateRest {
     /// Cached model catalogue (`GET {endpoint}/models`) for ONE endpoint at a
     /// time — the endpoint recorded in `models_cache_endpoint`. Fetched ON DEMAND
     /// (debounced) by the model omnisearch for whichever provider is being edited,
-    /// not at boot. `Some(vec![])` is a TERMINAL "no models / fetch failed" state
-    /// for that endpoint (degrade to manual model-id entry), distinct from `None`
-    /// = "never fetched". Re-fetched when the active omnisearch endpoint differs
-    /// from `models_cache_endpoint`.
+    /// not at boot. `Some(vec![])` is a legitimate "endpoint has no models" state
+    /// (the endpoint genuinely returned an empty list). `None` = "never fetched".
+    /// Re-fetched when the active omnisearch endpoint differs from
+    /// `models_cache_endpoint`.
     pub models_cache: Option<Vec<crate::dto::openrouter::ModelInfo>>,
     /// Which endpoint `models_cache` currently holds models for (`None` when the
     /// cache has never been populated). The omnisearch only filters against
     /// `models_cache` while this equals the active provider's endpoint; otherwise
     /// it shows `searching models…` and (re)requests a fetch.
     pub models_cache_endpoint: Option<String>,
+    /// The endpoint whose catalogue fetch LAST FAILED (`None` when no failure is
+    /// recorded). Set by the `WarmCatalogueFailed` drain so `request_catalogue`
+    /// can skip re-fetching an endpoint that just failed (preventing rapid retry
+    /// loops), while still allowing retries when the user explicitly re-triggers
+    /// (e.g. switching back to the endpoint later). Cleared on successful fetch.
+    pub models_cache_failed: Option<String>,
     /// A debounced catalogue fetch waiting to fire (see [`CataloguePending`]).
     /// Set/refreshed by [`AppStateRest::request_catalogue`]; consumed by the
     /// event-loop tick once `due` passes. `None` when no fetch is pending.
@@ -317,6 +323,7 @@ impl AppStateRest {
             warm_rx: None,
             models_cache: None,
             models_cache_endpoint: None,
+            models_cache_failed: None,
             catalogue_pending: None,
             catalogue_fetching: None,
             work_since: None,

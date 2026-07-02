@@ -173,6 +173,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // models…` forever (it has no fetch path of its own).
     shadow.rest.models_cache = global.models_cache;
     shadow.rest.models_cache_endpoint = global.models_cache_endpoint;
+    shadow.rest.models_cache_failed = global.models_cache_failed;
 
     // Global theme + accent. `view::draw` frames every screen via
     // `theme::palette(&shadow.rest.config)` BEFORE dispatching to a mode renderer, so
