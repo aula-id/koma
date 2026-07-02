@@ -226,11 +226,19 @@ impl TodoState {
     }
 
     /// Periodic refresh: re-read from disk only if enough time has elapsed.
-    /// Called from the draw path so the overlay stays live when the agent
-    /// writes new todos via the todowrite tool.
-    pub fn maybe_refresh(&mut self) {
+    /// Returns `true` if the item list actually changed (caller should mark dirty).
+    pub fn maybe_refresh(&mut self) -> bool {
         if self.last_refresh.elapsed() >= REFRESH_INTERVAL {
+            let old_hash: Vec<_> = self.items.iter()
+                .map(|i| (i.content.clone(), i.status.clone()))
+                .collect();
             self.refresh_from_disk();
+            let new_hash: Vec<_> = self.items.iter()
+                .map(|i| (i.content.clone(), i.status.clone()))
+                .collect();
+            old_hash != new_hash
+        } else {
+            false
         }
     }
 
