@@ -31,12 +31,38 @@
 //! resolved UNDER the memory dir — a slug can never escape it (path traversal).
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// The index file name inside the memory directory.
 const INDEX_FILE: &str = "MEMORY.md";
 
 /// Maximum slug length (filenames stay sane; long descriptions still slug fine).
 const MAX_SLUG_LEN: usize = 80;
+
+/// Atomically write `bytes` to `path` by writing to a PID-suffixed temp file
+/// first, then renaming over the target. This prevents concurrent readers from
+/// seeing a half-written file. The rename is atomic on POSIX (and NTFS) so
+/// another process either sees the old content or the new one, never a partial.
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let mut tmp_name = file_name.to_owned();
+    tmp_name.push(format!(".{}$", std::process::id()));
+    let tmp_path = parent.join(&tmp_name);
+    std::fs::write(&tmp_path, bytes)?;
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+/// Return the mtime of `MEMORY.md` inside `dir`, or `None` if it doesn't exist
+/// or can't be stat'd. Used by the cross-instance memory sync poll.
+pub fn memory_mtime(dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(dir.join(INDEX_FILE))
+        .ok()
+        .and_then(|m| m.modified().ok())
+}
 
 /// Read `AGENT.md` (preferred) or `AGENTS.md` from `workdir`, returning trimmed
 /// contents. `None` if neither exists or both are blank. These are project-level
@@ -244,7 +270,7 @@ pub fn write_memory(
     })?;
     std::fs::create_dir_all(dir)?;
     let text = render_memory_file(&clean, description, kind, body);
-    std::fs::write(&path, text.as_bytes())?;
+    atomic_write(&path, text.as_bytes())?;
     rebuild_index(dir)?;
     Ok(clean)
 }
@@ -313,7 +339,7 @@ fn rebuild_index(dir: &Path) -> std::io::Result<()> {
     for m in &memories {
         s.push_str(&format!("- [{}]({}.md)\n", m.description, m.slug));
     }
-    std::fs::write(dir.join(INDEX_FILE), s.as_bytes())
+    atomic_write(&dir.join(INDEX_FILE), s.as_bytes())
 }
 
 /// Read the memory INDEX (`MEMORY.md`) text to inject into the system prompt.
