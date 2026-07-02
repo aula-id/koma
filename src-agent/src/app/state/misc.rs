@@ -17,8 +17,11 @@ impl AppStateRest {
     /// / field focus for whatever provider is being edited. It is cheap and
     /// idempotent:
     /// - empty `endpoint` → no-op (nothing to fetch against);
-    /// - the cache already holds this endpoint (`models_cache_endpoint` matches,
-    ///   including the terminal empty-result state) → no-op (filter locally);
+    /// - the cache already holds this endpoint (`models_cache_endpoint` matches)
+    ///   AND the fetch succeeded → no-op (filter locally);
+    /// - the cache failed for this endpoint (`models_cache_failed` matches) →
+    ///   no-op (don't re-fetch a just-failed endpoint in a rapid loop; the next
+    ///   user-driven re-trigger clears `models_cache_failed` and retries);
     /// - a fetch for this endpoint is already in flight → no-op (don't double-fire);
     /// - otherwise (re)arm a pending fetch ~300 ms out. Calling it again on the
     ///   next keystroke pushes `due` forward, collapsing a typing burst into one
@@ -31,12 +34,18 @@ impl AppStateRest {
         if endpoint.is_empty() {
             return;
         }
-        if self.models_cache_endpoint.as_deref() == Some(endpoint) {
-            return; // already have this endpoint's catalogue (or terminal empty)
+        if self.models_cache_endpoint.as_deref() == Some(endpoint)
+            && self.models_cache.is_some()
+        {
+            return; // already have a successful cache for this endpoint
+        }
+        if self.models_cache_failed.as_deref() == Some(endpoint) {
+            return; // this endpoint just failed — don't re-fetch in a loop
         }
         if self.catalogue_fetching.as_deref() == Some(endpoint) {
             return; // already fetching this endpoint
         }
+        // Clear any stale failure for a DIFFERENT endpoint so it doesn't linger.
         self.catalogue_pending = Some(CataloguePending {
             endpoint: endpoint.to_string(),
             api_key: api_key.to_string(),

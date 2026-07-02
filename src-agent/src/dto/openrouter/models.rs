@@ -54,7 +54,7 @@ pub struct ModelPricing {
 ///
 /// `input_modalities` is the list of input kinds the model accepts (e.g.
 /// `["text","image"]`). A model can take images iff this contains `"image"`
-/// (see [`crate::service::openrouter::model_takes_images`]). Defaults so a model
+/// (see [`crate::service::openrouter::model_image_capability`]). Defaults so a model
 /// that omits the field (or the whole `architecture` object) still deserialises.
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct Architecture {

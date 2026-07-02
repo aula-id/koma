@@ -140,7 +140,7 @@ pub struct ImageWireCtx {
     /// (`images/NN-name.ext`) is resolved against this to read the bytes back.
     pub session_dir: PathBuf,
     /// Whether the resolved Main model accepts image inputs (from
-    /// `model_takes_images` over the cached catalogue). When false, image parts
+    /// `model_image_capability` over the cached catalogue). When false, image parts
     /// are silently stripped (the submit-time guard in handle_submit already
     /// posted a user-facing notice before the wire build runs).
     pub model_takes_images: bool,
