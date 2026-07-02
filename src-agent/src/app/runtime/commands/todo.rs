@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::app::mode::{parse_todo_file, Mode, TodoState};
 use crate::app::state::AppState;
 
-/// Handle the `/todo` command: open the read-only task-panel overlay.
+/// Handle the `/todo` command: open the task-panel overlay.
 ///
 /// Reads the current todo list from the foreground session's memory/TODO.md.
 /// The panel re-reads on every key press.
