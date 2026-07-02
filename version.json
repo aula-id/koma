@@ -1,4 +1,4 @@
 {
-  "version": "0.2.13",
+  "version": "0.2.14",
   "message": "fix: emit the OpenRouter-only reasoning sub-fields (reasoning.exclude / reasoning.enabled) ONLY for OpenRouter endpoints. OpenAI-native gateways (e.g. a codex/9router gateway) reject them with 400 'Unknown parameter: reasoning.exclude', which — now that git_operator routes through the classifier — fail-closed even read-only git calls. The classifier, fold, blob-router, and thinking-off paths now omit those fields for non-OpenRouter endpoints (effort, which is OpenAI-standard, is unchanged). Groq etc. keep working since they're reached through OpenRouter."
 }
