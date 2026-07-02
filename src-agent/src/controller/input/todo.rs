@@ -6,7 +6,7 @@
 //!
 //! Key map:
 //! - `Esc`           → `Action::CloseTodo` (return to Chat)
-//! - `Enter`         → cycle the selected item's status and persist
+//! - `Enter`         → reset selected item to pending (signals model to redo)
 //! - `Ctrl+C`        → `Action::None` (fully inert — koma disables Ctrl+C)
 //! - `Up`/`k`        → move the LIST cursor up
 //! - `Down`/`j`      → move the LIST cursor down
@@ -32,9 +32,8 @@ pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -
     let action = match key.code {
         KeyCode::Esc => Action::CloseTodo,
         KeyCode::Enter => {
-            // Cycle the selected item's status (pending → in_progress → completed
-            // → cancelled → pending) and write back to disk.
-            s.toggle_selected();
+            // Reset the selected item to pending — signals the model to redo it.
+            s.reset_to_pending();
             Action::None
         }
         KeyCode::Up | KeyCode::Char('k') => {
