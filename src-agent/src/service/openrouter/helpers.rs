@@ -70,25 +70,42 @@ pub(super) fn provider_routing_for(
     }
 }
 
+/// True when `endpoint` speaks OpenRouter's `reasoning` dialect — i.e. accepts
+/// the OpenRouter-only `enabled` / `exclude` sub-fields. OpenAI-native gateways
+/// (OpenAI itself, a codex/9router gateway, etc.) reject those with
+/// `400 Unknown parameter: 'reasoning.exclude'`, so we emit them ONLY here. Groq
+/// & friends are reached THROUGH OpenRouter, so they match and keep working.
+pub(super) fn is_openrouter(endpoint: &str) -> bool {
+    endpoint.to_lowercase().contains("openrouter")
+}
+
 /// Map a stored effort token to the request `reasoning` object.
 ///
 /// - `""` / `"default"` → `None`: omit `reasoning` entirely so the model uses
 ///   its own default thinking behaviour.
-/// - `"off"` / `"none"` → `Some(enabled: false)`: turn thinking off.
+/// - `"off"` / `"none"` → OpenRouter: `Some(enabled: false)` (turn thinking off);
+///   non-OpenRouter: `None` (the `enabled` field is an OpenRouter-only extension
+///   that OpenAI-native gateways 400 on — omit `reasoning` entirely and let the
+///   model use its own, often model-name-encoded, default).
 /// - any effort token (`minimal`/`low`/`medium`/`high`/`xhigh`/`max`/…) →
-///   `Some(effort: <token>)`. `effort` and `enabled` are mutually exclusive, so
-///   only `effort` is set here.
+///   `Some(effort: <token>)`. `effort` is OpenAI-standard, accepted everywhere.
 ///
 /// Free helper (not a method) so it has no hidden state — what you pass is what
 /// you get. Applied only on the interactive chat path.
-pub(super) fn reasoning_config(effort: &str) -> Option<ReasoningConfig> {
+pub(super) fn reasoning_config(effort: &str, endpoint: &str) -> Option<ReasoningConfig> {
     match effort.trim() {
         "" | "default" => None,
-        "off" | "none" => Some(ReasoningConfig {
-            effort: None,
-            enabled: Some(false),
-            exclude: None,
-        }),
+        "off" | "none" => {
+            if is_openrouter(endpoint) {
+                Some(ReasoningConfig {
+                    effort: None,
+                    enabled: Some(false),
+                    exclude: None,
+                })
+            } else {
+                None
+            }
+        }
         level => Some(ReasoningConfig {
             effort: Some(level.to_string()),
             enabled: None,

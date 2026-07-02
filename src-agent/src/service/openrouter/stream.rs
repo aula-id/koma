@@ -86,7 +86,7 @@ impl OpenRouterClient {
             tools: Some(tools),
             // Interactive chat is the only path that thinks; map the resolved
             // role's effort token to a `reasoning` directive (None = model default).
-            reasoning: reasoning_config(effort),
+            reasoning: reasoning_config(effort, conn.endpoint),
             // Free-form text reply; structured output is classifier-only.
             response_format: None,
             // Generous runaway cap for the interactive path.
