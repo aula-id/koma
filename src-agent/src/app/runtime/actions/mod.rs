@@ -150,6 +150,10 @@ pub(in crate::app::runtime) fn apply_action(
             session::handle_hub_kill_confirm(state, client, handle)?;
         }
 
+        Action::HubDeleteConfirm => {
+            session::handle_hub_delete_confirm(state)?;
+        }
+
         Action::CloseSessionHub => {
             session::handle_close_session_hub(state)?;
         }

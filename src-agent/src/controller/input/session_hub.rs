@@ -67,13 +67,48 @@ pub fn handle_session_hub(
         return Action::None;
     }
 
-    // 3. Ctrl+X: arm a kill, but ONLY on the cooking pane over a REAL session row
-    //    (never the synthetic "[+ new session]" row, never the history pane).
+    // 2b. CONFIRM MODE for HISTORY-pane physical delete: while a delete is armed,
+    //     accept ONLY confirm (Ctrl+X or Enter) or cancel (Esc / n / N). Mutually
+    //     exclusive with pending_kill (different panes).
+    if hub.pending_delete.is_some() {
+        // Confirm: another Ctrl+X (or Enter, mirroring the kill convention).
+        if is_ctrl(&key, 'x') || matches!(key.code, KeyCode::Enter) {
+            return Action::HubDeleteConfirm;
+        }
+        // Cancel: Esc or n/N. Any other key clears the arm and falls through.
+        if matches!(key.code, KeyCode::Esc)
+            || matches!(key.code, KeyCode::Char('n') | KeyCode::Char('N'))
+        {
+            hub.pending_delete = None;
+            return Action::None;
+        }
+        // Any other key clears the arm and falls through to normal handling.
+        hub.pending_delete = None;
+        // Fall through.
+    }
+
+    // 3. Ctrl+X: arm the appropriate action based on the focused pane.
+    //    - COOKING pane: arm a live-session kill (only on REAL session rows).
+    //    - HISTORY pane: arm a physical delete (only when a row is selected).
+    //    The two are mutually exclusive by focus; arming one also clears the other.
     if is_ctrl(&key, 'x') {
-        if matches!(hub.focus, HubPane::Cooking) {
-            if let Some(entry) = hub.selected_cooking() {
-                if entry.kind == SessionKind::Session {
-                    hub.pending_kill = entry.session_id.clone();
+        match hub.focus {
+            HubPane::Cooking => {
+                if let Some(entry) = hub.selected_cooking() {
+                    if entry.kind == SessionKind::Session {
+                        hub.pending_kill = entry.session_id.clone();
+                        hub.pending_delete = None;
+                    }
+                }
+            }
+            HubPane::History => {
+                if let Some(real) = hub.selected_history_real_idx() {
+                    if let Some(e) = hub.history.get(real) {
+                        if let Some(uuid) = e.path.file_name().and_then(|n| n.to_str()) {
+                            hub.pending_delete = Some(uuid.to_string());
+                            hub.pending_kill = None;
+                        }
+                    }
                 }
             }
         }

@@ -190,3 +190,14 @@ pub fn get(uuid: &str) -> Result<Option<RegRowFull>> {
         .optional()?;
     Ok(row)
 }
+
+/// Delete a session's registry row by UUID. A missing row is a no-op (DELETE
+/// matches zero rows). Used by [`crate::model::store::delete_session`].
+pub fn delete_by_uuid(uuid: &str) -> Result<()> {
+    let conn = open()?;
+    conn.execute(
+        "DELETE FROM sessions WHERE uuid = ?1",
+        rusqlite::params![uuid],
+    )?;
+    Ok(())
+}
