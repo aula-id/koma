@@ -285,7 +285,21 @@ pub(super) fn render_agent_viewer(
 
     // Render the sub-agent's structured conversation through the SHARED main-chat
     // transcript path (markdown bodies, reasoning/thinking blocks, ⚙/✓ tool lines).
-    let lines = assemble_messages(&sa.messages, palette, wrap_w);
+    // While a turn is still streaming its report has not been committed into
+    // `messages` yet (that happens at turn-end via an `AgentEvent::Snapshot`), so
+    // append the live in-progress buffer as a trailing assistant turn — the viewer
+    // then shows the report as it streams, mirroring the live cooking pane. Cheap:
+    // a clone only when something is actually streaming.
+    let lines = if sa.live_text.is_empty() {
+        assemble_messages(&sa.messages, palette, wrap_w)
+    } else {
+        let mut msgs = sa.messages.clone();
+        msgs.push(crate::dto::chat::ChatMessage::new(
+            crate::dto::chat::Role::Assistant,
+            sa.live_text.clone(),
+        ));
+        assemble_messages(&msgs, palette, wrap_w)
+    };
 
     // Scroll model: while the agent is RUNNING auto-follow the bottom so live
     // progress shows; otherwise honour the stored offset, clamped. Publish the max

@@ -143,6 +143,10 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         rx,
         transcript: sa.transcript.clone(),
         messages,
+        // Carry the projected live in-progress report text so the full-screen
+        // viewer renders the streaming report on the client exactly as the daemon
+        // does. Empty between turns (cleared on each committed Snapshot).
+        live_text: sa.live_text.clone(),
         tool_call_id: None,
         // Detachment IS rendered client-side (the transcript footer + cadence
         // predicate filter on `!detached`), so carry the projected flag. The

@@ -263,7 +263,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
                 .as_ref()
                 .map(|s| s.name.clone())
                 .unwrap_or_default(),
-            working: rt.is_working(),
+            working: rt.is_ui_busy(),
             is_foreground: raw_idx == state.rest.foreground,
             session_id: Some(rt.id.clone()),
             dir_label: store::dir_basename(&workdir),

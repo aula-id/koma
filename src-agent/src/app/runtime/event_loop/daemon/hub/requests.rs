@@ -244,7 +244,7 @@ impl DaemonHub {
                         .as_ref()
                         .map(|_| rt.effective_cwd().display().to_string())
                         .unwrap_or_default(),
-                    working: rt.is_working(),
+                    working: rt.is_ui_busy(),
                 };
                 self.send_to(idx, DaemonEvent::Status(status));
             }

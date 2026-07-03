@@ -87,6 +87,7 @@ mod roundtrip_tests {
                 steps: 3,
                 transcript: vec!["scanned src/".to_string()],
                 messages: vec![ChatMessage::new(Role::User, "scan")],
+                live_text: "streaming report…".to_string(),
                 committed_reasoning: Vec::new(),
             }],
             pending_subagents: vec![PendingSubagentSnapshot {

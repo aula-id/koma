@@ -100,7 +100,7 @@ pub fn session_snapshot(
         approval_reason: rt.approval_reason.clone(),
         pending_tool_calls: rt.pending_tool_calls.clone(),
         tool_idx: rt.tool_idx,
-        working: rt.is_working(),
+        working: rt.is_ui_busy(),
         finished_unseen: rt.finished_unseen,
         subagents: rt.subagents.iter().map(subagent_snapshot).collect(),
         pending_subagents: rt
@@ -152,6 +152,7 @@ fn subagent_snapshot(sa: &crate::app::subagent::SubAgent) -> SubAgentSnapshot {
         steps: sa.transcript.len(),
         transcript: sa.transcript.clone(),
         messages: sa.messages.clone(),
+        live_text: sa.live_text.clone(),
         committed_reasoning,
     }
 }

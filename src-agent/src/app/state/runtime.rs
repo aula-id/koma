@@ -1068,6 +1068,34 @@ impl SessionRuntime {
                 .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
     }
 
+    /// UI-activity twin of [`is_working`](Self::is_working): identical busy-flag set,
+    /// except a DETACHED (backgrounded) sub-agent does NOT count. A detached agent
+    /// runs off to the side while the main turn is idle, so the UI must read 'ready'.
+    ///
+    /// The split exists because `is_working` serves two masters that need different
+    /// answers for detached agents:
+    /// - LIVENESS (daemon quiescence / self-exit grace / hub-kill abort-vs-close /
+    ///   quit warning / completion-nudge gating) — a detached agent MUST count, else
+    ///   the daemon could self-exit and kill the running background agent. That is
+    ///   `is_working`; leave those callers on it.
+    /// - UI ACTIVITY (projected `working` → client `waiting` → comet shimmer + fast
+    ///   redraw cadence, the session-hub ●/○ marker, the foreground status line) — a
+    ///   detached agent must NOT count. Those callers read this.
+    pub fn is_ui_busy(&self) -> bool {
+        if self.closed {
+            return false;
+        }
+        self.waiting
+            || self.streaming.is_some()
+            || self.awaiting_approval
+            || self.awaiting_tool_tasks
+            || self.awaiting_shell
+            || self.awaiting_subagents
+            || self.subagents.iter().any(|s| {
+                matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached
+            })
+    }
+
     /// True once this session has been tombstoned via [`close()`](Self::close) —
     /// its slot stays in `sessions` (so no index shifts) but it is inert. Read by
     /// the session-hub cooking builder (a closed session must not reappear) and by
