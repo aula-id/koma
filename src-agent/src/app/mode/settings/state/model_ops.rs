@@ -75,18 +75,79 @@ impl SettingsState {
         }
     }
 
-    /// Move selection up in the models list; clears the delete-armed flag.
-    pub fn model_up(&mut self) {
-        self.model_sel = self.model_sel.saturating_sub(1);
+    /// Decode `model_sel` into a `(line, col)` grid position.
+    ///
+    /// Lines: 0 = add-buttons row (cols 0=global, 1=local), 1 = filter row
+    /// (cols 0=all, 1=local, 2=global), 2.. = data rows (single column each).
+    fn model_line_col(&self) -> (usize, usize) {
+        match self.model_sel {
+            0 => (0, 0),
+            1 => (0, 1),
+            2 => (1, 0),
+            3 => (1, 1),
+            4 => (1, 2),
+            n => (2 + (n - MODEL_CTRL_SLOTS), 0),
+        }
+    }
+
+    /// Number of selectable columns on `line` (buttons=2, filter=3, data=1).
+    fn model_line_width(&self, line: usize) -> usize {
+        match line {
+            0 => 2,
+            1 => 3,
+            _ => 1,
+        }
+    }
+
+    /// Total number of navigable lines: 2 control lines + one per visible row.
+    fn model_line_count(&self) -> usize {
+        2 + self.visible_model_count()
+    }
+
+    /// Encode a `(line, col)` grid position back into `model_sel`, clamping both
+    /// to the valid range, and clear the delete-armed flag.
+    fn set_model_line_col(&mut self, line: usize, col: usize) {
+        let line = line.min(self.model_line_count().saturating_sub(1));
+        let col  = col.min(self.model_line_width(line).saturating_sub(1));
+        self.model_sel = match line {
+            0 => col,           // 0=AddGlobal, 1=AddLocal
+            1 => 2 + col,       // 2=FilterAll, 3=FilterLocal, 4=FilterGlobal
+            _ => MODEL_CTRL_SLOTS + (line - 2), // data rows
+        };
         self.model_delete_armed = false;
     }
 
-    /// Move selection down in the models list (max index =
-    /// `MODEL_CTRL_SLOTS - 1 + visible_model_count()`); clears the delete-armed flag.
-    pub fn model_down(&mut self) {
-        let max = MODEL_CTRL_SLOTS - 1 + self.visible_model_count();
-        self.model_sel = (self.model_sel + 1).min(max);
+    /// Move the cursor up one LINE, keeping the column (clamped to the new line's
+    /// width). Clears the delete-armed flag.
+    pub fn model_up(&mut self) {
         self.model_delete_armed = false;
+        let (line, col) = self.model_line_col();
+        self.set_model_line_col(line.saturating_sub(1), col);
+    }
+
+    /// Move the cursor down one LINE, keeping the column (clamped to the new
+    /// line's width). Clears the delete-armed flag.
+    pub fn model_down(&mut self) {
+        self.model_delete_armed = false;
+        let (line, col) = self.model_line_col();
+        let new_line = (line + 1).min(self.model_line_count().saturating_sub(1));
+        self.set_model_line_col(new_line, col);
+    }
+
+    /// Move the cursor left one COLUMN within the current line (clamps at 0).
+    /// No-op on single-column data rows. Clears the delete-armed flag.
+    pub fn model_left(&mut self) {
+        self.model_delete_armed = false;
+        let (line, col) = self.model_line_col();
+        self.set_model_line_col(line, col.saturating_sub(1));
+    }
+
+    /// Move the cursor right one COLUMN within the current line (clamped to the
+    /// line width). No-op on single-column data rows. Clears delete-armed.
+    pub fn model_right(&mut self) {
+        self.model_delete_armed = false;
+        let (line, col) = self.model_line_col();
+        self.set_model_line_col(line, col + 1);
     }
 
     /// Apply a filter mode and clamp `model_sel` to the new valid range.

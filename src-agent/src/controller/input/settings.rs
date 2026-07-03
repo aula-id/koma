@@ -483,10 +483,27 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 KeyCode::Down | KeyCode::Tab => {
                     s.model_down();
                 }
-                // Left/Right are no-ops on the list level (filter is now selected
-                // via the nav chain + Enter on the radio slots).
+                // Left/Right move the cursor horizontally WITHIN a line: between
+                // the two add buttons, or across the three filter boxes. On a
+                // single-column data row they are no-ops (clamped in the setter).
+                KeyCode::Left => {
+                    s.model_left();
+                }
+                KeyCode::Right => {
+                    s.model_right();
+                }
+                // Space selects the filter box under the cursor (applies it).
+                // No-op on the add buttons / data rows.
+                KeyCode::Char(' ') => {
+                    match s.model_selection() {
+                        ModelRowSel::FilterAll    => s.model_filter_set(ModelFilterMode::All),
+                        ModelRowSel::FilterLocal  => s.model_filter_set(ModelFilterMode::Local),
+                        ModelRowSel::FilterGlobal => s.model_filter_set(ModelFilterMode::Global),
+                        _ => {}
+                    }
+                }
                 // `+` shortcut: open add-global modal (muscle-memory shortcut;
-                // local add is via [+add local] or Enter on slot 1).
+                // local add is via [+add local] or Enter on slot 0/1).
                 KeyCode::Char('+') => {
                     s.open_model_modal_add(false);
                     if let Some((ep, key)) = s.mm_provider_conn() {
