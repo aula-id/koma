@@ -60,6 +60,11 @@ pub struct AppStateRest {
     /// key/mouse scroll handlers read it to clamp + detect "at bottom". Single-
     /// threaded UI state, never sent across threads, so `Cell` is fine.
     pub last_max_scroll: std::cell::Cell<u16>,
+    /// Persisted scroll offset for the `/` command + `@` file palettes (shared,
+    /// since only one shows at a time). Render-owned (interior-mutable, never
+    /// serialized); drives `scroll_window` so the selection walks within the
+    /// visible rows instead of pinning to the bottom.
+    pub palette_offset: std::cell::Cell<usize>,
     pub last_key: Option<String>,
     /// Instant of the most-recent IDLE Esc press in Chat, used to detect a
     /// double-Esc (two idle Escs within ~400ms) that opens the message-rewind
@@ -301,6 +306,7 @@ impl AppStateRest {
             palette_sel: 0,
             should_quit: false,
             last_max_scroll: std::cell::Cell::new(0),
+            palette_offset: std::cell::Cell::new(0),
             last_key: None,
             last_esc: None,
             last_model: None,
