@@ -198,6 +198,11 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
     // rebuild unchanged since it's already an identity, not a position.
     let saved_kill_id: Option<String> = hub.pending_kill.clone();
 
+    // Same for a pending HISTORY-pane delete arm — it's a session UUID identity, so it
+    // survives the rebuild; without this it would reset every probe tick and the confirm
+    // bar would vanish after ~1s.
+    let saved_delete_id: Option<String> = hub.pending_delete.clone();
+
     // Rebuild the panes from the handed-in snapshot (no blocking discovery on this thread).
     let mut fresh = hub_from_snapshot(fresh, current_id);
 
@@ -245,6 +250,8 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
     // survives the rebuild. If the targeted session is gone, the confirm bar gracefully
     // re-arms on the next Ctrl+X press (the UUID won't match any current row).
     fresh.pending_kill = saved_kill_id;
+
+    fresh.pending_delete = saved_delete_id;
 
     *hub = fresh;
 }
