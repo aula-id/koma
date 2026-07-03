@@ -148,6 +148,7 @@ fn subagent_snapshot(sa: &crate::app::subagent::SubAgent) -> SubAgentSnapshot {
         name: sa.agent_name.clone(),
         label: sa.label.clone(),
         status,
+        detached: sa.detached,
         steps: sa.transcript.len(),
         transcript: sa.transcript.clone(),
         messages: sa.messages.clone(),
