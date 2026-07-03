@@ -12,7 +12,9 @@ use crate::dto::openrouter::{
 };
 use crate::service::StreamEvent;
 
-use super::helpers::{clean_error, emit, provider_routing_for, reasoning_config, sanitize_tool_acc};
+use super::helpers::{
+    clean_error, emit, is_openrouter, provider_routing_for, reasoning_config, sanitize_tool_acc,
+};
 use super::client::OpenRouterClient;
 use super::types::Conn;
 use super::think_split::{Emit as ThinkEmit, ThinkSplit};
@@ -79,7 +81,15 @@ impl OpenRouterClient {
             // caching breakpoint; a user message carrying image attachments becomes
             // a parts array (text + image_url, or text + strip-warning when the
             // model can't read images); everything else serialises as a plain string.
-            messages: to_wire_with_images(messages, image_ctx.as_ref()),
+            // On OpenRouter-dialect endpoints, echo captured `reasoning_details`
+            // back on tool-continuation requests so a reasoning model keeps its
+            // signed chain-of-thought across tool calls; stripped elsewhere (safe
+            // regenerate default). Same endpoint gate `reasoning_config` uses below.
+            messages: to_wire_with_images(
+                messages,
+                image_ctx.as_ref(),
+                is_openrouter(conn.endpoint),
+            ),
             stream: true,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
@@ -221,6 +231,15 @@ impl OpenRouterClient {
                         if let Some(r) = &choice.delta.reasoning {
                             if !r.is_empty() {
                                 emit(&tx, StreamEvent::Reasoning(r.clone()));
+                            }
+                        }
+                        // OpenRouter also streams structured `reasoning_details`
+                        // fragments (typed + signed chain-of-thought). Emit each
+                        // chunk's batch so the caller can merge them by index and
+                        // replay them on tool-continuation requests.
+                        if let Some(details) = &choice.delta.reasoning_details {
+                            if !details.is_empty() {
+                                emit(&tx, StreamEvent::ReasoningDetails(details.clone()));
                             }
                         }
                         if let Some(tcs) = &choice.delta.tool_calls {
