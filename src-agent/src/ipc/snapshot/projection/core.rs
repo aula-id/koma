@@ -109,6 +109,19 @@ pub fn session_snapshot(
             .map(pending_subagent_snapshot)
             .collect(),
         resolved_model_id,
+        pending_steer: rt
+            .pending_steer
+            .iter()
+            .map(|s| {
+                let one_line = s.replace('\n', " ");
+                let t = one_line.trim().to_string();
+                if t.chars().count() > 48 {
+                    format!("{}…", t.chars().take(48).collect::<String>())
+                } else {
+                    t
+                }
+            })
+            .collect(),
     }
 }
 

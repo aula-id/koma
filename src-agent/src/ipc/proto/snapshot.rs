@@ -41,6 +41,11 @@ pub struct SessionSnapshot {
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,
+    /// Truncated previews of the foreground session's queued mid-turn steer messages
+    /// (full text lives daemon-side). Drives the pending panel between transcript +
+    /// composer. Empty = no panel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_steer: Vec<String>,
 }
 
 /// A plain-data projection of one SubAgent.

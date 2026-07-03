@@ -265,6 +265,14 @@ pub(in crate::app::runtime) fn apply_action(
             state.rest.fg_mut().status = "ready".into();
         }
 
+        Action::CancelSteers => {
+            let n = state.rest.fg().pending_steer.len();
+            state.rest.fg_mut().pending_steer.clear();
+            if n > 0 {
+                state.rest.fg_mut().status = "steering queue cleared".into();
+            }
+        }
+
         Action::OpenRewind => {
             rewind::handle_open_rewind(state)?;
         }

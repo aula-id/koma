@@ -93,6 +93,9 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     // Reconstruct the running/finished sub-agents (plain data + an inert handle/rx)
     // so the `$` panel list AND the full-screen viewer render off real shadow data.
     rt.subagents = s.subagents.iter().map(shadow_subagent).collect();
+    // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate
+    // in `handle_chat`) can read them from the shadow without a daemon round-trip.
+    rt.pending_steer = s.pending_steer.clone();
     rt
 }
 

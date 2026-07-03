@@ -209,6 +209,12 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         };
     }
 
+    // Ctrl+X (with pending steers) → cancel all queued mid-turn steer messages.
+    // Only fires when the queue is non-empty so Ctrl+X stays free for other uses
+    // (e.g. sub-agent kill above) when there is nothing to cancel.
+    if is_ctrl(&key, 'x') && !rest.fg().pending_steer.is_empty() {
+        return Action::CancelSteers;
+    }
     // Ctrl+C is fully inert everywhere (koma disables it): no quit, no detach,
     // no interrupt. Esc handles interrupt/rewind now (see the Esc arm below).
     if is_ctrl(&key, 'c') {
@@ -376,7 +382,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                             Action::Shell(cmd.to_string())
                         }
                     }
-                } else if !rest.fg().input.trim().is_empty() && !rest.fg().waiting && !rest.fg().awaiting_shell {
+                } else if !rest.fg().input.trim().is_empty() && !rest.fg().awaiting_shell {
                     Action::Submit(rest.take_input())
                 } else {
                     Action::None
