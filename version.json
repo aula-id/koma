@@ -1,4 +1,4 @@
 {
-  "version": "0.2.14",
-  "message": "fix: emit the OpenRouter-only reasoning sub-fields (reasoning.exclude / reasoning.enabled) ONLY for OpenRouter endpoints. OpenAI-native gateways (e.g. a codex/9router gateway) reject them with 400 'Unknown parameter: reasoning.exclude', which — now that git_operator routes through the classifier — fail-closed even read-only git calls. The classifier, fold, blob-router, and thinking-off paths now omit those fields for non-OpenRouter endpoints (effort, which is OpenAI-standard, is unchanged). Groq etc. keep working since they're reached through OpenRouter."
+  "version": "0.2.16",
+  "message": "fix: scoped /settings model list (global vs session) with inline [+add global] / [+add local] buttons and a unified Up/Down navigation chain; fix /agents session-scoped model routing so a per-session agent model actually routes to that model instead of silently falling back to Main (re-overlay session_models at delegation); per-session toast when an agent's declared model can't resolve; serde hardening on the settings IPC snapshot."
 }
