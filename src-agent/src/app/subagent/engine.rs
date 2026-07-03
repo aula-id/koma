@@ -89,6 +89,10 @@ struct StreamOutcome {
     /// Display-only reasoning/thinking accumulated from the `delta.reasoning`
     /// channel; committed onto the assistant message so the viewer renders it.
     reasoning: String,
+    /// OpenRouter `reasoning_details` merged (by index) across streaming chunks.
+    /// Carried onto a tool-call assistant message so the sub-agent replays its
+    /// chain-of-thought (incl. signatures) on the next continuation request.
+    reasoning_details: Vec<crate::dto::chat::ReasoningDetail>,
     tool_calls: Vec<ToolCall>,
     error: Option<String>,
     /// Last-seen usage chunk: (prompt_tokens, completion_tokens, cost).
@@ -248,6 +252,13 @@ pub async fn run_agent_loop(
             let r = outcome.reasoning;
             (!r.trim().is_empty()).then_some(r)
         };
+        // Structured reasoning_details for THIS step: `None` when the model emitted
+        // none. Only attached to a tool-call assistant message (a tool round-trip
+        // follows, so replaying the signed chain-of-thought preserves continuity).
+        let reasoning_details = {
+            let d = outcome.reasoning_details;
+            (!d.is_empty()).then_some(d)
+        };
         if !assistant_text.trim().is_empty() {
             last_text = assistant_text.clone();
         }
@@ -292,7 +303,12 @@ pub async fn run_agent_loop(
             emit(&tx, AgentEvent::Done(cap_report(report)));
             return;
         }
-        convo.push_assistant_with_tools(assistant_text, tool_calls.clone(), reasoning.clone());
+        convo.push_assistant_with_tools(
+            assistant_text,
+            tool_calls.clone(),
+            reasoning.clone(),
+            reasoning_details,
+        );
 
         // 4. Run each requested call, appending a result for EVERY call id so the
         //    conversation stays API-valid (no dangling tool_call ids).
@@ -451,6 +467,11 @@ async fn stream_step(
             // dim/italic block). Display-only: never re-emitted as content.
             StreamEvent::Reasoning(t) => {
                 outcome.reasoning.push_str(&t);
+            }
+            // Merge structured reasoning_details (by index) so the tool-call
+            // assistant message can replay the model's signed chain-of-thought.
+            StreamEvent::ReasoningDetails(d) => {
+                crate::dto::chat::merge_reasoning_details(&mut outcome.reasoning_details, d);
             }
             // Lifecycle / accounting events the sub-agent doesn't track here.
             StreamEvent::Done

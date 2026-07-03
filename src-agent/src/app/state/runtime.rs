@@ -100,6 +100,13 @@ pub struct SessionRuntime {
     /// folded onto the committed `ChatMessage` as a display-only block (never
     /// serialised). Empty when the model emits no reasoning.
     pub stream_reasoning: String,
+    /// Parallel to `stream_reasoning`: the in-progress assistant's OpenRouter
+    /// `reasoning_details`, merged (by index) from `StreamEvent::ReasoningDetails`
+    /// deltas during a turn. Armed fresh in `begin_stream`, drained on the tool-call
+    /// commit, and echoed back on tool-continuation requests (OpenRouter only) so
+    /// the model keeps its signed chain-of-thought across tool calls. Never
+    /// serialised; empty when the model emits no structured reasoning.
+    pub stream_reasoning_details: Vec<crate::dto::chat::ReasoningDetail>,
     pub current_task: Option<AbortHandle>,
     /// Receiver for the in-flight request's events, or `None` when idle. Each
     /// request owns a fresh channel; dropping this receiver silently discards
@@ -404,6 +411,7 @@ impl SessionRuntime {
             waiting: false,
             streaming: None,
             stream_reasoning: String::new(),
+            stream_reasoning_details: Vec::new(),
             current_task: None,
             active_rx: None,
             harness_rx: None,
@@ -460,6 +468,8 @@ impl SessionRuntime {
         // Arm the parallel reasoning buffer fresh so the previous round's
         // thinking can never bleed into this one.
         self.stream_reasoning.clear();
+        // Same for the structured reasoning_details accumulator (replay buffer).
+        self.stream_reasoning_details.clear();
     }
 
     pub fn append_token(&mut self, t: &str) {
@@ -486,6 +496,18 @@ impl SessionRuntime {
             None
         } else {
             Some(std::mem::take(&mut self.stream_reasoning))
+        }
+    }
+
+    /// Take the accumulated OpenRouter `reasoning_details`, clearing the buffer.
+    /// Returns `Some` only when non-empty. Drained alongside `take_reasoning` at
+    /// the tool-call commit so the structured chain-of-thought can be echoed back
+    /// on the next request and can never leak into a later round/turn.
+    pub fn take_reasoning_details(&mut self) -> Option<Vec<crate::dto::chat::ReasoningDetail>> {
+        if self.stream_reasoning_details.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.stream_reasoning_details))
         }
     }
 
@@ -940,6 +962,7 @@ impl SessionRuntime {
         // thinking block can't bleed into the next turn; it's folded onto the
         // interrupted message (display-only).
         let reasoning = self.take_reasoning();
+        self.stream_reasoning_details.clear();
         let buf = self.take_stream();
         if let Some(b) = buf {
             if !b.is_empty() {

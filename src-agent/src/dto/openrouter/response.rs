@@ -52,6 +52,15 @@ pub struct ResponseMessage {
     pub content: Option<String>,
     #[serde(default, alias = "reasoning_content", alias = "thinking")]
     pub reasoning: Option<String>,
+    /// OpenRouter `reasoning_details` array on a non-streaming assistant message.
+    /// Captured verbatim so a reasoning model's chain-of-thought (incl. load-bearing
+    /// signatures) can be echoed back on tool-continuation requests. `None` on
+    /// providers/models that don't emit it. The non-streaming path (`/compact`
+    /// summary) has no tool round-trip to replay it on, so it is decoded but not
+    /// read today — mirrors the sibling `role` field.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub reasoning_details: Option<Vec<crate::dto::chat::ReasoningDetail>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +109,13 @@ pub struct Delta {
     /// doesn't think on (and absent entirely for non-reasoning models).
     #[serde(default, alias = "reasoning_content", alias = "thinking")]
     pub reasoning: Option<String>,
+    /// Incremental OpenRouter `reasoning_details` fragments for the current
+    /// assistant turn, streamed in chunks carrying an `index`. Merged (by index)
+    /// into the assistant message's reasoning_details and echoed back on
+    /// tool-continuation requests so the model keeps its chain-of-thought (incl.
+    /// load-bearing signatures) across tool calls. `None` on frames/models without it.
+    #[serde(default)]
+    pub reasoning_details: Option<Vec<crate::dto::chat::ReasoningDetail>>,
     /// Incremental tool-call fragments. The model streams a tool call across
     /// several frames: the first carries the `id` + function `name`, subsequent
     /// frames append `arguments` text. Each entry's `index` selects the slot to

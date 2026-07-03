@@ -25,6 +25,9 @@ pub enum StreamEvent {
     /// and committed onto the assistant message as a display-only block — never
     /// sent back to the API or persisted to disk.
     Reasoning(String),
+    /// A batch of `reasoning_details` fragments from one streaming chunk (OpenRouter).
+    /// Merged by index into the assistant message's reasoning_details for replay.
+    ReasoningDetails(Vec<crate::dto::chat::ReasoningDetail>),
     /// Token/cost accounting for the in-flight generation. Arrives on the final
     /// streaming chunk, just before [`StreamEvent::Done`]; stashed and committed
     /// with the assistant message. `cached_tokens` is the share of `prompt_tokens`

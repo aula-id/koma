@@ -6,6 +6,61 @@ use super::attachment::Attachment;
 use super::role::Role;
 use super::tool::ToolCall;
 
+/// One OpenRouter `reasoning_details` array entry. Captured from the response and
+/// echoed back UNMODIFIED on tool-continuation requests so reasoning models keep
+/// their chain-of-thought across tool calls within a turn. Typed fields cover the
+/// documented shape; `extra` (serde flatten) preserves any unknown fields verbatim
+/// for byte-fidelity / forward-compat (signatures are load-bearing — never drop them).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReasoningDetail {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Merge streamed `reasoning_details` fragments into an accumulator. OpenRouter
+/// streams these in chunks carrying an `index`; entries with the same `Some(index)`
+/// are concatenated (text/summary/data appended in arrival order; signature/id/
+/// format/kind/extra last-write-wins). Entries with `index == None` (e.g. a
+/// non-streamed full array) are appended as-is.
+pub fn merge_reasoning_details(acc: &mut Vec<ReasoningDetail>, incoming: Vec<ReasoningDetail>) {
+    for d in incoming {
+        let slot = if d.index.is_some() {
+            acc.iter_mut().find(|e| e.index == d.index)
+        } else {
+            None
+        };
+        match slot {
+            Some(e) => {
+                if let Some(t) = d.text { e.text.get_or_insert_with(String::new).push_str(&t); }
+                if let Some(s) = d.summary { e.summary.get_or_insert_with(String::new).push_str(&s); }
+                if let Some(dd) = d.data { e.data.get_or_insert_with(String::new).push_str(&dd); }
+                if d.signature.is_some() { e.signature = d.signature; }
+                if d.id.is_some() { e.id = d.id; }
+                if d.format.is_some() { e.format = d.format; }
+                if d.kind.is_some() { e.kind = d.kind; }
+                for (k, v) in d.extra { e.extra.insert(k, v); }
+            }
+            None => acc.push(d),
+        }
+    }
+}
+
 /// A single turn in a conversation: who spoke and what they said.
 ///
 /// Serialised to / from JSON so it can be stored in `messages.json` and sent
@@ -40,6 +95,12 @@ pub struct ChatMessage {
     /// conversation the model sees, and never touches disk.
     #[serde(skip)]
     pub reasoning: Option<String>,
+    /// Display+replay-only OpenRouter reasoning_details for THIS assistant turn.
+    /// `#[serde(skip)]` — never touches `messages.json` and never re-enters the
+    /// conversation via disk; it lives only in-memory within an active turn so the
+    /// wire builder can echo it back on tool-continuation requests (OpenRouter only).
+    #[serde(skip)]
+    pub reasoning_details: Option<Vec<ReasoningDetail>>,
 }
 
 impl ChatMessage {
@@ -52,6 +113,7 @@ impl ChatMessage {
             tool_call_id: None,
             attachments: Vec::new(),
             reasoning: None,
+            reasoning_details: None,
         }
     }
 
@@ -65,6 +127,7 @@ impl ChatMessage {
             tool_call_id: None,
             attachments: Vec::new(),
             reasoning: None,
+            reasoning_details: None,
         }
     }
 
@@ -77,6 +140,7 @@ impl ChatMessage {
             tool_call_id: Some(tool_call_id),
             attachments: Vec::new(),
             reasoning: None,
+            reasoning_details: None,
         }
     }
 
@@ -94,6 +158,12 @@ impl ChatMessage {
     /// the message before it enters the conversation.
     pub fn with_reasoning(mut self, reasoning: Option<String>) -> Self {
         self.reasoning = reasoning.filter(|r| !r.is_empty());
+        self
+    }
+
+    /// Attach OpenRouter reasoning_details (builder style). Empty → `None`.
+    pub fn with_reasoning_details(mut self, details: Option<Vec<ReasoningDetail>>) -> Self {
+        self.reasoning_details = details.filter(|d| !d.is_empty());
         self
     }
 }

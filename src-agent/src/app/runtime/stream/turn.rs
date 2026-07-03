@@ -60,6 +60,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
     // Reasoning taken unconditionally so it can't leak; may be promoted to
     // content below when the model streamed its entire answer through that channel.
     let reasoning = rt.take_reasoning();
+    let _ = rt.take_reasoning_details();
     let buf = rt.take_stream().unwrap_or_default();
     let (content, msg_reasoning) = final_answer(buf, reasoning);
     let mut save_err = None;
@@ -169,6 +170,11 @@ pub(crate) fn advance_turn(
     // can never leak into the next round) and folded onto the committed message
     // below; never logged to disk or sent to the API.
     let reasoning = state.rest.sessions[sess_idx].take_reasoning();
+    // Structured OpenRouter reasoning_details streamed this round. Drained
+    // unconditionally (same as `reasoning`, so it can never leak into the next
+    // round) and carried onto the tool-call assistant message so the model replays
+    // its signed chain-of-thought on the continuation request (OpenRouter only).
+    let reasoning_details = state.rest.sessions[sess_idx].take_reasoning_details();
 
     // 1b. Text-format tool-call fallback. Some models (Hermes/Qwen/ChatML on
     //     budget / gpt-oss / GLM routes) emit a tool call as `<tool_call>…JSON…
@@ -211,7 +217,7 @@ pub(crate) fn advance_turn(
                 let content = buf.clone().unwrap_or_default();
                 let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
                 sess.conversation
-                    .push_assistant_with_tools(content, pending.clone(), reasoning);
+                    .push_assistant_with_tools(content, pending.clone(), reasoning, reasoning_details);
                 if let Err(e) = sess.save() {
                     save_err = Some(e.to_string());
                 }
