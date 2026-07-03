@@ -21,10 +21,11 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::EffortPickerState;
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 /// Render the effort picker for `picker` using the given colour `palette`.
-pub fn draw(frame: &mut Frame, picker: &EffortPickerState, palette: &Palette) {
+pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &EffortPickerState, palette: &Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -66,12 +67,13 @@ pub fn draw(frame: &mut Frame, picker: &EffortPickerState, palette: &Palette) {
         })
         .collect();
 
-    // Scroll so the selected row stays visible within the inner height.
+    // Scroll so the selected row stays visible within the inner height
+    // (scrolloff-walk within the window; one row per option → start == offset).
     let list_height = inner.height as usize;
-    let scroll = picker
-        .selected
-        .saturating_sub(list_height.saturating_sub(1)) as u16;
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
+    let sel = picker.selected.min(picker.options.len().saturating_sub(1));
+    let (start, _) =
+        crate::view::scroll::scroll_window(&rest.effort_offset, sel, picker.options.len(), list_height);
+    frame.render_widget(Paragraph::new(lines).scroll((start as u16, 0)), inner);
 
     // --- Capability note (dim) ---
     let note_area = chunks[2].inner(Margin { horizontal: 1, vertical: 0 });

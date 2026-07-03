@@ -71,12 +71,13 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
         }
-        Mode::KeyInput(form) => key_input::draw(frame, form, cache, cache_endpoint, &palette),
-        Mode::SessionPicker(p) => session_picker::draw(frame, p, &palette),
-        Mode::SessionHub(h) => session_hub::draw(frame, h, &palette),
-        Mode::Settings(s) => settings::draw(frame, s, cache, cache_endpoint, &palette),
+        Mode::KeyInput(form) => key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette),
+        Mode::SessionPicker(p) => session_picker::draw(frame, &state.rest, p, &palette),
+        Mode::SessionHub(h) => session_hub::draw(frame, &state.rest, h, &palette),
+        Mode::Settings(s) => settings::draw(frame, &state.rest, s, cache, cache_endpoint, &palette),
         Mode::Agents(a) => agents::draw(
             frame,
+            &state.rest,
             a,
             &state.rest.config,
             state.rest.fg().session.as_ref().map(|s| &s.settings),
@@ -107,10 +108,10 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
-            todo::render_todo_overlay(frame, chunks[3], chunks[1], &t.items, t.selected, t.completed_count(), &palette);
+            todo::render_todo_overlay(frame, chunks[3], chunks[1], &state.rest, &t.items, t.selected, t.completed_count(), &palette);
         }
-        Mode::Help(h) => help::draw(frame, h, &palette),
-        Mode::Effort(e) => effort::draw(frame, e, &palette),
+        Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
+        Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
         Mode::Loading(s) => loading::draw(frame, s, &palette),
         Mode::Usage(nav) => {
             // The dashboard renders from a pre-fetched ledger projection so the SAME
@@ -130,7 +131,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
-            message_rewind::draw(frame, chunks[3], chunks[1], rw, &palette);
+            message_rewind::draw(frame, chunks[3], chunks[1], &state.rest, rw, &palette);
         }
         Mode::QuitConfirm(s) => quit_confirm::draw(frame, s, &palette),
     }
