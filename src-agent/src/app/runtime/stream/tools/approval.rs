@@ -579,19 +579,34 @@ pub(crate) fn process_tools(
                     // `exit`: restore the base primary root (swap slot [0] back) and return
                     // to it. Extra roots in workdir[1..] are preserved. Mutate + save in a
                     // scoped borrow, then call apply_workspace_change outside it.
-                    let primary = {
+                    //
+                    // Capture whether we were ACTUALLY inside an entered worktree BEFORE the
+                    // swap: `workdir_saved.is_some()` means a real worktree is active and
+                    // exit_worktree() will restore the base; `is_none()` means there is
+                    // nothing to exit (e.g. the session was launched FROM a worktree). We
+                    // must report these distinctly or the model can't tell a no-op from a
+                    // real exit and retries `exit` in a loop.
+                    let (primary, was_active) = {
                         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            let was_active = sess.settings.workdir_saved.is_some();
                             sess.settings.exit_worktree();
                             let _ = sess.save();
-                            sess.workdir()
+                            (sess.workdir(), was_active)
                         } else {
-                            std::path::PathBuf::from(".")
+                            (std::path::PathBuf::from("."), false)
                         }
                     };
                     super::super::spawn::apply_workspace_change(
                         state, sess_idx, primary.clone(), client, handle,
                     );
-                    format!("exited to {}", primary.display())
+                    if was_active {
+                        format!("exited worktree — now at {}", primary.display())
+                    } else {
+                        format!(
+                            "no active worktree to exit — already at {} (this session started here); nothing to do",
+                            primary.display()
+                        )
+                    }
                 } else if let Some(removed) =
                     result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
                 {
