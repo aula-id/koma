@@ -449,9 +449,10 @@ pub(super) fn handle_background_subagent(id: usize, state: &mut AppState) -> Res
 
     let agent_name = state.rest.sessions[fg].subagents[sa_idx].agent_name.clone();
     let result_text = format!(
-        "backgrounded sub-agent #{id} ({agent_name}) — now running in the background. Its FULL \
-         report is delivered to you automatically when it finishes. END YOUR TURN NOW — do not \
-         poll; you will be woken with the result."
+        "backgrounded sub-agent #{id} ({agent_name}) — now running in the background. Its full \
+         report is delivered to you automatically when it finishes — no need to poll. Don't \
+         re-announce it to the user; just continue the conversation naturally, and you'll be \
+         woken with the result when it lands."
     );
     state.rest.sessions[fg]
         .tool_results
@@ -516,9 +517,10 @@ pub(super) fn handle_background_all_subagents(state: &mut AppState) -> Result<()
             .retain(|c| c != &call_id);
 
         let result_text = format!(
-            "backgrounded sub-agent #{id} ({agent_name}) — now running in the background. Its FULL \
-             report is delivered to you automatically when it finishes. END YOUR TURN NOW — do not \
-             poll; you will be woken with the result."
+            "backgrounded sub-agent #{id} ({agent_name}) — now running in the background. Its full \
+             report is delivered to you automatically when it finishes — no need to poll. Don't \
+             re-announce it to the user; just continue the conversation naturally, and you'll be \
+             woken with the result when it lands."
         );
         state.rest.sessions[fg]
             .tool_results

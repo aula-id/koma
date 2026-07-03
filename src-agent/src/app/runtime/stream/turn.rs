@@ -20,6 +20,22 @@ pub(crate) fn push_image_unsupported_notice(rest: &mut AppStateRest) {
     }
 }
 
+/// True when a tool call's argument string carries no actual arguments — empty,
+/// whitespace, `null`, or an empty JSON object. Used to detect native tool calls
+/// whose args a backend dropped while parsing a `<tool_call>` XML span, so they
+/// can be repaired from the XML still present in the assistant content.
+fn tool_args_are_empty(args: &str) -> bool {
+    let t = args.trim();
+    if t.is_empty() {
+        return true;
+    }
+    match serde_json::from_str::<serde_json::Value>(t) {
+        Ok(serde_json::Value::Object(m)) => m.is_empty(),
+        Ok(serde_json::Value::Null) => true,
+        _ => false,
+    }
+}
+
 /// True when a provider error indicates the model/endpoint cannot accept image
 /// input, so we can show the friendly notice instead of a raw error toast.
 ///
@@ -196,6 +212,46 @@ pub(crate) fn advance_turn(
                     buf = Some(cleaned);
                     pending = synthesized.clone();
                     state.rest.sessions[sess_idx].pending_tool_calls = synthesized;
+                }
+            }
+        }
+    } else if pending.iter().any(|c| tool_args_are_empty(&c.function.arguments)) {
+        // REPAIR: some backends parse a `<tool_call>` XML span into a native
+        // tool_call but DROP its arguments (args become "{}"), leaving the raw
+        // markup in `content`. The XML form is still in `text` and our extractor
+        // parses it perfectly — recover the arguments BY NAME and strip the
+        // redundant markup. We only BACKFILL empty native args (never add calls,
+        // never overwrite good args), so a legit no-arg tool call whose XML form
+        // is absent stays untouched.
+        if let Some(text) = buf.as_deref() {
+            if !text.is_empty() {
+                let (cleaned, synthesized) =
+                    crate::dto::chat::extract_text_tool_calls(text);
+                if !synthesized.is_empty() {
+                    let mut used = vec![false; synthesized.len()];
+                    let mut repaired = false;
+                    for native in pending.iter_mut() {
+                        if !tool_args_are_empty(&native.function.arguments) {
+                            continue;
+                        }
+                        // Match an as-yet-unused synthesized call of the same name
+                        // that actually carries args (positional-safe for dupes).
+                        let hit = synthesized.iter().enumerate().position(|(i, s)| {
+                            !used[i]
+                                && s.function.name == native.function.name
+                                && !tool_args_are_empty(&s.function.arguments)
+                        });
+                        if let Some(idx) = hit {
+                            native.function.arguments =
+                                synthesized[idx].function.arguments.clone();
+                            used[idx] = true;
+                            repaired = true;
+                        }
+                    }
+                    if repaired {
+                        buf = Some(cleaned);
+                        state.rest.sessions[sess_idx].pending_tool_calls = pending.clone();
+                    }
                 }
             }
         }
