@@ -207,9 +207,18 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // foreground session's reconstructed `subagents`). Mirror the daemon's
     // `agent_viewer` index / scroll / follow + the panel open-state + selection so the
     // unmodified chat renderer takes the same full-screen-viewer / overlay branch.
+    // The viewer's OPEN index is daemon-authoritative, but the scroll OFFSET +
+    // follow flag are CLIENT-owned (like the main transcript's scroll/follow):
+    // reconciling them from the daemon would fight the client's local scrolling,
+    // and because the headless daemon never renders, its `last_max_scroll` is 0
+    // so its scroll math collapses to top/bottom. Reset the local offset only
+    // when the viewer opens or switches to a different sub-agent.
+    let viewer_changed = shadow.rest.agent_viewer != global.agent_viewer;
     shadow.rest.agent_viewer = global.agent_viewer;
-    shadow.rest.agent_viewer_scroll = global.agent_viewer_scroll;
-    shadow.rest.agent_viewer_follow = global.agent_viewer_follow;
+    if viewer_changed {
+        shadow.rest.agent_viewer_scroll = 0;
+        shadow.rest.agent_viewer_follow = true;
+    }
     shadow.rest.subagents_open = global.subagents_open;
     shadow.rest.subagent_sel = global.subagent_sel;
     // The `@`-file / `/`-command picker highlighted-row index — mirrored like
