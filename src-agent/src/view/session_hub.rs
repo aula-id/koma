@@ -88,8 +88,10 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, hub: &SessionHub, palette: &
     // --- Footer: confirm bar while a kill is armed, else the keybinding hint. ---
     if let Some(ref kill_id) = hub.pending_kill {
         draw_confirm_bar(frame, chunks[2], hub, kill_id, palette);
+    } else if let Some(ref del_id) = hub.pending_delete {
+        draw_delete_confirm_bar(frame, chunks[2], hub, del_id, palette);
     } else {
-        let hint = "Tab switch · ↑/↓ select · Enter open · Ctrl+X kill · type to search history · Esc close";
+        let hint = "Tab switch · ↑/↓ select · Enter open · Ctrl+X kill (cooking) / delete (history) · type to search · Esc close";
         let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));
         frame.render_widget(instructions, chunks[2]);
     }
@@ -123,6 +125,33 @@ fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, kill_id: &s
         .bg(palette.sel_bg)
         .add_modifier(Modifier::BOLD);
     // Pad to full width so the whole footer line carries the warning background.
+    let padded = format!(" {:<width$}", text, width = area.width.saturating_sub(1) as usize);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
+        area,
+    );
+}
+
+/// Render the HISTORY-pane delete-confirm bar into `area` (replacing the footer
+/// hint). Resolves the target's display name by searching `history` for the row
+/// whose on-disk path's final component == `del_id` (the session UUID). Uses the
+/// same inverse warning treatment as [`draw_confirm_bar`]. The wording is
+/// deliberately blunt ("permanently") — this deletes files off disk.
+fn draw_delete_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, del_id: &str, palette: &Palette) {
+    if area.width == 0 {
+        return;
+    }
+    let name = hub
+        .history
+        .iter()
+        .find(|e| e.path.file_name().and_then(|n| n.to_str()) == Some(del_id))
+        .map(|e| e.name.as_str())
+        .unwrap_or("session");
+    let text = format!("Permanently delete session '{name}' from disk?  Ctrl+X confirm · Esc cancel");
+    let bar_style = Style::default()
+        .fg(palette.sel_fg)
+        .bg(palette.sel_bg)
+        .add_modifier(Modifier::BOLD);
     let padded = format!(" {:<width$}", text, width = area.width.saturating_sub(1) as usize);
     frame.render_widget(
         Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),

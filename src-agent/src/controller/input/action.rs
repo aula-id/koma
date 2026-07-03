@@ -117,6 +117,12 @@ pub enum Action {
     /// The hub is then rebuilt in place (the killed/now-idle session reflected) so
     /// the overlay stays open. No-op if nothing valid is pending.
     HubKillConfirm,
+    /// Confirm a delete armed on the hub's HISTORY pane (second Ctrl+X while a
+    /// `pending_delete` is set). The runtime reads the pending target out of the
+    /// hub state, physically deletes that on-disk session (its directory tree +
+    /// registry row) via `store::delete_session`, then rebuilds the hub in place
+    /// so it leaves HISTORY. No-op if nothing valid is pending.
+    HubDeleteConfirm,
     /// Esc on the session hub — close it and return to the (unchanged) Chat
     /// view. No session state is touched. Ctrl+C is inert.
     CloseSessionHub,

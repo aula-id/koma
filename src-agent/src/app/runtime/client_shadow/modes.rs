@@ -135,6 +135,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
         history_query: h.history_query,
         history_filtered,
         pending_kill: h.pending_kill,
+        pending_delete: None,
     }
 }
 

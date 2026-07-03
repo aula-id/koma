@@ -322,6 +322,7 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         history_query: String::new(),
         history_filtered,
         pending_kill: None,
+        pending_delete: None,
     }
 }
 
