@@ -6,6 +6,7 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::SettingsState;
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 use super::utils::truncate;
 
@@ -119,6 +120,7 @@ pub(super) fn draw_providers(
 /// Columns: Name (12 = glyph 2 + name 10), Role (11), Model (flexible), Provider (12).
 pub(super) fn draw_models(
     frame: &mut Frame,
+    rest: &AppStateRest,
     st: &SettingsState,
     palette: &Palette,
     area: Rect,
@@ -231,11 +233,25 @@ pub(super) fn draw_models(
     // Collect visible indices once so visible position == enumerate index.
     let vis_indices = st.visible_model_indices();
 
-    // Data rows — iterate visible positions only.
-    // A data row at visible position `p` is highlighted when model_sel == MODEL_CTRL_SLOTS + p.
-    let rows: Vec<Row> = vis_indices.iter().enumerate().map(|(vis_pos, &real_idx)| {
+    // Window the visible rows so the selected model stays on-screen (the Table
+    // has no TableState/scroll of its own). The Table renders a header row, so the
+    // data budget is one less than `table_h`. When focus is on a control slot
+    // (model_sel < MODEL_CTRL_SLOTS) there is no data selection → offset stays 0.
+    let data_h = (table_h as usize).saturating_sub(1);
+    let sel_data = st.model_sel.saturating_sub(MODEL_CTRL_SLOTS);
+    let (start, end) = crate::view::scroll::scroll_window(
+        &rest.settings_models_offset,
+        sel_data,
+        vis_indices.len(),
+        data_h,
+    );
+
+    // Data rows — iterate the visible window only.
+    // A data row at window position `vis_pos` maps to visible index `start+vis_pos`
+    // and is highlighted when model_sel == MODEL_CTRL_SLOTS + (start + vis_pos).
+    let rows: Vec<Row> = vis_indices[start..end].iter().enumerate().map(|(vis_pos, &real_idx)| {
         let m = &st.models[real_idx];
-        let selected = focused && st.model_sel == MODEL_CTRL_SLOTS + vis_pos;
+        let selected = focused && st.model_sel == MODEL_CTRL_SLOTS + start + vis_pos;
         let armed    = selected && st.model_delete_armed;
 
         // Name cell: dim glyph prefix + styled name text.

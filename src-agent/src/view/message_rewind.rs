@@ -24,6 +24,7 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::RewindState;
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 /// Collapse a message to a single line and truncate it to at most `max` Unicode
@@ -58,6 +59,7 @@ pub fn draw(
     frame: &mut Frame,
     input_chunk: Rect,
     transcript_chunk: Rect,
+    rest: &AppStateRest,
     rw: &RewindState,
     palette: &Palette,
 ) {
@@ -106,11 +108,17 @@ pub fn draw(
             lines.push(Line::styled(text, style));
         }
 
-        // Bottom-anchor the scroll so the selection stays visible within the list
-        // height (same calc the old full-screen list used).
+        // Scrolloff window (persisted offset on rest — RewindState is rebuilt per
+        // client frame). One row per entry, so window start == scroll offset.
         let list_height = list.height as usize;
-        let scroll = rw.selected.saturating_sub(list_height.saturating_sub(1)) as u16;
-        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), list);
+        let sel = rw.selected.min(rw.entries.len().saturating_sub(1));
+        let (start, _) = crate::view::scroll::scroll_window(
+            &rest.rewind_offset,
+            sel,
+            rw.entries.len(),
+            list_height,
+        );
+        frame.render_widget(Paragraph::new(lines).scroll((start as u16, 0)), list);
     }
 
     // --- Keybinding hint ---

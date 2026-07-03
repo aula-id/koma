@@ -37,6 +37,7 @@ use ratatui::{
 };
 
 use crate::app::mode::AgentsState;
+use crate::app::state::AppStateRest;
 use crate::model::app_config::AppConfig;
 use crate::model::settings::Settings;
 use crate::view::theme::Palette;
@@ -111,6 +112,7 @@ pub(crate) fn model_display(
 /// All colours flow through `palette` — no hardcoded `Color::` values.
 pub fn draw(
     frame: &mut Frame,
+    rest: &AppStateRest,
     st: &AgentsState,
     config: &AppConfig,
     settings: Option<&Settings>,
@@ -178,11 +180,11 @@ pub fn draw(
 
     // --- Tool picker overlay (rendered on top of everything else) ---
     if let Some(picker) = &st.tool_picker {
-        draw_tool_picker(frame, picker, palette, frame.area());
+        draw_tool_picker(frame, rest, picker, palette, frame.area());
     }
 
     // --- Model picker overlay (rendered last; only one modal open at a time) ---
     if let Some(picker) = &st.model_picker {
-        draw_model_picker(frame, picker, palette, frame.area());
+        draw_model_picker(frame, rest, picker, palette, frame.area());
     }
 }

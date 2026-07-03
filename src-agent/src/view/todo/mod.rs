@@ -14,6 +14,7 @@ use ratatui::{
 };
 
 use crate::app::mode::todo::{TodoItem, TodoStatus};
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 /// Truncate `s` to at most `max` chars, appending `…` if cut.
@@ -168,10 +169,12 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
 /// Render the `/todo` panel as a bordered overlay anchored just above
 /// `input_chunk`, drawn on top of the chat transcript. Mirrors the
 /// `/bash` overlay layout (list LEFT + detail RIGHT).
+#[allow(clippy::too_many_arguments)]
 pub fn render_todo_overlay(
     frame: &mut Frame,
     input_chunk: Rect,
     transcript_chunk: Rect,
+    rest: &AppStateRest,
     items: &[TodoItem],
     selected: usize,
     completed_count: usize,
@@ -229,10 +232,16 @@ pub fn render_todo_overlay(
         .enumerate()
         .map(|(i, item)| todo_row(item, i == sel, list_w, palette))
         .collect();
-    // Scroll so the selected row is always visible.
+    // Scrolloff window (persisted offset on rest — TodoState is rebuilt per
+    // client frame). One row per item, so window start == scroll offset.
     let scroll = if list_h > 0 {
-        let top = sel.saturating_sub(list_h.saturating_sub(1));
-        top as u16
+        let (start, _) = crate::view::scroll::scroll_window(
+            &rest.todo_offset,
+            sel,
+            items.len(),
+            list_h,
+        );
+        start as u16
     } else {
         0
     };

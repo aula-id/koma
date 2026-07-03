@@ -139,7 +139,16 @@ pub(super) fn render_subagents_panel(
                 ),
             ]));
         }
-        frame.render_widget(Paragraph::new(list_lines), list_inner);
+        // Window the left list so the selected row stays visible (the list has
+        // no scroll of its own). Total rows = live/done sub-agents + pending.
+        let total_rows = rest.fg().subagents.len() + rest.fg().pending_subagents.len();
+        let (start, _) = crate::view::scroll::scroll_window(
+            &rest.subagent_list_offset,
+            sel,
+            total_rows,
+            list_inner.height as usize,
+        );
+        frame.render_widget(Paragraph::new(list_lines).scroll((start as u16, 0)), list_inner);
 
         // RIGHT: the selected sub-agent's status line + the trailing transcript
         // lines that fit. Inset 1 col on the left so it doesn't hug the divider.

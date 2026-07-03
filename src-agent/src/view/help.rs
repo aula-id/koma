@@ -25,6 +25,7 @@ use ratatui::{
 };
 
 use crate::app::mode::{HelpKind, HelpState};
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 /// Width the key column is padded to (so descriptions align in a column).
@@ -38,7 +39,7 @@ const GREEN: Color = Color::Rgb(57, 255, 20);
 ///
 /// Colours flow through `palette`, except the fixed `GREEN` "update available"
 /// accent in the "Updating koma" block (it mirrors the non-themeable header badge).
-pub fn draw(frame: &mut Frame, st: &HelpState, palette: &Palette) {
+pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Palette) {
     // Height of the "Updating koma" block: label + current/available + run-command,
     // plus one extra line when the update carries a release message. A trailing
     // spacer line separates it from the search row.
@@ -130,14 +131,14 @@ pub fn draw(frame: &mut Frame, st: &HelpState, palette: &Palette) {
         );
     } else if max_vis > 0 {
         let sel = st.selected.min(st.filtered_idx.len() - 1);
-        // Window start keeps `sel` visible (anchors to the bottom when scrolling
-        // down past the viewport) — the same pattern as the file palette.
-        let start = if sel < max_vis {
-            0
-        } else {
-            sel + 1 - max_vis
-        };
-        let end = (start + max_vis).min(st.filtered_idx.len());
+        // Scrolloff window (persisted offset on rest — HelpState is rebuilt per
+        // client frame, so its own struct can't hold the offset).
+        let (start, end) = crate::view::scroll::scroll_window(
+            &rest.help_offset,
+            sel,
+            st.filtered_idx.len(),
+            max_vis,
+        );
 
         let rows: Vec<Line> = st.filtered_idx[start..end]
             .iter()
