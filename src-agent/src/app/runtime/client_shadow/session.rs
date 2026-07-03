@@ -88,6 +88,9 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             // The turn-bookkeeping call id is daemon-internal + never rendered, and the
             // client never advances a turn, so a shadow pending entry carries `None`.
             tool_call_id: None,
+            // Detachment drives turn bookkeeping only (never rendered); the client
+            // never advances a turn, so a shadow pending entry is left non-detached.
+            detached: false,
         })
         .collect();
     // Reconstruct the running/finished sub-agents (plain data + an inert handle/rx)
@@ -141,6 +144,10 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         transcript: sa.transcript.clone(),
         messages,
         tool_call_id: None,
+        // Detachment + nudge-latch are daemon-side turn bookkeeping, never rendered;
+        // the client never drives a sub-agent, so a shadow carries the inert defaults.
+        detached: false,
+        nudged: false,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,

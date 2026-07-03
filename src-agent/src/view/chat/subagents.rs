@@ -56,9 +56,26 @@ pub(super) fn render_subagents_panel(
     let y = input_chunk.y.saturating_sub(h);
     let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
 
+    // Build the panel title, appending Ctrl+B hint when a running blocking agent
+    // is selected (the only situation where the key does something useful).
+    let has_backgroundable = rest
+        .fg()
+        .subagents
+        .get(rest.subagent_sel)
+        .is_some_and(|sa| {
+            matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
+                && !sa.detached
+                && sa.tool_call_id.is_some()
+        });
+    let panel_title = if has_backgroundable {
+        " sub-agents  Ctrl+X kill \u{b7} Ctrl+B background "
+    } else {
+        " sub-agents  Ctrl+X kill "
+    };
+
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(" sub-agents ", Style::default().fg(palette.dim)));
+        .title(Span::styled(panel_title, Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);

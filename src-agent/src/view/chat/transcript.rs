@@ -166,7 +166,7 @@ pub(super) fn render_transcript(
             .fg()
             .subagents
             .iter()
-            .filter(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
+            .filter(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached)
             .collect();
         if !running_agents.is_empty() {
             let elapsed_ms = std::time::SystemTime::now()

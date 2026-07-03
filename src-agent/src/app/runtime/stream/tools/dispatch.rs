@@ -294,9 +294,12 @@ pub(crate) fn deny_all_pending(state: &mut AppState, sess_idx: usize, reason: &s
     rt.approval_reason = None;
     rt.waiting = false;
     rt.current_task = None;
-    // Kill every running sub-agent and drop the pending queue so a killed WC
-    // turn can't ghost-restart via orphaned tasks or stale awaiting flags.
-    rt.abort_running_subagents();
+    // Kill every BLOCKING running sub-agent and drop the pending queue so a
+    // killed WC turn can't ghost-restart via orphaned tasks or stale flags.
+    // Detached background agents are preserved (include_detached = false),
+    // matching the Esc/interrupt behavior — the user's background work survives
+    // a workspace-check denial just as it survives an Esc.
+    rt.abort_running_subagents(false);
     rt.pending_tool_tasks.clear();
     rt.awaiting_tool_tasks = false;
 }

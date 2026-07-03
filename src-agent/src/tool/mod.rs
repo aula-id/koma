@@ -132,6 +132,8 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Forget),
         Box::new(memory::Recall),
         Box::new(task::Task),
+        Box::new(task::TaskOutput),
+        Box::new(task::TaskKill),
         Box::new(todo::TodoWrite),
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),

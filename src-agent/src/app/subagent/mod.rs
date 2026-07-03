@@ -102,6 +102,19 @@ pub struct SubAgent {
     /// by the model via the `task` tool; `None` means it was spawned by the
     /// user's `/task` slash command.
     pub tool_call_id: Option<String>,
+    /// True when this sub-agent runs DETACHED (`task` with `run_in_background:
+    /// true`): the spawning `task` call was answered IMMEDIATELY with the id (it
+    /// carries `tool_call_id == None`, so the main turn never parks on it) and
+    /// the model polls it with `task_output` / stops it with `task_kill`. On
+    /// terminal a detached agent fires a ONE-shot completion nudge instead of
+    /// the `/task` chat-fold — see `nudged`. A blocking model delegation or a
+    /// `/task` slash-command agent is NOT detached.
+    pub detached: bool,
+    /// De-dupe latch for the detached-completion nudge: set the first tick a
+    /// `detached` sub-agent is observed in a terminal state, so the nudge is
+    /// injected EXACTLY ONCE even though the terminal-fold block runs every
+    /// tick. Ignored for non-detached agents. Starts `false`.
+    pub nudged: bool,
     /// Last-seen prompt tokens from [`AgentEvent::UsageReport`] (context size,
     /// not a cumulative sum). Zero until the report arrives.
     pub usage_tokens_in: u64,
@@ -135,4 +148,9 @@ pub struct PendingSubagent {
     /// The `task`-tool call id this delegation answers, if any (`None` for a
     /// `/task` slash-command enqueue, which never parks the main turn).
     pub tool_call_id: Option<String>,
+    /// Carries the detached flag across the queued→running promotion, so a
+    /// background `task` delegation enqueued while all slots were busy stays
+    /// detached (fires the completion nudge, never parks) once `try_start_pending`
+    /// promotes it. `false` for a blocking delegation or a `/task` enqueue.
+    pub detached: bool,
 }

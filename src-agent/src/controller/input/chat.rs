@@ -157,6 +157,21 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             }
             return Action::None;
         }
+        if is_ctrl(&key, 'b') {
+            let sel = rest.subagent_sel;
+            // Only background a RUNNING, non-detached sub-agent (blocking path).
+            // Queued / done / killed / already-detached agents are not eligible.
+            let eligible = rest.fg().subagents.get(sel).is_some_and(|sa| {
+                matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
+                    && !sa.detached
+                    && sa.tool_call_id.is_some()
+            });
+            if eligible {
+                let id = rest.fg().subagents[sel].id;
+                return Action::BackgroundSubagent(id);
+            }
+            return Action::None;
+        }
         match key.code {
             KeyCode::Up => {
                 rest.subagent_sel = rest.subagent_sel.saturating_sub(1);
@@ -273,6 +288,21 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             rest.fg_mut().set_toast("no active session".to_string());
         }
         return Action::None;
+    }
+
+    // Ctrl+B (main composer, NOT the `$` panel): background ALL running blocking
+    // sub-agents of the foreground session at once, unblocking the parked turn.
+    // The `$` panel's Ctrl+B handler above returns early when the panel is open,
+    // so this arm is only reached when the panel is CLOSED (normal composer mode).
+    // Only fires when at least one eligible agent exists; otherwise falls through.
+    if is_ctrl(&key, 'b')
+        && rest.fg().subagents.iter().any(|sa| {
+            matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
+                && !sa.detached
+                && sa.tool_call_id.is_some()
+        })
+    {
+        return Action::BackgroundAllSubagents;
     }
 
     // Max visible entries in the `@` file-reference palette (shared across all
