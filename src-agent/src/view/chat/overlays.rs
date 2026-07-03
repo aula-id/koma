@@ -36,9 +36,14 @@ pub(super) fn render_command_palette(
     }
     const MAX_VIS: usize = 7;
     let sel = rest.palette_sel.min(cmd_matches.len() - 1);
-    // window start keeps `sel` visible (anchors to bottom when scrolling down)
-    let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
-    let end = (start + MAX_VIS).min(cmd_matches.len());
+    // Scrolloff window: the selection walks within the visible rows and only
+    // scrolls at the edges (persisted offset), instead of pinning to the bottom.
+    let (start, end) = crate::view::scroll::scroll_window(
+        &rest.palette_offset,
+        sel,
+        cmd_matches.len(),
+        MAX_VIS,
+    );
     let rows: Vec<Line> = cmd_matches[start..end]
         .iter()
         .enumerate()
@@ -100,9 +105,14 @@ pub(super) fn render_file_palette(
         };
         if !files.is_empty() {
             let sel = rest.palette_sel.min(files.len() - 1);
-            // window start keeps `sel` visible (anchors to bottom when scrolling down)
-            let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
-            let end = (start + MAX_VIS).min(files.len());
+            // Scrolloff window: selection walks within the visible rows; the
+            // window only scrolls at the edges (persisted offset).
+            let (start, end) = crate::view::scroll::scroll_window(
+                &rest.palette_offset,
+                sel,
+                files.len(),
+                MAX_VIS,
+            );
             let rows: Vec<Line> = files[start..end].iter().enumerate().map(|(vi, f)| {
                 let i = start + vi;
                 if i == sel {

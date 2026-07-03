@@ -25,6 +25,7 @@ pub mod loading;
 pub mod message_rewind;
 pub mod markdown;
 pub mod quit_confirm;
+pub mod scroll;
 pub mod session_hub;
 pub mod session_picker;
 pub mod settings;
