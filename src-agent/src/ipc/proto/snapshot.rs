@@ -56,6 +56,11 @@ pub struct SubAgentSnapshot {
     pub name: String,
     pub label: String,
     pub status: String,
+    /// Whether this sub-agent is backgrounded (detached). Projected so the
+    /// client's `!detached` render/cadence checks work — without it the client
+    /// defaults every agent to attached and keeps animating a backgrounded one.
+    #[serde(default)]
+    pub detached: bool,
     pub steps: usize,
     pub transcript: Vec<String>,
     pub messages: Vec<ChatMessage>,

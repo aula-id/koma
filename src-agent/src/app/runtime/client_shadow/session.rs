@@ -144,9 +144,10 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         transcript: sa.transcript.clone(),
         messages,
         tool_call_id: None,
-        // Detachment + nudge-latch are daemon-side turn bookkeeping, never rendered;
-        // the client never drives a sub-agent, so a shadow carries the inert defaults.
-        detached: false,
+        // Detachment IS rendered client-side (the transcript footer + cadence
+        // predicate filter on `!detached`), so carry the projected flag. The
+        // nudge-latch is daemon-only bookkeeping, so it keeps its inert default.
+        detached: sa.detached,
         nudged: false,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
