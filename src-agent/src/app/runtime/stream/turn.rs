@@ -283,6 +283,43 @@ pub(crate) fn advance_turn(
             None => "ready".into(),
         };
         state.rest.sessions[sess_idx].status = status;
+
+        // Turn ended with queued steers still pending (they were enqueued but no
+        // tool-hop boundary consumed them). Auto-send them as a normal next turn —
+        // the user queued them expecting delivery. `waiting` is now false, so the
+        // minimal submit path spins a fresh turn.
+        let steers = std::mem::take(&mut state.rest.sessions[sess_idx].pending_steer);
+        if !steers.is_empty() {
+            let joined = steers.join("\n\n");
+            // Replicate the minimal submit sequence: push the user message, wire up
+            // the session state, and start a new stream. `handle_submit` is
+            // pub(super) in the actions module, so we inline the essentials here
+            // rather than risk a module-visibility or borrow cycle.
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None);
+                sess.conversation.push_user(joined);
+                let _ = sess.save();
+            }
+            if client.is_some() && state.rest.sessions[sess_idx].session.is_some() {
+                let history = state.rest.sessions[sess_idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.conversation.history())
+                    .unwrap_or_default();
+                state.rest.sessions[sess_idx].begin_stream();
+                state.rest.sessions[sess_idx].waiting = true;
+                state.rest.sessions[sess_idx].agent_steps = 0;
+                state.rest.sessions[sess_idx].pending_tool_calls.clear();
+                state.rest.sessions[sess_idx].awaiting_approval = false;
+                state.rest.sessions[sess_idx].tool_idx = 0;
+                state.rest.sessions[sess_idx].tool_results.clear();
+                state.rest.sessions[sess_idx].pending_tool_tasks.clear();
+                state.rest.sessions[sess_idx].awaiting_tool_tasks = false;
+                state.rest.sessions[sess_idx].status = "thinking".into();
+                super::run::start_stream_task(history, state, sess_idx, client, handle);
+            }
+        }
+
         return;
     }
 

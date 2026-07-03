@@ -256,6 +256,11 @@ pub struct SessionRuntime {
     /// a `task`-tool entry's call id is also held in `pending_subagent_calls` so the
     /// parked main turn waits for the queued delegation too.
     pub pending_subagents: VecDeque<PendingSubagent>,
+    /// Queued steer messages: user submits made WHILE a turn is cooking. Drained +
+    /// coalesced into one user message at the next tool-hop boundary (or auto-sent as
+    /// a fresh turn if the turn ends first). Full text kept here; the projection sends
+    /// truncated previews to the client. Hard cap 5 (a 6th submit toasts a warning).
+    pub pending_steer: Vec<String>,
     /// Tool-call ids of in-flight `task`-tool delegations whose result the main
     /// agent is still waiting for. The model-callable `task` tool DEFERS its tool
     /// result (mirroring the `awaiting_approval` park): `process_tools` pushes the
@@ -441,6 +446,7 @@ impl SessionRuntime {
             pending_bash_nudges: Vec::new(),
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
+            pending_steer: Vec::new(),
             pending_subagent_calls: Vec::new(),
             awaiting_subagents: false,
             next_subagent_id: 0,

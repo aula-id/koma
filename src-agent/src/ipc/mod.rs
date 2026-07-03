@@ -96,6 +96,7 @@ mod roundtrip_tests {
             // Non-empty so the round-trip proves the projected model id survives
             // serialize -> deserialize (an empty string would alias the default).
             resolved_model_id: "anthropic/claude-sonnet-4-5".to_string(),
+            pending_steer: Vec::new(),
         }
     }
 

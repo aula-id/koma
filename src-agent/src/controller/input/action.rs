@@ -224,4 +224,7 @@ pub enum Action {
     /// marked any non-terminal step `Skipped` for correctness; the runtime just
     /// swaps the mode to `Chat`.
     SkipLoading,
+    /// Clear the foreground session's queued mid-turn steer messages (Ctrl+X in the
+    /// composer while steers are pending). No-op if the queue is empty.
+    CancelSteers,
 }

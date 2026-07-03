@@ -54,31 +54,90 @@ mod transcript;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
+    text::{Line, Span},
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
 use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
-/// Compute the 5-element layout split for the chat screen given `rest` and the
+/// Compute the 6-element layout split for the chat screen given `rest` and the
 /// terminal `area`. The result is identical to what `draw` uses internally and
 /// is exposed so overlay renderers (e.g. the `/bash` panel) can anchor their
 /// popup at the same chunk positions without re-deriving the layout.
 ///
-/// Chunks in order: [0] header, [1] transcript, [2] model-name row,
-/// [3] input box, [4] status bar.
+/// Chunks in order: [0] header, [1] transcript, [2] pending-steer panel,
+/// [3] model-name row, [4] input box, [5] status bar.
+/// When `rest.fg().pending_steer` is empty, chunk [2] has zero height (hidden)
+/// and the transcript keeps its full space.
 pub(crate) fn layout_chunks(rest: &AppStateRest, area: Rect) -> std::rc::Rc<[Rect]> {
     let input_rows = input::input_row_count(rest, area.width, area.height);
     let input_h = (input_rows as u16) + 2;
+    let n = rest.fg().pending_steer.len();
+    let pending_h = if n == 0 {
+        Constraint::Length(0)
+    } else {
+        // +1 for the header row; n is capped at 5 daemon-side so max is 6 rows.
+        Constraint::Length((n as u16) + 1)
+    };
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),
             Constraint::Min(1),
+            pending_h,
             Constraint::Length(1),
             Constraint::Length(input_h),
             Constraint::Length(1),
         ])
         .split(area)
+}
+
+/// Render the pending-steer panel between the transcript and the model row.
+///
+/// Header: a full-width top-border line with the label inline as a Block title,
+/// plus horizontal padding so the rows align with the composer content. Mirrors
+/// the composer block style (view/chat/input.rs): Borders::TOP only + horizontal
+/// padding of 2. One row per queued steer: an animated braille spinner glyph +
+/// the truncated preview text. Dim styling, left-aligned. Skipped entirely when
+/// the area is zero-height (no queued steers).
+fn draw_pending_steers(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &Palette) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let dim = Style::default().fg(palette.dim);
+
+    // Full-width top border with an inline title + horizontal padding, matching the
+    // composer block (view/chat/input.rs): Borders::TOP spans the whole width and the
+    // title rides the border line; Padding::horizontal(2) insets the rows so they
+    // line up with the composer content.
+    let block = Block::new()
+        .borders(Borders::TOP)
+        .border_style(dim)
+        .title(Span::styled(" pending (ctrl+x to cancel all) ", dim))
+        .padding(Padding::horizontal(2));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, preview) in rest.fg().pending_steer.iter().enumerate() {
+        let glyph = SPINNER[((now_ms / 80 + i as u128) as usize) % SPINNER.len()];
+        let text = helpers::truncate_chars(preview, inner.width.saturating_sub(2) as usize);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{glyph} "), dim),
+            Span::styled(text, dim),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Render the chat screen from `rest` using the given colour `palette`.
@@ -101,41 +160,45 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
         return;
     }
 
-    // Layout: header (text + bottom rule) | transcript | model name row |
-    // input (top+bottom rules) | status. Header/input get thin dim borders so
-    // the screen reads as structured, not boxed; the transcript stays flat.
-    // The model-name row is a single dim right-aligned line sitting directly
-    // above the input's top border (no extra gap — it reads as a label for it).
+    // Layout: header | transcript | pending-steer panel (0 height when empty) |
+    // model name row | input (top+bottom rules) | status. Header/input get thin
+    // dim borders; the transcript stays flat. The model-name row is a single dim
+    // right-aligned line sitting directly above the input's top border.
+    // Chunks: [0] header, [1] transcript, [2] pending panel, [3] model-name row,
+    //         [4] input box, [5] status bar.
     let chunks = layout_chunks(rest, frame.area());
 
     // --- Header ---
     header::render_header(frame, chunks[0], rest, palette);
 
     // --- Model name row ---
-    header::render_model_row(frame, chunks[2], rest, resolved_model, palette);
+    header::render_model_row(frame, chunks[3], rest, resolved_model, palette);
 
     // --- Transcript ---
     transcript::render_transcript(frame, chunks[1], rest, palette);
 
+    // --- Pending-steer panel (hidden when empty) ---
+    draw_pending_steers(frame, chunks[2], rest, palette);
+
     // --- Input box / compaction animation ---
-    input::render_input(frame, chunks[3], rest, palette);
+    input::render_input(frame, chunks[4], rest, palette);
 
     // --- Status bar ---
-    status::render_status(frame, chunks[4], rest, palette);
+    status::render_status(frame, chunks[5], rest, palette);
 
     // --- Slash command palette ---
     let cmd_palette_active = overlays::render_command_palette(
-        frame, chunks[3], chunks[1], rest, palette,
+        frame, chunks[4], chunks[1], rest, palette,
     );
 
     // --- File reference palette --- only when the command palette is NOT active.
     if !cmd_palette_active {
-        overlays::render_file_palette(frame, chunks[3], chunks[1], rest, palette);
+        overlays::render_file_palette(frame, chunks[4], chunks[1], rest, palette);
     }
 
     // --- Sub-agents panel ---
     if rest.subagents_open {
-        subagents::render_subagents_panel(frame, chunks[3], chunks[1], rest, palette);
+        subagents::render_subagents_panel(frame, chunks[4], chunks[1], rest, palette);
     }
 
     // --- Toast ---
@@ -143,6 +206,6 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
 
     // --- Tool-approval prompt ---
     if rest.fg().awaiting_approval {
-        overlays::render_tool_approval(frame, chunks[3], chunks[1], rest, palette);
+        overlays::render_tool_approval(frame, chunks[4], chunks[1], rest, palette);
     }
 }

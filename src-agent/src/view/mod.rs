@@ -102,13 +102,15 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
-            bash::render_bash_overlay(frame, chunks[3], chunks[1], &b.jobs, b.selected, &palette);
+            // chunks[4] = input box, chunks[1] = transcript (6-chunk layout)
+            bash::render_bash_overlay(frame, chunks[4], chunks[1], &b.jobs, b.selected, &palette);
         }
         Mode::Todo(t) => {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
-            todo::render_todo_overlay(frame, chunks[3], chunks[1], &state.rest, &t.items, t.selected, t.completed_count(), &palette);
+            // chunks[4] = input box, chunks[1] = transcript (6-chunk layout)
+            todo::render_todo_overlay(frame, chunks[4], chunks[1], &state.rest, &t.items, t.selected, t.completed_count(), &palette);
         }
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
@@ -131,7 +133,8 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
-            message_rewind::draw(frame, chunks[3], chunks[1], &state.rest, rw, &palette);
+            // chunks[4] = input box, chunks[1] = transcript (6-chunk layout)
+            message_rewind::draw(frame, chunks[4], chunks[1], &state.rest, rw, &palette);
         }
         Mode::QuitConfirm(s) => quit_confirm::draw(frame, s, &palette),
     }

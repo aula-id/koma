@@ -24,11 +24,23 @@ pub(super) fn handle_submit(
         state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
-    // Busy guard: block while a turn is streaming OR a `!` shell is draining
-    // off-thread — a Submit landing during the latter would race the shell entry
-    // into the same conversation tail.
-    if state.rest.fg().waiting || state.rest.fg().awaiting_shell {
+    // A shell command in flight still blocks (different mode).
+    if state.rest.fg().awaiting_shell {
         state.rest.fg_mut().status = "busy — wait for response".into();
+        return Ok(());
+    }
+    // A cooking agentic turn: QUEUE this submit as a mid-turn steer instead of
+    // blocking. Hard cap 5; a 6th warns via toast and is dropped.
+    if state.rest.fg().waiting {
+        let steer_text = text.trim().to_string();
+        if steer_text.is_empty() {
+            return Ok(());
+        }
+        if state.rest.fg().pending_steer.len() >= 5 {
+            state.rest.fg_mut().set_toast("5 pending allowed!".to_string());
+            return Ok(());
+        }
+        state.rest.fg_mut().pending_steer.push(steer_text);
         return Ok(());
     }
     // Prompt-classifier (PC): keep a copy of the user's prompt to

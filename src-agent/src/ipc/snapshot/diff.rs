@@ -169,7 +169,8 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
             || p.pending_subagents != n.pending_subagents
             // A model change (settings override or global catalogue edit) has no
             // incremental delta; resync so the header updates immediately.
-            || p.resolved_model_id != n.resolved_model_id;
+            || p.resolved_model_id != n.resolved_model_id
+            || p.pending_steer != n.pending_steer;
         if structural {
             return DiffResult::full();
         }
