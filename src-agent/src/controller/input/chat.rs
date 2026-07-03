@@ -271,7 +271,9 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
 
     // Max visible entries in the `@` file-reference palette (shared across all
     // key handlers in this function and kept in sync with the view constant).
-    const FILE_PAL_MAX: usize = 10;
+    // Result cap for @-file palette navigation — must match the projection's
+    // FILE_PAL_MAX so palette_sel can walk the whole scrollable match set.
+    const FILE_PAL_MAX: usize = 200;
 
     match key.code {
         KeyCode::Esc => {
