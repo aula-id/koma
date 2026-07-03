@@ -412,7 +412,7 @@ pub fn draw(
             if st.model_delete_armed {
                 "ctrl+x again to CONFIRM delete · any key cancels"
             } else {
-                "↑↓ select · + add · ctrl+x delete · esc back"
+                "↑↓ line · ←→ item · space select · enter open/edit · ctrl+x del · esc back"
             }
         } else if on_list_field {
             "Enter manage list"

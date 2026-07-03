@@ -102,11 +102,13 @@ pub(super) fn draw_providers(
 /// Render the Models Select interactive screen inside `area`.
 ///
 /// Layout (top to bottom):
-///   Line 0: `Model List   [+add global]  [+add local]`
-///   Line 1: `[X]all [ ]local [ ]global`  (radio; cursor + active filter independently shown)
-///   Line 2+: model table (header + visible data rows)
+///   Line 0: `Model List` (title only)
+///   Line 1: `[+add global]  [+add local]` (add buttons — Left/Right select, Enter opens)
+///   Line 2: `[ ]all [X]local [ ]global` (filter boxes — Left/Right move, Space selects)
+///   Line 3+: model table (header + visible data rows)
 ///
-/// The five control slots (add global=0, add local=1, filter all=2, filter
+/// Navigation is a 2D grid: Up/Down move between lines, Left/Right move within a
+/// line. The five control slots (add global=0, add local=1, filter all=2, filter
 /// local=3, filter global=4) share the same `model_sel` index as the data rows.
 /// A data row at visible position `p` is highlighted when `model_sel == 5 + p`.
 /// This mirrors [`crate::app::mode::settings::state::model_ops::MODEL_CTRL_SLOTS`].
@@ -130,8 +132,21 @@ pub(super) fn draw_models(
     let focused = st.in_detail;
     let filter  = st.model_filter;
 
-    // ---- Line 0: title + inline add buttons -----------------------------------
-    // Format: `Model List   [+add global]  [+add local]`
+    // ---- Line 0: title --------------------------------------------------------
+    {
+        let title_line = Line::from(vec![
+            Span::styled("Model List", Style::default().fg(palette.dim)),
+        ]);
+        let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        frame.render_widget(Paragraph::new(title_line), title_area);
+    }
+
+    if area.height < 2 {
+        return;
+    }
+
+    // ---- Line 1: add buttons (below the title) --------------------------------
+    // Left/Right select between them; Enter opens the pre-scoped add modal.
     {
         let on_global = focused && st.model_sel == 0;
         let on_local  = focused && st.model_sel == 1;
@@ -147,23 +162,22 @@ pub(super) fn draw_models(
             Style::default().fg(palette.accent)
         };
 
-        let title_line = Line::from(vec![
-            Span::styled("Model List   ", Style::default().fg(palette.dim)),
+        let btn_line = Line::from(vec![
             Span::styled("[+add global]", btn_g_style),
             Span::raw("  "),
             Span::styled("[+add local]", btn_l_style),
         ]);
-        let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
-        frame.render_widget(Paragraph::new(title_line), title_area);
+        let btn_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 };
+        frame.render_widget(Paragraph::new(btn_line), btn_area);
     }
 
-    if area.height < 2 {
+    if area.height < 3 {
         return;
     }
 
-    // ---- Line 1: filter radio bar ---------------------------------------------
-    // Active filter shown with `[X]`; cursor highlight independently from `model_sel`.
-    // A filter option can simultaneously be the active one AND the cursor target.
+    // ---- Line 2: filter radio bar ---------------------------------------------
+    // Space selects the box under the cursor (applies the filter). Active filter
+    // shown with `[X]`; cursor highlight (sel 2/3/4) is independent from `[X]`.
     {
         // Helper: radio chip text — `[X]` when the active filter, `[ ]` otherwise.
         let mk_radio = |mode: ModelFilterMode, label: &str| -> String {
@@ -185,17 +199,17 @@ pub(super) fn draw_models(
             Span::raw(" "),
             Span::styled(mk_radio(ModelFilterMode::Global, "global"), cursor_style(4)),
         ]);
-        let radio_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 };
+        let radio_area = Rect { x: area.x, y: area.y + 2, width: area.width, height: 1 };
         frame.render_widget(Paragraph::new(radio_line), radio_area);
     }
 
-    if area.height < 3 {
+    if area.height < 4 {
         return;
     }
 
-    // ---- Lines 2+: model table -----------------------------------------------
-    let table_y = area.y + 2;
-    let table_h = area.height.saturating_sub(2);
+    // ---- Lines 3+: model table -----------------------------------------------
+    let table_y = area.y + 3;
+    let table_h = area.height.saturating_sub(3);
 
     // Column widths: Name (12 total = 2 glyph + 10 name text), Role (11),
     // Model (flexible), Provider (12).
