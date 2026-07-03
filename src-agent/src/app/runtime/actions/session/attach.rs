@@ -73,7 +73,7 @@ pub fn handle_live_switch(
     // Reflect the now-foreground session's live state in the status line. Per-session
     // (C6): compute the working flag (immutable `sessions` borrow) first, then write
     // the foreground session's own status.
-    let working = state.rest.fg().is_working();
+    let working = state.rest.fg().is_ui_busy();
     state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
     // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
     // the repoint above; the now-foreground session shows its OWN stored mode (normally

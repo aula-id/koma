@@ -64,6 +64,13 @@ pub struct SubAgentSnapshot {
     pub steps: usize,
     pub transcript: Vec<String>,
     pub messages: Vec<ChatMessage>,
+    /// Live in-progress assistant report text for the current (not-yet-committed)
+    /// turn, mirrored from `SubAgent::live_text`. Lets the full-screen viewer render
+    /// the streaming report on a thin client as it arrives, instead of only after the
+    /// turn commits into `messages`. `#[serde(default)]` keeps version-skewed peers
+    /// safe (empty when absent).
+    #[serde(default)]
+    pub live_text: String,
     /// Out-of-band, index-aligned reasoning for `messages` (mirrors
     /// `SessionSnapshot::committed_reasoning`). `ChatMessage::reasoning` is
     /// `#[serde(skip)]`, so the viewer's thinking blocks must ride this side

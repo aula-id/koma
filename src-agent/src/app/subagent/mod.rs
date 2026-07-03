@@ -97,6 +97,13 @@ pub struct SubAgent {
     /// [`AgentEvent::Snapshot`]. Drives the full-screen history viewer; empty
     /// until the first turn is committed.
     pub messages: Vec<crate::dto::chat::ChatMessage>,
+    /// Live in-progress assistant report text for the CURRENT (not-yet-committed)
+    /// turn, accumulated from [`AgentEvent::Token`] and cleared on the next
+    /// [`AgentEvent::Snapshot`] (which commits that turn into `messages`). Lets the
+    /// full-screen viewer render the streaming report as it arrives instead of
+    /// waiting for turn-end — mirrors how `messages`/`committed_reasoning` are
+    /// projected end-to-end. Empty when nothing is streaming.
+    pub live_text: String,
     /// The tool-call id from the model's `task` tool invocation that spawned
     /// this sub-agent, if any. `Some(call_id)` means the sub-agent was spawned
     /// by the model via the `task` tool; `None` means it was spawned by the

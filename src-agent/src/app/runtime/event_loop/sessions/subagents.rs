@@ -74,6 +74,12 @@ pub(super) fn drain_subagents(
             for ev in events {
                 match ev {
                     AgentEvent::Token(t) => {
+                        // Accumulate the raw streamed report text for the CURRENT
+                        // turn so the full-screen viewer can render it live (the
+                        // transcript below is a lossy, capped display log; this is
+                        // the verbatim in-progress report). Cleared on the next
+                        // Snapshot, which commits this turn into `messages`.
+                        sa.live_text.push_str(&t);
                         // Merge consecutive token chunks into the last transcript
                         // line when it is still a "token" line (not a marker line)
                         // and short. Push a new line otherwise.
@@ -106,6 +112,10 @@ pub(super) fn drain_subagents(
                         // Replace the structured history wholesale; drives the
                         // full-screen sub-agent viewer.
                         sa.messages = m;
+                        // The turn just committed into `messages`, so the live
+                        // in-progress buffer is now duplicated there — clear it so
+                        // the viewer doesn't render the report twice.
+                        sa.live_text = String::new();
                     }
                     AgentEvent::ToolStarted { name, args } => {
                         sa.transcript.push(format!("→ {name} {}", trunc(&args, 120)));

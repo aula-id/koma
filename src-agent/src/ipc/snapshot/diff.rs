@@ -7,7 +7,7 @@
 //! [`StateSnapshot`] instead. Correctness-first (daemon stage 4): when in doubt,
 //! ask for a full snapshot; a full snapshot is ALWAYS a valid update.
 
-use crate::ipc::proto::{StateDelta, StateSnapshot};
+use crate::ipc::proto::{StateDelta, StateSnapshot, SubAgentSnapshot};
 
 /// The outcome of diffing the current snapshot against the previously-sent one.
 ///
@@ -143,6 +143,14 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
 
     let mut deltas: Vec<StateDelta> = Vec::new();
 
+    // A sub-agent viewer being open means the client is actively rendering agent
+    // content, so EVERY field of a detached agent must stream (live updates). This
+    // is true when the `$` sub-agents panel is open OR the full-screen agent viewer
+    // is open (`agent_viewer` = `Some(idx)`). When BOTH are closed, a hidden detached
+    // agent stays IPC-silent (see `subagents_differ_for_client`) — its per-step churn
+    // no longer forces a full snapshot, so the client stops redrawing every step.
+    let viewer_open = next.global.subagents_open || next.global.agent_viewer.is_some();
+
     // --- per-session, id-keyed (the set is identical + in the same order here) ---
     for (p, n) in prev.sessions.iter().zip(next.sessions.iter()) {
         // Any of these moving is either hard to fold incrementally or rare enough
@@ -165,7 +173,11 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
             // A `cd` (the effective cwd moving) has no incremental delta, so a
             // change forces a full resync — the client rebuilds with the new cwd.
             || p.cwd != n.cwd
-            || p.subagents != n.subagents
+            // Sub-agent set: a HIDDEN detached agent's per-step content churn is
+            // ignored (only structural id/name/status/detached changes fire) so it
+            // stays IPC-silent; a visible or attached agent still resyncs on any
+            // change. See `subagents_differ_for_client`.
+            || subagents_differ_for_client(&p.subagents, &n.subagents, viewer_open)
             || p.pending_subagents != n.pending_subagents
             // A model change (settings override or global catalogue edit) has no
             // incremental delta; resync so the header updates immediately.
@@ -278,6 +290,42 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
         needs_full: false,
         deltas,
     }
+}
+
+/// Decide whether a session's sub-agent set changed in a way the CLIENT must be
+/// told about (forcing a full snapshot).
+///
+/// A backgrounded (detached) sub-agent that is NOT being viewed must be IPC-silent:
+/// its transcript / messages / steps grow every step, and re-sending on that churn
+/// makes the client redraw every step (composer lag + the chat rams to the bottom).
+/// So while such an agent is HIDDEN, we ignore ALL content churn and fire only on
+/// STRUCTURAL changes — status (Running -> Done/Killed/Error, which drives the
+/// completion nudge), identity (`id`/`name`), and the `detached` flag (so a Ctrl+B
+/// detach pushes exactly once). When the viewer is open, or the agent is attached
+/// (foreground delegation), every field matters and we compare full equality.
+///
+/// This is a strict WHITELIST for the hidden-detached case (compare ONLY
+/// id/name/status/detached) — any content field, present or future, is ignored while
+/// hidden, mirroring how background bash stays quiet.
+fn subagents_differ_for_client(
+    prev: &[SubAgentSnapshot],
+    next: &[SubAgentSnapshot],
+    viewer_open: bool,
+) -> bool {
+    if prev.len() != next.len() {
+        return true;
+    }
+    prev.iter().zip(next).any(|(p, n)| {
+        if viewer_open || !n.detached {
+            // Visible (viewer open) or attached (foreground) -> any change matters.
+            p != n
+        } else {
+            // Hidden detached agent -> ignore ALL content churn; only STRUCTURAL
+            // changes matter: status (Running -> Done/Killed/Error drives the nudge),
+            // identity, and the detached flag (a Ctrl+B detach pushes once).
+            p.id != n.id || p.name != n.name || p.status != n.status || p.detached != n.detached
+        }
+    })
 }
 
 /// Result of comparing an old vs new append-only string buffer.

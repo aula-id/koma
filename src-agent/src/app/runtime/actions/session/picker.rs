@@ -145,7 +145,7 @@ pub fn open_disk_session(
         *client = if usable { Some(build_client()) } else { None };
         // Per-session status (C6): compute the working flag first (it borrows
         // `sessions` immutably), then write the foreground session's own status.
-        let working = state.rest.fg().is_working();
+        let working = state.rest.fg().is_ui_busy();
         state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
         // No `mode = Chat` on the target (C3): it shows its OWN stored mode. The leaving
         // session was reset to Chat above before the repoint.

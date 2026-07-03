@@ -121,6 +121,7 @@ pub fn spawn_subagent(
         rx,
         transcript: Vec::new(),
         messages: Vec::new(),
+        live_text: String::new(),
         tool_call_id,
         detached,
         nudged: false,
