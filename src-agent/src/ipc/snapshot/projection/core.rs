@@ -198,7 +198,10 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
     }
 }
 
-const FILE_PAL_MAX: usize = 10;
+// Result cap for the @-file palette (how many matches are navigable/scrollable).
+// The visible window is smaller (overlays.rs MAX_VIS); search is memoized so a
+// larger cap is cheap. Lets a long match set scroll instead of truncating at 10.
+const FILE_PAL_MAX: usize = 200;
 
 fn file_palette_matches(state: &AppState) -> Option<Vec<String>> {
     let partial = crate::controller::input::file_ref_partial(&state.rest.fg().input)?;
