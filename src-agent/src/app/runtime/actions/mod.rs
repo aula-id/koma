@@ -273,6 +273,14 @@ pub(in crate::app::runtime) fn apply_action(
             }
         }
 
+        Action::BackgroundSubagent(id) => {
+            chat::handle_background_subagent(id, state)?;
+        }
+
+        Action::BackgroundAllSubagents => {
+            chat::handle_background_all_subagents(state)?;
+        }
+
         Action::OpenRewind => {
             rewind::handle_open_rewind(state)?;
         }

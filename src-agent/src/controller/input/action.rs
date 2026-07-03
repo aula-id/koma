@@ -227,4 +227,17 @@ pub enum Action {
     /// Clear the foreground session's queued mid-turn steer messages (Ctrl+X in the
     /// composer while steers are pending). No-op if the queue is empty.
     CancelSteers,
+    /// Ctrl+B in the `$` sub-agents panel: detach the selected RUNNING BLOCKING
+    /// sub-agent without killing it. Flips `detached = true`, removes its
+    /// `tool_call_id` from `pending_subagent_calls`, and injects an immediate
+    /// tool result so the parked main turn resumes. The agent keeps running; its
+    /// completion fires the standard detached nudge (see `drain_subagents`).
+    /// Inner `usize` is the sub-agent's stable session id.
+    BackgroundSubagent(usize),
+    /// Ctrl+B in the MAIN CHAT composer (not the `$` panel): detach ALL running
+    /// blocking sub-agents of the foreground session at once.  Mirrors
+    /// `BackgroundSubagent` for every eligible agent (Running, !detached,
+    /// tool_call_id present) and lets the park gate in `deferred.rs`
+    /// (`pending_subagent_calls.is_empty()`) resume the turn automatically.
+    BackgroundAllSubagents,
 }

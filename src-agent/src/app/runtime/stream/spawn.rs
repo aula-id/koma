@@ -229,6 +229,7 @@ fn spawn_task_with_id(
     agent_name: &str,
     task_text: &str,
     tool_call_id: Option<String>,
+    detached: bool,
 ) -> Option<usize> {
     if client.is_none() || state.rest.sessions[sess_idx].session.is_none() {
         return None;
@@ -303,6 +304,7 @@ fn spawn_task_with_id(
         agent_name,
         task_text,
         tool_call_id,
+        detached,
     )?;
     state.rest.sessions[sess_idx].subagents.push(sub);
     Some(id)
@@ -318,6 +320,10 @@ fn spawn_task_with_id(
 /// spawned sub-agent). Returns `None` when there is no client/session or the
 /// named agent doesn't exist — the caller surfaces that as it sees fit. Does NOT
 /// await the sub-agent. The `$` panel is NOT auto-opened; the user opens it manually.
+// Wide by nature (mirrors `spawn_task_with_id`): it bakes the full per-session
+// sub-agent context on top of `state`/`sess_idx`/client/handle. A struct would
+// only obscure the two call sites.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_task(
     state: &mut AppState,
     sess_idx: usize,
@@ -326,10 +332,11 @@ pub(crate) fn spawn_task(
     agent_name: &str,
     task_text: &str,
     tool_call_id: Option<String>,
+    detached: bool,
 ) -> Option<usize> {
     let id = state.rest.sessions[sess_idx].next_subagent_id;
     let spawned =
-        spawn_task_with_id(state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id)?;
+        spawn_task_with_id(state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached)?;
     // Only consume the id on a successful spawn (a failed spawn leaves it free).
     state.rest.sessions[sess_idx].next_subagent_id += 1;
     Some(spawned)
@@ -363,6 +370,10 @@ pub(crate) enum SpawnOutcome {
 /// This does NOT touch `pending_subagent_calls`: the blocking `task`-tool caller
 /// records the call id there itself (for BOTH spawned and queued outcomes) so the
 /// parked main turn waits for the delegation whether it ran now or later.
+// Wide by nature: threads the full sub-agent context (agent, task, deferred-call
+// id, detached flag) through to `spawn_task` / the queue. A struct would only
+// obscure the two call sites (`task`-tool interception + `/task` command).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_or_queue(
     state: &mut AppState,
     sess_idx: usize,
@@ -371,9 +382,10 @@ pub(crate) fn spawn_or_queue(
     agent_name: &str,
     task_text: &str,
     tool_call_id: Option<String>,
+    detached: bool,
 ) -> SpawnOutcome {
     if running_subagents(state, sess_idx) < crate::app::subagent::MAX_SUBAGENTS {
-        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id) {
+        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached) {
             Some(id) => SpawnOutcome::Spawned(id),
             None => SpawnOutcome::Failed,
         }
@@ -392,6 +404,7 @@ pub(crate) fn spawn_or_queue(
                 agent_name: agent_name.to_string(),
                 prompt: task_text.to_string(),
                 tool_call_id,
+                detached,
             });
         SpawnOutcome::Queued(id)
     }
@@ -438,6 +451,7 @@ pub(crate) fn try_start_pending(
             &pending.agent_name,
             &pending.prompt,
             pending.tool_call_id.clone(),
+            pending.detached,
         );
         if started.is_none() {
             // The agent no longer resolves. Drop the entry; for a task-tool

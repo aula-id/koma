@@ -144,12 +144,14 @@ pub(super) fn drain_subagents(
         // loop, so later ticks skip it).
         //
         // `chat_fold` carries the /task chat-fold note; `defer` carries the
-        // (call_id, result) for the task-tool deferred delivery. `sub_usage`
-        // carries (model_id, tokens_in, tokens_out, cost) to merge+record when
-        // the sub-agent reaches any terminal state. At most one of chat_fold /
-        // defer is Some (the two origins are mutually exclusive on tool_call_id).
-        // sub_usage is Some whenever the status is terminal and usage > 0.
-        let (chat_fold, defer, sub_usage) = {
+        // (call_id, result) for the task-tool deferred delivery; `nudge` carries
+        // the (id, agent, status_label) for a DETACHED sub-agent's one-shot
+        // completion nudge (buffered, injected when idle — mirrors bg-bash).
+        // `sub_usage` carries (model_id, tokens_in, tokens_out, cost) to merge+record
+        // when the sub-agent reaches any terminal state. At most one of chat_fold /
+        // defer / nudge is Some (blocking-task-tool, /task, and detached are mutually
+        // exclusive). sub_usage is Some whenever the status is terminal and usage > 0.
+        let (chat_fold, defer, nudge, sub_usage) = {
             let sa = &state.rest.sessions[idx].subagents[i];
             // Capture usage once; only carry it if there is something to record.
             let usage_tuple = if sa.usage_tokens_out > 0 || sa.usage_cost > 0.0 {
@@ -162,46 +164,84 @@ pub(super) fn drain_subagents(
             } else {
                 None
             };
-            match (&sa.tool_call_id, &sa.status) {
-                // task-tool path: deliver the deferred result back to the model.
-                (Some(call_id), status)
-                    if state.rest.sessions[idx].pending_subagent_calls.contains(call_id) =>
-                {
-                    let result = match status {
-                        // Deliver the FULL, untruncated report.
-                        SubAgentStatus::Done(s) => Some(s.clone()),
-                        SubAgentStatus::Error(e) => Some(format!("sub-agent error: {e}")),
-                        // Killed (user Ctrl+X / task died) — fill so the round
-                        // can't hang waiting on a result that will never come.
-                        SubAgentStatus::Killed => Some("[sub-agent killed]".to_string()),
-                        // Still running: nothing to deliver this tick.
-                        SubAgentStatus::Running => None,
-                    };
-                    // Only carry usage on a terminal transition (result is Some).
-                    let carry_usage = if result.is_some() { usage_tuple } else { None };
-                    (None, result.map(|r| (call_id.clone(), r)), carry_usage)
+            // DETACHED (task run_in_background) path FIRST: it carries
+            // tool_call_id == None (so it would otherwise fall into the /task
+            // arms below), but it must NOT chat-fold — instead it fires a ONE-shot
+            // completion nudge. The `!sa.nudged` latch makes it fire exactly once
+            // even though this block runs every tick until the agent is done.
+            if sa.detached {
+                let outcome = match &sa.status {
+                    SubAgentStatus::Done(s) => Some(s.clone()),
+                    SubAgentStatus::Error(e) => Some(format!("error: {e}")),
+                    SubAgentStatus::Killed => Some("[killed]".to_string()),
+                    SubAgentStatus::Running => None,
+                };
+                match outcome {
+                    // Terminal + not yet nudged: carry the nudge + usage.
+                    // The 3rd element of the tuple is the FULL outcome/report text,
+                    // not a short status label — it is injected verbatim into the
+                    // wake-nudge user turn so the model receives the complete result
+                    // without needing to poll task_output.
+                    Some(outcome) if !sa.nudged => {
+                        (None, None, Some((sa.id, sa.agent_name.clone(), outcome)), usage_tuple)
+                    }
+                    // Terminal but already nudged: nothing to do (usage already
+                    // recorded on the first terminal tick).
+                    Some(_) => (None, None, None, None),
+                    // Still running: nothing this tick.
+                    None => (None, None, None, None),
                 }
-                // /task command path (tool_call_id == None): on Done, build the
-                // FULL, untruncated report note (injected as an assistant turn
-                // below). Done is terminal and the agent is pruned this tick, so
-                // it fires once.
-                (None, SubAgentStatus::Done(result)) => (
-                    Some(format!(
-                        "[sub-agent #{} {}] finished: {result}",
-                        sa.id, sa.agent_name
-                    )),
-                    None,
-                    usage_tuple,
-                ),
-                // /task command path: Killed or Error — no chat-fold note (the
-                // turn is dead), but still carry accumulated usage so cost is
-                // not silently lost.
-                (None, SubAgentStatus::Killed | SubAgentStatus::Error(_)) => {
-                    (None, None, usage_tuple)
+            } else {
+                match (&sa.tool_call_id, &sa.status) {
+                    // task-tool path: deliver the deferred result back to the model.
+                    (Some(call_id), status)
+                        if state.rest.sessions[idx].pending_subagent_calls.contains(call_id) =>
+                    {
+                        let result = match status {
+                            // Deliver the FULL, untruncated report.
+                            SubAgentStatus::Done(s) => Some(s.clone()),
+                            SubAgentStatus::Error(e) => Some(format!("sub-agent error: {e}")),
+                            // Killed (user Ctrl+X / task died) — fill so the round
+                            // can't hang waiting on a result that will never come.
+                            SubAgentStatus::Killed => Some("[sub-agent killed]".to_string()),
+                            // Still running: nothing to deliver this tick.
+                            SubAgentStatus::Running => None,
+                        };
+                        // Only carry usage on a terminal transition (result is Some).
+                        let carry_usage = if result.is_some() { usage_tuple } else { None };
+                        (None, result.map(|r| (call_id.clone(), r)), None, carry_usage)
+                    }
+                    // /task command path (tool_call_id == None): on Done, build the
+                    // FULL, untruncated report note (injected as an assistant turn
+                    // below). Done is terminal and the agent is pruned this tick, so
+                    // it fires once.
+                    (None, SubAgentStatus::Done(result)) => (
+                        Some(format!(
+                            "[sub-agent #{} {}] finished: {result}",
+                            sa.id, sa.agent_name
+                        )),
+                        None,
+                        None,
+                        usage_tuple,
+                    ),
+                    // /task command path: Killed or Error — no chat-fold note (the
+                    // turn is dead), but still carry accumulated usage so cost is
+                    // not silently lost.
+                    (None, SubAgentStatus::Killed | SubAgentStatus::Error(_)) => {
+                        (None, None, None, usage_tuple)
+                    }
+                    _ => (None, None, None, None),
                 }
-                _ => (None, None, None),
             }
         };
+        // Buffer a detached agent's completion nudge and latch `nudged` so it
+        // fires exactly once. Drained into ONE synthetic user turn when the
+        // session next goes idle (see `deferred.rs`), mirroring bg-bash.
+        if let Some(entry) = nudge {
+            state.rest.sessions[idx].pending_subagent_nudges.push(entry);
+            state.rest.sessions[idx].subagents[i].nudged = true;
+            dirty = true;
+        }
         if let Some(note) = chat_fold {
             // /task command path: append the full report as a display-only
             // assistant turn so the session retains a complete record.

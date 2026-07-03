@@ -243,6 +243,15 @@ pub struct SessionRuntime {
     /// busy; drained into ONE injected user turn when the session next goes idle.
     /// Each entry is `(job_id, status_label)`.
     pub pending_bash_nudges: Vec<(usize, String)>,
+    /// Detached (`task` `run_in_background`) sub-agents that reached a terminal
+    /// state but whose completion has not yet been delivered to the model as a
+    /// nudge. Buffered here (mirrors [`pending_bash_nudges`](Self::pending_bash_nudges))
+    /// while the agent is busy; drained into ONE injected user turn when the
+    /// session next goes idle. Each entry is `(subagent_id, agent_name, full_report)`:
+    /// the third element is the FULL outcome/report text (not a short label) and
+    /// is injected verbatim into the wake-nudge body so the model receives the
+    /// complete result without needing to call task_output.
+    pub pending_subagent_nudges: Vec<(usize, String, String)>,
     /// All sub-agents spawned this session (running + finished). Drained each tick
     /// by the event loop; finished ones stay in the list for the UI to show their
     /// final state.
@@ -444,6 +453,7 @@ impl SessionRuntime {
             bash_done_rx: None,
             bash_done_tx: None,
             pending_bash_nudges: Vec::new(),
+            pending_subagent_nudges: Vec::new(),
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
             pending_steer: Vec::new(),
@@ -832,38 +842,69 @@ impl SessionRuntime {
         }
     }
 
-    /// Kill every still-running sub-agent that belongs to THIS session, drop
-    /// model-delegated queued sub-agents, but PRESERVE user-initiated /task
-    /// jobs (tool_call_id == None).
+    /// Kill running sub-agents that belong to THIS session, drop model-delegated
+    /// queued sub-agents, but PRESERVE user-initiated /task jobs
+    /// (tool_call_id == None).
     ///
-    /// Called from every turn-halt path (interrupt, deny-tool, deny-all-pending)
-    /// so that "stop means stop" — no orphaned background tokio tasks continue
-    /// running after the user has cancelled the turn.
+    /// `include_detached` controls whether detached background sub-agents
+    /// (`sub.detached == true`) are killed along with blocking ones:
     ///
-    /// - Running sub-agents: `abort.abort()` kills the tokio task; status is
-    ///   flipped to `Killed` immediately so the `$` panel reflects it without
-    ///   waiting for a terminal event that will never arrive.
+    /// - `false` (turn-halt / Esc / deny): SKIP detached agents — they are
+    ///   background jobs the user explicitly asked to run independently, and they
+    ///   must survive an Esc/interrupt just as bg-bash jobs do (bg-bash: `bash_jobs`
+    ///   are never touched by `interrupt()`, only dropped with the session on
+    ///   `close()`). Only blocking (non-detached) Running sub-agents are killed.
+    ///   `pending_subagent_nudges` is left INTACT because that buffer is exclusively
+    ///   fed by detached agents; clearing it would drop a completion notification
+    ///   that arrived just before the interrupt.
+    ///
+    /// - `true` (session close / tombstone): kill ALL Running sub-agents including
+    ///   detached ones — the session is going away entirely, nothing survives.
+    ///   `pending_subagent_nudges` is cleared (the session can no longer fire them).
+    ///
+    /// - Running (non-detached) sub-agents: `abort.abort()` kills the tokio task;
+    ///   status is flipped to `Killed` immediately so the `$` panel reflects it
+    ///   without waiting for a terminal event that will never arrive.
     /// - Model-delegated queued sub-agents (tool_call_id == Some): dropped to
-    ///   halt the interrupted turn's work.
+    ///   halt the interrupted turn's work (always, regardless of `include_detached`).
     /// - User-initiated /task entries (tool_call_id == None): retained so the
     ///   user's independent pending commands survive the turn halt.
     /// - `pending_subagent_calls` / `awaiting_subagents`: cleared here so the
-    ///   caller does NOT need to do it separately (keeps the three halt paths
-    ///   consistent).
+    ///   caller does NOT need to do it separately (keeps the halt paths consistent).
     ///
     /// This method ONLY touches the session it is called on — it is always
-    /// invoked via `state.rest.fg_mut()`, so background sessions are not
-    /// affected.
-    pub fn abort_running_subagents(&mut self) {
+    /// invoked via `state.rest.fg_mut()` (or a named session slot), so other
+    /// sessions are not affected.
+    pub fn abort_running_subagents(&mut self, include_detached: bool) {
         for sub in &mut self.subagents {
             if matches!(sub.status, crate::app::subagent::SubAgentStatus::Running) {
+                // When NOT including detached agents, skip detached ones so they
+                // keep running independently (mirrors bg-bash surviving Esc).
+                if !include_detached && sub.detached {
+                    continue;
+                }
                 sub.abort.abort();
                 sub.status = crate::app::subagent::SubAgentStatus::Killed;
+                // Suppress the detached-completion nudge for an agent killed here:
+                // the user stopped this turn (or the session closed), so the session
+                // must NOT auto-wake to announce "your background agent finished".
+                // Latching `nudged` stops the next-tick terminal-fold in
+                // `drain_subagents` from buffering a nudge for it.
+                sub.nudged = true;
             }
         }
         self.pending_subagents.retain(|p| p.tool_call_id.is_none());
         self.pending_subagent_calls.clear();
         self.awaiting_subagents = false;
+        // `pending_subagent_nudges` is exclusively fed by DETACHED agents. When
+        // `include_detached == false` (turn-halt/Esc), preserved detached agents
+        // may have already buffered a nudge that arrived just before the interrupt —
+        // keep it so the session auto-wakes to announce completion when next idle.
+        // When `include_detached == true` (session close), clear it: the session is
+        // going away and can no longer fire the nudge.
+        if include_detached {
+            self.pending_subagent_nudges.clear();
+        }
     }
 
     /// TOMBSTONE this session (daemon stage 10): tear down ALL of its in-flight work
@@ -911,7 +952,8 @@ impl SessionRuntime {
         // Sub-agents: kill running, drop model-delegated queued work, clear the
         // parked-delegation bookkeeping. (Unlike a turn-halt, a CLOSE also drops
         // user-initiated /task entries — the session is going away entirely.)
-        self.abort_running_subagents();
+        // include_detached = true: session is gone, all background agents die with it.
+        self.abort_running_subagents(true);
         self.pending_subagents.clear();
         // Release this session's on-disk lock right away (unlink + forget the path).
         if let Some(path) = self.held_lock.take() {
@@ -949,11 +991,14 @@ impl SessionRuntime {
         self.approval_reason = None;
         self.tool_idx = 0;
         self.tool_results.clear();
-        // Kill every running sub-agent spawned by this turn and drop the pending
-        // queue. `abort_running_subagents` also clears `pending_subagent_calls`
-        // and `awaiting_subagents`, so the halt path is complete — no orphaned
-        // background task can deliver a late result.
-        self.abort_running_subagents();
+        // Kill every BLOCKING running sub-agent spawned by this turn and drop the
+        // pending queue. `abort_running_subagents` also clears
+        // `pending_subagent_calls` and `awaiting_subagents`, so the halt path is
+        // complete. Detached (background) sub-agents are PRESERVED — they are the
+        // user's independent background jobs and survive Esc exactly as bg-bash
+        // jobs do (bash_jobs is never touched by interrupt()).
+        // include_detached = false: Esc/turn-halt, preserve background agents.
+        self.abort_running_subagents(false);
         // Abandon any round parked on a deferred tool task. The off-thread worker
         // keeps running but its result lands with no matching pending id, so the
         // next-turn machine reset discards it; it can't resume a turn that was
