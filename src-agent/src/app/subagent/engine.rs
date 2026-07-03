@@ -86,6 +86,9 @@ fn is_stall(text: &str) -> bool {
 #[derive(Default)]
 struct StreamOutcome {
     text: String,
+    /// Display-only reasoning/thinking accumulated from the `delta.reasoning`
+    /// channel; committed onto the assistant message so the viewer renders it.
+    reasoning: String,
     tool_calls: Vec<ToolCall>,
     error: Option<String>,
     /// Last-seen usage chunk: (prompt_tokens, completion_tokens, cost).
@@ -238,13 +241,20 @@ pub async fn run_agent_loop(
 
         let assistant_text = outcome.text;
         let tool_calls = outcome.tool_calls;
+        // Attach this step's captured thinking to the committed assistant message
+        // so the full-screen viewer can render it. `None` when the model emitted
+        // no reasoning this step.
+        let reasoning = {
+            let r = outcome.reasoning;
+            (!r.trim().is_empty()).then_some(r)
+        };
         if !assistant_text.trim().is_empty() {
             last_text = assistant_text.clone();
         }
 
         // 2. Commit the assistant turn into the isolated history (with tool calls
-        //    when present so the tool results can answer them). Reasoning is
-        //    display-only and not tracked by the sub-agent, so `None`.
+        //    when present so the tool results can answer them), carrying the
+        //    step's captured reasoning so the viewer renders the thinking block.
         if tool_calls.is_empty() {
             // Clean the raw text the SAME way the report will be delivered (unwrap
             // a <content>…</content> wrapper + strip tool-call markup) BEFORE the
@@ -259,7 +269,7 @@ pub async fn run_agent_loop(
             //    on the cleaned report; commit the RAW text into history so the
             //    transcript still shows what the model literally said.
             if nudges < 2 && is_stall(&report) {
-                convo.push_assistant(assistant_text, None);
+                convo.push_assistant(assistant_text, reasoning.clone());
                 convo.push_user(
                     "Continue now: call the tools you need to finish the task, \
                      then write your COMPLETE final report. \
@@ -282,7 +292,7 @@ pub async fn run_agent_loop(
             emit(&tx, AgentEvent::Done(cap_report(report)));
             return;
         }
-        convo.push_assistant_with_tools(assistant_text, tool_calls.clone(), None);
+        convo.push_assistant_with_tools(assistant_text, tool_calls.clone(), reasoning.clone());
 
         // 4. Run each requested call, appending a result for EVERY call id so the
         //    conversation stays API-valid (no dangling tool_call ids).
@@ -383,8 +393,9 @@ pub async fn run_agent_loop(
 /// Opens a fresh inner [`StreamEvent`] channel, dispatches
 /// [`OpenRouterClient::stream_complete`] on the resolved route, and folds the
 /// drained events: `Token` deltas append to the text (and are re-emitted as
-/// [`AgentEvent::Token`]), `ToolCalls` are collected, `Error` is captured.
-/// `Reasoning` / `Usage` are display-only accounting the sub-agent ignores.
+/// [`AgentEvent::Token`]), `ToolCalls` are collected, `Error` is captured, and
+/// `Reasoning` deltas accumulate into a parallel buffer committed onto the
+/// assistant message (so the viewer renders the thinking). `Usage` is accounting.
 async fn stream_step(
     client: &Arc<OpenRouterClient>,
     resolved: &Resolved,
@@ -435,9 +446,14 @@ async fn stream_step(
             StreamEvent::Usage { prompt_tokens, completion_tokens, cost, .. } => {
                 outcome.usage = Some((prompt_tokens, completion_tokens, cost));
             }
-            // Display-only / accounting events the sub-agent doesn't track.
-            StreamEvent::Reasoning(_)
-            | StreamEvent::Done
+            // Accumulate the model's thinking into a parallel buffer so the
+            // committed assistant message carries it (the viewer renders it as a
+            // dim/italic block). Display-only: never re-emitted as content.
+            StreamEvent::Reasoning(t) => {
+                outcome.reasoning.push_str(&t);
+            }
+            // Lifecycle / accounting events the sub-agent doesn't track here.
+            StreamEvent::Done
             | StreamEvent::Compacted { .. }
             | StreamEvent::HarnessVerdict { .. }
             | StreamEvent::EndpointsLoaded { .. }
