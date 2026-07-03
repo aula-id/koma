@@ -120,6 +120,16 @@ fn subagent_snapshot(sa: &crate::app::subagent::SubAgent) -> SubAgentSnapshot {
         SubAgentStatus::Error(e) => format!("error: {e}"),
     };
 
+    // Carry reasoning out-of-band (index-aligned with `messages`) since
+    // `ChatMessage::reasoning` is `#[serde(skip)]`. Ship an empty vec in the
+    // common no-reasoning case so the wire stays small.
+    let committed_reasoning: Vec<Option<String>> =
+        if sa.messages.iter().any(|m| m.reasoning.is_some()) {
+            sa.messages.iter().map(|m| m.reasoning.clone()).collect()
+        } else {
+            Vec::new()
+        };
+
     SubAgentSnapshot {
         id: sa.id,
         name: sa.agent_name.clone(),
@@ -128,6 +138,7 @@ fn subagent_snapshot(sa: &crate::app::subagent::SubAgent) -> SubAgentSnapshot {
         steps: sa.transcript.len(),
         transcript: sa.transcript.clone(),
         messages: sa.messages.clone(),
+        committed_reasoning,
     }
 }
 

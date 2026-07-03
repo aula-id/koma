@@ -114,6 +114,18 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
     // Fresh receiver the client never drains (the daemon folds real events; a shadow
     // sub-agent's content arrives wholesale via the next snapshot's `messages`).
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    // Re-attach the display-only reasoning the wire carried out-of-band:
+    // `ChatMessage::reasoning` is `#[serde(skip)]`, so every deserialised message
+    // arrives with `reasoning: None`. The side-channel is index-aligned with
+    // `messages`; a missing/short entry (no-reasoning case ships an empty vec)
+    // leaves `reasoning` at None. Without this the viewer's thinking block for a
+    // sub-agent turn would never render on the client.
+    let mut messages = sa.messages.clone();
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if let Some(Some(reasoning)) = sa.committed_reasoning.get(i) {
+            msg.reasoning = Some(reasoning.clone());
+        }
+    }
     SubAgent {
         id: sa.id,
         agent_name: sa.name.clone(),
@@ -124,7 +136,7 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         abort,
         rx,
         transcript: sa.transcript.clone(),
-        messages: sa.messages.clone(),
+        messages,
         tool_call_id: None,
         usage_tokens_in: 0,
         usage_tokens_out: 0,

@@ -54,6 +54,12 @@ pub struct SubAgentSnapshot {
     pub steps: usize,
     pub transcript: Vec<String>,
     pub messages: Vec<ChatMessage>,
+    /// Out-of-band, index-aligned reasoning for `messages` (mirrors
+    /// `SessionSnapshot::committed_reasoning`). `ChatMessage::reasoning` is
+    /// `#[serde(skip)]`, so the viewer's thinking blocks must ride this side
+    /// channel to survive IPC. Empty vec = no reasoning on any message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub committed_reasoning: Vec<Option<String>>,
 }
 
 /// A plain-data projection of one queued PendingSubagent.
