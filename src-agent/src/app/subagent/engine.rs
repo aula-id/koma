@@ -165,6 +165,37 @@ fn cap_report(text: String) -> String {
     }
 }
 
+/// A report that carries no real deliverable — empty, the `(no report)`
+/// placeholder, or content that is ONLY an inline think/thinking/thought block
+/// (the agent's answer went to the reasoning channel). Used to decide whether to
+/// fall back to the sub-agent's reasoning when building the delivered report.
+fn report_is_blank(report: &str) -> bool {
+    let t = report.trim();
+    if t.is_empty() || t == "(no report)" {
+        return true;
+    }
+    strip_think_blocks(t).trim().is_empty()
+}
+
+/// Remove `<think>…</think>`, `<thinking>…</thinking>`, and `<thought>…</thought>`
+/// blocks so a message that is only inline thinking registers as blank. Matches
+/// the common lowercase tag forms; dangling/unmatched tags are left as-is.
+fn strip_think_blocks(s: &str) -> String {
+    let mut out = s.to_string();
+    for (open, close) in [
+        ("<think>", "</think>"),
+        ("<thinking>", "</thinking>"),
+        ("<thought>", "</thought>"),
+    ] {
+        while let Some(o) = out.find(open) {
+            let Some(rel) = out[o..].find(close) else { break };
+            let end = o + rel + close.len();
+            out.replace_range(o..end, "");
+        }
+    }
+    out
+}
+
 /// Run the autonomous sub-agent loop to completion.
 ///
 /// Loops until the model produces a final answer (no tool calls) or, when
@@ -299,8 +330,22 @@ pub async fn run_agent_loop(
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
             // Deliver the CLEANED report (tags stripped, with empty-fallback) so a
             // weak model's wrapped output never reaches the orchestrator as empty
-            // or with a leaked </content>.
-            emit(&tx, AgentEvent::Done(cap_report(report)));
+            // or with a leaked </content>. If the model produced NO usable content
+            // (empty, "(no report)", or only an inline think tag) — i.e. it spent
+            // its final turn in the reasoning channel — fall back to that reasoning
+            // so the orchestrator gets real text instead of a blank report.
+            let delivered = if report_is_blank(&report) {
+                match &reasoning {
+                    Some(r) if !r.trim().is_empty() => format!(
+                        "(the sub-agent finished without a written report; its reasoning follows)\n\n{}",
+                        r.trim()
+                    ),
+                    _ => report,
+                }
+            } else {
+                report
+            };
+            emit(&tx, AgentEvent::Done(cap_report(delivered)));
             return;
         }
         convo.push_assistant_with_tools(
