@@ -150,6 +150,10 @@ pub(in crate::app::runtime) fn apply_action(
             session::handle_hub_kill_confirm(state, client, handle)?;
         }
 
+        Action::HubDeleteConfirm => {
+            session::handle_hub_delete_confirm(state)?;
+        }
+
         Action::CloseSessionHub => {
             session::handle_close_session_hub(state)?;
         }
@@ -259,6 +263,22 @@ pub(in crate::app::runtime) fn apply_action(
         Action::CloseUsage => {
             *state.mode_mut() = crate::app::mode::Mode::Chat;
             state.rest.fg_mut().status = "ready".into();
+        }
+
+        Action::CancelSteers => {
+            let n = state.rest.fg().pending_steer.len();
+            state.rest.fg_mut().pending_steer.clear();
+            if n > 0 {
+                state.rest.fg_mut().status = "steering queue cleared".into();
+            }
+        }
+
+        Action::BackgroundSubagent(id) => {
+            chat::handle_background_subagent(id, state)?;
+        }
+
+        Action::BackgroundAllSubagents => {
+            chat::handle_background_all_subagents(state)?;
         }
 
         Action::OpenRewind => {

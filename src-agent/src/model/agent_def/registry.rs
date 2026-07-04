@@ -55,7 +55,7 @@ pub(crate) fn builtin_agents() -> Vec<AgentDef> {
 
     vec![
         AgentDef {
-            steps: Some(15),
+            steps: Some(80),
             conditions: "When you need to locate where something is defined, used, or how code is structured across the codebase.".to_string(),
             ..AgentDef::builtin(
                 "explore",

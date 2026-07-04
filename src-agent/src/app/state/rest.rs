@@ -60,6 +60,33 @@ pub struct AppStateRest {
     /// key/mouse scroll handlers read it to clamp + detect "at bottom". Single-
     /// threaded UI state, never sent across threads, so `Cell` is fine.
     pub last_max_scroll: std::cell::Cell<u16>,
+    /// Persisted scroll offset for the `/` command + `@` file palettes (shared,
+    /// since only one shows at a time). Render-owned (interior-mutable, never
+    /// serialized); drives `scroll_window` so the selection walks within the
+    /// visible rows instead of pinning to the bottom.
+    pub palette_offset: std::cell::Cell<usize>,
+    /// Persisted scrolloff offsets for the other selectable list overlays. Each
+    /// mode-state struct is rebuilt fresh from the IPC snapshot every client frame
+    /// (see `app/runtime/client_shadow/modes.rs`), so a `Cell` on those structs
+    /// would reset each frame — the offset MUST live here on `AppStateRest` (never
+    /// reset by snapshot reconciliation). One cell per independent list; two lists
+    /// that can coexist visually (the hub panes, the two model-modal dropdowns) get
+    /// distinct cells. All drive `crate::view::scroll::scroll_window`.
+    pub help_offset: std::cell::Cell<usize>,
+    pub session_picker_offset: std::cell::Cell<usize>,
+    pub hub_cooking_offset: std::cell::Cell<usize>,
+    pub hub_history_offset: std::cell::Cell<usize>,
+    pub rewind_offset: std::cell::Cell<usize>,
+    pub todo_offset: std::cell::Cell<usize>,
+    pub key_input_results_offset: std::cell::Cell<usize>,
+    pub settings_dir_picker_offset: std::cell::Cell<usize>,
+    pub model_modal_results_offset: std::cell::Cell<usize>,
+    pub model_modal_route_offset: std::cell::Cell<usize>,
+    pub agents_tool_picker_offset: std::cell::Cell<usize>,
+    pub agents_model_picker_offset: std::cell::Cell<usize>,
+    pub effort_offset: std::cell::Cell<usize>,
+    pub settings_models_offset: std::cell::Cell<usize>,
+    pub subagent_list_offset: std::cell::Cell<usize>,
     pub last_key: Option<String>,
     /// Instant of the most-recent IDLE Esc press in Chat, used to detect a
     /// double-Esc (two idle Escs within ~400ms) that opens the message-rewind
@@ -301,6 +328,22 @@ impl AppStateRest {
             palette_sel: 0,
             should_quit: false,
             last_max_scroll: std::cell::Cell::new(0),
+            palette_offset: std::cell::Cell::new(0),
+            help_offset: std::cell::Cell::new(0),
+            session_picker_offset: std::cell::Cell::new(0),
+            hub_cooking_offset: std::cell::Cell::new(0),
+            hub_history_offset: std::cell::Cell::new(0),
+            rewind_offset: std::cell::Cell::new(0),
+            todo_offset: std::cell::Cell::new(0),
+            key_input_results_offset: std::cell::Cell::new(0),
+            settings_dir_picker_offset: std::cell::Cell::new(0),
+            model_modal_results_offset: std::cell::Cell::new(0),
+            model_modal_route_offset: std::cell::Cell::new(0),
+            agents_tool_picker_offset: std::cell::Cell::new(0),
+            agents_model_picker_offset: std::cell::Cell::new(0),
+            effort_offset: std::cell::Cell::new(0),
+            settings_models_offset: std::cell::Cell::new(0),
+            subagent_list_offset: std::cell::Cell::new(0),
             last_key: None,
             last_esc: None,
             last_model: None,

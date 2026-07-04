@@ -21,6 +21,7 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::PickerState;
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 /// Format a `SystemTime` as a human-readable relative age string.
@@ -63,7 +64,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Render the session picker for `picker` using the given colour `palette`.
-pub fn draw(frame: &mut Frame, picker: &PickerState, palette: &Palette) {
+pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &PickerState, palette: &Palette) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -135,13 +136,18 @@ pub fn draw(frame: &mut Frame, picker: &PickerState, palette: &Palette) {
         lines.push(Line::styled(row, style));
     }
 
-    // Scroll so the selected row stays visible within the inner height.
+    // Scrolloff window (persisted offset on rest — PickerState is rebuilt per
+    // client frame). `lines` holds one row per filtered entry, so the window
+    // start maps straight onto the Paragraph scroll offset.
     let list_height = inner.height as usize;
-    let scroll = picker
-        .selected
-        .saturating_sub(list_height.saturating_sub(1)) as u16;
-
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
+    let sel = picker.selected.min(picker.filtered_idx.len().saturating_sub(1));
+    let (start, _) = crate::view::scroll::scroll_window(
+        &rest.session_picker_offset,
+        sel,
+        picker.filtered_idx.len(),
+        list_height,
+    );
+    frame.render_widget(Paragraph::new(lines).scroll((start as u16, 0)), inner);
 
     // --- Keybinding hint (flat, with session count prepended) ---
     let hint = format!(

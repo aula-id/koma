@@ -104,6 +104,14 @@ pub struct WireMessage {
     pub tool_calls: Option<Vec<crate::dto::chat::ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// OpenRouter `reasoning_details` echoed back on a tool-continuation request so
+    /// a reasoning model keeps its chain-of-thought (incl. load-bearing signatures)
+    /// across tool calls. Populated ONLY when the target endpoint speaks OpenRouter's
+    /// dialect (see `to_wire_with_images`'s `preserve_reasoning`); `None` (and thus
+    /// omitted from the wire) everywhere else, so the safe regenerate-on-next-turn
+    /// default is preserved for OpenAI-native gateways.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_details: Option<Vec<crate::dto::chat::ReasoningDetail>>,
 }
 
 /// Convert a conversation history into wire messages, placing the single prompt-
@@ -129,7 +137,7 @@ pub struct WireMessage {
 /// fresh system message), the whole content is emitted as one cached part — the
 /// original pre-split behaviour.
 pub fn to_wire(messages: Vec<ChatMessage>) -> Vec<WireMessage> {
-    to_wire_with_images(messages, None)
+    to_wire_with_images(messages, None, false)
 }
 
 /// Image-attachment context for [`to_wire_with_images`]: where the on-disk images
@@ -171,13 +179,28 @@ pub struct ImageWireCtx {
 /// When the System content has NO mark (e.g. secondary/utility calls that build a
 /// fresh system message), the whole content is emitted as one cached part — the
 /// original pre-split behaviour.
+///
+/// `preserve_reasoning` gates OpenRouter `reasoning_details` echo-back: when true
+/// (OpenRouter-dialect endpoints only), each assistant message's captured
+/// `reasoning_details` ride the wire so a reasoning model keeps its chain-of-thought
+/// (incl. signatures) across tool calls; when false (every other endpoint + all the
+/// oneshot/classifier/fold/blob paths) they are dropped, keeping the safe
+/// regenerate-on-next-turn default.
 pub fn to_wire_with_images(
     messages: Vec<ChatMessage>,
     image_ctx: Option<&ImageWireCtx>,
+    preserve_reasoning: bool,
 ) -> Vec<WireMessage> {
     messages
         .into_iter()
         .map(|m| {
+            // Capture the replay reasoning BEFORE any field of `m` is moved out
+            // below (content / tool_calls), so the by-move take can't conflict.
+            let reasoning_details = if preserve_reasoning {
+                m.reasoning_details
+            } else {
+                None
+            };
             let content = if m.role == crate::dto::chat::Role::System {
                 WireContent::Parts(system_parts(m.content))
             } else if !m.attachments.is_empty() {
@@ -222,6 +245,7 @@ pub fn to_wire_with_images(
                 content,
                 tool_calls,
                 tool_call_id: m.tool_call_id,
+                reasoning_details,
             }
         })
         .collect()

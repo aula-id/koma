@@ -29,6 +29,7 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::{HubPane, SessionHub, SessionKind};
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 /// Format a `SystemTime` as a human-readable relative age string.
@@ -69,7 +70,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Render the session hub for `hub` using the given colour `palette`.
-pub fn draw(frame: &mut Frame, hub: &SessionHub, palette: &Palette) {
+pub fn draw(frame: &mut Frame, rest: &AppStateRest, hub: &SessionHub, palette: &Palette) {
     // Split: cooking half | history half | one-line hint. The two halves share the
     // remaining height evenly (each is independently scrollable inside its slot).
     let chunks = Layout::default()
@@ -81,14 +82,16 @@ pub fn draw(frame: &mut Frame, hub: &SessionHub, palette: &Palette) {
         ])
         .split(frame.area());
 
-    draw_cooking(frame, chunks[0], hub, palette);
-    draw_history(frame, chunks[1], hub, palette);
+    draw_cooking(frame, chunks[0], rest, hub, palette);
+    draw_history(frame, chunks[1], rest, hub, palette);
 
     // --- Footer: confirm bar while a kill is armed, else the keybinding hint. ---
     if let Some(ref kill_id) = hub.pending_kill {
         draw_confirm_bar(frame, chunks[2], hub, kill_id, palette);
+    } else if let Some(ref del_id) = hub.pending_delete {
+        draw_delete_confirm_bar(frame, chunks[2], hub, del_id, palette);
     } else {
-        let hint = "Tab switch · ↑/↓ select · Enter open · Ctrl+X kill · type to search history · Esc close";
+        let hint = "Tab switch · ↑/↓ select · Enter open · Ctrl+X kill (cooking) / delete (history) · type to search · Esc close";
         let instructions = Paragraph::new(hint).style(Style::default().fg(palette.dim));
         frame.render_widget(instructions, chunks[2]);
     }
@@ -129,8 +132,35 @@ fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, kill_id: &s
     );
 }
 
+/// Render the HISTORY-pane delete-confirm bar into `area` (replacing the footer
+/// hint). Resolves the target's display name by searching `history` for the row
+/// whose on-disk path's final component == `del_id` (the session UUID). Uses the
+/// same inverse warning treatment as [`draw_confirm_bar`]. The wording is
+/// deliberately blunt ("permanently") — this deletes files off disk.
+fn draw_delete_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, del_id: &str, palette: &Palette) {
+    if area.width == 0 {
+        return;
+    }
+    let name = hub
+        .history
+        .iter()
+        .find(|e| e.path.file_name().and_then(|n| n.to_str()) == Some(del_id))
+        .map(|e| e.name.as_str())
+        .unwrap_or("session");
+    let text = format!("Permanently delete session '{name}' from disk?  Ctrl+X confirm · Esc cancel");
+    let bar_style = Style::default()
+        .fg(palette.sel_fg)
+        .bg(palette.sel_bg)
+        .add_modifier(Modifier::BOLD);
+    let padded = format!(" {:<width$}", text, width = area.width.saturating_sub(1) as usize);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
+        area,
+    );
+}
+
 /// Render the TOP "cooking" pane (the live sessions) into `area`.
-fn draw_cooking(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palette) {
+fn draw_cooking(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &SessionHub, palette: &Palette) {
     let focused = hub.focus == HubPane::Cooking;
 
     let real_sessions = hub.cooking.iter().filter(|e| e.kind == SessionKind::Session).count();
@@ -184,12 +214,18 @@ fn draw_cooking(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
         }
     }
 
-    // Scroll so the selected row stays visible within this pane's height (only the
-    // focused pane scrolls to its cursor; the unfocused pane sits at the top).
+    // Only the focused pane scrolls to its cursor (unfocused sits at top).
+    // Persisted offset on rest — SessionHub is rebuilt per client frame.
     let list_height = inner.height as usize;
     let scroll = if focused {
-        hub.cooking_selected
-            .saturating_sub(list_height.saturating_sub(1)) as u16
+        let sel = hub.cooking_selected.min(hub.cooking.len().saturating_sub(1));
+        let (start, _) = crate::view::scroll::scroll_window(
+            &rest.hub_cooking_offset,
+            sel,
+            hub.cooking.len(),
+            list_height,
+        );
+        start as u16
     } else {
         0
     };
@@ -205,7 +241,7 @@ fn draw_cooking(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
 /// client (the shadow: identity filter over the already-filtered rows the daemon
 /// projected). An empty filtered view shows `no matches` when a query is active, or
 /// `no past sessions` when there is simply no history.
-fn draw_history(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palette) {
+fn draw_history(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &SessionHub, palette: &Palette) {
     let focused = hub.focus == HubPane::History;
 
     let inner = pane_inner(
@@ -270,8 +306,15 @@ fn draw_history(frame: &mut Frame, area: Rect, hub: &SessionHub, palette: &Palet
 
     let list_height = list_area.height as usize;
     let scroll = if focused {
-        hub.history_selected
-            .saturating_sub(list_height.saturating_sub(1)) as u16
+        let n = hub.history_filtered.len();
+        let sel = hub.history_selected.min(n.saturating_sub(1));
+        let (start, _) = crate::view::scroll::scroll_window(
+            &rest.hub_history_offset,
+            sel,
+            n,
+            list_height,
+        );
+        start as u16
     } else {
         0
     };

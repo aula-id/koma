@@ -36,9 +36,14 @@ pub(super) fn render_command_palette(
     }
     const MAX_VIS: usize = 7;
     let sel = rest.palette_sel.min(cmd_matches.len() - 1);
-    // window start keeps `sel` visible (anchors to bottom when scrolling down)
-    let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
-    let end = (start + MAX_VIS).min(cmd_matches.len());
+    // Scrolloff window: the selection walks within the visible rows and only
+    // scrolls at the edges (persisted offset), instead of pinning to the bottom.
+    let (start, end) = crate::view::scroll::scroll_window(
+        &rest.palette_offset,
+        sel,
+        cmd_matches.len(),
+        MAX_VIS,
+    );
     let rows: Vec<Line> = cmd_matches[start..end]
         .iter()
         .enumerate()
@@ -89,20 +94,26 @@ pub(super) fn render_file_palette(
     palette: &Palette,
 ) {
     if let Some(partial) = crate::controller::input::file_ref_partial(&rest.fg().input) {
-        const MAX_VIS: usize = 10;
+        const MAX_VIS: usize = 10; // visible window height (rows shown at once)
+        const FILE_PAL_RESULTS: usize = 200; // result cap — larger than the window so the list scrolls
         // Prefer the daemon-projected palette when present (the thin attach client,
         // whose reconstructed `dir_cache` is empty — it would otherwise show no rows).
-        // `None` on a local TUI: compute the matches live from the session index, the
-        // unchanged behaviour. Both run the SAME `search(partial, MAX_VIS)`.
+        // `None` on a local TUI: compute the matches live from the session index. Both
+        // return up to FILE_PAL_RESULTS matches; the window (MAX_VIS) scrolls through them.
         let files: Vec<String> = match &rest.file_palette {
             Some(projected) => projected.clone(),
-            None => rest.fg().dir_cache.read().map(|c| c.search(partial, MAX_VIS)).unwrap_or_default(),
+            None => rest.fg().dir_cache.read().map(|c| c.search(partial, FILE_PAL_RESULTS)).unwrap_or_default(),
         };
         if !files.is_empty() {
             let sel = rest.palette_sel.min(files.len() - 1);
-            // window start keeps `sel` visible (anchors to bottom when scrolling down)
-            let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
-            let end = (start + MAX_VIS).min(files.len());
+            // Scrolloff window: selection walks within the visible rows; the
+            // window only scrolls at the edges (persisted offset).
+            let (start, end) = crate::view::scroll::scroll_window(
+                &rest.palette_offset,
+                sel,
+                files.len(),
+                MAX_VIS,
+            );
             let rows: Vec<Line> = files[start..end].iter().enumerate().map(|(vi, f)| {
                 let i = start + vi;
                 if i == sel {

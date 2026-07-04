@@ -49,7 +49,9 @@ pub(super) fn handle_task(
     // shared `spawn_or_queue` helper so the ctx/registry/awareness/memory inputs
     // + bookkeeping never diverge from the `task` tool.
     let fgi = state.rest.foreground;
-    match super::super::stream::spawn_or_queue(state, fgi, client, handle, &agent_name, &task_text, None)
+    // `/task` sub-agents are never detached: the slash command has no background
+    // mode, so pass `detached = false` (blocking/foreground-style lifecycle).
+    match super::super::stream::spawn_or_queue(state, fgi, client, handle, &agent_name, &task_text, None, false)
     {
         super::super::stream::SpawnOutcome::Spawned(id) => {
             state

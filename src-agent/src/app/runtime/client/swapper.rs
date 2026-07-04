@@ -146,6 +146,7 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
         history_query: String::new(),
         history_filtered,
         pending_kill: None,
+        pending_delete: None,
     }
 }
 
@@ -197,6 +198,11 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
     // rebuild unchanged since it's already an identity, not a position.
     let saved_kill_id: Option<String> = hub.pending_kill.clone();
 
+    // Same for a pending HISTORY-pane delete arm — it's a session UUID identity, so it
+    // survives the rebuild; without this it would reset every probe tick and the confirm
+    // bar would vanish after ~1s.
+    let saved_delete_id: Option<String> = hub.pending_delete.clone();
+
     // Rebuild the panes from the handed-in snapshot (no blocking discovery on this thread).
     let mut fresh = hub_from_snapshot(fresh, current_id);
 
@@ -244,6 +250,8 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
     // survives the rebuild. If the targeted session is gone, the confirm bar gracefully
     // re-arms on the next Ctrl+X press (the UUID won't match any current row).
     fresh.pending_kill = saved_kill_id;
+
+    fresh.pending_delete = saved_delete_id;
 
     *hub = fresh;
 }
@@ -466,6 +474,15 @@ fn handle_swapper_key(
         // Fall through: the key is handled normally this same press.
     }
 
+    // Same disarm rule for a pending HISTORY-pane delete: any key other than a
+    // confirming Ctrl+X (intercepted above) cancels the armed delete.
+    if hub.pending_delete.is_some() {
+        hub.pending_delete = None;
+        if matches!(key.code, KeyCode::Esc) && !key.modifiers.contains(KeyModifiers::CONTROL) {
+            return None;
+        }
+    }
+
     // Ctrl+C is fully inert now (koma disables it): it no longer cancels the swapper.
     // Esc is the sole cancel gesture (handled in the match below).
 
@@ -523,16 +540,26 @@ fn handle_swapper_key(
     }
 }
 
-/// Handle a `Ctrl+X` press in the swapper: the two-step session NUKE.
+fn handle_ctrl_x_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<SwapperOutcome> {
+    match hub.focus {
+        HubPane::Cooking => handle_ctrl_x_cooking_nuke(hub, current_id),
+        HubPane::History => {
+            handle_ctrl_x_history_delete(hub);
+            None
+        }
+    }
+}
+
+/// Handle a `Ctrl+X` press on the COOKING pane: the two-step session NUKE
+/// (arm → confirm) that reaps the focused live session's daemon.
 ///
-/// Guard: acts ONLY when the COOKING pane is focused and the highlighted row is a REAL live
-/// session (`SessionKind::Session` carrying `Some(session_id)`). On the History pane, the
-/// synthetic `[+ new session]` row, or a row with no id, it returns `None` and arms nothing
-/// (there is no daemon to reap).
+/// Guard: acts ONLY when the highlighted row is a REAL live session
+/// (`SessionKind::Session` carrying `Some(session_id)`). On the synthetic
+/// `[+ new session]` row or a row with no id, it returns `None` and arms nothing.
 ///
 /// Two-step (mirrors the daemon-side hub's arm→confirm):
-///   - not yet armed on THIS row → arm: set `pending_kill` to the focused cooking index and
-///     stay in the picker (the confirm bar renders from `pending_kill`);
+///   - not yet armed on THIS row → arm: set `pending_kill` to the focused cooking
+///     index and stay in the picker (the confirm bar renders from `pending_kill`);
 ///   - already armed AND still aimed at the same session UUID → CONFIRM = nuke: reap
 ///     that session's daemon ([`manage::nuke_session_daemon`], a SILENT graceful
 ///     `QuitDaemon` that is alt-screen safe — unlike `stop_session_daemon`, which
@@ -541,12 +568,7 @@ fn handle_swapper_key(
 ///     for the ~1s probe tick.
 ///
 /// Always returns `None` — a nuke never resolves the swapper; the user keeps picking.
-fn handle_ctrl_x_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<SwapperOutcome> {
-    // Only the cooking pane has killable rows.
-    if !matches!(hub.focus, HubPane::Cooking) {
-        return None;
-    }
-
+fn handle_ctrl_x_cooking_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<SwapperOutcome> {
     // Resolve the focused row + its session id; bail (arm nothing) on the synthetic
     // new-session row or any row without an id.
     let target_id = match hub.selected_cooking() {
@@ -581,6 +603,39 @@ fn handle_ctrl_x_nuke(hub: &mut SessionHub, current_id: Option<&str>) -> Option<
     apply_snapshot(hub, fresh, current_id);
 
     None
+}
+
+/// Handle a `Ctrl+X` press on the HISTORY pane: two-step PHYSICAL delete of the
+/// on-disk session (arm → confirm). First press arms `pending_delete` on the
+/// focused row's session UUID; a second press on the SAME row deletes the
+/// session directory + its registry row via [`crate::model::store::delete_session`],
+/// drops it from the in-memory `history` list, and refilters so it vanishes
+/// immediately (the background probe only refreshes COOKING — history is
+/// client-owned here). Irreversible. No-op on an empty filtered view.
+fn handle_ctrl_x_history_delete(hub: &mut SessionHub) {
+    let real = match hub.selected_history_real_idx() {
+        Some(r) => r,
+        None => return,
+    };
+    let (path, uuid) = match hub.history.get(real) {
+        Some(e) => match e.path.file_name().and_then(|n| n.to_str()) {
+            Some(id) => (e.path.clone(), id.to_string()),
+            None => return,
+        },
+        None => return,
+    };
+    // Not yet armed on THIS row → arm and wait for the confirming second press.
+    if hub.pending_delete.as_deref() != Some(uuid.as_str()) {
+        hub.pending_delete = Some(uuid);
+        return;
+    }
+    // Second press on the same row → CONFIRM = physical delete (disk + registry).
+    let _ = crate::model::store::delete_session(&path);
+    hub.pending_delete = None;
+    if real < hub.history.len() {
+        hub.history.remove(real);
+    }
+    hub.refilter_history();
 }
 
 /// Resolve an Enter press in the swapper to a target session UUID (or `None` to stay in

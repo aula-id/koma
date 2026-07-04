@@ -56,9 +56,26 @@ pub(super) fn render_subagents_panel(
     let y = input_chunk.y.saturating_sub(h);
     let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
 
+    // Build the panel title, appending Ctrl+B hint when a running blocking agent
+    // is selected (the only situation where the key does something useful).
+    let has_backgroundable = rest
+        .fg()
+        .subagents
+        .get(rest.subagent_sel)
+        .is_some_and(|sa| {
+            matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
+                && !sa.detached
+                && sa.tool_call_id.is_some()
+        });
+    let panel_title = if has_backgroundable {
+        " sub-agents  Ctrl+X kill \u{b7} Ctrl+B background "
+    } else {
+        " sub-agents  Ctrl+X kill "
+    };
+
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(" sub-agents ", Style::default().fg(palette.dim)));
+        .title(Span::styled(panel_title, Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
@@ -139,7 +156,16 @@ pub(super) fn render_subagents_panel(
                 ),
             ]));
         }
-        frame.render_widget(Paragraph::new(list_lines), list_inner);
+        // Window the left list so the selected row stays visible (the list has
+        // no scroll of its own). Total rows = live/done sub-agents + pending.
+        let total_rows = rest.fg().subagents.len() + rest.fg().pending_subagents.len();
+        let (start, _) = crate::view::scroll::scroll_window(
+            &rest.subagent_list_offset,
+            sel,
+            total_rows,
+            list_inner.height as usize,
+        );
+        frame.render_widget(Paragraph::new(list_lines).scroll((start as u16, 0)), list_inner);
 
         // RIGHT: the selected sub-agent's status line + the trailing transcript
         // lines that fit. Inset 1 col on the left so it doesn't hug the divider.
@@ -259,7 +285,21 @@ pub(super) fn render_agent_viewer(
 
     // Render the sub-agent's structured conversation through the SHARED main-chat
     // transcript path (markdown bodies, reasoning/thinking blocks, ⚙/✓ tool lines).
-    let lines = assemble_messages(&sa.messages, palette, wrap_w);
+    // While a turn is still streaming its report has not been committed into
+    // `messages` yet (that happens at turn-end via an `AgentEvent::Snapshot`), so
+    // append the live in-progress buffer as a trailing assistant turn — the viewer
+    // then shows the report as it streams, mirroring the live cooking pane. Cheap:
+    // a clone only when something is actually streaming.
+    let lines = if sa.live_text.is_empty() {
+        assemble_messages(&sa.messages, palette, wrap_w)
+    } else {
+        let mut msgs = sa.messages.clone();
+        msgs.push(crate::dto::chat::ChatMessage::new(
+            crate::dto::chat::Role::Assistant,
+            sa.live_text.clone(),
+        ));
+        assemble_messages(&msgs, palette, wrap_w)
+    };
 
     // Scroll model: while the agent is RUNNING auto-follow the bottom so live
     // progress shows; otherwise honour the stored offset, clamped. Publish the max

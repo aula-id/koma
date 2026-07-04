@@ -72,6 +72,7 @@ pub fn spawn_subagent(
     agent_name: &str,
     task: &str,
     tool_call_id: Option<String>,
+    detached: bool,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
@@ -120,7 +121,10 @@ pub fn spawn_subagent(
         rx,
         transcript: Vec::new(),
         messages: Vec::new(),
+        live_text: String::new(),
         tool_call_id,
+        detached,
+        nudged: false,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,

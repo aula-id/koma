@@ -37,6 +37,7 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::{SETTING_CATEGORIES, SettingField, SettingsState};
+use crate::app::state::AppStateRest;
 use crate::model::app_config::ThemeMode;
 use crate::view::theme::{resolve_accent, Palette};
 use providers::{draw_providers, draw_models};
@@ -59,6 +60,7 @@ const SIDEBAR_W: u16 = 22;
 /// the per-accent tint resolved via [`resolve_accent`].
 pub fn draw(
     frame: &mut Frame,
+    rest: &AppStateRest,
     st: &SettingsState,
     models_cache: &[crate::dto::openrouter::ModelInfo],
     cache_endpoint: Option<&str>,
@@ -161,7 +163,7 @@ pub fn draw(
     if st.is_providers_category() {
         draw_providers(frame, st, palette, detail_inner);
     } else if st.is_models_category() {
-        draw_models(frame, st, palette, detail_inner);
+        draw_models(frame, rest, st, palette, detail_inner);
     } else if cat_fields.is_empty() {
         // Stub placeholder for other categories with no fields yet.
         let stub_text = "(stub)";
@@ -412,7 +414,7 @@ pub fn draw(
             if st.model_delete_armed {
                 "ctrl+x again to CONFIRM delete · any key cancels"
             } else {
-                "↑↓ select · + add · ctrl+x delete · esc back"
+                "↑↓ line · ←→ item · space select · enter open/edit · ctrl+x del · esc back"
             }
         } else if on_list_field {
             "Enter manage list"
@@ -456,9 +458,14 @@ pub fn draw(
             )));
         } else {
             let sel = picker.sel.min(picker.matches.len().saturating_sub(1));
-            // Window keeps `sel` visible, anchoring to the bottom while scrolling.
-            let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
-            let end = (start + MAX_VIS).min(picker.matches.len());
+            // Scrolloff window (persisted offset on rest — SettingsState/PathPicker
+            // is rebuilt per client frame).
+            let (start, end) = crate::view::scroll::scroll_window(
+                &rest.settings_dir_picker_offset,
+                sel,
+                picker.matches.len(),
+                MAX_VIS,
+            );
             for (vi, m) in picker.matches[start..end].iter().enumerate() {
                 let i = start + vi;
                 if i == sel {
@@ -515,7 +522,7 @@ pub fn draw(
             .map(|(ep, _)| cache_endpoint == Some(ep.as_str()))
             .unwrap_or(false);
         draw_model_modal(
-            frame, st, modal, omni, is_or, cache_matches, models_cache, palette, frame.area(),
+            frame, rest, st, modal, omni, is_or, cache_matches, models_cache, palette, frame.area(),
         );
 
         // Role checkbox picker overlay: a modal-on-modal, drawn LAST so it floats

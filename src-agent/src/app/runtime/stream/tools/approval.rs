@@ -29,6 +29,27 @@ fn parse_bash_id(job_id: &str) -> Option<usize> {
         .ok()
 }
 
+/// Parse a detached sub-agent id from a `task_output` / `task_kill` `id` arg,
+/// which the model may send as a JSON integer OR a string (`3` or `"3"`, and
+/// tolerating a stray `#`/`sub-`/`agent-` prefix). Returns `None` for anything
+/// that doesn't resolve to a number, so an unknown handle surfaces a clean "no
+/// such sub-agent" error. Mirrors [`parse_bash_id`], generalised to both JSON
+/// shapes because the `task_*` tools declare `id` as `integer | string`.
+fn parse_subagent_id(v: &serde_json::Value) -> Option<usize> {
+    if let Some(n) = v.as_u64() {
+        return usize::try_from(n).ok();
+    }
+    let s = v.as_str()?.trim();
+    s.strip_prefix('#')
+        .unwrap_or(s)
+        .strip_prefix("sub-")
+        .or_else(|| s.strip_prefix("agent-"))
+        .unwrap_or(s)
+        .trim()
+        .parse::<usize>()
+        .ok()
+}
+
 /// Render a one-line status banner for a background bash job, shown FIRST in a
 /// `bash_output` result so the model sees the lifecycle at a glance: `[running]`,
 /// `[exit <code>]`, `[killed]`, or `[error: <msg>]`.
@@ -198,11 +219,57 @@ pub(crate) fn process_tools(
                 serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
             let agent = args.get("agent").and_then(|v| v.as_str()).unwrap_or("").trim();
             let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim();
+            // `run_in_background: true` makes the sub-agent DETACHED: the call is
+            // answered IMMEDIATELY with its id (no park), mirroring bg-bash. The
+            // model then polls it with `task_output` / stops it with `task_kill`.
+            let background = args
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if agent.is_empty() || prompt.is_empty() {
                 state.rest.sessions[sess_idx].tool_results.push((
                     call.id.clone(),
                     "error: task requires non-empty 'agent' and 'prompt'".to_string(),
                 ));
+            } else if background {
+                // DETACHED branch (mirrors the bg-bash interception): spawn/queue
+                // the agent NOT tied to this call (tool_call_id = None) and marked
+                // detached, DO NOT record the call id in `pending_subagent_calls`
+                // (so the round never parks on it), and push an IMMEDIATE result.
+                // On terminal the detached agent fires a completion nudge (see
+                // `drain_subagents` + `deferred.rs`) so the model knows to poll it.
+                let agent = agent.to_string();
+                let prompt = prompt.to_string();
+                let result = match super::super::spawn::spawn_or_queue(
+                    state,
+                    sess_idx,
+                    client,
+                    handle,
+                    &agent,
+                    &prompt,
+                    None,  // detached: not tied to a blocking call
+                    true,  // detached = true
+                ) {
+                    super::super::spawn::SpawnOutcome::Spawned(id) => format!(
+                        "started background sub-agent #{id} ({agent}). It runs on its own and its \
+                         full report is delivered to you automatically when it finishes — no need to \
+                         poll or wait. Don't re-announce or repeat this to the user; just continue the \
+                         conversation naturally, and you'll be woken with the result when it lands. \
+                         (task_kill({{\"id\": {id}}}) to abort.)"
+                    ),
+                    super::super::spawn::SpawnOutcome::Queued(id) => format!(
+                        "queued background sub-agent #{id} ({agent}) — all {} slots busy; it \
+                         starts when one frees, runs on its own, and delivers its full \
+                         report to you automatically — no need to poll. Don't re-announce it to the \
+                         user; just carry on naturally, and you'll be woken when it lands. \
+                         (task_kill({{\"id\": {id}}}) to abort.)",
+                        crate::app::subagent::MAX_SUBAGENTS
+                    ),
+                    super::super::spawn::SpawnOutcome::Failed => {
+                        format!("error: unknown agent '{agent}'")
+                    }
+                };
+                state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
             } else {
                 let agent = agent.to_string();
                 let prompt = prompt.to_string();
@@ -220,6 +287,7 @@ pub(crate) fn process_tools(
                     &agent,
                     &prompt,
                     Some(call.id.clone()),
+                    false, // blocking delegation (parks the round)
                 ) {
                     super::super::spawn::SpawnOutcome::Spawned(_)
                     | super::super::spawn::SpawnOutcome::Queued(_) => {
@@ -344,6 +412,119 @@ pub(crate) fn process_tools(
                     format!("job bash-{} killed", job.id)
                 }
                 None => format!("error: no such job: {job_id}"),
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `task_output` tool (mirrors `bash_output`):
+        // look up the detached sub-agent in this session's registry and answer
+        // synchronously with a status line + its transcript tail (Running) or its
+        // full report (Done) / error / killed note. Never parks. An unknown or
+        // missing id returns an `error:` line surfaced to the model verbatim —
+        // no guessing fallback, because with up to MAX_SUBAGENTS running in
+        // parallel, returning the wrong agent's report is worse than asking.
+        if call.function.name == "task_output" {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let id_arg = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            let result = match parse_subagent_id(&id_arg)
+                .and_then(|n| state.rest.sessions[sess_idx].subagents.iter().find(|s| s.id == n))
+            {
+                Some(sa) => {
+                    use crate::app::subagent::SubAgentStatus::*;
+                    match &sa.status {
+                        Running => format!(
+                            "[running] sub-agent #{} ({}) — still working. No need to poll again: \
+                             its full report is delivered to you automatically when it finishes, \
+                             and you'll be woken with the result. Just continue the conversation \
+                             with the user meanwhile.",
+                            sa.id, sa.agent_name
+                        ),
+                        Done(report) => {
+                            format!("[done] sub-agent #{} ({})\n{report}", sa.id, sa.agent_name)
+                        }
+                        Error(e) => format!("[error] sub-agent #{} ({}): {e}", sa.id, sa.agent_name),
+                        Killed => format!("[killed] sub-agent #{} ({})", sa.id, sa.agent_name),
+                    }
+                }
+                None => {
+                    // No guessing: with up to MAX_SUBAGENTS running, returning the wrong
+                    // agent's report is worse than asking. Require an explicit id.
+                    if id_arg.is_null() {
+                        "error: task_output needs a numeric id, e.g. task_output({\"id\": 0}). \
+                         This does NOT mean the sub-agent finished — a background sub-agent \
+                         delivers its full report to you automatically when it is done, so there's no \
+                         need to re-delegate or poll. Just continue with the user; you'll be woken when it lands."
+                            .to_string()
+                    } else {
+                        format!(
+                            "error: no sub-agent with id {id_arg}. Call task_output with a valid \
+                             numeric id, e.g. task_output({{\"id\": 0}})."
+                        )
+                    }
+                }
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `task_kill` tool (mirrors `bash_kill`): find
+        // the detached sub-agent and abort its tokio task, flipping a still-Running
+        // status to `Killed`. Never parks. An unknown id returns an `error:` line.
+        if call.function.name == "task_kill" {
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let id_arg = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            // Resolve the target id first (immutable borrow), then mutate by id.
+            let explicit_id = parse_subagent_id(&id_arg)
+                .filter(|&n| state.rest.sessions[sess_idx].subagents.iter().any(|s| s.id == n));
+            let resolved_id: Result<usize, String> = if let Some(n) = explicit_id {
+                Ok(n)
+            } else {
+                // No valid explicit id — try to infer a safe target.
+                use crate::app::subagent::SubAgentStatus;
+                let running: Vec<usize> = state.rest.sessions[sess_idx].subagents.iter()
+                    .filter(|s| matches!(s.status, SubAgentStatus::Running))
+                    .map(|s| s.id)
+                    .collect();
+                match running.len() {
+                    0 => Err("error: no running sub-agent to kill.".to_string()),
+                    1 => Ok(running[0]),
+                    _ => {
+                        let list = running.iter()
+                            .map(|id| format!("#{id}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        Err(format!(
+                            "error: task_kill needs an id — running sub-agents: {list}. \
+                             e.g. task_kill({{\"id\": {}}})",
+                            running[0]
+                        ))
+                    }
+                }
+            };
+            let result = match resolved_id {
+                Ok(target_id) => {
+                    use crate::app::subagent::SubAgentStatus;
+                    // Drop the immutable borrow before taking a mutable one.
+                    let sa = state.rest.sessions[sess_idx].subagents.iter_mut()
+                        .find(|s| s.id == target_id)
+                        .expect("id was validated above");
+                    // Abort the tokio task (best effort) and flip a still-Running
+                    // status to Killed so the $ panel + a later task_output reflect
+                    // it immediately (a terminal status is left untouched).
+                    sa.abort.abort();
+                    if matches!(sa.status, SubAgentStatus::Running) {
+                        sa.status = SubAgentStatus::Killed;
+                    }
+                    format!("sub-agent #{} killed", sa.id)
+                }
+                Err(msg) => msg,
             };
             state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
             state.rest.sessions[sess_idx].tool_idx += 1;
@@ -579,19 +760,34 @@ pub(crate) fn process_tools(
                     // `exit`: restore the base primary root (swap slot [0] back) and return
                     // to it. Extra roots in workdir[1..] are preserved. Mutate + save in a
                     // scoped borrow, then call apply_workspace_change outside it.
-                    let primary = {
+                    //
+                    // Capture whether we were ACTUALLY inside an entered worktree BEFORE the
+                    // swap: `workdir_saved.is_some()` means a real worktree is active and
+                    // exit_worktree() will restore the base; `is_none()` means there is
+                    // nothing to exit (e.g. the session was launched FROM a worktree). We
+                    // must report these distinctly or the model can't tell a no-op from a
+                    // real exit and retries `exit` in a loop.
+                    let (primary, was_active) = {
                         if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                            let was_active = sess.settings.workdir_saved.is_some();
                             sess.settings.exit_worktree();
                             let _ = sess.save();
-                            sess.workdir()
+                            (sess.workdir(), was_active)
                         } else {
-                            std::path::PathBuf::from(".")
+                            (std::path::PathBuf::from("."), false)
                         }
                     };
                     super::super::spawn::apply_workspace_change(
                         state, sess_idx, primary.clone(), client, handle,
                     );
-                    format!("exited to {}", primary.display())
+                    if was_active {
+                        format!("exited worktree — now at {}", primary.display())
+                    } else {
+                        format!(
+                            "no active worktree to exit — already at {} (this session started here); nothing to do",
+                            primary.display()
+                        )
+                    }
                 } else if let Some(removed) =
                     result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
                 {

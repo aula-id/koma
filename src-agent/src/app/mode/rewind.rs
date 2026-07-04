@@ -43,7 +43,11 @@ impl RewindState {
             .filter(|(_, m)| m.role == crate::dto::chat::Role::User)
             .map(|(idx, m)| RewindEntry {
                 vec_index: idx,
-                content: m.content.clone(),
+                content: m.content
+                    .strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
+                    .or_else(|| m.content.strip_prefix(crate::dto::chat::SHELL_MARK))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| m.content.clone()),
             })
             .collect();
         if entries.is_empty() {

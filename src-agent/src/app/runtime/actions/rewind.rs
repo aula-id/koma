@@ -116,7 +116,15 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
     let messages = sess.conversation.messages();
     // Only user turns are ever offered by the picker; guard anyway.
     let text = match messages.get(idx) {
-        Some(m) if m.role == Role::User => Some(m.content.clone()),
+        Some(m) if m.role == Role::User => {
+            // Strip synthetic nudge/shell markers so the user edits the real body, not the marker.
+            let content = m.content
+                .strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
+                .or_else(|| m.content.strip_prefix(crate::dto::chat::SHELL_MARK))
+                .map(str::to_string)
+                .unwrap_or_else(|| m.content.clone());
+            Some(content)
+        }
         _ => None,
     };
     let Some(text) = text else {

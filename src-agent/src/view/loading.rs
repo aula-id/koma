@@ -82,6 +82,42 @@ fn step_line<'a>(status: &'a WarmStatus, label: &'a str, frame: u64, palette: &P
     Line::from(spans)
 }
 
+/// Draw a centered "reopening" splash with an animated braille spinner, driven by
+/// `spinner_frame` (advances one braille glyph per call, 10-frame cycle). Used by the client
+/// while it silently restarts a stale session-daemon (`attach_session`), so the ~1s
+/// blocking restart shows motion instead of a frozen frame. Standalone (no daemon
+/// snapshot needed) — mirrors this module's `draw` layout but with a single line.
+pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(40), // spacer → line lands a bit above center
+            Constraint::Length(1),      // "koma" title
+            Constraint::Length(1),      // gap
+            Constraint::Length(1),      // spinner + label
+            Constraint::Min(0),         // rest
+        ])
+        .split(area);
+
+    let title = Paragraph::new(Line::from(Span::styled(
+        "koma",
+        Style::default().fg(palette.accent),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(title, chunks[1]);
+
+    let glyph = SPINNER[(spinner_frame % 10) as usize];
+    let line = Line::from(vec![
+        Span::styled(glyph, Style::default().fg(palette.accent)),
+        Span::styled("  reopening", Style::default().fg(palette.fg)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).alignment(Alignment::Center),
+        chunks[3],
+    );
+}
+
 /// Render the loading splash for `state` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, state: &LoadingState, palette: &Palette) {
     let area = frame.area();

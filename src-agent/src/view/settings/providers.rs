@@ -6,6 +6,7 @@ use ratatui::{
     Frame,
 };
 use crate::app::mode::SettingsState;
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 use super::utils::truncate;
 
@@ -102,11 +103,13 @@ pub(super) fn draw_providers(
 /// Render the Models Select interactive screen inside `area`.
 ///
 /// Layout (top to bottom):
-///   Line 0: `Model List   [+add global]  [+add local]`
-///   Line 1: `[X]all [ ]local [ ]global`  (radio; cursor + active filter independently shown)
-///   Line 2+: model table (header + visible data rows)
+///   Line 0: `Model List` (title only)
+///   Line 1: `[+add global]  [+add local]` (add buttons — Left/Right select, Enter opens)
+///   Line 2: `[ ]all [X]local [ ]global` (filter boxes — Left/Right move, Space selects)
+///   Line 3+: model table (header + visible data rows)
 ///
-/// The five control slots (add global=0, add local=1, filter all=2, filter
+/// Navigation is a 2D grid: Up/Down move between lines, Left/Right move within a
+/// line. The five control slots (add global=0, add local=1, filter all=2, filter
 /// local=3, filter global=4) share the same `model_sel` index as the data rows.
 /// A data row at visible position `p` is highlighted when `model_sel == 5 + p`.
 /// This mirrors [`crate::app::mode::settings::state::model_ops::MODEL_CTRL_SLOTS`].
@@ -117,6 +120,7 @@ pub(super) fn draw_providers(
 /// Columns: Name (12 = glyph 2 + name 10), Role (11), Model (flexible), Provider (12).
 pub(super) fn draw_models(
     frame: &mut Frame,
+    rest: &AppStateRest,
     st: &SettingsState,
     palette: &Palette,
     area: Rect,
@@ -130,8 +134,21 @@ pub(super) fn draw_models(
     let focused = st.in_detail;
     let filter  = st.model_filter;
 
-    // ---- Line 0: title + inline add buttons -----------------------------------
-    // Format: `Model List   [+add global]  [+add local]`
+    // ---- Line 0: title --------------------------------------------------------
+    {
+        let title_line = Line::from(vec![
+            Span::styled("Model List", Style::default().fg(palette.dim)),
+        ]);
+        let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        frame.render_widget(Paragraph::new(title_line), title_area);
+    }
+
+    if area.height < 2 {
+        return;
+    }
+
+    // ---- Line 1: add buttons (below the title) --------------------------------
+    // Left/Right select between them; Enter opens the pre-scoped add modal.
     {
         let on_global = focused && st.model_sel == 0;
         let on_local  = focused && st.model_sel == 1;
@@ -147,23 +164,22 @@ pub(super) fn draw_models(
             Style::default().fg(palette.accent)
         };
 
-        let title_line = Line::from(vec![
-            Span::styled("Model List   ", Style::default().fg(palette.dim)),
+        let btn_line = Line::from(vec![
             Span::styled("[+add global]", btn_g_style),
             Span::raw("  "),
             Span::styled("[+add local]", btn_l_style),
         ]);
-        let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
-        frame.render_widget(Paragraph::new(title_line), title_area);
+        let btn_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 };
+        frame.render_widget(Paragraph::new(btn_line), btn_area);
     }
 
-    if area.height < 2 {
+    if area.height < 3 {
         return;
     }
 
-    // ---- Line 1: filter radio bar ---------------------------------------------
-    // Active filter shown with `[X]`; cursor highlight independently from `model_sel`.
-    // A filter option can simultaneously be the active one AND the cursor target.
+    // ---- Line 2: filter radio bar ---------------------------------------------
+    // Space selects the box under the cursor (applies the filter). Active filter
+    // shown with `[X]`; cursor highlight (sel 2/3/4) is independent from `[X]`.
     {
         // Helper: radio chip text — `[X]` when the active filter, `[ ]` otherwise.
         let mk_radio = |mode: ModelFilterMode, label: &str| -> String {
@@ -185,17 +201,17 @@ pub(super) fn draw_models(
             Span::raw(" "),
             Span::styled(mk_radio(ModelFilterMode::Global, "global"), cursor_style(4)),
         ]);
-        let radio_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 };
+        let radio_area = Rect { x: area.x, y: area.y + 2, width: area.width, height: 1 };
         frame.render_widget(Paragraph::new(radio_line), radio_area);
     }
 
-    if area.height < 3 {
+    if area.height < 4 {
         return;
     }
 
-    // ---- Lines 2+: model table -----------------------------------------------
-    let table_y = area.y + 2;
-    let table_h = area.height.saturating_sub(2);
+    // ---- Lines 3+: model table -----------------------------------------------
+    let table_y = area.y + 3;
+    let table_h = area.height.saturating_sub(3);
 
     // Column widths: Name (12 total = 2 glyph + 10 name text), Role (11),
     // Model (flexible), Provider (12).
@@ -217,11 +233,25 @@ pub(super) fn draw_models(
     // Collect visible indices once so visible position == enumerate index.
     let vis_indices = st.visible_model_indices();
 
-    // Data rows — iterate visible positions only.
-    // A data row at visible position `p` is highlighted when model_sel == MODEL_CTRL_SLOTS + p.
-    let rows: Vec<Row> = vis_indices.iter().enumerate().map(|(vis_pos, &real_idx)| {
+    // Window the visible rows so the selected model stays on-screen (the Table
+    // has no TableState/scroll of its own). The Table renders a header row, so the
+    // data budget is one less than `table_h`. When focus is on a control slot
+    // (model_sel < MODEL_CTRL_SLOTS) there is no data selection → offset stays 0.
+    let data_h = (table_h as usize).saturating_sub(1);
+    let sel_data = st.model_sel.saturating_sub(MODEL_CTRL_SLOTS);
+    let (start, end) = crate::view::scroll::scroll_window(
+        &rest.settings_models_offset,
+        sel_data,
+        vis_indices.len(),
+        data_h,
+    );
+
+    // Data rows — iterate the visible window only.
+    // A data row at window position `vis_pos` maps to visible index `start+vis_pos`
+    // and is highlighted when model_sel == MODEL_CTRL_SLOTS + (start + vis_pos).
+    let rows: Vec<Row> = vis_indices[start..end].iter().enumerate().map(|(vis_pos, &real_idx)| {
         let m = &st.models[real_idx];
-        let selected = focused && st.model_sel == MODEL_CTRL_SLOTS + vis_pos;
+        let selected = focused && st.model_sel == MODEL_CTRL_SLOTS + start + vis_pos;
         let armed    = selected && st.model_delete_armed;
 
         // Name cell: dim glyph prefix + styled name text.

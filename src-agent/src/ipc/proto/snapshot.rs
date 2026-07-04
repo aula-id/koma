@@ -41,6 +41,11 @@ pub struct SessionSnapshot {
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,
+    /// Truncated previews of the foreground session's queued mid-turn steer messages
+    /// (full text lives daemon-side). Drives the pending panel between transcript +
+    /// composer. Empty = no panel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_steer: Vec<String>,
 }
 
 /// A plain-data projection of one SubAgent.
@@ -51,9 +56,27 @@ pub struct SubAgentSnapshot {
     pub name: String,
     pub label: String,
     pub status: String,
+    /// Whether this sub-agent is backgrounded (detached). Projected so the
+    /// client's `!detached` render/cadence checks work — without it the client
+    /// defaults every agent to attached and keeps animating a backgrounded one.
+    #[serde(default)]
+    pub detached: bool,
     pub steps: usize,
     pub transcript: Vec<String>,
     pub messages: Vec<ChatMessage>,
+    /// Live in-progress assistant report text for the current (not-yet-committed)
+    /// turn, mirrored from `SubAgent::live_text`. Lets the full-screen viewer render
+    /// the streaming report on a thin client as it arrives, instead of only after the
+    /// turn commits into `messages`. `#[serde(default)]` keeps version-skewed peers
+    /// safe (empty when absent).
+    #[serde(default)]
+    pub live_text: String,
+    /// Out-of-band, index-aligned reasoning for `messages` (mirrors
+    /// `SessionSnapshot::committed_reasoning`). `ChatMessage::reasoning` is
+    /// `#[serde(skip)]`, so the viewer's thinking blocks must ride this side
+    /// channel to survive IPC. Empty vec = no reasoning on any message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub committed_reasoning: Vec<Option<String>>,
 }
 
 /// A plain-data projection of one queued PendingSubagent.

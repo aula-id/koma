@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::mode::agents::{ModelPickerState, ToolPickerState};
+use crate::app::state::AppStateRest;
 use crate::view::theme::Palette;
 
 use super::truncate;
@@ -38,6 +39,7 @@ pub(super) fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
 /// ```
 pub(super) fn draw_tool_picker(
     frame: &mut Frame,
+    rest: &AppStateRest,
     picker: &ToolPickerState,
     palette: &Palette,
     area: Rect,
@@ -108,8 +110,15 @@ pub(super) fn draw_tool_picker(
     // Option rows.
     let cursor = picker.cursor.min(filtered.len().saturating_sub(1));
     let opt_area_y = inner.y + 1;
-    // Scroll so the cursor row is always visible.
-    let scroll = cursor.saturating_sub((opt_rows as usize).saturating_sub(1));
+    // Scrolloff window (persisted offset on rest — ToolPickerState is rebuilt
+    // per client frame). `opt_rows` is the viewport height; `lines` holds one
+    // row per filtered option, so window start == the Paragraph scroll offset.
+    let (scroll, _) = crate::view::scroll::scroll_window(
+        &rest.agents_tool_picker_offset,
+        cursor,
+        filtered.len(),
+        opt_rows as usize,
+    );
 
     let mut lines: Vec<Line> = Vec::new();
     if filtered.is_empty() {
@@ -171,6 +180,7 @@ pub(super) fn draw_tool_picker(
 /// ```
 pub(super) fn draw_model_picker(
     frame: &mut Frame,
+    rest: &AppStateRest,
     picker: &ModelPickerState,
     palette: &Palette,
     area: Rect,
@@ -212,8 +222,15 @@ pub(super) fn draw_model_picker(
     let body_w = inner.width;
     let body_x = inner.x;
     let cursor = picker.cursor.min(picker.options.len().saturating_sub(1));
-    // Scroll so the cursor row stays visible.
-    let scroll = cursor.saturating_sub((opt_rows as usize).saturating_sub(1));
+    // Scrolloff window (persisted offset on rest — ModelPickerState is rebuilt
+    // per client frame). `opt_rows` is the viewport height; `lines` holds one
+    // row per option.
+    let (scroll, _) = crate::view::scroll::scroll_window(
+        &rest.agents_model_picker_offset,
+        cursor,
+        picker.options.len(),
+        opt_rows as usize,
+    );
 
     let lines: Vec<Line> = picker
         .options

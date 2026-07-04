@@ -100,7 +100,7 @@ pub fn session_snapshot(
         approval_reason: rt.approval_reason.clone(),
         pending_tool_calls: rt.pending_tool_calls.clone(),
         tool_idx: rt.tool_idx,
-        working: rt.is_working(),
+        working: rt.is_ui_busy(),
         finished_unseen: rt.finished_unseen,
         subagents: rt.subagents.iter().map(subagent_snapshot).collect(),
         pending_subagents: rt
@@ -109,6 +109,19 @@ pub fn session_snapshot(
             .map(pending_subagent_snapshot)
             .collect(),
         resolved_model_id,
+        pending_steer: rt
+            .pending_steer
+            .iter()
+            .map(|s| {
+                let one_line = s.replace('\n', " ");
+                let t = one_line.trim().to_string();
+                if t.chars().count() > 48 {
+                    format!("{}…", t.chars().take(48).collect::<String>())
+                } else {
+                    t
+                }
+            })
+            .collect(),
     }
 }
 
@@ -120,14 +133,27 @@ fn subagent_snapshot(sa: &crate::app::subagent::SubAgent) -> SubAgentSnapshot {
         SubAgentStatus::Error(e) => format!("error: {e}"),
     };
 
+    // Carry reasoning out-of-band (index-aligned with `messages`) since
+    // `ChatMessage::reasoning` is `#[serde(skip)]`. Ship an empty vec in the
+    // common no-reasoning case so the wire stays small.
+    let committed_reasoning: Vec<Option<String>> =
+        if sa.messages.iter().any(|m| m.reasoning.is_some()) {
+            sa.messages.iter().map(|m| m.reasoning.clone()).collect()
+        } else {
+            Vec::new()
+        };
+
     SubAgentSnapshot {
         id: sa.id,
         name: sa.agent_name.clone(),
         label: sa.label.clone(),
         status,
+        detached: sa.detached,
         steps: sa.transcript.len(),
         transcript: sa.transcript.clone(),
         messages: sa.messages.clone(),
+        live_text: sa.live_text.clone(),
+        committed_reasoning,
     }
 }
 
@@ -187,7 +213,10 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
     }
 }
 
-const FILE_PAL_MAX: usize = 10;
+// Result cap for the @-file palette (how many matches are navigable/scrollable).
+// The visible window is smaller (overlays.rs MAX_VIS); search is memoized so a
+// larger cap is cheap. Lets a long match set scroll instead of truncating at 10.
+const FILE_PAL_MAX: usize = 200;
 
 fn file_palette_matches(state: &AppState) -> Option<Vec<String>> {
     let partial = crate::controller::input::file_ref_partial(&state.rest.fg().input)?;

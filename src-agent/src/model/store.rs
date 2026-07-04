@@ -198,6 +198,29 @@ pub fn session_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
     Ok(pwd_bucket_dir(pwd_hash)?.join(uuid))
 }
 
+/// Physically delete a session: remove its on-disk directory tree AND its
+/// registry row. `path` MUST be a session directory under [`sessions_dir`]
+/// (e.g. a hub `HistoryEntry::path`); its final component is the session UUID.
+/// Refuses any path outside the sessions root as a guard against a bad caller
+/// nuking an unrelated directory. The registry delete is best-effort (a missing
+/// row must not block the filesystem cleanup); a missing directory is a no-op.
+pub fn delete_session(path: &Path) -> Result<()> {
+    let root = sessions_dir()?;
+    if !path.starts_with(&root) {
+        return Err(anyhow!(
+            "refusing to delete session path outside sessions dir: {}",
+            path.display()
+        ));
+    }
+    if let Some(uuid) = path.file_name().and_then(|n| n.to_str()) {
+        let _ = session_registry::delete_by_uuid(uuid);
+    }
+    if path.exists() {
+        std::fs::remove_dir_all(path)?;
+    }
+    Ok(())
+}
+
 /// A session's image-attachment directory: `<session_dir>/images/`. Holds the
 /// copied-in image bytes for every pasted/picked image attachment
 /// (`images/NN-name.ext`). Lives INSIDE the session dir, so deleting a session

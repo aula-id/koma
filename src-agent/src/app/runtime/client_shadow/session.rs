@@ -88,11 +88,17 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             // The turn-bookkeeping call id is daemon-internal + never rendered, and the
             // client never advances a turn, so a shadow pending entry carries `None`.
             tool_call_id: None,
+            // Detachment drives turn bookkeeping only (never rendered); the client
+            // never advances a turn, so a shadow pending entry is left non-detached.
+            detached: false,
         })
         .collect();
     // Reconstruct the running/finished sub-agents (plain data + an inert handle/rx)
     // so the `$` panel list AND the full-screen viewer render off real shadow data.
     rt.subagents = s.subagents.iter().map(shadow_subagent).collect();
+    // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate
+    // in `handle_chat`) can read them from the shadow without a daemon round-trip.
+    rt.pending_steer = s.pending_steer.clone();
     rt
 }
 
@@ -114,6 +120,18 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
     // Fresh receiver the client never drains (the daemon folds real events; a shadow
     // sub-agent's content arrives wholesale via the next snapshot's `messages`).
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    // Re-attach the display-only reasoning the wire carried out-of-band:
+    // `ChatMessage::reasoning` is `#[serde(skip)]`, so every deserialised message
+    // arrives with `reasoning: None`. The side-channel is index-aligned with
+    // `messages`; a missing/short entry (no-reasoning case ships an empty vec)
+    // leaves `reasoning` at None. Without this the viewer's thinking block for a
+    // sub-agent turn would never render on the client.
+    let mut messages = sa.messages.clone();
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if let Some(Some(reasoning)) = sa.committed_reasoning.get(i) {
+            msg.reasoning = Some(reasoning.clone());
+        }
+    }
     SubAgent {
         id: sa.id,
         agent_name: sa.name.clone(),
@@ -124,8 +142,17 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         abort,
         rx,
         transcript: sa.transcript.clone(),
-        messages: sa.messages.clone(),
+        messages,
+        // Carry the projected live in-progress report text so the full-screen
+        // viewer renders the streaming report on the client exactly as the daemon
+        // does. Empty between turns (cleared on each committed Snapshot).
+        live_text: sa.live_text.clone(),
         tool_call_id: None,
+        // Detachment IS rendered client-side (the transcript footer + cadence
+        // predicate filter on `!detached`), so carry the projected flag. The
+        // nudge-latch is daemon-only bookkeeping, so it keeps its inert default.
+        detached: sa.detached,
+        nudged: false,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,

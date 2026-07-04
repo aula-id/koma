@@ -74,14 +74,18 @@ const SIGNAL_GRACE: Duration = Duration::from_secs(2);
 /// [`ensure_daemon_and_connect`] spawn-and-confirm (poll-connect until the new daemon
 /// accepts), so the auto-restart never reinvents the kill or the spawn. It returns
 /// `Ok(())` once a fresh daemon is confirmed accepting (or surfaces the spawn error);
-/// the caller then reconnects to the new daemon. It prints a couple of plain status
-/// lines, which is harmless here — the client's handshake runs BEFORE the alt-screen is
-/// entered, so the lines scroll away when the TUI opens.
-pub fn restart_daemon(session_id: &str) -> Result<()> {
+/// the caller then reconnects to the new daemon.
+///
+/// When `quiet` is `true`, ALL terminal output (the outcome lines and the stop-phase
+/// warning) is suppressed. Pass `true` from any caller that is inside or entering the
+/// alt-screen TUI — a lost log line beats a corrupted screen.
+pub fn restart_daemon(session_id: &str, quiet: bool) -> Result<()> {
     // Stop whatever owns this session (prints its own outcome). A kill error shouldn't
     // block the restart — surface it but continue to the spawn.
-    if let Err(e) = stop_session_daemon(session_id) {
-        eprintln!("koma daemon: warning during stop phase of restart: {e:#}");
+    if let Err(e) = stop_session_daemon(session_id, quiet) {
+        if !quiet {
+            eprintln!("koma daemon: warning during stop phase of restart: {e:#}");
+        }
     }
 
     // Spawn + wait for it to accept (false: we just killed it). Confirm-only stream.
@@ -89,11 +93,13 @@ pub fn restart_daemon(session_id: &str) -> Result<()> {
         .context("failed to start the new daemon")?;
     drop(stream); // we only needed to confirm it is accepting
 
-    match read_pidfile(session_id) {
-        Some(pid) => println!("koma daemon: restarted session {session_id} (pid {pid})"),
-        None => println!(
-            "koma daemon: restarted session {session_id} (pid unknown — pidfile not yet written)"
-        ),
+    if !quiet {
+        match read_pidfile(session_id) {
+            Some(pid) => println!("koma daemon: restarted session {session_id} (pid {pid})"),
+            None => println!(
+                "koma daemon: restarted session {session_id} (pid unknown — pidfile not yet written)"
+            ),
+        }
     }
     Ok(())
 }
@@ -807,11 +813,17 @@ fn daemon_session_count(sock: &Path) -> Result<usize> {
 ///    unlinks its own socket/pidfile, exits). Wait up to [`KILL_GRACE`].
 /// 3. Still up: fall back to this session's pidfile PID — SIGTERM, wait, then SIGKILL.
 /// 4. Finally unlink this session's socket + pidfile if present, and report.
-fn stop_session_daemon(session_id: &str) -> Result<()> {
+///
+/// When `quiet` is `true`, ALL terminal output (`println!`/`eprintln!`) is suppressed.
+/// Pass `true` from any caller that is inside or entering the alt-screen TUI — a lost
+/// log line beats a corrupted screen.
+fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
     if !daemon_alive(session_id) {
         // Sweep any leftover turds from a previous crash so the next start is clean.
         unlink_daemon_files(session_id);
-        println!("koma daemon: session {session_id} not running");
+        if !quiet {
+            println!("koma daemon: session {session_id} not running");
+        }
         return Ok(());
     }
 
@@ -843,7 +855,9 @@ fn stop_session_daemon(session_id: &str) -> Result<()> {
         // The daemon's own teardown unlinks the socket + pidfile; sweep defensively in
         // case it didn't get that far, then report.
         unlink_daemon_files(session_id);
-        println!("koma daemon: stopped session {session_id} (graceful QuitDaemon)");
+        if !quiet {
+            println!("koma daemon: stopped session {session_id} (graceful QuitDaemon)");
+        }
         return Ok(());
     }
 
@@ -852,10 +866,12 @@ fn stop_session_daemon(session_id: &str) -> Result<()> {
     // ONLY as the signal target — if it's missing we can't signal, so just nuke files.
     let Some(pid) = read_pidfile(session_id) else {
         unlink_daemon_files(session_id);
-        println!(
-            "koma daemon: session {session_id} still up but no pidfile to signal; removed \
-             stale socket/pidfile. If a daemon is still running, stop it manually."
-        );
+        if !quiet {
+            println!(
+                "koma daemon: session {session_id} still up but no pidfile to signal; removed \
+                 stale socket/pidfile. If a daemon is still running, stop it manually."
+            );
+        }
         return Ok(());
     };
 
@@ -863,7 +879,9 @@ fn stop_session_daemon(session_id: &str) -> Result<()> {
     send_signal(pid, libc::SIGTERM);
     if wait_until_dead(session_id, SIGNAL_GRACE) {
         unlink_daemon_files(session_id);
-        println!("koma daemon: stopped session {session_id} (SIGTERM to pid {pid})");
+        if !quiet {
+            println!("koma daemon: stopped session {session_id} (SIGTERM to pid {pid})");
+        }
         return Ok(());
     }
 
@@ -871,13 +889,15 @@ fn stop_session_daemon(session_id: &str) -> Result<()> {
     send_signal(pid, libc::SIGKILL);
     let died = wait_until_dead(session_id, SIGNAL_GRACE);
     unlink_daemon_files(session_id);
-    if died {
-        println!("koma daemon: killed session {session_id} (SIGKILL to pid {pid})");
-    } else {
-        println!(
-            "koma daemon: sent SIGKILL to pid {pid} (session {session_id}) but the socket is \
-             still up; removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
-        );
+    if !quiet {
+        if died {
+            println!("koma daemon: killed session {session_id} (SIGKILL to pid {pid})");
+        } else {
+            println!(
+                "koma daemon: sent SIGKILL to pid {pid} (session {session_id}) but the socket is \
+                 still up; removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
+            );
+        }
     }
     Ok(())
 }
@@ -945,7 +965,7 @@ fn cmd_kill() -> Result<()> {
         return Ok(());
     }
     for (id, _path) in live {
-        let _ = stop_session_daemon(&id);
+        let _ = stop_session_daemon(&id, false);
     }
     // Stop the GLOBAL MCP daemon too (best-effort; prints its own outcome). Only bother
     // when it's live — a dead one just gets its stale files swept below via its own
@@ -972,7 +992,7 @@ fn cmd_restart() -> Result<()> {
         return Ok(());
     }
     for (id, _path) in live {
-        if let Err(e) = restart_daemon(&id) {
+        if let Err(e) = restart_daemon(&id, false) {
             eprintln!("koma daemon: failed to restart session {id}: {e:#}");
         }
     }
