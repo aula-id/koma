@@ -171,7 +171,11 @@ fn command_slug(command: &str) -> String {
 /// absolute path on success. Every failure mode (can't create the dir, can't get
 /// the clock, can't write the file) is a silent no-op — a tee failure must never
 /// break the tool result.
-fn write_tee_log(log_dir: &Path, command: &str, raw: &str) -> Option<PathBuf> {
+///
+/// `pub(crate)` so [`crate::app::bgbash`] can reuse the exact same tee
+/// machinery for finished background jobs (`bash_output` polls), instead of
+/// duplicating the file-naming/GC logic.
+pub(crate) fn write_tee_log(log_dir: &Path, command: &str, raw: &str) -> Option<PathBuf> {
     if std::fs::create_dir_all(log_dir).is_err() {
         return None;
     }
