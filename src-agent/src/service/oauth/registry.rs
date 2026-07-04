@@ -12,6 +12,7 @@ use crate::model::app_config::OAuthProvider;
 /// effort is carried in reasoning.effort, never as an id suffix. 9router's
 /// -high/-review/-none ids are ITS OWN aliases and 404/entitlement-fail here.
 pub const CODEX_MODELS: &[&str] = &[
+    "gpt-5.6",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
