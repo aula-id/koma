@@ -106,15 +106,15 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
             }
         }
         // Record into the global usage ledger (best-effort telemetry, non-fatal).
+        // The model id is read from `pending_dispatch_model_id` — snapshotted at
+        // DISPATCH time in `run::start_stream_task` — rather than re-resolved
+        // here: a stream can run for seconds, during which `agent_mode` can
+        // leave `Plan` (or role assignments can change), so re-resolving at this
+        // ledger-write point could misattribute cost to a model that never
+        // actually served this request. See `pending_dispatch_model_id`'s doc.
         if let Some((pt, ct, cost)) = usage {
             if let Some(sess) = rt.session.as_ref() {
-                let model_id = crate::app::resolve::resolve_role(
-                    &rest.config,
-                    &sess.settings,
-                    crate::model::app_config::ModelRole::Main,
-                )
-                .map(|r| r.model_id)
-                .unwrap_or_default();
+                let model_id = rt.pending_dispatch_model_id.clone().unwrap_or_default();
                 crate::model::usage::record_usage(
                     &model_id,
                     "main",
@@ -300,15 +300,13 @@ pub(crate) fn advance_turn(
             }
         }
         // Record into the global usage ledger (best-effort telemetry, non-fatal).
+        // Same truthful-attribution note as `finish_stream`: read the DISPATCH-time
+        // snapshot (`pending_dispatch_model_id`) rather than re-resolving the role
+        // here, since `agent_mode`/role assignments can change while this round's
+        // stream was in flight.
         if let Some((pt, ct, cost)) = usage {
             if let Some(sess) = rt.session.as_ref() {
-                let model_id = crate::app::resolve::resolve_role(
-                    &state.rest.config,
-                    &sess.settings,
-                    crate::model::app_config::ModelRole::Main,
-                )
-                .map(|r| r.model_id)
-                .unwrap_or_default();
+                let model_id = rt.pending_dispatch_model_id.clone().unwrap_or_default();
                 crate::model::usage::record_usage(
                     &model_id,
                     "main",

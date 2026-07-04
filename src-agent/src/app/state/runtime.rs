@@ -121,6 +121,17 @@ pub struct SessionRuntime {
     /// Usage for the in-flight response, captured from the StreamEvent::Usage
     /// chunk and consumed when the assistant message is committed.
     pub pending_usage: Option<(u64, u64, f64)>,
+    /// The model id actually DISPATCHED for the in-flight request, captured in
+    /// `stream::run::start_stream_task` at the moment `resolve_turn_model` picks
+    /// the route (Main, or Planner while `AgentMode::Plan` is active) — BEFORE
+    /// the request is sent. The usage-ledger write in `finish_stream` /
+    /// `advance_turn` reads this instead of re-resolving the role, because a
+    /// stream can run for seconds and `agent_mode` (or the model/route
+    /// assignments) may change before that response finishes — re-resolving at
+    /// ledger-write time would then misattribute cost to whatever model happens
+    /// to be configured NOW, not the one that actually served the request. Reset
+    /// on every dispatch; `None` only before the very first send of a session.
+    pub pending_dispatch_model_id: Option<String>,
     /// THIS session's cumulative token/cost totals (summed from its own
     /// messages.sqlite on open via `load_token_totals`, incremented per response).
     /// Per-session so each tab tracks only its own usage — switching foreground
@@ -430,6 +441,7 @@ impl SessionRuntime {
             active_rx: None,
             harness_rx: None,
             pending_usage: None,
+            pending_dispatch_model_id: None,
             tokens_in: 0,
             tokens_out: 0,
             cost: 0.0,

@@ -238,19 +238,38 @@ over sec_remote (stateful socket).\n",
         (sess.path.clone(), sess.settings.clone(), user_intent, aware)
     });
 
-    // Resolve the MAIN role for the actual send: its connection (endpoint + key),
+    // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows
     // ONLY here, into the streaming path. Resolved BEFORE the spawn into an owned
     // `Resolved` so the moved-into-task value carries no borrow of `state.rest`.
     // Main always resolves (legacy fallback), but keep it `Option` and treat a
     // `None` as "no session" below.
+    //
+    // `resolve_turn_model` folds in Plan mode: while `state.rest.agent_mode` is
+    // `AgentMode::Plan`, an assigned Planner model drives the turn instead of
+    // Main (unless it resolves to the exact same route as Main, in which case
+    // Main's `Resolved` is kept unchanged to preserve prompt-cache continuity).
+    // Leaving Plan mode reverts to Main automatically — this is a per-turn
+    // resolution, not swap state. Every downstream use below (window sizing,
+    // image capability, effort, the final dispatch) reads off THIS `main`
+    // binding, so whichever route was chosen flows through consistently.
     let main = state.rest.sessions[sess_idx].session.as_ref().and_then(|sess| {
-        crate::app::resolve::resolve_role(
+        crate::app::resolve::resolve_turn_model(
             &state.rest.config,
             &sess.settings,
-            crate::model::app_config::ModelRole::Main,
+            state.rest.agent_mode,
         )
     });
+    // Snapshot the model id that will actually be dispatched onto the session's
+    // runtime state, for the usage-ledger write in `finish_stream`/`advance_turn`
+    // to read once this response completes. Captured HERE (dispatch time), not
+    // re-resolved at ledger-write time: a stream can run for seconds, during
+    // which `agent_mode` can leave Plan (user toggle, or the model's own
+    // `plan_ready`) or the role assignments can change — re-resolving later
+    // would then attribute cost to whatever is configured NOW rather than the
+    // model that actually served this request.
+    state.rest.sessions[sess_idx].pending_dispatch_model_id =
+        main.as_ref().map(|m| m.model_id.clone());
 
     // 1. Window: the model's context-window size in tokens, from the cached
     //    catalogue. WINDOW-SIZING FIX: size against the RESOLVED Main model id

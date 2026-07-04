@@ -10,14 +10,16 @@ impl ModelRole {
             ModelRole::Awareness => "awareness",
             ModelRole::Safeguard => "safeguard",
             ModelRole::Compactor => "compactor",
+            ModelRole::Planner   => "planner",
         }
     }
 
-    pub const ALL: [ModelRole; 4] = [
+    pub const ALL: [ModelRole; 5] = [
         ModelRole::Main,
         ModelRole::Awareness,
         ModelRole::Safeguard,
         ModelRole::Compactor,
+        ModelRole::Planner,
     ];
 }
 

@@ -590,6 +590,7 @@ fn shadow_role(r: &str) -> ModelRole {
         "awareness" => ModelRole::Awareness,
         "safeguard" => ModelRole::Safeguard,
         "compactor" => ModelRole::Compactor,
+        "planner" => ModelRole::Planner,
         _ => ModelRole::Main,
     }
 }
