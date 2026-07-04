@@ -306,7 +306,9 @@ impl Tool for Bash {
     fn description(&self) -> &'static str {
         "Run a shell command in the workspace. Use for cargo, build commands, and general shell tasks. \
          For git operations, use the git_operator tool instead — it handles SSH key injection and \
-         destructive-operation guards automatically. Output is captured (stdout+stderr)."
+         destructive-operation guards automatically. Output is captured (stdout+stderr). \
+         Output of known noisy commands (cargo, git, npm, pip, docker, make) is auto-compressed; a [filter: <name>, N -> M lines] marker shows when. \
+         If output was compressed, truncated, or the command failed, the complete output is saved to a file shown on a 'full-output: <path>' line — read that file instead of re-running the command."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -378,7 +380,9 @@ impl Tool for BashOutput {
          (one started by bash with run_in_background=true). Poll this to watch a \
          long-running command's progress. Optionally filter the output with \
          `pattern` (a regex, grep-style) and/or limit to the last `tail_lines` \
-         lines to save tokens on noisy jobs."
+         lines to save tokens on noisy jobs. Once a job finishes, its output may be \
+         auto-compressed the same way as foreground bash ([filter: ...] marker + 'full-output: <path>' file); \
+         pass tail_lines or pattern to get the raw buffer instead."
     }
     fn parameters(&self) -> Value {
         json!({
