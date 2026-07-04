@@ -62,7 +62,7 @@ impl SettingField {
             SettingField::AllowedFolders     => "Allowed dirs",
             SettingField::ShortSendEnabled   => "Short-send",
             SettingField::SlidingCache       => "Sliding cache",
-            SettingField::BashSaving         => "Bash saving",
+            SettingField::BashSaving         => "Bash shorts",
             SettingField::InternetMode       => "Internet mode",
         }
     }
