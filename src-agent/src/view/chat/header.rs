@@ -21,7 +21,7 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
         crate::app::state::AgentMode::Normal => ("●", "normal",   Color::Rgb(80, 220, 80)),
         crate::app::state::AgentMode::Auto   => ("»", "auto",     Color::Rgb(255, 210, 60)),
-        crate::app::state::AgentMode::Plan   => ("p", "planning", Color::Rgb(80, 200, 255)),
+        crate::app::state::AgentMode::Plan   => ("●", "planning", Color::Rgb(80, 200, 255)),
         crate::app::state::AgentMode::Yolo   => ("!", "yooloo",   Color::Rgb(255, 60, 60)),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
