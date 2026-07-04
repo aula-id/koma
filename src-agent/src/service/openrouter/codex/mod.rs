@@ -57,11 +57,35 @@ pub(super) fn codex_headers(
     }
 }
 
-/// Human-readable cause of a `response.failed` event: prefer the payload's
-/// `response.error.message`, else the whole payload trimmed to 200 chars, else a
-/// generic fallback. Shared by the streaming + collect drivers.
+/// Map a codex entitlement-error `code` to a human-readable cause. These
+/// arrive IN-BAND as SSE `error` / `response.failed` events (not an HTTP 403),
+/// so both [`failed_message`] and [`error_message`] check here first before
+/// falling back to their generic formatting. `None` for any other code.
+fn entitlement_message(code: Option<&str>) -> Option<&'static str> {
+    match code {
+        Some("usage_not_included") => Some(
+            "codex: your ChatGPT plan does not include this model — upgrade or pick another model",
+        ),
+        Some("insufficient_quota") => {
+            Some("codex: quota exceeded — check your ChatGPT plan/billing")
+        }
+        _ => None,
+    }
+}
+
+/// Human-readable cause of a `response.failed` event: an entitlement error
+/// (via `response.error.code`) first, else the payload's `response.error.message`,
+/// else the whole payload trimmed to 200 chars, else a generic fallback. Shared
+/// by the streaming + collect drivers.
 pub(super) fn failed_message(response: Option<serde_json::Value>) -> String {
     if let Some(v) = response.as_ref() {
+        let code = v
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_str());
+        if let Some(m) = entitlement_message(code) {
+            return m.to_string();
+        }
         if let Some(msg) = v
             .get("error")
             .and_then(|e| e.get("message"))
@@ -77,7 +101,13 @@ pub(super) fn failed_message(response: Option<serde_json::Value>) -> String {
 }
 
 /// Format a transport-level `error` event's `message` / `code` into one string.
+/// An entitlement `code` (`usage_not_included` / `insufficient_quota`) is
+/// mapped to a human-readable cause; any other code keeps the previous
+/// `"{code}: {message}"`-style formatting.
 pub(super) fn error_message(message: Option<String>, code: Option<String>) -> String {
+    if let Some(m) = entitlement_message(code.as_deref()) {
+        return m.to_string();
+    }
     match (message, code) {
         (Some(m), Some(c)) => format!("{c}: {m}"),
         (Some(m), None) => m,

@@ -7,31 +7,15 @@
 use crate::dto::openrouter::ModelInfo;
 use crate::model::app_config::OAuthProvider;
 
-/// Static Codex model catalogue (no network catalogue endpoint for Codex —
-/// see [`meta`]). Copied from 9router's `codex.js` registry entry `models[]`
-/// (ids only).
+/// Models a ChatGPT subscription can use via the codex backend.
+/// Source: opencode's ALLOWED_MODELS (plugin/openai/codex.ts) — plain base ids;
+/// effort is carried in reasoning.effort, never as an id suffix. 9router's
+/// -high/-review/-none ids are ITS OWN aliases and 404/entitlement-fail here.
 pub const CODEX_MODELS: &[&str] = &[
     "gpt-5.5",
-    "gpt-5.5-review",
     "gpt-5.4",
-    "gpt-5.4-review",
     "gpt-5.4-mini",
-    "gpt-5.4-mini-review",
-    "gpt-5.3-codex",
-    "gpt-5.3-codex-review",
-    "gpt-5.3-codex-xhigh",
-    "gpt-5.3-codex-xhigh-review",
-    "gpt-5.3-codex-high",
-    "gpt-5.3-codex-high-review",
-    "gpt-5.3-codex-low",
-    "gpt-5.3-codex-low-review",
-    "gpt-5.3-codex-none",
-    "gpt-5.3-codex-none-review",
     "gpt-5.3-codex-spark",
-    "gpt-5.3-codex-spark-review",
-    "gpt-5.5-image",
-    "gpt-5.4-image",
-    "gpt-5.3-image",
 ];
 
 /// Synthesize a `GET /models`-shaped catalogue from [`CODEX_MODELS`] so the
