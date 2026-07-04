@@ -192,6 +192,13 @@ pub(super) fn render_toast(
     }
 }
 
+/// Height (in rows) of the `plan_ready` approval box: 2 content rows (the
+/// question + the y/a/n footer) plus the top/bottom border. Shared with
+/// `mod::draw`, which reserves exactly this many rows at the bottom of the
+/// transcript while a plan approval is parked so the summary block (rendered as
+/// the last transcript content) isn't hidden under this box.
+pub(super) const PLAN_APPROVAL_HEIGHT: u16 = 4;
+
 /// Render the tool-approval prompt shown while a risky tool call is paused for
 /// the user's y/n (Normal mode).
 ///
@@ -231,7 +238,9 @@ pub(super) fn render_tool_approval(
         ];
 
         let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
-        let h = ((rows.len() as u16) + 2).min(avail.max(3));
+        // Fixed height (2 content rows + 2 border) — shared with the transcript's
+        // plan-approval reserve in `mod::draw` so the summary block clears this box.
+        let h = PLAN_APPROVAL_HEIGHT.min(avail.max(3));
         let y = input_chunk.y.saturating_sub(h);
         let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
         let block = Block::bordered()

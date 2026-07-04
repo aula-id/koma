@@ -175,7 +175,29 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
     header::render_model_row(frame, chunks[3], rest, resolved_model, palette);
 
     // --- Transcript ---
-    transcript::render_transcript(frame, chunks[1], rest, palette);
+    // A parked plan_ready approval renders its must-read summary as the BOTTOM
+    // block of the transcript — exactly where the approval overlay (drawn last,
+    // anchored at the input and growing UP over the transcript's bottom rows) would
+    // hide it. So while such an approval is parked, shrink the transcript to end at
+    // the overlay's top edge: its follow-to-bottom then lands the summary just above
+    // the box, keeping it readable while the user decides. Normal tool approvals need
+    // no reserve (they render their details inside the overlay itself).
+    let transcript_area = {
+        let plan_parked = rest.fg().awaiting_approval
+            && rest
+                .fg()
+                .pending_tool_calls
+                .get(rest.fg().tool_idx)
+                .map(|c| c.function.name == "plan_ready")
+                .unwrap_or(false);
+        let overlay_top = chunks[4].y.saturating_sub(overlays::PLAN_APPROVAL_HEIGHT);
+        if plan_parked && overlay_top < chunks[1].y + chunks[1].height {
+            Rect { height: overlay_top.saturating_sub(chunks[1].y), ..chunks[1] }
+        } else {
+            chunks[1]
+        }
+    };
+    transcript::render_transcript(frame, transcript_area, rest, palette);
 
     // --- Pending-steer panel (hidden when empty) ---
     draw_pending_steers(frame, chunks[2], rest, palette);

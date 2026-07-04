@@ -34,11 +34,12 @@ impl Tool for PlanEnter {
     }
 
     fn description(&self) -> &'static str {
-        "Enter plan mode: tools become read-only while you explore and design an \
-         implementation plan. Only use this when the user explicitly asks you to plan \
-         (e.g. 'plan this', 'make a plan', 'design first'). Never enter plan mode on your \
-         own initiative. Exit happens when the user approves the plan you present via \
-         plan_ready."
+        "Enter plan mode: tools become read-only while you explore and design. Use this \
+         when the user asks you to plan, learn, research, explore, or design something \
+         before building (e.g. 'plan this', 'learn the codebase', 'research how X works', \
+         'design the architecture'). Do not enter plan mode for direct implementation \
+         requests, and never for your own convenience - the trigger is the user's intent \
+         to plan or understand first."
     }
 
     fn parameters(&self) -> Value {
