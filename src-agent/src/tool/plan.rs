@@ -62,8 +62,10 @@ impl Tool for PlanReady {
     fn description(&self) -> &'static str {
         "Present your finished plan for user approval. summary is shown to the user; plan \
          (full detail: files, exact edits, order, risks) is saved to <session>/plan.md. \
-         Only call this from plan mode when your plan is complete. The user may approve, \
-         approve with history compaction, or ask to keep discussing."
+         Only call this from plan mode when your plan is complete. Only call this after ALL \
+         work is finished - including background bash jobs and sub-agents; collect their \
+         results first. The user may approve, approve with history compaction, or ask to \
+         keep discussing."
     }
 
     fn parameters(&self) -> Value {

@@ -208,9 +208,9 @@ pub(super) fn render_tool_approval(
     let warn = Color::Rgb(255, 180, 60);
 
     // plan_ready is a DISTINCT approval — a finished plan presented for the user's
-    // y/a/n decision. Render a bespoke box (title "plan ready", the summary body,
-    // a dim plan.md pointer, and the three-way footer) instead of the generic
-    // tool-approval layout, then return.
+    // y/a/n decision. The plan SUMMARY is rendered as normal transcript content
+    // (see `transcript::render_tool_lines`), so this overlay stays minimal: just
+    // the question + the three-way footer.
     let is_plan_ready = rest
         .fg()
         .pending_tool_calls
@@ -218,38 +218,17 @@ pub(super) fn render_tool_approval(
         .map(|c| c.function.name == "plan_ready")
         .unwrap_or(false);
     if is_plan_ready {
-        let mut rows: Vec<Line> = Vec::new();
-        // Body: the summary (carried in `approval_reason`). Split on explicit
-        // newlines; long lines are clipped by the box width, like the generic
-        // reason render.
-        if let Some(summary) = rest.fg().approval_reason.as_ref() {
-            for line in summary.lines() {
-                rows.push(Line::from(Span::styled(
-                    format!(" {line}"),
-                    Style::default().fg(palette.fg),
-                )));
-            }
-        }
-        // Dim pointer to the full plan on disk. The client shadow's session has an
-        // empty path (render-irrelevant on the client), so fall back to a literal
-        // note when the path isn't a real absolute path.
-        let plan_line = rest
-            .fg()
-            .session
-            .as_ref()
-            .map(|s| s.plan_path())
-            .filter(|p| p.is_absolute())
-            .map(|p| format!(" full plan: {}", p.display()))
-            .unwrap_or_else(|| " full plan saved to session plan.md".to_string());
-        rows.push(Line::from(Span::styled(
-            plan_line,
-            Style::default().fg(palette.dim),
-        )));
-        rows.push(Line::from(vec![
-            Span::styled(" [y] approve   ", Style::default().fg(warn)),
-            Span::styled("[a] approve & compact   ", Style::default().fg(warn)),
-            Span::styled("[n] chat more", Style::default().fg(palette.dim)),
-        ]));
+        let rows: Vec<Line> = vec![
+            Line::from(Span::styled(
+                " proceed with the plan?",
+                Style::default().fg(palette.fg),
+            )),
+            Line::from(vec![
+                Span::styled(" [y] approve   ", Style::default().fg(warn)),
+                Span::styled("[a] approve & compact   ", Style::default().fg(warn)),
+                Span::styled("[n] chat more", Style::default().fg(palette.dim)),
+            ]),
+        ];
 
         let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
         let h = ((rows.len() as u16) + 2).min(avail.max(3));

@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::{Alignment, Margin, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
@@ -19,10 +19,10 @@ use super::helpers::truncate_chars;
 /// bypassed — make it unmistakable).
 pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
-        crate::app::state::AgentMode::Normal => ("●", "normal", Color::Rgb(80, 220, 80)),
-        crate::app::state::AgentMode::Auto   => ("»", "auto",   Color::Rgb(255, 210, 60)),
-        crate::app::state::AgentMode::Plan   => ("p", "plan",   Color::Rgb(80, 200, 255)),
-        crate::app::state::AgentMode::Yolo   => ("!", "yooloo", Color::Rgb(255, 60, 60)),
+        crate::app::state::AgentMode::Normal => ("●", "normal",   Color::Rgb(80, 220, 80)),
+        crate::app::state::AgentMode::Auto   => ("»", "auto",     Color::Rgb(255, 210, 60)),
+        crate::app::state::AgentMode::Plan   => ("p", "planning", Color::Rgb(80, 200, 255)),
+        crate::app::state::AgentMode::Yolo   => ("!", "yooloo",   Color::Rgb(255, 60, 60)),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.
@@ -65,9 +65,24 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
         .max(1);
     let mut header_spans = badge_spans;
     header_spans.push(Span::raw(" ".repeat(gap)));
-    header_spans.push(Span::styled(mode_icon, Style::default().fg(mode_color)));
-    header_spans.push(Span::raw(" "));
-    header_spans.push(Span::styled(mode_label, Style::default().fg(mode_color)));
+    if matches!(rest.agent_mode, crate::app::state::AgentMode::Plan) {
+        // "planning" gets a bold shimmer sweep instead of a flat colour — see
+        // `plan_shimmer_spans` below. Icon stays a plain bold dot of the same cyan.
+        header_spans.push(Span::styled(
+            mode_icon,
+            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        ));
+        header_spans.push(Span::raw(" "));
+        let elapsed_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        header_spans.extend(plan_shimmer_spans(mode_label, elapsed_ms));
+    } else {
+        header_spans.push(Span::styled(mode_icon, Style::default().fg(mode_color)));
+        header_spans.push(Span::raw(" "));
+        header_spans.push(Span::styled(mode_label, Style::default().fg(mode_color)));
+    }
     let header_line = Line::from(header_spans);
     let header_block = Block::new()
         .borders(Borders::BOTTOM)
@@ -76,6 +91,56 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     let header_inner = header_block.inner(chunk);
     frame.render_widget(header_block, chunk);
     frame.render_widget(Paragraph::new(header_line), header_inner);
+}
+
+/// Build the shimmering "planning" label spans for the Plan-mode header entry.
+///
+/// The whole word is bold, base-coloured in the calm plan cyan. A small bright
+/// highlight (one peak char + a dimmer shoulder on each side where the text
+/// allows it) sweeps left-to-right across the letters, then spends a short
+/// `GAP`-wide pause off the right edge — during which the word sits flat at
+/// the base colour — before wrapping back to the start. That pause is what
+/// turns the sweep into a rhythmic pulse instead of a nonstop strobe.
+///
+/// Time-driven only (no stored counter, mirrors `comet_spans` in
+/// `super::helpers`): the phase is derived straight from wall-clock
+/// milliseconds, so it advances on every redraw with nothing to reset. Per-char
+/// spans keep the colour mapping trivial and multibyte-safe (`chars()`).
+fn plan_shimmer_spans(text: &str, elapsed_ms: u128) -> Vec<Span<'static>> {
+    const BASE: Color = Color::Rgb(80, 200, 255);
+    const SHOULDER: Color = Color::Rgb(140, 225, 255);
+    const PEAK: Color = Color::Rgb(200, 245, 255);
+    const FRAME_MS: u128 = 90; // sweep advance cadence
+    const GAP: usize = 3; // pause length after the highlight exits, before it wraps
+
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let period = n + GAP;
+    let pos = ((elapsed_ms / FRAME_MS) as usize) % period.max(1);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(n);
+    for (i, ch) in chars.iter().enumerate() {
+        // `pos >= n` means the highlight is in its off-screen gap pause: render
+        // flat base colour. Otherwise the char at `pos` is the bright peak, and
+        // its immediate neighbours (when in bounds) are the dimmer shoulders.
+        let color = if pos >= n {
+            BASE
+        } else if i == pos {
+            PEAK
+        } else if i + 1 == pos || i == pos + 1 {
+            SHOULDER
+        } else {
+            BASE
+        };
+        spans.push(Span::styled(
+            ch.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
 }
 
 /// Render the model-name row: right-aligned, dim, sits directly above the input

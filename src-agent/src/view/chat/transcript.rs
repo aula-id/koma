@@ -12,7 +12,7 @@ use crate::app::state::AppStateRest;
 use crate::dto::chat::Role;
 use crate::view::theme::Palette;
 use super::helpers::{
-    push_thinking_line, render_block, split_thinking, truncate_chars,
+    push_thinking_line, render_block, split_thinking, truncate_chars, THINK_BAR,
 };
 
 /// Render the transcript area into `body_chunk`.
@@ -95,7 +95,7 @@ pub(super) fn render_transcript(
             let has_body = !block.is_empty();
             let tool_lines: Vec<Line<'static>> = committed
                 .get(i)
-                .map(|m| render_tool_lines(m, &completed_tool_ids, has_body, palette))
+                .map(|m| render_tool_lines(m, &completed_tool_ids, has_body, palette, wrap_w))
                 .unwrap_or_default();
 
             // Empty blocks (hidden harness messages) with no tool lines leave no
@@ -432,6 +432,7 @@ pub(super) fn render_tool_lines(
     completed: &std::collections::HashSet<&str>,
     has_body: bool,
     palette: &Palette,
+    wrap_w: usize,
 ) -> Vec<Line<'static>> {
     if msg.role != Role::Assistant {
         return Vec::new();
@@ -441,7 +442,6 @@ pub(super) fn render_tool_lines(
     };
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(calls.len());
     for (ci, call) in calls.iter().enumerate() {
-        let args = truncate_chars(&call.function.arguments, 60);
         let done = completed.contains(call.id.as_str());
         let (glyph, glyph_style) = if done {
             ("✓ ", Style::default().fg(palette.accent))
@@ -453,6 +453,51 @@ pub(super) fn render_tool_lines(
         } else {
             Span::raw("  ")
         };
+
+        // plan_ready: render the plan SUMMARY as a readable quote block instead of
+        // the raw args blob (which carries the whole plan text). The summary lives
+        // in the call's `summary` arg — parse it out; on any parse failure fall
+        // through to the generic tool-call line. Display-only: the summary is NOT a
+        // separate conversation message, so there is no model-context duplication.
+        if call.function.name == "plan_ready" {
+            if let Some(summary) =
+                serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                    .ok()
+                    .and_then(|v| v.get("summary").and_then(|s| s.as_str()).map(str::to_string))
+            {
+                // Header: "⚙/✓ plan ready" — the glyph flips to ✓ once the user
+                // decides and the plan_ready tool result lands.
+                lines.push(Line::from(vec![
+                    prefix,
+                    Span::styled(glyph, glyph_style),
+                    Span::styled("plan ready", Style::default().fg(palette.dim)),
+                ]));
+                // Summary body: the same dim left rule the reasoning block uses
+                // (THINK_BAR — one rail, never a box), the text in fg, hung under a
+                // 2-col indent and wrapped to the pane width.
+                let bar_style = Style::default().fg(palette.dim);
+                let inner_w = wrap_w.saturating_sub(2 + THINK_BAR.chars().count()).max(1);
+                for sline in summary.lines() {
+                    if sline.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(THINK_BAR, bar_style),
+                        ]));
+                        continue;
+                    }
+                    let spans =
+                        vec![Span::styled(sline.to_string(), Style::default().fg(palette.fg))];
+                    for visual in crate::view::markdown::wrap_spans(&spans, inner_w) {
+                        let mut line = vec![Span::raw("  "), Span::styled(THINK_BAR, bar_style)];
+                        line.extend(visual);
+                        lines.push(Line::from(line));
+                    }
+                }
+                continue;
+            }
+        }
+
+        let args = truncate_chars(&call.function.arguments, 60);
         lines.push(Line::from(vec![
             prefix,
             Span::styled(glyph, glyph_style),
@@ -531,7 +576,7 @@ pub(super) fn assemble_messages(
     for msg in messages {
         let block = render_message_block(msg, palette, wrap_w);
         let has_body = !block.is_empty();
-        let tool_lines = render_tool_lines(msg, &completed, has_body, palette);
+        let tool_lines = render_tool_lines(msg, &completed, has_body, palette, wrap_w);
         // Empty block with no tool lines (system / hidden harness) → no trace.
         if block.is_empty() && tool_lines.is_empty() {
             continue;

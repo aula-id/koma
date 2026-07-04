@@ -250,6 +250,35 @@ pub(crate) fn process_tools(
                 state.rest.sessions[sess_idx].tool_idx += 1;
                 continue;
             }
+            // Settled-session guard: plan_ready is only accepted once ALL of this
+            // session's background work has finished. A still-running background bash
+            // job or sub-agent (typically a detached one — a blocking one would have
+            // parked this round) means the plan may rest on incomplete results, so
+            // REJECT (do NOT park) and tell the model to collect the outputs first.
+            let mut pending: Vec<String> = Vec::new();
+            for j in &state.rest.sessions[sess_idx].bash_jobs {
+                if matches!(j.snapshot_status(), crate::app::bgbash::BashJobStatus::Running) {
+                    pending.push(format!("bash-{}", j.id));
+                }
+            }
+            for sa in &state.rest.sessions[sess_idx].subagents {
+                if matches!(sa.status, crate::app::subagent::SubAgentStatus::Running) {
+                    pending.push(format!("#{} ({})", sa.id, sa.agent_name));
+                }
+            }
+            if !pending.is_empty() {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "plan_ready rejected: background work is still running ({}). Collect the \
+                         results with bash_output/task_output, incorporate them into the plan, \
+                         then call plan_ready again.",
+                        pending.join(", ")
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
             let sanitized =
                 crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
             let args: serde_json::Value =
