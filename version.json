@@ -1,4 +1,4 @@
 {
-  "version": "0.2.16",
-  "message": "fix: scoped /settings model list (global vs session) with inline [+add global] / [+add local] buttons and a unified Up/Down navigation chain; fix /agents session-scoped model routing so a per-session agent model actually routes to that model instead of silently falling back to Main (re-overlay session_models at delegation); per-session toast when an agent's declared model can't resolve; serde hardening on the settings IPC snapshot."
+  "version": "0.2.17",
+  "message": "feat: background/detached sub-agents — run_in_background on the task tool, task_output/task_kill to poll/abort, Ctrl+B to background a running agent, and idle completion nudges; plus fixes making backgrounded agents fully quiet — is_ui_busy split stops the comet shimmer on 'ready', IPC diff suppression ends the per-step redraw lag and chat-rams-to-bottom, and live_text streams the report into the $ viewer; never-empty reports (reasoning fallback), no double-report (altitude-aware stall detection), recovery of backend-dropped tool-call args from inline XML, and the explore step cap raised 15 to 80."
 }
