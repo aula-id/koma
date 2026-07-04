@@ -76,6 +76,14 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // sessions). Cloned into every ToolCtx so `sec_*` tool calls can dispatch to
     // the daemon. `None` before startup builds it (and inert when not installed).
     let sec_manager = state.rest.sec_manager.clone();
+    // Whether `bash`/`git_operator` run their "saving" output path (filtering +
+    // tee-to-disk). No session ⇒ default true.
+    let bash_saving = session_ref
+        .as_ref()
+        .map(|s| s.settings.bash_saving)
+        .unwrap_or(true);
+    // Tee log directory: `<session_dir>/opt/`. `None` with no active session.
+    let bash_log_dir = session_ref.as_ref().map(|s| s.path.join("opt"));
     crate::tool::ToolCtx {
         workspace,
         workspaces,
@@ -87,6 +95,8 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         ssh_key,
         mcp_manager,
         sec_manager,
+        bash_saving,
+        bash_log_dir,
     }
 }
 

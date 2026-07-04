@@ -265,6 +265,10 @@ pub struct Settings {
     /// (e.g. Anthropic). When false (the default), no such adaptation is attempted.
     #[serde(default = "default_sliding_cache")]
     pub sliding_cache: bool,
+    /// Whether bash/git_operator run their "saving" output path (filtering +
+    /// tee-to-disk) to preserve command logs. Defaults to true.
+    #[serde(default = "default_bash_saving")]
+    pub bash_saving: bool,
     /// Internet-access tier for this session. `Simple` (default) keeps
     /// `web_fetch`/`web_search` on the lightweight in-process raw-HTTP path.
     /// `Full` upgrades `web_fetch` to the opt-in scrapion browser backend
@@ -339,6 +343,10 @@ fn default_sliding_cache() -> bool {
     false
 }
 
+fn default_bash_saving() -> bool {
+    true
+}
+
 fn default_internet_mode() -> InternetMode {
     InternetMode::Simple
 }
@@ -365,6 +373,7 @@ impl Default for Settings {
             short_send_enabled: default_short_send_enabled(),
             short_send_tail_n: default_short_send_tail_n(),
             sliding_cache: default_sliding_cache(),
+            bash_saving: true,
             internet_mode: InternetMode::Simple,
             session_models: Vec::new(),
             git_ssh_key: None,

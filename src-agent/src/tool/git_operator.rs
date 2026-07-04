@@ -212,12 +212,15 @@ impl Tool for GitOperator {
         // Strip ANSI color codes (git colorizes output by default).
         let combined = crate::dto::chat::strip_ansi(&combined);
 
-        let exit_code_n = output.status.code().unwrap_or(-1);
-        let exit_code_str = exit_code_n.to_string();
-
-        // Cap via the shared helper (last MAX_TOOL_OUTPUT_CHARS chars).
-        // format_captured_output appends "exit code: N" — do not duplicate it here.
-        Ok(super::shell::format_captured_output(combined, &exit_code_str))
+        // Same saving/tee post-processing as `bash` (filtering, tee-to-disk on
+        // truncation/non-zero-exit, and the shared truncation cap +
+        // "exit code: N" line) — `finalize_output` handles all of it. Build a
+        // pseudo command string ("git <args...>") so the filter table's
+        // command-family matching still works for git subcommands.
+        let exit = super::shell::ShellExit::Code(output.status.code());
+        let pseudo_command = format!("git {}", git_args.join(" "));
+        let opts = super::shell::OutputOpts { saving: ctx.bash_saving, log_dir: ctx.bash_log_dir.clone() };
+        Ok(super::shell::finalize_output(&pseudo_command, combined, exit, &opts))
     }
 }
 
