@@ -20,15 +20,19 @@ pub enum OAuthFlowState {
     /// Codex browser flow: the loopback listener is up and `url` is the
     /// authorization URL (shown so the user can copy it if the browser didn't
     /// open). `frame` drives the braille spinner, advanced once per tick.
-    CodexWait { url: String, frame: u8 },
+    /// `copied` flips to `true` after a successful `c` (copy-url) press, so
+    /// the view can show a one-shot confirmation line.
+    CodexWait { url: String, frame: u8, copied: bool },
     /// Codex manual flow: the user is typing/pasting a raw access token.
     CodexPaste { input: String },
     /// Kilo Code device flow: waiting for the user to approve `user_code` at
-    /// `verification_url`. `frame` drives the braille spinner.
+    /// `verification_url`. `frame` drives the braille spinner. `copied` flips
+    /// to `true` after a successful `c` (copy-url) press.
     KiloWait {
         user_code: String,
         verification_url: String,
         frame: u8,
+        copied: bool,
     },
     /// The flow failed; `String` is the human-readable reason. Enter/Esc dismiss
     /// back to `Idle`.

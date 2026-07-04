@@ -264,6 +264,9 @@ pub struct OAuthFlowSnapshot {
     /// `codex_wait`/`kilo_wait`'s braille-spinner frame counter, advanced
     /// daemon-side every tick while the flow is in flight.
     pub frame: u8,
+    /// `codex_wait`/`kilo_wait`'s "url copied to clipboard" confirmation flag,
+    /// set after a successful `c` (copy-url) key press.
+    pub copied: bool,
 }
 
 /// A serde-safe projection of one model draft.

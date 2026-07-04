@@ -273,6 +273,14 @@ pub(in crate::app::runtime) fn apply_action(
             oauth::handle_oauth_delete(uuid, state, handle)?;
         }
 
+        Action::OAuthCopyUrl => {
+            oauth::handle_oauth_copy_url(state)?;
+        }
+
+        Action::OAuthOpenUrl => {
+            oauth::handle_oauth_open_url(state)?;
+        }
+
         Action::SkipLoading => {
             session::handle_skip_loading(state)?;
         }

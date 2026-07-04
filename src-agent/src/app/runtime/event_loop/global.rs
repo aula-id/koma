@@ -169,7 +169,7 @@ pub(super) fn service_global(
         match orx.try_recv() {
             Ok(OAuthEvent::CodexUrl { url }) => {
                 for st in settings_states(state) {
-                    st.oauth_flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0 };
+                    st.oauth_flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0, copied: false };
                 }
                 state.rest.oauth_rx = Some(orx);
                 dirty = true;
@@ -180,6 +180,7 @@ pub(super) fn service_global(
                         user_code: user_code.clone(),
                         verification_url: verification_url.clone(),
                         frame: 0,
+                        copied: false,
                     };
                 }
                 state.rest.oauth_rx = Some(orx);

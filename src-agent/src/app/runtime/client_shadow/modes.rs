@@ -619,12 +619,13 @@ fn shadow_oauth_flow(s: crate::ipc::proto::OAuthFlowSnapshot) -> OAuthFlowState 
     match s.kind.as_str() {
         "starting" => OAuthFlowState::Starting,
         "pick" => OAuthFlowState::Pick(s.cursor),
-        "codex_wait" => OAuthFlowState::CodexWait { url: s.url, frame: s.frame },
+        "codex_wait" => OAuthFlowState::CodexWait { url: s.url, frame: s.frame, copied: s.copied },
         "codex_paste" => OAuthFlowState::CodexPaste { input: s.input },
         "kilo_wait" => OAuthFlowState::KiloWait {
             user_code: s.user_code,
             verification_url: s.url,
             frame: s.frame,
+            copied: s.copied,
         },
         "failed" => OAuthFlowState::Failed(s.error),
         _ => OAuthFlowState::Idle,

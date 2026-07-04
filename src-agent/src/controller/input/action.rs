@@ -232,6 +232,15 @@ pub enum Action {
     /// the connection (by `uuid`) from `config.oauth_conns`, persist, and evict
     /// its token-refresh cache entry.
     OAuthDelete(String),
+    /// `c` on the Codex/Kilo Code wait screen: best-effort copy the flow's
+    /// URL to the system clipboard. Synchronous, fire-and-forget — sets the
+    /// active variant's `copied` flag on success so the view can show a
+    /// confirmation line.
+    OAuthCopyUrl,
+    /// `o` on the Codex/Kilo Code wait screen: re-open the flow's URL in the
+    /// system browser (in case the first automatic open didn't land, or the
+    /// user closed the tab). Synchronous, fire-and-forget.
+    OAuthOpenUrl,
     // --- Usage dashboard actions ---
     /// Esc on the usage dashboard — return to Chat.
     CloseUsage,

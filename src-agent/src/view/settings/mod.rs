@@ -433,6 +433,9 @@ pub fn draw(
                 OAuthFlowState::Pick(_) => "↑↓ select · enter choose · esc back",
                 OAuthFlowState::CodexPaste { .. } => "type token · enter save · esc back",
                 OAuthFlowState::Failed(_) => "enter/esc dismiss",
+                OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
+                    "c copy url · o open browser · esc cancel"
+                }
                 _ => "esc cancel",
             }
         } else if on_list_field {
