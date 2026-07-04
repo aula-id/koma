@@ -116,8 +116,23 @@ fn persist_and_finish(state: &mut AppState, select_uuid: &str, ok_status: String
             // LIVE reconnect: tear down the old MCP connections and reconnect from
             // the just-saved server set, in the background. No restart needed. With
             // no manager (MCP never initialised) or zero servers this is a no-op.
+            //
+            // `reconnect` itself is spawned onto a bare OS thread rather than called
+            // inline: on the `Proxy` backend it does TWO blocking unix-socket round-
+            // trips to the global MCP daemon (each bounded by a 65s IO timeout), and
+            // this handler runs synchronously on the event-loop thread — a slow/wedged
+            // daemon would otherwise freeze all input (keys, Esc double-tap timing,
+            // rendering) for up to ~130s. On the `Local` backend `reconnect` is already
+            // cheap (a couple of mutex-guarded ops that spawn async work on the tokio
+            // handle), so running it on a throwaway thread costs only a thread spawn.
+            // The eventual server/tool-count state becomes visible via the cached
+            // `server_status_cached` reads (see `app/mcp/mod.rs`).
             if let Some(m) = state.rest.mcp_manager.as_ref() {
-                m.reconnect(&servers);
+                let mgr = m.clone();
+                let servers_cloned = servers.clone();
+                std::thread::spawn(move || {
+                    mgr.reconnect(&servers_cloned);
+                });
             }
             state.rest.fg_mut().status = ok_status;
         }

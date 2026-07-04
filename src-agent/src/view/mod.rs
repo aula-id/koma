@@ -94,7 +94,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 .rest
                 .mcp_manager
                 .as_ref()
-                .map(|mgr| mgr.server_status())
+                .map(|mgr| mgr.server_status_cached())
                 .or_else(|| m.shadow_status.clone());
             mcp::draw(frame, m, status.as_ref(), &palette);
         }
