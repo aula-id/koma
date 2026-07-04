@@ -377,10 +377,48 @@ pub(crate) fn process_tools(
                 .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
             {
                 Some(job) => {
-                    let line = bash_status_line(&job.snapshot_status());
+                    let status = job.snapshot_status();
+                    let line = bash_status_line(&status);
                     let out = job.output_snapshot();
+                    // Only reshape a FINISHED job's output when the model gave
+                    // no explicit pattern/tail_lines shaping of its own — an
+                    // explicit ask is deliberate and must be respected as-is.
+                    // Running/Killed/Error, and any poll with pattern or
+                    // tail_lines set, take the exact original path below.
+                    let finished_code = match status {
+                        crate::app::bgbash::BashJobStatus::Done(code) => Some(code),
+                        _ => None,
+                    };
+                    let saving = state.rest.sessions[sess_idx]
+                        .session
+                        .as_ref()
+                        .map(|s| s.settings.bash_saving)
+                        .unwrap_or(true);
+                    let qualifies =
+                        finished_code.is_some() && tail_lines.is_none() && pattern.is_none() && saving;
+
                     if out.is_empty() {
                         format!("{line}\n(no output yet)")
+                    } else if qualifies {
+                        // Mirror `tool::shell::finalize_output`'s "saving" path
+                        // (filter + tee) for a finished background job, same as
+                        // synchronous bash/git_operator.
+                        let code = finished_code.expect("qualifies implies finished_code is Some");
+                        let (text, should_tee) =
+                            crate::app::bgbash::render_finished_output(&job.command, &out, code, saving);
+                        let mut body = format!("{line}\n{text}");
+                        if should_tee {
+                            let log_dir = state.rest.sessions[sess_idx]
+                                .session
+                                .as_ref()
+                                .map(|s| s.path.join("opt"));
+                            if let Some(dir) = log_dir {
+                                if let Some(path) = job.ensure_tee_log(&dir, &out) {
+                                    body.push_str(&format!("\nfull-output: {}", path.display()));
+                                }
+                            }
+                        }
+                        body
                     } else {
                         match filter_bash_output(&out, tail_lines, pattern) {
                             Ok(filtered) if filtered.is_empty() => format!("{line}\n(no matching lines)"),
