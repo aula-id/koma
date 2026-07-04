@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Table, Wrap},
     Frame,
 };
 
@@ -50,9 +50,10 @@ pub(super) fn draw_oauth(
             area,
             &format!("{} starting login…", SPINNER[0]),
             None,
+            false,
         ),
         OAuthFlowState::Pick(cursor) => draw_picker(frame, *cursor, palette, area),
-        OAuthFlowState::CodexWait { url, frame: f } => draw_message(
+        OAuthFlowState::CodexWait { url, frame: f, copied } => draw_message(
             frame,
             palette,
             area,
@@ -62,12 +63,14 @@ pub(super) fn draw_oauth(
                 crate::service::oauth::registry::CODEX_PORT,
             ),
             Some(url),
+            *copied,
         ),
         OAuthFlowState::CodexPaste { input } => draw_paste(frame, input, palette, area),
         OAuthFlowState::KiloWait {
             user_code,
             verification_url,
             frame: f,
+            copied,
         } => draw_message(
             frame,
             palette,
@@ -78,6 +81,7 @@ pub(super) fn draw_oauth(
                 user_code,
             ),
             Some(verification_url),
+            *copied,
         ),
         OAuthFlowState::Failed(msg) => draw_failed(frame, msg, palette, area),
     }
@@ -177,8 +181,16 @@ fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) 
 }
 
 /// A one-line status/spinner message plus an optional URL/code line beneath it —
-/// shared shape for `Starting`/`CodexWait`/`KiloWait`.
-fn draw_message(frame: &mut Frame, palette: &Palette, area: Rect, headline: &str, url: Option<&str>) {
+/// shared shape for `Starting`/`CodexWait`/`KiloWait`. `copied` shows a dim
+/// confirmation line under the URL after a successful `c` (copy-url) press.
+fn draw_message(
+    frame: &mut Frame,
+    palette: &Palette,
+    area: Rect,
+    headline: &str,
+    url: Option<&str>,
+    copied: bool,
+) {
     let mut lines = vec![Line::from(Span::styled(
         headline.to_string(),
         Style::default().fg(palette.accent),
@@ -190,9 +202,15 @@ fn draw_message(frame: &mut Frame, palette: &Palette, area: Rect, headline: &str
                 u.to_string(),
                 Style::default().fg(palette.dim),
             )));
+            if copied {
+                lines.push(Line::from(Span::styled(
+                    "url copied to clipboard",
+                    Style::default().fg(palette.dim),
+                )));
+            }
         }
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 /// The manual paste-token screen: a single input line with a trailing cursor.
@@ -202,7 +220,7 @@ fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
         Span::styled(input.to_string(), Style::default().fg(palette.fg)),
         Span::styled("█", Style::default().fg(palette.accent)),
     ]);
-    frame.render_widget(Paragraph::new(vec![line]), area);
+    frame.render_widget(Paragraph::new(vec![line]).wrap(Wrap { trim: false }), area);
 }
 
 /// Failure screen: the error line in red plus a dismiss hint.
@@ -215,5 +233,5 @@ fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
             Style::default().fg(palette.dim),
         )),
     ];
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }

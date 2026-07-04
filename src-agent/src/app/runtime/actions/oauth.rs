@@ -175,6 +175,50 @@ fn apply_login_result(
     }
 }
 
+/// Handle `Action::OAuthCopyUrl`: best-effort copy the active wait screen's URL
+/// to the system clipboard. Synchronous, fire-and-forget — on success, sets
+/// the active `CodexWait`/`KiloWait` variant's `copied` flag so the view can
+/// show a confirmation line; on failure (or in any other `oauth_flow` state,
+/// e.g. `Starting`, which has no URL yet) this is a silent no-op — no error
+/// state churn.
+pub(super) fn handle_oauth_copy_url(state: &mut AppState) -> Result<()> {
+    if let Mode::Settings(s) = state.mode_mut() {
+        match &mut s.oauth_flow {
+            OAuthFlowState::CodexWait { url, copied, .. } => {
+                if crate::service::oauth::browser::copy_to_clipboard(url) {
+                    *copied = true;
+                }
+            }
+            OAuthFlowState::KiloWait { verification_url, copied, .. } => {
+                if crate::service::oauth::browser::copy_to_clipboard(verification_url) {
+                    *copied = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Handle `Action::OAuthOpenUrl`: re-open the active wait screen's URL in the
+/// system browser (in case the initial automatic open didn't land, or the
+/// user closed the tab). Synchronous, fire-and-forget — the result is ignored
+/// the same way the initial flow-start open ignores it.
+pub(super) fn handle_oauth_open_url(state: &mut AppState) -> Result<()> {
+    if let Mode::Settings(s) = state.mode_mut() {
+        match &s.oauth_flow {
+            OAuthFlowState::CodexWait { url, .. } => {
+                crate::service::oauth::browser::open_in_browser(url);
+            }
+            OAuthFlowState::KiloWait { verification_url, .. } => {
+                crate::service::oauth::browser::open_in_browser(verification_url);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Handle `Action::OAuthDelete`: remove the connection from `config.oauth_conns`,
 /// persist, evict its token-refresh cache entry, and rebuild `oauth_drafts` in
 /// the open submenu.

@@ -670,8 +670,10 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
 /// (`s.oauth_flow != Idle`). Ctrl+C was already handled as inert by the caller.
 ///
 /// - `Starting`/`CodexWait`/`KiloWait`: Esc aborts the background task
-///   (`Action::OAuthCancel`); everything else is ignored (a spinner screen with
-///   nothing to type).
+///   (`Action::OAuthCancel`); `c`/`o` copy/re-open the flow's URL
+///   (`Action::OAuthCopyUrl`/`Action::OAuthOpenUrl` — no-ops in `Starting`,
+///   which has no URL yet); everything else is ignored (a spinner screen with
+///   nothing else to type).
 /// - `Pick`: Up/Down move the cursor; Enter on Codex/Kilo Code kicks off that
 ///   provider's flow (`Action::OAuthStart`), Enter on "paste token" switches
 ///   straight to `CodexPaste` (no task involved); Esc returns to `Idle`.
@@ -682,10 +684,11 @@ fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
     match s.oauth_flow.clone() {
         OAuthFlowState::Idle => Action::None, // unreachable: caller guards on non-Idle
         OAuthFlowState::Starting | OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
-            if key.code == KeyCode::Esc {
-                Action::OAuthCancel
-            } else {
-                Action::None
+            match key.code {
+                KeyCode::Esc => Action::OAuthCancel,
+                KeyCode::Char('c') => Action::OAuthCopyUrl,
+                KeyCode::Char('o') => Action::OAuthOpenUrl,
+                _ => Action::None,
             }
         }
         OAuthFlowState::Pick(cursor) => {

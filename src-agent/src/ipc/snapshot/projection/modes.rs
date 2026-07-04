@@ -249,10 +249,11 @@ pub fn oauth_flow_snapshot(
             cursor: *cursor,
             ..Default::default()
         },
-        OAuthFlowState::CodexWait { url, frame } => OAuthFlowSnapshot {
+        OAuthFlowState::CodexWait { url, frame, copied } => OAuthFlowSnapshot {
             kind: "codex_wait".to_string(),
             url: url.clone(),
             frame: *frame,
+            copied: *copied,
             ..Default::default()
         },
         OAuthFlowState::CodexPaste { input } => OAuthFlowSnapshot {
@@ -260,11 +261,12 @@ pub fn oauth_flow_snapshot(
             input: input.clone(),
             ..Default::default()
         },
-        OAuthFlowState::KiloWait { user_code, verification_url, frame } => OAuthFlowSnapshot {
+        OAuthFlowState::KiloWait { user_code, verification_url, frame, copied } => OAuthFlowSnapshot {
             kind: "kilo_wait".to_string(),
             url: verification_url.clone(),
             user_code: user_code.clone(),
             frame: *frame,
+            copied: *copied,
             ..Default::default()
         },
         OAuthFlowState::Failed(error) => OAuthFlowSnapshot {

@@ -471,6 +471,7 @@ mod roundtrip_tests {
             kind: "codex_wait".to_string(),
             url: "https://auth.openai.com/oauth/authorize?...".to_string(),
             frame: 3,
+            copied: true,
             ..Default::default()
         });
         roundtrip(&OAuthFlowSnapshot {
@@ -483,6 +484,7 @@ mod roundtrip_tests {
             url: "https://kilo.ai/device".to_string(),
             user_code: "ABCD-1234".to_string(),
             frame: 7,
+            copied: true,
             ..Default::default()
         });
         roundtrip(&OAuthFlowSnapshot {
