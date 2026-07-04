@@ -29,6 +29,7 @@ pub mod memory;
 pub mod pong;
 pub mod search;
 pub mod shell;
+pub mod shell_filter;
 pub mod task;
 pub mod todo;
 
@@ -85,6 +86,14 @@ pub struct ToolCtx {
     /// no manager is available (e.g. headless/test constructions) — sec calls then
     /// fall through to the "unknown tool" error.
     pub sec_manager: Option<Arc<crate::app::sec::SecDaemonManager>>,
+    /// Whether `bash`/`git_operator` should run their "saving" output path
+    /// (noise filtering + tee-to-disk on truncation/non-zero-exit). Defaults to
+    /// true everywhere until a settings toggle exists to turn it off per-session.
+    pub bash_saving: bool,
+    /// Directory tee'd full command logs are written to when `bash_saving` is
+    /// true (`<session_dir>/opt/`). `None` when no session is active (or for
+    /// headless/test constructions), in which case tee is simply skipped.
+    pub bash_log_dir: Option<PathBuf>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.

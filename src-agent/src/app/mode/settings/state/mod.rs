@@ -82,6 +82,8 @@ pub struct SettingsState {
     pub short_send_enabled: bool,
     /// Draft: cache-warmth-adaptive summarization toggle.
     pub sliding_cache: bool,
+    /// Draft: bash output saving (filtered + tee-to-disk) toggle.
+    pub bash_saving: bool,
     /// Draft: internet-access tier toggle.
     pub internet_mode: InternetMode,
     /// The session's effective working directory, captured at construction. Used
@@ -208,6 +210,7 @@ impl SettingsState {
             allowed_folders,
             short_send_enabled: session.settings.short_send_enabled,
             sliding_cache: session.settings.sliding_cache,
+            bash_saving: session.settings.bash_saving,
             internet_mode: session.settings.internet_mode,
             cwd: effective_cwd,
             list_editing: false,
@@ -315,6 +318,9 @@ impl SettingsState {
             }
             SettingField::SlidingCache => {
                 self.sliding_cache = !self.sliding_cache;
+            }
+            SettingField::BashSaving => {
+                self.bash_saving = !self.bash_saving;
             }
             SettingField::InternetMode => {
                 self.internet_mode = self.internet_mode.toggled();
