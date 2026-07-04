@@ -10,26 +10,40 @@ use crate::dto::chat::{ChatMessage, Role};
 use crate::service::{openrouter::OpenRouterClient, StreamEvent};
 
 /// Handle the `/compact` command: summarise old turns and trim context.
-pub(super) fn handle_compact(
+///
+/// `preserve_n_override` lets a caller force how many recent turns are kept
+/// verbatim: `/compact` passes `None` (use the session's configured
+/// `compaction.preserve_n`), while the plan-approval compaction passes `Some(0)`
+/// to collapse the ENTIRE exploratory history to the summary (the approved plan
+/// is seeded separately in `apply_compaction_result`).
+///
+/// `pub(crate)` so the deferred/idle drain can fire it once the post-approval
+/// turn settles. It still operates on the FOREGROUND session, so the drain call
+/// site gates on `idx == foreground` to keep the two in sync.
+pub(crate) fn handle_compact(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
+    preserve_n_override: Option<usize>,
 ) -> Result<()> {
     if state.rest.fg().waiting {
         state.rest.fg_mut().status = "busy — wait for response".into();
+        state.rest.pending_plan_seed = false;
         return Ok(());
     }
     if client.is_none() || state.rest.fg().session.is_none() {
         state.rest.fg_mut().status = "no active session".into();
+        state.rest.pending_plan_seed = false;
         return Ok(());
     }
     let (to_sum, kept_tail) = {
         let sess = state.rest.fg().session.as_ref().unwrap();
-        let pn = sess.settings.compaction.preserve_n;
+        let pn = preserve_n_override.unwrap_or(sess.settings.compaction.preserve_n);
         sess.conversation.split_for_compaction(pn)
     };
     if to_sum.is_empty() {
         state.rest.fg_mut().status = "nothing to compact".into();
+        state.rest.pending_plan_seed = false;
         return Ok(());
     }
     let mut req = vec![ChatMessage::new(

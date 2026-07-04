@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
-use crate::app::state::{AppState, AppStateRest};
+use crate::app::state::{AgentMode, AppState, AppStateRest};
 use crate::dto::chat::{ChatMessage, Role};
 use crate::service::openrouter::OpenRouterClient;
 
@@ -350,6 +350,7 @@ over sec_remote (stateful socket).\n",
     // stream's advertise filter keeps the model's calls to them. With no MCP servers
     // (or none connected yet) both are empty and the request is byte-identical to the
     // pre-MCP path. Sub-agents get NO MCP tools (kept simple) — only the main agent.
+    let mode = state.rest.agent_mode;
     let (mut mcp_tools, mut advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
         match state.rest.mcp_manager.as_ref() {
             Some(mgr) => {
@@ -360,10 +361,13 @@ over sec_remote (stateful socket).\n",
             None => (Vec::new(), crate::tool::main_tool_names()),
         };
     // Security daemon tools for the MAIN agent. Gated on BOTH the runtime enable
-    // flag (`security_enabled`) AND having a manager. When disabled, sec_ tools are
-    // not advertised, keeping normal turns lean. Same pattern as MCP otherwise: extend
-    // the allow-list with the daemon's `sec_`-prefixed names and append its ToolDefs.
-    if state.rest.security_enabled {
+    // flag (`security_enabled`) AND having a manager, AND NOT being in Plan mode
+    // (Plan is read-only; the sec_ toolkit is offensive/mutating by nature, so it
+    // is withheld wholesale rather than filtered tool-by-tool). When disabled,
+    // sec_ tools are not advertised, keeping normal turns lean. Same pattern as
+    // MCP otherwise: extend the allow-list with the daemon's `sec_`-prefixed
+    // names and append its ToolDefs.
+    if state.rest.security_enabled && mode != AgentMode::Plan {
         if let Some(sec) = state.rest.sec_manager.as_ref() {
             // Filter out tools the user disabled in the `/security` panel so they are
             // neither advertised nor allow-listed (an empty `sec_inactive` keeps every
@@ -376,6 +380,24 @@ over sec_remote (stateful socket).\n",
                     .filter(|d| !inactive.contains(&d.function.name)),
             );
         }
+    }
+    // Plan mode: fold the advertised surface down to the read-only / reasoning /
+    // delegation whitelist (`tool_allowed_in_plan`). MCP tools ride through
+    // untouched — the user explicitly wired those servers, so they own that risk
+    // (same precedent as `sec_*`'s harness exemption). Advertise `seqthink` (the
+    // structured-reasoning tool) while Plan is ACTIVE; advertise `plan_enter`
+    // (the request-to-plan tool) otherwise, so the model can ask to enter Plan
+    // mode next turn — never both at once, which is why both live in
+    // `INTERNAL_ONLY` rather than `main_tool_names`.
+    if mode == AgentMode::Plan {
+        advertise.retain(|n| crate::tool::tool_allowed_in_plan(n) || n.starts_with("mcp__"));
+        advertise.push("seqthink".to_string());
+        // `plan_ready` (present the finished plan for approval) is advertised only
+        // while Plan is active — it lives in `INTERNAL_ONLY`, so `main_tool_names`
+        // never carries it, and it is pushed explicitly here alongside `seqthink`.
+        advertise.push("plan_ready".to_string());
+    } else {
+        advertise.push("plan_enter".to_string());
     }
 
     let (tx, rx) = mpsc::unbounded_channel();

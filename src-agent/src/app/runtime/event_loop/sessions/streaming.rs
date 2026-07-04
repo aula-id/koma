@@ -88,6 +88,12 @@ pub(super) fn drain_stream(
                     state.rest.sessions[idx].compact_anim_start = None;
                     state.rest.sessions[idx].compact_apply_at = None;
                     state.rest.sessions[idx].compact_pending = None;
+                    // A stream error during a plan-approval compaction flow (the
+                    // post-approval turn OR the compactor call) aborts it: drop the
+                    // one-shot plan flags so a stale seed can't fire on a later
+                    // `/compact`. No-op when no plan flow is armed.
+                    state.rest.pending_plan_compact = false;
+                    state.rest.pending_plan_seed = false;
                     still_streaming = false;
                     break;
                 }

@@ -75,6 +75,17 @@ pub enum Action {
     /// Deny the paused risky tool call (`n`/Esc in the approval modal): feed
     /// `"denied by user"` back as its result and resume the machine.
     DenyTool,
+    /// Approve a paused `plan_ready` call (`y` in the plan-approval modal): answer
+    /// it with the "approved — execute now" result, restore the pre-Plan mode, and
+    /// resume the round so the model exits planning and executes.
+    ApprovePlan,
+    /// Approve a paused `plan_ready` call AND compact history to it (`a` in the
+    /// plan-approval modal): like [`ApprovePlan`], plus arm the compaction rail so
+    /// the exploratory context collapses to the approved plan before execution.
+    ApprovePlanCompact,
+    /// Deny a paused `plan_ready` call (`n`/Esc in the plan-approval modal): answer
+    /// it with the "keep discussing" result and STAY in Plan mode.
+    DenyPlan,
     // --- KeyInput actions ---
     /// Setup wizard finished; carry the entered endpoint, api key, and model out
     /// so the runtime can build a provider-agnostic config from them.

@@ -243,11 +243,6 @@ impl ModelModal {
             session_only,
         }
     }
-
-    /// `true` when this modal is in EDIT mode.
-    pub fn is_edit(&self) -> bool {
-        self.editing_idx.is_some()
-    }
 }
 
 /// Filter the cached model catalogue by a (case-insensitive) substring match on

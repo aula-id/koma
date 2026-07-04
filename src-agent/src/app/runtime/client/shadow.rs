@@ -188,6 +188,7 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // silently drop the loud-red Yolo header on the thin client.
     shadow.rest.agent_mode = match global.agent_mode.as_str() {
         "normal" => AgentMode::Normal,
+        "plan"   => AgentMode::Plan,
         "yolo"   => AgentMode::Yolo,
         _        => AgentMode::Auto,
     };

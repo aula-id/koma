@@ -63,6 +63,11 @@ pub enum ClientRequest {
     SendKey(KeyWire),
     Paste { text: String },
     ApproveTool { approve: bool },
+    /// Answer a paused `plan_ready` approval. `decision` is one of `"approve"`,
+    /// `"compact"` (approve + compact history to the plan), or `"deny"` (keep
+    /// discussing). Parity with [`ApproveTool`] for a direct (non-key) path; the
+    /// TUI client normally forwards the y/a/n keystroke as `SendKey` instead.
+    PlanDecision { decision: String },
     NewSession {
         name: Option<String>,
         working_dir: Option<String>,

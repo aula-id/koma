@@ -373,6 +373,18 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // Answer a paused `plan_ready` approval via the local plan handlers.
+            // An unrecognised decision maps to `DenyPlan` (fail-safe: keep planning).
+            ClientRequest::PlanDecision { decision } => {
+                let action = match decision.as_str() {
+                    "approve" => Action::ApprovePlan,
+                    "compact" => Action::ApprovePlanCompact,
+                    _ => Action::DenyPlan,
+                };
+                let result = apply_action(action, state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
             // Spawn a fresh parallel session via the local `/new` command. The
             // requested `name` / `working_dir` are not yet honoured (the `/new` path
             // inherits last-used creds + the launch dir); wiring them is a later
