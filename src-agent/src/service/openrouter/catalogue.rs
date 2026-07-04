@@ -3,10 +3,9 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::dto::openrouter::{EndpointsResponse, ModelEndpoint, ModelInfo, ModelsResponse};
 
-use super::helpers::clean_error;
+use super::helpers::{auth_headers_with_account, clean_error};
 use super::client::OpenRouterClient;
 use super::types::{Conn, EffortCaps};
 
@@ -111,13 +110,13 @@ impl OpenRouterClient {
     /// clean errors, no panics. Callers treat any `Err` as "capabilities
     /// unknown" and report that rather than opening a guessed capability menu.
     pub async fn list_models(&self, conn: Conn<'_>) -> Result<Vec<ModelInfo>> {
+        // Refresh hook so an OAuth-backed catalogue connection (e.g. Kilo Code)
+        // sends a live bearer + its org header; non-OAuth conns pass through.
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { Some(acct.as_str()) } else { None };
         let url = format!("{}/models", conn.endpoint);
-        let response = self
-            .http
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account)
             .send()
             .await?;
 
@@ -144,13 +143,11 @@ impl OpenRouterClient {
         conn: Conn<'_>,
         model_id: &str,
     ) -> Result<Vec<ModelEndpoint>> {
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { Some(acct.as_str()) } else { None };
         let url = format!("{}/models/{}/endpoints", conn.endpoint, model_id);
-        let response = self
-            .http
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account)
             .send()
             .await?;
 

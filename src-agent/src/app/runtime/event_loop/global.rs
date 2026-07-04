@@ -33,8 +33,10 @@
 
 use std::sync::Arc;
 
+use crate::app::mode::settings::OAuthFlowState;
 use crate::app::mode::{Mode, WarmStatus};
 use crate::app::state::AppState;
+use crate::service::oauth::OAuthEvent;
 use crate::service::{openrouter::OpenRouterClient, StreamEvent, WarmEvent};
 
 use super::drains::apply_compaction_result;
@@ -155,6 +157,90 @@ pub(super) fn service_global(
         }
     }
 
+    // Drain the `/settings` OAuth submenu's connect-flow channel (mirrors
+    // `sec_health_rx`): a spawned Codex/Kilo Code flow sends `CodexUrl`/`KiloCode`
+    // once it has something to show, then exactly one terminal event (`Success` or
+    // `Failed`). Non-terminal events swap `oauth_flow` to the matching wait screen
+    // and put the receiver back; a terminal event applies the result and ends the
+    // flow (task handle cleared). De-globalized (C3): fold into whichever
+    // session(s) actually have the OAuth submenu open, not the (stale outside a
+    // client bracket) foreground.
+    if let Some(mut orx) = state.rest.oauth_rx.take() {
+        match orx.try_recv() {
+            Ok(OAuthEvent::CodexUrl { url }) => {
+                for st in settings_states(state) {
+                    st.oauth_flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0 };
+                }
+                state.rest.oauth_rx = Some(orx);
+                dirty = true;
+            }
+            Ok(OAuthEvent::KiloCode { user_code, verification_url }) => {
+                for st in settings_states(state) {
+                    st.oauth_flow = OAuthFlowState::KiloWait {
+                        user_code: user_code.clone(),
+                        verification_url: verification_url.clone(),
+                        frame: 0,
+                    };
+                }
+                state.rest.oauth_rx = Some(orx);
+                dirty = true;
+            }
+            Ok(OAuthEvent::Success { conn }) => {
+                // Immediate persist: seed the refresh-token cache, append to the
+                // catalogue, save `config.json`, then rebuild `oauth_drafts` in
+                // every open submenu. A save failure surfaces as `Failed` instead
+                // of silently losing the just-completed login.
+                let seeded = conn.clone();
+                handle.spawn(async move {
+                    crate::service::oauth::manager::seed(&seeded).await;
+                });
+                state.rest.config.oauth_conns.push(conn);
+                let save_err = state.rest.config.save().err().map(|e| e.to_string());
+                let drafts = crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);
+                for st in settings_states(state) {
+                    match &save_err {
+                        Some(e) => {
+                            st.oauth_flow = OAuthFlowState::Failed(format!(
+                                "login ok but config write failed: {e}"
+                            ));
+                        }
+                        None => {
+                            st.oauth_drafts = drafts.clone();
+                            st.oauth_flow = OAuthFlowState::Idle;
+                        }
+                    }
+                }
+                state.rest.oauth_task = None;
+                dirty = true;
+                // Receiver consumed (terminal event) — don't put it back.
+            }
+            Ok(OAuthEvent::Failed { error }) => {
+                for st in settings_states(state) {
+                    st.oauth_flow = OAuthFlowState::Failed(error.clone());
+                }
+                state.rest.oauth_task = None;
+                dirty = true;
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                // Still in flight — keep the receiver for the next tick.
+                state.rest.oauth_rx = Some(orx);
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                // Sender dropped without a terminal event (task panicked/aborted
+                // mid-flight) — surface it rather than leaving the wait screen
+                // spinning forever.
+                for st in settings_states(state) {
+                    if !matches!(st.oauth_flow, OAuthFlowState::Idle) {
+                        st.oauth_flow =
+                            OAuthFlowState::Failed("login flow ended unexpectedly".to_string());
+                    }
+                }
+                state.rest.oauth_task = None;
+                dirty = true;
+            }
+        }
+    }
+
     // Drain the startup-warming channel. Fully independent of streaming: the
     // background catalogue + awareness tasks each send one [`WarmEvent`]. ALWAYS
     // fold the result into `state.rest.*` (the cache / summary) regardless of the
@@ -257,6 +343,7 @@ pub(super) fn service_global(
             let pending = state.rest.catalogue_pending.take().unwrap();
             let endpoint = pending.endpoint;
             let api_key = pending.api_key;
+            let oauth_uuid = pending.oauth_uuid;
             state.rest.catalogue_fetching = Some(endpoint.clone());
             // Open a fresh warm channel for this fetch and stash its receiver.
             // Senders aren't stored in state (only the receiver), so this is the
@@ -280,6 +367,12 @@ pub(super) fn service_global(
                 let conn = crate::service::openrouter::Conn {
                     endpoint: &endpoint,
                     api_key: &api_key,
+                    // Catalogue fetch is OpenAI-compatible. `oauth_uuid` is threaded
+                    // through so an OAuth-backed catalogue (e.g. Kilo Code) refreshes
+                    // its bearer via `fresh_key`; empty for a static-key provider.
+                    api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+                    account_id: "",
+                    oauth_uuid: &oauth_uuid,
                 };
                 let ev = match c.list_models(conn).await {
                     Ok(models) => WarmEvent::WarmCatalogue { endpoint, models },
@@ -453,6 +546,22 @@ pub(super) fn service_global(
         }
     }
 
+    // ADVANCE the OAuth submenu's connect-flow spinner while a Codex/Kilo Code
+    // flow is waiting. Mirrors the security health-probe advance above: only the
+    // WAIT screens carry a `frame` counter (the picker/paste/failed screens don't
+    // animate), so bump it only for sessions currently showing one of those two.
+    if state.rest.oauth_rx.is_some() {
+        for st in settings_states(state) {
+            match &mut st.oauth_flow {
+                OAuthFlowState::CodexWait { frame, .. } | OAuthFlowState::KiloWait { frame, .. } => {
+                    *frame = frame.wrapping_add(1);
+                    dirty = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
     // While a compaction animation is in flight, mark every tick dirty so the
     // spinner/elapsed/bar actually advance (rendering is otherwise only
     // event-driven). The same applies while the comet shimmer is active: it must
@@ -475,6 +584,7 @@ pub(super) fn service_global(
         || shimmer_active
         || has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()
+        || state.rest.oauth_rx.is_some()
     {
         dirty = true;
     }
@@ -506,6 +616,22 @@ fn security_states(
 ) -> impl Iterator<Item = &mut crate::app::mode::SecurityState> {
     state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
         Mode::Security(sec) => Some(sec.as_mut()),
+        _ => None,
+    })
+}
+
+/// De-globalization helper (C3): mutably borrow the [`crate::app::mode::SettingsState`]
+/// of EVERY session currently showing the `/settings` dashboard.
+///
+/// The OAuth submenu's connect-flow drain (above) lands here outside any client
+/// bracket, so it must reach whichever session(s) are actually in `Mode::Settings` —
+/// never the (stale) foreground. Mirrors [`security_states`]; in the single-window
+/// case at most one session matches.
+fn settings_states(
+    state: &mut AppState,
+) -> impl Iterator<Item = &mut crate::app::mode::SettingsState> {
+    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
+        Mode::Settings(set) => Some(set.as_mut()),
         _ => None,
     })
 }

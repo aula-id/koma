@@ -107,6 +107,8 @@ pub struct CataloguePending {
     pub endpoint: String,
     /// Bearer token for that endpoint (may be empty for a keyless catalogue).
     pub api_key: String,
+    /// OAuth uuid backing this fetch (empty = static-key provider, no refresh).
+    pub oauth_uuid: String,
     /// Earliest instant the fetch may fire (debounce gate).
     pub due: std::time::Instant,
 }

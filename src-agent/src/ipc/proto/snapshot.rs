@@ -222,6 +222,50 @@ pub struct ProviderDraftSnapshot {
     pub api_key: String,
 }
 
+/// A serde-safe projection of one OAuth connection draft (provider-cycle merge
+/// in the Models Select modal).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OAuthDraftSnapshot {
+    pub uuid: String,
+    pub label: String,
+    /// Wire token: `"codex"` | `"kilocode"`.
+    pub provider: String,
+    pub key: String,
+    /// Display status computed at build time: `"active"` / `"renews in Nd"` /
+    /// `"expired"` / `"no expiry"`. `#[serde(default)]` keeps an older peer's
+    /// snapshot (pre-OAuth-submenu) decoding cleanly (empty string).
+    #[serde(default)]
+    pub status: String,
+}
+
+/// A serde-safe projection of the `/settings` OAuth submenu's connect-flow state
+/// ([`crate::app::mode::settings::OAuthFlowState`]). Flat rather than a wire enum
+/// (simplest shape): `kind` is the active variant's tag and every variant's data
+/// rides in whichever of the other fields it needs; unused fields sit at their
+/// default. `url` is dual-purpose — the Codex authorization URL for `codex_wait`,
+/// the Kilo Code verification URL for `kilo_wait`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[allow(dead_code)]
+pub struct OAuthFlowSnapshot {
+    /// `"idle"` | `"starting"` | `"pick"` | `"codex_wait"` | `"codex_paste"` |
+    /// `"kilo_wait"` | `"failed"`.
+    pub kind: String,
+    /// `Pick`'s cursor (0=Codex, 1=Kilo Code, 2=Codex paste-token).
+    pub cursor: usize,
+    /// `codex_wait`'s authorization URL / `kilo_wait`'s verification URL.
+    pub url: String,
+    /// `kilo_wait`'s device code the user approves.
+    pub user_code: String,
+    /// `codex_paste`'s in-progress token draft.
+    pub input: String,
+    /// `failed`'s human-readable reason.
+    pub error: String,
+    /// `codex_wait`/`kilo_wait`'s braille-spinner frame counter, advanced
+    /// daemon-side every tick while the flow is in flight.
+    pub frame: u8,
+}
+
 /// A serde-safe projection of one model draft.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -319,6 +363,16 @@ pub struct SettingsSnapshot {
     pub list_sel: usize,
     pub picker: Option<PathPickerSnapshot>,
     pub providers: Vec<ProviderDraftSnapshot>,
+    #[serde(default)]
+    pub oauth_drafts: Vec<OAuthDraftSnapshot>,
+    /// Selected row in the OAuth submenu's connections list (`#[serde(default)]`
+    /// keeps an older peer's snapshot decoding cleanly).
+    #[serde(default)]
+    pub oauth_sel: usize,
+    #[serde(default)]
+    pub oauth_armed: Option<usize>,
+    #[serde(default)]
+    pub oauth_flow: OAuthFlowSnapshot,
     pub prov_sel: usize,
     pub prov_delete_armed: bool,
     pub prov_modal: Option<ProviderModalSnapshot>,

@@ -59,19 +59,86 @@ pub enum ApiType {
     #[default]
     OpenAiCompatible,
     AnthropicCompatible,
+    /// The OpenAI Responses API ("Codex") transport used by ChatGPT-subscription
+    /// OAuth connections. Speaks a DIFFERENT wire protocol than
+    /// `OpenAiCompatible` (`/responses`, typed SSE events, encrypted reasoning
+    /// continuity) — dispatched by the dedicated `service::openrouter::codex`
+    /// submodule. Set only via OAuth resolution, never user-selectable in the
+    /// providers modal (serde `"codex"`).
+    Codex,
 }
 
 impl ApiType {
     /// Whether the runtime can actually dispatch a request against this wire type.
-    /// Only `OpenAiCompatible` routes today — the client speaks the OpenAI
-    /// chat-completions contract exclusively. `AnthropicCompatible` is persisted +
-    /// selectable in the UI but DEFERRED: native Anthropic Messages is a distinct
-    /// protocol (its own adapter, not a rider on this pass), so it is treated as
-    /// unroutable. The single source of truth shared by the resolution-boundary
-    /// gate (`Resolved::is_routable`) and the UI affordance.
+    /// `OpenAiCompatible` speaks the OpenAI chat-completions contract; `Codex`
+    /// speaks the OpenAI Responses API (both have real transports). Only
+    /// `AnthropicCompatible` stays DEFERRED — native Anthropic Messages is a
+    /// distinct protocol (its own adapter, not a rider on this pass), so it is
+    /// treated as unroutable. The single source of truth shared by the
+    /// resolution-boundary gate (`Resolved::is_routable`) and the UI affordance.
     pub fn is_routable(self) -> bool {
-        matches!(self, ApiType::OpenAiCompatible)
+        matches!(self, ApiType::OpenAiCompatible | ApiType::Codex)
     }
+}
+
+/// Which OAuth-backed provider an [`OAuthConn`] authenticates against. Distinct
+/// from [`ApiType`]: OAuth connections carry their own token lifecycle (access/
+/// refresh/id tokens, expiry) rather than a static `api_key`, so they are kept
+/// in a separate catalogue (`AppConfig::oauth_conns`) instead of `providers`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthProvider {
+    #[default]
+    Codex,
+    Kilocode,
+}
+
+impl OAuthProvider {
+    /// Human-facing label for the `/settings` OAuth submenu.
+    pub fn label(&self) -> &'static str {
+        match self {
+            OAuthProvider::Codex => "Codex",
+            OAuthProvider::Kilocode => "Kilo Code",
+        }
+    }
+}
+
+/// One OAuth-authenticated connection, keyed by `uuid`. Populated by the login
+/// flow in `crate::service::oauth` and persisted alongside `providers`/`models`.
+///
+/// Every field carries `#[serde(default)]` so a partially-written or
+/// older-schema config loads cleanly; `uuid` defaults to a freshly minted v4.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OAuthConn {
+    #[serde(default = "new_uuid")]
+    pub uuid: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub provider: OAuthProvider,
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub id_token: String,
+    /// Unix seconds the access token expires at; `0` = never expires.
+    #[serde(default)]
+    pub expires_at: u64,
+    /// Unix seconds of the last successful refresh; `0` = never refreshed.
+    #[serde(default)]
+    pub last_refresh: u64,
+    /// Codex ChatGPT account id.
+    #[serde(default)]
+    pub account_id: String,
+    /// Kilo Code organization id.
+    #[serde(default)]
+    pub org_id: String,
+    #[serde(default)]
+    pub email: String,
+    /// Codex plan type (e.g. "plus", "pro").
+    #[serde(default)]
+    pub plan: String,
 }
 
 /// Runtime role slot a model can be assigned to. Each role is GLOBALLY exclusive
@@ -246,6 +313,10 @@ pub struct AppConfig {
     /// load with an empty vec, so behaviour is unchanged until a server is added.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerEntry>,
+    /// OAuth-authenticated connections (Codex / Kilo Code). Empty by default;
+    /// old config files (no such key) load with an empty vec.
+    #[serde(default)]
+    pub oauth_conns: Vec<OAuthConn>,
 }
 
 impl Default for AppConfig {
@@ -256,6 +327,7 @@ impl Default for AppConfig {
             providers: Vec::new(),
             models: Vec::new(),
             mcp_servers: Vec::new(),
+            oauth_conns: Vec::new(),
         }
     }
 }
@@ -282,6 +354,12 @@ impl AppConfig {
     /// back to the UI draft's positional `provider_idx`.
     pub fn provider_index_by_uuid(&self, uuid: &str) -> Option<usize> {
         self.providers.iter().position(|p| p.uuid == uuid)
+    }
+
+    /// Index of the OAuth connection whose `uuid` matches, if any. Mirrors
+    /// [`Self::provider_index_by_uuid`] for the OAuth catalogue.
+    pub fn oauth_index_by_uuid(&self, uuid: &str) -> Option<usize> {
+        self.oauth_conns.iter().position(|c| c.uuid == uuid)
     }
 
     /// Idempotent migration seed: synthesize the global provider/model catalogue

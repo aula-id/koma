@@ -454,4 +454,49 @@ mod roundtrip_tests {
         }));
         roundtrip(&agents);
     }
+
+    /// The `/settings` OAuth submenu's connect-flow projection ([`OAuthFlowSnapshot`])
+    /// and one connection draft ([`OAuthDraftSnapshot`], with its `status` field) —
+    /// every flow-state variant survives the wire round-trip.
+    #[test]
+    fn oauth_flow_and_draft_snapshot_roundtrip() {
+        roundtrip(&OAuthFlowSnapshot { kind: "idle".to_string(), ..Default::default() });
+        roundtrip(&OAuthFlowSnapshot { kind: "starting".to_string(), ..Default::default() });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "pick".to_string(),
+            cursor: 2,
+            ..Default::default()
+        });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "codex_wait".to_string(),
+            url: "https://auth.openai.com/oauth/authorize?...".to_string(),
+            frame: 3,
+            ..Default::default()
+        });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "codex_paste".to_string(),
+            input: "eyJhbGciOi...".to_string(),
+            ..Default::default()
+        });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "kilo_wait".to_string(),
+            url: "https://kilo.ai/device".to_string(),
+            user_code: "ABCD-1234".to_string(),
+            frame: 7,
+            ..Default::default()
+        });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "failed".to_string(),
+            error: "device login denied".to_string(),
+            ..Default::default()
+        });
+
+        roundtrip(&OAuthDraftSnapshot {
+            uuid: "11111111-1111-4111-8111-111111111111".to_string(),
+            label: "codex (dev@example.com)".to_string(),
+            provider: "codex".to_string(),
+            key: "sk-fake".to_string(),
+            status: "renews in 3d".to_string(),
+        });
+    }
 }

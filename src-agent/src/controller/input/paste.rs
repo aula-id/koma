@@ -66,7 +66,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                 });
                 let endpoint = form.endpoint.trim().to_string();
                 let api_key = form.api_key.trim().to_string();
-                state.rest.request_catalogue(&endpoint, &api_key);
+                state.rest.request_catalogue(&endpoint, &api_key, "");
             } else {
                 paste_single_line(text, |c| form.push_char(c));
             }
@@ -89,7 +89,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                     == Some(crate::app::mode::settings::ModelField::Model)
                 {
                     if let Some((ep, key)) = s.mm_provider_conn() {
-                        state.rest.request_catalogue(&ep, &key);
+                        state.rest.request_catalogue(&ep, &key, "");
                     }
                 }
             } else if s.prov_modal.is_some() {

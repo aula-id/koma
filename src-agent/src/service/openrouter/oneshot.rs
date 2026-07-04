@@ -3,12 +3,15 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::dto::chat::{ChatMessage, Role};
 use crate::dto::openrouter::{
     to_wire, ChatRequest, ChatResponse, ReasoningConfig, UsageRequest,
 };
-use super::helpers::{clean_error, is_openrouter, provider_routing_for};
+use crate::model::app_config::ApiType;
+use super::codex::to_text_format;
+use super::helpers::{
+    auth_headers, clean_error, is_openrouter, parse_blob_ids, parse_summary, provider_routing_for,
+};
 use super::client::OpenRouterClient;
 use super::types::Conn;
 
@@ -25,6 +28,16 @@ impl OpenRouterClient {
         provider: &str,
         messages: Vec<ChatMessage>,
     ) -> Result<String> {
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        if conn.api_type == ApiType::Codex {
+            // Codex has no non-streaming endpoint: `codex_collect` drains the SSE
+            // inline and returns the concatenated text. Default effort, no schema.
+            return self
+                .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
@@ -42,12 +55,7 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer)
             .json(&body)
             .send()
             .await?;
@@ -83,6 +91,15 @@ impl OpenRouterClient {
         provider: &str,
         messages: Vec<ChatMessage>,
     ) -> Result<String> {
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        if conn.api_type == ApiType::Codex {
+            // Default effort (→ medium), no structured-output schema.
+            return self
+                .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
@@ -100,12 +117,7 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer)
             .json(&body)
             .send()
             .await?;
@@ -154,24 +166,50 @@ impl OpenRouterClient {
         provider: &str,
         messages: Vec<ChatMessage>,
     ) -> Result<String> {
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        // Strict JSON-schema for the verdict object: exactly
+        // `{"allow": <bool>, "reason": <string>}`, `additionalProperties: false`.
+        // Built once, reused by both transports.
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["allow", "reason"],
+            "properties": {
+                "allow": { "type": "boolean" },
+                "reason": { "type": "string" }
+            }
+        });
+        if conn.api_type == ApiType::Codex {
+            // Reasoning off (effort "none"); pin the verdict schema via the
+            // flattened Responses `text.format`. Parsing stays in the caller.
+            let raw = self
+                .codex_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(to_text_format("verdict", schema.clone())),
+                )
+                .await?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow!("empty classifier reply"));
+            }
+            return Ok(trimmed.to_string());
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
-        // Strict JSON-schema for the verdict object. `strict: true` +
-        // `additionalProperties: false` force the model to emit exactly
-        // `{"allow": <bool>, "reason": <string>}` and nothing else.
+        // `strict: true` + `additionalProperties: false` force the model to emit
+        // exactly the verdict object and nothing else.
         let response_format = serde_json::json!({
             "type": "json_schema",
             "json_schema": {
                 "name": "verdict",
                 "strict": true,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["allow", "reason"],
-                    "properties": {
-                        "allow": { "type": "boolean" },
-                        "reason": { "type": "string" }
-                    }
-                }
+                "schema": schema
             }
         });
         let body = ChatRequest {
@@ -197,12 +235,7 @@ impl OpenRouterClient {
             max_tokens: Some(2_000),
         };
 
-        let response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer)
             .json(&body)
             .send()
             .await?;
@@ -260,29 +293,50 @@ impl OpenRouterClient {
         system_prompt: &str,
         user_payload: &str,
     ) -> Result<String> {
-        let url = format!("{}/chat/completions", conn.endpoint);
-        // Strict JSON-schema for the summary object. `strict: true` +
-        // `additionalProperties: false` force the model to emit exactly
-        // `{"summary": "<text>"}` and nothing else.
-        let response_format = serde_json::json!({
-            "type": "json_schema",
-            "json_schema": {
-                "name": "rolling_summary",
-                "strict": true,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "summary": { "type": "string" }
-                    },
-                    "required": ["summary"],
-                    "additionalProperties": false
-                }
-            }
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        // Strict JSON-schema for the summary object: exactly `{"summary": "<text>"}`,
+        // `additionalProperties: false`. Built once, reused by both transports.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "summary": { "type": "string" }
+            },
+            "required": ["summary"],
+            "additionalProperties": false
         });
         let messages = vec![
             ChatMessage::new(Role::System, system_prompt),
             ChatMessage::new(Role::User, user_payload),
         ];
+        if conn.api_type == ApiType::Codex {
+            // Reasoning off (effort "none"); pin the summary schema via the
+            // flattened Responses `text.format`. Shared parse tail.
+            let raw = self
+                .codex_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(to_text_format("rolling_summary", schema.clone())),
+                )
+                .await?;
+            return parse_summary(&raw);
+        }
+        let url = format!("{}/chat/completions", conn.endpoint);
+        // `strict: true` + `additionalProperties: false` force the model to emit
+        // exactly the summary object and nothing else.
+        let response_format = serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "rolling_summary",
+                "strict": true,
+                "schema": schema
+            }
+        });
         let body = ChatRequest {
             model: model.to_string(),
             messages: to_wire(messages),
@@ -308,12 +362,7 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer)
             .json(&body)
             .send()
             .await?;
@@ -331,20 +380,13 @@ impl OpenRouterClient {
             .next()
             .map(|c| c.message)
             .ok_or_else(|| anyhow!("no choices returned"))?;
-        // Strict-JSON extraction: parse `message.content` as `{"summary": "..."}`.
-        // No fallback to raw content or the reasoning field — a model that ignores
-        // the schema fails-open (the caller swallows the error), which is the correct
-        // behaviour: better to skip one turn's summary than to persist garbage.
-        let content = message.content.as_deref().unwrap_or("").trim();
-        let parsed: serde_json::Value =
-            serde_json::from_str(content).map_err(|_| anyhow!("unparseable summary"))?;
-        let summary = parsed
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("unparseable summary"))?;
-        Ok(summary.to_string())
+        // Strict-JSON extraction via the shared `parse_summary` helper (identical
+        // behaviour for both transports): parse `message.content` as
+        // `{"summary": "..."}`. No fallback to raw content or the reasoning field —
+        // a model that ignores the schema fails-open (the caller swallows the
+        // error): better to skip one turn's summary than to persist garbage.
+        let content = message.content.as_deref().unwrap_or("");
+        parse_summary(content)
     }
 
     /// Blob-rehydrate router completion against a DIFFERENT model/provider — the
@@ -377,25 +419,19 @@ impl OpenRouterClient {
         system_prompt: &str,
         user_payload: &str,
     ) -> Result<Vec<i64>> {
-        let url = format!("{}/chat/completions", conn.endpoint);
-        // Strict JSON-schema for the id list. `strict: true` +
-        // `additionalProperties: false` force the model to emit exactly
-        // `{"blob_ids": [<integer>, ...]}` and nothing else.
-        let response_format = serde_json::json!({
-            "type": "json_schema",
-            "json_schema": {
-                "name": "blob_selection",
-                "strict": true,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["blob_ids"],
-                    "properties": {
-                        "blob_ids": {
-                            "type": "array",
-                            "items": { "type": "integer" }
-                        }
-                    }
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        // Strict JSON-schema for the id list: exactly `{"blob_ids": [<integer>, …]}`,
+        // `additionalProperties: false`. Built once, reused by both transports.
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["blob_ids"],
+            "properties": {
+                "blob_ids": {
+                    "type": "array",
+                    "items": { "type": "integer" }
                 }
             }
         });
@@ -403,6 +439,37 @@ impl OpenRouterClient {
             ChatMessage::new(Role::System, system_prompt),
             ChatMessage::new(Role::User, user_payload),
         ];
+        if conn.api_type == ApiType::Codex {
+            // Best-effort: on ANY Codex failure return an empty selection so the
+            // caller simply rehydrates nothing. Reasoning off (effort "none").
+            let raw = match self
+                .codex_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(to_text_format("blob_selection", schema.clone())),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            };
+            return Ok(parse_blob_ids(&raw));
+        }
+        let url = format!("{}/chat/completions", conn.endpoint);
+        // `strict: true` + `additionalProperties: false` force the model to emit
+        // exactly the id list and nothing else.
+        let response_format = serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "blob_selection",
+                "strict": true,
+                "schema": schema
+            }
+        });
         let body = ChatRequest {
             model: model.to_string(),
             messages: to_wire(messages),
@@ -427,12 +494,7 @@ impl OpenRouterClient {
         };
 
         // Best-effort: any failure returns an empty selection rather than erroring.
-        let response = match self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let response = match auth_headers(self.http.post(&url), &conn, &bearer)
             .json(&body)
             .send()
             .await
@@ -471,16 +533,8 @@ impl OpenRouterClient {
         if raw.is_empty() {
             return Ok(Vec::new());
         }
-        // Parse `{"blob_ids": [..]}` and return the ids. Unparseable → empty.
-        let parsed: serde_json::Value = match serde_json::from_str(&raw) {
-            Ok(v) => v,
-            Err(_) => return Ok(Vec::new()),
-        };
-        let ids = parsed
-            .get("blob_ids")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
-            .unwrap_or_default();
-        Ok(ids)
+        // Parse `{"blob_ids": [..]}` via the shared helper (identical behaviour for
+        // both transports). Unparseable → empty.
+        Ok(parse_blob_ids(&raw))
     }
 }

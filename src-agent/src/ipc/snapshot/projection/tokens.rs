@@ -15,6 +15,7 @@ pub fn api_type_token(t: ApiType) -> &'static str {
     match t {
         ApiType::OpenAiCompatible => "openai",
         ApiType::AnthropicCompatible => "anthropic",
+        ApiType::Codex => "codex",
     }
 }
 

@@ -9,7 +9,7 @@ use crate::app::mode::help::HelpState;
 use crate::app::mode::mcp::McpState;
 use crate::app::mode::security::SecurityState;
 use crate::app::mode::editor::TextEditorState;
-use crate::app::mode::settings::{ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft};
+use crate::app::mode::settings::{ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState, Mode,
     PickerState, RewindState, SessionHub, SessionKind, SettingsState, UsageNavState,
@@ -22,8 +22,8 @@ use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
     CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot,
     HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot,
-    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
-    ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
+    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot,
+    PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
     RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
     TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
     WarmStatusWire,
@@ -179,6 +179,10 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         list_sel: st.list_sel,
         picker: st.picker.as_ref().map(path_picker_snapshot),
         providers: st.providers.iter().map(provider_draft_snapshot).collect(),
+        oauth_drafts: st.oauth_drafts.iter().map(oauth_draft_snapshot).collect(),
+        oauth_sel: st.oauth_sel,
+        oauth_armed: st.oauth_armed,
+        oauth_flow: oauth_flow_snapshot(&st.oauth_flow),
         prov_sel: st.prov_sel,
         prov_delete_armed: st.prov_delete_armed,
         prov_modal: st.prov_modal.as_ref().map(|m| ProviderModalSnapshot {
@@ -207,6 +211,67 @@ pub fn provider_draft_snapshot(p: &ProviderDraft) -> ProviderDraftSnapshot {
         endpoint: p.endpoint.clone(),
         api_type: api_type_token(p.api_type).to_string(),
         api_key: p.api_key.clone(),
+    }
+}
+
+pub fn oauth_draft_snapshot(o: &OAuthDraft) -> OAuthDraftSnapshot {
+    OAuthDraftSnapshot {
+        uuid: o.uuid.clone(),
+        label: o.label.clone(),
+        provider: match o.provider {
+            crate::model::app_config::OAuthProvider::Codex => "codex",
+            crate::model::app_config::OAuthProvider::Kilocode => "kilocode",
+        }
+        .to_string(),
+        key: o.key.clone(),
+        status: o.status.clone(),
+    }
+}
+
+/// Project the OAuth submenu's connect-flow state into its flat wire form (see
+/// [`crate::ipc::proto::OAuthFlowSnapshot`] for the field-reuse convention).
+pub fn oauth_flow_snapshot(
+    f: &crate::app::mode::settings::OAuthFlowState,
+) -> crate::ipc::proto::OAuthFlowSnapshot {
+    use crate::app::mode::settings::OAuthFlowState;
+    use crate::ipc::proto::OAuthFlowSnapshot;
+    match f {
+        OAuthFlowState::Idle => OAuthFlowSnapshot {
+            kind: "idle".to_string(),
+            ..Default::default()
+        },
+        OAuthFlowState::Starting => OAuthFlowSnapshot {
+            kind: "starting".to_string(),
+            ..Default::default()
+        },
+        OAuthFlowState::Pick(cursor) => OAuthFlowSnapshot {
+            kind: "pick".to_string(),
+            cursor: *cursor,
+            ..Default::default()
+        },
+        OAuthFlowState::CodexWait { url, frame } => OAuthFlowSnapshot {
+            kind: "codex_wait".to_string(),
+            url: url.clone(),
+            frame: *frame,
+            ..Default::default()
+        },
+        OAuthFlowState::CodexPaste { input } => OAuthFlowSnapshot {
+            kind: "codex_paste".to_string(),
+            input: input.clone(),
+            ..Default::default()
+        },
+        OAuthFlowState::KiloWait { user_code, verification_url, frame } => OAuthFlowSnapshot {
+            kind: "kilo_wait".to_string(),
+            url: verification_url.clone(),
+            user_code: user_code.clone(),
+            frame: *frame,
+            ..Default::default()
+        },
+        OAuthFlowState::Failed(error) => OAuthFlowSnapshot {
+            kind: "failed".to_string(),
+            error: error.clone(),
+            ..Default::default()
+        },
     }
 }
 
