@@ -53,9 +53,10 @@ impl OpenRouterClient {
         // Expose the requested subset of the built-in tool set to the model. The
         // caller passes the exact tool names to advertise (`advertise`): the main
         // chat loop advertises `crate::tool::main_tool_names` (everything not in
-        // `INTERNAL_ONLY`, currently empty), and each sub-agent advertises only
-        // its effective allow-list. Each retained tool maps to an OpenAI/OpenRouter
-        // `function` definition (name + description + raw JSON-Schema parameters).
+        // `INTERNAL_ONLY`, currently `seqthink`/`plan_enter` — pushed back on mode-
+        // gated instead), and each sub-agent advertises only its effective
+        // allow-list. Each retained tool maps to an OpenAI/OpenRouter `function`
+        // definition (name + description + raw JSON-Schema parameters).
         let mut tools: Vec<ToolDef> = crate::tool::all_tools()
             .iter()
             .filter(|t| advertise.iter().any(|n| n == t.name()))

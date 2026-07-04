@@ -41,9 +41,10 @@ pub(in crate::view::settings) fn draw_model_modal(
 ) {
     // Taller than the provider modal: it hosts a results list.
     // OpenRouter mode adds a separate readout row + search field + rule (2 extra).
-    // Edit mode gets one further extra row for the Role field; OpenRouter +
-    // model-selected adds a Route label row above the (now selectable) options
-    // list. Sized for the taller layout so the 8-row options list never clips.
+    // The Role row renders unconditionally (Add and Edit alike), so the base
+    // already accounts for it; OpenRouter + model-selected adds a Route label row
+    // above the (now selectable) options list. Sized for the taller layout so the
+    // 8-row options list never clips.
     //
     // When the search query is EMPTY and a model is selected, the options list
     // renders instead of the results dropdown (they're mutually exclusive). Sized
@@ -52,7 +53,7 @@ pub(in crate::view::settings) fn draw_model_modal(
     // clip even with the extra Route label row.
     const MODAL_W: u16 = 60;
     const MODAL_H_BASE: u16 = 23;
-    let modal_h = if modal.is_edit() { MODAL_H_BASE + 1 } else { MODAL_H_BASE };
+    let modal_h = MODAL_H_BASE + 1;
     let w = MODAL_W.min(area.width.saturating_sub(2));
     let h = modal_h.min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
@@ -431,29 +432,27 @@ pub(in crate::view::settings) fn draw_model_modal(
     // comma-joined assigned role labels, or "none". Enter on this field opens the
     // Role checkbox picker overlay (the actual multi-select UI). Accent label +
     // fg value when the Role field is focused; dim otherwise.
-    if modal.is_edit() {
-        let active = focused(ModelField::Role);
-        let lc     = if active { palette.accent } else { palette.dim };
-        let label  = Span::styled(
-            format!("{:<width$}", "Role", width = label_w),
-            Style::default().fg(lc),
-        );
-        let value = if modal.roles.is_empty() {
-            "none".to_string()
-        } else {
-            modal
-                .roles
-                .iter()
-                .map(|r: &ModelRole| r.label())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let vc = if active { palette.fg } else { palette.dim };
-        lines.push(Line::from(vec![
-            label,
-            Span::styled(truncate(&value, val_w), Style::default().fg(vc)),
-        ]));
-    }
+    let active = focused(ModelField::Role);
+    let lc     = if active { palette.accent } else { palette.dim };
+    let label  = Span::styled(
+        format!("{:<width$}", "Role", width = label_w),
+        Style::default().fg(lc),
+    );
+    let value = if modal.roles.is_empty() {
+        "none".to_string()
+    } else {
+        modal
+            .roles
+            .iter()
+            .map(|r: &ModelRole| r.label())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let vc = if active { palette.fg } else { palette.dim };
+    lines.push(Line::from(vec![
+        label,
+        Span::styled(truncate(&value, val_w), Style::default().fg(vc)),
+    ]));
 
     // Blank line before the buttons.
     lines.push(Line::from(""));

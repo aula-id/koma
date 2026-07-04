@@ -213,10 +213,27 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         }
     }
 
-    // Tool-approval modal: while a risky call is paused, only y/n/Esc matter.
-    // `y` approves (run it), `n`/Esc deny (feed "denied by user"); every other
-    // key is swallowed so the prompt stays up and input can't leak underneath.
+    // Tool-approval modal: while a call is paused, only its decision keys matter;
+    // every other key is swallowed so the prompt stays up and input can't leak
+    // underneath. A paused `plan_ready` call uses a THREE-way y/a/n gate (approve /
+    // approve & compact / keep discussing); every other risky call keeps the
+    // original y/n mapping. The paused call is resolved the same way the overlay
+    // renderer resolves it: `pending_tool_calls[tool_idx]`.
     if rest.fg().awaiting_approval {
+        let is_plan_ready = rest
+            .fg()
+            .pending_tool_calls
+            .get(rest.fg().tool_idx)
+            .map(|c| c.function.name == "plan_ready")
+            .unwrap_or(false);
+        if is_plan_ready {
+            return match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => Action::ApprovePlan,
+                KeyCode::Char('a') | KeyCode::Char('A') => Action::ApprovePlanCompact,
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::DenyPlan,
+                _ => Action::None,
+            };
+        }
         return match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => Action::ApproveTool,
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::DenyTool,
@@ -522,7 +539,11 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         // unarmed it's Auto<->Normal (identical to before); only once YOLO is armed
         // from the /security panel does the cycle include Yolo (Auto→Normal→Yolo→Auto).
         KeyCode::BackTab => {
-            rest.agent_mode = rest.agent_mode.cycle(rest.yolo_armed);
+            // `set_agent_mode` is the single choke-point (shared with `/mode`) that
+            // maintains `plan_return_mode` and rebuilds + saves the system prompt
+            // when the cycle crosses the Plan boundary.
+            let next = rest.agent_mode.cycle(rest.yolo_armed);
+            rest.set_agent_mode(next);
             // Per-session status (C6): label into a local (disjoint `agent_mode` read)
             // before the `fg_mut()` borrow.
             let label = rest.agent_mode.label();

@@ -48,6 +48,13 @@ pub struct Session {
     pub pwd_hash: String,
     pub settings: Settings,
     pub conversation: Conversation,
+    /// Whether the CURRENT `agent_mode` is `Plan`, mirrored in from
+    /// `AppStateRest::set_agent_mode` before it calls `rebuild_system`. Not
+    /// persisted (mode lives on `AppStateRest`, not the session on disk) — this
+    /// is just the least-invasive way to get the mode into `rebuild_system`,
+    /// which is a `Session` method with no access to `AppStateRest`. Read only
+    /// by `rebuild_system` to decide whether to append the planning nudge.
+    pub plan_mode_hint: bool,
 }
 
 impl Session {
@@ -76,6 +83,7 @@ impl Session {
             pwd_hash,
             settings,
             conversation,
+            plan_mode_hint: false,
         }
     }
 
@@ -85,6 +93,13 @@ impl Session {
 
     fn messages_path(&self) -> PathBuf {
         self.path.join("messages.json")
+    }
+
+    /// Path to this session's approved-plan file (`<session>/plan.md`), written
+    /// by the `plan_ready` interception when a plan is presented for approval and
+    /// re-read to seed a compacted conversation. Mirrors [`Self::settings_path`].
+    pub fn plan_path(&self) -> PathBuf {
+        self.path.join("plan.md")
     }
 
     /// Load a session from `dir` on disk.
@@ -161,6 +176,7 @@ impl Session {
             pwd_hash,
             settings,
             conversation,
+            plan_mode_hint: false,
         };
 
         // Ensure the per-session scratch dir exists. Best-effort: a failure here
@@ -327,6 +343,15 @@ impl Session {
             "\n\n# Scratch space\nYou have a writable scratch directory at: {}\nUse it for temporary files, cloning repositories, and downloads. Both bash and the file tools may read and write under it. It is separate from the user's workspace — keep throwaway work here, not in the project.",
             scratch_path.display()
         ));
+
+        // Plan mode: append a soft nudge (no MUST, no protocol walls — weak
+        // models over-obey rigid instructions). `plan_mode_hint` is mirrored in
+        // from `AppStateRest::set_agent_mode` right before it calls this method.
+        if self.plan_mode_hint {
+            sys.push_str(
+                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need. You can use the seqthink tool to structure your reasoning step by step. When your plan is solid, call plan_ready with a short summary and the full detailed plan (files, exact changes, reasoning). The user will approve it or discuss further."
+            );
+        }
 
         self.conversation.set_system(sys);
     }

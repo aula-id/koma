@@ -315,6 +315,7 @@ fn spawn_task_with_id(
         task_text,
         tool_call_id,
         detached,
+        state.rest.agent_mode,
     )?;
     state.rest.sessions[sess_idx].subagents.push(sub);
     Some(id)

@@ -184,7 +184,6 @@ pub(crate) fn process_tools(
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
-    let mode = state.rest.agent_mode;
     // Recent conversation tail, used to make TAC intent-aware. Cloned out once
     // (empty when there's no session) so the per-call `block_on` below holds no
     // borrow of `state`. We feed the last few User/Assistant turns — NOT just the
@@ -198,9 +197,157 @@ pub(crate) fn process_tools(
         .map(|sess| sess.conversation.recent_context(6, 600))
         .unwrap_or_default();
     while state.rest.sessions[sess_idx].tool_idx < state.rest.sessions[sess_idx].pending_tool_calls.len() {
+        // re-read every iteration: plan_enter can flip the mode mid-round
+        let mode = state.rest.agent_mode;
         let call = state.rest.sessions[sess_idx].pending_tool_calls
             [state.rest.sessions[sess_idx].tool_idx]
             .clone();
+        // Intercept the model-callable `plan_enter` tool BEFORE the generic
+        // dispatch path (mirrors `cd`): the tool's `run` is pure validation (it
+        // always succeeds, no arguments), so the actual mode switch is applied
+        // HERE via `set_agent_mode` — the single choke-point shared with `/mode`
+        // and Shift+Tab, so `plan_return_mode` + the system-prompt nudge never
+        // drift out of sync between entry points. Already-Plan is a no-op (the
+        // model gets a friendly "already in plan mode" instead of a spurious
+        // re-entry into the same mode).
+        if call.function.name == "plan_enter" {
+            let result = super::dispatch::run_tool(state, sess_idx, &call);
+            let final_result = if result == crate::tool::plan::PLAN_ENTER_SENTINEL {
+                if mode == AgentMode::Plan {
+                    "already in plan mode".to_string()
+                } else {
+                    state.rest.set_agent_mode(AgentMode::Plan);
+                    "entered plan mode - tools are read-only; explore, structure your \
+                     reasoning with seqthink, and call plan_ready with a summary + full \
+                     plan when confident"
+                        .to_string()
+                }
+            } else {
+                // Not expected (plan_enter has no failure path), but pass through
+                // unchanged rather than swallow it.
+                result
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `plan_ready` tool BEFORE the generic
+        // dispatch path (mirrors the `bash_output` FULL interception). Its args
+        // carry the entire plan text — too big to round-trip through a sentinel —
+        // so they're parsed HERE and `Tool::run` is never called (it's a stub).
+        // Outside Plan mode it's a no-op error. In Plan mode we persist the plan
+        // to `<session>/plan.md` and PARK the round for the user's y/a/n decision,
+        // mirroring the risky-gate pause below: set `awaiting_approval` +
+        // `approval_reason` (the summary) + a status line and `return` WITHOUT
+        // advancing `tool_idx`, so the resume handlers (`ApprovePlan` /
+        // `ApprovePlanCompact` / `DenyPlan`) answer THIS exact call.
+        if call.function.name == "plan_ready" {
+            if mode != AgentMode::Plan {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    "plan_ready is only available in plan mode".to_string(),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let (summary, plan) = match crate::tool::plan::parse_plan_ready_args(&args) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), e));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    continue;
+                }
+            };
+            // Persist the full plan to `<session>/plan.md` (atomic tmp + rename).
+            // On IO failure (or no active session) answer the call with an error
+            // and continue — do NOT park on an unwritten plan.
+            let plan_path = state.rest.sessions[sess_idx]
+                .session
+                .as_ref()
+                .map(|s| s.plan_path());
+            match plan_path {
+                Some(path) => {
+                    if let Err(e) =
+                        crate::model::memory::atomic_write(&path, plan.as_bytes())
+                    {
+                        state.rest.sessions[sess_idx].tool_results.push((
+                            call.id.clone(),
+                            format!("error: could not write plan.md: {e}"),
+                        ));
+                        state.rest.sessions[sess_idx].tool_idx += 1;
+                        continue;
+                    }
+                }
+                None => {
+                    state.rest.sessions[sess_idx].tool_results.push((
+                        call.id.clone(),
+                        "error: could not write plan.md: no active session".to_string(),
+                    ));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    continue;
+                }
+            }
+            // Park for the user's decision. Do NOT advance `tool_idx` — the resume
+            // handlers answer this exact plan_ready call.
+            state.rest.sessions[sess_idx].awaiting_approval = true;
+            state.rest.sessions[sess_idx].approval_reason = Some(summary);
+            state.rest.sessions[sess_idx].status =
+                "plan ready - [y] approve  [a] approve & compact  [n] chat more".to_string();
+            return;
+        }
+        // Plan-mode read-only enforcement (defense-in-depth). The advertise fold
+        // (`app::runtime::stream::run`) and the sub-agent allow-list fold
+        // (`app::subagent::spawn`) already hide non-whitelisted tools from the
+        // model while Plan is active, but a stale/fabricated call name must still
+        // be rejected HERE so a model that ignores its own tool list can never
+        // mutate anything. `git_operator` is whitelisted at the tool-name level
+        // (it's read-only-safe in principle) but additionally filtered by
+        // subcommand — Plan may run read git (`log`, `diff`, `status`, …) but not
+        // `commit`/`push`/`checkout`/etc. `mcp__*` tools are exempt (the user
+        // explicitly wired those servers, so they own that risk — same precedent
+        // as `sec_*`'s harness exemption).
+        if mode == AgentMode::Plan && !call.function.name.starts_with("mcp__") {
+            if call.function.name == "git_operator" {
+                let sanitized =
+                    crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+                let args: serde_json::Value =
+                    serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+                let subcmd = args
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !crate::tool::plan_git_subcommand_allowed(subcmd) {
+                    state.rest.sessions[sess_idx].tool_results.push((
+                        call.id.clone(),
+                        format!(
+                            "plan mode is read-only: git {subcmd} is not allowed (read-only git only)"
+                        ),
+                    ));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    continue;
+                }
+                // An allowed read-only git subcommand falls through to the normal
+                // gate flow below — git_operator is risky, so Auto/Normal/Yolo
+                // handling applies unchanged (Plan is treated like Auto there; see
+                // the comments at the classifier verdict branches).
+            } else if !crate::tool::tool_allowed_in_plan(&call.function.name) {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "plan mode is read-only: {} is unavailable until the plan is approved",
+                        call.function.name
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+        }
         // Intercept the model-callable `task` tool BEFORE the generic
         // classify/dispatch path: spawn a background sub-agent (never classify it
         // as risky, never await it inline). UNLIKE the generic path, a SUCCESSFUL
@@ -694,6 +841,10 @@ pub(crate) fn process_tools(
                             // Auto + allow → fall through and run it inline.
                         } else if verdict.available {
                             // Definite block. Auto records + continues; Normal asks.
+                            // Plan never reaches this `is_remove` classifier flow at
+                            // all — `git_worktree` isn't in `tool_allowed_in_plan`, so
+                            // the read-only gate above already denied it before this
+                            // point, leaving only Auto/Normal/Yolo here.
                             if mode == AgentMode::Auto {
                                 state.rest.sessions[sess_idx].tool_results.push((
                                     call.id.clone(),
@@ -968,7 +1119,14 @@ pub(crate) fn process_tools(
                         // mode the USER approves every risky op and the classifier
                         // only informs. The allowed reason is surfaced so the prompt
                         // shows the verdict was "ok".
-                        if mode == AgentMode::Auto {
+                        // Plan reaches this generic risky gate ONLY for `git_operator`
+                        // with an allowed READ subcommand — every other risky tool
+                        // (write/edit/delete/bash/web_download, and any git_operator
+                        // subcommand outside the read-only list) was already denied
+                        // by the Plan read-only gate above, before this point.
+                        // Deliberately treated like Auto: TAC-approved read-only git
+                        // is harmless, so no prompt is needed.
+                        if mode == AgentMode::Auto || mode == AgentMode::Plan {
                             // Fall through and run it inline (no prompt).
                             state.rest.sessions[sess_idx].approval_reason = None;
                         } else {
@@ -981,7 +1139,11 @@ pub(crate) fn process_tools(
                         }
                     } else if verdict.available {
                         // Definite block. Auto records it and continues; Normal asks.
-                        if mode == AgentMode::Auto {
+                        // Same Plan caveat as the allow-branch above: only a
+                        // classifier-blocked git_operator READ subcommand reaches
+                        // here in Plan mode, so it is recorded + continued exactly
+                        // like Auto rather than prompting.
+                        if mode == AgentMode::Auto || mode == AgentMode::Plan {
                             state.rest.sessions[sess_idx].tool_results.push((
                                 call.id.clone(),
                                 format!("blocked by harness: {}", verdict.reason),
