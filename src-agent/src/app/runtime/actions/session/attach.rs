@@ -73,7 +73,7 @@ pub fn handle_live_switch(
     // Reflect the now-foreground session's live state in the status line. Per-session
     // (C6): compute the working flag (immutable `sessions` borrow) first, then write
     // the foreground session's own status.
-    let working = state.rest.fg().is_working();
+    let working = state.rest.fg().is_ui_busy();
     state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
     // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
     // the repoint above; the now-foreground session shows its OWN stored mode (normally
@@ -231,6 +231,51 @@ fn rebuild_hub(
     hub.pending_kill = None;
     *state.mode_mut() = Mode::SessionHub(Box::new(hub));
     Ok(())
+}
+
+/// Handle `Action::HubDeleteConfirm`: physically delete the session armed in the hub's
+/// `pending_delete` (disk directory tree + registry row), then rebuild the hub in place
+/// so the deleted row vanishes from HISTORY and the overlay stays open.
+///
+/// Reads the pending target UUID + resolves its on-disk path from the hub's `history`
+/// list. The delete is best-effort — a disk error must not wedge the UI. The hub is
+/// rebuilt via [`rebuild_hub`], which constructs a fresh snapshot from disk (the deleted
+/// session is gone from the registry/filesystem) and re-applies the user's focus +
+/// history query. A no-op (just clears the arm + rebuilds) when nothing valid is pending.
+pub fn handle_hub_delete_confirm(state: &mut AppState) -> Result<()> {
+    // Read the armed target UUID + resolve its on-disk path out of the hub.
+    let path = {
+        let hub = if let Mode::SessionHub(hub) = state.mode() {
+            hub
+        } else {
+            return Ok(());
+        };
+        let uuid = match hub.pending_delete.as_deref() {
+            Some(u) => u.to_string(),
+            None => return Ok(()),
+        };
+        match hub.history.iter().find(|e| {
+            e.path.file_name().and_then(|n| n.to_str()) == Some(uuid.as_str())
+        }) {
+            Some(e) => e.path.clone(),
+            None => return Ok(()),
+        }
+    };
+
+    // Preserve the user's view (focus + search) across the rebuild.
+    let (prev_focus, prev_query) = if let Mode::SessionHub(hub) = state.mode() {
+        (hub.focus, hub.history_query.clone())
+    } else {
+        (crate::app::mode::HubPane::Cooking, String::new())
+    };
+
+    // Physical delete (disk + registry). Best-effort: a delete error shouldn't wedge the UI.
+    let _ = crate::model::store::delete_session(&path);
+
+    // Rebuild the hub in place so the deleted row leaves HISTORY. rebuild_hub
+    // re-lists from disk and clears pending state (build_session_hub sets
+    // pending_delete: None).
+    rebuild_hub(state, prev_focus, prev_query)
 }
 
 /// Create a brand-new session rooted at `cwd` (pwd-EXPLICIT), append it as a new tab,

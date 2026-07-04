@@ -30,6 +30,7 @@ use ratatui::{
 };
 
 use crate::app::mode::{filter_models, KeyInputForm};
+use crate::app::state::AppStateRest;
 use crate::dto::openrouter::ModelInfo;
 use crate::view::theme::Palette;
 
@@ -184,6 +185,7 @@ fn result_line(
 /// plain text box there).
 pub fn draw(
     frame: &mut Frame,
+    rest: &AppStateRest,
     form: &KeyInputForm,
     models_cache: &[ModelInfo],
     cache_endpoint: Option<&str>,
@@ -338,9 +340,14 @@ pub fn draw(
                 render_line(frame, dim_indented("no models \u{2014} type an id", indent, palette), row);
             } else {
                 let sel = form.result_sel.min(results.len() - 1);
-                // Autoscroll: anchor the window so the selected row stays visible.
-                let start = if sel < RESULTS_MAX { 0 } else { sel + 1 - RESULTS_MAX };
-                let end = (start + RESULTS_MAX).min(results.len());
+                // Scrolloff window (persisted offset on rest — KeyInputForm is
+                // rebuilt per client frame).
+                let (start, end) = crate::view::scroll::scroll_window(
+                    &rest.key_input_results_offset,
+                    sel,
+                    results.len(),
+                    RESULTS_MAX,
+                );
                 for (vi, &mi) in results[start..end].iter().enumerate() {
                     let i = start + vi;
                     let info = &models_cache[mi];

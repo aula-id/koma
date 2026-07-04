@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 /// The safe read-only default tool set used when an agent declares no `tools`.
 pub(super) const DEFAULT_TOOLS: [&str; 4] = ["read", "grep", "glob", "dir_list"];
 
-/// The recursion-guard tool that is NEVER auto-included in an agent's allow-list.
-pub(super) const TASK_TOOL: &str = "task";
+/// Delegation/orchestration tools that are NEVER included in a sub-agent's
+/// allow-list. `task` is the recursion guard (a sub-agent can't fan out its own
+/// sub-agents); `task_output` / `task_kill` manage the MAIN agent's detached
+/// (`run_in_background`) delegations, which a sub-agent has no business touching.
+pub(super) const TASK_TOOLS: [&str; 3] = ["task", "task_output", "task_kill"];
 
 // ---------------------------------------------------------------------------
 // AgentDef
@@ -167,14 +170,16 @@ impl AgentDef {
     /// The effective tool allow-list for this agent.
     ///
     /// Falls back to the safe read-only default when `tools` is empty, and always
-    /// strips the `"task"` tool (recursion guard) regardless of what was declared.
+    /// strips the delegation tools (`task` / `task_output` / `task_kill`) —
+    /// `task` is the recursion guard, and the two `task_*` tools manage the main
+    /// agent's detached delegations — regardless of what was declared.
     pub fn effective_tools(&self) -> Vec<String> {
         let base: Vec<String> = if self.tools.is_empty() {
             DEFAULT_TOOLS.iter().map(|t| t.to_string()).collect()
         } else {
             self.tools.clone()
         };
-        base.into_iter().filter(|t| t != TASK_TOOL).collect()
+        base.into_iter().filter(|t| !TASK_TOOLS.contains(&t.as_str())).collect()
     }
 
     /// Render this agent into a frontmatter + markdown string for writing to disk.

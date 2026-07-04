@@ -546,5 +546,5 @@ pub(super) fn has_running_subagents(state: &AppState) -> bool {
         .fg()
         .subagents
         .iter()
-        .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
+        .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached)
 }

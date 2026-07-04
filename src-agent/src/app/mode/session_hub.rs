@@ -125,6 +125,12 @@ pub struct SessionHub {
     /// session's UUID (from [`CookingEntry::session_id`]). While Some, the hub
     /// shows a confirm bar and the input handler only accepts confirm/cancel.
     pub pending_kill: Option<String>,
+    /// When set, a HISTORY-pane PHYSICAL delete is awaiting confirmation: the
+    /// value is the targeted session's UUID (the final path component of its
+    /// on-disk `HistoryEntry::path`). While Some, the hub shows a delete-confirm
+    /// bar. Distinct from `pending_kill` (COOKING pane, live-session reap) — the
+    /// two are mutually exclusive by focused pane.
+    pub pending_delete: Option<String>,
 }
 
 impl SessionHub {

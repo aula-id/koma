@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
@@ -284,6 +284,23 @@ pub(super) fn render_loop(
                     // (the daemon's authoritative InputChanged reconciles later), then
                     // forward the key verbatim for the daemon to interpret. Only the
                     // unambiguous text edits are echoed — see `local_echo`.
+                    // Full-screen sub-agent viewer scroll is CLIENT-owned: the
+                    // headless daemon never renders, so its `last_max_scroll` is
+                    // always 0 and forwarding these keys would collapse the view to
+                    // top/bottom. Handle them locally against THIS client's fresh
+                    // max (mirrors the mouse-wheel local pattern); everything else
+                    // (Esc closes the viewer daemon-side) still forwards.
+                    if shadow.rest.agent_viewer.is_some() {
+                        match key.code {
+                            KeyCode::Up       => { shadow.rest.agent_viewer_scroll_up(1);   continue; }
+                            KeyCode::Down     => { shadow.rest.agent_viewer_scroll_down(1);  continue; }
+                            KeyCode::PageUp   => { shadow.rest.agent_viewer_scroll_up(10);   continue; }
+                            KeyCode::PageDown => { shadow.rest.agent_viewer_scroll_down(10); continue; }
+                            KeyCode::Home     => { shadow.rest.agent_viewer_scroll_to_top();    continue; }
+                            KeyCode::End      => { shadow.rest.agent_viewer_scroll_to_bottom(); continue; }
+                            _ => {}
+                        }
+                    }
                     local_echo(&mut shadow, &key);
                     let _ = req_tx.send(ClientRequest::SendKey(KeyWire::from(key)));
                 }
@@ -292,18 +309,26 @@ pub(super) fn render_loop(
                 // gives immediate feedback without a round-trip). Bottom-pinning
                 // follow is reconstructed from snapshots, so a manual scroll just
                 // nudges the local offset for this render.
-                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        for _ in 0..3 {
-                            shadow.rest.scroll_up();
+                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) => {
+                    // When the full-screen sub-agent viewer is open, the wheel
+                    // scrolls IT (client-owned); otherwise it scrolls the main
+                    // transcript. Both use the client's fresh `last_max_scroll`.
+                    let viewer = shadow.rest.agent_viewer.is_some();
+                    match m.kind {
+                        MouseEventKind::ScrollUp => {
+                            for _ in 0..3 {
+                                if viewer { shadow.rest.agent_viewer_scroll_up(1); }
+                                else { shadow.rest.scroll_up(); }
+                            }
                         }
-                    }
-                    MouseEventKind::ScrollDown => {
-                        for _ in 0..3 {
-                            shadow.rest.scroll_down();
+                        MouseEventKind::ScrollDown => {
+                            for _ in 0..3 {
+                                if viewer { shadow.rest.agent_viewer_scroll_down(1); }
+                                else { shadow.rest.scroll_down(); }
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 },
                 // A resize just needs the next unconditional paint to relayout.
                 Event::Resize(_, _) => {}

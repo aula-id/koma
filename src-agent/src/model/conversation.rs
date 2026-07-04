@@ -82,15 +82,21 @@ impl Conversation {
     /// assistant text accompanying the calls (often empty). `reasoning` is the
     /// display-only thinking block (the model may think before emitting tool
     /// calls); attached before the push and never serialised — see
-    /// [`Self::push_assistant`].
+    /// [`Self::push_assistant`]. `reasoning_details` is the structured OpenRouter
+    /// chain-of-thought (typed + signed) for this turn, echoed back on the
+    /// tool-continuation request so the model keeps its reasoning across tool calls;
+    /// also never persisted to disk.
     pub fn push_assistant_with_tools(
         &mut self,
         content: String,
         tool_calls: Vec<ToolCall>,
         reasoning: Option<String>,
+        reasoning_details: Option<Vec<crate::dto::chat::ReasoningDetail>>,
     ) {
         self.messages.push(
-            ChatMessage::assistant_with_tools(content, tool_calls).with_reasoning(reasoning),
+            ChatMessage::assistant_with_tools(content, tool_calls)
+                .with_reasoning(reasoning)
+                .with_reasoning_details(reasoning_details),
         );
     }
 

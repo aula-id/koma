@@ -8,6 +8,7 @@ use ratatui::{
 use crate::app::mode::SettingsState;
 use crate::app::mode::settings::{ModelModal, ModelField, ModelRole};
 use crate::app::mode::filter_models;
+use crate::app::state::AppStateRest;
 use crate::dto::openrouter::ModelInfo;
 use crate::view::theme::Palette;
 use super::super::utils::{price_per_million, truncate};
@@ -28,6 +29,7 @@ use super::super::utils::{price_per_million, truncate};
 #[allow(clippy::too_many_arguments)]
 pub(in crate::view::settings) fn draw_model_modal(
     frame: &mut Frame,
+    rest: &AppStateRest,
     st: &SettingsState,
     modal: &ModelModal,
     omni: bool,
@@ -205,8 +207,14 @@ pub(in crate::view::settings) fn draw_model_modal(
                     )));
                 } else {
                     let sel = modal.result_sel.min(results.len().saturating_sub(1));
-                    let start = if sel < MAX_VIS { 0 } else { sel + 1 - MAX_VIS };
-                    let end = (start + MAX_VIS).min(results.len());
+                    // Scrolloff window (persisted offset on rest — ModelModal is
+                    // rebuilt per client frame).
+                    let (start, end) = crate::view::scroll::scroll_window(
+                        &rest.model_modal_results_offset,
+                        sel,
+                        results.len(),
+                        MAX_VIS,
+                    );
                     let row_w = inner.width as usize;
                     for (vi, &mi) in results[start..end].iter().enumerate() {
                         let i = start + vi;
@@ -340,13 +348,21 @@ pub(in crate::view::settings) fn draw_model_modal(
                         }
 
                         // Window of MAX_EP+1 rows (Auto always counts as a row).
+                        // Persisted offset on rest — ModelModal is rebuilt per
+                        // client frame. Keep the unfocused-pane pin: only the
+                        // focused Route field scrolls to its cursor.
                         const VIS: usize = MAX_EP + 1;
-                        let start = if !route_active || sel < VIS {
-                            0
+                        let (start, end) = if route_active {
+                            crate::view::scroll::scroll_window(
+                                &rest.model_modal_route_offset,
+                                sel,
+                                option_count,
+                                VIS,
+                            )
                         } else {
-                            sel + 1 - VIS
+                            rest.model_modal_route_offset.set(0);
+                            (0, VIS.min(option_count))
                         };
-                        let end = (start + VIS).min(option_count);
                         for (i, label) in opt_labels
                             .iter()
                             .enumerate()

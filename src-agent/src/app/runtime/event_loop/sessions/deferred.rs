@@ -232,6 +232,72 @@ pub(super) fn drain_deferred_and_resume(
         dirty = true;
     }
 
+    // --- detached sub-agent completion NUDGE: inject + auto-wake when idle ---
+    // A DETACHED (`task` `run_in_background`) sub-agent that reached a terminal
+    // state is buffered in `pending_subagent_nudges` (filled once per agent by
+    // `drain_subagents`). Exactly like the bg-bash nudge above, the moment this
+    // session is idle (no turn in flight, nothing parked, no running sub-agents)
+    // we drain the whole buffer into ONE synthetic user turn so the model REACTS
+    // to the completion(s). While busy we leave the buffer untouched and re-check
+    // on a later tick — so we never inject mid-turn (which would corrupt
+    // tool_call/tool_result ordering). `is_working()` returns true while any
+    // sub-agent is Running, so a still-running detached agent can never trip this.
+    // Auto-wake mirrors `handle_submit`: begin_stream + waiting + the per-turn
+    // resets, then `start_stream_task`.
+    // Ordering-dependent invariant: the bg-bash nudge block above sets waiting=true
+    // when it fires, and is_working() subsumes waiting — so if a bash nudge already
+    // kicked off a stream this tick, the gate below is false and this block defers to
+    // the next tick. The two background-completion nudges therefore never double-launch
+    // a stream in the same tick. Do NOT reorder these blocks without preserving that.
+    if !state.rest.sessions[idx].pending_subagent_nudges.is_empty()
+        && !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        let nudges = std::mem::take(&mut state.rest.sessions[idx].pending_subagent_nudges);
+        // The leading BASH_NUDGE_MARK keeps the transcript renderer compact
+        // (dim green-✓ line) while making the full reports available to the model.
+        // Each finished agent's complete report is injected verbatim — no polling
+        // needed; the model receives the result directly, exactly as a blocking
+        // sub-agent delivers its tool result.
+        let mut body = String::from(crate::dto::chat::BASH_NUDGE_MARK);
+        for (id, agent, report) in &nudges {
+            body.push_str(&format!(
+                "background sub-agent #{id} ({agent}) finished — its full report:\n\n{report}\n\n"
+            ));
+        }
+        body.push_str("React only if action is required; otherwise acknowledge briefly.");
+
+        // Append as a USER turn (so the model treats it as input to respond to),
+        // persist to msglog + messages.json, then capture history for the wire.
+        let history = {
+            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
+            let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+            sess.conversation.push_user(body);
+            let _ = sess.save();
+            sess.conversation.history()
+        };
+
+        // Per-turn reset + start stream, mirroring handle_submit's kickoff. The
+        // session is idle here, so these are clean-state resets (defensive).
+        {
+            let rt = &mut state.rest.sessions[idx];
+            rt.begin_stream();
+            rt.waiting = true;
+            rt.agent_steps = 0;
+            rt.pending_tool_calls.clear();
+            rt.awaiting_approval = false;
+            rt.tool_idx = 0;
+            rt.tool_results.clear();
+            rt.pending_tool_tasks.clear();
+            rt.awaiting_tool_tasks = false;
+        }
+        state.rest.reset_scroll_at(idx);
+        state.rest.sessions[idx].status = "thinking".into();
+        super::super::super::stream::start_stream_task(history, state, idx, client, handle);
+        dirty = true;
+    }
+
     dirty
 }
 

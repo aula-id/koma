@@ -28,7 +28,8 @@ mod input;
 mod bridge;
 mod swapper;
 
-use std::io::stdout;
+use std::io::{stdout, Stdout};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -57,6 +58,42 @@ enum ClientState {
     Swapper(SessionHub),
 }
 
+/// Restart the stale session-daemon while showing an animated "reopening" spinner.
+/// The restart (`manage::restart_daemon`) is blocking (~1s), so it runs on a
+/// background thread while THIS (main) thread — which owns the terminal — draws the
+/// spinner each frame until the restart completes, then propagates its result.
+/// Kept fully silent (quiet=true) so nothing bleeds into the alt-screen.
+fn restart_daemon_animated(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    session_id: &str,
+) -> Result<()> {
+    let sid = session_id.to_string();
+    let worker = std::thread::spawn(move || super::manage::restart_daemon(&sid, true));
+
+    // Load the actual user config (dark/light, accent) so the spinner matches the
+    // user's real theme rather than always using defaults.
+    let cfg = crate::model::app_config::AppConfig::load();
+    let palette = crate::view::theme::palette(&cfg);
+
+    let mut frame: u64 = 0;
+    // ~80ms per braille glyph → a calm spin; check completion each frame.
+    const FRAME: Duration = Duration::from_millis(80);
+    while !worker.is_finished() {
+        let start = Instant::now();
+        let _ = terminal.draw(|f| crate::view::loading::draw_reopening(f, frame, &palette));
+        frame = frame.wrapping_add(1);
+        if let Some(rem) = FRAME.checked_sub(start.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+
+    // Propagate the restart's result; a panicked worker thread → generic error.
+    match worker.join() {
+        Ok(res) => res.map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}")),
+        Err(_) => Err(anyhow::anyhow!("reopening thread panicked during daemon restart")),
+    }
+}
+
 /// Attach to a session-daemon, spawning it if needed, and run the build-skew handshake.
 ///
 /// The single attach primitive used everywhere the client connects: the initial
@@ -79,7 +116,11 @@ enum ClientState {
 /// if the just-spawned daemon STILL mismatches (it shouldn't, it was built from the current
 /// binary) it warns and renders against it rather than restart-looping. A daemon that sends
 /// no `Hello` (slow / pre-handshake) is never restarted on that absence alone.
-fn attach_session(handle: &tokio::runtime::Handle, session_id: &str) -> Result<Connection> {
+fn attach_session(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+) -> Result<Connection> {
     // Make sure a daemon owns this session before we connect. No-op when it is already
     // live (the bind-as-oracle probe inside short-circuits); spawns + waits otherwise.
     super::manage::ensure_daemon_running(session_id, false)
@@ -102,7 +143,6 @@ fn attach_session(handle: &tokio::runtime::Handle, session_id: &str) -> Result<C
             );
             break;
         }
-        eprintln!("koma: daemon running stale code — restarting...");
         already_restarted = true;
 
         // Tear down the stale connection's bridge before restarting: drop our request
@@ -111,8 +151,7 @@ fn attach_session(handle: &tokio::runtime::Handle, session_id: &str) -> Result<C
         drop(conn.req_tx);
         drop(conn.frame_rx);
 
-        super::manage::restart_daemon(session_id)
-            .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
+        restart_daemon_animated(terminal, session_id)?;
 
         conn = connect_attach_and_handshake(handle, &sock_path)?;
     }
@@ -209,7 +248,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         let id = opts.session.clone().ok_or_else(|| {
             anyhow::anyhow!("internal: client_run requires a session id (--session <id>) without --resume")
         })?;
-        let conn = attach_session(&handle, &id)?;
+        let conn = attach_session(&mut terminal, &handle, &id)?;
         current_session_id = Some(id);
         ClientState::Attached(conn)
     };
@@ -281,7 +320,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         }
                         teardown_connection(&handle, conn);
                         let new_id = uuid::Uuid::new_v4().to_string();
-                        match attach_session(&handle, &new_id) {
+                        match attach_session(&mut terminal, &handle, &new_id) {
                             Ok(conn) => {
                                 current_session_id = Some(new_id);
                                 ClientState::Attached(conn)
@@ -314,7 +353,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                 // success it becomes the foreground; on failure DEGRADE to the swapper
                 // rebuilt from fresh discovery (the dead/unreachable session drops out)
                 // rather than crash — the user can pick again.
-                SwapperOutcome::Pick(target) => match attach_session(&handle, &target) {
+                SwapperOutcome::Pick(target) => match attach_session(&mut terminal, &handle, &target) {
                     Ok(conn) => {
                         current_session_id = Some(target);
                         ClientState::Attached(conn)
@@ -329,7 +368,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                 // failed reconnect to a since-died previous daemon also degrades back to
                 // the swapper instead of crashing.
                 SwapperOutcome::Cancel => match prev_session.take() {
-                    Some(prev) => match attach_session(&handle, &prev) {
+                    Some(prev) => match attach_session(&mut terminal, &handle, &prev) {
                         Ok(conn) => {
                             current_session_id = Some(prev);
                             ClientState::Attached(conn)

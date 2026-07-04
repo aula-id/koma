@@ -157,6 +157,21 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             }
             return Action::None;
         }
+        if is_ctrl(&key, 'b') {
+            let sel = rest.subagent_sel;
+            // Only background a RUNNING, non-detached sub-agent (blocking path).
+            // Queued / done / killed / already-detached agents are not eligible.
+            let eligible = rest.fg().subagents.get(sel).is_some_and(|sa| {
+                matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
+                    && !sa.detached
+                    && sa.tool_call_id.is_some()
+            });
+            if eligible {
+                let id = rest.fg().subagents[sel].id;
+                return Action::BackgroundSubagent(id);
+            }
+            return Action::None;
+        }
         match key.code {
             KeyCode::Up => {
                 rest.subagent_sel = rest.subagent_sel.saturating_sub(1);
@@ -209,6 +224,12 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         };
     }
 
+    // Ctrl+X (with pending steers) → cancel all queued mid-turn steer messages.
+    // Only fires when the queue is non-empty so Ctrl+X stays free for other uses
+    // (e.g. sub-agent kill above) when there is nothing to cancel.
+    if is_ctrl(&key, 'x') && !rest.fg().pending_steer.is_empty() {
+        return Action::CancelSteers;
+    }
     // Ctrl+C is fully inert everywhere (koma disables it): no quit, no detach,
     // no interrupt. Esc handles interrupt/rewind now (see the Esc arm below).
     if is_ctrl(&key, 'c') {
@@ -269,9 +290,26 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
         return Action::None;
     }
 
+    // Ctrl+B (main composer, NOT the `$` panel): background ALL running blocking
+    // sub-agents of the foreground session at once, unblocking the parked turn.
+    // The `$` panel's Ctrl+B handler above returns early when the panel is open,
+    // so this arm is only reached when the panel is CLOSED (normal composer mode).
+    // Only fires when at least one eligible agent exists; otherwise falls through.
+    if is_ctrl(&key, 'b')
+        && rest.fg().subagents.iter().any(|sa| {
+            matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
+                && !sa.detached
+                && sa.tool_call_id.is_some()
+        })
+    {
+        return Action::BackgroundAllSubagents;
+    }
+
     // Max visible entries in the `@` file-reference palette (shared across all
     // key handlers in this function and kept in sync with the view constant).
-    const FILE_PAL_MAX: usize = 10;
+    // Result cap for @-file palette navigation — must match the projection's
+    // FILE_PAL_MAX so palette_sel can walk the whole scrollable match set.
+    const FILE_PAL_MAX: usize = 200;
 
     match key.code {
         KeyCode::Esc => {
@@ -374,7 +412,7 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                             Action::Shell(cmd.to_string())
                         }
                     }
-                } else if !rest.fg().input.trim().is_empty() && !rest.fg().waiting && !rest.fg().awaiting_shell {
+                } else if !rest.fg().input.trim().is_empty() && !rest.fg().awaiting_shell {
                     Action::Submit(rest.take_input())
                 } else {
                     Action::None

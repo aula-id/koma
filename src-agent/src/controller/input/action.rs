@@ -117,6 +117,12 @@ pub enum Action {
     /// The hub is then rebuilt in place (the killed/now-idle session reflected) so
     /// the overlay stays open. No-op if nothing valid is pending.
     HubKillConfirm,
+    /// Confirm a delete armed on the hub's HISTORY pane (second Ctrl+X while a
+    /// `pending_delete` is set). The runtime reads the pending target out of the
+    /// hub state, physically deletes that on-disk session (its directory tree +
+    /// registry row) via `store::delete_session`, then rebuilds the hub in place
+    /// so it leaves HISTORY. No-op if nothing valid is pending.
+    HubDeleteConfirm,
     /// Esc on the session hub — close it and return to the (unchanged) Chat
     /// view. No session state is touched. Ctrl+C is inert.
     CloseSessionHub,
@@ -218,4 +224,20 @@ pub enum Action {
     /// marked any non-terminal step `Skipped` for correctness; the runtime just
     /// swaps the mode to `Chat`.
     SkipLoading,
+    /// Clear the foreground session's queued mid-turn steer messages (Ctrl+X in the
+    /// composer while steers are pending). No-op if the queue is empty.
+    CancelSteers,
+    /// Ctrl+B in the `$` sub-agents panel: detach the selected RUNNING BLOCKING
+    /// sub-agent without killing it. Flips `detached = true`, removes its
+    /// `tool_call_id` from `pending_subagent_calls`, and injects an immediate
+    /// tool result so the parked main turn resumes. The agent keeps running; its
+    /// completion fires the standard detached nudge (see `drain_subagents`).
+    /// Inner `usize` is the sub-agent's stable session id.
+    BackgroundSubagent(usize),
+    /// Ctrl+B in the MAIN CHAT composer (not the `$` panel): detach ALL running
+    /// blocking sub-agents of the foreground session at once.  Mirrors
+    /// `BackgroundSubagent` for every eligible agent (Running, !detached,
+    /// tool_call_id present) and lets the park gate in `deferred.rs`
+    /// (`pending_subagent_calls.is_empty()`) resume the turn automatically.
+    BackgroundAllSubagents,
 }

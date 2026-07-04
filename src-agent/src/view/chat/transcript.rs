@@ -166,7 +166,7 @@ pub(super) fn render_transcript(
             .fg()
             .subagents
             .iter()
-            .filter(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
+            .filter(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached)
             .collect();
         if !running_agents.is_empty() {
             let elapsed_ms = std::time::SystemTime::now()
@@ -476,6 +476,24 @@ pub(super) fn render_tool_lines(
                     .add_modifier(Modifier::ITALIC);
                 lines.push(Line::from(vec![Span::styled(
                     "  ↳ running in background · /bash to manage",
+                    annotation_style,
+                )]));
+            }
+        }
+        // For background task (sub-agent) calls, mirror the bash annotation.
+        if call.function.name == "task" {
+            let parsed = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            let is_background = parsed
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_background {
+                let annotation_style = Style::default()
+                    .fg(palette.dim)
+                    .add_modifier(Modifier::ITALIC);
+                lines.push(Line::from(vec![Span::styled(
+                    "  ↳ running in background · /task to manage",
                     annotation_style,
                 )]));
             }

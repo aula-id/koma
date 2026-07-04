@@ -62,22 +62,36 @@ fn tool_is_risky(name: &str) -> bool {
 /// finished report — e.g. "Let me read a few more files:" — so the engine can
 /// nudge the model to keep going instead of accepting the half-thought as done.
 ///
-/// Criteria (any one is enough):
-/// - trimmed text is empty
-/// - trimmed text ends with `:`  (classic "Let me read…:" cliffhanger)
-/// - trimmed text is shorter than 40 chars  (too short to be a real report)
+/// Altitude-aware: a substantial or structured response (long, multi-line, or
+/// containing markdown headings/tables/lists) is NEVER a stall. Only short,
+/// bodyless lead-ins or dangling colons qualify.
+///
+/// Criteria for NOT a stall (any one is enough to return false):
+/// - trimmed length >= 300 chars
+/// - contains a newline (multi-line = has a body)
+/// - contains "##" (markdown heading)
+/// - contains "| " (table row)
+/// - contains "- " (list item)
+///
+/// A stall requires ALL of the following (after ruling out the above):
+/// - trimmed text is empty, OR
+/// - trimmed text ends with `:` (classic "Let me read…:" cliffhanger), OR
 /// - trimmed text starts with a known procrastination phrase (case-insensitive)
 fn is_stall(text: &str) -> bool {
     let t = text.trim();
-    if t.is_empty() || t.ends_with(':') || t.len() < 40 {
-        return true;
-    }
+    if t.is_empty() { return true; }
+    // Substantial -> long, multi-line, or structured (headings/tables/lists). Never a stall.
+    let substantial = t.len() >= 300
+        || t.contains('\n')
+        || t.contains("##")
+        || t.contains("| ")
+        || t.contains("- ");
+    if substantial { return false; }
+    // Short + bodyless: a "let me..."/"next I..." lead-in or a dangling colon.
     let lower = t.to_lowercase();
-    let stall_prefixes = [
-        "let me", "i'll", "i will", "let's", "now i", "next,", "next i",
-        "first,",
-    ];
-    stall_prefixes.iter().any(|p| lower.starts_with(p))
+    let lead_in = ["let me", "i'll", "i will", "let's", "now i", "next,", "next i", "first,"]
+        .iter().any(|p| lower.starts_with(p));
+    t.ends_with(':') || lead_in
 }
 
 /// One drained stream result: the assistant text, any requested tool calls,
@@ -86,6 +100,13 @@ fn is_stall(text: &str) -> bool {
 #[derive(Default)]
 struct StreamOutcome {
     text: String,
+    /// Display-only reasoning/thinking accumulated from the `delta.reasoning`
+    /// channel; committed onto the assistant message so the viewer renders it.
+    reasoning: String,
+    /// OpenRouter `reasoning_details` merged (by index) across streaming chunks.
+    /// Carried onto a tool-call assistant message so the sub-agent replays its
+    /// chain-of-thought (incl. signatures) on the next continuation request.
+    reasoning_details: Vec<crate::dto::chat::ReasoningDetail>,
     tool_calls: Vec<ToolCall>,
     error: Option<String>,
     /// Last-seen usage chunk: (prompt_tokens, completion_tokens, cost).
@@ -156,6 +177,37 @@ fn cap_report(text: String) -> String {
     } else {
         text
     }
+}
+
+/// A report that carries no real deliverable — empty, the `(no report)`
+/// placeholder, or content that is ONLY an inline think/thinking/thought block
+/// (the agent's answer went to the reasoning channel). Used to decide whether to
+/// fall back to the sub-agent's reasoning when building the delivered report.
+fn report_is_blank(report: &str) -> bool {
+    let t = report.trim();
+    if t.is_empty() || t == "(no report)" {
+        return true;
+    }
+    strip_think_blocks(t).trim().is_empty()
+}
+
+/// Remove `<think>…</think>`, `<thinking>…</thinking>`, and `<thought>…</thought>`
+/// blocks so a message that is only inline thinking registers as blank. Matches
+/// the common lowercase tag forms; dangling/unmatched tags are left as-is.
+fn strip_think_blocks(s: &str) -> String {
+    let mut out = s.to_string();
+    for (open, close) in [
+        ("<think>", "</think>"),
+        ("<thinking>", "</thinking>"),
+        ("<thought>", "</thought>"),
+    ] {
+        while let Some(o) = out.find(open) {
+            let Some(rel) = out[o..].find(close) else { break };
+            let end = o + rel + close.len();
+            out.replace_range(o..end, "");
+        }
+    }
+    out
 }
 
 /// Run the autonomous sub-agent loop to completion.
@@ -238,13 +290,27 @@ pub async fn run_agent_loop(
 
         let assistant_text = outcome.text;
         let tool_calls = outcome.tool_calls;
+        // Attach this step's captured thinking to the committed assistant message
+        // so the full-screen viewer can render it. `None` when the model emitted
+        // no reasoning this step.
+        let reasoning = {
+            let r = outcome.reasoning;
+            (!r.trim().is_empty()).then_some(r)
+        };
+        // Structured reasoning_details for THIS step: `None` when the model emitted
+        // none. Only attached to a tool-call assistant message (a tool round-trip
+        // follows, so replaying the signed chain-of-thought preserves continuity).
+        let reasoning_details = {
+            let d = outcome.reasoning_details;
+            (!d.is_empty()).then_some(d)
+        };
         if !assistant_text.trim().is_empty() {
             last_text = assistant_text.clone();
         }
 
         // 2. Commit the assistant turn into the isolated history (with tool calls
-        //    when present so the tool results can answer them). Reasoning is
-        //    display-only and not tracked by the sub-agent, so `None`.
+        //    when present so the tool results can answer them), carrying the
+        //    step's captured reasoning so the viewer renders the thinking block.
         if tool_calls.is_empty() {
             // Clean the raw text the SAME way the report will be delivered (unwrap
             // a <content>…</content> wrapper + strip tool-call markup) BEFORE the
@@ -259,7 +325,7 @@ pub async fn run_agent_loop(
             //    on the cleaned report; commit the RAW text into history so the
             //    transcript still shows what the model literally said.
             if nudges < 2 && is_stall(&report) {
-                convo.push_assistant(assistant_text, None);
+                convo.push_assistant(assistant_text, reasoning.clone());
                 convo.push_user(
                     "Continue now: call the tools you need to finish the task, \
                      then write your COMPLETE final report. \
@@ -278,11 +344,30 @@ pub async fn run_agent_loop(
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
             // Deliver the CLEANED report (tags stripped, with empty-fallback) so a
             // weak model's wrapped output never reaches the orchestrator as empty
-            // or with a leaked </content>.
-            emit(&tx, AgentEvent::Done(cap_report(report)));
+            // or with a leaked </content>. If the model produced NO usable content
+            // (empty, "(no report)", or only an inline think tag) — i.e. it spent
+            // its final turn in the reasoning channel — fall back to that reasoning
+            // so the orchestrator gets real text instead of a blank report.
+            let delivered = if report_is_blank(&report) {
+                match &reasoning {
+                    Some(r) if !r.trim().is_empty() => format!(
+                        "(the sub-agent finished without a written report; its reasoning follows)\n\n{}",
+                        r.trim()
+                    ),
+                    _ => report,
+                }
+            } else {
+                report
+            };
+            emit(&tx, AgentEvent::Done(cap_report(delivered)));
             return;
         }
-        convo.push_assistant_with_tools(assistant_text, tool_calls.clone(), None);
+        convo.push_assistant_with_tools(
+            assistant_text,
+            tool_calls.clone(),
+            reasoning.clone(),
+            reasoning_details,
+        );
 
         // 4. Run each requested call, appending a result for EVERY call id so the
         //    conversation stays API-valid (no dangling tool_call ids).
@@ -383,8 +468,9 @@ pub async fn run_agent_loop(
 /// Opens a fresh inner [`StreamEvent`] channel, dispatches
 /// [`OpenRouterClient::stream_complete`] on the resolved route, and folds the
 /// drained events: `Token` deltas append to the text (and are re-emitted as
-/// [`AgentEvent::Token`]), `ToolCalls` are collected, `Error` is captured.
-/// `Reasoning` / `Usage` are display-only accounting the sub-agent ignores.
+/// [`AgentEvent::Token`]), `ToolCalls` are collected, `Error` is captured, and
+/// `Reasoning` deltas accumulate into a parallel buffer committed onto the
+/// assistant message (so the viewer renders the thinking). `Usage` is accounting.
 async fn stream_step(
     client: &Arc<OpenRouterClient>,
     resolved: &Resolved,
@@ -435,9 +521,19 @@ async fn stream_step(
             StreamEvent::Usage { prompt_tokens, completion_tokens, cost, .. } => {
                 outcome.usage = Some((prompt_tokens, completion_tokens, cost));
             }
-            // Display-only / accounting events the sub-agent doesn't track.
-            StreamEvent::Reasoning(_)
-            | StreamEvent::Done
+            // Accumulate the model's thinking into a parallel buffer so the
+            // committed assistant message carries it (the viewer renders it as a
+            // dim/italic block). Display-only: never re-emitted as content.
+            StreamEvent::Reasoning(t) => {
+                outcome.reasoning.push_str(&t);
+            }
+            // Merge structured reasoning_details (by index) so the tool-call
+            // assistant message can replay the model's signed chain-of-thought.
+            StreamEvent::ReasoningDetails(d) => {
+                crate::dto::chat::merge_reasoning_details(&mut outcome.reasoning_details, d);
+            }
+            // Lifecycle / accounting events the sub-agent doesn't track here.
+            StreamEvent::Done
             | StreamEvent::Compacted { .. }
             | StreamEvent::HarnessVerdict { .. }
             | StreamEvent::EndpointsLoaded { .. }

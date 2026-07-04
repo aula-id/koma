@@ -72,4 +72,16 @@ impl AppStateRest {
             self.agent_viewer_follow = true; // back at the bottom -> resume following
         }
     }
+
+    /// Jump the sub-agent viewer to the very top (first line); leaves follow off.
+    pub fn agent_viewer_scroll_to_top(&mut self) {
+        self.agent_viewer_follow = false;
+        self.agent_viewer_scroll = 0;
+    }
+
+    /// Jump the sub-agent viewer to the bottom and resume following live output.
+    pub fn agent_viewer_scroll_to_bottom(&mut self) {
+        self.agent_viewer_follow = true;
+        self.agent_viewer_scroll = self.last_max_scroll.get();
+    }
 }

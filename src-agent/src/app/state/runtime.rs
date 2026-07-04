@@ -100,6 +100,13 @@ pub struct SessionRuntime {
     /// folded onto the committed `ChatMessage` as a display-only block (never
     /// serialised). Empty when the model emits no reasoning.
     pub stream_reasoning: String,
+    /// Parallel to `stream_reasoning`: the in-progress assistant's OpenRouter
+    /// `reasoning_details`, merged (by index) from `StreamEvent::ReasoningDetails`
+    /// deltas during a turn. Armed fresh in `begin_stream`, drained on the tool-call
+    /// commit, and echoed back on tool-continuation requests (OpenRouter only) so
+    /// the model keeps its signed chain-of-thought across tool calls. Never
+    /// serialised; empty when the model emits no structured reasoning.
+    pub stream_reasoning_details: Vec<crate::dto::chat::ReasoningDetail>,
     pub current_task: Option<AbortHandle>,
     /// Receiver for the in-flight request's events, or `None` when idle. Each
     /// request owns a fresh channel; dropping this receiver silently discards
@@ -236,6 +243,15 @@ pub struct SessionRuntime {
     /// busy; drained into ONE injected user turn when the session next goes idle.
     /// Each entry is `(job_id, status_label)`.
     pub pending_bash_nudges: Vec<(usize, String)>,
+    /// Detached (`task` `run_in_background`) sub-agents that reached a terminal
+    /// state but whose completion has not yet been delivered to the model as a
+    /// nudge. Buffered here (mirrors [`pending_bash_nudges`](Self::pending_bash_nudges))
+    /// while the agent is busy; drained into ONE injected user turn when the
+    /// session next goes idle. Each entry is `(subagent_id, agent_name, full_report)`:
+    /// the third element is the FULL outcome/report text (not a short label) and
+    /// is injected verbatim into the wake-nudge body so the model receives the
+    /// complete result without needing to call task_output.
+    pub pending_subagent_nudges: Vec<(usize, String, String)>,
     /// All sub-agents spawned this session (running + finished). Drained each tick
     /// by the event loop; finished ones stay in the list for the UI to show their
     /// final state.
@@ -249,6 +265,11 @@ pub struct SessionRuntime {
     /// a `task`-tool entry's call id is also held in `pending_subagent_calls` so the
     /// parked main turn waits for the queued delegation too.
     pub pending_subagents: VecDeque<PendingSubagent>,
+    /// Queued steer messages: user submits made WHILE a turn is cooking. Drained +
+    /// coalesced into one user message at the next tool-hop boundary (or auto-sent as
+    /// a fresh turn if the turn ends first). Full text kept here; the projection sends
+    /// truncated previews to the client. Hard cap 5 (a 6th submit toasts a warning).
+    pub pending_steer: Vec<String>,
     /// Tool-call ids of in-flight `task`-tool delegations whose result the main
     /// agent is still waiting for. The model-callable `task` tool DEFERS its tool
     /// result (mirroring the `awaiting_approval` park): `process_tools` pushes the
@@ -404,6 +425,7 @@ impl SessionRuntime {
             waiting: false,
             streaming: None,
             stream_reasoning: String::new(),
+            stream_reasoning_details: Vec::new(),
             current_task: None,
             active_rx: None,
             harness_rx: None,
@@ -431,8 +453,10 @@ impl SessionRuntime {
             bash_done_rx: None,
             bash_done_tx: None,
             pending_bash_nudges: Vec::new(),
+            pending_subagent_nudges: Vec::new(),
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
+            pending_steer: Vec::new(),
             pending_subagent_calls: Vec::new(),
             awaiting_subagents: false,
             next_subagent_id: 0,
@@ -460,6 +484,8 @@ impl SessionRuntime {
         // Arm the parallel reasoning buffer fresh so the previous round's
         // thinking can never bleed into this one.
         self.stream_reasoning.clear();
+        // Same for the structured reasoning_details accumulator (replay buffer).
+        self.stream_reasoning_details.clear();
     }
 
     pub fn append_token(&mut self, t: &str) {
@@ -486,6 +512,18 @@ impl SessionRuntime {
             None
         } else {
             Some(std::mem::take(&mut self.stream_reasoning))
+        }
+    }
+
+    /// Take the accumulated OpenRouter `reasoning_details`, clearing the buffer.
+    /// Returns `Some` only when non-empty. Drained alongside `take_reasoning` at
+    /// the tool-call commit so the structured chain-of-thought can be echoed back
+    /// on the next request and can never leak into a later round/turn.
+    pub fn take_reasoning_details(&mut self) -> Option<Vec<crate::dto::chat::ReasoningDetail>> {
+        if self.stream_reasoning_details.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.stream_reasoning_details))
         }
     }
 
@@ -804,38 +842,69 @@ impl SessionRuntime {
         }
     }
 
-    /// Kill every still-running sub-agent that belongs to THIS session, drop
-    /// model-delegated queued sub-agents, but PRESERVE user-initiated /task
-    /// jobs (tool_call_id == None).
+    /// Kill running sub-agents that belong to THIS session, drop model-delegated
+    /// queued sub-agents, but PRESERVE user-initiated /task jobs
+    /// (tool_call_id == None).
     ///
-    /// Called from every turn-halt path (interrupt, deny-tool, deny-all-pending)
-    /// so that "stop means stop" — no orphaned background tokio tasks continue
-    /// running after the user has cancelled the turn.
+    /// `include_detached` controls whether detached background sub-agents
+    /// (`sub.detached == true`) are killed along with blocking ones:
     ///
-    /// - Running sub-agents: `abort.abort()` kills the tokio task; status is
-    ///   flipped to `Killed` immediately so the `$` panel reflects it without
-    ///   waiting for a terminal event that will never arrive.
+    /// - `false` (turn-halt / Esc / deny): SKIP detached agents — they are
+    ///   background jobs the user explicitly asked to run independently, and they
+    ///   must survive an Esc/interrupt just as bg-bash jobs do (bg-bash: `bash_jobs`
+    ///   are never touched by `interrupt()`, only dropped with the session on
+    ///   `close()`). Only blocking (non-detached) Running sub-agents are killed.
+    ///   `pending_subagent_nudges` is left INTACT because that buffer is exclusively
+    ///   fed by detached agents; clearing it would drop a completion notification
+    ///   that arrived just before the interrupt.
+    ///
+    /// - `true` (session close / tombstone): kill ALL Running sub-agents including
+    ///   detached ones — the session is going away entirely, nothing survives.
+    ///   `pending_subagent_nudges` is cleared (the session can no longer fire them).
+    ///
+    /// - Running (non-detached) sub-agents: `abort.abort()` kills the tokio task;
+    ///   status is flipped to `Killed` immediately so the `$` panel reflects it
+    ///   without waiting for a terminal event that will never arrive.
     /// - Model-delegated queued sub-agents (tool_call_id == Some): dropped to
-    ///   halt the interrupted turn's work.
+    ///   halt the interrupted turn's work (always, regardless of `include_detached`).
     /// - User-initiated /task entries (tool_call_id == None): retained so the
     ///   user's independent pending commands survive the turn halt.
     /// - `pending_subagent_calls` / `awaiting_subagents`: cleared here so the
-    ///   caller does NOT need to do it separately (keeps the three halt paths
-    ///   consistent).
+    ///   caller does NOT need to do it separately (keeps the halt paths consistent).
     ///
     /// This method ONLY touches the session it is called on — it is always
-    /// invoked via `state.rest.fg_mut()`, so background sessions are not
-    /// affected.
-    pub fn abort_running_subagents(&mut self) {
+    /// invoked via `state.rest.fg_mut()` (or a named session slot), so other
+    /// sessions are not affected.
+    pub fn abort_running_subagents(&mut self, include_detached: bool) {
         for sub in &mut self.subagents {
             if matches!(sub.status, crate::app::subagent::SubAgentStatus::Running) {
+                // When NOT including detached agents, skip detached ones so they
+                // keep running independently (mirrors bg-bash surviving Esc).
+                if !include_detached && sub.detached {
+                    continue;
+                }
                 sub.abort.abort();
                 sub.status = crate::app::subagent::SubAgentStatus::Killed;
+                // Suppress the detached-completion nudge for an agent killed here:
+                // the user stopped this turn (or the session closed), so the session
+                // must NOT auto-wake to announce "your background agent finished".
+                // Latching `nudged` stops the next-tick terminal-fold in
+                // `drain_subagents` from buffering a nudge for it.
+                sub.nudged = true;
             }
         }
         self.pending_subagents.retain(|p| p.tool_call_id.is_none());
         self.pending_subagent_calls.clear();
         self.awaiting_subagents = false;
+        // `pending_subagent_nudges` is exclusively fed by DETACHED agents. When
+        // `include_detached == false` (turn-halt/Esc), preserved detached agents
+        // may have already buffered a nudge that arrived just before the interrupt —
+        // keep it so the session auto-wakes to announce completion when next idle.
+        // When `include_detached == true` (session close), clear it: the session is
+        // going away and can no longer fire the nudge.
+        if include_detached {
+            self.pending_subagent_nudges.clear();
+        }
     }
 
     /// TOMBSTONE this session (daemon stage 10): tear down ALL of its in-flight work
@@ -883,7 +952,8 @@ impl SessionRuntime {
         // Sub-agents: kill running, drop model-delegated queued work, clear the
         // parked-delegation bookkeeping. (Unlike a turn-halt, a CLOSE also drops
         // user-initiated /task entries — the session is going away entirely.)
-        self.abort_running_subagents();
+        // include_detached = true: session is gone, all background agents die with it.
+        self.abort_running_subagents(true);
         self.pending_subagents.clear();
         // Release this session's on-disk lock right away (unlink + forget the path).
         if let Some(path) = self.held_lock.take() {
@@ -921,11 +991,14 @@ impl SessionRuntime {
         self.approval_reason = None;
         self.tool_idx = 0;
         self.tool_results.clear();
-        // Kill every running sub-agent spawned by this turn and drop the pending
-        // queue. `abort_running_subagents` also clears `pending_subagent_calls`
-        // and `awaiting_subagents`, so the halt path is complete — no orphaned
-        // background task can deliver a late result.
-        self.abort_running_subagents();
+        // Kill every BLOCKING running sub-agent spawned by this turn and drop the
+        // pending queue. `abort_running_subagents` also clears
+        // `pending_subagent_calls` and `awaiting_subagents`, so the halt path is
+        // complete. Detached (background) sub-agents are PRESERVED — they are the
+        // user's independent background jobs and survive Esc exactly as bg-bash
+        // jobs do (bash_jobs is never touched by interrupt()).
+        // include_detached = false: Esc/turn-halt, preserve background agents.
+        self.abort_running_subagents(false);
         // Abandon any round parked on a deferred tool task. The off-thread worker
         // keeps running but its result lands with no matching pending id, so the
         // next-turn machine reset discards it; it can't resume a turn that was
@@ -940,6 +1013,7 @@ impl SessionRuntime {
         // thinking block can't bleed into the next turn; it's folded onto the
         // interrupted message (display-only).
         let reasoning = self.take_reasoning();
+        self.stream_reasoning_details.clear();
         let buf = self.take_stream();
         if let Some(b) = buf {
             if !b.is_empty() {
@@ -992,6 +1066,34 @@ impl SessionRuntime {
                 .subagents
                 .iter()
                 .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running))
+    }
+
+    /// UI-activity twin of [`is_working`](Self::is_working): identical busy-flag set,
+    /// except a DETACHED (backgrounded) sub-agent does NOT count. A detached agent
+    /// runs off to the side while the main turn is idle, so the UI must read 'ready'.
+    ///
+    /// The split exists because `is_working` serves two masters that need different
+    /// answers for detached agents:
+    /// - LIVENESS (daemon quiescence / self-exit grace / hub-kill abort-vs-close /
+    ///   quit warning / completion-nudge gating) — a detached agent MUST count, else
+    ///   the daemon could self-exit and kill the running background agent. That is
+    ///   `is_working`; leave those callers on it.
+    /// - UI ACTIVITY (projected `working` → client `waiting` → comet shimmer + fast
+    ///   redraw cadence, the session-hub ●/○ marker, the foreground status line) — a
+    ///   detached agent must NOT count. Those callers read this.
+    pub fn is_ui_busy(&self) -> bool {
+        if self.closed {
+            return false;
+        }
+        self.waiting
+            || self.streaming.is_some()
+            || self.awaiting_approval
+            || self.awaiting_tool_tasks
+            || self.awaiting_shell
+            || self.awaiting_subagents
+            || self.subagents.iter().any(|s| {
+                matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached
+            })
     }
 
     /// True once this session has been tombstoned via [`close()`](Self::close) —

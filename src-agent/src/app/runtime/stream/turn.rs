@@ -20,6 +20,22 @@ pub(crate) fn push_image_unsupported_notice(rest: &mut AppStateRest) {
     }
 }
 
+/// True when a tool call's argument string carries no actual arguments — empty,
+/// whitespace, `null`, or an empty JSON object. Used to detect native tool calls
+/// whose args a backend dropped while parsing a `<tool_call>` XML span, so they
+/// can be repaired from the XML still present in the assistant content.
+fn tool_args_are_empty(args: &str) -> bool {
+    let t = args.trim();
+    if t.is_empty() {
+        return true;
+    }
+    match serde_json::from_str::<serde_json::Value>(t) {
+        Ok(serde_json::Value::Object(m)) => m.is_empty(),
+        Ok(serde_json::Value::Null) => true,
+        _ => false,
+    }
+}
+
 /// True when a provider error indicates the model/endpoint cannot accept image
 /// input, so we can show the friendly notice instead of a raw error toast.
 ///
@@ -60,6 +76,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
     // Reasoning taken unconditionally so it can't leak; may be promoted to
     // content below when the model streamed its entire answer through that channel.
     let reasoning = rt.take_reasoning();
+    let _ = rt.take_reasoning_details();
     let buf = rt.take_stream().unwrap_or_default();
     let (content, msg_reasoning) = final_answer(buf, reasoning);
     let mut save_err = None;
@@ -169,6 +186,11 @@ pub(crate) fn advance_turn(
     // can never leak into the next round) and folded onto the committed message
     // below; never logged to disk or sent to the API.
     let reasoning = state.rest.sessions[sess_idx].take_reasoning();
+    // Structured OpenRouter reasoning_details streamed this round. Drained
+    // unconditionally (same as `reasoning`, so it can never leak into the next
+    // round) and carried onto the tool-call assistant message so the model replays
+    // its signed chain-of-thought on the continuation request (OpenRouter only).
+    let reasoning_details = state.rest.sessions[sess_idx].take_reasoning_details();
 
     // 1b. Text-format tool-call fallback. Some models (Hermes/Qwen/ChatML on
     //     budget / gpt-oss / GLM routes) emit a tool call as `<tool_call>…JSON…
@@ -193,6 +215,46 @@ pub(crate) fn advance_turn(
                 }
             }
         }
+    } else if pending.iter().any(|c| tool_args_are_empty(&c.function.arguments)) {
+        // REPAIR: some backends parse a `<tool_call>` XML span into a native
+        // tool_call but DROP its arguments (args become "{}"), leaving the raw
+        // markup in `content`. The XML form is still in `text` and our extractor
+        // parses it perfectly — recover the arguments BY NAME and strip the
+        // redundant markup. We only BACKFILL empty native args (never add calls,
+        // never overwrite good args), so a legit no-arg tool call whose XML form
+        // is absent stays untouched.
+        if let Some(text) = buf.as_deref() {
+            if !text.is_empty() {
+                let (cleaned, synthesized) =
+                    crate::dto::chat::extract_text_tool_calls(text);
+                if !synthesized.is_empty() {
+                    let mut used = vec![false; synthesized.len()];
+                    let mut repaired = false;
+                    for native in pending.iter_mut() {
+                        if !tool_args_are_empty(&native.function.arguments) {
+                            continue;
+                        }
+                        // Match an as-yet-unused synthesized call of the same name
+                        // that actually carries args (positional-safe for dupes).
+                        let hit = synthesized.iter().enumerate().position(|(i, s)| {
+                            !used[i]
+                                && s.function.name == native.function.name
+                                && !tool_args_are_empty(&s.function.arguments)
+                        });
+                        if let Some(idx) = hit {
+                            native.function.arguments =
+                                synthesized[idx].function.arguments.clone();
+                            used[idx] = true;
+                            repaired = true;
+                        }
+                    }
+                    if repaired {
+                        buf = Some(cleaned);
+                        state.rest.sessions[sess_idx].pending_tool_calls = pending.clone();
+                    }
+                }
+            }
+        }
     }
 
     // 2. Commit the assistant message (and log + count it). The assistant text
@@ -211,7 +273,7 @@ pub(crate) fn advance_turn(
                 let content = buf.clone().unwrap_or_default();
                 let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
                 sess.conversation
-                    .push_assistant_with_tools(content, pending.clone(), reasoning);
+                    .push_assistant_with_tools(content, pending.clone(), reasoning, reasoning_details);
                 if let Err(e) = sess.save() {
                     save_err = Some(e.to_string());
                 }
@@ -277,6 +339,43 @@ pub(crate) fn advance_turn(
             None => "ready".into(),
         };
         state.rest.sessions[sess_idx].status = status;
+
+        // Turn ended with queued steers still pending (they were enqueued but no
+        // tool-hop boundary consumed them). Auto-send them as a normal next turn —
+        // the user queued them expecting delivery. `waiting` is now false, so the
+        // minimal submit path spins a fresh turn.
+        let steers = std::mem::take(&mut state.rest.sessions[sess_idx].pending_steer);
+        if !steers.is_empty() {
+            let joined = steers.join("\n\n");
+            // Replicate the minimal submit sequence: push the user message, wire up
+            // the session state, and start a new stream. `handle_submit` is
+            // pub(super) in the actions module, so we inline the essentials here
+            // rather than risk a module-visibility or borrow cycle.
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                let _ = crate::model::msglog::append(&sess.path, Role::User, &joined, None);
+                sess.conversation.push_user(joined);
+                let _ = sess.save();
+            }
+            if client.is_some() && state.rest.sessions[sess_idx].session.is_some() {
+                let history = state.rest.sessions[sess_idx]
+                    .session
+                    .as_ref()
+                    .map(|s| s.conversation.history())
+                    .unwrap_or_default();
+                state.rest.sessions[sess_idx].begin_stream();
+                state.rest.sessions[sess_idx].waiting = true;
+                state.rest.sessions[sess_idx].agent_steps = 0;
+                state.rest.sessions[sess_idx].pending_tool_calls.clear();
+                state.rest.sessions[sess_idx].awaiting_approval = false;
+                state.rest.sessions[sess_idx].tool_idx = 0;
+                state.rest.sessions[sess_idx].tool_results.clear();
+                state.rest.sessions[sess_idx].pending_tool_tasks.clear();
+                state.rest.sessions[sess_idx].awaiting_tool_tasks = false;
+                state.rest.sessions[sess_idx].status = "thinking".into();
+                super::run::start_stream_task(history, state, sess_idx, client, handle);
+            }
+        }
+
         return;
     }
 

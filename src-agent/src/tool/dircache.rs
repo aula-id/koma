@@ -7,20 +7,56 @@
 //! deletes files.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use anyhow::Result;
 use serde_json::{json, Value};
 use super::{Tool, ToolCtx};
+
+/// Hard cap on indexed files. Prevents a giant workspace root (e.g. ~/Downloads
+/// with tens of thousands of files) from ballooning the index and every search.
+const MAX_INDEXED_FILES: usize = 50_000;
+
+/// Directory basenames pruned from the walk regardless of .gitignore. These are
+/// well-known heavy/generated trees that never belong in `@`-file autocomplete
+/// and would otherwise dominate the index.
+const PRUNE_DIRS: &[&str] = &[
+    "node_modules", "target", ".git", "dist", "build", ".cache",
+    ".venv", "venv", "__pycache__", ".next", ".idea", "vendor", ".gradle",
+];
+
+/// Memoized result of the last `search` call. Guarded by a `Mutex` (not
+/// `RefCell`/`Cell`) because `search` runs under an `RwLock` READ lock and the
+/// memo must be `Sync`. `version` ties the cache to a specific index generation:
+/// a `reindex` bumps `DirCache::version`, so a stale memo is detected and
+/// recomputed on the next miss.
+#[derive(Default)]
+struct SearchMemo {
+    query: String,
+    limit: usize,
+    version: u64,
+    results: Vec<String>,
+    /// True once a real search has populated this memo (guards the empty default).
+    valid: bool,
+}
 
 /// Workspace file index (relative paths), refreshed in the background. Feeds
 /// `@`-file autocomplete and the DirList tool.
 #[derive(Default)]
 pub struct DirCache {
     pub files: Vec<String>,
+    /// Unique ancestor directories (each rendered with a trailing "/"), sorted.
+    /// Precomputed at index time so `search` never rebuilds the dir set per call.
+    pub dirs: Vec<String>,
     pub indexing: bool,
     /// Human-readable '[i] /path' entries for configured roots that were not
     /// directories at the last index. Empty when all roots resolved.
     pub missing_roots: Vec<String>,
+    /// Index generation counter. Bumped every time `reindex` replaces `files`.
+    /// Used to invalidate `memo` without locking it during reindex.
+    pub version: u64,
+    /// Last-search cache. Interior-mutable so `search` can update it under a
+    /// read lock; thread-safe via `Mutex`.
+    memo: Mutex<SearchMemo>,
 }
 
 /// Re-index one or more workspace roots on a background thread
@@ -38,12 +74,26 @@ pub fn reindex(roots: Vec<PathBuf>, cache: Arc<RwLock<DirCache>>) {
     std::thread::spawn(move || {
         let mut files: Vec<String> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
-        for (i, root) in roots.iter().enumerate() {
+        'roots: for (i, root) in roots.iter().enumerate() {
             if !root.is_dir() {
                 missing.push(format!("[{i}] {}", root.display()));
                 continue;
             }
-            for dent in ignore::WalkBuilder::new(root).build().flatten() {
+            let walker = ignore::WalkBuilder::new(root)
+                // Prune well-known heavy/generated dirs so the index can't
+                // balloon. Applied on top of the existing .gitignore behaviour.
+                .filter_entry(|dent| {
+                    // Never prune the walk root itself (depth 0), even if its
+                    // basename happens to match — only prune nested heavy dirs.
+                    if dent.depth() > 0 && dent.file_type().is_some_and(|t| t.is_dir()) {
+                        if let Some(name) = dent.file_name().to_str() {
+                            return !PRUNE_DIRS.contains(&name);
+                        }
+                    }
+                    true
+                })
+                .build();
+            for dent in walker.flatten() {
                 if dent.file_type().is_some_and(|t| t.is_file()) {
                     if let Ok(rel) = dent.path().strip_prefix(root) {
                         let path = rel.to_string_lossy().into_owned();
@@ -52,17 +102,43 @@ pub fn reindex(roots: Vec<PathBuf>, cache: Arc<RwLock<DirCache>>) {
                         } else {
                             files.push(path);
                         }
+                        // Hard cap: stop collecting once the index is full.
+                        if files.len() >= MAX_INDEXED_FILES {
+                            break 'roots;
+                        }
                     }
                 }
             }
         }
         files.sort();
+        // Precompute the unique ancestor-dir set ONCE, here, so `search`
+        // iterates a ready-made list instead of rebuilding a HashSet per call.
+        let dirs = compute_dirs(&files);
         if let Ok(mut c) = cache.write() {
             c.files = files;
+            c.dirs = dirs;
             c.missing_roots = missing;
             c.indexing = false;
+            // New index generation: invalidates any memoized search.
+            c.version = c.version.wrapping_add(1);
         }
     });
+}
+
+/// Compute the sorted, unique set of ancestor directories for `files`, each
+/// rendered with a trailing "/". Runs once per reindex (off the read path).
+fn compute_dirs(files: &[String]) -> Vec<String> {
+    let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for f in files {
+        let mut path = f.as_str();
+        while let Some(i) = path.rfind('/') {
+            path = &path[..i];
+            set.insert(format!("{path}/"));
+        }
+    }
+    let mut dirs: Vec<String> = set.into_iter().collect();
+    dirs.sort();
+    dirs
 }
 
 impl DirCache {
@@ -87,6 +163,32 @@ impl DirCache {
     /// Within each group, sort by ascending path length then lexicographically.
     /// Truncate to `limit`.
     pub fn search(&self, query: &str, limit: usize) -> Vec<String> {
+        // Fast path: identical query+limit against the same index generation.
+        // This is what turns the ~125Hz per-tick snapshot calls into O(1) memo
+        // hits instead of re-walking every candidate each frame.
+        if let Ok(memo) = self.memo.lock() {
+            if memo.valid
+                && memo.version == self.version
+                && memo.limit == limit
+                && memo.query == query
+            {
+                return memo.results.clone();
+            }
+        }
+        let results = self.search_uncached(query, limit);
+        if let Ok(mut memo) = self.memo.lock() {
+            memo.query = query.to_string();
+            memo.limit = limit;
+            memo.version = self.version;
+            memo.results = results.clone();
+            memo.valid = true;
+        }
+        results
+    }
+
+    /// The actual search computation (see [`DirCache::search`] for the ranking
+    /// contract). Split out so `search` can wrap it with memoization.
+    fn search_uncached(&self, query: &str, limit: usize) -> Vec<String> {
         if query.is_empty() {
             // Depth-1 browse: list top-level entries from all workspaces.
             let mut result: Vec<String> = Vec::new();
@@ -115,29 +217,15 @@ impl DirCache {
             return result;
         }
 
-        // Build the full candidate set: all files + all unique ancestor dirs.
+        // Candidate set: all files + the precomputed ancestor dirs (built once
+        // at index time in `compute_dirs`, not rebuilt per call).
         let q = query.to_lowercase();
-        let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut candidates: Vec<String> = Vec::new();
 
-        for f in &self.files {
-            // Ancestor directories for this file.
-            let mut path = f.as_str();
-            while let Some(i) = path.rfind('/') {
-                path = &path[..i];
-                let dir_entry = format!("{path}/");
-                dirs.insert(dir_entry);
-            }
-            candidates.push(f.clone());
-        }
-        for d in dirs {
-            candidates.push(d);
-        }
-
-        // Filter by substring match, then rank.
+        // Filter by substring match, then rank. Iterate files and dirs in place
+        // to avoid materializing a combined candidate Vec.
         let mut starts: Vec<String> = Vec::new();
         let mut contains: Vec<String> = Vec::new();
-        for c in candidates {
+        for c in self.files.iter().chain(self.dirs.iter()) {
             let cl = c.to_lowercase();
             if !cl.contains(&q) {
                 continue;
@@ -151,9 +239,9 @@ impl DirCache {
                 }
             };
             if base.to_lowercase().starts_with(&q) {
-                starts.push(c);
+                starts.push(c.clone());
             } else {
-                contains.push(c);
+                contains.push(c.clone());
             }
         }
 

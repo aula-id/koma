@@ -35,6 +35,15 @@ pub(super) fn drain_stream(
                     state.rest.sessions[idx].append_reasoning(&t);
                     state.rest.sessions[idx].status = "thinking".into();
                 }
+                StreamEvent::ReasoningDetails(d) => {
+                    // Merge structured reasoning_details (by index) into this
+                    // session's replay buffer; drained on the tool-call commit and
+                    // echoed back on tool-continuation requests (OpenRouter only).
+                    crate::dto::chat::merge_reasoning_details(
+                        &mut state.rest.sessions[idx].stream_reasoning_details,
+                        d,
+                    );
+                }
                 StreamEvent::Usage { prompt_tokens, completion_tokens, cached_tokens, cost } => {
                     // Stash for the assistant-commit step; do NOT break — usage
                     // arrives just before Done.
