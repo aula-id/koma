@@ -16,7 +16,8 @@
 //!   - the deferred `/compact` apply,
 //!   - the missing-workspace-root warning,
 //!   - the comet-shimmer `work_since` reconcile + the "keep redrawing while a
-//!     compaction / shimmer / sub-agent is live" force-dirty,
+//!     compaction / shimmer / sub-agent / Plan-mode header shimmer is live"
+//!     force-dirty,
 //!   - the toast auto-dismiss tick.
 //!
 //! What deliberately STAYS in [`super::run_loop`] (terminal-coupled, NOT here):
@@ -461,7 +462,13 @@ pub(super) fn service_global(
     // while any sub-agent is running (background `/task` agents that don't set
     // `waiting`), force redraws so the in-chat spinner animates. And while a security
     // health probe is pending, force redraws so its "checking dependencies…" spinner
-    // keeps cycling until the result lands.
+    // keeps cycling until the result lands. And while the agent is in Plan mode, force
+    // redraws so the "planning" header shimmer (view/chat/header.rs) keeps sweeping
+    // even on an otherwise fully idle UI — it is wall-clock driven (no stored counter)
+    // so it only needs a periodic repaint, not a tighter poll cadence: the existing
+    // 100ms idle poll timeout (see `run_loop`) is already finer than the shimmer's
+    // 90ms step, so this force-dirty alone is enough — it does NOT join the fast-poll
+    // predicate below.
     // Compaction anim is per-session now (C4): force a redraw while ANY session has a
     // live compaction clock, so a background session's spinner still advances (the
     // rendered foreground may not be the compacting one, but the per-tick redraw is
@@ -475,6 +482,7 @@ pub(super) fn service_global(
         || shimmer_active
         || has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()
+        || state.rest.agent_mode == crate::app::state::AgentMode::Plan
     {
         dirty = true;
     }
