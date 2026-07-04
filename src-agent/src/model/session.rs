@@ -349,7 +349,7 @@ impl Session {
         // from `AppStateRest::set_agent_mode` right before it calls this method.
         if self.plan_mode_hint {
             sys.push_str(
-                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need. You can use the seqthink tool to structure your reasoning step by step. When your plan is solid, call plan_ready with a short summary and the full detailed plan (files, exact changes, reasoning). The user will approve it or discuss further."
+                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need. You can use the seqthink tool to structure your reasoning step by step. When your plan is solid, call plan_ready with a summary that names each file to edit and why, plus the full detailed plan (files, exact changes, reasoning). The user will approve it or discuss further."
             );
         }
 

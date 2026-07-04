@@ -61,12 +61,12 @@ impl Tool for PlanReady {
     }
 
     fn description(&self) -> &'static str {
-        "Present your finished plan for user approval. summary is shown to the user; plan \
-         (full detail: files, exact edits, order, risks) is saved to <session>/plan.md. \
-         Only call this from plan mode when your plan is complete. Only call this after ALL \
-         work is finished - including background bash jobs and sub-agents; collect their \
-         results first. The user may approve, approve with history compaction, or ask to \
-         keep discussing."
+        "Present your finished plan for user approval. summary must list the files being \
+         changed and why for each; plan (full detail: files, exact edits, order, risks) is \
+         saved to <session>/plan.md. Only call this from plan mode when your plan is complete. \
+         Only call this after ALL work is finished - including background bash jobs and \
+         sub-agents; collect their results first. The user may approve, approve with history \
+         compaction, or ask to keep discussing."
     }
 
     fn parameters(&self) -> Value {
@@ -75,7 +75,7 @@ impl Tool for PlanReady {
             "properties": {
                 "summary": {
                     "type": "string",
-                    "description": "Short user-facing summary of the plan: what will change and the important points"
+                    "description": "User-facing digest the user approves from. Must include: what will change and why, each file to be edited with a one-line reason, and any key risks or ordering. Not the full plan, but complete enough to decide without opening plan.md."
                 },
                 "plan": {
                     "type": "string",
