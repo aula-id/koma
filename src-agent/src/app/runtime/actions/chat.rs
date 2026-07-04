@@ -92,6 +92,9 @@ pub(super) fn handle_submit(
             )
         });
         let capable = match (state.rest.models_cache.as_deref(), main.as_ref()) {
+            // Codex Responses models are image-capable and have no static
+            // catalogue to consult, so never block on a lookup that must miss.
+            (_, Some(m)) if m.api_type == crate::model::app_config::ApiType::Codex => true,
             // Only trust the catalogue when it was fetched for THIS model's
             // endpoint. After a mid-session provider/model swap the cache may
             // still hold the old endpoint's models (missing the new model) —

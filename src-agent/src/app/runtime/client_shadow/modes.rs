@@ -11,8 +11,8 @@ use crate::app::mode::security::SecurityState;
 use crate::app::mode::bash::BashState;
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{
-    ModelDraft, ModelModal, PathPicker, PickerMode, ProviderDraft, ProviderModal, RolePickerState,
-    SettingsState,
+    ModelDraft, ModelModal, OAuthDraft, OAuthFlowState, PathPicker, PickerMode, ProviderDraft,
+    ProviderModal, RolePickerState, SettingsState,
 };
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState,
@@ -22,9 +22,9 @@ use crate::app::mode::{
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, HelpSnapshot,
-    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, PathPickerSnapshot,
-    PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot, SettingsSnapshot,
-    TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
+    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, OAuthDraftSnapshot,
+    PathPickerSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot,
+    SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
 use crate::model::settings::{InternetMode, Settings};
@@ -182,6 +182,14 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
                 api_key: p.api_key,
             })
             .collect(),
+        oauth_drafts: s
+            .oauth_drafts
+            .into_iter()
+            .map(shadow_oauth_draft)
+            .collect(),
+        oauth_sel: s.oauth_sel,
+        oauth_armed: s.oauth_armed,
+        oauth_flow: shadow_oauth_flow(s.oauth_flow),
         prov_sel: s.prov_sel,
         prov_delete_armed: s.prov_delete_armed,
         prov_modal: s.prov_modal.map(|m| ProviderModal {
@@ -579,7 +587,47 @@ pub(crate) fn shadow_internet_mode(t: &str) -> InternetMode {
 pub(crate) fn shadow_api_type(t: &str) -> ApiType {
     match t {
         "anthropic" => ApiType::AnthropicCompatible,
+        "codex" => ApiType::Codex,
         _ => ApiType::OpenAiCompatible,
+    }
+}
+
+/// Map an OAuth-provider wire token back to an [`OAuthProvider`] (unknown → Codex).
+fn shadow_oauth_provider(t: &str) -> crate::model::app_config::OAuthProvider {
+    match t {
+        "kilocode" => crate::model::app_config::OAuthProvider::Kilocode,
+        _ => crate::model::app_config::OAuthProvider::Codex,
+    }
+}
+
+/// Rebuild one [`OAuthDraft`] from its wire projection.
+fn shadow_oauth_draft(o: OAuthDraftSnapshot) -> OAuthDraft {
+    OAuthDraft {
+        uuid: o.uuid,
+        label: o.label,
+        provider: shadow_oauth_provider(&o.provider),
+        key: o.key,
+        status: o.status,
+    }
+}
+
+/// Rebuild the OAuth submenu's connect-flow state from its flat wire projection
+/// (see [`crate::ipc::proto::OAuthFlowSnapshot`] for the field-reuse convention).
+/// An unrecognised `kind` (e.g. a version-skewed peer, or the all-default decode
+/// of a missing field) falls back to `Idle` rather than panicking.
+fn shadow_oauth_flow(s: crate::ipc::proto::OAuthFlowSnapshot) -> OAuthFlowState {
+    match s.kind.as_str() {
+        "starting" => OAuthFlowState::Starting,
+        "pick" => OAuthFlowState::Pick(s.cursor),
+        "codex_wait" => OAuthFlowState::CodexWait { url: s.url, frame: s.frame },
+        "codex_paste" => OAuthFlowState::CodexPaste { input: s.input },
+        "kilo_wait" => OAuthFlowState::KiloWait {
+            user_code: s.user_code,
+            verification_url: s.url,
+            frame: s.frame,
+        },
+        "failed" => OAuthFlowState::Failed(s.error),
+        _ => OAuthFlowState::Idle,
     }
 }
 

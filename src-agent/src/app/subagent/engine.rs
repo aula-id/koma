@@ -487,12 +487,21 @@ async fn stream_step(
     let effort = resolved.effort.clone();
     let endpoint = resolved.endpoint.clone();
     let api_key = resolved.api_key.clone();
+    // OAuth identity + wire type, threaded so a sub-agent resolved onto a Codex /
+    // Kilo OAuth route dispatches through the right transport with a refreshable
+    // token (all "" / OpenAiCompatible for a static-key route).
+    let api_type = resolved.api_type;
+    let account_id = resolved.account_id.clone();
+    let oauth_uuid = resolved.oauth_uuid.clone();
     // Advertise only this agent's allow-list (owned clone moved into the task).
     let advertise = tools.to_vec();
     let send = tokio::spawn(async move {
         let conn = crate::service::openrouter::Conn {
             endpoint: &endpoint,
             api_key: &api_key,
+            api_type,
+            account_id: &account_id,
+            oauth_uuid: &oauth_uuid,
         };
         // Sub-agents advertise only their own allow-list and receive NO MCP tools
         // (kept simple — MCP is a main-agent capability for now), so pass an empty

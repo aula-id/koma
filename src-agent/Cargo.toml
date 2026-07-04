@@ -29,6 +29,7 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
+sha2 = "0.10"
 libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.

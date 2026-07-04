@@ -3,6 +3,7 @@
 //! mutations and I/O.
 
 use crate::controller::command::Command;
+use crate::model::app_config::OAuthProvider;
 
 /// All observable effects a key-press can request from the runtime.
 ///
@@ -214,6 +215,23 @@ pub enum Action {
     /// edit; the modal's loading flags are already set by the caller. The
     /// runtime opens a fresh `endpoints_rx` channel and spawns the fetch.
     FetchModelEndpoints(String),
+    // --- OAuth submenu actions ---
+    /// Enter on a provider-picker row: kick off the Codex browser flow or the
+    /// Kilo Code device flow on a background task. The runtime opens a fresh
+    /// `oauth_rx` channel and spawns it; the drain folds `OAuthEvent`s into the
+    /// open OAuth submenu.
+    OAuthStart(OAuthProvider),
+    /// Esc while a Codex/Kilo Code flow is waiting (`CodexWait`/`KiloWait`):
+    /// abort the background task and return the submenu to `Idle`.
+    OAuthCancel,
+    /// Enter on the Codex "paste token" screen with a non-empty draft: build a
+    /// connection from the pasted raw access token and persist it immediately
+    /// (no background task — this path is synchronous).
+    OAuthPaste(String),
+    /// Second Ctrl+X confirming a delete on the OAuth connections list: remove
+    /// the connection (by `uuid`) from `config.oauth_conns`, persist, and evict
+    /// its token-refresh cache entry.
+    OAuthDelete(String),
     // --- Usage dashboard actions ---
     /// Esc on the usage dashboard — return to Chat.
     CloseUsage,

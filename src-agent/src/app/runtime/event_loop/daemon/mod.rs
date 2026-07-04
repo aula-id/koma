@@ -197,7 +197,11 @@ fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool 
         .sessions
         .iter()
         .any(|s| matches!(s.mode, crate::app::mode::Mode::Loading(_)));
-    if state.rest.catalogue_pending.is_some() || any_loading || has_running_subagents(state) {
+    if state.rest.catalogue_pending.is_some()
+        || any_loading
+        || has_running_subagents(state)
+        || state.rest.oauth_rx.is_some()
+    {
         return false;
     }
     // Any live session doing self-advancing work (anything working that ISN'T merely

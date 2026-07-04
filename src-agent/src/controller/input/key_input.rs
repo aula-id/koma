@@ -99,13 +99,13 @@ pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: K
             KeyCode::Backspace => {
                 form.query.pop();
                 form.result_sel = 0;
-                rest.request_catalogue(&endpoint, &api_key);
+                rest.request_catalogue(&endpoint, &api_key, "");
                 Action::None
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 form.query.push(c);
                 form.result_sel = 0; // new filter → reset the highlight
-                rest.request_catalogue(&endpoint, &api_key);
+                rest.request_catalogue(&endpoint, &api_key, "");
                 Action::None
             }
             _ => Action::None,
@@ -158,7 +158,7 @@ pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: K
                         let api_key = form.api_key.trim().to_string();
                         form.advance_step();
                         if omni {
-                            rest.request_catalogue(&endpoint, &api_key);
+                            rest.request_catalogue(&endpoint, &api_key, "");
                         }
                         Action::None
                     }

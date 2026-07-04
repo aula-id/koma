@@ -19,6 +19,7 @@
 //! | `stream`      | `stream_complete` impl                                |
 //! | `oneshot`     | `complete`, `complete_with`, `classify_with`, etc.    |
 //! | `catalogue`   | `effort_caps`, `context_length_for`, list methods     |
+//! | `codex`       | OpenAI Responses API transport (subscription OAuth)   |
 
 mod types;
 mod client;
@@ -26,6 +27,7 @@ mod helpers;
 mod stream;
 mod oneshot;
 mod catalogue;
+mod codex;
 mod think_split;
 
 // Re-export the entire public surface so every external path is unchanged.

@@ -30,7 +30,7 @@ impl AppStateRest {
     /// The event-loop tick fires the pending fetch once `due` passes; the result
     /// lands via the `warm_rx` drain, which sets `models_cache` +
     /// `models_cache_endpoint` and clears `catalogue_fetching`.
-    pub fn request_catalogue(&mut self, endpoint: &str, api_key: &str) {
+    pub fn request_catalogue(&mut self, endpoint: &str, api_key: &str, oauth_uuid: &str) {
         if endpoint.is_empty() {
             return;
         }
@@ -49,6 +49,7 @@ impl AppStateRest {
         self.catalogue_pending = Some(CataloguePending {
             endpoint: endpoint.to_string(),
             api_key: api_key.to_string(),
+            oauth_uuid: oauth_uuid.to_string(),
             due: std::time::Instant::now() + std::time::Duration::from_millis(300),
         });
     }

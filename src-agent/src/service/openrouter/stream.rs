@@ -4,16 +4,17 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::dto::chat::{ChatMessage, ToolCall};
 use crate::dto::openrouter::{
     to_wire_with_images, ChatRequest, ImageWireCtx, StreamChunk, ToolDef, ToolFunctionDef,
     UsageRequest,
 };
+use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
 
 use super::helpers::{
-    clean_error, emit, is_openrouter, provider_routing_for, reasoning_config, sanitize_tool_acc,
+    auth_headers, clean_error, emit, is_openrouter, provider_routing_for, reasoning_config,
+    sanitize_tool_acc,
 };
 use super::client::OpenRouterClient;
 use super::types::Conn;
@@ -44,6 +45,35 @@ impl OpenRouterClient {
         image_ctx: Option<ImageWireCtx>,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
+        // Send-time OAuth refresh hook: resolve a (possibly just-refreshed) bearer
+        // token + provider account/org id. Non-OAuth conns (empty `oauth_uuid`)
+        // fast-path to `(api_key, "")` with zero locking.
+        let (bearer, acct) =
+            crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
+        // Prefer the manager's cached account (authoritative post-refresh); fall
+        // back to whatever the route carried.
+        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+
+        // Codex speaks the OpenAI Responses API — a different wire protocol —
+        // handled by the dedicated transport. `provider` (the OpenRouter route
+        // slug) is meaningless there and ignored.
+        if conn.api_type == ApiType::Codex {
+            return self
+                .codex_stream_complete(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    effort,
+                    messages,
+                    advertise,
+                    mcp_tools,
+                    image_ctx,
+                    tx,
+                )
+                .await;
+        }
+
         // The plan-word steer is now injected into the System message upstream in
         // `start_stream_task`, BEFORE the volatile project-files/awareness tail and
         // ahead of the `CACHE_SPLIT_MARK` boundary, so it stays inside the cached
@@ -103,12 +133,7 @@ impl OpenRouterClient {
             max_tokens: Some(32_000),
         };
 
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", conn.api_key))
-            .header("HTTP-Referer", HTTP_REFERER)
-            .header("X-Title", APP_TITLE)
+        let resp = auth_headers(self.http.post(&url), &conn, &bearer)
             .json(&body)
             .send()
             .await;

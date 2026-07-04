@@ -115,11 +115,8 @@ pub(in crate::view::settings) fn draw_model_modal(
         let active = focused(ModelField::Provider);
         let lc = if active { palette.accent } else { palette.dim };
         let label = Span::styled(format!("{:<width$}", "Provider", width = label_w), Style::default().fg(lc));
-        let prov_name = st
-            .providers
-            .get(modal.provider_idx)
-            .map(|p| if p.name.is_empty() { "\u{2014}" } else { p.name.as_str() });
-        let toggle_text = match prov_name {
+        let prov_name = st.mm_provider_label();
+        let toggle_text = match prov_name.as_deref() {
             Some(n) => format!("\u{2039} {} \u{203a}", n),
             None    => "\u{2039} (no providers) \u{203a}".to_string(),
         };
