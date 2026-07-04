@@ -509,7 +509,7 @@ pub fn mcp_snapshot(m: &McpState, state: &AppState) -> McpSnapshot {
             .rest
             .mcp_manager
             .as_ref()
-            .map(|mgr| mgr.server_status())
+            .map(|mgr| mgr.server_status_cached())
             .unwrap_or_default(),
     }
 }
