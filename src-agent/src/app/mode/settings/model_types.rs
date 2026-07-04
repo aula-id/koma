@@ -70,7 +70,7 @@ pub enum ModelField {
 /// State for the role multi-select picker overlay (model EDIT modal).
 ///
 /// A bordered checkbox modal mirroring the `/agents` tool picker, but simpler:
-/// the option set is fixed ([`ModelRole::ALL`], 4 entries) so there is NO text
+/// the option set is fixed ([`ModelRole::ALL`], 5 entries) so there is NO text
 /// filter. Opened from the model modal's Role field (Enter); closed by Enter
 /// (confirm → write `selected_roles()` back into `ModelModal::roles`) or Esc
 /// (cancel → discard). `checked` is parallel to `ModelRole::ALL`.
