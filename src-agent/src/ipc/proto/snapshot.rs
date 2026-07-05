@@ -38,12 +38,6 @@ pub struct SessionSnapshot {
     pub tool_idx: usize,
     pub working: bool,
     pub finished_unseen: bool,
-    /// This session's koma-free (`/free`) toggle, mirrored from
-    /// [`crate::app::state::SessionRuntime::free_mode`] so the thin client can render
-    /// the `free` status tag off the shadow. `#[serde(default)]` keeps version-skewed
-    /// peers safe (a missing field decodes to `false`).
-    #[serde(default)]
-    pub free_mode: bool,
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,

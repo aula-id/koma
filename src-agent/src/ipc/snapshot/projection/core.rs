@@ -1,7 +1,7 @@
 use super::modes::mode_snapshot;
 use super::tokens::theme_token;
 
-use crate::app::resolve::resolve_role_free;
+use crate::app::resolve::resolve_role;
 use crate::app::state::AppState;
 use crate::app::subagent::SubAgentStatus;
 use crate::model::app_config::{AppConfig, ModelRole};
@@ -71,13 +71,10 @@ pub fn session_snapshot(
         .map(|s| s.name.clone())
         .unwrap_or_default();
 
-    // Honour this session's `/free` toggle so the projected label (the thin client's
-    // only model-name source — see `client_shadow::shadow_session`) reads koma-free's
-    // `koma/apple` when on, matching the local TUI.
     let resolved_model_id = rt
         .session
         .as_ref()
-        .and_then(|s| resolve_role_free(config, &s.settings, ModelRole::Main, rt.free_mode))
+        .and_then(|s| resolve_role(config, &s.settings, ModelRole::Main))
         .map(|r| r.model_id)
         .or_else(|| rt.session.as_ref().map(|s| s.settings.model.clone()))
         .unwrap_or_default();
@@ -105,7 +102,6 @@ pub fn session_snapshot(
         tool_idx: rt.tool_idx,
         working: rt.is_ui_busy(),
         finished_unseen: rt.finished_unseen,
-        free_mode: rt.free_mode,
         subagents: rt.subagents.iter().map(subagent_snapshot).collect(),
         pending_subagents: rt
             .pending_subagents

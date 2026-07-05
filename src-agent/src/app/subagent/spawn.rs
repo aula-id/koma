@@ -75,15 +75,12 @@ pub fn spawn_subagent(
     tool_call_id: Option<String>,
     detached: bool,
     mode: AgentMode,
-    free_mode: bool,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
 
-    // Resolve the agent's route (its own model+provider, else inherit Main). The
-    // parent session's `free_mode` only steers the inherit-Main fallback onto
-    // koma-free — an agent with its own resolvable model keeps it.
-    let resolved = crate::app::resolve::resolve_agent(config, settings, agent, free_mode)?;
+    // Resolve the agent's route (its own model+provider, else inherit Main).
+    let resolved = crate::app::resolve::resolve_agent(config, settings, agent)?;
 
     // The effective allow-list + isolated seed conversation + step budget. While
     // the PARENT session is in Plan mode, the delegated sub-agent must stay

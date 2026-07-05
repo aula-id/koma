@@ -162,18 +162,9 @@ pub(super) fn render_model_row(
     } else {
         resolved_model
     };
-    // koma-free (`/free`) status tag: a short green marker after the model id so the
-    // keyless free tier is unmistakable. Reserve its width in the truncation budget so
-    // a long model id can never clip the tag off the right edge.
-    let free = rest.fg().free_mode;
-    const FREE_TAG: &str = " free";
-    let tag_w = if free { FREE_TAG.chars().count() } else { 0 };
-    let model_label = truncate_chars(display_model, row_inner_w.saturating_sub(tag_w));
-    let mut spans = vec![Span::styled(model_label, Style::default().fg(palette.dim))];
-    if free {
-        spans.push(Span::styled(FREE_TAG, Style::default().fg(Color::Rgb(120, 210, 140))));
-    }
-    let model_row = Paragraph::new(Line::from(spans)).alignment(Alignment::Right);
+    let model_label = truncate_chars(display_model, row_inner_w);
+    let model_row = Paragraph::new(Span::styled(model_label, Style::default().fg(palette.dim)))
+        .alignment(Alignment::Right);
     let model_area = chunk.inner(Margin { horizontal: 2, vertical: 0 });
     frame.render_widget(model_row, model_area);
 }

@@ -182,9 +182,6 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
             // A model change (settings override or global catalogue edit) has no
             // incremental delta; resync so the header updates immediately.
             || p.resolved_model_id != n.resolved_model_id
-            // A `/free` toggle flips how routes resolve AND the status tag; there is no
-            // incremental delta for it, so resync wholesale to re-render the client.
-            || p.free_mode != n.free_mode
             || p.pending_steer != n.pending_steer;
         if structural {
             return DiffResult::full();

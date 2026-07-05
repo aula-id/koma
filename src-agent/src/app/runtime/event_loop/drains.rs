@@ -139,24 +139,20 @@ pub(super) fn apply_compaction_result(
         _ => None,
     };
     if let Some((c, config, settings, workdir)) = aware_inputs {
-        // Honour THIS session's `/free` toggle for the recomputed awareness route.
-        let free_mode = state.rest.sessions.get(idx).map(|rt| rt.free_mode).unwrap_or(false);
         // Resolve the Awareness role (endpoint + key + model + upstream-route slug)
         // for the summary call; Awareness always resolves, but guard defensively.
         // Also resolve the Main route as a fallback: when the Awareness model call
         // itself fails (e.g. bad/typo'd model name) we retry once on the trusted
         // Main route before giving up.
-        if let Some(r) = crate::app::resolve::resolve_role_free(
+        if let Some(r) = crate::app::resolve::resolve_role(
             &config,
             &settings,
             crate::model::app_config::ModelRole::Awareness,
-            free_mode,
         ) {
-            let main_route = crate::app::resolve::resolve_role_free(
+            let main_route = crate::app::resolve::resolve_role(
                 &config,
                 &settings,
                 crate::model::app_config::ModelRole::Main,
-                free_mode,
             );
             if let Some(session_id) = state.rest.sessions.get(idx).map(|rt| rt.id.clone()) {
                 crate::app::runtime::spawn_awareness_recompute(
