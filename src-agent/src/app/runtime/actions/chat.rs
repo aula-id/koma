@@ -655,6 +655,8 @@ pub(super) fn handle_approve_plan(
     // Leave Plan BEFORE resuming: the round finishes into `finish_tool_round` →
     // `start_stream_task`, which reads `agent_mode` to size the advertised tool
     // surface, so the continuation must already be in the restored (executing) mode.
+    // Planning is done — leaving Plan here (via set_agent_mode) drops the plan
+    // checklist so it doesn't bleed into `/todo`.
     restore_plan_return_mode(state);
     process_tools(state, fgi, client, handle);
     Ok(())
@@ -683,6 +685,8 @@ pub(super) fn handle_approve_plan_compact(
         state,
         crate::tool::plan::plan_approved_compact_text().to_string(),
     );
+    // Leaving Plan here (via set_agent_mode) drops the plan checklist so it doesn't
+    // bleed into `/todo` (independent of the plan.md seed the compaction re-reads).
     restore_plan_return_mode(state);
     state.rest.pending_plan_seed = true;
     state.rest.pending_plan_compact = true;
@@ -702,7 +706,10 @@ pub(super) fn handle_deny_plan(
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
     answer_plan_ready(state, crate::tool::plan::plan_denied_text().to_string());
-    // Mode stays Plan — nothing else to do beyond continuing the round.
+    // Mode stays Plan — deny means "keep discussing", so the plan checklist is
+    // DELIBERATELY preserved (the model revises it in place via todowrite). It is
+    // cleared only on a real exit from Plan (approve / mode-switch), in
+    // `set_agent_mode`'s leaving-plan branch.
     process_tools(state, fgi, client, handle);
     Ok(())
 }

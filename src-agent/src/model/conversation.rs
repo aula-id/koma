@@ -106,6 +106,23 @@ impl Conversation {
             .push(ChatMessage::tool_result(tool_call_id, content));
     }
 
+    /// Overwrite the stored `arguments` JSON of the tool call identified by
+    /// `call_id`, searching assistant turns from the tail (most recent first).
+    /// Used by the `plan_ready` interception to swap the model's raw `highlights`
+    /// for the composed user-facing plan digest, so the transcript renders the
+    /// digest with no view-layer changes. No-op if the id isn't found.
+    pub fn set_tool_call_args(&mut self, call_id: &str, arguments: String) {
+        for msg in self.messages.iter_mut().rev() {
+            let Some(tcs) = msg.tool_calls.as_mut() else {
+                continue;
+            };
+            if let Some(tc) = tcs.iter_mut().find(|c| c.id == call_id) {
+                tc.function.arguments = arguments;
+                return;
+            }
+        }
+    }
+
     /// Borrow the full message list (system + turns). Passed directly to the
     /// wire-format `ChatRequest` without copying.
     pub fn messages(&self) -> &[ChatMessage] {

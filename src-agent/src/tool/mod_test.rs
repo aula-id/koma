@@ -8,7 +8,6 @@ fn plan_allowlist_blocks_mutating_and_offensive_tools() {
     assert!(!tool_allowed_in_plan("bash"));
     assert!(!tool_allowed_in_plan("web_download"));
     assert!(!tool_allowed_in_plan("remember"));
-    assert!(!tool_allowed_in_plan("todo_write"));
     assert!(!tool_allowed_in_plan("git_worktree"));
 }
 
@@ -19,6 +18,10 @@ fn plan_allowlist_allows_read_only_and_reasoning_tools() {
     assert!(tool_allowed_in_plan("git_operator"));
     assert!(tool_allowed_in_plan("task"));
     assert!(tool_allowed_in_plan("seqthink"));
+    // The real tool name is `todowrite` (no underscore) — Plan mode manages
+    // the checklist through it (fully intercepted in `process_tools`, see
+    // `approval.rs`), so it's allowed here at the tool-name level.
+    assert!(tool_allowed_in_plan("todowrite"));
 }
 
 #[test]

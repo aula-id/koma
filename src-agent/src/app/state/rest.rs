@@ -475,6 +475,40 @@ impl AppStateRest {
         if entering_plan || leaving_plan {
             if let Some(sess) = self.fg_mut().session.as_mut() {
                 sess.plan_mode_hint = entering_plan;
+                // Seed the two locked plan rails on entry — but ONLY when the plan
+                // todo list is missing/empty, so re-entering plan mode mid-session
+                // never clobbers the model's in-progress steps.
+                if entering_plan {
+                    use crate::app::mode::todo::{
+                        self, TodoItem, TodoPriority, TodoStatus, PLAN_RAIL_SAVE, PLAN_RAIL_SERVE,
+                    };
+                    let path = sess.plan_todos_path();
+                    if todo::load_todos_from(&path).is_empty() {
+                        let rails = vec![
+                            TodoItem {
+                                content: PLAN_RAIL_SERVE.to_string(),
+                                status: TodoStatus::Pending,
+                                priority: TodoPriority::Low,
+                                locked: true,
+                            },
+                            TodoItem {
+                                content: PLAN_RAIL_SAVE.to_string(),
+                                status: TodoStatus::Pending,
+                                priority: TodoPriority::Low,
+                                locked: true,
+                            },
+                        ];
+                        let _ = todo::save_todos_to(&path, &rails);
+                    }
+                } else if leaving_plan {
+                    // Symmetric with the entry seed: leaving Plan for any non-plan
+                    // mode (plan approved, `/mode`, Shift+Tab) drops the plan
+                    // checklist so it never lingers into the next planning session or
+                    // bleeds into the working `/todo` list. Best-effort remove — a
+                    // missing file (NotFound) is fine. Deny STAYS in Plan, so this
+                    // never fires on "chat more".
+                    let _ = std::fs::remove_file(sess.plan_todos_path());
+                }
                 sess.rebuild_system();
                 let _ = sess.save();
             }
