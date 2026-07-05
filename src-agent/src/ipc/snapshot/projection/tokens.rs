@@ -24,6 +24,7 @@ pub fn role_token(r: ModelRole) -> &'static str {
         ModelRole::Awareness => "awareness",
         ModelRole::Safeguard => "safeguard",
         ModelRole::Compactor => "compactor",
+        ModelRole::Planner => "planner",
     }
 }
 

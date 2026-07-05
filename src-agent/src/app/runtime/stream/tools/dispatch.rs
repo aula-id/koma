@@ -302,4 +302,9 @@ pub(crate) fn deny_all_pending(state: &mut AppState, sess_idx: usize, reason: &s
     rt.abort_running_subagents(false);
     rt.pending_tool_tasks.clear();
     rt.awaiting_tool_tasks = false;
+    // Drop any TAC-classify park too, so a WC-denied turn can't leave the round
+    // parked on a verdict (channel ends stay for reuse; a late verdict is dropped
+    // by the drain's park/id guard).
+    rt.awaiting_classify = false;
+    rt.pending_classify_verdict = None;
 }

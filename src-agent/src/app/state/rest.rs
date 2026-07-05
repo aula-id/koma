@@ -167,6 +167,26 @@ pub struct AppStateRest {
     /// Tool-approval policy. `Auto` runs every tool immediately; `Normal` pauses
     /// for `y/n` on risky (write/delete) tools. Toggled with Shift+Tab / `/mode`.
     pub agent_mode: AgentMode,
+    /// The mode to restore when leaving `Plan` mode: set to the PREVIOUS mode
+    /// the moment `agent_mode` transitions INTO `Plan`, and cleared back to
+    /// `None` the moment it transitions back OUT (either manually via `/mode` /
+    /// Shift+Tab, or — in a later wave — via plan approval/denial). `None`
+    /// whenever `agent_mode != Plan`. See `set_agent_mode`, the single
+    /// choke-point that maintains this invariant.
+    pub plan_return_mode: Option<AgentMode>,
+    /// One-shot signal set by `handle_approve_plan_compact`: the user approved a
+    /// plan AND asked to compact history to it. Consumed by the deferred/idle
+    /// drain (`event_loop::sessions::deferred`) once the foreground session goes
+    /// idle, which then fires `handle_compact` with `preserve_n = 0`. Kept
+    /// separate from `pending_plan_seed` because compaction is TRIGGERED here but
+    /// the plan is SEEDED later, in `apply_compaction_result`.
+    pub pending_plan_compact: bool,
+    /// One-shot signal, also set by `handle_approve_plan_compact`: after the
+    /// plan-approval compaction completes, `apply_compaction_result` reads
+    /// `<session>/plan.md` and appends it as the first post-compaction user turn
+    /// so the model executes from a clean context that leads with the plan. A
+    /// missing plan.md is silently skipped; the flag is cleared either way.
+    pub pending_plan_seed: bool,
     /// Process working directory captured at startup. The deterministic
     /// workspace check (WC) always allows this directory regardless of the
     /// allow-list, so running the agent in the folder you want to work in just
@@ -297,6 +317,18 @@ pub struct AppStateRest {
     /// `health_fetching` / `health_frame` instead.
     pub sec_health_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<crate::app::sec::InstallHealthEntry>, String>>>,
+    /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
+    /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
+    /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
+    /// that channel is REPLACED wholesale on every warm (see its doc), so a
+    /// recompute in flight when a new warm starts would be stranded — never
+    /// delivered, never re-created. This receiver is created lazily on first use
+    /// and lives for the app's lifetime. Drained in `service_global` alongside
+    /// `sec_health_rx`/`warm_rx`.
+    pub awareness_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>>,
+    /// SENDER half of `awareness_rx`, cloned into each spawned recompute task.
+    /// `None` until the first recompute is spawned (see `session_mgmt::spawn_awareness_recompute`).
+    pub awareness_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
 }
 
 impl Default for AppStateRest {
@@ -361,6 +393,9 @@ impl AppStateRest {
             new_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
+            plan_return_mode: None,
+            pending_plan_compact: false,
+            pending_plan_seed: false,
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             endpoints_rx: None,
             warm_rx: None,
@@ -383,6 +418,8 @@ impl AppStateRest {
             version_tx: Some(vtx),
             version_rx: Some(vrx),
             sec_health_rx: None,
+            awareness_rx: None,
+            awareness_tx: None,
         }
     }
 
@@ -395,6 +432,40 @@ impl AppStateRest {
     pub fn fg_mut(&mut self) -> &mut SessionRuntime {
         let i = self.foreground;
         &mut self.sessions[i]
+    }
+
+    /// Single choke-point for changing `agent_mode` — used by both the
+    /// Shift+Tab cycle and `/mode`, so `plan_return_mode` and the Plan-mode
+    /// system-prompt nudge never drift out of sync between the two entry
+    /// points.
+    ///
+    /// - Entering `Plan` from anything else remembers the previous mode in
+    ///   `plan_return_mode`.
+    /// - Leaving `Plan` (to any other mode) clears `plan_return_mode`.
+    /// - Crossing the Plan boundary (either direction) also flips the
+    ///   foreground session's `plan_mode_hint` and rebuilds + saves its
+    ///   system prompt, so the nudge appears/disappears immediately. A
+    ///   same-tier move (Auto↔Normal↔Yolo) leaves the prompt untouched.
+    pub fn set_agent_mode(&mut self, new_mode: AgentMode) {
+        let old_mode = self.agent_mode;
+        if old_mode == new_mode {
+            return;
+        }
+        let entering_plan = new_mode == AgentMode::Plan;
+        let leaving_plan = old_mode == AgentMode::Plan;
+        if entering_plan {
+            self.plan_return_mode = Some(old_mode);
+        } else if leaving_plan {
+            self.plan_return_mode = None;
+        }
+        self.agent_mode = new_mode;
+        if entering_plan || leaving_plan {
+            if let Some(sess) = self.fg_mut().session.as_mut() {
+                sess.plan_mode_hint = entering_plan;
+                sess.rebuild_system();
+                let _ = sess.save();
+            }
+        }
     }
 
     /// Resolve a per-client foreground POINTER (a stable session UUID, or `None`) to a

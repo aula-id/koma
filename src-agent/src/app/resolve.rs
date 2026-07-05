@@ -2,11 +2,13 @@
 //! into one concrete [`Resolved`] route (model id + endpoint + key + wire type +
 //! optional upstream pin + effort).
 //!
-//! The runtime has four model-driven roles — Main (interactive chat), Awareness
-//! (project-doc summary), Safeguard (the safety classifier), and Compactor
-//! (`/compact`, which rides Main today). Each is assigned a model via the global
-//! catalogue (`config.models`) or a per-session override (`settings.session_models`);
-//! that model points at a provider connection (`config.providers`) by uuid, which
+//! The runtime has five model-driven roles — Main (interactive chat), Awareness
+//! (project-doc summary), Safeguard (the safety classifier), Compactor
+//! (`/compact`, which rides Main today), and Planner (drives the MAIN turn
+//! instead of Main while the session is in `AgentMode::Plan`; see
+//! [`resolve_turn_model`]). Each is assigned a model via the global catalogue
+//! (`config.models`) or a per-session override (`settings.session_models`); that
+//! model points at a provider connection (`config.providers`) by uuid, which
 //! carries the endpoint + key + wire type. [`resolve_role`] walks that chain and
 //! produces the route the call site hands to the client.
 //!
@@ -29,6 +31,7 @@
 //! | Compactor | resolve Main (compactor rides Main; no config slot of its own)      |
 //! | Awareness | inherit Main (same route as the Main role)                          |
 //! | Safeguard | legacy `classifier_model` if set; else `None` (FAIL-CLOSED)        |
+//! | Planner   | `None` — no fallback at all; caller falls back to Main              |
 //!
 //! ## Foot-gun (do not regress)
 //!
@@ -37,6 +40,7 @@
 //! Awareness its own model. When nothing is assigned, Awareness inherits Main so the
 //! call works on any provider the user has actually configured, not just OpenRouter.
 
+use crate::app::state::AgentMode;
 use crate::config::DEFAULT_BASE_URL;
 use crate::model::agent_def::AgentDef;
 use crate::model::app_config::{ApiType, AppConfig, ModelEntry, ModelRole};
@@ -115,14 +119,16 @@ fn find_model_entry<'a>(
 /// does not match any known provider (a dangling reference) — the caller treats
 /// that the same as "no assignment" and falls through to the legacy fallback.
 ///
-/// `effort` is taken from `settings.effort` only for the Main role; every other
-/// role gets an empty effort.
+/// `effort` is taken from `settings.effort` for the Main role AND the Planner
+/// role (Planner drives the turn exactly like Main while it is active, so it
+/// carries the same reasoning-effort knob); every other role gets an empty
+/// effort.
 fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role: ModelRole) -> Option<Resolved> {
     let provider = config
         .providers
         .iter()
         .find(|p| p.uuid == entry.provider_uuid)?;
-    let effort = if role == ModelRole::Main {
+    let effort = if matches!(role, ModelRole::Main | ModelRole::Planner) {
         settings.effort.clone()
     } else {
         String::new()
@@ -157,6 +163,9 @@ fn legacy_main(settings: &Settings) -> Resolved {
 /// settings fields) and Safeguard (fail-closed). Compactor and Awareness inherit
 /// the fully-resolved Main route instead — that redirect is handled in
 /// [`resolve_role`] before this function is called, so neither role reaches here.
+/// Planner has NO fallback at all: an unassigned or unresolved Planner returns
+/// `None` here, and the caller (`resolve_turn_model`) treats that identically to
+/// "no Planner assigned" — the turn simply stays on Main.
 fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
     match role {
         // Chat is the product — Main must never go dark.
@@ -165,6 +174,8 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
         // reaching here; these arms are unreachable in practice but kept for
         // exhaustiveness.
         ModelRole::Compactor | ModelRole::Awareness => Some(legacy_main(settings)),
+        // Planner has no legacy fallback by design — unassigned means "use Main".
+        ModelRole::Planner => None,
         ModelRole::Safeguard => {
             // FAIL-CLOSED: only the legacy classifier model rescues it; an empty
             // field yields `None`, which the harness caller degrades to a human
@@ -227,6 +238,48 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
 
     // 4. No assignment, or a dangling provider → per-role legacy fallback.
     legacy_fallback(settings, role)
+}
+
+/// True when `a` and `b` name the exact same route: same model id, same
+/// provider endpoint, and the same OpenRouter upstream pin. Deliberately does
+/// NOT compare `api_key`/`api_type`/`effort` — those can never differ for two
+/// entries that already agree on model+endpoint+route (same provider
+/// connection), and effort is set from `settings.effort` identically for both
+/// Main and Planner (see `from_entry`).
+fn same_route(a: &Resolved, b: &Resolved) -> bool {
+    a.model_id == b.model_id && a.endpoint == b.endpoint && a.route == b.route
+}
+
+/// Resolve the model that should drive the CURRENT main turn, honouring
+/// Plan-mode's dedicated Planner role.
+///
+/// This is a pure PER-TURN decision — there is no swap state to track: the
+/// instant `mode` leaves `AgentMode::Plan`, the very next call resolves Main
+/// again automatically.
+///
+/// - `mode != AgentMode::Plan`: always Main (today's behaviour, untouched).
+/// - `mode == AgentMode::Plan` and no Planner assigned (or its provider is
+///   dangling): Main, unchanged.
+/// - `mode == AgentMode::Plan` and Planner resolves to the EXACT same route as
+///   Main (model id + endpoint + upstream route): return Main's `Resolved`
+///   unchanged rather than a structurally-identical copy — this preserves the
+///   provider's prompt-cache continuity (the request keeps flowing through the
+///   same `Resolved` value the rest of the turn already threads through).
+/// - Otherwise: Planner's `Resolved` drives the turn — callers must read
+///   effort/endpoint/model id/image-capability etc. off the RETURNED value,
+///   never off a separately-resolved Main.
+///
+/// Returns `None` only when Main itself can't resolve (in practice never,
+/// since Main has a legacy soft-fallback).
+pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMode) -> Option<Resolved> {
+    let main = resolve_role(config, settings, ModelRole::Main)?;
+    if mode != AgentMode::Plan {
+        return Some(main);
+    }
+    match resolve_role(config, settings, ModelRole::Planner) {
+        Some(planner) if !same_route(&planner, &main) => Some(planner),
+        _ => Some(main),
+    }
 }
 
 /// Resolve the concrete route for a sub-agent ([`AgentDef`]).
@@ -332,3 +385,7 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
     // 2. No usable model/provider → inherit the Main route.
     resolve_role(config, settings, ModelRole::Main).map(with_effort)
 }
+
+#[cfg(test)]
+#[path = "resolve_test.rs"]
+mod tests;

@@ -167,6 +167,13 @@ enum McpBackend {
     },
 }
 
+/// How long a cached [`McpManager::server_status_cached`] answer is served before a
+/// background refresh is kicked off. Short enough that the `/mcp` panel feels live,
+/// long enough that a per-frame/per-tick reader (the panel render, the snapshot
+/// projection) never pays the underlying `server_status()` cost — which, on the
+/// `Proxy` backend, is a blocking unix-socket round-trip to the global MCP daemon.
+const STATUS_CACHE_TTL: Duration = Duration::from_secs(2);
+
 /// The global MCP client manager — a facade over an [`McpBackend`].
 ///
 /// A `Local` backend owns the `rmcp` connections (the runtime [`Handle`] + a
@@ -175,6 +182,16 @@ enum McpBackend {
 /// Cloned cheaply via the `Arc` returned by [`Self::connect_all`] / [`Self::connect_proxy`].
 pub struct McpManager {
     backend: McpBackend,
+    /// Cache for [`Self::server_status_cached`]: `(last-refreshed-at, last value)`.
+    /// `None` timestamp means "never refreshed yet" (first call after construction).
+    /// Guarded independently of the backend's own state so a refresh never contends
+    /// with `tool_defs`/`execute_blocking`.
+    status_cache: Mutex<(Option<std::time::Instant>, std::collections::HashMap<String, usize>)>,
+    /// Single-flight guard for the background refresh spawned by
+    /// [`Self::server_status_cached`]: only one refresh may be in flight at a time,
+    /// so N rapid callers (panel render + snapshot projection, both ~10Hz) don't each
+    /// kick off their own blocking `server_status()` call.
+    status_refreshing: std::sync::atomic::AtomicBool,
 }
 
 impl McpManager {
@@ -193,6 +210,8 @@ impl McpManager {
                 handle: handle.clone(),
                 snapshot: Mutex::new(Snapshot::default()),
             },
+            status_cache: Mutex::new((None, std::collections::HashMap::new())),
+            status_refreshing: std::sync::atomic::AtomicBool::new(false),
         });
 
         for server in servers {
@@ -240,6 +259,8 @@ impl McpManager {
                 sock,
                 cache: Mutex::new((defs, names)),
             },
+            status_cache: Mutex::new((None, std::collections::HashMap::new())),
+            status_refreshing: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
@@ -526,6 +547,69 @@ impl McpManager {
                 _ => std::collections::HashMap::new(),
             },
         }
+    }
+
+    /// Cached, non-blocking twin of [`Self::server_status`] for HOT call sites (the
+    /// `/mcp` panel render and the snapshot projection, both invoked at up to ~10Hz).
+    ///
+    /// Returns the last-known status map immediately. If the cache is empty or older
+    /// than [`STATUS_CACHE_TTL`], it also kicks off a refresh:
+    /// - **Local** — `server_status()` is a cheap in-memory snapshot walk (no IO), so
+    ///   the refresh runs inline, synchronously, before returning.
+    /// - **Proxy** — `server_status()` does a blocking unix-socket round-trip to the
+    ///   global MCP daemon, so the refresh is spawned onto a background `std::thread`;
+    ///   this call returns the STALE cached value (or an empty map on the very first
+    ///   call) immediately, and the next call after the refresh lands sees the fresh
+    ///   value.
+    ///
+    /// A single-flight [`AtomicBool`](std::sync::atomic::AtomicBool) guard
+    /// (`status_refreshing`) ensures only one refresh is ever in flight, so N callers
+    /// racing past a stale cache don't each open their own daemon connection.
+    pub fn server_status_cached(self: &Arc<Self>) -> std::collections::HashMap<String, usize> {
+        use std::sync::atomic::Ordering;
+
+        let stale = {
+            let cache = self.status_cache.lock().unwrap_or_else(|p| p.into_inner());
+            match cache.0 {
+                Some(at) => at.elapsed() >= STATUS_CACHE_TTL,
+                None => true,
+            }
+        };
+
+        if stale
+            && self
+                .status_refreshing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            match &self.backend {
+                // Local: no IO, so refresh inline — no thread spawn needed, and the
+                // caller gets the fresh value on this very call.
+                McpBackend::Local { .. } => {
+                    let fresh = self.server_status();
+                    *self.status_cache.lock().unwrap_or_else(|p| p.into_inner()) =
+                        (Some(std::time::Instant::now()), fresh);
+                    self.status_refreshing.store(false, Ordering::Release);
+                }
+                // Proxy: blocking daemon round-trip, so refresh off-thread and serve
+                // the stale value now; the next call picks up the fresh one.
+                McpBackend::Proxy { .. } => {
+                    let mgr = Arc::clone(self);
+                    std::thread::spawn(move || {
+                        let fresh = mgr.server_status();
+                        *mgr.status_cache.lock().unwrap_or_else(|p| p.into_inner()) =
+                            (Some(std::time::Instant::now()), fresh);
+                        mgr.status_refreshing.store(false, Ordering::Release);
+                    });
+                }
+            }
+        }
+
+        self.status_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .1
+            .clone()
     }
 
     /// Execute a namespaced MCP tool call and return its flattened text result.

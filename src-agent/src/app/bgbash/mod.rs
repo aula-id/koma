@@ -60,6 +60,12 @@ pub struct BashJobShared {
     /// None while Running. Frozen so the /bash panel's elapsed timer stops at
     /// the final duration.
     pub ended_at: Mutex<Option<Instant>>,
+    /// Absolute path of this job's tee'd full-output log, once written by
+    /// [`BashJob::ensure_tee_log`]. `None` until the first qualifying
+    /// `bash_output` poll actually needs it; idempotent thereafter — the SAME
+    /// path is reused (never rewritten) once populated, so the model's
+    /// full-output pointer for this job never changes out from under it.
+    pub tee_path: Mutex<Option<std::path::PathBuf>>,
 }
 
 /// One registered background bash job: its identity, the command, when it
@@ -69,8 +75,9 @@ pub struct BashJob {
     /// Surfaced to the model as `bash-<id>`.
     pub id: usize,
     /// The shell command this job runs. Read by the `/bash` panel + chat-line
-    /// rendering (a later stage); kept now so the registry entry is complete.
-    #[allow(dead_code)]
+    /// rendering, and by the `bash_output` poll path (`render_finished_output`
+    /// / `ensure_tee_log`) to apply the same command-aware output filter as
+    /// synchronous `bash`/`git_operator`.
     pub command: String,
     /// Wall-clock instant the job was registered. Read by the `/bash` panel (a
     /// later stage) to show how long a job has been running.
@@ -115,6 +122,70 @@ impl BashJob {
             None => self.started_at.elapsed().as_secs(),
         }
     }
+
+    /// Idempotently tee this job's full captured `raw` output to `log_dir`,
+    /// via the SAME tee machinery `tool::shell::finalize_output` uses
+    /// (`<log_dir>/<epoch_ms>_<slug>.log`, lazy `create_dir_all`, GC after
+    /// write). The FIRST qualifying `bash_output` poll writes the file and
+    /// remembers its path; every later poll reuses that same path WITHOUT
+    /// rewriting it — the job's buffer keeps growing, but the model's
+    /// full-output pointer for this job must stay stable. A write failure
+    /// (bad dir, clock, IO) leaves `tee_path` `None` so a later poll can retry.
+    pub fn ensure_tee_log(&self, log_dir: &std::path::Path, raw: &str) -> Option<std::path::PathBuf> {
+        if let Ok(existing) = self.shared.tee_path.lock() {
+            if let Some(path) = existing.as_ref() {
+                return Some(path.clone());
+            }
+        }
+        let path = crate::tool::shell::write_tee_log(log_dir, &self.command, raw)?;
+        if let Ok(mut slot) = self.shared.tee_path.lock() {
+            *slot = Some(path.clone());
+        }
+        Some(path)
+    }
+}
+
+/// Decide + render a finished background job's `bash_output` text when the
+/// model passed NEITHER `pattern` NOR `tail_lines` (the runtime only reaches
+/// this once ALL of that plus a `Done` status and a non-empty buffer already
+/// hold — see `app::runtime::stream::tools::approval`'s `bash_output` arm, the
+/// only caller). Mirrors [`crate::tool::shell::finalize_output`]'s "saving"
+/// filter + `[filter: ...]` marker exactly, so a finished background job gets
+/// the SAME noise-trimming as synchronous `bash`/`git_operator` once it's
+/// done — but is a pure function (no IO, no job/session state) so the
+/// decision is unit-testable in isolation; the caller applies the tee
+/// side-effect ([`BashJob::ensure_tee_log`]) using the returned `should_tee`
+/// flag.
+///
+/// Returns `(text, should_tee)`: `text` is the model-visible body WITHOUT the
+/// leading status line (the caller prepends that) and WITHOUT any
+/// `full-output:` tee marker (that path is only known after the caller's tee
+/// IO runs). `should_tee` is true when `saving` is on AND either the filter
+/// actually changed something or the job exited non-zero — the same "might
+/// have lost information" heuristic `finalize_output` uses for its
+/// tee-write condition.
+pub(crate) fn render_finished_output(command: &str, out: &str, exit_code: i32, saving: bool) -> (String, bool) {
+    if !saving {
+        return (out.to_string(), false);
+    }
+
+    let outcome = crate::tool::shell_filter::filter_output(command, out, Some(exit_code));
+    let should_tee = outcome.changed || exit_code != 0;
+    let text = if outcome.changed {
+        if let Some(name) = outcome.filter_name {
+            let raw_lines = out.lines().count();
+            let out_lines = outcome.text.lines().count();
+            format!(
+                "{}\n[filter: {name}, {raw_lines} -> {out_lines} lines]",
+                outcome.text.trim_end_matches('\n')
+            )
+        } else {
+            outcome.text
+        }
+    } else {
+        outcome.text
+    };
+    (text, should_tee)
 }
 
 /// Append `chunk` to the shared output buffer, ANSI-stripping it first and then
@@ -159,6 +230,7 @@ pub fn spawn_bash_job(
         status: Mutex::new(BashJobStatus::Running),
         pid: Mutex::new(None),
         ended_at: Mutex::new(None),
+        tee_path: Mutex::new(None),
     });
     let job = BashJob {
         id,
@@ -295,3 +367,7 @@ pub fn kill_bash_job(job: &BashJob) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

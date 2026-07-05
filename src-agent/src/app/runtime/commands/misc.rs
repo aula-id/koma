@@ -11,9 +11,10 @@ use crate::model::store;
 /// Handle the `/mode` command.
 ///
 /// `arg` (the token after `/mode`, already lowercased):
-/// - `None` → armed-aware CYCLE (Auto→Normal→[Yolo when armed]→Auto), the same
-///   transition as Shift+Tab.
-/// - `Some("auto")` / `Some("normal")` → explicitly set that mode (always allowed).
+/// - `None` → armed-aware CYCLE (Auto→Normal→Plan→[Yolo when armed]→Auto), the
+///   same transition as Shift+Tab.
+/// - `Some("auto")` / `Some("normal")` / `Some("plan")` → explicitly set that
+///   mode (always allowed).
 /// - `Some("yolo")` → enter YOLO **only when armed** (Layer 2). When NOT armed it
 ///   REFUSES: the mode is left unchanged and the status explains how to unlock it.
 /// - any other token → leave the mode unchanged and report the bad argument.
@@ -21,22 +22,25 @@ pub(super) fn handle_mode(state: &mut AppState, arg: Option<String>) -> Result<(
     match arg.as_deref() {
         None => {
             // Bare `/mode`: armed-aware cycle (identical to the Shift+Tab toggle).
-            state.rest.agent_mode = state.rest.agent_mode.cycle(state.rest.yolo_armed);
+            let next = state.rest.agent_mode.cycle(state.rest.yolo_armed);
+            state.rest.set_agent_mode(next);
         }
-        Some("auto") => state.rest.agent_mode = AgentMode::Auto,
-        Some("normal") => state.rest.agent_mode = AgentMode::Normal,
+        Some("auto") => state.rest.set_agent_mode(AgentMode::Auto),
+        Some("normal") => state.rest.set_agent_mode(AgentMode::Normal),
+        Some("plan") => state.rest.set_agent_mode(AgentMode::Plan),
         Some("yolo") => {
             // Layer-2 gate: only an ARMED YOLO may be entered. Unarmed → refuse and
             // leave the mode untouched.
             if state.rest.yolo_armed {
-                state.rest.agent_mode = AgentMode::Yolo;
+                state.rest.set_agent_mode(AgentMode::Yolo);
             } else {
                 state.rest.fg_mut().status = "yolo locked — enable it in /security first".into();
                 return Ok(());
             }
         }
         Some(other) => {
-            state.rest.fg_mut().status = format!("unknown mode: {other} (auto | normal | yolo)");
+            state.rest.fg_mut().status =
+                format!("unknown mode: {other} (auto | normal | plan | yolo)");
             return Ok(());
         }
     }

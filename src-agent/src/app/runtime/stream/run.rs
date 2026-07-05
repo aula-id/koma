@@ -5,24 +5,34 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
-use crate::app::state::{AppState, AppStateRest};
+use crate::app::state::{AgentMode, AppState, AppStateRest};
 use crate::dto::chat::{ChatMessage, Role};
 use crate::service::openrouter::OpenRouterClient;
 
-/// Abort the in-flight task and stop listening to it: aborts the task handle,
-/// drops the active receiver (so any late events from the task vanish), and
-/// clears the waiting flag.
+/// Fully cancel the foreground session's in-flight turn before its conversation is
+/// cut/replaced: abort the stream task, drop the active receiver (so late events
+/// vanish), clear `waiting`, AND tear down the whole agentic round — approval,
+/// deferred-tool, sub-agent, and classifier lanes — via
+/// [`SessionRuntime::interrupt`]. Delegating to `interrupt()` keeps ONE source of
+/// truth for round teardown, so a parked classifier verdict (or a deferred tool /
+/// a delegated sub-agent) can never resume onto the truncated conversation after
+/// the caller cuts it. Also clears THIS session's compaction animation/timer, which
+/// `interrupt()` deliberately leaves to the caller (exactly as `handle_interrupt`
+/// does), so a mid-`/compact` abort can't wedge the spinner.
+///
+/// Sole caller: the message-rewind picker ([`crate::app::runtime::actions`]'s
+/// `handle_rewind_to_message`), which needs exactly this full cancellation before
+/// it truncates the conversation.
 pub(crate) fn abort_current(rest: &mut AppStateRest) {
     let rt = rest.fg_mut();
-    if let Some(h) = rt.current_task.take() {
-        h.abort();
-    }
-    rt.active_rx = None;
-    rt.waiting = false;
-    // Tear down THIS session's in-flight compaction animation / deferred apply so an
-    // interrupt (Esc) or `/new` mid-compact doesn't leave the spinner stuck (and
-    // forcing a per-tick redraw) forever. Per-session now (C4) — clear it on the same
-    // foreground runtime we just aborted.
+    // Round teardown: interrupt() aborts the task handle, drops active_rx, clears
+    // waiting, tears down the approval / deferred-tool / sub-agent / classifier
+    // state, and commits any partial assistant buffer with an [interrupted] marker
+    // (the rewind caller truncates that away). This is what closes the "rewind
+    // during a classifier/deferred park executes the abandoned tool" hole.
+    rt.interrupt();
+    // Compaction anim/timer are NOT touched by interrupt(); clear them here so a
+    // mid-`/compact` abort doesn't leave the spinner stuck (per-session, C4).
     rt.compact_anim_start = None;
     rt.compact_apply_at = None;
     rt.compact_pending = None;
@@ -238,19 +248,38 @@ over sec_remote (stateful socket).\n",
         (sess.path.clone(), sess.settings.clone(), user_intent, aware)
     });
 
-    // Resolve the MAIN role for the actual send: its connection (endpoint + key),
+    // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows
     // ONLY here, into the streaming path. Resolved BEFORE the spawn into an owned
     // `Resolved` so the moved-into-task value carries no borrow of `state.rest`.
     // Main always resolves (legacy fallback), but keep it `Option` and treat a
     // `None` as "no session" below.
+    //
+    // `resolve_turn_model` folds in Plan mode: while `state.rest.agent_mode` is
+    // `AgentMode::Plan`, an assigned Planner model drives the turn instead of
+    // Main (unless it resolves to the exact same route as Main, in which case
+    // Main's `Resolved` is kept unchanged to preserve prompt-cache continuity).
+    // Leaving Plan mode reverts to Main automatically — this is a per-turn
+    // resolution, not swap state. Every downstream use below (window sizing,
+    // image capability, effort, the final dispatch) reads off THIS `main`
+    // binding, so whichever route was chosen flows through consistently.
     let main = state.rest.sessions[sess_idx].session.as_ref().and_then(|sess| {
-        crate::app::resolve::resolve_role(
+        crate::app::resolve::resolve_turn_model(
             &state.rest.config,
             &sess.settings,
-            crate::model::app_config::ModelRole::Main,
+            state.rest.agent_mode,
         )
     });
+    // Snapshot the model id that will actually be dispatched onto the session's
+    // runtime state, for the usage-ledger write in `finish_stream`/`advance_turn`
+    // to read once this response completes. Captured HERE (dispatch time), not
+    // re-resolved at ledger-write time: a stream can run for seconds, during
+    // which `agent_mode` can leave Plan (user toggle, or the model's own
+    // `plan_ready`) or the role assignments can change — re-resolving later
+    // would then attribute cost to whatever is configured NOW rather than the
+    // model that actually served this request.
+    state.rest.sessions[sess_idx].pending_dispatch_model_id =
+        main.as_ref().map(|m| m.model_id.clone());
 
     // 1. Window: the model's context-window size in tokens, from the cached
     //    catalogue. WINDOW-SIZING FIX: size against the RESOLVED Main model id
@@ -350,6 +379,7 @@ over sec_remote (stateful socket).\n",
     // stream's advertise filter keeps the model's calls to them. With no MCP servers
     // (or none connected yet) both are empty and the request is byte-identical to the
     // pre-MCP path. Sub-agents get NO MCP tools (kept simple) — only the main agent.
+    let mode = state.rest.agent_mode;
     let (mut mcp_tools, mut advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
         match state.rest.mcp_manager.as_ref() {
             Some(mgr) => {
@@ -360,10 +390,13 @@ over sec_remote (stateful socket).\n",
             None => (Vec::new(), crate::tool::main_tool_names()),
         };
     // Security daemon tools for the MAIN agent. Gated on BOTH the runtime enable
-    // flag (`security_enabled`) AND having a manager. When disabled, sec_ tools are
-    // not advertised, keeping normal turns lean. Same pattern as MCP otherwise: extend
-    // the allow-list with the daemon's `sec_`-prefixed names and append its ToolDefs.
-    if state.rest.security_enabled {
+    // flag (`security_enabled`) AND having a manager, AND NOT being in Plan mode
+    // (Plan is read-only; the sec_ toolkit is offensive/mutating by nature, so it
+    // is withheld wholesale rather than filtered tool-by-tool). When disabled,
+    // sec_ tools are not advertised, keeping normal turns lean. Same pattern as
+    // MCP otherwise: extend the allow-list with the daemon's `sec_`-prefixed
+    // names and append its ToolDefs.
+    if state.rest.security_enabled && mode != AgentMode::Plan {
         if let Some(sec) = state.rest.sec_manager.as_ref() {
             // Filter out tools the user disabled in the `/security` panel so they are
             // neither advertised nor allow-listed (an empty `sec_inactive` keeps every
@@ -376,6 +409,24 @@ over sec_remote (stateful socket).\n",
                     .filter(|d| !inactive.contains(&d.function.name)),
             );
         }
+    }
+    // Plan mode: fold the advertised surface down to the read-only / reasoning /
+    // delegation whitelist (`tool_allowed_in_plan`). MCP tools ride through
+    // untouched — the user explicitly wired those servers, so they own that risk
+    // (same precedent as `sec_*`'s harness exemption). Advertise `seqthink` (the
+    // structured-reasoning tool) while Plan is ACTIVE; advertise `plan_enter`
+    // (the request-to-plan tool) otherwise, so the model can ask to enter Plan
+    // mode next turn — never both at once, which is why both live in
+    // `INTERNAL_ONLY` rather than `main_tool_names`.
+    if mode == AgentMode::Plan {
+        advertise.retain(|n| crate::tool::tool_allowed_in_plan(n) || n.starts_with("mcp__"));
+        advertise.push("seqthink".to_string());
+        // `plan_ready` (present the finished plan for approval) is advertised only
+        // while Plan is active — it lives in `INTERNAL_ONLY`, so `main_tool_names`
+        // never carries it, and it is pushed explicitly here alongside `seqthink`.
+        advertise.push("plan_ready".to_string());
+    } else {
+        advertise.push("plan_enter".to_string());
     }
 
     let (tx, rx) = mpsc::unbounded_channel();

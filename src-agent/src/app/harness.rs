@@ -245,9 +245,10 @@ fn parse_verdict(reply: &str) -> Option<Verdict> {
 
 /// How long to wait for a classifier verdict before giving up. With thinking
 /// turned OFF the call is fast, so this is mostly headroom for a slow network;
-/// the bound still matters because the sync loop drives this via `block_on` and
-/// must never freeze. On timeout the verdict is `unavailable("classifier
-/// timeout")`, so the caller degrades (TAC → human prompt) rather than hanging.
+/// the bound still matters because TAC PARKS a tool round on this call (run on a
+/// spawned off-thread task), so it must resolve promptly or the round stays parked.
+/// On timeout the verdict is `unavailable("classifier timeout")`, so the caller
+/// degrades (TAC → human prompt) rather than hanging.
 const CLASSIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
 /// Run the classifier model over `messages` and return a [`Verdict`].
@@ -262,7 +263,8 @@ const CLASSIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12)
 /// `unavailable_allow` selects the fail-open posture for the *unavailable* cases:
 /// PC passes `true` (advisory — the turn still proceeds) and TAC passes `false`
 /// (the caller decides per mode). The reason is preserved either way so the toast
-/// / approval box is accurate. Bounded by [`CLASSIFY_TIMEOUT`]; `block_on`-safe.
+/// / approval box is accurate. Bounded by [`CLASSIFY_TIMEOUT`] so a parked round
+/// always resumes.
 async fn classify(
     client: &OpenRouterClient,
     config: &AppConfig,
