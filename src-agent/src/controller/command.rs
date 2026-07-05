@@ -21,7 +21,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/resume", "Open the session hub (live + past sessions)"),
     ("/mode", "Toggle Normal/Auto tool approval"),
     ("/effort", "Set model reasoning/thinking effort"),
-    ("/free", "Toggle this session onto the keyless koma-free tier"),
+    ("/free", "Toggle this session to use koma-free"),
     ("/internet", "Toggle internet mode (simple | full)"),
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
