@@ -22,6 +22,7 @@ pub mod help;
 pub mod effort;
 pub mod key_input;
 pub mod onboard;
+pub mod onboard_provider;
 pub mod loading;
 pub mod message_rewind;
 pub mod markdown;
@@ -77,6 +78,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             chat::draw(frame, &state.rest, &resolved_model, &palette);
         }
         Mode::Onboard(o) => onboard::draw(frame, o, &palette),
+        Mode::OnboardProvider(op) => onboard_provider::draw(frame, op, cache, cache_endpoint, &palette),
         Mode::KeyInput(form) => key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette),
         Mode::SessionPicker(p) => session_picker::draw(frame, &state.rest, p, &palette),
         Mode::SessionHub(h) => session_hub::draw(frame, &state.rest, h, &palette),

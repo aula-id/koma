@@ -5,7 +5,7 @@
 //!
 //! - `0` koma free → keyless free tier (`Action::SetupKomaFree`, straight to Chat).
 //! - `1` provider  → sign in to a provider account (`Action::OnboardProvider`,
-//!   opens `/settings` on the OAuth category).
+//!   opens `Mode::OnboardProvider` guided wizard).
 //! - `2` custom    → own endpoint + API key (`Action::OnboardCustom`, opens the
 //!   existing `Mode::KeyInput` wizard).
 //!

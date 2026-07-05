@@ -12,8 +12,8 @@ use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState, Mode,
-    OnboardState, PickerState, RewindState, SessionHub, SessionKind, SettingsState, UsageNavState,
-    WarmStatus,
+    OnboardProviderState, OnboardProviderStep, OnboardState, PickerState, RewindState, SessionHub,
+    SessionKind, SettingsState, UsageNavState, WarmStatus,
 };
 use crate::app::state::{AppState, AppStateRest};
 use crate::model::store::SessionMeta;
@@ -22,7 +22,8 @@ use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
     CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot,
     HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot,
-    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot, OnboardSnapshot,
+    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot,
+    OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot,
     PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
     RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
@@ -37,6 +38,9 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
     // (C2), so this projects THAT client's overlay.
     match state.mode() {
         Mode::Onboard(o) => ModeSnapshot::Onboard(Box::new(onboard_snapshot(o))),
+        Mode::OnboardProvider(op) => {
+            ModeSnapshot::OnboardProvider(Box::new(onboard_provider_snapshot(op)))
+        }
         Mode::KeyInput(f) => ModeSnapshot::KeyInput(key_input_snapshot(f)),
         Mode::SessionPicker(p) => ModeSnapshot::SessionPicker(picker_snapshot(p)),
         Mode::SessionHub(h) => ModeSnapshot::SessionHub(session_hub_snapshot(h)),
@@ -76,6 +80,27 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
 
 pub fn onboard_snapshot(o: &OnboardState) -> OnboardSnapshot {
     OnboardSnapshot { cursor: o.cursor }
+}
+
+pub fn onboard_provider_snapshot(op: &OnboardProviderState) -> OnboardProviderSnapshot {
+    OnboardProviderSnapshot {
+        step: match op.step {
+            OnboardProviderStep::Login => "login",
+            OnboardProviderStep::ModelSelect => "model_select",
+        }
+        .to_string(),
+        oauth_flow: oauth_flow_snapshot(&op.oauth_flow),
+        new_conn_uuid: op.new_conn_uuid.clone(),
+        provider: op.provider.map(|p| {
+            match p {
+                crate::model::app_config::OAuthProvider::Codex => "codex",
+                crate::model::app_config::OAuthProvider::Kilocode => "kilocode",
+            }
+            .to_string()
+        }),
+        query: op.query.clone(),
+        result_sel: op.result_sel,
+    }
 }
 
 pub fn key_input_snapshot(f: &KeyInputForm) -> KeyInputSnapshot {

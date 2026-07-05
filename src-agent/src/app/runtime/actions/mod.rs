@@ -135,6 +135,14 @@ pub(in crate::app::runtime) fn apply_action(
             onboard::handle_onboard_custom(state)?;
         }
 
+        Action::OnboardProviderSaveModel(model_id) => {
+            onboard::handle_onboard_provider_save_model(model_id, state, client, handle)?;
+        }
+
+        Action::OnboardProviderBack => {
+            onboard::handle_onboard_provider_back(state)?;
+        }
+
         Action::SaveCreds { endpoint, api_key, model } => {
             settings_creds::handle_save_creds(endpoint, api_key, model, state, client, handle)?;
         }

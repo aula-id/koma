@@ -134,6 +134,7 @@ pub enum DaemonEvent {
 #[allow(dead_code)]
 pub enum ModeSnapshot {
     Onboard(Box<OnboardSnapshot>),
+    OnboardProvider(Box<OnboardProviderSnapshot>),
     KeyInput(KeyInputSnapshot),
     SessionPicker(PickerSnapshot),
     SessionHub(SessionHubSnapshot),
