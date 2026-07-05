@@ -166,6 +166,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         allowed_folders: s.allowed_folders,
         short_send_enabled: s.short_send_enabled,
         sliding_cache: s.sliding_cache,
+        bash_saving: s.bash_saving,
         internet_mode: shadow_internet_mode(&s.internet_mode),
         cwd: std::path::PathBuf::from(s.cwd),
         list_editing: s.list_editing,
@@ -638,6 +639,7 @@ fn shadow_role(r: &str) -> ModelRole {
         "awareness" => ModelRole::Awareness,
         "safeguard" => ModelRole::Safeguard,
         "compactor" => ModelRole::Compactor,
+        "planner" => ModelRole::Planner,
         _ => ModelRole::Main,
     }
 }

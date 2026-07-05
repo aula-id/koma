@@ -83,6 +83,26 @@ pub(super) fn apply_compaction_result(
     // final-answer paths already apply to assistant content.
     let summary = crate::dto::chat::strip_tool_call_tags(&summary);
 
+    // Plan-approval seed (one-shot): if `handle_approve_plan_compact` armed
+    // `pending_plan_seed`, read the approved plan now so we can append it as the
+    // FIRST post-compaction user turn — the model then executes from a clean
+    // context that leads with the plan. Cleared unconditionally (a missing plan.md
+    // is silently skipped) so it can never re-fire on a later plain `/compact`.
+    let plan_seed: Option<String> = if state.rest.pending_plan_seed {
+        state.rest.pending_plan_seed = false;
+        state
+            .rest
+            .sessions
+            .get(idx)
+            .and_then(|rt| rt.session.as_ref())
+            .map(|s| s.plan_path())
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|body| format!("Approved plan (execute now):\n\n{}", body.trim()))
+    } else {
+        None
+    };
+    let seeded = plan_seed.is_some();
+
     if let Some(sess) = state
         .rest
         .sessions
@@ -91,6 +111,11 @@ pub(super) fn apply_compaction_result(
     {
         sess.conversation
             .apply_compaction(summary.clone(), kept_tail);
+        // Append the approved plan AFTER the summary so it rides into the wire
+        // history built below (the save + the later auto-wake both see it).
+        if let Some(seed) = plan_seed {
+            sess.conversation.push_user(seed);
+        }
         sess.rebuild_system();
         let _ = sess.save();
     }
@@ -98,7 +123,9 @@ pub(super) fn apply_compaction_result(
     // better understood after a compact, and this also satisfies the "applies on
     // compaction" requirement. Best-effort; gated by `awareness_enabled` inside
     // `summarize`. Clone the inputs out first (including `config` for the role
-    // resolution) so the `block_on` doesn't hold a borrow of `state.rest`.
+    // resolution) so the spawn doesn't hold a borrow of `state.rest`. Runs OFF the
+    // event-loop thread (`spawn_awareness_recompute`) rather than `block_on`; the
+    // result lands asynchronously via the `awareness_rx` drain in `service_global`.
     let aware_inputs = match (
         client.as_ref(),
         state.rest.sessions.get(idx).and_then(|rt| rt.session.as_ref()),
@@ -127,29 +154,17 @@ pub(super) fn apply_compaction_result(
                 &settings,
                 crate::model::app_config::ModelRole::Main,
             );
-            let s = match main_route {
-                Some(ref m) => handle.block_on(crate::app::awareness::summarize_with_fallback(
-                    &c,
-                    &settings,
-                    r.conn(),
-                    &r.model_id,
-                    r.provider(),
-                    &workdir,
-                    m.conn(),
-                    &m.model_id,
-                    m.provider(),
-                )),
-                None => handle.block_on(crate::app::awareness::summarize(
-                    &c,
-                    &settings,
-                    r.conn(),
-                    &r.model_id,
-                    r.provider(),
-                    &workdir,
-                )),
-            };
-            if let Some(rt) = state.rest.sessions.get_mut(idx) {
-                rt.awareness_summary = s;
+            if let Some(session_id) = state.rest.sessions.get(idx).map(|rt| rt.id.clone()) {
+                crate::app::runtime::spawn_awareness_recompute(
+                    state,
+                    handle,
+                    session_id,
+                    c,
+                    settings,
+                    workdir,
+                    r,
+                    main_route,
+                );
             }
         }
     }
@@ -189,6 +204,37 @@ pub(super) fn apply_compaction_result(
         rt.compact_pending = None;
         // Per-session status (C6): "ready" belongs on the compacted session's slot.
         rt.status = "ready".into();
+    }
+
+    // Plan-approval auto-continue: when this compaction was plan-seeded, the
+    // approved plan is now the last user turn, so kick a fresh stream immediately
+    // (mirroring the bg-bash / detached-sub-agent nudge auto-wake) rather than
+    // leaving it pending for a manual Enter. `apply_compaction_result` just set
+    // `waiting = false` above, so this cleanly re-enters the streaming state.
+    if seeded && client.is_some() && state.rest.sessions[idx].session.is_some() {
+        let history = {
+            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
+            sess.conversation.history()
+        };
+        // Per-turn reset + start stream, mirroring handle_submit's kickoff. The
+        // session is idle here (waiting was just cleared), so these are clean-state.
+        {
+            let rt = &mut state.rest.sessions[idx];
+            rt.begin_stream();
+            rt.waiting = true;
+            rt.agent_steps = 0;
+            rt.pending_tool_calls.clear();
+            rt.awaiting_approval = false;
+            rt.tool_idx = 0;
+            rt.tool_results.clear();
+            rt.pending_tool_tasks.clear();
+            rt.awaiting_tool_tasks = false;
+            rt.awaiting_classify = false;
+            rt.pending_classify_verdict = None;
+        }
+        state.rest.reset_scroll_at(idx);
+        state.rest.sessions[idx].status = "thinking".into();
+        crate::app::runtime::stream::start_stream_task(history, state, idx, client, handle);
     }
 }
 

@@ -121,6 +121,17 @@ pub struct SessionRuntime {
     /// Usage for the in-flight response, captured from the StreamEvent::Usage
     /// chunk and consumed when the assistant message is committed.
     pub pending_usage: Option<(u64, u64, f64)>,
+    /// The model id actually DISPATCHED for the in-flight request, captured in
+    /// `stream::run::start_stream_task` at the moment `resolve_turn_model` picks
+    /// the route (Main, or Planner while `AgentMode::Plan` is active) — BEFORE
+    /// the request is sent. The usage-ledger write in `finish_stream` /
+    /// `advance_turn` reads this instead of re-resolving the role, because a
+    /// stream can run for seconds and `agent_mode` (or the model/route
+    /// assignments) may change before that response finishes — re-resolving at
+    /// ledger-write time would then misattribute cost to whatever model happens
+    /// to be configured NOW, not the one that actually served the request. Reset
+    /// on every dispatch; `None` only before the very first send of a session.
+    pub pending_dispatch_model_id: Option<String>,
     /// THIS session's cumulative token/cost totals (summed from its own
     /// messages.sqlite on open via `load_token_totals`, incremented per response).
     /// Per-session so each tab tracks only its own usage — switching foreground
@@ -195,6 +206,33 @@ pub struct SessionRuntime {
     /// Kept here so later deferred tools in the same session reuse the one channel.
     /// `None` until the first deferred tool runs.
     pub tool_task_tx: Option<UnboundedSender<(String, String)>>,
+    // --- TAC-classify park lane (parallel to the deferred tool-task lane) ---
+    /// True while a risky tool call is PARKED waiting on an off-thread TAC
+    /// (tool-call classifier) verdict. Set by `process_tools` when it spawns the
+    /// classify task and returns without a verdict rather than freezing the event
+    /// loop on `block_on`; cleared by the event-loop drain once the verdict lands
+    /// (which stages it in `pending_classify_verdict` and re-enters `process_tools`).
+    /// `waiting` stays true across the park so the comet keeps shimmering — this
+    /// flag only records WHY the round is parked. Distinct from `awaiting_approval`
+    /// (the human y/n prompt), which is a later, separate state.
+    pub awaiting_classify: bool,
+    /// Sender half of the TAC-classify verdict channel: `(tool_call_id, verdict)`.
+    /// Cloned into each spawned classify task (the sender is `Send`, so it can fire
+    /// from the tokio task). Lazily created (with `classify_rx`) the first time a
+    /// risky tool is classified in a session, then reused. `None` until then.
+    pub classify_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, crate::app::harness::Verdict)>>,
+    /// Receiver half of the TAC-classify verdict channel. Drained each event-loop
+    /// tick: a verdict whose id matches the parked call at `tool_idx` is staged in
+    /// `pending_classify_verdict` and the round resumes; any other (stale) delivery
+    /// is dropped. `None` until the first risky tool is classified.
+    pub classify_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, crate::app::harness::Verdict)>>,
+    /// The verdict the classifier produced for the parked call, staged by the
+    /// event-loop drain for `process_tools` to consume on re-entry: `(tool_call_id,
+    /// verdict)`. `process_tools` takes it when the id matches the current call and
+    /// acts on it via the SAME three-way branch the old inline `block_on` drove; a
+    /// staged verdict for a DIFFERENT id (an interrupted/superseded turn) is dropped
+    /// and the call is re-classified. `None` when no verdict is staged.
+    pub pending_classify_verdict: Option<(String, crate::app::harness::Verdict)>,
     // --- `!` user-shell lane (off-thread, parallel to the deferred tool lane) ---
     /// True while a `!`-shortcut command is running OFF the UI/event-loop thread
     /// (see `actions::chat::handle_shell`). The `!` shell uses the SAME blocking
@@ -430,6 +468,7 @@ impl SessionRuntime {
             active_rx: None,
             harness_rx: None,
             pending_usage: None,
+            pending_dispatch_model_id: None,
             tokens_in: 0,
             tokens_out: 0,
             cost: 0.0,
@@ -445,6 +484,10 @@ impl SessionRuntime {
             awaiting_tool_tasks: false,
             tool_task_rx: None,
             tool_task_tx: None,
+            awaiting_classify: false,
+            classify_tx: None,
+            classify_rx: None,
+            pending_classify_verdict: None,
             awaiting_shell: false,
             shell_task_rx: None,
             shell_task_tx: None,
@@ -945,6 +988,11 @@ impl SessionRuntime {
         // keeps the inert slot fully clean.
         self.park_started_at = None;
         self.awaiting_tool_tasks = false;
+        // Drop any TAC-classify park too (a tombstone is never awaiting); a late
+        // verdict to this inert slot is discarded because the servicer skips a
+        // closed session's drain.
+        self.awaiting_classify = false;
+        self.pending_classify_verdict = None;
         // A `!` shell may be draining off-thread; clear the park flag so a late
         // delivery to this tombstone is discarded by the gated drain (the OS child
         // finishes on its own — we never block close() on it).
@@ -1006,6 +1054,13 @@ impl SessionRuntime {
         // tools. We deliberately do NOT join the worker here.
         self.pending_tool_tasks.clear();
         self.awaiting_tool_tasks = false;
+        // Abandon any round parked on the TAC classifier the same way: the
+        // off-thread classify task keeps running but its verdict lands with no
+        // matching parked id (pending_tool_calls is cleared above), so the drain
+        // drops it. Channel ends are left intact for reuse (mirrors the tool-task
+        // lane); a stale staged verdict is cleared so it can't be mis-consumed.
+        self.awaiting_classify = false;
+        self.pending_classify_verdict = None;
         // Take any captured usage unconditionally so a partial turn's usage can't
         // leak into the next response.
         let usage = self.pending_usage.take();
@@ -1060,6 +1115,7 @@ impl SessionRuntime {
             || self.streaming.is_some()
             || self.awaiting_approval
             || self.awaiting_tool_tasks
+            || self.awaiting_classify
             || self.awaiting_shell
             || self.awaiting_subagents
             || self
@@ -1089,6 +1145,7 @@ impl SessionRuntime {
             || self.streaming.is_some()
             || self.awaiting_approval
             || self.awaiting_tool_tasks
+            || self.awaiting_classify
             || self.awaiting_shell
             || self.awaiting_subagents
             || self.subagents.iter().any(|s| {

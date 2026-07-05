@@ -173,6 +173,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         allowed_folders: st.allowed_folders.clone(),
         short_send_enabled: st.short_send_enabled,
         sliding_cache: st.sliding_cache,
+        bash_saving: st.bash_saving,
         internet_mode: st.internet_mode.as_str().to_string(),
         cwd: st.cwd.display().to_string(),
         list_editing: st.list_editing,
@@ -575,7 +576,7 @@ pub fn mcp_snapshot(m: &McpState, state: &AppState) -> McpSnapshot {
             .rest
             .mcp_manager
             .as_ref()
-            .map(|mgr| mgr.server_status())
+            .map(|mgr| mgr.server_status_cached())
             .unwrap_or_default(),
     }
 }

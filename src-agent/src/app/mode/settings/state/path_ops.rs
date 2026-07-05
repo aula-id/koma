@@ -35,6 +35,7 @@ impl SettingsState {
             | SettingField::ClassifierEnabled
             | SettingField::ShortSendEnabled
             | SettingField::SlidingCache
+            | SettingField::BashSaving
             | SettingField::InternetMode => None,
         }
     }

@@ -72,7 +72,12 @@ pub(super) fn handle_rewind_cancel(state: &mut AppState) -> Result<()> {
 /// id (archive out of sync / disabled) just skips the cap — the reload + watermark
 /// rails already prevent resurrection on their own.
 pub(super) fn handle_rewind_to_message(idx: usize, state: &mut AppState) -> Result<()> {
-    // 1. Abort any running stream so it can't append onto the cut history.
+    // 1. Fully cancel any in-flight turn so nothing can resume onto the cut history.
+    //    `abort_current` now tears down the WHOLE round (stream + approval +
+    //    deferred-tool + sub-agent + classifier lanes), not just the stream task —
+    //    otherwise a risky call parked on the classifier (or a deferred tool / a
+    //    delegated sub-agent) could land its result AFTER the rewind and
+    //    execute/append against the truncated conversation.
     if state.rest.fg().waiting {
         abort_current(&mut state.rest);
         state.rest.fg_mut().waiting = false;

@@ -90,8 +90,8 @@ fn filter_bash_output(
 /// run: the harness is disabled, or there's no client/session. `None` makes the
 /// caller fall back to the ORIGINAL approval behaviour (Normal prompts a risky
 /// call, Auto runs it) — the unchanged path when the harness is off. The
-/// `Settings` and client `Arc` are cloned out so the caller's `block_on` doesn't
-/// hold a borrow of `state`.
+/// `Settings` and client `Arc` are cloned out so the caller can move them into
+/// the off-thread classify task ([`spawn_classify_park`]) without borrowing `state`.
 pub(super) fn tac_inputs(
     state: &AppState,
     sess_idx: usize,
@@ -109,6 +109,62 @@ pub(super) fn tac_inputs(
         )),
         _ => None,
     }
+}
+
+/// Spawn the TAC classifier for `call` OFF the event-loop thread and PARK the
+/// round on it. Lazily opens this session's verdict channel, fires the classify
+/// task (which sends `(call_id, verdict)` back over it once done), latches
+/// `awaiting_classify`, and sets the "classifying …" status. The caller MUST
+/// `return` right after so the round stays parked — the event-loop drain stages
+/// the verdict and re-enters `process_tools`, which then acts on it via the
+/// unchanged three-way verdict branch. This replaces the old synchronous
+/// `handle.block_on(classify_toolcall(..))`, which froze the whole event loop
+/// (every session, in the daemon) for the 1-12s of the classify call.
+///
+/// The inputs are cheap-cloned owned values (Arc client / AppConfig / Settings /
+/// Strings), so the spawned future is `Send + 'static` — mirroring the advisory
+/// prompt-classifier spawn in `actions::chat::handle_submit`. `classify_toolcall`
+/// is pure async HTTP with its own internal timeout, so `handle.spawn` (a tokio
+/// task) is correct here (NOT a `std::thread` — there is no `reqwest::blocking`).
+#[allow(clippy::too_many_arguments)]
+fn spawn_classify_park(
+    state: &mut AppState,
+    sess_idx: usize,
+    handle: &tokio::runtime::Handle,
+    client: Arc<OpenRouterClient>,
+    config: crate::model::app_config::AppConfig,
+    settings: crate::model::settings::Settings,
+    convo_context: &str,
+    call: &ToolCall,
+) {
+    // Lazily create THIS session's verdict channel once, then reuse it (mirrors
+    // the deferred tool-task channel). Both ends live on the session; the task
+    // fires over `classify_tx`, the event-loop drain reads `classify_rx`.
+    if state.rest.sessions[sess_idx].classify_tx.is_none() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.sessions[sess_idx].classify_tx = Some(tx);
+        state.rest.sessions[sess_idx].classify_rx = Some(rx);
+    }
+    let tx = state.rest.sessions[sess_idx]
+        .classify_tx
+        .as_ref()
+        .unwrap()
+        .clone();
+    let convo = convo_context.to_string();
+    let name = call.function.name.clone();
+    let args = call.function.arguments.clone();
+    let call_id = call.id.clone();
+    handle.spawn(async move {
+        let verdict = crate::app::harness::classify_toolcall(
+            &client, &config, &settings, &convo, &name, &args,
+        )
+        .await;
+        // A dropped receiver (turn interrupted / session closed) makes this a
+        // no-op — same contract as the streaming + PC channels.
+        let _ = tx.send((call_id, verdict));
+    });
+    state.rest.sessions[sess_idx].awaiting_classify = true;
+    state.rest.sessions[sess_idx].status = format!("classifying {}…", call.function.name);
 }
 
 /// True if `target_abs` was read/written/edited earlier in the conversation
@@ -170,24 +226,31 @@ fn file_known_in_history(
 /// isn't dispatched until this one's result lands (correctness: two writes to the
 /// same file in one round must not race). The event-loop drain folds the result in
 /// and the resume gate RE-ENTERS this function at the advanced `tool_idx`, so the
-/// loop simply continues. The classifier/approval gate above still runs on the UI
-/// thread BEFORE a deferred risky tool is dispatched — deferral happens only after
-/// the call is allowed. Instant tools (pong / dir_list / dir_cache_update) still
-/// run inline.
+/// loop simply continues. The classifier/approval gate above decides BEFORE a
+/// deferred risky tool is dispatched — deferral happens only after the call is
+/// allowed. Instant tools (pong / dir_list / dir_cache_update) still run inline.
+///
+/// **Async classifier gate.** The TAC classify call is NOT run inline: it would
+/// freeze the event loop 1-12s per risky call. Instead the gate spawns the
+/// classify off-thread ([`spawn_classify_park`]) and PARKS the round on
+/// `awaiting_classify`; the event-loop drain stages the verdict into
+/// `pending_classify_verdict` and RE-ENTERS this function, which consumes it and
+/// acts on the unchanged three-way branch. So a risky-tool round can park twice —
+/// first on the classifier, then (in Normal, or on a deferred allow) on approval /
+/// the deferred lane.
 ///
 /// Each call/string is cloned out of `state.rest` before `run_tool` (which
-/// borrows `state` mutably) so there's no overlapping borrow of the vec. Reached
-/// only from the sync loop, so the `block_on` TAC call is safe.
+/// borrows `state` mutably) so there's no overlapping borrow of the vec.
 pub(crate) fn process_tools(
     state: &mut AppState,
     sess_idx: usize,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) {
-    let mode = state.rest.agent_mode;
     // Recent conversation tail, used to make TAC intent-aware. Cloned out once
-    // (empty when there's no session) so the per-call `block_on` below holds no
-    // borrow of `state`. We feed the last few User/Assistant turns — NOT just the
+    // (empty when there's no session) so it can be moved into the off-thread
+    // classify task without borrowing `state`. We feed the last few User/Assistant
+    // turns — NOT just the
     // most-recent user line — because in multi-turn chats that last line is often a
     // terse confirmation ("ok go!", "yes") whose intent only resolves against the
     // earlier request and the agent's proposed plan. 6 messages × 600 chars keeps
@@ -198,9 +261,186 @@ pub(crate) fn process_tools(
         .map(|sess| sess.conversation.recent_context(6, 600))
         .unwrap_or_default();
     while state.rest.sessions[sess_idx].tool_idx < state.rest.sessions[sess_idx].pending_tool_calls.len() {
+        // re-read every iteration: plan_enter can flip the mode mid-round
+        let mode = state.rest.agent_mode;
         let call = state.rest.sessions[sess_idx].pending_tool_calls
             [state.rest.sessions[sess_idx].tool_idx]
             .clone();
+        // Intercept the model-callable `plan_enter` tool BEFORE the generic
+        // dispatch path (mirrors `cd`): the tool's `run` is pure validation (it
+        // always succeeds, no arguments), so the actual mode switch is applied
+        // HERE via `set_agent_mode` — the single choke-point shared with `/mode`
+        // and Shift+Tab, so `plan_return_mode` + the system-prompt nudge never
+        // drift out of sync between entry points. Already-Plan is a no-op (the
+        // model gets a friendly "already in plan mode" instead of a spurious
+        // re-entry into the same mode).
+        if call.function.name == "plan_enter" {
+            let result = super::dispatch::run_tool(state, sess_idx, &call);
+            let final_result = if result == crate::tool::plan::PLAN_ENTER_SENTINEL {
+                if mode == AgentMode::Plan {
+                    "already in plan mode".to_string()
+                } else {
+                    state.rest.set_agent_mode(AgentMode::Plan);
+                    "entered plan mode - tools are read-only; explore, structure your \
+                     reasoning with seqthink, and call plan_ready with a summary + full \
+                     plan when confident"
+                        .to_string()
+                }
+            } else {
+                // Not expected (plan_enter has no failure path), but pass through
+                // unchanged rather than swallow it.
+                result
+            };
+            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+            state.rest.sessions[sess_idx].tool_idx += 1;
+            continue;
+        }
+        // Intercept the model-callable `plan_ready` tool BEFORE the generic
+        // dispatch path (mirrors the `bash_output` FULL interception). Its args
+        // carry the entire plan text — too big to round-trip through a sentinel —
+        // so they're parsed HERE and `Tool::run` is never called (it's a stub).
+        // Outside Plan mode it's a no-op error. In Plan mode we persist the plan
+        // to `<session>/plan.md` and PARK the round for the user's y/a/n decision,
+        // mirroring the risky-gate pause below: set `awaiting_approval` +
+        // `approval_reason` (the summary) + a status line and `return` WITHOUT
+        // advancing `tool_idx`, so the resume handlers (`ApprovePlan` /
+        // `ApprovePlanCompact` / `DenyPlan`) answer THIS exact call.
+        if call.function.name == "plan_ready" {
+            if mode != AgentMode::Plan {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    "plan_ready is only available in plan mode".to_string(),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+            // Settled-session guard: plan_ready is only accepted once ALL of this
+            // session's background work has finished. A still-running background bash
+            // job or sub-agent (typically a detached one — a blocking one would have
+            // parked this round) means the plan may rest on incomplete results, so
+            // REJECT (do NOT park) and tell the model to collect the outputs first.
+            let mut pending: Vec<String> = Vec::new();
+            for j in &state.rest.sessions[sess_idx].bash_jobs {
+                if matches!(j.snapshot_status(), crate::app::bgbash::BashJobStatus::Running) {
+                    pending.push(format!("bash-{}", j.id));
+                }
+            }
+            for sa in &state.rest.sessions[sess_idx].subagents {
+                if matches!(sa.status, crate::app::subagent::SubAgentStatus::Running) {
+                    pending.push(format!("#{} ({})", sa.id, sa.agent_name));
+                }
+            }
+            if !pending.is_empty() {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "plan_ready rejected: background work is still running ({}). Collect the \
+                         results with bash_output/task_output, incorporate them into the plan, \
+                         then call plan_ready again.",
+                        pending.join(", ")
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+            let sanitized =
+                crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+            let args: serde_json::Value =
+                serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+            let (summary, plan) = match crate::tool::plan::parse_plan_ready_args(&args) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), e));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    continue;
+                }
+            };
+            // Persist the full plan to `<session>/plan.md` (atomic tmp + rename).
+            // On IO failure (or no active session) answer the call with an error
+            // and continue — do NOT park on an unwritten plan.
+            let plan_path = state.rest.sessions[sess_idx]
+                .session
+                .as_ref()
+                .map(|s| s.plan_path());
+            match plan_path {
+                Some(path) => {
+                    if let Err(e) =
+                        crate::model::memory::atomic_write(&path, plan.as_bytes())
+                    {
+                        state.rest.sessions[sess_idx].tool_results.push((
+                            call.id.clone(),
+                            format!("error: could not write plan.md: {e}"),
+                        ));
+                        state.rest.sessions[sess_idx].tool_idx += 1;
+                        continue;
+                    }
+                }
+                None => {
+                    state.rest.sessions[sess_idx].tool_results.push((
+                        call.id.clone(),
+                        "error: could not write plan.md: no active session".to_string(),
+                    ));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    continue;
+                }
+            }
+            // Park for the user's decision. Do NOT advance `tool_idx` — the resume
+            // handlers answer this exact plan_ready call.
+            state.rest.sessions[sess_idx].awaiting_approval = true;
+            state.rest.sessions[sess_idx].approval_reason = Some(summary);
+            state.rest.sessions[sess_idx].status =
+                "plan ready - [y] approve  [a] approve & compact  [n] chat more".to_string();
+            return;
+        }
+        // Plan-mode read-only enforcement (defense-in-depth). The advertise fold
+        // (`app::runtime::stream::run`) and the sub-agent allow-list fold
+        // (`app::subagent::spawn`) already hide non-whitelisted tools from the
+        // model while Plan is active, but a stale/fabricated call name must still
+        // be rejected HERE so a model that ignores its own tool list can never
+        // mutate anything. `git_operator` is whitelisted at the tool-name level
+        // (it's read-only-safe in principle) but additionally filtered by
+        // subcommand — Plan may run read git (`log`, `diff`, `status`, …) but not
+        // `commit`/`push`/`checkout`/etc. `mcp__*` tools are exempt (the user
+        // explicitly wired those servers, so they own that risk — same precedent
+        // as `sec_*`'s harness exemption).
+        if mode == AgentMode::Plan && !call.function.name.starts_with("mcp__") {
+            if call.function.name == "git_operator" {
+                let sanitized =
+                    crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+                let args: serde_json::Value =
+                    serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+                let subcmd = args
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !crate::tool::plan_git_subcommand_allowed(subcmd) {
+                    state.rest.sessions[sess_idx].tool_results.push((
+                        call.id.clone(),
+                        format!(
+                            "plan mode is read-only: git {subcmd} is not allowed (read-only git only)"
+                        ),
+                    ));
+                    state.rest.sessions[sess_idx].tool_idx += 1;
+                    continue;
+                }
+                // An allowed read-only git subcommand falls through to the normal
+                // gate flow below — git_operator is risky, so Auto/Normal/Yolo
+                // handling applies unchanged (Plan is treated like Auto there; see
+                // the comments at the classifier verdict branches).
+            } else if !crate::tool::tool_allowed_in_plan(&call.function.name) {
+                state.rest.sessions[sess_idx].tool_results.push((
+                    call.id.clone(),
+                    format!(
+                        "plan mode is read-only: {} is unavailable until the plan is approved",
+                        call.function.name
+                    ),
+                ));
+                state.rest.sessions[sess_idx].tool_idx += 1;
+                continue;
+            }
+        }
         // Intercept the model-callable `task` tool BEFORE the generic
         // classify/dispatch path: spawn a background sub-agent (never classify it
         // as risky, never await it inline). UNLIKE the generic path, a SUCCESSFUL
@@ -291,7 +531,17 @@ pub(crate) fn process_tools(
                 ) {
                     super::super::spawn::SpawnOutcome::Spawned(_)
                     | super::super::spawn::SpawnOutcome::Queued(_) => {
-                        state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone())
+                        state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone());
+                        // Park the round on this delegation IMMEDIATELY (mirrors
+                        // `dispatch_deferred` setting `awaiting_tool_tasks` inline at
+                        // dispatch): if a LATER call in this round early-returns
+                        // before the loop bottom — e.g. a risky call parks on the
+                        // classifier — the bottom-of-loop `awaiting_subagents = true`
+                        // reconciliation is skipped, and the sub-agent drain would
+                        // then not treat the round as parked. Setting it here keeps
+                        // the park flag correct mid-round; the bottom-of-loop set
+                        // stays as a (now-idempotent) backstop.
+                        state.rest.sessions[sess_idx].awaiting_subagents = true;
                     }
                     // Nothing started or queued (no client/session or unknown
                     // agent) → answer the call now so it isn't left dangling.
@@ -377,10 +627,48 @@ pub(crate) fn process_tools(
                 .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
             {
                 Some(job) => {
-                    let line = bash_status_line(&job.snapshot_status());
+                    let status = job.snapshot_status();
+                    let line = bash_status_line(&status);
                     let out = job.output_snapshot();
+                    // Only reshape a FINISHED job's output when the model gave
+                    // no explicit pattern/tail_lines shaping of its own — an
+                    // explicit ask is deliberate and must be respected as-is.
+                    // Running/Killed/Error, and any poll with pattern or
+                    // tail_lines set, take the exact original path below.
+                    let finished_code = match status {
+                        crate::app::bgbash::BashJobStatus::Done(code) => Some(code),
+                        _ => None,
+                    };
+                    let saving = state.rest.sessions[sess_idx]
+                        .session
+                        .as_ref()
+                        .map(|s| s.settings.bash_saving)
+                        .unwrap_or(true);
+                    let qualifies =
+                        finished_code.is_some() && tail_lines.is_none() && pattern.is_none() && saving;
+
                     if out.is_empty() {
                         format!("{line}\n(no output yet)")
+                    } else if qualifies {
+                        // Mirror `tool::shell::finalize_output`'s "saving" path
+                        // (filter + tee) for a finished background job, same as
+                        // synchronous bash/git_operator.
+                        let code = finished_code.expect("qualifies implies finished_code is Some");
+                        let (text, should_tee) =
+                            crate::app::bgbash::render_finished_output(&job.command, &out, code, saving);
+                        let mut body = format!("{line}\n{text}");
+                        if should_tee {
+                            let log_dir = state.rest.sessions[sess_idx]
+                                .session
+                                .as_ref()
+                                .map(|s| s.path.join("opt"));
+                            if let Some(dir) = log_dir {
+                                if let Some(path) = job.ensure_tee_log(&dir, &out) {
+                                    body.push_str(&format!("\nfull-output: {}", path.display()));
+                                }
+                            }
+                        }
+                        body
                     } else {
                         match filter_bash_output(&out, tail_lines, pattern) {
                             Ok(filtered) if filtered.is_empty() => format!("{line}\n(no matching lines)"),
@@ -633,16 +921,26 @@ pub(crate) fn process_tools(
             } else if is_remove && mode != AgentMode::Yolo {
                 match tac_inputs(state, sess_idx, client) {
                     Some((c, config, settings)) => {
-                        let verdict = handle.block_on(
-                            crate::app::harness::classify_toolcall(
-                                &c,
-                                &config,
-                                &settings,
-                                &convo_context,
-                                &call.function.name,
-                                &call.function.arguments,
-                            ),
-                        );
+                        // Async TAC gate (mirrors the generic risky gate below):
+                        // take a drain-staged verdict for THIS call, else spawn the
+                        // classifier off-thread and PARK — the round re-enters this
+                        // arm with the verdict once it lands (`pre_approved` stays
+                        // false, `is_remove` stays true, so it lands back here). A
+                        // stale staged id is dropped and re-classified. The three-way
+                        // branch below is UNCHANGED.
+                        let verdict = match state.rest.sessions[sess_idx]
+                            .pending_classify_verdict
+                            .take()
+                        {
+                            Some((vid, v)) if vid == call.id => v,
+                            _ => {
+                                spawn_classify_park(
+                                    state, sess_idx, handle, c, config, settings,
+                                    &convo_context, &call,
+                                );
+                                return;
+                            }
+                        };
                         if verdict.available && verdict.allow {
                             // Definite allow. Auto runs inline; Normal still asks.
                             if mode == AgentMode::Normal {
@@ -656,6 +954,10 @@ pub(crate) fn process_tools(
                             // Auto + allow → fall through and run it inline.
                         } else if verdict.available {
                             // Definite block. Auto records + continues; Normal asks.
+                            // Plan never reaches this `is_remove` classifier flow at
+                            // all — `git_worktree` isn't in `tool_allowed_in_plan`, so
+                            // the read-only gate above already denied it before this
+                            // point, leaving only Auto/Normal/Yolo here.
                             if mode == AgentMode::Auto {
                                 state.rest.sessions[sess_idx].tool_results.push((
                                     call.id.clone(),
@@ -902,7 +1204,7 @@ pub(crate) fn process_tools(
         // a definite-allow. Only the classifier + prompts are bypassed — the
         // deterministic workspace path guard (WC) inside the tools still applies, so
         // writes stay in the project dir. Gate it FIRST so no `tac_inputs` /
-        // `block_on(classify_toolcall)` ever fires in Yolo; clear any stale approval
+        // `spawn_classify_park` ever fires in Yolo; clear any stale approval
         // reason and fall through to the dispatch block below (which advances
         // `tool_idx`). The classifier/approval branches below are reached only for the
         // Auto/Normal modes.
@@ -916,21 +1218,39 @@ pub(crate) fn process_tools(
             match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
                 Some((c, config, settings)) => {
-                    let verdict = handle.block_on(crate::app::harness::classify_toolcall(
-                        &c,
-                        &config,
-                        &settings,
-                        &convo_context,
-                        &call.function.name,
-                        &call.function.arguments,
-                    ));
+                    // Async TAC gate: consume a verdict the event-loop drain already
+                    // staged for THIS call, else spawn the classifier off-thread and
+                    // PARK the round (returning immediately) — the drain re-enters
+                    // here with the verdict once it lands. A staged verdict for a
+                    // DIFFERENT id is stale (interrupted/superseded turn): drop it and
+                    // classify fresh. The three-way branch below is UNCHANGED.
+                    let verdict = match state.rest.sessions[sess_idx]
+                        .pending_classify_verdict
+                        .take()
+                    {
+                        Some((vid, v)) if vid == call.id => v,
+                        _ => {
+                            spawn_classify_park(
+                                state, sess_idx, handle, c, config, settings,
+                                &convo_context, &call,
+                            );
+                            return;
+                        }
+                    };
                     if verdict.available && verdict.allow {
                         // Definite allow. Auto runs it inline (no prompt — the user
                         // delegated decisions); Normal still asks, because in Normal
                         // mode the USER approves every risky op and the classifier
                         // only informs. The allowed reason is surfaced so the prompt
                         // shows the verdict was "ok".
-                        if mode == AgentMode::Auto {
+                        // Plan reaches this generic risky gate ONLY for `git_operator`
+                        // with an allowed READ subcommand — every other risky tool
+                        // (write/edit/delete/bash/web_download, and any git_operator
+                        // subcommand outside the read-only list) was already denied
+                        // by the Plan read-only gate above, before this point.
+                        // Deliberately treated like Auto: TAC-approved read-only git
+                        // is harmless, so no prompt is needed.
+                        if mode == AgentMode::Auto || mode == AgentMode::Plan {
                             // Fall through and run it inline (no prompt).
                             state.rest.sessions[sess_idx].approval_reason = None;
                         } else {
@@ -943,7 +1263,11 @@ pub(crate) fn process_tools(
                         }
                     } else if verdict.available {
                         // Definite block. Auto records it and continues; Normal asks.
-                        if mode == AgentMode::Auto {
+                        // Same Plan caveat as the allow-branch above: only a
+                        // classifier-blocked git_operator READ subcommand reaches
+                        // here in Plan mode, so it is recorded + continued exactly
+                        // like Auto rather than prompting.
+                        if mode == AgentMode::Auto || mode == AgentMode::Plan {
                             state.rest.sessions[sess_idx].tool_results.push((
                                 call.id.clone(),
                                 format!("blocked by harness: {}", verdict.reason),

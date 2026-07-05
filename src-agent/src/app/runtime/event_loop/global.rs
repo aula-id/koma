@@ -16,7 +16,8 @@
 //!   - the deferred `/compact` apply,
 //!   - the missing-workspace-root warning,
 //!   - the comet-shimmer `work_since` reconcile + the "keep redrawing while a
-//!     compaction / shimmer / sub-agent is live" force-dirty,
+//!     compaction / shimmer / sub-agent / Plan-mode header shimmer is live"
+//!     force-dirty,
 //!   - the toast auto-dismiss tick.
 //!
 //! What deliberately STAYS in [`super::run_loop`] (terminal-coupled, NOT here):
@@ -239,6 +240,45 @@ pub(super) fn service_global(
                 state.rest.oauth_task = None;
                 dirty = true;
             }
+        }
+    }
+
+    // Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),
+    // mirroring the `sec_health_rx` drain just above. Distinct from `warm_rx`:
+    // that channel is REPLACED per warm, so a recompute in flight when a new warm
+    // starts would be stranded — this pair is created once and kept for the app's
+    // lifetime. Route each `(session_id, summary)` by id (same C4 pattern as
+    // `WarmEvent::WarmAwareness` below) since `service_global` runs outside any
+    // client bracket and the foreground cursor is stale scratch here. Loop (not a
+    // single `try_recv`) so a burst of recomputes (e.g. several quick `cd`s)
+    // doesn't lag a tick behind. Non-blocking (try_recv).
+    if let Some(mut arx) = state.rest.awareness_rx.take() {
+        let mut keep = true;
+        loop {
+            match arx.try_recv() {
+                Ok((session_id, summary)) => {
+                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
+                        s.awareness_summary = summary;
+                    }
+                    // Session gone (closed since the recompute was spawned) → the
+                    // result is simply dropped, same contract as `WarmAwareness`.
+                    dirty = true;
+                }
+                // Channel drained for now: keep listening on later ticks.
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                // Sender dropped without sending — shouldn't happen (the spawn
+                // always sends), but stay clean and stop polling.
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        if keep {
+            state.rest.awareness_rx = Some(arx);
+        } else {
+            // Also drop the paired sender so a future recompute reopens a fresh pair.
+            state.rest.awareness_tx = None;
         }
     }
 
@@ -571,7 +611,13 @@ pub(super) fn service_global(
     // while any sub-agent is running (background `/task` agents that don't set
     // `waiting`), force redraws so the in-chat spinner animates. And while a security
     // health probe is pending, force redraws so its "checking dependencies…" spinner
-    // keeps cycling until the result lands.
+    // keeps cycling until the result lands. And while the agent is in Plan mode, force
+    // redraws so the "planning" header shimmer (view/chat/header.rs) keeps sweeping
+    // even on an otherwise fully idle UI — it is wall-clock driven (no stored counter)
+    // so it only needs a periodic repaint, not a tighter poll cadence: the existing
+    // 100ms idle poll timeout (see `run_loop`) is already finer than the shimmer's
+    // 90ms step, so this force-dirty alone is enough — it does NOT join the fast-poll
+    // predicate below.
     // Compaction anim is per-session now (C4): force a redraw while ANY session has a
     // live compaction clock, so a background session's spinner still advances (the
     // rendered foreground may not be the compacting one, but the per-tick redraw is
@@ -586,6 +632,7 @@ pub(super) fn service_global(
         || has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()
         || state.rest.oauth_rx.is_some()
+        || state.rest.agent_mode == crate::app::state::AgentMode::Plan
     {
         dirty = true;
     }

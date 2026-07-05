@@ -34,17 +34,18 @@ pub mod usage;
 
 use ratatui::Frame;
 use crate::app::mode::Mode;
-use crate::app::resolve::{resolve_role};
+use crate::app::resolve::resolve_turn_model;
 use crate::app::state::{AppState, AppStateRest};
-use crate::model::app_config::ModelRole;
 
-/// Resolve the concrete Main model id for the foreground session, mirroring
-/// the logic the request layer uses. Session overrides win; falls back to the
-/// legacy `settings.model` field; defaults to empty string when there is no
-/// session at all.
+/// Resolve the concrete model id driving the foreground session's NEXT turn,
+/// mirroring the logic the request layer uses (`resolve_turn_model`): Main,
+/// except while the session is in `AgentMode::Plan` with a Planner assigned
+/// that differs from Main, in which case the label shows the Planner's model.
+/// Session overrides win; falls back to the legacy `settings.model` field;
+/// defaults to empty string when there is no session at all.
 fn resolved_main_model(rest: &AppStateRest) -> String {
     rest.fg().session.as_ref()
-        .and_then(|s| resolve_role(&rest.config, &s.settings, ModelRole::Main))
+        .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode))
         .map(|r| r.model_id)
         .or_else(|| rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
         .unwrap_or_default()
@@ -93,7 +94,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 .rest
                 .mcp_manager
                 .as_ref()
-                .map(|mgr| mgr.server_status())
+                .map(|mgr| mgr.server_status_cached())
                 .or_else(|| m.shadow_status.clone());
             mcp::draw(frame, m, status.as_ref(), &palette);
         }

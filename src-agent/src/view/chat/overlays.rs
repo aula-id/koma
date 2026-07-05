@@ -192,6 +192,13 @@ pub(super) fn render_toast(
     }
 }
 
+/// Height (in rows) of the `plan_ready` approval box: 2 content rows (the
+/// question + the y/a/n footer) plus the top/bottom border. Shared with
+/// `mod::draw`, which reserves exactly this many rows at the bottom of the
+/// transcript while a plan approval is parked so the summary block (rendered as
+/// the last transcript content) isn't hidden under this box.
+pub(super) const PLAN_APPROVAL_HEIGHT: u16 = 4;
+
 /// Render the tool-approval prompt shown while a risky tool call is paused for
 /// the user's y/n (Normal mode).
 ///
@@ -206,6 +213,47 @@ pub(super) fn render_tool_approval(
     palette: &Palette,
 ) {
     let warn = Color::Rgb(255, 180, 60);
+
+    // plan_ready is a DISTINCT approval — a finished plan presented for the user's
+    // y/a/n decision. The plan SUMMARY is rendered as normal transcript content
+    // (see `transcript::render_tool_lines`), so this overlay stays minimal: just
+    // the question + the three-way footer.
+    let is_plan_ready = rest
+        .fg()
+        .pending_tool_calls
+        .get(rest.fg().tool_idx)
+        .map(|c| c.function.name == "plan_ready")
+        .unwrap_or(false);
+    if is_plan_ready {
+        let rows: Vec<Line> = vec![
+            Line::from(Span::styled(
+                " proceed with the plan?",
+                Style::default().fg(palette.fg),
+            )),
+            Line::from(vec![
+                Span::styled(" [y] approve   ", Style::default().fg(warn)),
+                Span::styled("[a] approve & compact   ", Style::default().fg(warn)),
+                Span::styled("[n] chat more", Style::default().fg(palette.dim)),
+            ]),
+        ];
+
+        let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
+        // Fixed height (2 content rows + 2 border) — shared with the transcript's
+        // plan-approval reserve in `mod::draw` so the summary block clears this box.
+        let h = PLAN_APPROVAL_HEIGHT.min(avail.max(3));
+        let y = input_chunk.y.saturating_sub(h);
+        let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+        let block = Block::bordered()
+            .border_style(Style::default().fg(warn))
+            .title(Span::styled(" plan ready ", Style::default().fg(warn)))
+            .padding(Padding::horizontal(1));
+        let inner = block.inner(rect);
+        frame.render_widget(Clear, rect);
+        frame.render_widget(block, rect);
+        frame.render_widget(Paragraph::new(rows), inner);
+        return;
+    }
+
     let mut rows: Vec<Line> = Vec::new();
     if let Some(call) = rest.fg().pending_tool_calls.get(rest.fg().tool_idx) {
         let name = call.function.name.as_str();

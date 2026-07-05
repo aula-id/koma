@@ -82,12 +82,22 @@ pub(super) fn drain_stream(
                     state.rest.sessions[idx].approval_reason = None;
                     state.rest.sessions[idx].tool_idx = 0;
                     state.rest.sessions[idx].tool_results.clear();
+                    // Drop any TAC-classify park so a stream error can't leave the
+                    // round parked on a verdict that will never resume.
+                    state.rest.sessions[idx].awaiting_classify = false;
+                    state.rest.sessions[idx].pending_classify_verdict = None;
                     // Clear THIS session's in-flight compaction animation so a failed
                     // compaction (e.g. null content decode error) doesn't leave the
                     // spinner stuck driving per-tick redraws indefinitely. Per-session (C4).
                     state.rest.sessions[idx].compact_anim_start = None;
                     state.rest.sessions[idx].compact_apply_at = None;
                     state.rest.sessions[idx].compact_pending = None;
+                    // A stream error during a plan-approval compaction flow (the
+                    // post-approval turn OR the compactor call) aborts it: drop the
+                    // one-shot plan flags so a stale seed can't fire on a later
+                    // `/compact`. No-op when no plan flow is armed.
+                    state.rest.pending_plan_compact = false;
+                    state.rest.pending_plan_seed = false;
                     still_streaming = false;
                     break;
                 }

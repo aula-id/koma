@@ -1,6 +1,15 @@
+use std::sync::Once;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
+
+/// Ensures [`ensure_schema`] runs at most once per process. `usage_db_path()`
+/// resolves through `store::base_dir()` (`~/.koma`), which is a constant
+/// per-process (home dir doesn't change mid-run), so every [`open`] call in
+/// this process targets the same file — the DDL only needs to run on the
+/// first one. [`Once::call_once`] also blocks any concurrent caller until
+/// that first run finishes, so nobody queries a not-yet-created table.
+static SCHEMA_ONCE: Once = Once::new();
 
 // ── Path + schema helpers ────────────────────────────────────────────────────
 
@@ -31,9 +40,13 @@ pub(crate) fn open() -> Option<Connection> {
     let conn = Connection::open(&path)
         .map_err(|e| eprintln!("koma: usage ledger open error: {e}"))
         .ok()?;
-    ensure_schema(&conn)
-        .map_err(|e| eprintln!("koma: usage ledger schema error: {e}"))
-        .ok()?;
+    // Run the DDL only on the first `open()` in this process — see
+    // `SCHEMA_ONCE`. Every later call reuses the schema created here.
+    SCHEMA_ONCE.call_once(|| {
+        if let Err(e) = ensure_schema(&conn) {
+            eprintln!("koma: usage ledger schema error: {e}");
+        }
+    });
     Some(conn)
 }
 

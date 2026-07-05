@@ -190,6 +190,9 @@ mod roundtrip_tests {
                 text: "/home/u/shot.png".to_string(),
             },
             ClientRequest::ApproveTool { approve: true },
+            ClientRequest::PlanDecision {
+                decision: "compact".to_string(),
+            },
             ClientRequest::NewSession {
                 name: Some("scratch".to_string()),
                 working_dir: Some("/tmp/x".to_string()),
