@@ -454,16 +454,17 @@ pub(super) fn render_tool_lines(
             Span::raw("  ")
         };
 
-        // plan_ready: render the plan SUMMARY as a readable quote block instead of
-        // the raw args blob (which carries the whole plan text). The summary lives
-        // in the call's `summary` arg — parse it out; on any parse failure fall
-        // through to the generic tool-call line. Display-only: the summary is NOT a
-        // separate conversation message, so there is no model-context duplication.
+        // plan_ready: render the composed user-facing plan (checklist + full plan,
+        // or checklist + highlights when the plan is long) as a readable quote block
+        // instead of the raw args blob. The interception rewrites the `highlights`
+        // arg to this composed digest (see approval::process_tools +
+        // conversation::set_tool_call_args), so we just parse it out; on any parse
+        // failure fall through to the generic tool-call line. Display-only.
         if call.function.name == "plan_ready" {
-            if let Some(summary) =
+            if let Some(digest) =
                 serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                     .ok()
-                    .and_then(|v| v.get("summary").and_then(|s| s.as_str()).map(str::to_string))
+                    .and_then(|v| v.get("highlights").and_then(|s| s.as_str()).map(str::to_string))
             {
                 // Header: "⚙/✓ plan ready" — the glyph flips to ✓ once the user
                 // decides and the plan_ready tool result lands.
@@ -472,12 +473,12 @@ pub(super) fn render_tool_lines(
                     Span::styled(glyph, glyph_style),
                     Span::styled("plan ready", Style::default().fg(palette.dim)),
                 ]));
-                // Summary body: the same dim left rule the reasoning block uses
+                // Digest body: the same dim left rule the reasoning block uses
                 // (THINK_BAR — one rail, never a box), the text in fg, hung under a
-                // 2-col indent and wrapped to the pane width.
+                // 2-col indent and wrapped to the pane width. All lines, no truncation.
                 let bar_style = Style::default().fg(palette.dim);
                 let inner_w = wrap_w.saturating_sub(2 + THINK_BAR.chars().count()).max(1);
-                for sline in summary.lines() {
+                for sline in digest.lines() {
                     if sline.trim().is_empty() {
                         lines.push(Line::from(vec![
                             Span::raw("  "),
