@@ -126,6 +126,15 @@ fn user_messages(rest: &AppStateRest) -> Vec<String> {
 /// double-Esc clears the composer or opens the rewind overlay. Ctrl+R re-sends the
 /// last message (idle only).
 pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
+    // Any key other than Esc disarms a pending double-Esc: without this, a lone
+    // Esc press arms a timer that a much-later Esc (beyond human double-tap pace,
+    // but still within the window) could consume, unexpectedly clearing the
+    // composer or popping the rewind overlay. Typing, arrows, Enter, etc. all
+    // cancel the arm so only a genuine back-to-back double-tap fires it.
+    if key.code != KeyCode::Esc {
+        rest.last_esc = None;
+    }
+
     // The full-screen sub-agent VIEWER is the most modal surface: while it's open
     // every key routes to it. Up/Down/PgUp scroll; Esc closes it back to the still-
     // open `$` panel; everything else is swallowed so nothing leaks underneath.
@@ -348,27 +357,29 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                         && fg.streaming.as_ref().is_none_or(|s| s.is_empty())
                 };
                 rest.last_esc = None;
-                return if early_thinking {
+                if early_thinking {
                     Action::InterruptRewind // handler falls back to plain interrupt if no user msg
                 } else {
                     Action::Interrupt
-                };
-            }
-            // Idle: double-Esc within ~400ms. With text in the composer → clear it;
-            // with an empty composer → open the history overlay. A lone Esc arms the timer.
-            const DOUBLE_ESC_MS: u128 = 400;
-            let now = std::time::Instant::now();
-            match rest.last_esc.take() {
-                Some(prev) if now.duration_since(prev).as_millis() <= DOUBLE_ESC_MS => {
-                    if rest.fg().input.is_empty() {
-                        Action::OpenRewind
-                    } else {
-                        Action::ClearComposer
-                    }
                 }
-                _ => {
-                    rest.last_esc = Some(now);
-                    Action::None
+            } else {
+                // Idle: double-Esc within DOUBLE_ESC_MS. With text in the composer →
+                // clear it; with an empty composer → open the history overlay. A lone
+                // Esc arms the timer.
+                const DOUBLE_ESC_MS: u128 = 800;
+                let now = std::time::Instant::now();
+                match rest.last_esc.take() {
+                    Some(prev) if now.duration_since(prev).as_millis() <= DOUBLE_ESC_MS => {
+                        if rest.fg().input.is_empty() {
+                            Action::OpenRewind
+                        } else {
+                            Action::ClearComposer
+                        }
+                    }
+                    _ => {
+                        rest.last_esc = Some(now);
+                        Action::None
+                    }
                 }
             }
         }
