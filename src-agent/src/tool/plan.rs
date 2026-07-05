@@ -115,10 +115,29 @@ pub(crate) fn parse_plan_ready_args(args: &Value) -> Result<(String, String), St
 
 /// Tool-result text answered back to the model when the user APPROVES a plan
 /// (plain, no compaction). Names the on-disk plan so the model can re-read it.
+/// Only used as a FALLBACK when the plan body couldn't be read off disk — see
+/// [`plan_approved_text_with_body`], which is preferred whenever the read
+/// succeeds.
 pub(crate) fn plan_approved_text(plan_path: &str) -> String {
     format!(
         "plan approved by user - exit planning and execute it now. Full detail is in \
          {plan_path}; read it if you need to refresh any part."
+    )
+}
+
+/// Tool-result text answered back to the model when the user APPROVES a plan
+/// (plain, no compaction), with the full plan BODY embedded directly instead of
+/// just a path pointer. The plain-approve path previously only named
+/// `plan.md`'s path, expecting the model to `read` it back — but the session
+/// dir can sit outside every configured workspace root, so that `read` can
+/// fail with "outside workspace". Embedding the body sidesteps that entirely.
+/// Mirrors the compact-seed pattern in
+/// `event_loop/drains.rs::apply_compaction_result`.
+pub(crate) fn plan_approved_text_with_body(body: &str) -> String {
+    format!(
+        "plan approved by user - exit planning and execute it now. Full approved plan below; \
+         follow it exactly.\n\n--- APPROVED PLAN ---\n{}\n--- END PLAN ---",
+        body.trim()
     )
 }
 

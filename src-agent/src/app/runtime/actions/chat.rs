@@ -653,15 +653,27 @@ pub(super) fn handle_approve_plan(
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
-    // Name the on-disk plan so the model can re-read it if needed.
-    let plan_path = state
-        .rest
-        .fg()
-        .session
+    // Read the approved plan off disk and embed its full body in the tool
+    // result, instead of just naming the path — the session dir can sit
+    // outside every configured workspace root, so a bare pointer sends the
+    // model off to `read` a path it may not be allowed to open (see the
+    // `resolve_read` sessions-tree bypass in `tool/mod.rs` for the other half
+    // of this fix). Falls back to the old pointer-only text if the read fails
+    // (no session, or the file vanished) so nothing regresses.
+    let plan_path_opt = state.rest.fg().session.as_ref().map(|s| s.plan_path());
+    let plan_body = plan_path_opt
         .as_ref()
-        .map(|s| s.plan_path().display().to_string())
-        .unwrap_or_else(|| "the session plan.md".to_string());
-    answer_plan_ready(state, crate::tool::plan::plan_approved_text(&plan_path));
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let approve_text = match plan_body {
+        Some(body) => crate::tool::plan::plan_approved_text_with_body(&body),
+        None => {
+            let plan_path = plan_path_opt
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "the session plan.md".to_string());
+            crate::tool::plan::plan_approved_text(&plan_path)
+        }
+    };
+    answer_plan_ready(state, approve_text);
     // Make the tool-call classifier PLAN-AWARE for the execution that follows: stash
     // the approved plan text (truncated) on the fg session so `process_tools`
     // prepends it to the classifier context. The classifier keeps running (safety net
