@@ -125,11 +125,14 @@ pub(super) fn handle_setup_koma_free(
     state.rest.prev_session = None; // committed; discard fallback
     state.rest.spawn_pending = false; // a /new-spawned session is now committed
     state.rest.reset_scroll();
-    // Land in Chat first, THEN warm (warm_session is non-blocking and may upgrade the
-    // mode to Loading, so it must run LAST).
+    // Land in Chat and STAY there: warm in the BACKGROUND (no Loading splash) so the
+    // composer + double-Esc composer-clear / rewind are live IMMEDIATELY on a freshly-
+    // onboarded session. A splash on the cold keyless koma-free route would otherwise
+    // hang (routing Esc to skip-loading, not the double-Esc path). The awareness
+    // summary + workspace index still fold in via the WarmEvent / dir_cache drains.
     *state.mode_mut() = Mode::Chat;
     state.rest.fg_mut().status = "ready".into();
-    super::super::warm_session(state, client, handle);
+    super::super::warm_session_background(state, client, handle);
     Ok(())
 }
 
@@ -241,11 +244,13 @@ pub(super) fn handle_onboard_provider_save_model(
     state.rest.prev_session = None; // committed; discard fallback
     state.rest.spawn_pending = false; // a /new-spawned session is now committed
     state.rest.reset_scroll();
-    // Land in Chat first, THEN warm (warm_session may upgrade the mode to Loading, so
-    // it must run LAST).
+    // Land in Chat and STAY there: warm in the BACKGROUND (no Loading splash) so the
+    // composer + double-Esc composer-clear / rewind are live IMMEDIATELY on a freshly-
+    // onboarded session (mirrors handle_setup_koma_free). The awareness summary +
+    // workspace index still fold in via the WarmEvent / dir_cache drains.
     *state.mode_mut() = Mode::Chat;
     state.rest.fg_mut().status = "ready".into();
-    super::super::warm_session(state, client, handle);
+    super::super::warm_session_background(state, client, handle);
     Ok(())
 }
 
