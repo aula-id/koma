@@ -5,7 +5,7 @@
 //! [`Command`] value.  The runtime then routes that value to the appropriate
 //! service logic (compaction, new session, rename, etc.).
 //!
-//! Supported commands: `/compact`, `/new`, `/mode`, `/effort`,
+//! Supported commands: `/compact`, `/new`, `/mode`, `/effort`, `/free`,
 //! `/rename [session] <name>`, `/settings` (alias `/config`),
 //! `/resume` (alias `/sessions`), `/task <agent> <task>`,
 //! `/cd <path>`, `/adddir <path>`,
@@ -21,7 +21,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/resume", "Open the session hub (live + past sessions)"),
     ("/mode", "Toggle Normal/Auto tool approval"),
     ("/effort", "Set model reasoning/thinking effort"),
-    ("/free", "switch between koma-free and back"),
+    ("/free", "Toggle this session onto the keyless koma-free tier"),
     ("/internet", "Toggle internet mode (simple | full)"),
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
@@ -104,7 +104,8 @@ pub enum Command {
     /// Open the reasoning/thinking-effort picker for the current model.
     Effort,
     /// Toggle THIS session onto the keyless koma-free tier and back to the
-    /// configured Main model (`/free`). Session-scoped + ephemeral; no args.
+    /// configured Main model (`/free`). Session-scoped + derived from
+    /// `session_models` — no stored flag; no args.
     Free,
     /// Rename the current session.  Holds the new name string.
     Rename(String),
