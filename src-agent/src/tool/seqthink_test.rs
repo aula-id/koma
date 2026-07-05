@@ -16,6 +16,7 @@ fn test_ctx() -> ToolCtx {
         sec_manager: None,
         bash_saving: true,
         bash_log_dir: None,
+        session_dir: None,
     }
 }
 

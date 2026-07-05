@@ -129,6 +129,13 @@ pub struct ToolCtx {
     /// true (`<session_dir>/opt/`). `None` when no session is active (or for
     /// headless/test constructions), in which case tee is simply skipped.
     pub bash_log_dir: Option<PathBuf>,
+    /// The active session's own directory (`~/.koma/sessions/<pwd_hash>/<uuid>/`),
+    /// holding `plan.md`, `plan_todos.md`, `settings.json`, etc. Used ONLY by
+    /// [`resolve_read`]'s sessions exemption so the model can read files inside
+    /// its OWN session dir via an absolute path — never any other session's.
+    /// `None` when no session is active (or for headless/test constructions), in
+    /// which case the exemption is simply skipped.
+    pub session_dir: Option<PathBuf>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -338,7 +345,22 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
 ///
 /// SCRATCH BYPASS: delegates to `resolve` which allows absolute paths under
 /// the scratch root through without workspace containment checks.
-pub fn resolve_read(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
+///
+/// SESSION BYPASS (read-only, NOT mirrored into `resolve`): absolute paths
+/// under the ACTIVE session's own directory (`session_dir`, e.g.
+/// `~/.koma/sessions/<pwd_hash>/<uuid>/`) are also let through directly. This
+/// is what lets the model `read` its own `plan.md` (and other session
+/// artifacts) after a plain plan approval, whose path names a location outside
+/// every configured workspace root. It is intentionally scoped to
+/// `read`/`resolve_read` only — `resolve` is shared with `write`/`edit`/
+/// `delete`, and those must stay workspace-contained, so this exemption is NOT
+/// added there. It is ALSO intentionally scoped to only the caller's OWN
+/// session directory, not the whole `sessions/` tree: `resolve_read` also
+/// backs `grep`/`glob`, so widening this to every session would let the model
+/// read/grep every past session's chat history across all projects.
+/// `session_dir` is `None` when no session is active, in which case this
+/// exemption is simply skipped (falls through to normal workspace resolution).
+pub fn resolve_read(workspaces: &[PathBuf], rel: &str, session_dir: Option<&Path>) -> Result<PathBuf> {
     // Absolute scratch-root paths: let resolve() handle the bypass.
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
@@ -348,6 +370,37 @@ pub fn resolve_read(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
         let candidate = as_path.canonicalize().unwrap_or_else(|_| as_path.to_path_buf());
         if candidate.starts_with(&scratch) {
             return resolve(workspaces, rel);
+        }
+        // Session bypass: exempt ONLY the active session's own directory.
+        // Partial-canonicalize the same way `resolve()` does for the scratch
+        // bypass above, so `..` tricks can't walk the candidate back out of
+        // the session dir before the containment check.
+        if let Some(session_dir) = session_dir {
+            let normalized = match as_path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    let mut existing = as_path;
+                    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+                    while !existing.exists() {
+                        match existing.file_name() {
+                            Some(n) => tail.push(n.to_os_string()),
+                            None => break,
+                        }
+                        match existing.parent() {
+                            Some(p) => existing = p,
+                            None => break,
+                        }
+                    }
+                    let mut base = existing.canonicalize().unwrap_or_else(|_| existing.to_path_buf());
+                    for seg in tail.iter().rev() {
+                        base.push(seg);
+                    }
+                    base
+                }
+            };
+            if normalized.starts_with(session_dir) {
+                return Ok(normalized);
+            }
         }
     }
 
