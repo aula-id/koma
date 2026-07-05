@@ -265,10 +265,13 @@ fn all_idle_or_parked_detached(state: &AppState, client_attached: bool) -> bool 
 ///   - LOCAL TUI: there is no IPC; the forwarded-key story does not apply. The `[k]` key
 ///     runs through `handle_key` -> `QuitKillAll` -> `handle_quit_kill_all`, which sets
 ///     `state.rest.should_quit`. In the standalone `run_loop` that simply breaks the loop
-///     and the process exits (one window, so "close window (quit)" == quit koma). NOTE: this
-///     `should_quit` -> `close_all_sessions` translation BELOW is effectively dormant for
-///     clients now (no client sets `should_quit` on the daemon); it remains only as a
-///     defensive sweep in case a future daemon-side path ever sets the flag.
+///     and the process exits (one window, so "close window (quit)" == quit koma). NOTE: in
+///     PRACTICE no client reaches `handle_quit_kill_all`/`handle_quit_detach` today (both
+///     are intercepted client-side per the bullet above), so the `should_quit` sweep BELOW
+///     fires ONLY via the landing/onboarding chokepoint in `request_quit` (a fresh daemon
+///     sitting in `Mode::Onboard`/`OnboardProvider`/first-run `KeyInput`) — but the sweep
+///     itself is written generically: ANY future daemon-side path that sets `should_quit`
+///     gets the SAME real-shutdown treatment, not just that one caller.
 ///
 /// `shutting_down` is the process-level (signal-driven) stop flag; it is ORed with
 /// the hub's client-driven `QuitDaemon` flag so either path tears down identically.
@@ -349,20 +352,30 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
 
-        // 3a. Daemon-side `should_quit` sweep: if anything daemon-side ever sets
-        //     `should_quit` (via `handle_quit_kill_all`), translate it to "close every
-        //     session" (NOT an abrupt loop break — that is the LOCAL standalone TUI's
-        //     behaviour, where `run_loop` breaks on `should_quit`). Tombstone them all and
-        //     clear the flag; `all_sessions_closed` is then true, so the grace-timed
-        //     self-exit below drives a single clean teardown. Foreground is repointed
-        //     inside `close_all_sessions`. NOTE (C4): the CLIENT `[k]` no longer routes
-        //     here — it sends a per-session `QuitSession` + `Detach` (close THIS window
-        //     only), and `[d]` detach leaves sessions live and is a client-side exit. So
-        //     this block is effectively dormant for clients today; it stays as a defensive
-        //     translation in case a future daemon-side path sets the flag.
+        // 3a. Daemon-side `should_quit` sweep: `should_quit` means "quit the app",
+        //     the same intent the LOCAL standalone TUI honours by breaking `run_loop`
+        //     immediately (`event_loop/mod.rs`). The daemon has no loop-break of its
+        //     own to reuse — its ONE real termination path is `hub.should_shutdown()`
+        //     (checked at 3c below), which a controller's `QuitDaemon` latches — so
+        //     this sweep LATCHES THAT SAME FLAG via `hub.request_shutdown()` rather
+        //     than merely closing sessions. That makes `should_quit` a genuine quit in
+        //     daemon mode too: `request_quit`'s landing/onboarding chokepoint (a fresh,
+        //     unconfigured daemon sitting in `Mode::Onboard`/`OnboardProvider`/first-run
+        //     `KeyInput`, where `q`/Esc set `should_quit` directly with no QuitConfirm
+        //     overlay to intercept) previously left `should_quit` closing sessions with
+        //     nothing left to break the loop or unlink the socket, so the client never
+        //     saw its attached daemon disconnect and the process lingered forever.
+        //     `handle_quit_kill_all`/`handle_quit_detach` (the QuitConfirm overlay's
+        //     kill-all/detach choices) also set this flag, but are unreachable here in
+        //     practice: an ATTACHED client intercepts `k`/`d`/Enter-on-those-buttons
+        //     client-side (`client::input::handle_quit_confirm_key`) and never forwards
+        //     them as a `SendKey`, so only `Esc` (→ `QuitCancel`, which does not touch
+        //     `should_quit`) reaches the daemon's local `handle_quit_confirm` from a
+        //     client today. Clear the flag before latching so a stray re-check this same
+        //     tick reads it as already handled.
         if state.rest.should_quit {
-            hub.close_all_sessions(state);
             state.rest.should_quit = false;
+            hub.request_shutdown();
         }
 
         // 3a-bis. DETACHED-approval park timeout (stage 11, item 1). With the inbound
