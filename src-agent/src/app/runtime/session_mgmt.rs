@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::app::mode::{LoadingState, Mode, WarmStatus};
 use crate::app::resolve::resolve_role;
 use crate::app::state::AppState;
-use crate::model::app_config::ModelRole;
+use crate::model::app_config::{ApiType, ModelRole};
 use crate::service::openrouter::OpenRouterClient;
 use crate::service::WarmEvent;
 
@@ -29,6 +29,43 @@ pub(crate) fn reconcile_session_lock(state: &mut AppState) {
     }
 }
 
+/// Warm-awareness timeout for the startup splash / background warm. SHORT on
+/// purpose: the splash is skippable (Esc), but it must NEVER hang. An unbounded
+/// awareness call on a cold/slow route (e.g. keyless koma-free) would strand the
+/// session in [`Mode::Loading`], where the key dispatcher routes Esc to the splash-
+/// skip and never to Chat's double-Esc composer-clear / rewind. On timeout the drain
+/// still receives a terminal [`WarmEvent::WarmAwareness`] (`summary: None`), so a
+/// splash flips Loading→Chat instead of hanging.
+const WARM_AWARENESS_TIMEOUT_SECS: u64 = 20;
+
+/// Warm a newly-activated session WITH the animated loading splash (the splash
+/// variant: startup, /new, picker-select, creds-confirm). Thin wrapper over
+/// [`warm_session_impl`] with `show_splash = true`; see it for the full contract.
+pub(crate) fn warm_session(
+    state: &mut AppState,
+    client: &Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) {
+    warm_session_impl(state, client, handle, true);
+}
+
+/// Warm a newly-activated session in the BACKGROUND — identical warm work to
+/// [`warm_session`] (lock reconcile, workspace reindex, awareness task + channel) but
+/// WITHOUT the [`Mode::Loading`] splash: the session stays in whatever mode it already
+/// is (Chat), so the composer and the double-Esc composer-clear / rewind are usable
+/// immediately. Used by the first-run onboarding tails, where a blocking splash on a
+/// cold keyless route would otherwise swallow those keys. The awareness summary still
+/// folds into `awareness_summary` via the shared `WarmEvent` drain regardless of mode
+/// (the drain gates only the splash-STEP marker on `Mode::Loading`, not the summary
+/// store). Thin wrapper over [`warm_session_impl`] with `show_splash = false`.
+pub(crate) fn warm_session_background(
+    state: &mut AppState,
+    client: &Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) {
+    warm_session_impl(state, client, handle, false);
+}
+
 /// Warm a newly-activated session to match a cold terminal launch: kick off a
 /// background reindex of its workspace and (best-effort) compute the project
 /// awareness summary. Safe to call whenever a session becomes the active one
@@ -37,22 +74,24 @@ pub(crate) fn reconcile_session_lock(state: &mut AppState) {
 /// NON-BLOCKING: the awareness network call used to run via `handle.block_on` on
 /// the UI thread BEFORE the event loop started, so a slow network froze the app on
 /// a black screen. It is now SPAWNED as a background task (mirroring the endpoints
-/// fetch), and — when there is awareness work to do — this switches the app into
-/// [`Mode::Loading`], an animated splash the event loop renders while the task
-/// runs. The task sends a [`WarmEvent::WarmAwareness`] on `warm_rx`, drained in
-/// `run_loop` to populate the summary and advance the splash; once the awareness
-/// step is terminal the loop enters Chat. This function returns immediately (it
-/// only spawns), so startup never blocks.
+/// fetch), and — when there is awareness work to do AND `show_splash` is set — this
+/// switches the app into [`Mode::Loading`], an animated splash the event loop renders
+/// while the task runs. The task sends a [`WarmEvent::WarmAwareness`] on `warm_rx`,
+/// drained in `run_loop` to populate the summary and advance the splash; once the
+/// awareness step is terminal the loop enters Chat. This function returns immediately
+/// (it only spawns), so startup never blocks. The spawned call is bounded by
+/// [`WARM_AWARENESS_TIMEOUT_SECS`] so a hung upstream can never wedge the splash.
 ///
 /// The model catalogue is NO LONGER fetched here: it loads ON DEMAND, per
 /// endpoint, the first time a model omnisearch needs it (see
 /// `AppStateRest::request_catalogue` + the debounced tick in `event_loop`). So
 /// when awareness is disabled or unroutable, there is no warm work and the mode is
 /// left as-is (Chat) — no splash flash.
-pub(crate) fn warm_session(
+fn warm_session_impl(
     state: &mut AppState,
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
+    show_splash: bool,
 ) {
     // Claim the lock for the now-active session (and release any prior one).
     // Cheap no-op when the active session is unchanged. Placed first so every
@@ -82,7 +121,8 @@ pub(crate) fn warm_session(
     let want_awareness = settings.awareness_enabled;
     let aware_route = client.as_ref().and_then(|_| {
         if want_awareness {
-            resolve_role(&config, &settings, ModelRole::Awareness).filter(|r| r.is_routable())
+            resolve_role(&config, &settings, ModelRole::Awareness)
+                .filter(|r| r.is_routable())
         } else {
             None
         }
@@ -94,12 +134,35 @@ pub(crate) fn warm_session(
         return;
     }
 
-    *state.mode_mut() = Mode::Loading(LoadingState {
-        started: std::time::Instant::now(),
-        frame: 0,
-        workspace: WarmStatus::Running,
-        awareness: WarmStatus::Running,
-    });
+    // Resolve the Main route ONCE — it decides BOTH (a) whether the splash may show
+    // and (b) the awareness-fallback route moved into the task below. koma-free Main is
+    // KEYLESS and SLOW to warm, so a Loading splash on it strands the session in
+    // `Mode::Loading` for the whole `WARM_AWARENESS_TIMEOUT_SECS` window — and there the
+    // key dispatcher routes Esc to splash-skip, NEVER to Chat's double-Esc composer-clear
+    // / rewind. So SUPPRESS the splash whenever the resolved Main is koma-free (regardless
+    // of `show_splash`) and warm SILENTLY instead: blocking the UI in Loading is worse
+    // than warming quietly. The awareness task + `warm_rx` drain below still run and fold
+    // the summary in exactly as the background variant does. Non-koma-free (keyed / OAuth)
+    // Mains are unchanged — they still get the splash when `show_splash`.
+    let main_route = resolve_role(&config, &settings, ModelRole::Main);
+    let effective_splash = show_splash
+        && !main_route
+            .as_ref()
+            .is_some_and(|r| r.api_type == ApiType::KomaFree);
+
+    // Splash variant only: upgrade to the animated Loading splash while awareness
+    // warms. The BACKGROUND variant (`show_splash = false`, first-run onboarding) AND a
+    // koma-free Main (see above) SKIP this so the session stays in Chat — composer +
+    // double-Esc live immediately — while the same awareness task below still runs and
+    // folds its summary in via the drain.
+    if effective_splash {
+        *state.mode_mut() = Mode::Loading(LoadingState {
+            started: std::time::Instant::now(),
+            frame: 0,
+            workspace: WarmStatus::Running,
+            awareness: WarmStatus::Running,
+        });
+    }
 
     // One channel for the warm task; the receiver lives in state and is drained in
     // run_loop. Dropping it (e.g. app close) makes the sends no-ops, same contract
@@ -115,38 +178,52 @@ pub(crate) fn warm_session(
     // once on the trusted Main route before giving up.
     if let (Some(c), Some(route)) = (client.as_ref(), aware_route) {
         let c = Arc::clone(c);
-        // Resolve the Main route for fallback; cheap (no I/O). `None` is safe —
-        // `summarize_with_fallback` skips the retry when the routes are equal or
-        // Main is unavailable.
-        let main_route = resolve_role(&config, &settings, ModelRole::Main);
+        // `main_route` (resolved ONCE above, and reused here as the awareness fallback)
+        // is moved into the task. `None` is safe — `summarize_with_fallback` skips the
+        // retry when the routes are equal or Main is unavailable.
         handle.spawn(async move {
-            let summary = match main_route {
-                Some(ref m) => {
-                    crate::app::awareness::summarize_with_fallback(
-                        &c,
-                        &settings,
-                        route.conn(),
-                        &route.model_id,
-                        route.provider(),
-                        &workdir,
-                        m.conn(),
-                        &m.model_id,
-                        m.provider(),
-                    )
-                    .await
-                }
-                None => {
-                    crate::app::awareness::summarize(
-                        &c,
-                        &settings,
-                        route.conn(),
-                        &route.model_id,
-                        route.provider(),
-                        &workdir,
-                    )
-                    .await
-                }
-            };
+            // Bound the awareness call (WARM_AWARENESS_TIMEOUT_SECS): a hung/slow
+            // upstream must NOT strand the session — with a splash it would sit in
+            // Mode::Loading forever (swallowing double-Esc), and in the background it
+            // would leak the task. Timeout OR any inner failure collapses to `None`
+            // via `.ok().flatten()`, mirroring `spawn_awareness_recompute`; either way
+            // the terminal WarmAwareness below still fires (so a splash flips
+            // Loading→Chat, and the summary store is a harmless `None`).
+            let summary = tokio::time::timeout(
+                std::time::Duration::from_secs(WARM_AWARENESS_TIMEOUT_SECS),
+                async {
+                    match main_route {
+                        Some(ref m) => {
+                            crate::app::awareness::summarize_with_fallback(
+                                &c,
+                                &settings,
+                                route.conn(),
+                                &route.model_id,
+                                route.provider(),
+                                &workdir,
+                                m.conn(),
+                                &m.model_id,
+                                m.provider(),
+                            )
+                            .await
+                        }
+                        None => {
+                            crate::app::awareness::summarize(
+                                &c,
+                                &settings,
+                                route.conn(),
+                                &route.model_id,
+                                route.provider(),
+                                &workdir,
+                            )
+                            .await
+                        }
+                    }
+                },
+            )
+            .await
+            .ok()
+            .flatten();
             // Tag the result with the warming session's id so the drain routes it to
             // exactly that session (C4), never to a different Loading session.
             let _ = tx.send(WarmEvent::WarmAwareness {

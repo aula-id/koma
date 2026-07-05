@@ -160,7 +160,9 @@ fn draw_list(frame: &mut Frame, st: &SettingsState, palette: &Palette, area: Rec
 }
 
 /// Provider picker overlay: an inline 3-option list, cursor-highlighted.
-fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) {
+///
+/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
+pub(crate) fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) {
     const OPTIONS: [&str; 3] = ["Codex", "Kilo Code", "Codex (paste token)"];
     let lines: Vec<Line> = OPTIONS
         .iter()
@@ -183,7 +185,9 @@ fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) 
 /// A one-line status/spinner message plus an optional URL/code line beneath it —
 /// shared shape for `Starting`/`CodexWait`/`KiloWait`. `copied` shows a dim
 /// confirmation line under the URL after a successful `c` (copy-url) press.
-fn draw_message(
+///
+/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
+pub(crate) fn draw_message(
     frame: &mut Frame,
     palette: &Palette,
     area: Rect,
@@ -214,7 +218,9 @@ fn draw_message(
 }
 
 /// The manual paste-token screen: a single input line with a trailing cursor.
-fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
+///
+/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
+pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
     let line = Line::from(vec![
         Span::styled("token: ", Style::default().fg(palette.dim)),
         Span::styled(input.to_string(), Style::default().fg(palette.fg)),
@@ -224,7 +230,9 @@ fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
 }
 
 /// Failure screen: the error line in red plus a dismiss hint.
-fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
+///
+/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
+pub(crate) fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(msg.to_string(), Style::default().fg(Color::Red))),
         Line::from(""),

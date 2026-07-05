@@ -80,6 +80,10 @@ pub struct Resolved {
     /// `fresh_key` hook can refresh a near-expiry token. "" = static key (no
     /// refresh). Filled by the OAuth resolution path (a later wave).
     pub oauth_uuid: String,
+    /// The stable per-install id sent as the koma-free `X-Koma` header, carried
+    /// onto the [`Conn`]. Non-empty ONLY for an `ApiType::KomaFree` route (copied
+    /// from `AppConfig::install_id`); "" for every other route.
+    pub install_id: String,
 }
 
 impl Resolved {
@@ -93,6 +97,7 @@ impl Resolved {
             api_type: self.api_type,
             account_id: &self.account_id,
             oauth_uuid: &self.oauth_uuid,
+            install_id: &self.install_id,
         }
     }
 
@@ -110,6 +115,20 @@ impl Resolved {
     /// safeguard) skip the call gracefully (no summary / no recall / fail-closed).
     pub fn is_routable(&self) -> bool {
         self.api_type.is_routable()
+    }
+
+    /// Whether this route carries usable auth — the predicate the "is there a
+    /// usable Main route?" client-build / first-run gates check.
+    ///
+    /// A static-key or OAuth route is usable when its `api_key` (bearer /
+    /// access-token) is non-empty; a [`ApiType::KomaFree`] route is KEYLESS by
+    /// design (auth rides the `X-Koma`/`X-Session` headers, not `Authorization`),
+    /// so it is usable with an empty key. Purely a drop-in for the old
+    /// `!r.api_key.is_empty()` gate: identical for every other wire type, it only
+    /// flips koma-free from "no route" to "usable" so a keyless free-tier user
+    /// reaches Chat instead of being re-onboarded.
+    pub fn is_usable(&self) -> bool {
+        !self.api_key.is_empty() || matches!(self.api_type, ApiType::KomaFree)
     }
 }
 
@@ -153,6 +172,22 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         String::new()
     };
     if let Some(provider) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+        // koma-free: keyless dual-header transport. Route the ModelEntry names as-is
+        // (no force-override), but send NO api_key and carry the stable install id for
+        // the `X-Koma` header — auth rides the X-Koma/X-Session headers, not a bearer.
+        if provider.api_type == ApiType::KomaFree {
+            return Some(Resolved {
+                model_id: entry.model_id.clone(),
+                endpoint: provider.endpoint.clone(),
+                api_key: String::new(),
+                api_type: ApiType::KomaFree,
+                route: entry.route.clone(),
+                effort,
+                account_id: String::new(),
+                oauth_uuid: String::new(),
+                install_id: config.install_id.clone(),
+            });
+        }
         return Some(Resolved {
             model_id: entry.model_id.clone(),
             endpoint: provider.endpoint.clone(),
@@ -163,6 +198,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
             // Static-key provider route: no OAuth identity.
             account_id: String::new(),
             oauth_uuid: String::new(),
+            install_id: String::new(),
         });
     }
     // Fall back to an OAuth-backed connection (Codex / Kilo Code).
@@ -185,6 +221,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         effort,
         account_id,
         oauth_uuid: conn.uuid.clone(),
+        install_id: String::new(),
     })
 }
 
@@ -202,6 +239,7 @@ fn legacy_main(settings: &Settings) -> Resolved {
         effort: settings.effort.clone(),
         account_id: String::new(),
         oauth_uuid: String::new(),
+        install_id: String::new(),
     }
 }
 
@@ -239,6 +277,7 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
                     effort: String::new(),
                     account_id: String::new(),
                     oauth_uuid: String::new(),
+                    install_id: String::new(),
                 })
             }
         }
@@ -426,6 +465,7 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
                     effort: String::new(),
                     account_id: String::new(),
                     oauth_uuid: String::new(),
+                    install_id: String::new(),
                 }));
             }
         }

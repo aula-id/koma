@@ -121,6 +121,36 @@ pub struct GlobalSnapshot {
 
 // -- mode payload projections (stage 2: core interactive modes) ----------------
 
+/// A serde-safe projection of the first-run connection chooser (`Mode::Onboard`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OnboardSnapshot {
+    pub cursor: usize,
+}
+
+/// A serde-safe projection of the guided provider onboarding wizard
+/// (`Mode::OnboardProvider`).
+///
+/// The model-result list is NOT carried: the thin client recomputes it from the
+/// globally-projected `models_cache` (+ the compiled-in Codex static list) exactly as
+/// the `/settings` model omnisearch does, so no separate results projection is needed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OnboardProviderSnapshot {
+    /// Wire token for the active step: `"login"` | `"model_select"`.
+    pub step: String,
+    /// The reused OAuth connect-flow state (picker / wait / paste / failed).
+    pub oauth_flow: OAuthFlowSnapshot,
+    /// The just-created connection's uuid (set on login success).
+    pub new_conn_uuid: String,
+    /// Signed-in provider wire token: `Some("codex"|"kilocode")`, `None` pre-login.
+    pub provider: Option<String>,
+    /// Model omnisearch query.
+    pub query: String,
+    /// Highlighted row in the filtered model list.
+    pub result_sel: usize,
+}
+
 /// A serde-safe projection of the first-run setup wizard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

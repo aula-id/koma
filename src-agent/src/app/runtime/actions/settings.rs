@@ -358,6 +358,8 @@ pub(super) fn handle_fetch_model_endpoints(
             api_type: crate::model::app_config::ApiType::OpenAiCompatible,
             account_id: "",
             oauth_uuid: &oauth_uuid,
+            // Catalogue GET, never koma-free — no X-Koma header needed.
+            install_id: "",
         };
         let _ = match c.list_model_endpoints(conn, &model_id).await {
             Ok(eps) => tx.send(crate::service::StreamEvent::EndpointsLoaded {

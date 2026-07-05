@@ -186,8 +186,18 @@ impl SettingsState {
     /// `session_only`: `false` = global scope (`[+add global]`),
     /// `true` = session-local scope (`[+add local]`). The scope is stored on the
     /// modal and read back on save — no separate `SaveSession` button needed.
+    ///
+    /// Defaults `provider_idx` to the first NON-koma-free provider (nav-only
+    /// exclusion — see `model_nav.rs::is_koma_free_at`); falls back to `0`
+    /// when every provider is koma-free (or there are none) rather than
+    /// panicking or leaving the modal unusable.
     pub fn open_model_modal_add(&mut self, session_only: bool) {
-        self.model_modal = Some(ModelModal::new_add(0, session_only));
+        let provider_idx = self
+            .providers
+            .iter()
+            .position(|p| p.api_type != crate::model::app_config::ApiType::KomaFree)
+            .unwrap_or(0);
+        self.model_modal = Some(ModelModal::new_add(provider_idx, session_only));
     }
 
     /// Open the edit-model modal, prefilled from `models[idx]`.

@@ -67,7 +67,7 @@ pub fn handle_live_switch(
                 &settings,
                 crate::model::app_config::ModelRole::Main,
             )
-            .is_some_and(|r| !r.api_key.is_empty())
+            .is_some_and(|r| r.is_usable())
         });
     *client = if usable { Some(build_client()) } else { None };
     // Reflect the now-foreground session's live state in the status line. Per-session
@@ -350,7 +350,7 @@ pub(in crate::app::runtime) fn create_session_for_pwd(
         &sess.settings,
         crate::model::app_config::ModelRole::Main,
     )
-    .is_none_or(|r| r.api_key.is_empty());
+    .is_none_or(|r| !r.is_usable());
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 

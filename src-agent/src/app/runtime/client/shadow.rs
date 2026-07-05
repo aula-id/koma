@@ -273,6 +273,10 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // So build the mode into a local — the arms keep their `shadow.rest` writes — then store
     // it onto the foreground session with `set_mode`.
     let new_mode = match global.mode {
+        ModeSnapshot::Onboard(o) => Mode::Onboard(Box::new(shadow_onboard(*o))),
+        ModeSnapshot::OnboardProvider(o) => {
+            Mode::OnboardProvider(Box::new(shadow_onboard_provider(*o)))
+        }
         ModeSnapshot::KeyInput(f) => Mode::KeyInput(shadow_key_input(f)),
         ModeSnapshot::SessionPicker(p) => Mode::SessionPicker(shadow_picker(p)),
         ModeSnapshot::SessionHub(h) => Mode::SessionHub(Box::new(shadow_session_hub(h))),

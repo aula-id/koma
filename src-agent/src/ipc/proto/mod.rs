@@ -133,6 +133,8 @@ pub enum DaemonEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ModeSnapshot {
+    Onboard(Box<OnboardSnapshot>),
+    OnboardProvider(Box<OnboardProviderSnapshot>),
     KeyInput(KeyInputSnapshot),
     SessionPicker(PickerSnapshot),
     SessionHub(SessionHubSnapshot),

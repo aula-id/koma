@@ -117,7 +117,7 @@ pub(crate) fn apply_new_session_local(
         &sess.settings,
         crate::model::app_config::ModelRole::Main,
     )
-    .is_none_or(|r| r.api_key.is_empty());
+    .is_none_or(|r| !r.is_usable());
     runtime.session = Some(sess);
 
     // Capture the previous foreground index before we swap, so we can

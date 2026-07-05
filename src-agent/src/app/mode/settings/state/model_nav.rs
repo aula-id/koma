@@ -3,6 +3,7 @@
 
 use super::super::ModelField;
 use super::SettingsState;
+use crate::model::app_config::ApiType;
 
 /// The model modal's selected provider slot, resolved from `provider_idx`:
 /// providers first, then OAuth drafts (offset by `providers.len()`) — the
@@ -182,9 +183,20 @@ impl SettingsState {
         }
     }
 
+    /// `true` when provider slot `idx` is a REAL provider (not an OAuth draft)
+    /// whose `api_type` is `KomaFree`. Used to skip koma-free slots during
+    /// Provider-field navigation ONLY — the underlying `providers` vec and its
+    /// index space are never touched, so `provider_idx → provider_uuid` saving
+    /// (see `actions/settings.rs::to_entry`) stays correct.
+    fn is_koma_free_at(&self, idx: usize) -> bool {
+        idx < self.providers.len()
+            && self.providers[idx].api_type == ApiType::KomaFree
+    }
+
     /// Move left in the model modal, dispatching on the focused field:
-    /// - Provider → cycle provider backward (wrapping, resets search), then
-    ///   re-clamp `field` since the Route field may appear/disappear.
+    /// - Provider → cycle provider backward (wrapping, resets search), skipping
+    ///   any koma-free provider slot (nav-only — see [`Self::is_koma_free_at`]),
+    ///   then re-clamp `field` since the Route field may appear/disappear.
     /// - Save/Cancel → step left within the button group, clamping at Save.
     /// - everything else (Name/Model/Route) → no-op.
     ///
@@ -194,9 +206,27 @@ impl SettingsState {
         let n = self.providers.len() + self.oauth_drafts.len();
         match self.mm_current_field() {
             Some(ModelField::Provider) => {
-                if let Some(m) = self.model_modal.as_mut() {
-                    if n > 0 {
-                        m.provider_idx = (m.provider_idx + n - 1) % n;
+                if n > 0 {
+                    // Compute the landing index against `&self` first (borrow
+                    // of self.model_modal must not overlap with the
+                    // is_koma_free_at(&self) calls below).
+                    let start = self.model_modal.as_ref().map_or(0, |m| m.provider_idx);
+                    let mut idx = (start + n - 1) % n;
+                    // Keep stepping backward past koma-free slots. Cap at
+                    // `n` iterations so an all-koma-free config can't hang;
+                    // if that cap is hit, every slot is koma-free — leave
+                    // the index at its pre-call value instead.
+                    let mut steps = 0;
+                    while self.is_koma_free_at(idx) {
+                        steps += 1;
+                        if steps >= n {
+                            idx = start;
+                            break;
+                        }
+                        idx = (idx + n - 1) % n;
+                    }
+                    if let Some(m) = self.model_modal.as_mut() {
+                        m.provider_idx = idx;
                         m.query.clear();
                         m.result_sel = 0;
                     }
@@ -215,8 +245,9 @@ impl SettingsState {
     }
 
     /// Move right in the model modal, dispatching on the focused field:
-    /// - Provider → cycle provider forward (wrapping, resets search), then
-    ///   re-clamp `field` since the Route field may appear/disappear.
+    /// - Provider → cycle provider forward (wrapping, resets search), skipping
+    ///   any koma-free provider slot (nav-only — see [`Self::is_koma_free_at`]),
+    ///   then re-clamp `field` since the Route field may appear/disappear.
     /// - Save/Cancel → step right within the button group, clamping at Cancel.
     /// - everything else (Name/Model/Route) → no-op.
     ///
@@ -225,9 +256,25 @@ impl SettingsState {
         let n = self.providers.len() + self.oauth_drafts.len();
         match self.mm_current_field() {
             Some(ModelField::Provider) => {
-                if let Some(m) = self.model_modal.as_mut() {
-                    if n > 0 {
-                        m.provider_idx = (m.provider_idx + 1) % n;
+                if n > 0 {
+                    // Compute the landing index against `&self` first (borrow
+                    // of self.model_modal must not overlap with the
+                    // is_koma_free_at(&self) calls below).
+                    let start = self.model_modal.as_ref().map_or(0, |m| m.provider_idx);
+                    let mut idx = (start + 1) % n;
+                    // Keep stepping forward past koma-free slots. Same cap +
+                    // degenerate-fallback as mm_left, mirrored direction.
+                    let mut steps = 0;
+                    while self.is_koma_free_at(idx) {
+                        steps += 1;
+                        if steps >= n {
+                            idx = start;
+                            break;
+                        }
+                        idx = (idx + 1) % n;
+                    }
+                    if let Some(m) = self.model_modal.as_mut() {
+                        m.provider_idx = idx;
                         m.query.clear();
                         m.result_sel = 0;
                     }

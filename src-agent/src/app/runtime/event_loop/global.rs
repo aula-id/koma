@@ -35,7 +35,7 @@
 use std::sync::Arc;
 
 use crate::app::mode::settings::OAuthFlowState;
-use crate::app::mode::{Mode, WarmStatus};
+use crate::app::mode::{Mode, OnboardProviderState, OnboardProviderStep, WarmStatus};
 use crate::app::state::AppState;
 use crate::service::oauth::OAuthEvent;
 use crate::service::{openrouter::OpenRouterClient, StreamEvent, WarmEvent};
@@ -169,15 +169,15 @@ pub(super) fn service_global(
     if let Some(mut orx) = state.rest.oauth_rx.take() {
         match orx.try_recv() {
             Ok(OAuthEvent::CodexUrl { url }) => {
-                for st in settings_states(state) {
-                    st.oauth_flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0, copied: false };
+                for flow in oauth_flow_states(state) {
+                    *flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0, copied: false };
                 }
                 state.rest.oauth_rx = Some(orx);
                 dirty = true;
             }
             Ok(OAuthEvent::KiloCode { user_code, verification_url }) => {
-                for st in settings_states(state) {
-                    st.oauth_flow = OAuthFlowState::KiloWait {
+                for flow in oauth_flow_states(state) {
+                    *flow = OAuthFlowState::KiloWait {
                         user_code: user_code.clone(),
                         verification_url: verification_url.clone(),
                         frame: 0,
@@ -189,16 +189,21 @@ pub(super) fn service_global(
             }
             Ok(OAuthEvent::Success { conn }) => {
                 // Immediate persist: seed the refresh-token cache, append to the
-                // catalogue, save `config.json`, then rebuild `oauth_drafts` in
-                // every open submenu. A save failure surfaces as `Failed` instead
-                // of silently losing the just-completed login.
+                // catalogue, save `config.json`. A save failure surfaces as `Failed`
+                // instead of silently losing the just-completed login. Capture the new
+                // conn's identity BEFORE the move so the wizard fold below can bind to it.
                 let seeded = conn.clone();
                 handle.spawn(async move {
                     crate::service::oauth::manager::seed(&seeded).await;
                 });
+                let conn_uuid = conn.uuid.clone();
+                let conn_provider = conn.provider;
+                let conn_token = conn.access_token.clone();
                 state.rest.config.oauth_conns.push(conn);
                 let save_err = state.rest.config.save().err().map(|e| e.to_string());
                 let drafts = crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);
+                // Settings sessions: rebuild `oauth_drafts` + return to the list (or
+                // surface a save error). Unchanged behaviour.
                 for st in settings_states(state) {
                     match &save_err {
                         Some(e) => {
@@ -212,13 +217,41 @@ pub(super) fn service_global(
                         }
                     }
                 }
+                // Guided-wizard sessions: advance to the model picker bound to the new
+                // conn (or surface a save error).
+                let mut advanced = false;
+                for op in onboard_provider_states(state) {
+                    match &save_err {
+                        Some(e) => {
+                            op.oauth_flow = OAuthFlowState::Failed(format!(
+                                "login ok but config write failed: {e}"
+                            ));
+                        }
+                        None => {
+                            op.new_conn_uuid = conn_uuid.clone();
+                            op.provider = Some(conn_provider);
+                            op.step = OnboardProviderStep::ModelSelect;
+                            op.oauth_flow = OAuthFlowState::Idle;
+                            op.query.clear();
+                            op.result_sel = 0;
+                            advanced = true;
+                        }
+                    }
+                }
+                // Prime the network catalogue so ModelSelect can filter immediately
+                // (Codex serves its static list, so it needs no fetch). Done AFTER the
+                // `onboard_provider_states` borrow ends.
+                if advanced && save_err.is_none() && !crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint.is_empty() {
+                    let ep = crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint;
+                    state.rest.request_catalogue(ep, &conn_token, &conn_uuid);
+                }
                 state.rest.oauth_task = None;
                 dirty = true;
                 // Receiver consumed (terminal event) — don't put it back.
             }
             Ok(OAuthEvent::Failed { error }) => {
-                for st in settings_states(state) {
-                    st.oauth_flow = OAuthFlowState::Failed(error.clone());
+                for flow in oauth_flow_states(state) {
+                    *flow = OAuthFlowState::Failed(error.clone());
                 }
                 state.rest.oauth_task = None;
                 dirty = true;
@@ -231,9 +264,9 @@ pub(super) fn service_global(
                 // Sender dropped without a terminal event (task panicked/aborted
                 // mid-flight) — surface it rather than leaving the wait screen
                 // spinning forever.
-                for st in settings_states(state) {
-                    if !matches!(st.oauth_flow, OAuthFlowState::Idle) {
-                        st.oauth_flow =
+                for flow in oauth_flow_states(state) {
+                    if !matches!(flow, OAuthFlowState::Idle) {
+                        *flow =
                             OAuthFlowState::Failed("login flow ended unexpectedly".to_string());
                     }
                 }
@@ -414,6 +447,8 @@ pub(super) fn service_global(
                     api_type: crate::model::app_config::ApiType::OpenAiCompatible,
                     account_id: "",
                     oauth_uuid: &oauth_uuid,
+                    // Catalogue GET, never koma-free — no X-Koma header needed.
+                    install_id: "",
                 };
                 let ev = match c.list_models(conn).await {
                     Ok(models) => WarmEvent::WarmCatalogue { endpoint, models },
@@ -592,8 +627,8 @@ pub(super) fn service_global(
     // WAIT screens carry a `frame` counter (the picker/paste/failed screens don't
     // animate), so bump it only for sessions currently showing one of those two.
     if state.rest.oauth_rx.is_some() {
-        for st in settings_states(state) {
-            match &mut st.oauth_flow {
+        for flow in oauth_flow_states(state) {
+            match flow {
                 OAuthFlowState::CodexWait { frame, .. } | OAuthFlowState::KiloWait { frame, .. } => {
                     *frame = frame.wrapping_add(1);
                     dirty = true;
@@ -680,6 +715,36 @@ fn settings_states(
 ) -> impl Iterator<Item = &mut crate::app::mode::SettingsState> {
     state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
         Mode::Settings(set) => Some(set.as_mut()),
+        _ => None,
+    })
+}
+
+/// De-globalization helper (C3): mutably borrow the [`OAuthFlowState`] of EVERY session
+/// whose mode carries an OAuth connect-flow — the `/settings` dashboard OR the guided
+/// provider onboarding wizard.
+///
+/// The OAuth drain's shared-flow mutations (URL/code arrival, failure, spinner advance)
+/// are identical for both modes, so they fold through this one helper; only the terminal
+/// `Success` event diverges (Settings rebuilds its drafts; the wizard advances to model
+/// select), handled by iterating [`settings_states`] and [`onboard_provider_states`]
+/// separately. `service_global` runs outside any client bracket, so it must reach the
+/// session(s) actually in one of those modes, never the (stale) foreground.
+fn oauth_flow_states(state: &mut AppState) -> impl Iterator<Item = &mut OAuthFlowState> {
+    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
+        Mode::Settings(set) => Some(&mut set.oauth_flow),
+        Mode::OnboardProvider(op) => Some(&mut op.oauth_flow),
+        _ => None,
+    })
+}
+
+/// De-globalization helper (C3): mutably borrow the [`OnboardProviderState`] of EVERY
+/// session currently in the guided provider onboarding wizard. Mirrors [`settings_states`];
+/// in the single-window case at most one session matches.
+fn onboard_provider_states(
+    state: &mut AppState,
+) -> impl Iterator<Item = &mut OnboardProviderState> {
+    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
+        Mode::OnboardProvider(op) => Some(op.as_mut()),
         _ => None,
     })
 }

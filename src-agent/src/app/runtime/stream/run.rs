@@ -198,6 +198,7 @@ over sec_remote (stateful socket).\n",
             }
         }
     }
+
     // Short-send reshape inputs, snapshotted out of `state` BEFORE the spawn so
     // the task holds no borrow of `state`. Cloning the session dir + settings +
     // latest user message lets `shortsend::shape` run its fold/router off the UI
