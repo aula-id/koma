@@ -55,7 +55,7 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
             .json(&body)
             .send()
             .await?;
@@ -117,7 +117,7 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
             .json(&body)
             .send()
             .await?;
@@ -235,7 +235,7 @@ impl OpenRouterClient {
             max_tokens: Some(2_000),
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
             .json(&body)
             .send()
             .await?;
@@ -362,7 +362,7 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer)
+        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
             .json(&body)
             .send()
             .await?;
@@ -494,7 +494,7 @@ impl OpenRouterClient {
         };
 
         // Best-effort: any failure returns an empty selection rather than erroring.
-        let response = match auth_headers(self.http.post(&url), &conn, &bearer)
+        let response = match auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
             .json(&body)
             .send()
             .await

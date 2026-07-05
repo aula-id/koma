@@ -16,14 +16,15 @@ use crate::app::mode::settings::{
 };
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState,
-    PickerState, RewindEntry, RewindState, SessionHub, SessionKind, UsageMetric, UsageNavState,
-    UsageRange, UsageView, WarmStatus,
+    OnboardState, PickerState, RewindEntry, RewindState, SessionHub, SessionKind, UsageMetric,
+    UsageNavState, UsageRange, UsageView, WarmStatus,
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, OAuthDraftSnapshot,
-    PathPickerSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot,
+    OnboardSnapshot, PathPickerSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot,
+    SessionHubSnapshot,
     SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
@@ -37,6 +38,11 @@ use crate::model::store::SessionMeta;
 // the daemon); they only need to be faithful enough to DRAW. None hold a channel /
 // `Instant`-clock that must keep ticking except `Loading::started`, which is
 // re-anchored from the projected elapsed-ms so its footer counter matches.
+
+/// Rebuild the first-run connection chooser ([`OnboardState`]) from its projection.
+pub(crate) fn shadow_onboard(o: OnboardSnapshot) -> OnboardState {
+    OnboardState { cursor: o.cursor }
+}
 
 /// Rebuild the first-run wizard form ([`KeyInputForm`]) from its projection.
 pub(crate) fn shadow_key_input(f: KeyInputSnapshot) -> KeyInputForm {
@@ -589,6 +595,7 @@ pub(crate) fn shadow_api_type(t: &str) -> ApiType {
     match t {
         "anthropic" => ApiType::AnthropicCompatible,
         "codex" => ApiType::Codex,
+        "koma_free" => ApiType::KomaFree,
         _ => ApiType::OpenAiCompatible,
     }
 }

@@ -80,6 +80,10 @@ pub struct Resolved {
     /// `fresh_key` hook can refresh a near-expiry token. "" = static key (no
     /// refresh). Filled by the OAuth resolution path (a later wave).
     pub oauth_uuid: String,
+    /// The stable per-install id sent as the koma-free `X-Koma` header, carried
+    /// onto the [`Conn`]. Non-empty ONLY for an `ApiType::KomaFree` route (copied
+    /// from `AppConfig::install_id`); "" for every other route.
+    pub install_id: String,
 }
 
 impl Resolved {
@@ -93,6 +97,7 @@ impl Resolved {
             api_type: self.api_type,
             account_id: &self.account_id,
             oauth_uuid: &self.oauth_uuid,
+            install_id: &self.install_id,
         }
     }
 
@@ -110,6 +115,20 @@ impl Resolved {
     /// safeguard) skip the call gracefully (no summary / no recall / fail-closed).
     pub fn is_routable(&self) -> bool {
         self.api_type.is_routable()
+    }
+
+    /// Whether this route carries usable auth — the predicate the "is there a
+    /// usable Main route?" client-build / first-run gates check.
+    ///
+    /// A static-key or OAuth route is usable when its `api_key` (bearer /
+    /// access-token) is non-empty; a [`ApiType::KomaFree`] route is KEYLESS by
+    /// design (auth rides the `X-Koma`/`X-Session` headers, not `Authorization`),
+    /// so it is usable with an empty key. Purely a drop-in for the old
+    /// `!r.api_key.is_empty()` gate: identical for every other wire type, it only
+    /// flips koma-free from "no route" to "usable" so a keyless free-tier user
+    /// reaches Chat instead of being re-onboarded.
+    pub fn is_usable(&self) -> bool {
+        !self.api_key.is_empty() || matches!(self.api_type, ApiType::KomaFree)
     }
 }
 
@@ -153,6 +172,22 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         String::new()
     };
     if let Some(provider) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+        // koma-free: keyless dual-header transport. FORCE the canonical endpoint +
+        // model id (ignore whatever the ModelEntry says, so a /settings edit can't
+        // 404 it), send no api_key, and carry the stable install id for `X-Koma`.
+        if provider.api_type == ApiType::KomaFree {
+            return Some(Resolved {
+                model_id: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+                endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
+                api_key: String::new(),
+                api_type: ApiType::KomaFree,
+                route: None,
+                effort,
+                account_id: String::new(),
+                oauth_uuid: String::new(),
+                install_id: config.install_id.clone(),
+            });
+        }
         return Some(Resolved {
             model_id: entry.model_id.clone(),
             endpoint: provider.endpoint.clone(),
@@ -163,6 +198,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
             // Static-key provider route: no OAuth identity.
             account_id: String::new(),
             oauth_uuid: String::new(),
+            install_id: String::new(),
         });
     }
     // Fall back to an OAuth-backed connection (Codex / Kilo Code).
@@ -185,6 +221,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         effort,
         account_id,
         oauth_uuid: conn.uuid.clone(),
+        install_id: String::new(),
     })
 }
 
@@ -202,6 +239,7 @@ fn legacy_main(settings: &Settings) -> Resolved {
         effort: settings.effort.clone(),
         account_id: String::new(),
         oauth_uuid: String::new(),
+        install_id: String::new(),
     }
 }
 
@@ -239,6 +277,7 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
                     effort: String::new(),
                     account_id: String::new(),
                     oauth_uuid: String::new(),
+                    install_id: String::new(),
                 })
             }
         }
@@ -289,6 +328,53 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
     legacy_fallback(settings, role)
 }
 
+/// Synthesize the keyless koma-free route for `role` WITHOUT touching the config
+/// catalogue — the route the free-mode short-circuit hands back. Byte-for-byte
+/// identical to what [`from_entry`] builds when a `KomaFree` provider is assigned to
+/// `role`: the forced canonical endpoint + model id, an empty key/account/oauth
+/// identity, the stable `install_id` for the `X-Koma` header, and the SAME per-role
+/// effort rule (Main/Planner carry `settings.effort`; every other role — here only
+/// Compactor/Awareness — resolves it to `""`).
+fn koma_free_resolved(config: &AppConfig, settings: &Settings, role: ModelRole) -> Resolved {
+    let effort = if matches!(role, ModelRole::Main | ModelRole::Planner) {
+        settings.effort.clone()
+    } else {
+        String::new()
+    };
+    Resolved {
+        model_id: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
+        api_key: String::new(),
+        api_type: ApiType::KomaFree,
+        route: None,
+        effort,
+        account_id: String::new(),
+        oauth_uuid: String::new(),
+        install_id: config.install_id.clone(),
+    }
+}
+
+/// Free-mode-aware wrapper over [`resolve_role`]: the single chokepoint the `/free`
+/// toggle rides through.
+///
+/// While a session's `free_mode` is on, the Main role AND the roles that inherit it
+/// (Compactor / Awareness) resolve to the keyless koma-free route via
+/// [`koma_free_resolved`], overriding whatever Main is configured — WITHOUT mutating
+/// `config`. Planner and Safeguard never match that set, so a `free_mode` call for
+/// them is byte-identical to plain [`resolve_role`]; likewise every call with
+/// `free_mode == false`. Non-free resolution is therefore completely unchanged.
+pub fn resolve_role_free(
+    config: &AppConfig,
+    settings: &Settings,
+    role: ModelRole,
+    free_mode: bool,
+) -> Option<Resolved> {
+    if free_mode && matches!(role, ModelRole::Main | ModelRole::Compactor | ModelRole::Awareness) {
+        return Some(koma_free_resolved(config, settings, role));
+    }
+    resolve_role(config, settings, role)
+}
+
 /// True when `a` and `b` name the exact same route: same model id, same
 /// provider endpoint, and the same OpenRouter upstream pin. Deliberately does
 /// NOT compare `api_key`/`api_type`/`effort` — those can never differ for two
@@ -320,8 +406,19 @@ fn same_route(a: &Resolved, b: &Resolved) -> bool {
 ///
 /// Returns `None` only when Main itself can't resolve (in practice never,
 /// since Main has a legacy soft-fallback).
-pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMode) -> Option<Resolved> {
-    let main = resolve_role(config, settings, ModelRole::Main)?;
+pub fn resolve_turn_model(
+    config: &AppConfig,
+    settings: &Settings,
+    mode: AgentMode,
+    free_mode: bool,
+) -> Option<Resolved> {
+    // `free_mode` (the session's `/free` toggle) is a per-turn resolution input just
+    // like `mode`: it forces Main onto the keyless koma-free route via
+    // `resolve_role_free`. The Planner branch stays on plain `resolve_role` — Plan
+    // mode's dedicated Planner is NEVER forced to koma-free (an assigned Planner keeps
+    // its own route; an unassigned one falls through to the — now free-aware — Main).
+    // `free_mode == false` is byte-identical to the pre-toggle behaviour.
+    let main = resolve_role_free(config, settings, ModelRole::Main, free_mode)?;
     if mode != AgentMode::Plan {
         return Some(main);
     }
@@ -386,10 +483,21 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
     false
 }
 
+/// `free_mode` is the spawning session's koma-free toggle: it ONLY affects the
+/// fallback (step 2) — an agent WITH its own resolvable model keeps it (never forced
+/// to koma-free), but an agent that inherits Main follows the session onto the
+/// keyless route via [`resolve_role_free`]. `free_mode == false` is byte-identical to
+/// the pre-toggle behaviour.
+///
 /// Currently only called by the (Stage-1 inert) sub-agent spawn path, so it is
 /// unreferenced from the binary until that path is wired in — hence the allow.
 #[allow(dead_code)]
-pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) -> Option<Resolved> {
+pub fn resolve_agent(
+    config: &AppConfig,
+    settings: &Settings,
+    agent: &AgentDef,
+    free_mode: bool,
+) -> Option<Resolved> {
     // The agent's declared effort, applied on top of whichever route we land on.
     let agent_effort = agent.effort.clone();
     let with_effort = |mut r: Resolved| -> Resolved {
@@ -426,6 +534,7 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
                     effort: String::new(),
                     account_id: String::new(),
                     oauth_uuid: String::new(),
+                    install_id: String::new(),
                 }));
             }
         }
@@ -433,8 +542,9 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
         // better to run on the configured Main provider than to go dark.
     }
 
-    // 2. No usable model/provider → inherit the Main route.
-    resolve_role(config, settings, ModelRole::Main).map(with_effort)
+    // 2. No usable model/provider → inherit the Main route (koma-free when the
+    //    spawning session's free_mode is on; the configured Main otherwise).
+    resolve_role_free(config, settings, ModelRole::Main, free_mode).map(with_effort)
 }
 
 #[cfg(test)]

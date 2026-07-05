@@ -414,6 +414,8 @@ pub(super) fn service_global(
                     api_type: crate::model::app_config::ApiType::OpenAiCompatible,
                     account_id: "",
                     oauth_uuid: &oauth_uuid,
+                    // Catalogue GET, never koma-free — no X-Koma header needed.
+                    install_id: "",
                 };
                 let ev = match c.list_models(conn).await {
                     Ok(models) => WarmEvent::WarmCatalogue { endpoint, models },

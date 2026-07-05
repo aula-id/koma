@@ -26,6 +26,9 @@ pub struct Conn<'a> {
     pub account_id: &'a str,
     /// OAuthConn uuid for send-time refresh; "" = static key.
     pub oauth_uuid: &'a str,
+    /// koma-free: the stable per-install id sent as the `X-Koma` header; "" for
+    /// every other wire type.
+    pub install_id: &'a str,
 }
 
 /// Derived reasoning capability for a single model, used to build the `/effort`

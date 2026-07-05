@@ -16,6 +16,7 @@ mod cd;
 // `/compact` uses, with `preserve_n = 0`.
 pub(crate) mod compact;
 mod effort;
+mod free;
 // `pub(crate)` so the shared `internet_feedback` helper is reachable from the
 // Ctrl+E handler (controller) and the settings-save action, which flip the same
 // mode and must show the identical status line.
@@ -42,6 +43,7 @@ pub(super) fn apply_slash(
         Command::New(mode) => new_session::handle_new(state, client, handle, mode)?,
         Command::Mode(arg) => misc::handle_mode(state, arg)?,
         Command::Effort => effort::handle_effort(state, client)?,
+        Command::Free => free::handle_free(state)?,
         Command::Rename(name) => new_session::handle_rename(state, name)?,
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,

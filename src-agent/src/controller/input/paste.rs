@@ -163,7 +163,8 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         // the message-rewind picker, the session hub, the quit-confirm overlay,
         // the security control panel, or the background-bash panel — paste is a
         // no-op in all of them.
-        Mode::Effort(_)
+        Mode::Onboard(_)
+        | Mode::Effort(_)
         | Mode::Loading(_)
         | Mode::Usage(_)
         | Mode::MessageRewind(_)

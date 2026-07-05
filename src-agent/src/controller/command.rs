@@ -21,6 +21,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/resume", "Open the session hub (live + past sessions)"),
     ("/mode", "Toggle Normal/Auto tool approval"),
     ("/effort", "Set model reasoning/thinking effort"),
+    ("/free", "Toggle this session onto the keyless koma-free tier"),
     ("/internet", "Toggle internet mode (simple | full)"),
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
@@ -102,6 +103,9 @@ pub enum Command {
     Mode(Option<String>),
     /// Open the reasoning/thinking-effort picker for the current model.
     Effort,
+    /// Toggle THIS session onto the keyless koma-free tier and back to the
+    /// configured Main model (`/free`). Session-scoped + ephemeral; no args.
+    Free,
     /// Rename the current session.  Holds the new name string.
     Rename(String),
     /// Open the in-app settings dashboard (alias: `/config`).
@@ -179,6 +183,7 @@ pub fn parse(line: &str) -> Command {
             Command::Mode(arg.map(|s| s.to_lowercase()))
         }
         "effort" => Command::Effort,
+        "free" => Command::Free,
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,
         "mcp" => Command::Mcp,

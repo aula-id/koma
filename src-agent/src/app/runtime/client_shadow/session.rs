@@ -76,6 +76,9 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     rt.pending_tool_calls = s.pending_tool_calls.clone();
     rt.tool_idx = s.tool_idx;
     rt.finished_unseen = s.finished_unseen;
+    // Mirror the daemon's `/free` toggle so the client renders the `free` status tag
+    // (and the koma-free model label) off the shadow's foreground session.
+    rt.free_mode = s.free_mode;
     // Reconstruct the queued delegations (plain data) so the remote `$` panel can
     // list the same "pending" rows the local TUI shows. FIFO order is preserved.
     rt.pending_subagents = s

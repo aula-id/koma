@@ -21,6 +21,7 @@ mod mcp;
 mod help;
 mod clipboard;
 mod key_input;
+mod onboard;
 mod paste;
 mod picker;
 mod quit_confirm;
@@ -34,6 +35,7 @@ pub use action::Action;
 pub use chat::{file_ref_partial, handle_chat};
 pub use clipboard::request_clipboard_image;
 pub use key_input::handle_key_input;
+pub use onboard::handle_onboard;
 pub use paste::handle_paste;
 pub use picker::handle_picker;
 pub use quit_confirm::handle_quit_confirm;
@@ -84,6 +86,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     let mut mode = state.take_mode();
     let action = match &mut mode {
         Mode::Chat => handle_chat(&mut state.rest, key),
+        Mode::Onboard(o) => handle_onboard(o, &mut state.rest, key),
         Mode::KeyInput(form) => handle_key_input(form, &mut state.rest, key),
         Mode::SessionPicker(p) => handle_picker(p, &mut state.rest, key),
         Mode::SessionHub(h) => handle_session_hub(h, &mut state.rest, key),

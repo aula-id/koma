@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::app::mode::{LoadingState, Mode, WarmStatus};
-use crate::app::resolve::resolve_role;
+use crate::app::resolve::resolve_role_free;
 use crate::app::state::AppState;
 use crate::model::app_config::ModelRole;
 use crate::service::openrouter::OpenRouterClient;
@@ -71,6 +71,9 @@ pub(crate) fn warm_session(
     // even if another session replaces the shared `warm_rx` and is also Loading.
     let warming_id = state.rest.fg().id.clone();
     let config = state.rest.config.clone();
+    // Honour the warming session's `/free` toggle for awareness (structurally `false`
+    // on a fresh session, but kept uniform with the other awareness resolve sites).
+    let free_mode = state.rest.fg().free_mode;
     // Workspace reindex is already async (background thread); fire it always,
     // independent of whether we show the loading splash.
     crate::tool::dircache::reindex(workdirs, state.rest.fg().dir_cache.clone());
@@ -82,7 +85,8 @@ pub(crate) fn warm_session(
     let want_awareness = settings.awareness_enabled;
     let aware_route = client.as_ref().and_then(|_| {
         if want_awareness {
-            resolve_role(&config, &settings, ModelRole::Awareness).filter(|r| r.is_routable())
+            resolve_role_free(&config, &settings, ModelRole::Awareness, free_mode)
+                .filter(|r| r.is_routable())
         } else {
             None
         }
@@ -118,7 +122,7 @@ pub(crate) fn warm_session(
         // Resolve the Main route for fallback; cheap (no I/O). `None` is safe —
         // `summarize_with_fallback` skips the retry when the routes are equal or
         // Main is unavailable.
-        let main_route = resolve_role(&config, &settings, ModelRole::Main);
+        let main_route = resolve_role_free(&config, &settings, ModelRole::Main, free_mode);
         handle.spawn(async move {
             let summary = match main_route {
                 Some(ref m) => {

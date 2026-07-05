@@ -38,6 +38,12 @@ pub struct SessionSnapshot {
     pub tool_idx: usize,
     pub working: bool,
     pub finished_unseen: bool,
+    /// This session's koma-free (`/free`) toggle, mirrored from
+    /// [`crate::app::state::SessionRuntime::free_mode`] so the thin client can render
+    /// the `free` status tag off the shadow. `#[serde(default)]` keeps version-skewed
+    /// peers safe (a missing field decodes to `false`).
+    #[serde(default)]
+    pub free_mode: bool,
     pub subagents: Vec<SubAgentSnapshot>,
     pub pending_subagents: Vec<PendingSubagentSnapshot>,
     pub resolved_model_id: String,
@@ -120,6 +126,13 @@ pub struct GlobalSnapshot {
 }
 
 // -- mode payload projections (stage 2: core interactive modes) ----------------
+
+/// A serde-safe projection of the first-run connection chooser (`Mode::Onboard`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OnboardSnapshot {
+    pub cursor: usize,
+}
 
 /// A serde-safe projection of the first-run setup wizard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

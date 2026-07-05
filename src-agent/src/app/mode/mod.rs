@@ -18,6 +18,7 @@
 //! `AppStateRest`.
 
 mod key_input;
+mod onboard;
 mod effort;
 mod loading;
 mod picker;
@@ -45,6 +46,7 @@ pub use todo::{parse_todo_file, TodoState};
 pub use help::{HelpEntry, HelpKind, HelpState};
 pub use effort::EffortPickerState;
 pub use key_input::KeyInputForm;
+pub use onboard::OnboardState;
 pub use loading::{LoadingState, WarmStatus};
 pub use picker::PickerState;
 pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
@@ -139,6 +141,12 @@ pub struct UsageNavState {
 
 /// The mutually-exclusive UI modes of the application.
 pub enum Mode {
+    /// First-run connection CHOOSER: the very first screen a brand-new install
+    /// sees, a 3-way pick of HOW to connect (koma free / provider / custom) before
+    /// any credentials are asked for. Each row routes to a different setup path (see
+    /// [`OnboardState`]). Boxed to keep `Mode` uniform + cheap to move, consistent
+    /// with the other overlay variants.
+    Onboard(Box<OnboardState>),
     /// Credentials form: collects api key and model name before a session can
     /// start.  The inner [`KeyInputForm`] holds the in-progress field values
     /// and tracks which field is focused.
