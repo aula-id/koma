@@ -359,6 +359,20 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// True when the user has configured NOTHING routable yet (fresh install):
+    /// no providers, no models, no OAuth connections, and no legacy api_key.
+    /// Drives whether first-run shows the onboarding chooser (distinct from
+    /// whether Main *resolves*, since koma-free is now an always-usable fallback).
+    ///
+    /// `session_models` is per-session-scoped and never counted here — a truly
+    /// fresh install has none anyway, and they must not keep the chooser away.
+    pub fn is_unconfigured(&self, settings: &crate::model::settings::Settings) -> bool {
+        self.providers.is_empty()
+            && self.models.is_empty()
+            && self.oauth_conns.is_empty()
+            && settings.api_key.trim().is_empty()
+    }
+
     /// Load from `~/.simple-coder/config.json`.
     ///
     /// Returns `AppConfig::default()` on ANY error (file absent, parse failure,

@@ -25,14 +25,31 @@ use crate::app::state::AppState;
 /// session hub's history pane on the next launch. The overlay header adapts its
 /// wording to the working-vs-idle state.
 ///
-/// Only exception: zero sessions (normally impossible), in which case quit
-/// immediately.
+/// Two exceptions quit IMMEDIATELY (no overlay):
+///   - zero sessions (normally impossible);
+///   - a landing / unconfigured screen ([`Mode::Onboard`], [`Mode::OnboardProvider`],
+///     or a first-run [`Mode::KeyInput`]). These are setup-or-quit ONLY: routing them
+///     through QuitConfirm would let its cancel path ([`handle_quit_cancel`]) drop a
+///     brand-new user into an unconfigured Chat, so Esc/'q' here is a clean exit.
 ///
 /// [`SessionRuntime::is_working`]: crate::app::state::SessionRuntime::is_working
 pub(in crate::app::runtime) fn request_quit(state: &mut AppState) {
     let total = state.rest.sessions.len();
     // Zero sessions: nothing to keep or kill — just quit immediately.
     if total == 0 {
+        state.rest.should_quit = true;
+        return;
+    }
+    // Landing / unconfigured screens are setup-or-quit ONLY: a quit request here must
+    // exit cleanly rather than open QuitConfirm (whose cancel returns to Chat — a dead,
+    // unconfigured Chat for a first-run user). Covers the first-run chooser, the guided
+    // provider wizard, and the first-run credentials wizard at one chokepoint.
+    let on_landing = match state.mode() {
+        Mode::Onboard(_) | Mode::OnboardProvider(_) => true,
+        Mode::KeyInput(form) => form.first_run,
+        _ => false,
+    };
+    if on_landing {
         state.rest.should_quit = true;
         return;
     }
