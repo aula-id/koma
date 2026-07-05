@@ -468,6 +468,10 @@ impl AppStateRest {
         let leaving_plan = old_mode == AgentMode::Plan;
         if entering_plan {
             self.plan_return_mode = Some(old_mode);
+            // Belt-and-suspenders: a fresh plan cycle starts clean, so drop any
+            // approved-plan stash left from a prior cycle before the classifier could
+            // be fed a stale plan.
+            self.fg_mut().approved_plan = None;
         } else if leaving_plan {
             self.plan_return_mode = None;
         }

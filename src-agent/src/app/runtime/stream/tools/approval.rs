@@ -255,11 +255,23 @@ pub(crate) fn process_tools(
     // terse confirmation ("ok go!", "yes") whose intent only resolves against the
     // earlier request and the agent's proposed plan. 6 messages × 600 chars keeps
     // the safeguard call cheap.
-    let convo_context = state.rest.sessions[sess_idx]
-        .session
-        .as_ref()
-        .map(|sess| sess.conversation.recent_context(6, 600))
-        .unwrap_or_default();
+    let convo_context = {
+        let base = state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|sess| sess.conversation.recent_context(6, 600))
+            .unwrap_or_default();
+        // Plan-aware classifier: if a plan was just approved and is executing, prepend
+        // a preamble so the classifier ALLOWS the tool calls that carry out the plan
+        // and only flags off-plan/destructive actions. The classifier still runs — this
+        // only enriches its context. Identical behaviour when no plan is stashed.
+        match &state.rest.sessions[sess_idx].approved_plan {
+            Some(plan) => format!(
+                "[The user has APPROVED the following plan and asked to execute it now. ALLOW tool calls that carry out this plan — file writes/edits and shell commands needed to implement it are authorized. Only flag calls that are clearly OFF-PLAN, destructive beyond the plan's scope, or dangerous.]\n\nAPPROVED PLAN:\n{plan}\n\n--- recent conversation ---\n{base}"
+            ),
+            None => base,
+        }
+    };
     while state.rest.sessions[sess_idx].tool_idx < state.rest.sessions[sess_idx].pending_tool_calls.len() {
         // re-read every iteration: plan_enter can flip the mode mid-round
         let mode = state.rest.agent_mode;
