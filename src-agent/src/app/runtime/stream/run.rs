@@ -310,18 +310,25 @@ over sec_remote (stateful socket).\n",
         main.as_ref(),
     ) {
         (Some(sess), Some(m)) => {
-            let takes = match state.rest.models_cache.as_deref() {
-                Some(models)
-                    if state.rest.models_cache_endpoint.as_deref()
-                        == Some(m.endpoint.as_str()) =>
-                {
-                    use crate::service::openrouter::ImageCapability;
-                    matches!(
-                        crate::service::openrouter::model_image_capability(models, &m.model_id),
-                        ImageCapability::Supports | ImageCapability::Unknown
-                    )
+            // Codex Responses models are image-capable and have no static
+            // catalogue to consult, so never strip on a lookup that would
+            // necessarily miss; every other route uses the tri-state check.
+            let takes = if m.api_type == crate::model::app_config::ApiType::Codex {
+                true
+            } else {
+                match state.rest.models_cache.as_deref() {
+                    Some(models)
+                        if state.rest.models_cache_endpoint.as_deref()
+                            == Some(m.endpoint.as_str()) =>
+                    {
+                        use crate::service::openrouter::ImageCapability;
+                        matches!(
+                            crate::service::openrouter::model_image_capability(models, &m.model_id),
+                            ImageCapability::Supports | ImageCapability::Unknown
+                        )
+                    }
+                    _ => true, // cold/wrong-endpoint catalogue → assume capable
                 }
-                _ => true, // cold/wrong-endpoint catalogue → assume capable
             };
             Some(crate::dto::openrouter::ImageWireCtx {
                 session_dir: sess.path.clone(),

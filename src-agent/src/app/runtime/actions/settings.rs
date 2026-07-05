@@ -38,6 +38,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.bash_saving,
             s.internet_mode,
             s.providers.clone(),
+            s.oauth_drafts.clone(),
             s.models.clone(),
         )),
         _ => None,
@@ -63,6 +64,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         bash_saving,
         internet_mode,
         provider_drafts,
+        oauth_drafts,
         model_drafts,
     )) = drafts
     {
@@ -116,7 +118,13 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         // FRESHLY built provider_conns (so a model added in this same edit
         // session that points at a brand-new provider still resolves). A
         // dangling idx yields an empty provider_uuid (surfaces for re-pick).
-        let to_entry = |d: &crate::app::mode::settings::ModelDraft| ModelEntry {
+        // Resolve `provider_idx` back to a `provider_uuid` via the SAME
+        // providers-then-oauth-offset merge as the load side: a real provider's
+        // uuid when the idx is within `provider_conns`, else the OAuth draft's uuid
+        // (idx offset by `provider_conns.len()`). A dangling idx yields an empty
+        // provider_uuid (surfaces for re-pick). `oauth_drafts` is passed in so the
+        // OAuth catalogue never leaks into `config.providers`.
+        let to_entry = |d: &crate::app::mode::settings::ModelDraft, oauth_drafts: &[crate::app::mode::settings::OAuthDraft]| ModelEntry {
             uuid: if d.uuid.is_empty() {
                 uuid::Uuid::new_v4().to_string()
             } else {
@@ -124,10 +132,14 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             },
             name: d.name.clone(),
             model_id: d.model_id.clone(),
-            provider_uuid: provider_conns
-                .get(d.provider_idx)
-                .map(|p| p.uuid.clone())
-                .unwrap_or_default(),
+            provider_uuid: if d.provider_idx < provider_conns.len() {
+                provider_conns.get(d.provider_idx).map(|p| p.uuid.clone()).unwrap_or_default()
+            } else {
+                oauth_drafts
+                    .get(d.provider_idx - provider_conns.len())
+                    .map(|o| o.uuid.clone())
+                    .unwrap_or_default()
+            },
             route: d.route.clone(),
             // Persist the multi-role list; leave the legacy single-role
             // field None so it stops being serialized (migration on save).
@@ -139,12 +151,12 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         let model_entries: Vec<ModelEntry> = model_drafts
             .iter()
             .filter(|d| !d.session_only)
-            .map(&to_entry)
+            .map(|d| to_entry(d, &oauth_drafts))
             .collect();
         let session_model_entries: Vec<ModelEntry> = model_drafts
             .iter()
             .filter(|d| d.session_only)
-            .map(&to_entry)
+            .map(|d| to_entry(d, &oauth_drafts))
             .collect();
         // Capture old internet mode before overwriting, so we can toast only
         // on actual change (avoids a spurious toast on every settings save).
@@ -308,10 +320,10 @@ pub(super) fn handle_fetch_model_endpoints(
     // be on a completely different provider). Pull (endpoint, api_key)
     // from `mm_provider_conn` and MOVE the owned Strings into the task
     // (no borrow of `state` crosses the spawn boundary).
-    let provider_conn = if let Mode::Settings(s) = state.mode() {
-        s.mm_provider_conn()
+    let (provider_conn, oauth_uuid) = if let Mode::Settings(s) = state.mode() {
+        (s.mm_provider_conn(), s.mm_provider_oauth_uuid())
     } else {
-        None
+        (None, String::new())
     };
     let (Some(c), Some((endpoint, api_key))) = (client.as_ref(), provider_conn) else {
         if let Mode::Settings(s) = state.mode_mut() {
@@ -339,6 +351,13 @@ pub(super) fn handle_fetch_model_endpoints(
         let conn = crate::service::openrouter::Conn {
             endpoint: &endpoint,
             api_key: &api_key,
+            // Endpoints fetch is OpenAI-compatible. `oauth_uuid` is threaded through
+            // so an OAuth-backed catalogue refreshes its bearer via `fresh_key`;
+            // empty for a static-key provider. `account_id` stays empty — a
+            // catalogue GET needs no org header.
+            api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+            account_id: "",
+            oauth_uuid: &oauth_uuid,
         };
         let _ = match c.list_model_endpoints(conn, &model_id).await {
             Ok(eps) => tx.send(crate::service::StreamEvent::EndpointsLoaded {

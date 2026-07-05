@@ -43,7 +43,7 @@
 use crate::app::state::AgentMode;
 use crate::config::DEFAULT_BASE_URL;
 use crate::model::agent_def::AgentDef;
-use crate::model::app_config::{ApiType, AppConfig, ModelEntry, ModelRole};
+use crate::model::app_config::{ApiType, AppConfig, ModelEntry, ModelRole, OAuthProvider};
 use crate::model::settings::Settings;
 use crate::service::openrouter::Conn;
 
@@ -70,15 +70,29 @@ pub struct Resolved {
     // `stream_complete`). Non-empty only for the Main role; every other role
     // resolves it to "".
     pub effort: String,
+    /// Provider-specific identity carried onto the [`Conn`]: for a Codex OAuth
+    /// route the ChatGPT `chatgpt-account-id`; for a Kilo OAuth route the
+    /// organization id; "" for a static-key route. Filled by the OAuth
+    /// resolution path (a later wave); every non-OAuth construction site sets "".
+    pub account_id: String,
+    /// The [`OAuthConn`](crate::model::app_config::OAuthConn) uuid this route
+    /// authenticates through, threaded onto the [`Conn`] so the send-time
+    /// `fresh_key` hook can refresh a near-expiry token. "" = static key (no
+    /// refresh). Filled by the OAuth resolution path (a later wave).
+    pub oauth_uuid: String,
 }
 
 impl Resolved {
-    /// Borrow this route's `endpoint` + `api_key` as a [`Conn`] for a secondary
-    /// client call (the connection part of the route — "where + auth").
+    /// Borrow this route's `endpoint` + `api_key` (+ wire type + OAuth identity)
+    /// as a [`Conn`] for a client call (the connection part of the route —
+    /// "where + auth + how").
     pub fn conn(&self) -> Conn<'_> {
         Conn {
             endpoint: &self.endpoint,
             api_key: &self.api_key,
+            api_type: self.api_type,
+            account_id: &self.account_id,
+            oauth_uuid: &self.oauth_uuid,
         }
     }
 
@@ -114,32 +128,63 @@ fn find_model_entry<'a>(
         .or_else(|| config.models.iter().find(|e| e.uuid == uuid))
 }
 
-/// Build a [`Resolved`] from an assigned [`ModelEntry`] by resolving its provider
-/// against `config.providers`. Returns `None` when the entry's `provider_uuid`
-/// does not match any known provider (a dangling reference) — the caller treats
-/// that the same as "no assignment" and falls through to the legacy fallback.
+/// Build a [`Resolved`] from an assigned [`ModelEntry`] by resolving its
+/// `provider_uuid`, first against `config.providers` (a static-key provider) and
+/// then — on a miss — against `config.oauth_conns` (an OAuth-backed connection:
+/// Codex / Kilo Code). Returns `None` only when the `provider_uuid` matches
+/// NEITHER catalogue (a dangling reference), which the caller treats the same as
+/// "no assignment" and falls through to the legacy fallback.
+///
+/// A static-key provider carries no OAuth identity (`account_id`/`oauth_uuid`
+/// empty). An OAuth-backed connection resolves its endpoint from
+/// [`registry::meta`](crate::service::oauth::registry::meta), its bearer from the
+/// conn's `access_token`, and threads the conn's `uuid` (for the send-time
+/// `fresh_key` refresh) plus the provider-specific identity (`account_id` for
+/// Codex, `org_id` for Kilo) onto the route.
 ///
 /// `effort` is taken from `settings.effort` for the Main role AND the Planner
 /// role (Planner drives the turn exactly like Main while it is active, so it
 /// carries the same reasoning-effort knob); every other role gets an empty
 /// effort.
 fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role: ModelRole) -> Option<Resolved> {
-    let provider = config
-        .providers
-        .iter()
-        .find(|p| p.uuid == entry.provider_uuid)?;
     let effort = if matches!(role, ModelRole::Main | ModelRole::Planner) {
         settings.effort.clone()
     } else {
         String::new()
     };
+    if let Some(provider) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+        return Some(Resolved {
+            model_id: entry.model_id.clone(),
+            endpoint: provider.endpoint.clone(),
+            api_key: provider.api_key.clone(),
+            api_type: provider.api_type,
+            route: entry.route.clone(),
+            effort,
+            // Static-key provider route: no OAuth identity.
+            account_id: String::new(),
+            oauth_uuid: String::new(),
+        });
+    }
+    // Fall back to an OAuth-backed connection (Codex / Kilo Code).
+    let conn = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid)?;
+    let meta = crate::service::oauth::registry::meta(conn.provider);
+    let api_type = match conn.provider {
+        OAuthProvider::Codex => ApiType::Codex,
+        OAuthProvider::Kilocode => ApiType::OpenAiCompatible,
+    };
+    let account_id = match conn.provider {
+        OAuthProvider::Codex => conn.account_id.clone(),
+        OAuthProvider::Kilocode => conn.org_id.clone(),
+    };
     Some(Resolved {
         model_id: entry.model_id.clone(),
-        endpoint: provider.endpoint.clone(),
-        api_key: provider.api_key.clone(),
-        api_type: provider.api_type,
+        endpoint: meta.chat_endpoint.to_string(),
+        api_key: conn.access_token.clone(),
+        api_type,
         route: entry.route.clone(),
         effort,
+        account_id,
+        oauth_uuid: conn.uuid.clone(),
     })
 }
 
@@ -155,6 +200,8 @@ fn legacy_main(settings: &Settings) -> Resolved {
         api_type: ApiType::OpenAiCompatible,
         route: None,
         effort: settings.effort.clone(),
+        account_id: String::new(),
+        oauth_uuid: String::new(),
     }
 }
 
@@ -190,6 +237,8 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
                     api_type: ApiType::OpenAiCompatible,
                     route: None,
                     effort: String::new(),
+                    account_id: String::new(),
+                    oauth_uuid: String::new(),
                 })
             }
         }
@@ -375,6 +424,8 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
                     // upstream-routing slug (None = automatic routing).
                     route: agent.provider.clone(),
                     effort: String::new(),
+                    account_id: String::new(),
+                    oauth_uuid: String::new(),
                 }));
             }
         }

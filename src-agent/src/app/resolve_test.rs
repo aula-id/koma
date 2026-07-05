@@ -110,3 +110,61 @@ fn planner_role_has_no_legacy_fallback() {
 
     assert!(resolve_role(&config, &settings, ModelRole::Planner).is_none());
 }
+
+use crate::model::app_config::{OAuthConn, OAuthProvider};
+
+fn oauth_model_entry(provider_uuid: &str) -> ModelEntry {
+    ModelEntry {
+        uuid: "model-uuid".to_string(),
+        name: "test".to_string(),
+        model_id: "test-model".to_string(),
+        provider_uuid: provider_uuid.to_string(),
+        route: None,
+        roles: vec![ModelRole::Main],
+        role: None,
+    }
+}
+
+#[test]
+fn resolve_role_falls_back_to_codex_oauth_conn() {
+    let conn = OAuthConn {
+        uuid: "codex-uuid".to_string(),
+        provider: OAuthProvider::Codex,
+        access_token: "codex-token".to_string(),
+        account_id: "acct-123".to_string(),
+        ..Default::default()
+    };
+    let mut config = AppConfig::default();
+    config.oauth_conns.push(conn);
+    config.models.push(oauth_model_entry("codex-uuid"));
+    let settings = Settings::default();
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.endpoint, crate::service::oauth::registry::meta(OAuthProvider::Codex).chat_endpoint);
+    assert_eq!(resolved.api_key, "codex-token");
+    assert_eq!(resolved.api_type, ApiType::Codex);
+    assert_eq!(resolved.account_id, "acct-123");
+    assert_eq!(resolved.oauth_uuid, "codex-uuid");
+}
+
+#[test]
+fn resolve_role_falls_back_to_kilocode_oauth_conn() {
+    let conn = OAuthConn {
+        uuid: "kilo-uuid".to_string(),
+        provider: OAuthProvider::Kilocode,
+        access_token: "kilo-token".to_string(),
+        org_id: "org-456".to_string(),
+        ..Default::default()
+    };
+    let mut config = AppConfig::default();
+    config.oauth_conns.push(conn);
+    config.models.push(oauth_model_entry("kilo-uuid"));
+    let settings = Settings::default();
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.endpoint, crate::service::oauth::registry::meta(OAuthProvider::Kilocode).chat_endpoint);
+    assert_eq!(resolved.api_key, "kilo-token");
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(resolved.account_id, "org-456");
+    assert_eq!(resolved.oauth_uuid, "kilo-uuid");
+}

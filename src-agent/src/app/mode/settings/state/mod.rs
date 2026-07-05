@@ -8,6 +8,7 @@
 
 mod path_ops;
 mod provider_ops;
+mod oauth_ops;
 mod model_ops;
 mod model_nav;
 
@@ -20,7 +21,10 @@ use crate::view::theme::ACCENTS;
 
 use super::super::SettingField;
 use super::picker::PathPicker;
-use super::{ModelDraft, ModelFilterMode, ModelModal, ProviderDraft, ProviderModal};
+use super::{
+    ModelDraft, ModelFilterMode, ModelModal, OAuthDraft, OAuthFlowState, ProviderDraft,
+    ProviderModal,
+};
 
 /// Working state for the in-app `/settings` dashboard.
 ///
@@ -99,6 +103,20 @@ pub struct SettingsState {
     pub picker: Option<PathPicker>,
     /// In-memory list of API provider drafts (stub only, not persisted).
     pub providers: Vec<ProviderDraft>,
+    /// OAuth-authenticated connections (Codex / Kilo Code), appended AFTER
+    /// `providers` in the model modal's provider cycle. Read-only reflection of
+    /// `config.oauth_conns` — the `/settings` OAuth submenu (a later wave) is the
+    /// only thing that adds/removes entries from the underlying catalogue.
+    pub oauth_drafts: Vec<OAuthDraft>,
+    /// Selected row in the OAuth submenu's connections list. Index ==
+    /// `oauth_drafts.len()` means the `[+connect]` button row is highlighted.
+    pub oauth_sel: usize,
+    /// `Some(row)` after the first Ctrl+X on that row: the next Ctrl+X on the
+    /// SAME row confirms the delete. Any navigation clears it.
+    pub oauth_armed: Option<usize>,
+    /// Current step of the OAuth submenu's connect flow (`Idle` = the plain
+    /// connection list, no overlay).
+    pub oauth_flow: OAuthFlowState,
     /// Selected row in the providers list. Index == `providers.len()` means the
     /// `[+ add]` button row is highlighted.
     pub prov_sel: usize,
@@ -163,21 +181,41 @@ impl SettingsState {
                 api_key: p.api_key.clone(),
             })
             .collect();
+        // OAuth drafts: read-only-at-load reflection of `config.oauth_conns`,
+        // appended AFTER `providers` in the model modal's provider cycle AND shown
+        // in the `/settings` OAuth submenu. `OAuthDraft::from_config` is the single
+        // builder (also re-run after a submenu login/delete) so the label + status
+        // computation never drifts between the two call sites.
+        let oauth_drafts: Vec<OAuthDraft> = OAuthDraft::from_config(config);
         // Model drafts: global catalogue entries (session_only = false) followed
         // by this session's override-layer models (session_only = true). Each
         // entry's `provider_uuid` is resolved back to a positional `provider_idx`
         // against the providers built above; a dangling uuid (provider deleted
         // out-of-band) falls back to idx 0 so the row surfaces for re-pick rather
         // than vanishing.
-        let map_entry = |m: &crate::model::app_config::ModelEntry, session_only: bool| ModelDraft {
-            uuid: m.uuid.clone(),
-            name: m.name.clone(),
-            model_id: m.model_id.clone(),
-            provider_idx: config.provider_index_by_uuid(&m.provider_uuid).unwrap_or(0),
-            // Fold the legacy single-role field into the multi-role list on load.
-            roles: m.effective_roles(),
-            route: m.route.clone(),
-            session_only,
+        let map_entry = |m: &crate::model::app_config::ModelEntry, session_only: bool| {
+            // Resolve `provider_uuid` against the MERGED provider cycle: real
+            // providers first, then OAuth conns offset by `providers.len()`. A
+            // dangling uuid (neither resolves) falls back to idx 0 so the row
+            // surfaces for re-pick rather than vanishing.
+            let provider_idx = config
+                .provider_index_by_uuid(&m.provider_uuid)
+                .or_else(|| {
+                    config
+                        .oauth_index_by_uuid(&m.provider_uuid)
+                        .map(|i| config.providers.len() + i)
+                })
+                .unwrap_or(0);
+            ModelDraft {
+                uuid: m.uuid.clone(),
+                name: m.name.clone(),
+                model_id: m.model_id.clone(),
+                provider_idx,
+                // Fold the legacy single-role field into the multi-role list on load.
+                roles: m.effective_roles(),
+                route: m.route.clone(),
+                session_only,
+            }
         };
         let mut models: Vec<ModelDraft> =
             config.models.iter().map(|m| map_entry(m, false)).collect();
@@ -217,6 +255,10 @@ impl SettingsState {
             list_sel: 0,
             picker: None,
             providers,
+            oauth_drafts,
+            oauth_sel: 0,
+            oauth_armed: None,
+            oauth_flow: OAuthFlowState::Idle,
             prov_sel: 0,
             prov_delete_armed: false,
             prov_modal: None,
@@ -264,10 +306,11 @@ impl SettingsState {
 
     /// Move focus to the detail pane (only if the current category has fields,
     /// or if the category is one of the special interactive screens — API
-    /// Providers / Models Select — which carry no [`SettingField`] rows).
+    /// Providers / OAuth / Models Select — which carry no [`SettingField`] rows).
     pub fn focus_detail(&mut self) {
         if !super::SETTING_CATEGORIES[self.cat].fields.is_empty()
             || self.is_providers_category()
+            || self.is_oauth_category()
             || self.is_models_category()
         {
             self.in_detail = true;

@@ -107,7 +107,7 @@ pub(super) fn handle_effort(
         let already_fetching = state.rest.catalogue_fetching.as_deref()
             == Some(r.endpoint.as_str());
         if !already_pending && !already_fetching {
-            state.rest.request_catalogue(&r.endpoint, &r.api_key);
+            state.rest.request_catalogue(&r.endpoint, &r.api_key, &r.oauth_uuid);
         }
     }
     // Only trust `models_cache` when it was fetched for the Main endpoint;

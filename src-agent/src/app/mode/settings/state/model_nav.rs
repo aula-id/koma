@@ -4,7 +4,27 @@
 use super::super::ModelField;
 use super::SettingsState;
 
+/// The model modal's selected provider slot, resolved from `provider_idx`:
+/// providers first, then OAuth drafts (offset by `providers.len()`) — the
+/// provider-cycle merge.
+enum SelectedProvider<'a> {
+    Provider(&'a super::super::ProviderDraft),
+    OAuth(&'a super::super::OAuthDraft),
+}
+
 impl SettingsState {
+    /// Resolve the model modal's `provider_idx` into the merged provider cycle.
+    /// `None` when no modal is open or the index is out of range of BOTH lists.
+    fn mm_selected_provider(&self) -> Option<SelectedProvider<'_>> {
+        let idx = self.model_modal.as_ref()?.provider_idx;
+        let n = self.providers.len();
+        if idx < n {
+            self.providers.get(idx).map(SelectedProvider::Provider)
+        } else {
+            self.oauth_drafts.get(idx - n).map(SelectedProvider::OAuth)
+        }
+    }
+
     /// `true` when the modal's selected provider is an OpenRouter endpoint
     /// (its [`ProviderDraft::endpoint`], lowercased, contains `"openrouter"`).
     /// `false` when no modal is open or the provider index is out of range.
@@ -21,26 +41,30 @@ impl SettingsState {
             .unwrap_or(false)
     }
 
-    /// `true` when the modal's selected provider has a non-empty endpoint, so its
-    /// `/models` catalogue can be fetched and the Model field becomes a live
-    /// omnisearch. `false` when no modal is open, the index is out of range, or the
-    /// provider's endpoint is blank (then the Model field is a plain text box).
+    /// `true` when the Model field should be a live omnisearch: a real provider
+    /// with a non-empty endpoint, OR any OAuth draft (Kilo has a live catalogue;
+    /// Codex serves the static `CODEX_MODELS` list — both get the omnisearch UI).
     pub fn mm_provider_omnisearchable(&self) -> bool {
-        self.model_modal
-            .as_ref()
-            .and_then(|m| self.providers.get(m.provider_idx))
-            .map(|p| !p.endpoint.trim().is_empty())
-            .unwrap_or(false)
+        match self.mm_selected_provider() {
+            Some(SelectedProvider::Provider(p)) => !p.endpoint.trim().is_empty(),
+            Some(SelectedProvider::OAuth(_)) => true,
+            None => false,
+        }
     }
 
     /// The edited provider's `(endpoint, api_key)` for the on-demand catalogue
-    /// fetch, or `None` when no modal is open / the provider index is out of range.
-    /// The input handler hands these to `AppStateRest::request_catalogue`.
+    /// fetch, or `None` when no modal is open. For an OAuth-backed provider the
+    /// endpoint is its CATALOGUE endpoint (`registry::meta(..).catalogue_endpoint`,
+    /// empty for Codex — no network catalogue, see the static-list mechanism below)
+    /// and the key is the OAuth draft's snapshotted access token.
     pub fn mm_provider_conn(&self) -> Option<(String, String)> {
-        self.model_modal
-            .as_ref()
-            .and_then(|m| self.providers.get(m.provider_idx))
-            .map(|p| (p.endpoint.clone(), p.api_key.clone()))
+        match self.mm_selected_provider()? {
+            SelectedProvider::Provider(p) => Some((p.endpoint.clone(), p.api_key.clone())),
+            SelectedProvider::OAuth(d) => {
+                let ep = crate::service::oauth::registry::meta(d.provider).catalogue_endpoint.to_string();
+                Some((ep, d.key.clone()))
+            }
+        }
     }
 
     /// `true` when the modal's selected provider can serve the per-model
@@ -59,6 +83,47 @@ impl SettingsState {
                 p.api_type.is_routable() && p.endpoint.to_lowercase().contains("openrouter")
             })
             .unwrap_or(false)
+    }
+
+    /// The OAuth uuid backing the model modal's selected provider, or `""` when it
+    /// is a plain (non-OAuth) provider / no modal is open. Threaded onto the
+    /// catalogue-fetch `Conn` so `fresh_key` can refresh a near-expiry token.
+    pub fn mm_provider_oauth_uuid(&self) -> String {
+        match self.mm_selected_provider() {
+            Some(SelectedProvider::OAuth(d)) => d.uuid.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// `true` when the model modal's selected provider is the Codex OAuth draft —
+    /// gates the static-list short-circuit (no network catalogue for Codex).
+    pub fn mm_selected_is_codex(&self) -> bool {
+        matches!(
+            self.mm_selected_provider(),
+            Some(SelectedProvider::OAuth(d)) if d.provider == crate::model::app_config::OAuthProvider::Codex
+        )
+    }
+
+    /// Display label for provider index `idx` as stored on a `ModelDraft`/`ModelEntry`
+    /// (`provider_idx`, independent of any open modal): a real provider's name (em-
+    /// dash if blank), or an OAuth draft's label when `idx` is beyond the providers
+    /// list. `None` when `idx` resolves to neither (dangling / stale index).
+    pub fn provider_label_at(&self, idx: usize) -> Option<&str> {
+        let n = self.providers.len();
+        if idx < n {
+            self.providers.get(idx).map(|p| p.name.as_str()).filter(|s| !s.is_empty())
+        } else {
+            self.oauth_drafts.get(idx - n).map(|d| d.label.as_str())
+        }
+    }
+
+    /// Display label for the model modal's CURRENTLY selected provider (real name,
+    /// em-dash placeholder, or OAuth draft label). `None` when no modal is open.
+    pub fn mm_provider_label(&self) -> Option<String> {
+        match self.mm_selected_provider()? {
+            SelectedProvider::Provider(p) => Some(if p.name.is_empty() { "\u{2014}".to_string() } else { p.name.clone() }),
+            SelectedProvider::OAuth(d) => Some(d.label.clone()),
+        }
     }
 
     /// The fields the model modal exposes right now, in navigation order.
@@ -126,7 +191,7 @@ impl SettingsState {
     /// The Role field is NOT handled here: Enter on it opens the Role checkbox
     /// picker overlay ([`Self::open_role_picker`]); ←→ do nothing on that field.
     pub fn mm_left(&mut self) {
-        let n = self.providers.len();
+        let n = self.providers.len() + self.oauth_drafts.len();
         match self.mm_current_field() {
             Some(ModelField::Provider) => {
                 if let Some(m) = self.model_modal.as_mut() {
@@ -157,7 +222,7 @@ impl SettingsState {
     ///
     /// The Role field is NOT handled here — see [`Self::mm_left`].
     pub fn mm_right(&mut self) {
-        let n = self.providers.len();
+        let n = self.providers.len() + self.oauth_drafts.len();
         match self.mm_current_field() {
             Some(ModelField::Provider) => {
                 if let Some(m) = self.model_modal.as_mut() {
