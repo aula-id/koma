@@ -233,3 +233,58 @@ fn free_mode_off_is_identical() {
     assert_eq!(free_off.oauth_uuid, plain.oauth_uuid);
     assert_eq!(free_off.install_id, plain.install_id);
 }
+
+#[test]
+fn main_no_key_falls_back_to_koma_free() {
+    // Fresh / unconfigured: empty global config + no legacy api_key. The Main FALLBACK
+    // must resolve to the keyless koma-free tier, NOT a dead `gpt-4o-mini`@OpenRouter
+    // route. (A non-koma `model` isolates the no-key branch from the koma-default one.)
+    let config = AppConfig::default();
+    let settings = Settings {
+        api_key: String::new(),
+        model: "openai/gpt-4o-mini".to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.api_type, ApiType::KomaFree);
+    assert_eq!(resolved.endpoint, crate::service::koma_free::KOMA_FREE_ENDPOINT);
+    assert_eq!(resolved.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+    assert_eq!(resolved.install_id, config.install_id);
+    assert!(resolved.api_key.is_empty());
+}
+
+#[test]
+fn main_koma_default_model_routes_koma_free_even_with_key() {
+    // DEFAULT_MODEL is now the koma-free id: even WITH a legacy api_key set, a
+    // `settings.model == KOMA_FREE_MODEL` must route koma-free so DEFAULT_MODEL never
+    // gets sent to OpenRouter.
+    let config = AppConfig::default();
+    let settings = Settings {
+        api_key: "sk-or-legacy".to_string(),
+        model: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.api_type, ApiType::KomaFree);
+    assert_eq!(resolved.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+}
+
+#[test]
+fn main_with_legacy_key_and_real_model_still_uses_legacy_main() {
+    // Legacy keyed user with their OWN explicit (non-koma) model: UNCHANGED — the old
+    // settings-fields route (their key + model @ DEFAULT_BASE_URL, OpenAI-compatible wire).
+    let config = AppConfig::default();
+    let settings = Settings {
+        api_key: "sk-or-legacy".to_string(),
+        model: "openai/gpt-4o".to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
+    assert_eq!(resolved.model_id, "openai/gpt-4o");
+    assert_eq!(resolved.api_key, "sk-or-legacy");
+}

@@ -161,6 +161,11 @@ pub fn handle_skip_loading(state: &mut AppState) -> Result<()> {
     // here). The session/chat state was already set up by the activation
     // path that opened the splash, so we only swap the mode.
     *state.mode_mut() = Mode::Chat;
+    // Arm the double-Esc timer so the SAME Esc that skipped the splash counts as
+    // the FIRST tap of an Esc-Esc gesture: the immediately-following Esc (within the
+    // ~400ms window in chat.rs) then completes the double-tap (ClearComposer / OpenRewind)
+    // instead of being swallowed as a lone splash-skip.
+    state.rest.last_esc = Some(std::time::Instant::now());
     state.rest.fg_mut().status = "ready".into();
     Ok(())
 }

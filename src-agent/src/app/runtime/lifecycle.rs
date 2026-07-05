@@ -102,22 +102,21 @@ fn build_startup(
         state
     } else {
         let (lk, lm, lp) = prefill_creds();
-        // "Is this user configured?" is whether the MAIN role resolves to a route
-        // with a non-empty api_key — `resolve_role` consults the global
-        // `config.providers`/`config.models` AND the legacy per-field fallback, so a
-        // populated ~/.koma/config.json (provider + Main model) counts even with no
-        // legacy session key, and a legacy-only session still counts via the fallback.
-        // Probe with a Settings reflecting the prefilled legacy creds so the fallback
-        // path has them to work with.
+        // "Should we onboard?" is now DISTINCT from "does Main resolve?": with the
+        // always-usable koma-free Main fallback, `resolve_role(Main)` is basically never
+        // unusable, so it can no longer gate the first-run chooser. Instead ask whether the
+        // user has configured NOTHING routable yet — no providers/models/OAuth conns in the
+        // global `~/.koma/config.json` AND no legacy session api_key. A populated config or a
+        // legacy-keyed session both count as configured and skip the chooser. Probe with a
+        // Settings reflecting the prefilled legacy creds so the api_key check sees them.
         let probe = Settings {
             api_key: lk.clone().unwrap_or_default(),
             model: lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             provider: lp.clone().unwrap_or_default(),
             ..Default::default()
         };
-        let key_known = resolve_role(&config, &probe, ModelRole::Main)
-            .is_some_and(|r| r.is_usable());
-        let mut state = if key_known {
+        let unconfigured = config.is_unconfigured(&probe);
+        let mut state = if !unconfigured {
             // Returning user: spawn a fresh session pre-loaded with the last
             // creds and drop straight into chat. The credential prompt only
             // appears on the very first run. Per-session changes via /settings.
@@ -339,10 +338,11 @@ fn install_daemon_session(
     runtime.id = session_id.to_string();
     runtime.held_lock = Some(sess.path.clone());
 
-    // KeyInput only when NO usable Main route resolves (global providers/models + legacy
-    // fallback), not just on an empty `api_key` — computed before `sess` moves in.
-    let no_creds = resolve_role(&state.rest.config, &sess.settings, ModelRole::Main)
-        .is_none_or(|r| !r.is_usable());
+    // Onboarding chooser ONLY when the user has configured NOTHING routable yet (no
+    // providers/models/OAuth conns AND no legacy api_key) — NOT merely when Main fails to
+    // resolve, since the koma-free Main fallback is always usable now. Computed before
+    // `sess` moves in.
+    let unconfigured = state.rest.config.is_unconfigured(&sess.settings);
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 
@@ -364,8 +364,8 @@ fn install_daemon_session(
     // Seed this session's cumulative token counters from its own (possibly empty) ledger.
     state.rest.load_token_totals(0, &sess_path);
 
-    if no_creds {
-        // No usable creds yet — show the connection CHOOSER through the client. The
+    if unconfigured {
+        // Nothing configured yet — show the connection CHOOSER through the client. The
         // client renders `Mode::Onboard` and forwards the pick to the daemon; each
         // choice routes to its own setup action (koma free / provider / custom).
         *client = None;
