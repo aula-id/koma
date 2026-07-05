@@ -85,13 +85,18 @@ pub fn spawn_subagent(
     // The effective allow-list + isolated seed conversation + step budget. While
     // the PARENT session is in Plan mode, the delegated sub-agent must stay
     // read-only too — fold its allow-list down through the same whitelist used
-    // by the main advertise fold (`tool_allowed_in_plan`). This only ever
-    // NARROWS whatever the agent declared; `seqthink` is never ADDED here (it
-    // stays main-agent-only — a sub-agent has no user to ask "enter plan mode"
-    // on its behalf).
+    // by the main advertise fold (`tool_allowed_in_plan`), then strip two tools
+    // that whitelist alone would let through: `seqthink` (main-agent-only — a
+    // sub-agent has no user to ask "enter plan mode" on its behalf) and
+    // `todowrite` (its plan-mode interception lives in the main event loop's
+    // `process_tools`; a sub-agent that ran the generic `TodoWrite::run` instead
+    // would write the real per-directory `memory/TODO.md`, breaking plan-mode
+    // read-only). This only ever NARROWS whatever the agent declared.
     let mut tools = agent.effective_tools();
     if mode == AgentMode::Plan {
-        tools.retain(|n| crate::tool::tool_allowed_in_plan(n));
+        tools.retain(|n| {
+            crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "todowrite")
+        });
     }
     let convo = context::build_seed(agent, awareness, memory_md, task);
     // None = unbounded (natural termination when model returns no tool calls).
