@@ -324,20 +324,23 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
         return resolve_role(config, settings, ModelRole::Main);
     }
 
-    // 4. Main special-case (config is in scope here, unlike `legacy_fallback`): with NO
-    //    usable legacy key — OR when the model is the koma-free default id — fall the
-    //    UNASSIGNED/dangling Main back onto the keyless koma-free tier instead of a dead
-    //    `gpt-4o-mini`@OpenRouter route, so a brand-new / unconfigured user still lands on
-    //    a usable Main. A real legacy `api_key` (with a non-koma model) keeps the old
-    //    settings-fields route (`legacy_main`) UNCHANGED, so legacy users are untouched.
-    //    This also covers Compactor/Awareness, which are redirected to `resolve_role(Main)`
-    //    at step 3 above (they inherit whatever Main resolves to — koma-free included).
-    if role == ModelRole::Main {
-        let has_key = !settings.api_key.trim().is_empty();
-        let is_koma_default = settings.model == crate::service::koma_free::KOMA_FREE_MODEL;
-        if !has_key || is_koma_default {
-            return Some(koma_free_resolved(config, settings, ModelRole::Main));
-        }
+    // 4. Main special-case (config is in scope here, unlike `legacy_fallback`): a TRULY
+    //    unconfigured install — no providers, no models, no OAuth conns, AND no legacy
+    //    api_key — falls the UNASSIGNED Main onto the keyless koma-free tier instead of a
+    //    dead `gpt-4o-mini`@OpenRouter route, so a brand-new user still lands on a usable
+    //    Main. This also covers Compactor/Awareness, redirected to `resolve_role(Main)` at
+    //    step 3 above (they inherit whatever Main resolves to — koma-free included).
+    //
+    //    Gate on `is_unconfigured`, NOT `settings.model == KOMA_FREE_MODEL`: now that
+    //    `DEFAULT_MODEL == "koma/apple" == KOMA_FREE_MODEL`, EVERY session defaults to that
+    //    id, so the old `is_koma_default` guard was permanently armed — it silently reverted
+    //    a CONFIGURED user's Main to koma-free whenever their assigned Main failed to resolve
+    //    (dangling provider, or Main not fully reassigned), overriding every model change. A
+    //    configured user must instead fall through to their legacy/settings route at step 5.
+    //    `is_unconfigured` already subsumes the fresh no-key case, so the old
+    //    `!has_key` / `is_koma_default` clauses are dropped.
+    if role == ModelRole::Main && config.is_unconfigured(settings) {
+        return Some(koma_free_resolved(config, settings, ModelRole::Main));
     }
 
     // 5. No assignment, or a dangling provider → per-role legacy fallback.

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::app::mode::{LoadingState, Mode, WarmStatus};
 use crate::app::resolve::resolve_role_free;
 use crate::app::state::AppState;
-use crate::model::app_config::ModelRole;
+use crate::model::app_config::{ApiType, ModelRole};
 use crate::service::openrouter::OpenRouterClient;
 use crate::service::WarmEvent;
 
@@ -137,12 +137,28 @@ fn warm_session_impl(
         return;
     }
 
+    // Resolve the Main route ONCE — it decides BOTH (a) whether the splash may show
+    // and (b) the awareness-fallback route moved into the task below. koma-free Main is
+    // KEYLESS and SLOW to warm, so a Loading splash on it strands the session in
+    // `Mode::Loading` for the whole `WARM_AWARENESS_TIMEOUT_SECS` window — and there the
+    // key dispatcher routes Esc to splash-skip, NEVER to Chat's double-Esc composer-clear
+    // / rewind. So SUPPRESS the splash whenever the resolved Main is koma-free (regardless
+    // of `show_splash`) and warm SILENTLY instead: blocking the UI in Loading is worse
+    // than warming quietly. The awareness task + `warm_rx` drain below still run and fold
+    // the summary in exactly as the background variant does. Non-koma-free (keyed / OAuth)
+    // Mains are unchanged — they still get the splash when `show_splash`.
+    let main_route = resolve_role_free(&config, &settings, ModelRole::Main, free_mode);
+    let effective_splash = show_splash
+        && !main_route
+            .as_ref()
+            .is_some_and(|r| r.api_type == ApiType::KomaFree);
+
     // Splash variant only: upgrade to the animated Loading splash while awareness
-    // warms. The BACKGROUND variant (`show_splash = false`, first-run onboarding)
-    // SKIPS this so the session stays in Chat — composer + double-Esc live
-    // immediately — while the same awareness task below still runs and folds its
-    // summary in via the drain.
-    if show_splash {
+    // warms. The BACKGROUND variant (`show_splash = false`, first-run onboarding) AND a
+    // koma-free Main (see above) SKIP this so the session stays in Chat — composer +
+    // double-Esc live immediately — while the same awareness task below still runs and
+    // folds its summary in via the drain.
+    if effective_splash {
         *state.mode_mut() = Mode::Loading(LoadingState {
             started: std::time::Instant::now(),
             frame: 0,
@@ -165,10 +181,9 @@ fn warm_session_impl(
     // once on the trusted Main route before giving up.
     if let (Some(c), Some(route)) = (client.as_ref(), aware_route) {
         let c = Arc::clone(c);
-        // Resolve the Main route for fallback; cheap (no I/O). `None` is safe —
-        // `summarize_with_fallback` skips the retry when the routes are equal or
-        // Main is unavailable.
-        let main_route = resolve_role_free(&config, &settings, ModelRole::Main, free_mode);
+        // `main_route` (resolved ONCE above, and reused here as the awareness fallback)
+        // is moved into the task. `None` is safe — `summarize_with_fallback` skips the
+        // retry when the routes are equal or Main is unavailable.
         handle.spawn(async move {
             // Bound the awareness call (WARM_AWARENESS_TIMEOUT_SECS): a hung/slow
             // upstream must NOT strand the session — with a splash it would sit in
