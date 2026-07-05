@@ -1,0 +1,219 @@
+//! Token cache + single-flight refresh: the send-time hook every OAuth-backed
+//! request goes through to get a (possibly just-refreshed) bearer token.
+//!
+//! Only Codex tokens expire and need refreshing; Kilo Code tokens in this
+//! flow carry no expiry (`expires_at == 0`), so the staleness check is a
+//! no-op for them and [`fresh_key`] just returns the cached token.
+//!
+//! Refreshing is single-flighted per uuid (a `tokio::sync::Mutex` stashed in
+//! `FLIGHTS`) so concurrent requests against the same connection don't race
+//! to refresh the same refresh_token — the second caller re-checks staleness
+//! after acquiring the lock and finds the first caller already refreshed it.
+
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use tokio::sync::{Mutex, RwLock};
+
+use super::codex;
+use super::registry::{CODEX_MAX_REFRESH_AGE_SECS, CODEX_REFRESH_LEAD_SECS};
+use crate::model::app_config::{AppConfig, OAuthConn, OAuthProvider};
+
+#[derive(Clone)]
+struct TokenSnap {
+    access_token: String,
+    refresh_token: String,
+    expires_at: u64,
+    last_refresh: u64,
+    provider: OAuthProvider,
+    /// Codex ChatGPT account id, or Kilo organization id.
+    account: String,
+    /// Set once a refresh attempt comes back with an unrecoverable error
+    /// (invalid_grant / refresh_token_reused): stop retrying, keep serving
+    /// the last-known token until the user re-logs in.
+    unrecoverable: bool,
+}
+
+impl TokenSnap {
+    fn from_conn(conn: &OAuthConn) -> Self {
+        let account = match conn.provider {
+            OAuthProvider::Codex => conn.account_id.clone(),
+            OAuthProvider::Kilocode => conn.org_id.clone(),
+        };
+        TokenSnap {
+            access_token: conn.access_token.clone(),
+            refresh_token: conn.refresh_token.clone(),
+            expires_at: conn.expires_at,
+            last_refresh: conn.last_refresh,
+            provider: conn.provider,
+            account,
+            unrecoverable: false,
+        }
+    }
+}
+
+fn cache() -> &'static RwLock<HashMap<String, TokenSnap>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, TokenSnap>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn flights() -> &'static Mutex<HashMap<String, Arc<Mutex<()>>>> {
+    static FLIGHTS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    FLIGHTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Seed or replace the cache entry for `conn`. Called right after a fresh
+/// login and once for every entry when `AppConfig` loads at startup.
+pub async fn seed(conn: &OAuthConn) {
+    cache()
+        .write()
+        .await
+        .insert(conn.uuid.clone(), TokenSnap::from_conn(conn));
+}
+
+/// Drop the cache entry for `uuid`. Called when the `/settings` OAuth
+/// submenu deletes a connection.
+pub async fn evict(uuid: &str) {
+    cache().write().await.remove(uuid);
+    flights().lock().await.remove(uuid);
+}
+
+/// Get the per-uuid single-flight lock, creating it on first use.
+async fn flight_for(uuid: &str) -> Arc<Mutex<()>> {
+    let mut flights = flights().lock().await;
+    flights
+        .entry(uuid.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn is_stale(snap: &TokenSnap) -> bool {
+    if snap.provider != OAuthProvider::Codex || snap.unrecoverable {
+        return false;
+    }
+    let now = now_secs();
+    let near_expiry = snap.expires_at != 0 && now + CODEX_REFRESH_LEAD_SECS > snap.expires_at;
+    let too_old_since_refresh =
+        snap.last_refresh != 0 && now.saturating_sub(snap.last_refresh) > CODEX_MAX_REFRESH_AGE_SECS;
+    near_expiry || too_old_since_refresh
+}
+
+/// Persist a refreshed token set back into `config.json`'s matching
+/// `oauth_conns` entry.
+fn persist_refresh(uuid: &str, tokens: &codex::TokenResponse, refreshed_at: u64) {
+    let mut config = AppConfig::load();
+    if let Some(idx) = config.oauth_index_by_uuid(uuid) {
+        let conn = &mut config.oauth_conns[idx];
+        conn.access_token = tokens.access_token.clone();
+        if !tokens.refresh_token.is_empty() {
+            conn.refresh_token = tokens.refresh_token.clone();
+        }
+        if !tokens.id_token.is_empty() {
+            conn.id_token = tokens.id_token.clone();
+        }
+        conn.expires_at = tokens
+            .expires_in
+            .map(|secs| refreshed_at + secs)
+            .unwrap_or(conn.expires_at);
+        conn.last_refresh = refreshed_at;
+        let _ = config.save();
+    }
+}
+
+/// The send-time hook: resolve `oauth_uuid` to a bearer token (refreshing it
+/// first if it's Codex and near/over its staleness window), plus the
+/// provider-specific `account` string (Codex account id / Kilo org id).
+///
+/// An empty `oauth_uuid` means "this connection isn't OAuth-backed" — it
+/// passes `fallback_key` straight through (the caller's existing `api_key`
+/// path) with no account id.
+pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String) {
+    if oauth_uuid.is_empty() {
+        return (fallback_key.to_string(), String::new());
+    }
+
+    // Lazy-seed the cache from disk on a miss (e.g. first send after startup,
+    // before anything explicitly called `seed`).
+    if !cache().read().await.contains_key(oauth_uuid) {
+        let config = AppConfig::load();
+        if let Some(idx) = config.oauth_index_by_uuid(oauth_uuid) {
+            seed(&config.oauth_conns[idx]).await;
+        }
+    }
+
+    let snap = match cache().read().await.get(oauth_uuid).cloned() {
+        Some(s) => s,
+        // Unknown uuid (deleted / never persisted) — nothing to serve.
+        None => return (String::new(), String::new()),
+    };
+
+    if !is_stale(&snap) {
+        return (snap.access_token, snap.account);
+    }
+
+    // Single-flight the refresh per uuid: only one task actually calls the
+    // token endpoint; the rest wait for it and then re-read the cache.
+    let flight = flight_for(oauth_uuid).await;
+    let _guard = flight.lock().await;
+
+    // Re-check after acquiring the lock — another in-flight refresh may have
+    // already handled it while we were waiting.
+    let snap = match cache().read().await.get(oauth_uuid).cloned() {
+        Some(s) => s,
+        None => return (String::new(), String::new()),
+    };
+    if !is_stale(&snap) {
+        return (snap.access_token, snap.account);
+    }
+
+    match codex::refresh(http_client(), &snap.refresh_token).await {
+        Ok(tokens) => {
+            let refreshed_at = now_secs();
+            persist_refresh(oauth_uuid, &tokens, refreshed_at);
+
+            let mut updated = snap.clone();
+            updated.access_token = tokens.access_token.clone();
+            if !tokens.refresh_token.is_empty() {
+                updated.refresh_token = tokens.refresh_token.clone();
+            }
+            updated.expires_at = tokens
+                .expires_in
+                .map(|secs| refreshed_at + secs)
+                .unwrap_or(updated.expires_at);
+            updated.last_refresh = refreshed_at;
+
+            let bearer = updated.access_token.clone();
+            let account = updated.account.clone();
+            cache().write().await.insert(oauth_uuid.to_string(), updated);
+            (bearer, account)
+        }
+        Err(e) => {
+            // Never log token values; the error string here is already
+            // scrubbed (status + trimmed body, or the unrecoverable marker).
+            if e.starts_with("unrecoverable") {
+                let mut unrecoverable = snap.clone();
+                unrecoverable.unrecoverable = true;
+                cache()
+                    .write()
+                    .await
+                    .insert(oauth_uuid.to_string(), unrecoverable);
+            }
+            // Recoverable (or now-marked-unrecoverable) failure: fall back to
+            // the cached, possibly stale, token rather than failing the send.
+            (snap.access_token, snap.account)
+        }
+    }
+}

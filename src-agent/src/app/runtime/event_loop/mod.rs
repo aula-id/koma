@@ -148,8 +148,12 @@ pub(super) fn run_loop(
         // `due` fires promptly rather than waiting out a 100ms idle sleep (treat it
         // like the splash). `has_running_subagents` is the shared predicate
         // service_global uses to force redraws — reuse it here for the cadence.
+        // Likewise while an OAuth submenu connect flow is in flight, so its wait
+        // screen's braille spinner animates and the terminal event (Success/Failed)
+        // is picked up promptly instead of waiting out a 100ms idle sleep.
         let timeout = if state.rest.fg().waiting
             || state.rest.catalogue_pending.is_some()
+            || state.rest.oauth_rx.is_some()
             || matches!(state.mode(), Mode::Loading(_))
             || has_running_subagents(state)
         {

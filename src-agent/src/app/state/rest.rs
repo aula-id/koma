@@ -317,6 +317,17 @@ pub struct AppStateRest {
     /// `health_fetching` / `health_frame` instead.
     pub sec_health_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<crate::app::sec::InstallHealthEntry>, String>>>,
+    /// Receiver for the in-flight `/settings` OAuth submenu connect flow (Codex
+    /// browser login or Kilo Code device login). Mirrors `sec_health_rx`: opened
+    /// by `Action::OAuthStart`'s handler, drained each tick in `service_global`
+    /// and folded into the open OAuth submenu's `oauth_flow` (+ `oauth_drafts` on
+    /// success), then cleared. `None` when no flow is in flight.
+    pub oauth_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::service::oauth::OAuthEvent>>,
+    /// Abort handle for the background task behind `oauth_rx`, so `Action::OAuthCancel`
+    /// (Esc on a waiting flow) and a fresh `Action::OAuthStart` (superseding an older
+    /// flow) can actually stop the in-flight browser/poll loop rather than merely
+    /// dropping its receiver. `None` when no flow is in flight.
+    pub oauth_task: Option<tokio::task::AbortHandle>,
     /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
     /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
     /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
@@ -418,6 +429,8 @@ impl AppStateRest {
             version_tx: Some(vtx),
             version_rx: Some(vrx),
             sec_health_rx: None,
+            oauth_rx: None,
+            oauth_task: None,
             awareness_rx: None,
             awareness_tx: None,
         }

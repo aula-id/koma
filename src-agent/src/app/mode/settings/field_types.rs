@@ -96,6 +96,11 @@ pub const SETTING_CATEGORIES: &[SettingCategory] = &[
         fields: &[],
     },
     SettingCategory {
+        name: "OAuth",
+        group: "models",
+        fields: &[],
+    },
+    SettingCategory {
         name: "Models Select",
         group: "models",
         fields: &[],

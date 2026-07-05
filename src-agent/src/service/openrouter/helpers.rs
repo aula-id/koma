@@ -3,16 +3,96 @@
 //! None of these are part of the public API; they exist here so the larger
 //! submodules (stream, oneshot) can share them without duplication.
 
+use anyhow::{anyhow, Result};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::dto::chat::ToolCall;
 use crate::dto::openrouter::ReasoningConfig;
+use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
+
+use super::types::Conn;
 
 /// Send one event on the request channel, ignoring a closed receiver (the
 /// request was interrupted/superseded, so the event is simply dropped).
 pub(super) fn emit(tx: &UnboundedSender<StreamEvent>, event: StreamEvent) {
     let _ = tx.send(event);
+}
+
+/// Standard auth + identity headers for chat-completions-dialect requests.
+///
+/// `bearer` is the (possibly refreshed) token — NOT `conn.api_key`. The caller
+/// runs the [`crate::service::oauth::manager::fresh_key`] hook first and passes
+/// its result here so an OAuth-backed connection always sends a live token.
+///
+/// Kilo OAuth conns (`OpenAiCompatible` wire + a non-empty `account_id`, which
+/// carries their organization id) additionally get their organization header so
+/// the gateway scopes the request. The Codex Responses transport does NOT use
+/// this helper — it sends its own header set via `codex::codex_headers`.
+pub(super) fn auth_headers(
+    rb: reqwest::RequestBuilder,
+    conn: &Conn<'_>,
+    bearer: &str,
+) -> reqwest::RequestBuilder {
+    auth_headers_with_account(rb, conn, bearer, None)
+}
+
+/// auth_headers with optional account_id override (e.g. from OAuth refresh).
+pub(super) fn auth_headers_with_account(
+    rb: reqwest::RequestBuilder,
+    conn: &Conn<'_>,
+    bearer: &str,
+    effective_account: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let rb = rb
+        .header("Authorization", format!("Bearer {bearer}"))
+        .header("HTTP-Referer", HTTP_REFERER)
+        .header("X-Title", APP_TITLE);
+    let account_id = effective_account.unwrap_or(conn.account_id);
+    if conn.api_type == ApiType::OpenAiCompatible && !account_id.is_empty() {
+        rb.header("X-Kilocode-OrganizationID", account_id)
+    } else {
+        rb
+    }
+}
+
+/// Parse a rolling-summary reply (`{"summary": "<text>"}`) into the clean summary
+/// string. Shared by the chat-completions and Codex fold transports so both parse
+/// byte-identically. `Err("unparseable summary")` on non-JSON, a missing/empty
+/// `summary`, or a non-string value — the caller (`update_summary`) swallows the
+/// error, skipping one turn's summary rather than persisting garbage.
+pub(super) fn parse_summary(raw: &str) -> Result<String> {
+    let content = raw.trim();
+    let parsed: serde_json::Value =
+        serde_json::from_str(content).map_err(|_| anyhow!("unparseable summary"))?;
+    let summary = parsed
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("unparseable summary"))?;
+    Ok(summary.to_string())
+}
+
+/// Parse a blob-selection reply (`{"blob_ids": [<integer>, …]}`) into the id list.
+/// Shared by the chat-completions and Codex router transports so both parse
+/// byte-identically. Best-effort: an empty/non-JSON reply or a missing/ill-typed
+/// `blob_ids` yields an empty vec (the caller rehydrates nothing).
+pub(super) fn parse_blob_ids(raw: &str) -> Vec<i64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    parsed
+        .get("blob_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+        .unwrap_or_default()
 }
 
 /// Sanitise every accumulated tool call before the assembled set leaves the client.

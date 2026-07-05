@@ -26,6 +26,7 @@
 
 mod utils;
 mod providers;
+mod oauth;
 mod pickers;
 mod modals;
 
@@ -36,11 +37,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph},
     Frame,
 };
+use crate::app::mode::settings::OAuthFlowState;
 use crate::app::mode::{SETTING_CATEGORIES, SettingField, SettingsState};
 use crate::app::state::AppStateRest;
 use crate::model::app_config::ThemeMode;
 use crate::view::theme::{resolve_accent, Palette};
 use providers::{draw_providers, draw_models};
+use oauth::draw_oauth;
 use pickers::draw_role_picker;
 use modals::{draw_provider_modal, draw_model_modal};
 use utils::truncate;
@@ -162,6 +165,8 @@ pub fn draw(
     // SettingField rows).
     if st.is_providers_category() {
         draw_providers(frame, st, palette, detail_inner);
+    } else if st.is_oauth_category() {
+        draw_oauth(frame, st, palette, detail_inner);
     } else if st.is_models_category() {
         draw_models(frame, rest, st, palette, detail_inner);
     } else if cat_fields.is_empty() {
@@ -421,6 +426,23 @@ pub fn draw(
             } else {
                 "↑↓ line · ←→ item · space select · enter open/edit · ctrl+x del · esc back"
             }
+        } else if st.is_oauth_category() && st.in_detail {
+            match &st.oauth_flow {
+                OAuthFlowState::Idle => {
+                    if st.oauth_armed.is_some() {
+                        "ctrl+x again to CONFIRM delete · any key cancels"
+                    } else {
+                        "↑↓ select · enter connect · ctrl+x delete · esc back"
+                    }
+                }
+                OAuthFlowState::Pick(_) => "↑↓ select · enter choose · esc back",
+                OAuthFlowState::CodexPaste { .. } => "type token · enter save · esc back",
+                OAuthFlowState::Failed(_) => "enter/esc dismiss",
+                OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
+                    "c copy url · o open browser · esc cancel"
+                }
+                _ => "esc cancel",
+            }
         } else if on_list_field {
             "Enter manage list"
         } else if st.in_detail {
@@ -521,13 +543,26 @@ pub fn draw(
         // Route field stays OpenRouter-only.
         let omni = st.mm_provider_omnisearchable();
         let is_or = st.mm_provider_is_openrouter();
-        // Does the cache hold THIS provider's catalogue? (endpoint match)
-        let cache_matches = st
-            .mm_provider_conn()
-            .map(|(ep, _)| cache_endpoint == Some(ep.as_str()))
-            .unwrap_or(false);
+        // Codex has no network catalogue: substitute the synthetic CODEX_MODELS
+        // list (always "matches") so the existing renderer serves it unchanged.
+        let is_codex = st.mm_selected_is_codex();
+        let codex_cache = if is_codex {
+            crate::service::oauth::registry::codex_static_catalogue()
+        } else {
+            Vec::new()
+        };
+        let (cache, cache_matches): (&[crate::dto::openrouter::ModelInfo], bool) = if is_codex {
+            (&codex_cache, true)
+        } else {
+            // Does the cache hold THIS provider's catalogue? (endpoint match)
+            let cm = st
+                .mm_provider_conn()
+                .map(|(ep, _)| cache_endpoint == Some(ep.as_str()))
+                .unwrap_or(false);
+            (models_cache, cm)
+        };
         draw_model_modal(
-            frame, rest, st, modal, omni, is_or, cache_matches, models_cache, palette, frame.area(),
+            frame, rest, st, modal, omni, is_or, cache_matches, cache, palette, frame.area(),
         );
 
         // Role checkbox picker overlay: a modal-on-modal, drawn LAST so it floats

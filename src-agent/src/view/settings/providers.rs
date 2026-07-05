@@ -296,12 +296,7 @@ pub(super) fn draw_models(
         } else {
             truncate(&m.model_id, col_model_w as usize)
         };
-        let prov_str = st
-            .providers
-            .get(m.provider_idx)
-            .map(|p| p.name.as_str())
-            .filter(|n| !n.is_empty())
-            .unwrap_or("\u{2014}");
+        let prov_str = st.provider_label_at(m.provider_idx).unwrap_or("\u{2014}");
         let prov_str = truncate(prov_str, col_prov_w as usize);
 
         Row::new(vec![

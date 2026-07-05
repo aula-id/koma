@@ -1,8 +1,10 @@
 //! Key handler for the `/settings` dashboard (`Mode::Settings`).
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::app::mode::settings::OAuthFlowState;
 use crate::app::mode::SettingsState;
 use crate::app::state::AppStateRest;
+use crate::model::app_config::OAuthProvider;
 use super::{is_ctrl, Action};
 
 /// Handle a key press inside the `/settings` dashboard.
@@ -96,10 +98,24 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
         let mut modal_action = Action::None;
 
         if search_mode {
-            // The matched catalogue indices, but ONLY when the cache is for this
-            // endpoint; otherwise empty (still fetching → raw-query fallback).
-            let cache = rest.models_cache.as_deref().unwrap_or(&[]);
-            let filtered: Vec<usize> = if cache_matches {
+            // Codex has no network catalogue: serve its static CODEX_MODELS list
+            // through the SAME omnisearch machinery by substituting a synthetic
+            // catalogue for the (never-populated) network cache. Every other
+            // provider filters the on-demand cache, but only when it was fetched
+            // for THIS endpoint (else empty → raw-query fallback on Enter).
+            let is_codex = s.mm_selected_is_codex();
+            let codex_cache = if is_codex {
+                crate::service::oauth::registry::codex_static_catalogue()
+            } else {
+                Vec::new()
+            };
+            let cache: &[crate::dto::openrouter::ModelInfo] = if is_codex {
+                &codex_cache
+            } else {
+                rest.models_cache.as_deref().unwrap_or(&[])
+            };
+            let effective_cache_matches = cache_matches || is_codex;
+            let filtered: Vec<usize> = if effective_cache_matches {
                 filter_models(cache, &query)
             } else {
                 Vec::new()
@@ -156,14 +172,14 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                     // Re-request after the edit (debounced) so a shrinking query
                     // still has the right endpoint's catalogue on the way.
                     if let Some((ep, key)) = conn.as_ref() {
-                        rest.request_catalogue(ep, key);
+                        rest.request_catalogue(ep, key, &s.mm_provider_oauth_uuid());
                     }
                 }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     s.mm_push_char(c);
                     // On-demand fetch for the edited provider's endpoint (debounced).
                     if let Some((ep, key)) = conn.as_ref() {
-                        rest.request_catalogue(ep, key);
+                        rest.request_catalogue(ep, key, &s.mm_provider_oauth_uuid());
                     }
                 }
                 _ => {}
@@ -252,13 +268,13 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                     // Provider may have changed → request its endpoint's catalogue
                     // (recompute the conn AFTER the swap).
                     if let Some((ep, key)) = s.mm_provider_conn() {
-                        rest.request_catalogue(&ep, &key);
+                        rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                     }
                 }
                 KeyCode::Right => {
                     s.mm_right();
                     if let Some((ep, key)) = s.mm_provider_conn() {
-                        rest.request_catalogue(&ep, &key);
+                        rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                     }
                 }
                 KeyCode::Enter => {
@@ -278,7 +294,7 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                             s.mm_down();
                             if s.mm_current_field() == Some(ModelField::Model) {
                                 if let Some((ep, key)) = s.mm_provider_conn() {
-                                    rest.request_catalogue(&ep, &key);
+                                    rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                                 }
                             }
                         }
@@ -294,7 +310,7 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                     // provider's endpoint. No-op off the Model field / blank endpoint.
                     if cur == Some(ModelField::Model) {
                         if let Some((ep, key)) = conn.as_ref() {
-                            rest.request_catalogue(ep, key);
+                            rest.request_catalogue(ep, key, &s.mm_provider_oauth_uuid());
                         }
                     }
                 }
@@ -342,6 +358,12 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
             _ => {}
         }
         return Action::None;
+    }
+
+    // --- OAuth connect-flow overlay (deepest level while a flow is active:
+    //     intercepts ALL keys except Ctrl+C, exactly like the modals above) ---
+    if s.is_oauth_category() && !matches!(s.oauth_flow, OAuthFlowState::Idle) {
+        return handle_oauth_flow(s, key);
     }
 
     if s.picker.is_some() {
@@ -507,7 +529,7 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 KeyCode::Char('+') => {
                     s.open_model_modal_add(false);
                     if let Some((ep, key)) = s.mm_provider_conn() {
-                        rest.request_catalogue(&ep, &key);
+                        rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                     }
                 }
                 KeyCode::Enter => {
@@ -515,13 +537,13 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                         ModelRowSel::AddGlobal => {
                             s.open_model_modal_add(false);
                             if let Some((ep, key)) = s.mm_provider_conn() {
-                                rest.request_catalogue(&ep, &key);
+                                rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                             }
                         }
                         ModelRowSel::AddLocal => {
                             s.open_model_modal_add(true);
                             if let Some((ep, key)) = s.mm_provider_conn() {
-                                rest.request_catalogue(&ep, &key);
+                                rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                             }
                         }
                         ModelRowSel::FilterAll    => s.model_filter_set(ModelFilterMode::All),
@@ -533,7 +555,7 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                             // Prime the Model omnisearch for the edited provider's
                             // endpoint (any provider, debounced).
                             if let Some((ep, key)) = s.mm_provider_conn() {
-                                rest.request_catalogue(&ep, &key);
+                                rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                             }
                             // If the opened model's provider is OpenRouter and it
                             // has a model id, arm the loading flags + fetch its
@@ -553,6 +575,36 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 }
             }
             return models_action;
+        }
+
+        // --- OAuth category: connections-list navigation (flow overlay is
+        //     handled above, before this whole cascade, while active) ---
+        if s.is_oauth_category() {
+            match key.code {
+                KeyCode::Esc => {
+                    s.focus_sidebar();
+                }
+                KeyCode::Up => {
+                    s.oauth_up();
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    s.oauth_down();
+                }
+                KeyCode::Enter => {
+                    if s.oauth_on_add_button() {
+                        s.oauth_open_picker();
+                    }
+                }
+                _ if is_ctrl(&key, 'x') => {
+                    if let Some(uuid) = s.oauth_arm_or_delete() {
+                        return Action::OAuthDelete(uuid);
+                    }
+                }
+                _ => {
+                    s.oauth_disarm();
+                }
+            }
+            return Action::None;
         }
 
         match key.code {
@@ -610,6 +662,88 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 Action::None
             }
             _ => Action::None,
+        }
+    }
+}
+
+/// Route a key press while the OAuth submenu's connect flow is active
+/// (`s.oauth_flow != Idle`). Ctrl+C was already handled as inert by the caller.
+///
+/// - `Starting`/`CodexWait`/`KiloWait`: Esc aborts the background task
+///   (`Action::OAuthCancel`); `c`/`o` copy/re-open the flow's URL
+///   (`Action::OAuthCopyUrl`/`Action::OAuthOpenUrl` — no-ops in `Starting`,
+///   which has no URL yet); everything else is ignored (a spinner screen with
+///   nothing else to type).
+/// - `Pick`: Up/Down move the cursor; Enter on Codex/Kilo Code kicks off that
+///   provider's flow (`Action::OAuthStart`), Enter on "paste token" switches
+///   straight to `CodexPaste` (no task involved); Esc returns to `Idle`.
+/// - `CodexPaste`: chars/backspace edit the draft; Enter with a non-empty draft
+///   saves it (`Action::OAuthPaste`); Esc discards back to `Idle`.
+/// - `Failed`: Enter/Esc dismiss back to `Idle`.
+fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
+    match s.oauth_flow.clone() {
+        OAuthFlowState::Idle => Action::None, // unreachable: caller guards on non-Idle
+        OAuthFlowState::Starting | OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
+            match key.code {
+                KeyCode::Esc => Action::OAuthCancel,
+                KeyCode::Char('c') => Action::OAuthCopyUrl,
+                KeyCode::Char('o') => Action::OAuthOpenUrl,
+                _ => Action::None,
+            }
+        }
+        OAuthFlowState::Pick(cursor) => {
+            match key.code {
+                KeyCode::Esc => {
+                    s.oauth_flow = OAuthFlowState::Idle;
+                }
+                KeyCode::Up => {
+                    s.oauth_pick_up();
+                }
+                KeyCode::Down => {
+                    s.oauth_pick_down();
+                }
+                KeyCode::Enter => {
+                    return match cursor {
+                        0 => Action::OAuthStart(OAuthProvider::Codex),
+                        1 => Action::OAuthStart(OAuthProvider::Kilocode),
+                        _ => {
+                            s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
+                            Action::None
+                        }
+                    };
+                }
+                _ => {}
+            }
+            Action::None
+        }
+        OAuthFlowState::CodexPaste { input } => {
+            match key.code {
+                KeyCode::Esc => {
+                    s.oauth_flow = OAuthFlowState::Idle;
+                }
+                KeyCode::Enter => {
+                    if !input.trim().is_empty() {
+                        return Action::OAuthPaste(input);
+                    }
+                }
+                KeyCode::Backspace => {
+                    s.oauth_paste_backspace();
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    s.oauth_paste_push_char(c);
+                }
+                _ => {}
+            }
+            Action::None
+        }
+        OAuthFlowState::Failed(_) => {
+            match key.code {
+                KeyCode::Enter | KeyCode::Esc => {
+                    s.oauth_flow = OAuthFlowState::Idle;
+                }
+                _ => {}
+            }
+            Action::None
         }
     }
 }

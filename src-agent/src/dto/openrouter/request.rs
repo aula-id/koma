@@ -296,7 +296,10 @@ fn attachment_parts(
 /// Read an attachment's on-disk bytes and build its `data:<mime>;base64,<…>` URL,
 /// or `None` when the file can't be read. `rel_path` (`images/NN-name.ext`) is
 /// resolved against the session dir — the bytes are NEVER taken from the message.
-fn data_url_for(session_dir: &Path, att: &crate::dto::chat::Attachment) -> Option<String> {
+///
+/// `pub(crate)` so the Codex Responses transport (`service::openrouter::codex`)
+/// reuses the exact same data-URL derivation for its `input_image` parts.
+pub(crate) fn data_url_for(session_dir: &Path, att: &crate::dto::chat::Attachment) -> Option<String> {
     use base64::Engine;
     let path = session_dir.join(&att.rel_path);
     let bytes = std::fs::read(&path).ok()?;

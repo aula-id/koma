@@ -15,6 +15,11 @@ pub struct OpenRouterClient {
     /// keeping the system prefix byte-stable across the session so OpenRouter
     /// prompt caching can hit. (A per-request random word busted the cache.)
     plan_word: String,
+    /// Stable per-session id for the Codex Responses transport, minted once per
+    /// client (same lifetime as `plan_word`). Sent as BOTH the `session_id`
+    /// header and the request `prompt_cache_key` so the backend keys its prompt
+    /// cache to this session across the turn's many `/responses` calls.
+    codex_session_id: String,
 }
 
 impl Default for OpenRouterClient {
@@ -36,6 +41,9 @@ impl OpenRouterClient {
             // Pick the plan lead-in ONCE here so every request in this session
             // injects the same word → the cached system prefix stays byte-stable.
             plan_word: crate::resources::wanderer_word(),
+            // Mint the Codex session id ONCE per client so every `/responses`
+            // call in this session shares one prompt_cache_key + session_id.
+            codex_session_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -45,5 +53,11 @@ impl OpenRouterClient {
     /// prefix byte-stable so prompt caching can hit.
     pub fn plan_word(&self) -> &str {
         &self.plan_word
+    }
+
+    /// The stable per-session Codex Responses id (see field docs). Used by the
+    /// `codex` transport as the `session_id` header + `prompt_cache_key`.
+    pub(super) fn codex_session_id(&self) -> &str {
+        &self.codex_session_id
     }
 }
