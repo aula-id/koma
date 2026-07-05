@@ -175,11 +175,11 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
     header::render_model_row(frame, chunks[3], rest, resolved_model, palette);
 
     // --- Transcript ---
-    // A parked plan_ready approval renders its must-read summary as the BOTTOM
+    // A parked plan_ready approval renders its must-read plan digest as the BOTTOM
     // block of the transcript — exactly where the approval overlay (drawn last,
     // anchored at the input and growing UP over the transcript's bottom rows) would
     // hide it. So while such an approval is parked, shrink the transcript to end at
-    // the overlay's top edge: its follow-to-bottom then lands the summary just above
+    // the overlay's top edge: its follow-to-bottom then lands the digest just above
     // the box, keeping it readable while the user decides. Normal tool approvals need
     // no reserve (they render their details inside the overlay itself).
     let transcript_area = {
