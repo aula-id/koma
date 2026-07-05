@@ -32,7 +32,13 @@ pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -
         KeyCode::Esc => Action::CloseTodo,
         KeyCode::Enter => {
             // Reset the selected item to pending — signals the model to redo it.
-            s.reset_to_pending();
+            // Locked items (the plan-mode rails: "serve plan to user" / "save plan
+            // to file & prompt approval") are system-managed — the model can't
+            // touch them either (enforced in the todowrite interception) — so a
+            // locked selection is a no-op here rather than resetting it.
+            if !s.current().map(|item| item.locked).unwrap_or(false) {
+                s.reset_to_pending();
+            }
             Action::None
         }
         KeyCode::Up | KeyCode::Char('k') => {
