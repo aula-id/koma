@@ -1,4 +1,4 @@
 {
-  "version": "0.2.17",
-  "message": "feat: background/detached sub-agents — run_in_background on the task tool, task_output/task_kill to poll/abort, Ctrl+B to background a running agent, and idle completion nudges; plus fixes making backgrounded agents fully quiet — is_ui_busy split stops the comet shimmer on 'ready', IPC diff suppression ends the per-step redraw lag and chat-rams-to-bottom, and live_text streams the report into the $ viewer; never-empty reports (reasoning fallback), no double-report (altitude-aware stall detection), recovery of backend-dropped tool-call args from inline XML, and the explore step cap raised 15 to 80."
+  "version": "0.2.18",
+  "message": "feat: OAuth for Codex (ChatGPT subscription) and Kilo Code — /settings OAuth submenu with browser + device-code login (copy/reopen URL keys), single-flight token refresh, and a full OpenAI Responses API transport so Codex models chat, reason, and call tools; OAuth accounts appear in the model picker's provider cycle (Kilo catalogue fetched live, Codex entitled model list incl. gpt-5.6). Anthropic OAuth deliberately excluded."
 }
