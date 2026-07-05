@@ -25,6 +25,8 @@ pub(super) fn emit(tx: &UnboundedSender<StreamEvent>, event: StreamEvent) {
 /// `bearer` is the (possibly refreshed) token — NOT `conn.api_key`. The caller
 /// runs the [`crate::service::oauth::manager::fresh_key`] hook first and passes
 /// its result here so an OAuth-backed connection always sends a live token.
+/// `session_id` is the client's stable per-session id (used only by the koma-free
+/// branch as the `X-Session` header; ignored for every other wire type).
 ///
 /// Kilo OAuth conns (`OpenAiCompatible` wire + a non-empty `account_id`, which
 /// carries their organization id) additionally get their organization header so
@@ -34,8 +36,9 @@ pub(super) fn auth_headers(
     rb: reqwest::RequestBuilder,
     conn: &Conn<'_>,
     bearer: &str,
+    session_id: &str,
 ) -> reqwest::RequestBuilder {
-    auth_headers_with_account(rb, conn, bearer, None)
+    auth_headers_with_account(rb, conn, bearer, None, session_id)
 }
 
 /// auth_headers with optional account_id override (e.g. from OAuth refresh).
@@ -44,7 +47,17 @@ pub(super) fn auth_headers_with_account(
     conn: &Conn<'_>,
     bearer: &str,
     effective_account: Option<&str>,
+    session_id: &str,
 ) -> reqwest::RequestBuilder {
+    // koma-free: keyless dual-header auth. Send the stable install id (`X-Koma`)
+    // + the per-session id (`X-Session`) and NO `Authorization`/org header.
+    if conn.api_type == ApiType::KomaFree {
+        return rb
+            .header("X-Koma", conn.install_id)
+            .header("X-Session", session_id)
+            .header("HTTP-Referer", HTTP_REFERER)
+            .header("X-Title", APP_TITLE);
+    }
     let rb = rb
         .header("Authorization", format!("Bearer {bearer}"))
         .header("HTTP-Referer", HTTP_REFERER)

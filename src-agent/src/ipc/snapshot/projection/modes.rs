@@ -12,7 +12,7 @@ use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState, Mode,
-    PickerState, RewindState, SessionHub, SessionKind, SettingsState, UsageNavState,
+    OnboardState, PickerState, RewindState, SessionHub, SessionKind, SettingsState, UsageNavState,
     WarmStatus,
 };
 use crate::app::state::{AppState, AppStateRest};
@@ -22,7 +22,8 @@ use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
     CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot,
     HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot,
-    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot,
+    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot, OnboardSnapshot,
+    PathPickerSnapshot,
     PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
     RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
     TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
@@ -35,6 +36,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
     // daemon the per-client foreground is swapped in before each per-client projection
     // (C2), so this projects THAT client's overlay.
     match state.mode() {
+        Mode::Onboard(o) => ModeSnapshot::Onboard(Box::new(onboard_snapshot(o))),
         Mode::KeyInput(f) => ModeSnapshot::KeyInput(key_input_snapshot(f)),
         Mode::SessionPicker(p) => ModeSnapshot::SessionPicker(picker_snapshot(p)),
         Mode::SessionHub(h) => ModeSnapshot::SessionHub(session_hub_snapshot(h)),
@@ -70,6 +72,10 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
             selected: s.selected,
         },
     }
+}
+
+pub fn onboard_snapshot(o: &OnboardState) -> OnboardSnapshot {
+    OnboardSnapshot { cursor: o.cursor }
 }
 
 pub fn key_input_snapshot(f: &KeyInputForm) -> KeyInputSnapshot {

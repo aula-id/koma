@@ -21,6 +21,7 @@ pub mod security;
 pub mod help;
 pub mod effort;
 pub mod key_input;
+pub mod onboard;
 pub mod loading;
 pub mod message_rewind;
 pub mod markdown;
@@ -44,8 +45,11 @@ use crate::app::state::{AppState, AppStateRest};
 /// Session overrides win; falls back to the legacy `settings.model` field;
 /// defaults to empty string when there is no session at all.
 fn resolved_main_model(rest: &AppStateRest) -> String {
+    // Honour the session's `/free` toggle so the label reads the model that will
+    // actually be sent (koma-free's `koma/apple` when on).
+    let free_mode = rest.fg().free_mode;
     rest.fg().session.as_ref()
-        .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode))
+        .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode, free_mode))
         .map(|r| r.model_id)
         .or_else(|| rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
         .unwrap_or_default()
@@ -72,6 +76,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             let resolved_model = resolved_main_model(&state.rest);
             chat::draw(frame, &state.rest, &resolved_model, &palette);
         }
+        Mode::Onboard(o) => onboard::draw(frame, o, &palette),
         Mode::KeyInput(form) => key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette),
         Mode::SessionPicker(p) => session_picker::draw(frame, &state.rest, p, &palette),
         Mode::SessionHub(h) => session_hub::draw(frame, &state.rest, h, &palette),

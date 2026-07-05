@@ -163,19 +163,23 @@ pub(crate) fn apply_workspace_change(
         _ => None,
     };
     if let Some((c, config, settings)) = aware_inputs {
-        if let Some(route) = crate::app::resolve::resolve_role(
+        // Honour the session's `/free` toggle for the recomputed awareness route.
+        let free_mode = state.rest.sessions[sess_idx].free_mode;
+        if let Some(route) = crate::app::resolve::resolve_role_free(
             &config,
             &settings,
             crate::model::app_config::ModelRole::Awareness,
+            free_mode,
         )
         .filter(|r| r.is_routable())
         {
             // Also resolve the Main route as a fallback for when the Awareness
             // model call itself errors (e.g. bad/typo'd model name). Cheap — no I/O.
-            let main_route = crate::app::resolve::resolve_role(
+            let main_route = crate::app::resolve::resolve_role_free(
                 &config,
                 &settings,
                 crate::model::app_config::ModelRole::Main,
+                free_mode,
             );
             let session_id = state.rest.sessions[sess_idx].id.clone();
             crate::app::runtime::spawn_awareness_recompute(
@@ -310,6 +314,9 @@ fn spawn_task_with_id(
         tool_call_id,
         detached,
         state.rest.agent_mode,
+        // Parent session's `/free` toggle: a delegated agent inheriting Main follows
+        // the session onto koma-free.
+        state.rest.sessions[sess_idx].free_mode,
     )?;
     state.rest.sessions[sess_idx].subagents.push(sub);
     Some(id)

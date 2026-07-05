@@ -116,7 +116,7 @@ impl OpenRouterClient {
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
         let effective_account = if !acct.is_empty() { Some(acct.as_str()) } else { None };
         let url = format!("{}/models", conn.endpoint);
-        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account)
+        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account, self.codex_session_id())
             .send()
             .await?;
 
@@ -147,7 +147,7 @@ impl OpenRouterClient {
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
         let effective_account = if !acct.is_empty() { Some(acct.as_str()) } else { None };
         let url = format!("{}/models/{}/endpoints", conn.endpoint, model_id);
-        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account)
+        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account, self.codex_session_id())
             .send()
             .await?;
 

@@ -198,6 +198,13 @@ over sec_remote (stateful socket).\n",
             }
         }
     }
+    // The RESOLVING session's koma-free toggle (`/free`), read straight off its
+    // runtime (this path always has the session index in hand). Threaded into every
+    // route resolution below so Main + its inheritors (the Awareness fold + the turn
+    // model) ride the keyless koma-free route while it is on. `false` for a normal
+    // session keeps resolution byte-identical.
+    let free_mode = state.rest.sessions[sess_idx].free_mode;
+
     // Short-send reshape inputs, snapshotted out of `state` BEFORE the spawn so
     // the task holds no borrow of `state`. Cloning the session dir + settings +
     // latest user message lets `shortsend::shape` run its fold/router off the UI
@@ -239,10 +246,11 @@ over sec_remote (stateful socket).\n",
         // downgrade it to `None`. `shape` already treats `None` as "skip the fold +
         // snippet-router" gracefully (existing summary still applies) — no summary /
         // no recall, never a crash.
-        let aware = crate::app::resolve::resolve_role(
+        let aware = crate::app::resolve::resolve_role_free(
             &state.rest.config,
             &sess.settings,
             crate::model::app_config::ModelRole::Awareness,
+            free_mode,
         )
         .filter(|r| r.is_routable());
         (sess.path.clone(), sess.settings.clone(), user_intent, aware)
@@ -268,6 +276,7 @@ over sec_remote (stateful socket).\n",
             &state.rest.config,
             &sess.settings,
             state.rest.agent_mode,
+            free_mode,
         )
     });
     // Snapshot the model id that will actually be dispatched onto the session's

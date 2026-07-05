@@ -140,7 +140,7 @@ pub fn open_disk_session(
                     &settings,
                     crate::model::app_config::ModelRole::Main,
                 )
-                .is_some_and(|r| !r.api_key.is_empty())
+                .is_some_and(|r| r.is_usable())
             });
         *client = if usable { Some(build_client()) } else { None };
         // Per-session status (C6): compute the working flag first (it borrows
@@ -189,7 +189,7 @@ pub fn open_disk_session(
         &sess.settings,
         crate::model::app_config::ModelRole::Main,
     )
-    .is_none_or(|r| r.api_key.is_empty());
+    .is_none_or(|r| !r.is_usable());
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 

@@ -66,18 +66,27 @@ pub enum ApiType {
     /// submodule. Set only via OAuth resolution, never user-selectable in the
     /// providers modal (serde `"codex"`).
     Codex,
+    /// The koma-free keyless free tier: an OpenAI chat-completions endpoint
+    /// (`service::koma_free::KOMA_FREE_ENDPOINT`) reached with two custom headers
+    /// (`X-Koma` install id + `X-Session`) and NO `Authorization`, pinning the
+    /// `koma/apple` model. Speaks the same chat-completions wire as
+    /// `OpenAiCompatible`; only auth + the forced endpoint/model differ. Set only
+    /// via the first-run chooser / `/free` toggle, never user-selectable in the
+    /// providers modal (serde `"koma_free"`).
+    KomaFree,
 }
 
 impl ApiType {
     /// Whether the runtime can actually dispatch a request against this wire type.
-    /// `OpenAiCompatible` speaks the OpenAI chat-completions contract; `Codex`
-    /// speaks the OpenAI Responses API (both have real transports). Only
+    /// `OpenAiCompatible` and `KomaFree` speak the OpenAI chat-completions contract
+    /// (`KomaFree` is that wire with keyless dual-header auth); `Codex`
+    /// speaks the OpenAI Responses API (all have real transports). Only
     /// `AnthropicCompatible` stays DEFERRED — native Anthropic Messages is a
     /// distinct protocol (its own adapter, not a rider on this pass), so it is
     /// treated as unroutable. The single source of truth shared by the
     /// resolution-boundary gate (`Resolved::is_routable`) and the UI affordance.
     pub fn is_routable(self) -> bool {
-        matches!(self, ApiType::OpenAiCompatible | ApiType::Codex)
+        matches!(self, ApiType::OpenAiCompatible | ApiType::Codex | ApiType::KomaFree)
     }
 }
 
@@ -324,6 +333,12 @@ pub struct AppConfig {
     /// old config files (no such key) load with an empty vec.
     #[serde(default)]
     pub oauth_conns: Vec<OAuthConn>,
+    /// Stable per-install identity sent as the `X-Koma` header on koma-free
+    /// requests (the keyless free tier's rate-limit bucket). Minted once (serde
+    /// default on an older config lacking the key; the manual `Default` for a
+    /// missing/corrupt file) and persisted on the next `save()` — never cleared.
+    #[serde(default = "new_uuid")]
+    pub install_id: String,
 }
 
 impl Default for AppConfig {
@@ -335,6 +350,10 @@ impl Default for AppConfig {
             models: Vec::new(),
             mcp_servers: Vec::new(),
             oauth_conns: Vec::new(),
+            // Mint a stable install id even on the missing/corrupt-config fallback
+            // path, so the koma-free `X-Koma` header is never empty; it is
+            // persisted on the first `save()` and read back stably thereafter.
+            install_id: new_uuid(),
         }
     }
 }

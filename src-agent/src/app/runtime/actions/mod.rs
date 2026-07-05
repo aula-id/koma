@@ -20,6 +20,7 @@ mod todo;
 mod chat;
 mod mcp;
 mod oauth;
+mod onboard;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
 // `commands` module) can route through the same `request_quit` chokepoint as the
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
@@ -120,6 +121,18 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::DenyPlan => {
             chat::handle_deny_plan(state, client, handle)?;
+        }
+
+        Action::SetupKomaFree => {
+            onboard::handle_setup_koma_free(state, client, handle)?;
+        }
+
+        Action::OnboardProvider => {
+            onboard::handle_onboard_provider(state)?;
+        }
+
+        Action::OnboardCustom => {
+            onboard::handle_onboard_custom(state)?;
         }
 
         Action::SaveCreds { endpoint, api_key, model } => {

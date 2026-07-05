@@ -50,7 +50,7 @@ pub fn handle_cancel_key_input(
                     &settings,
                     crate::model::app_config::ModelRole::Main,
                 )
-                .is_some_and(|r| !r.api_key.is_empty())
+                .is_some_and(|r| r.is_usable())
             });
         *client = if restored_usable {
             Some(build_client())
@@ -90,7 +90,7 @@ pub fn handle_cancel_key_input(
             settings,
             crate::model::app_config::ModelRole::Main,
         )
-        .is_some_and(|r| !r.api_key.is_empty())
+        .is_some_and(|r| r.is_usable())
     };
     if let Some(prev) = state.rest.prev_session.take() {
         *client = if usable(state, &prev.settings) {

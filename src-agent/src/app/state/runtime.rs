@@ -428,6 +428,14 @@ pub struct SessionRuntime {
     /// the cross-instance memory-sync poll to detect when another koma instance
     /// updated the shared memory store. `None` until first snapshot.
     pub last_memory_mtime: Option<SystemTime>,
+    /// PER-SESSION koma-free toggle, flipped by the `/free` command. When `true`,
+    /// this session's Main role and the roles that inherit it (Compactor /
+    /// Awareness) resolve to the keyless koma-free route regardless of the
+    /// configured Main model — see [`crate::app::resolve::resolve_role_free`].
+    /// Ephemeral + daemon-owned: NEVER written to config/settings, and a fresh
+    /// session always starts `false`. Projected into `SessionSnapshot` so the thin
+    /// client can render the `free` status tag off the shadow.
+    pub free_mode: bool,
 }
 
 impl Default for SessionRuntime {
@@ -518,6 +526,8 @@ impl SessionRuntime {
             closed: false,
             park_started_at: None,
             last_memory_mtime: None,
+            // Fresh sessions never start on the koma-free tier; `/free` toggles it.
+            free_mode: false,
         }
     }
 

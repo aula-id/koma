@@ -84,11 +84,15 @@ pub(super) fn handle_submit(
     // Uses the tri-state `model_image_capability` so an unknown/missing/stale
     // catalogue never wrongly blocks (fail-open: `Unknown` => allow).
     if had_image {
+        // Resolve the SAME route the send will use (koma-free when `/free` is on) so
+        // the capability guard checks the model that actually receives the image.
+        let free_mode = state.rest.fg().free_mode;
         let main = state.rest.fg().session.as_ref().and_then(|sess| {
-            crate::app::resolve::resolve_role(
+            crate::app::resolve::resolve_role_free(
                 &state.rest.config,
                 &sess.settings,
                 crate::model::app_config::ModelRole::Main,
+                free_mode,
             )
         });
         let capable = match (state.rest.models_cache.as_deref(), main.as_ref()) {

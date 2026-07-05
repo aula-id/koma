@@ -493,6 +493,10 @@ async fn stream_step(
     let api_type = resolved.api_type;
     let account_id = resolved.account_id.clone();
     let oauth_uuid = resolved.oauth_uuid.clone();
+    // koma-free install id (X-Koma), threaded like the OAuth identity above so a
+    // sub-agent that inherits a koma-free route keeps a valid rate-limit bucket;
+    // "" for every other route, so non-koma-free sends are unchanged.
+    let install_id = resolved.install_id.clone();
     // Advertise only this agent's allow-list (owned clone moved into the task).
     let advertise = tools.to_vec();
     let send = tokio::spawn(async move {
@@ -502,6 +506,7 @@ async fn stream_step(
             api_type,
             account_id: &account_id,
             oauth_uuid: &oauth_uuid,
+            install_id: &install_id,
         };
         // Sub-agents advertise only their own allow-list and receive NO MCP tools
         // (kept simple — MCP is a main-agent capability for now), so pass an empty

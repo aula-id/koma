@@ -134,7 +134,7 @@ impl OpenRouterClient {
             max_tokens: Some(32_000),
         };
 
-        let resp = auth_headers(self.http.post(&url), &conn, &bearer)
+        let resp = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
             .json(&body)
             .send()
             .await;
@@ -149,6 +149,20 @@ impl OpenRouterClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            // koma-free is rate-limited per install against a shared free-tier
+            // bucket; a 429 means it is busy/exhausted (Retry-After ignored on
+            // purpose). Surface a human hint instead of the raw upstream JSON.
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                && conn.api_type == ApiType::KomaFree
+            {
+                emit(
+                    &tx,
+                    StreamEvent::Error(
+                        "koma free tier is busy right now - retry in a moment, or set up a provider/custom model in /settings".to_string(),
+                    ),
+                );
+                return Ok(());
+            }
             emit(
                 &tx,
                 StreamEvent::Error(clean_error(status, &text)),

@@ -44,7 +44,7 @@ fn non_plan_mode_always_uses_main_even_with_planner_assigned() {
     let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
     let settings = Settings::default();
 
-    let resolved = resolve_turn_model(&config, &settings, AgentMode::Auto).unwrap();
+    let resolved = resolve_turn_model(&config, &settings, AgentMode::Auto, false).unwrap();
     assert_eq!(resolved.model_id, "main/model");
     assert_eq!(resolved.endpoint, "https://main.example");
 }
@@ -54,7 +54,7 @@ fn plan_mode_with_distinct_planner_uses_planner() {
     let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
     let settings = Settings::default();
 
-    let resolved = resolve_turn_model(&config, &settings, AgentMode::Plan).unwrap();
+    let resolved = resolve_turn_model(&config, &settings, AgentMode::Plan, false).unwrap();
     assert_eq!(resolved.model_id, "planner/model");
     assert_eq!(resolved.endpoint, "https://planner.example");
 }
@@ -79,7 +79,7 @@ fn plan_mode_with_no_planner_assigned_stays_on_main() {
     });
     let settings = Settings::default();
 
-    let resolved = resolve_turn_model(&config, &settings, AgentMode::Plan).unwrap();
+    let resolved = resolve_turn_model(&config, &settings, AgentMode::Plan, false).unwrap();
     assert_eq!(resolved.model_id, "main/model");
 }
 
@@ -93,7 +93,7 @@ fn plan_mode_with_planner_same_route_as_main_keeps_main_resolved() {
     let settings = Settings::default();
 
     let main_only = resolve_role(&config, &settings, ModelRole::Main).unwrap();
-    let turn = resolve_turn_model(&config, &settings, AgentMode::Plan).unwrap();
+    let turn = resolve_turn_model(&config, &settings, AgentMode::Plan, false).unwrap();
 
     assert_eq!(turn.model_id, main_only.model_id);
     assert_eq!(turn.endpoint, main_only.endpoint);
@@ -167,4 +167,69 @@ fn resolve_role_falls_back_to_kilocode_oauth_conn() {
     assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
     assert_eq!(resolved.account_id, "org-456");
     assert_eq!(resolved.oauth_uuid, "kilo-uuid");
+}
+
+#[test]
+fn free_mode_forces_main_to_koma_free() {
+    // A normal keyed provider + Main model configured; `free_mode = true` must
+    // still short-circuit Main onto the keyless koma-free route.
+    let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
+    let settings = Settings::default();
+
+    let resolved = resolve_role_free(&config, &settings, ModelRole::Main, true)
+        .expect("free-mode Main must resolve");
+    assert_eq!(resolved.api_type, ApiType::KomaFree);
+    assert_eq!(resolved.endpoint, crate::service::koma_free::KOMA_FREE_ENDPOINT);
+    assert_eq!(resolved.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+    assert_eq!(resolved.install_id, config.install_id);
+}
+
+#[test]
+fn free_mode_forces_compactor_and_awareness() {
+    let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
+    let settings = Settings::default();
+
+    let compactor = resolve_role_free(&config, &settings, ModelRole::Compactor, true)
+        .expect("free-mode Compactor must resolve");
+    assert_eq!(compactor.api_type, ApiType::KomaFree);
+    assert_eq!(compactor.endpoint, crate::service::koma_free::KOMA_FREE_ENDPOINT);
+    assert_eq!(compactor.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+
+    let awareness = resolve_role_free(&config, &settings, ModelRole::Awareness, true)
+        .expect("free-mode Awareness must resolve");
+    assert_eq!(awareness.api_type, ApiType::KomaFree);
+    assert_eq!(awareness.endpoint, crate::service::koma_free::KOMA_FREE_ENDPOINT);
+    assert_eq!(awareness.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+}
+
+#[test]
+fn free_mode_leaves_planner_and_safeguard_alone() {
+    // Planner and Safeguard never match the free-mode short-circuit set — with
+    // no config assigned to either, they behave exactly like plain
+    // `resolve_role` with free_mode false: Safeguard fail-closed `None`,
+    // Planner `None` (no legacy fallback).
+    let config = AppConfig::default();
+    let settings = Settings::default();
+
+    assert!(resolve_role_free(&config, &settings, ModelRole::Safeguard, true).is_none());
+    assert!(resolve_role_free(&config, &settings, ModelRole::Planner, true).is_none());
+}
+
+#[test]
+fn free_mode_off_is_identical() {
+    let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
+    let settings = Settings::default();
+
+    let free_off = resolve_role_free(&config, &settings, ModelRole::Main, false)
+        .expect("Main must resolve");
+    let plain = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(free_off.model_id, plain.model_id);
+    assert_eq!(free_off.endpoint, plain.endpoint);
+    assert_eq!(free_off.api_key, plain.api_key);
+    assert_eq!(free_off.api_type, plain.api_type);
+    assert_eq!(free_off.route, plain.route);
+    assert_eq!(free_off.effort, plain.effort);
+    assert_eq!(free_off.account_id, plain.account_id);
+    assert_eq!(free_off.oauth_uuid, plain.oauth_uuid);
+    assert_eq!(free_off.install_id, plain.install_id);
 }

@@ -78,6 +78,7 @@ mod roundtrip_tests {
             tool_idx: 0,
             working: true,
             finished_unseen: false,
+            free_mode: false,
             subagents: vec![SubAgentSnapshot {
                 id: 1,
                 name: "explorer".to_string(),
