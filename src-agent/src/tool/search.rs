@@ -47,7 +47,7 @@ impl Tool for Grep {
         };
 
         let search_path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let base = resolve_read(&ctx.workspaces, search_path)?;
+        let base = resolve_read(&ctx.workspaces, search_path, ctx.session_dir.as_deref())?;
 
         // Optional glob filter.
         let glob_matcher: Option<globset::GlobMatcher> = match args.get("glob").and_then(Value::as_str) {
@@ -164,7 +164,7 @@ impl Tool for Glob {
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'pattern'"))?;
 
         let base_rel = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let _base = resolve_read(&ctx.workspaces, base_rel)?; // sandbox check
+        let _base = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref())?; // sandbox check
 
         let matcher = globset::Glob::new(pattern)
             .map_err(|e| anyhow::anyhow!("invalid glob '{pattern}': {e}"))?
@@ -185,7 +185,7 @@ impl Tool for Glob {
                 .collect()
         } else {
             // Cache empty: fall back to a fresh walk from the base path.
-            let base_abs = resolve_read(&ctx.workspaces, base_rel)?;
+            let base_abs = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref())?;
             let mut v: Vec<String> = Vec::new();
             let multi = ctx.workspaces.len() > 1;
             for entry in ignore::WalkBuilder::new(&base_abs).build().flatten() {
