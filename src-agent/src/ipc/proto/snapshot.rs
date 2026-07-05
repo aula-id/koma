@@ -665,6 +665,7 @@ pub struct TodoItemSnapshot {
     pub status: String,
     /// Wire token: "high" | "medium" | "low"
     pub priority: String,
+    pub locked: bool,
 }
 
 /// A serde-safe projection of the `/todo` task-panel.

@@ -61,28 +61,28 @@ impl Tool for PlanReady {
     }
 
     fn description(&self) -> &'static str {
-        "Present your finished plan for user approval. summary must list the files being \
-         changed and why for each; plan (full detail: files, exact edits, order, risks) is \
-         saved to <session>/plan.md. Only call this from plan mode when your plan is complete. \
-         Only call this after ALL work is finished - including background bash jobs and \
-         sub-agents; collect their results first. The user may approve, approve with history \
-         compaction, or ask to keep discussing."
+        "Present your finished plan for user approval. highlights = the key things the user \
+         must know to approve (the important changes, decisions, and risks); plan (full detail: \
+         files, exact edits, order, risks) is saved to <session>/plan.md. Only call this from \
+         plan mode when your plan is complete. Only call this after ALL work is finished - \
+         including background bash jobs and sub-agents; collect their results first. The user \
+         may approve, approve with history compaction, or ask to keep discussing."
     }
 
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "summary": {
+                "highlights": {
                     "type": "string",
-                    "description": "User-facing digest the user approves from. Must include: what will change and why, each file to be edited with a one-line reason, and any key risks or ordering. Not the full plan, but complete enough to decide without opening plan.md."
+                    "description": "The key things the user must know to approve: the important changes, decisions, and risks — substantive, not one line per file, but NOT the full plan. The full detail goes in `plan`."
                 },
                 "plan": {
                     "type": "string",
                     "description": "The FULL detailed plan: files to touch, exact changes, how and why. This is saved to the session plan.md for execution."
                 }
             },
-            "required": ["summary", "plan"]
+            "required": ["highlights", "plan"]
         })
     }
 
@@ -94,23 +94,23 @@ impl Tool for PlanReady {
 
 /// Pure validation for a `plan_ready` call's arguments, extracted so the
 /// interception in `process_tools` can parse them directly (the tool's `run` is
-/// a never-called stub). Returns the trimmed `(summary, plan)` on success, or an
-/// `error:`-prefixed message string (surfaced to the model verbatim) when either
-/// required field is missing or blank.
+/// a never-called stub). Returns the trimmed `(highlights, plan)` on success, or
+/// an `error:`-prefixed message string (surfaced to the model verbatim) when
+/// either required field is missing or blank.
 pub(crate) fn parse_plan_ready_args(args: &Value) -> Result<(String, String), String> {
-    let summary = args
-        .get("summary")
+    let highlights = args
+        .get("highlights")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or("error: plan_ready requires a non-empty 'summary'")?;
+        .ok_or("error: plan_ready requires a non-empty 'highlights'")?;
     let plan = args
         .get("plan")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or("error: plan_ready requires a non-empty 'plan'")?;
-    Ok((summary.to_string(), plan.to_string()))
+    Ok((highlights.to_string(), plan.to_string()))
 }
 
 /// Tool-result text answered back to the model when the user APPROVES a plan

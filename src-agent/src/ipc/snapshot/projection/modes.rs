@@ -545,6 +545,7 @@ pub fn todo_snapshot(t: &crate::app::mode::TodoState) -> TodoSnapshot {
             content: item.content.clone(),
             status: item.status.label().to_string(),
             priority: item.priority.label().to_string(),
+            locked: item.locked,
         }).collect(),
         selected: t.selected,
         pwd_hash: t.pwd_hash.clone(),
