@@ -90,8 +90,8 @@ fn filter_bash_output(
 /// run: the harness is disabled, or there's no client/session. `None` makes the
 /// caller fall back to the ORIGINAL approval behaviour (Normal prompts a risky
 /// call, Auto runs it) — the unchanged path when the harness is off. The
-/// `Settings` and client `Arc` are cloned out so the caller's `block_on` doesn't
-/// hold a borrow of `state`.
+/// `Settings` and client `Arc` are cloned out so the caller can move them into
+/// the off-thread classify task ([`spawn_classify_park`]) without borrowing `state`.
 pub(super) fn tac_inputs(
     state: &AppState,
     sess_idx: usize,
@@ -109,6 +109,62 @@ pub(super) fn tac_inputs(
         )),
         _ => None,
     }
+}
+
+/// Spawn the TAC classifier for `call` OFF the event-loop thread and PARK the
+/// round on it. Lazily opens this session's verdict channel, fires the classify
+/// task (which sends `(call_id, verdict)` back over it once done), latches
+/// `awaiting_classify`, and sets the "classifying …" status. The caller MUST
+/// `return` right after so the round stays parked — the event-loop drain stages
+/// the verdict and re-enters `process_tools`, which then acts on it via the
+/// unchanged three-way verdict branch. This replaces the old synchronous
+/// `handle.block_on(classify_toolcall(..))`, which froze the whole event loop
+/// (every session, in the daemon) for the 1-12s of the classify call.
+///
+/// The inputs are cheap-cloned owned values (Arc client / AppConfig / Settings /
+/// Strings), so the spawned future is `Send + 'static` — mirroring the advisory
+/// prompt-classifier spawn in `actions::chat::handle_submit`. `classify_toolcall`
+/// is pure async HTTP with its own internal timeout, so `handle.spawn` (a tokio
+/// task) is correct here (NOT a `std::thread` — there is no `reqwest::blocking`).
+#[allow(clippy::too_many_arguments)]
+fn spawn_classify_park(
+    state: &mut AppState,
+    sess_idx: usize,
+    handle: &tokio::runtime::Handle,
+    client: Arc<OpenRouterClient>,
+    config: crate::model::app_config::AppConfig,
+    settings: crate::model::settings::Settings,
+    convo_context: &str,
+    call: &ToolCall,
+) {
+    // Lazily create THIS session's verdict channel once, then reuse it (mirrors
+    // the deferred tool-task channel). Both ends live on the session; the task
+    // fires over `classify_tx`, the event-loop drain reads `classify_rx`.
+    if state.rest.sessions[sess_idx].classify_tx.is_none() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.sessions[sess_idx].classify_tx = Some(tx);
+        state.rest.sessions[sess_idx].classify_rx = Some(rx);
+    }
+    let tx = state.rest.sessions[sess_idx]
+        .classify_tx
+        .as_ref()
+        .unwrap()
+        .clone();
+    let convo = convo_context.to_string();
+    let name = call.function.name.clone();
+    let args = call.function.arguments.clone();
+    let call_id = call.id.clone();
+    handle.spawn(async move {
+        let verdict = crate::app::harness::classify_toolcall(
+            &client, &config, &settings, &convo, &name, &args,
+        )
+        .await;
+        // A dropped receiver (turn interrupted / session closed) makes this a
+        // no-op — same contract as the streaming + PC channels.
+        let _ = tx.send((call_id, verdict));
+    });
+    state.rest.sessions[sess_idx].awaiting_classify = true;
+    state.rest.sessions[sess_idx].status = format!("classifying {}…", call.function.name);
 }
 
 /// True if `target_abs` was read/written/edited earlier in the conversation
@@ -170,14 +226,21 @@ fn file_known_in_history(
 /// isn't dispatched until this one's result lands (correctness: two writes to the
 /// same file in one round must not race). The event-loop drain folds the result in
 /// and the resume gate RE-ENTERS this function at the advanced `tool_idx`, so the
-/// loop simply continues. The classifier/approval gate above still runs on the UI
-/// thread BEFORE a deferred risky tool is dispatched — deferral happens only after
-/// the call is allowed. Instant tools (pong / dir_list / dir_cache_update) still
-/// run inline.
+/// loop simply continues. The classifier/approval gate above decides BEFORE a
+/// deferred risky tool is dispatched — deferral happens only after the call is
+/// allowed. Instant tools (pong / dir_list / dir_cache_update) still run inline.
+///
+/// **Async classifier gate.** The TAC classify call is NOT run inline: it would
+/// freeze the event loop 1-12s per risky call. Instead the gate spawns the
+/// classify off-thread ([`spawn_classify_park`]) and PARKS the round on
+/// `awaiting_classify`; the event-loop drain stages the verdict into
+/// `pending_classify_verdict` and RE-ENTERS this function, which consumes it and
+/// acts on the unchanged three-way branch. So a risky-tool round can park twice —
+/// first on the classifier, then (in Normal, or on a deferred allow) on approval /
+/// the deferred lane.
 ///
 /// Each call/string is cloned out of `state.rest` before `run_tool` (which
-/// borrows `state` mutably) so there's no overlapping borrow of the vec. Reached
-/// only from the sync loop, so the `block_on` TAC call is safe.
+/// borrows `state` mutably) so there's no overlapping borrow of the vec.
 pub(crate) fn process_tools(
     state: &mut AppState,
     sess_idx: usize,
@@ -185,8 +248,9 @@ pub(crate) fn process_tools(
     handle: &tokio::runtime::Handle,
 ) {
     // Recent conversation tail, used to make TAC intent-aware. Cloned out once
-    // (empty when there's no session) so the per-call `block_on` below holds no
-    // borrow of `state`. We feed the last few User/Assistant turns — NOT just the
+    // (empty when there's no session) so it can be moved into the off-thread
+    // classify task without borrowing `state`. We feed the last few User/Assistant
+    // turns — NOT just the
     // most-recent user line — because in multi-turn chats that last line is often a
     // terse confirmation ("ok go!", "yes") whose intent only resolves against the
     // earlier request and the agent's proposed plan. 6 messages × 600 chars keeps
@@ -467,7 +531,17 @@ pub(crate) fn process_tools(
                 ) {
                     super::super::spawn::SpawnOutcome::Spawned(_)
                     | super::super::spawn::SpawnOutcome::Queued(_) => {
-                        state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone())
+                        state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone());
+                        // Park the round on this delegation IMMEDIATELY (mirrors
+                        // `dispatch_deferred` setting `awaiting_tool_tasks` inline at
+                        // dispatch): if a LATER call in this round early-returns
+                        // before the loop bottom — e.g. a risky call parks on the
+                        // classifier — the bottom-of-loop `awaiting_subagents = true`
+                        // reconciliation is skipped, and the sub-agent drain would
+                        // then not treat the round as parked. Setting it here keeps
+                        // the park flag correct mid-round; the bottom-of-loop set
+                        // stays as a (now-idempotent) backstop.
+                        state.rest.sessions[sess_idx].awaiting_subagents = true;
                     }
                     // Nothing started or queued (no client/session or unknown
                     // agent) → answer the call now so it isn't left dangling.
@@ -847,16 +921,26 @@ pub(crate) fn process_tools(
             } else if is_remove && mode != AgentMode::Yolo {
                 match tac_inputs(state, sess_idx, client) {
                     Some((c, config, settings)) => {
-                        let verdict = handle.block_on(
-                            crate::app::harness::classify_toolcall(
-                                &c,
-                                &config,
-                                &settings,
-                                &convo_context,
-                                &call.function.name,
-                                &call.function.arguments,
-                            ),
-                        );
+                        // Async TAC gate (mirrors the generic risky gate below):
+                        // take a drain-staged verdict for THIS call, else spawn the
+                        // classifier off-thread and PARK — the round re-enters this
+                        // arm with the verdict once it lands (`pre_approved` stays
+                        // false, `is_remove` stays true, so it lands back here). A
+                        // stale staged id is dropped and re-classified. The three-way
+                        // branch below is UNCHANGED.
+                        let verdict = match state.rest.sessions[sess_idx]
+                            .pending_classify_verdict
+                            .take()
+                        {
+                            Some((vid, v)) if vid == call.id => v,
+                            _ => {
+                                spawn_classify_park(
+                                    state, sess_idx, handle, c, config, settings,
+                                    &convo_context, &call,
+                                );
+                                return;
+                            }
+                        };
                         if verdict.available && verdict.allow {
                             // Definite allow. Auto runs inline; Normal still asks.
                             if mode == AgentMode::Normal {
@@ -1120,7 +1204,7 @@ pub(crate) fn process_tools(
         // a definite-allow. Only the classifier + prompts are bypassed — the
         // deterministic workspace path guard (WC) inside the tools still applies, so
         // writes stay in the project dir. Gate it FIRST so no `tac_inputs` /
-        // `block_on(classify_toolcall)` ever fires in Yolo; clear any stale approval
+        // `spawn_classify_park` ever fires in Yolo; clear any stale approval
         // reason and fall through to the dispatch block below (which advances
         // `tool_idx`). The classifier/approval branches below are reached only for the
         // Auto/Normal modes.
@@ -1134,14 +1218,25 @@ pub(crate) fn process_tools(
             match tac_inputs(state, sess_idx, client) {
                 // Classifier enabled → run TAC in both modes and act on its verdict.
                 Some((c, config, settings)) => {
-                    let verdict = handle.block_on(crate::app::harness::classify_toolcall(
-                        &c,
-                        &config,
-                        &settings,
-                        &convo_context,
-                        &call.function.name,
-                        &call.function.arguments,
-                    ));
+                    // Async TAC gate: consume a verdict the event-loop drain already
+                    // staged for THIS call, else spawn the classifier off-thread and
+                    // PARK the round (returning immediately) — the drain re-enters
+                    // here with the verdict once it lands. A staged verdict for a
+                    // DIFFERENT id is stale (interrupted/superseded turn): drop it and
+                    // classify fresh. The three-way branch below is UNCHANGED.
+                    let verdict = match state.rest.sessions[sess_idx]
+                        .pending_classify_verdict
+                        .take()
+                    {
+                        Some((vid, v)) if vid == call.id => v,
+                        _ => {
+                            spawn_classify_park(
+                                state, sess_idx, handle, c, config, settings,
+                                &convo_context, &call,
+                            );
+                            return;
+                        }
+                    };
                     if verdict.available && verdict.allow {
                         // Definite allow. Auto runs it inline (no prompt — the user
                         // delegated decisions); Normal still asks, because in Normal

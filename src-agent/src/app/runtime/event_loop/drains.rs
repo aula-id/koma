@@ -123,7 +123,9 @@ pub(super) fn apply_compaction_result(
     // better understood after a compact, and this also satisfies the "applies on
     // compaction" requirement. Best-effort; gated by `awareness_enabled` inside
     // `summarize`. Clone the inputs out first (including `config` for the role
-    // resolution) so the `block_on` doesn't hold a borrow of `state.rest`.
+    // resolution) so the spawn doesn't hold a borrow of `state.rest`. Runs OFF the
+    // event-loop thread (`spawn_awareness_recompute`) rather than `block_on`; the
+    // result lands asynchronously via the `awareness_rx` drain in `service_global`.
     let aware_inputs = match (
         client.as_ref(),
         state.rest.sessions.get(idx).and_then(|rt| rt.session.as_ref()),
@@ -152,29 +154,17 @@ pub(super) fn apply_compaction_result(
                 &settings,
                 crate::model::app_config::ModelRole::Main,
             );
-            let s = match main_route {
-                Some(ref m) => handle.block_on(crate::app::awareness::summarize_with_fallback(
-                    &c,
-                    &settings,
-                    r.conn(),
-                    &r.model_id,
-                    r.provider(),
-                    &workdir,
-                    m.conn(),
-                    &m.model_id,
-                    m.provider(),
-                )),
-                None => handle.block_on(crate::app::awareness::summarize(
-                    &c,
-                    &settings,
-                    r.conn(),
-                    &r.model_id,
-                    r.provider(),
-                    &workdir,
-                )),
-            };
-            if let Some(rt) = state.rest.sessions.get_mut(idx) {
-                rt.awareness_summary = s;
+            if let Some(session_id) = state.rest.sessions.get(idx).map(|rt| rt.id.clone()) {
+                crate::app::runtime::spawn_awareness_recompute(
+                    state,
+                    handle,
+                    session_id,
+                    c,
+                    settings,
+                    workdir,
+                    r,
+                    main_route,
+                );
             }
         }
     }
@@ -239,6 +229,8 @@ pub(super) fn apply_compaction_result(
             rt.tool_results.clear();
             rt.pending_tool_tasks.clear();
             rt.awaiting_tool_tasks = false;
+            rt.awaiting_classify = false;
+            rt.pending_classify_verdict = None;
         }
         state.rest.reset_scroll_at(idx);
         state.rest.sessions[idx].status = "thinking".into();

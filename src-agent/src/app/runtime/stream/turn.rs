@@ -369,6 +369,8 @@ pub(crate) fn advance_turn(
                 state.rest.sessions[sess_idx].tool_results.clear();
                 state.rest.sessions[sess_idx].pending_tool_tasks.clear();
                 state.rest.sessions[sess_idx].awaiting_tool_tasks = false;
+                state.rest.sessions[sess_idx].awaiting_classify = false;
+                state.rest.sessions[sess_idx].pending_classify_verdict = None;
                 state.rest.sessions[sess_idx].status = "thinking".into();
                 super::run::start_stream_task(history, state, sess_idx, client, handle);
             }

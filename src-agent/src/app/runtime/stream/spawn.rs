@@ -117,10 +117,12 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
 ///    match the shell-cd mental model; the async reindex never blocks the UI;
 /// 3. recompute the project-awareness summary for the new cwd, IF awareness is
 ///    enabled + routable. This mirrors the post-`/compact` recompute
-///    (`event_loop::drains`) and, like it, runs via `block_on` on the event-loop
-///    thread; when awareness is off (the common case) there is no network at all.
-///    The summary is recomputed for the session at `sess_idx` directly (not
-///    `fg_mut()`), so a background-session cd updates the RIGHT session.
+///    (`event_loop::drains`) and, like it, is SPAWNED off the event-loop thread
+///    (`spawn_awareness_recompute`) rather than `block_on`, so a slow/hung network
+///    call never freezes the UI; when awareness is off (the common case) there is
+///    no network at all. The result lands asynchronously, keyed by session id, via
+///    the `awareness_rx` drain in `service_global` — never written synchronously
+///    here — so a background-session cd's result still lands on the RIGHT session.
 ///
 /// The session's persisted `settings.workdir` list (the allow-list / `[N]` roots)
 /// is deliberately UNTOUCHED — cd moves only the cwd. `memory_dir` is also left
@@ -144,8 +146,11 @@ pub(crate) fn apply_workspace_change(
 
     // 3. Recompute awareness for the new cwd when enabled + routable. Snapshot the
     //    inputs (cloning the settings + config) so no session borrow is held
-    //    across the `block_on`. `summarize` returns `None` on no-docs / disabled /
-    //    failure, which simply clears the summary — best-effort, never fatal.
+    //    across the spawn. The recompute runs OFF the event-loop thread (see
+    //    `spawn_awareness_recompute`) and lands its result asynchronously via
+    //    `awareness_rx`, drained in `service_global`; `summarize` returns `None`
+    //    on no-docs / disabled / failure, which simply clears the summary —
+    //    best-effort, never fatal.
     let aware_inputs = match (
         client.as_ref(),
         state.rest.sessions[sess_idx].session.as_ref(),
@@ -172,28 +177,17 @@ pub(crate) fn apply_workspace_change(
                 &settings,
                 crate::model::app_config::ModelRole::Main,
             );
-            let summary = match main_route {
-                Some(ref m) => handle.block_on(crate::app::awareness::summarize_with_fallback(
-                    &c,
-                    &settings,
-                    route.conn(),
-                    &route.model_id,
-                    route.provider(),
-                    &new_cwd,
-                    m.conn(),
-                    &m.model_id,
-                    m.provider(),
-                )),
-                None => handle.block_on(crate::app::awareness::summarize(
-                    &c,
-                    &settings,
-                    route.conn(),
-                    &route.model_id,
-                    route.provider(),
-                    &new_cwd,
-                )),
-            };
-            state.rest.sessions[sess_idx].awareness_summary = summary;
+            let session_id = state.rest.sessions[sess_idx].id.clone();
+            crate::app::runtime::spawn_awareness_recompute(
+                state,
+                handle,
+                session_id,
+                c,
+                settings,
+                new_cwd.clone(),
+                route,
+                main_route,
+            );
         }
     }
 }

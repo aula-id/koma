@@ -317,6 +317,18 @@ pub struct AppStateRest {
     /// `health_fetching` / `health_frame` instead.
     pub sec_health_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<crate::app::sec::InstallHealthEntry>, String>>>,
+    /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
+    /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
+    /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
+    /// that channel is REPLACED wholesale on every warm (see its doc), so a
+    /// recompute in flight when a new warm starts would be stranded — never
+    /// delivered, never re-created. This receiver is created lazily on first use
+    /// and lives for the app's lifetime. Drained in `service_global` alongside
+    /// `sec_health_rx`/`warm_rx`.
+    pub awareness_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, Option<String>)>>,
+    /// SENDER half of `awareness_rx`, cloned into each spawned recompute task.
+    /// `None` until the first recompute is spawned (see `session_mgmt::spawn_awareness_recompute`).
+    pub awareness_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
 }
 
 impl Default for AppStateRest {
@@ -406,6 +418,8 @@ impl AppStateRest {
             version_tx: Some(vtx),
             version_rx: Some(vrx),
             sec_health_rx: None,
+            awareness_rx: None,
+            awareness_tx: None,
         }
     }
 
