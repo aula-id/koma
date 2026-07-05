@@ -490,7 +490,6 @@ pub(crate) fn process_tools(
                     // (plan_ready marks them Completed; without this reset they'd
                     // stay Completed while the model reworks the plan). Only
                     // `plan_ready` marks them Completed.
-                    let rail_status = |_content: &str| -> TodoStatus { TodoStatus::Pending };
                     // The model's items: drop any whose content case-insensitively
                     // equals a rail (the model must not fabricate/move the rails) or
                     // is blank (blank content never survives a parse round-trip), and
@@ -534,13 +533,13 @@ pub(crate) fn process_tools(
                     let mut merged = model_items;
                     merged.push(TodoItem {
                         content: PLAN_RAIL_SERVE.to_string(),
-                        status: rail_status(PLAN_RAIL_SERVE),
+                        status: TodoStatus::Pending,
                         priority: TodoPriority::Low,
                         locked: true,
                     });
                     merged.push(TodoItem {
                         content: PLAN_RAIL_SAVE.to_string(),
-                        status: rail_status(PLAN_RAIL_SAVE),
+                        status: TodoStatus::Pending,
                         priority: TodoPriority::Low,
                         locked: true,
                     });

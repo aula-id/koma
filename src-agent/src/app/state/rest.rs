@@ -475,31 +475,33 @@ impl AppStateRest {
         if entering_plan || leaving_plan {
             if let Some(sess) = self.fg_mut().session.as_mut() {
                 sess.plan_mode_hint = entering_plan;
-                // Seed the two locked plan rails on entry — but ONLY when the plan
-                // todo list is missing/empty, so re-entering plan mode mid-session
-                // never clobbers the model's in-progress steps.
+                // Seed the two locked plan rails on entry, UNCONDITIONALLY. This
+                // guard-checking `old_mode == new_mode` early-returns above, and the
+                // `plan_enter` interception short-circuits when already in Plan, so
+                // `entering_plan` only ever fires on a genuine transition INTO plan —
+                // a fresh rail seed is always correct there, and overwrites any stale
+                // plan_todos.md left behind by an abnormal exit (crash/kill mid-plan,
+                // since `agent_mode` is process-local and resets on restart).
                 if entering_plan {
                     use crate::app::mode::todo::{
                         self, TodoItem, TodoPriority, TodoStatus, PLAN_RAIL_SAVE, PLAN_RAIL_SERVE,
                     };
                     let path = sess.plan_todos_path();
-                    if todo::load_todos_from(&path).is_empty() {
-                        let rails = vec![
-                            TodoItem {
-                                content: PLAN_RAIL_SERVE.to_string(),
-                                status: TodoStatus::Pending,
-                                priority: TodoPriority::Low,
-                                locked: true,
-                            },
-                            TodoItem {
-                                content: PLAN_RAIL_SAVE.to_string(),
-                                status: TodoStatus::Pending,
-                                priority: TodoPriority::Low,
-                                locked: true,
-                            },
-                        ];
-                        let _ = todo::save_todos_to(&path, &rails);
-                    }
+                    let rails = vec![
+                        TodoItem {
+                            content: PLAN_RAIL_SERVE.to_string(),
+                            status: TodoStatus::Pending,
+                            priority: TodoPriority::Low,
+                            locked: true,
+                        },
+                        TodoItem {
+                            content: PLAN_RAIL_SAVE.to_string(),
+                            status: TodoStatus::Pending,
+                            priority: TodoPriority::Low,
+                            locked: true,
+                        },
+                    ];
+                    let _ = todo::save_todos_to(&path, &rails);
                 } else if leaving_plan {
                     // Symmetric with the entry seed: leaving Plan for any non-plan
                     // mode (plan approved, `/mode`, Shift+Tab) drops the plan
