@@ -19,6 +19,7 @@
 
 mod key_input;
 mod onboard;
+pub mod onboard_provider;
 mod effort;
 mod loading;
 mod picker;
@@ -47,6 +48,7 @@ pub use help::{HelpEntry, HelpKind, HelpState};
 pub use effort::EffortPickerState;
 pub use key_input::KeyInputForm;
 pub use onboard::OnboardState;
+pub use onboard_provider::{OnboardProviderState, OnboardProviderStep};
 pub use loading::{LoadingState, WarmStatus};
 pub use picker::PickerState;
 pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
@@ -147,6 +149,13 @@ pub enum Mode {
     /// [`OnboardState`]). Boxed to keep `Mode` uniform + cheap to move, consistent
     /// with the other overlay variants.
     Onboard(Box<OnboardState>),
+    /// Guided PROVIDER onboarding wizard: entered from the chooser's "provider" row,
+    /// it chains an OAuth login → model pick → save-as-global-Main → Chat (see
+    /// [`OnboardProviderState`]). Reuses the `/settings` OAuth connect-flow machine +
+    /// login runners; the model pick is the same omnisearch the `/settings` model
+    /// modal uses. Boxed to keep `Mode` uniform + cheap to move, consistent with the
+    /// other overlay variants.
+    OnboardProvider(Box<OnboardProviderState>),
     /// Credentials form: collects api key and model name before a session can
     /// start.  The inner [`KeyInputForm`] holds the in-progress field values
     /// and tracks which field is focused.
