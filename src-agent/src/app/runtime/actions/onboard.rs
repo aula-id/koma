@@ -69,8 +69,9 @@ pub(super) fn handle_setup_koma_free(
     };
 
     // Ensure a Main-role koma-free model entry exists (reuse if this provider already
-    // has one). The forced endpoint/model live in `resolve::from_entry`, so the entry's
-    // `model_id` is only a label — pin it to the canonical id for clarity.
+    // has one). This handler explicitly writes KOMA_FREE_ENDPOINT and KOMA_FREE_MODEL;
+    // resolve::from_entry just passes them through (no forcing). Pin model_id to the
+    // canonical id for clarity.
     let has_main_model = state.rest.config.models.iter().any(|m| {
         m.provider_uuid == provider_uuid && m.effective_roles().contains(&ModelRole::Main)
     });

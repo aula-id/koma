@@ -68,15 +68,11 @@ pub(crate) fn handle_compact(
     // main route today) into an owned `Resolved` BEFORE the spawn, so the
     // moved-into-task value carries no borrow of `state.rest`. Compactor
     // always resolves (Main legacy fallback), but guard defensively.
-    // Honour THIS session's `/free` toggle: compaction rides Main, so a free-mode
-    // session forces the Compactor route onto the keyless koma-free tier too.
-    let free_mode = state.rest.fg().free_mode;
     let route = state.rest.fg().session.as_ref().and_then(|s| {
-        crate::app::resolve::resolve_role_free(
+        crate::app::resolve::resolve_role(
             &state.rest.config,
             &s.settings,
             crate::model::app_config::ModelRole::Compactor,
-            free_mode,
         )
     });
     // Fresh channel for this request; the receiver lives in state so an

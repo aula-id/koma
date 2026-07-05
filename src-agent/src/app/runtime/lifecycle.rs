@@ -102,20 +102,18 @@ fn build_startup(
         state
     } else {
         let (lk, lm, lp) = prefill_creds();
-        // "Should we onboard?" is now DISTINCT from "does Main resolve?": with the
-        // always-usable koma-free Main fallback, `resolve_role(Main)` is basically never
-        // unusable, so it can no longer gate the first-run chooser. Instead ask whether the
-        // user has configured NOTHING routable yet — no providers/models/OAuth conns in the
-        // global `~/.koma/config.json` AND no legacy session api_key. A populated config or a
-        // legacy-keyed session both count as configured and skip the chooser. Probe with a
-        // Settings reflecting the prefilled legacy creds so the api_key check sees them.
+        // Route to onboarding when Main doesn't resolve to a usable route. Empty config
+        // → legacy fallback with no key is not usable → onboard. A configured/usable Main
+        // skips the chooser. Probe with a Settings reflecting the prefilled legacy creds
+        // so resolve_role can evaluate the route against them.
         let probe = Settings {
             api_key: lk.clone().unwrap_or_default(),
             model: lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             provider: lp.clone().unwrap_or_default(),
             ..Default::default()
         };
-        let unconfigured = config.is_unconfigured(&probe);
+        let unconfigured = resolve_role(&config, &probe, ModelRole::Main)
+            .is_none_or(|r| !r.is_usable());
         let mut state = if !unconfigured {
             // Returning user: spawn a fresh session pre-loaded with the last
             // creds and drop straight into chat. The credential prompt only
@@ -338,11 +336,10 @@ fn install_daemon_session(
     runtime.id = session_id.to_string();
     runtime.held_lock = Some(sess.path.clone());
 
-    // Onboarding chooser ONLY when the user has configured NOTHING routable yet (no
-    // providers/models/OAuth conns AND no legacy api_key) — NOT merely when Main fails to
-    // resolve, since the koma-free Main fallback is always usable now. Computed before
-    // `sess` moves in.
-    let unconfigured = state.rest.config.is_unconfigured(&sess.settings);
+    // Onboard when Main resolves but is not usable (or doesn't resolve). Computed
+    // before `sess` moves in.
+    let unconfigured = resolve_role(&state.rest.config, &sess.settings, ModelRole::Main)
+        .is_none_or(|r| !r.is_usable());
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 

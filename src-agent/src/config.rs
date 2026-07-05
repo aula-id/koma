@@ -7,12 +7,8 @@
 /// Base URL of the OpenRouter API endpoint.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-/// Default model id when the user hasn't configured one. This is the koma-free
-/// tier's model (`service::koma_free::KOMA_FREE_MODEL`), so a defaulted
-/// `settings.model` routes through the keyless free tier via `resolve_role`'s Main
-/// fallback rather than a dead `gpt-4o-mini`@OpenRouter route. A user with their own
-/// api_key + explicit model is unaffected (they set `settings.model` themselves).
-pub const DEFAULT_MODEL: &str = "koma/apple";
+/// Model identifier sent to OpenRouter when the user hasn't specified one.
+pub const DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
 
 /// Default OpenRouter provider slug (empty = use OpenRouter's default routing).
 ///

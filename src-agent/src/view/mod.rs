@@ -46,11 +46,8 @@ use crate::app::state::{AppState, AppStateRest};
 /// Session overrides win; falls back to the legacy `settings.model` field;
 /// defaults to empty string when there is no session at all.
 fn resolved_main_model(rest: &AppStateRest) -> String {
-    // Honour the session's `/free` toggle so the label reads the model that will
-    // actually be sent (koma-free's `koma/apple` when on).
-    let free_mode = rest.fg().free_mode;
     rest.fg().session.as_ref()
-        .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode, free_mode))
+        .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode))
         .map(|r| r.model_id)
         .or_else(|| rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
         .unwrap_or_default()

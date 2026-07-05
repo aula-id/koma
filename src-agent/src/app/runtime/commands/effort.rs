@@ -78,15 +78,11 @@ pub(super) fn handle_effort(
     let model = settings.model.clone();
     // Resolve the MAIN role (the effort menu is per the chat model, served
     // by the Main endpoint). Snapshot the route into an owned local so it
-    // doesn't borrow `state.rest` across the mutation below. Honour THIS
-    // session's `/free` toggle — like /compact, a free-mode session's Main
-    // route is the keyless koma-free tier, not whatever is configured.
-    let free_mode = state.rest.fg().free_mode;
-    let main = crate::app::resolve::resolve_role_free(
+    // doesn't borrow `state.rest` across the mutation below.
+    let main = crate::app::resolve::resolve_role(
         &state.rest.config,
         &settings,
         crate::model::app_config::ModelRole::Main,
-        free_mode,
     );
 
     // Arm a debounced fetch for the Main endpoint so a SUBSEQUENT
