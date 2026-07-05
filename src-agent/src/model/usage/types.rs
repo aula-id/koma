@@ -186,7 +186,29 @@ impl UsageData {
     ///
     /// All queries are individually non-fatal (empty/zero on a missing ledger), so
     /// this never fails — a fresh install yields an all-default bundle.
+    ///
+    /// Cached: identical `(session_view, since, heat_bucket, heat_n,
+    /// session_uuid)` calls within the cache TTL reuse the last computed result
+    /// instead of re-hitting the ledger — see [`super::cache`]. This is the
+    /// chokepoint both the per-frame local TUI arm and the daemon's ~100ms
+    /// snapshot-projection arm call, so caching here caps both to at most one
+    /// real ledger read per TTL window.
     pub fn collect(
+        session_view: bool,
+        since: i64,
+        heat_bucket: BucketSize,
+        heat_n: usize,
+        session_uuid: &str,
+    ) -> Self {
+        let key = (session_view, since, heat_bucket, heat_n, session_uuid.to_string());
+        super::cache::get_or_compute(key, || {
+            Self::collect_uncached(session_view, since, heat_bucket, heat_n, session_uuid)
+        })
+    }
+
+    /// Uncached ledger read — see [`Self::collect`] for the cached entry point
+    /// every call site should use instead.
+    fn collect_uncached(
         session_view: bool,
         since: i64,
         heat_bucket: BucketSize,

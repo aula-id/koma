@@ -78,6 +78,12 @@ impl ApiType {
 /// (a given role is held by at most ONE model), but a single model may carry
 /// SEVERAL roles (e.g. Main + Awareness + Compactor). Persisted in lowercase
 /// (`"main"`, `"awareness"`, …).
+///
+/// `Planner` drives the MAIN turn instead of `Main` while the session is in
+/// `AgentMode::Plan` (see `app::resolve::resolve_turn_model`). It has no config
+/// slot of its own beyond the assignment, no legacy fallback, and does NOT
+/// inherit Main's route the way Compactor/Awareness do — an unassigned or
+/// unresolved Planner simply means the turn stays on Main.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelRole {
@@ -85,6 +91,7 @@ pub enum ModelRole {
     Awareness,
     Safeguard,
     Compactor,
+    Planner,
 }
 
 /// One API provider connection: a base URL + auth + wire type, keyed by `uuid`.

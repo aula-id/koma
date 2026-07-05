@@ -26,9 +26,12 @@ pub mod git_operator;
 pub mod git_worktree;
 pub mod internet;
 pub mod memory;
+pub mod plan;
 pub mod pong;
 pub mod search;
+pub mod seqthink;
 pub mod shell;
+pub mod shell_filter;
 pub mod task;
 pub mod todo;
 
@@ -44,6 +47,36 @@ pub use dircache::DirCache;
 /// interception in `process_tools` (it never reaches this generic gate).
 pub(crate) fn tool_is_risky(name: &str) -> bool {
     matches!(name, "write" | "delete" | "edit" | "bash" | "git_operator" | "web_download")
+}
+
+/// Tools reachable while [`crate::app::state::AgentMode::Plan`] is active — the
+/// read-only / reasoning / delegation surface a planning turn is allowed to use.
+/// Consumed by: the main advertise fold (`app::runtime::stream::run`), the
+/// sub-agent allow-list fold (`app::subagent::spawn`), and the defense-in-depth
+/// deny gate inside `process_tools` (`app::runtime::stream::tools::approval`) —
+/// so a fabricated/stale call name can never mutate anything while Plan is
+/// active, even if it slipped past the advertise fold. `git_operator` is allowed
+/// here at the tool-name level only; per-subcommand read-only filtering is a
+/// separate check, [`plan_git_subcommand_allowed`], since Plan may run READ git
+/// but not `commit`/`push`/`checkout`/etc.
+pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
+    matches!(name,
+        "read" | "grep" | "glob" | "dir_list" | "dir_cache_update" | "recall"
+        | "web_search" | "web_fetch" | "pong" | "cd" | "git_cred"
+        | "task" | "task_output" | "task_kill" | "bash_output" | "bash_kill"
+        | "git_operator" | "seqthink" | "plan_ready" | "plan_enter")
+}
+
+/// True when `subcmd` (the first element of a `git_operator` call's `args`
+/// array) is a read-only git subcommand — the only ones Plan mode may run
+/// through `git_operator` (which [`tool_allowed_in_plan`] otherwise lets
+/// through at the tool-name level). Anything else (`commit`, `push`,
+/// `checkout`, `reset`, …) is denied so Plan mode's git access stays genuinely
+/// read-only.
+pub(crate) fn plan_git_subcommand_allowed(subcmd: &str) -> bool {
+    matches!(subcmd,
+        "status" | "log" | "diff" | "show" | "blame" | "branch" | "remote"
+        | "rev-parse" | "describe" | "shortlog" | "ls-files" | "ls-remote")
 }
 
 /// Shared context handed to every tool invocation.
@@ -85,6 +118,14 @@ pub struct ToolCtx {
     /// no manager is available (e.g. headless/test constructions) — sec calls then
     /// fall through to the "unknown tool" error.
     pub sec_manager: Option<Arc<crate::app::sec::SecDaemonManager>>,
+    /// Whether `bash`/`git_operator` should run their "saving" output path
+    /// (noise filtering + tee-to-disk on truncation/non-zero-exit). Defaults to
+    /// true everywhere until a settings toggle exists to turn it off per-session.
+    pub bash_saving: bool,
+    /// Directory tee'd full command logs are written to when `bash_saving` is
+    /// true (`<session_dir>/opt/`). `None` when no session is active (or for
+    /// headless/test constructions), in which case tee is simply skipped.
+    pub bash_log_dir: Option<PathBuf>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -141,16 +182,21 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
         Box::new(git_worktree::GitWorktree),
+        Box::new(plan::PlanEnter),
+        Box::new(plan::PlanReady),
+        Box::new(seqthink::SeqThink),
     ]
 }
 
-/// Tools that are NEVER advertised to the main chat model — reachable only by
-/// sub-agents whose allow-list names them (the sub-agent caller advertises its
-/// own `tools`, not [`main_tool_names`]). Currently empty: every built-in tool is
-/// offered to the main model. The mechanism is kept because per-sub-agent tool
-/// scoping still relies on the [`main_tool_names`] / `advertise` split, so a
-/// future internal-only tool only needs to be listed here.
-const INTERNAL_ONLY: &[&str] = &[];
+/// Tools that are NEVER advertised to the main chat model via
+/// [`main_tool_names`] — the caller pushes them onto `advertise` explicitly,
+/// mode-gated, instead (see `app::runtime::stream::run::start_stream_task`).
+/// `plan_enter` (the request to enter Plan mode) is advertised only OUTSIDE Plan
+/// mode; `seqthink` (structured reasoning) and `plan_ready` (present a finished
+/// plan) are advertised only WHILE Plan mode is active. None of the three can
+/// live in the unconditional `main_tool_names` set, since each is gated on
+/// `agent_mode`.
+const INTERNAL_ONLY: &[&str] = &["seqthink", "plan_enter", "plan_ready"];
 
 /// Tools that MUST run off the UI/event-loop thread because they do blocking
 /// I/O — running them inline in `process_tools` (which executes on the main
@@ -377,3 +423,7 @@ pub fn find_workspace(workspaces: &[PathBuf], abs: &Path) -> Option<PathBuf> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

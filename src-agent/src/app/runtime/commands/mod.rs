@@ -11,7 +11,10 @@ use crate::service::openrouter::OpenRouterClient;
 mod bash;
 mod todo;
 mod cd;
-mod compact;
+// `pub(crate)` so the plan-approval compaction rail (deferred/idle drain) can call
+// `handle_compact` once the post-approval turn settles — the same entry point
+// `/compact` uses, with `preserve_n = 0`.
+pub(crate) mod compact;
 mod effort;
 // `pub(crate)` so the shared `internet_feedback` helper is reachable from the
 // Ctrl+E handler (controller) and the settings-save action, which flip the same
@@ -35,7 +38,7 @@ pub(super) fn apply_slash(
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     match cmd {
-        Command::Compact => compact::handle_compact(state, client, handle)?,
+        Command::Compact => compact::handle_compact(state, client, handle, None)?,
         Command::New(mode) => new_session::handle_new(state, client, handle, mode)?,
         Command::Mode(arg) => misc::handle_mode(state, arg)?,
         Command::Effort => effort::handle_effort(state, client)?,

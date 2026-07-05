@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::app::state::AppState;
+use crate::app::state::{AgentMode, AppState};
 use crate::dto::chat::Role;
 use crate::model::msglog;
 use crate::service::openrouter::OpenRouterClient;
@@ -130,6 +130,10 @@ pub(super) fn handle_submit(
     // awaiting_tool_tasks=true or stale pending ids from a prior halt path.
     state.rest.fg_mut().pending_tool_tasks.clear();
     state.rest.fg_mut().awaiting_tool_tasks = false;
+    // Same for the TAC-classify park lane: a new submit must never inherit a stale
+    // awaiting_classify / pending verdict from a prior halted turn.
+    state.rest.fg_mut().awaiting_classify = false;
+    state.rest.fg_mut().pending_classify_verdict = None;
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.
@@ -587,6 +591,115 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
     state.rest.fg_mut().abort_running_subagents(false);
     state.rest.fg_mut().pending_tool_tasks.clear();
     state.rest.fg_mut().awaiting_tool_tasks = false;
+    // Drop any TAC-classify park too (deny is a turn-halt): clear the flag + any
+    // staged verdict so the halted round can't later resume off a stale verdict.
+    state.rest.fg_mut().awaiting_classify = false;
+    state.rest.fg_mut().pending_classify_verdict = None;
     state.rest.fg_mut().status = "denied — stopped".into();
+    Ok(())
+}
+
+/// Answer the paused `plan_ready` call (at `tool_idx`) with `result` and advance
+/// past it. Unlike a risky tool, `plan_ready` is FULLY INTERCEPTED — it is never
+/// re-dispatched through `run_tool`; its result is pushed directly (like a
+/// denial) so the parked round can be resumed by `process_tools`.
+fn answer_plan_ready(state: &mut AppState, result: String) {
+    if let Some(call) = state
+        .rest
+        .fg()
+        .pending_tool_calls
+        .get(state.rest.fg().tool_idx)
+        .cloned()
+    {
+        state.rest.fg_mut().tool_results.push((call.id, result));
+        state.rest.fg_mut().tool_idx += 1;
+    }
+}
+
+/// Leave Plan mode, restoring the mode stashed when it was entered. Consumes
+/// `plan_return_mode` (defaulting to `Auto`); a stashed `Yolo` that is no longer
+/// armed downgrades to `Auto` so Plan approval can never silently re-enter Yolo.
+/// `set_agent_mode` does the rebuild/save on the Plan→ret transition and also
+/// clears `plan_return_mode` (already `None` after the `take`, so it's a no-op).
+fn restore_plan_return_mode(state: &mut AppState) {
+    let mut ret = state.rest.plan_return_mode.take().unwrap_or(AgentMode::Auto);
+    if ret == AgentMode::Yolo && !state.rest.yolo_armed {
+        ret = AgentMode::Auto;
+    }
+    state.rest.set_agent_mode(ret);
+}
+
+/// Handle `Action::ApprovePlan` (`y` on a paused `plan_ready`): answer the call
+/// with the "approved — execute now" result, restore the pre-Plan mode, and
+/// resume the round so the model exits planning and executes the plan.
+pub(super) fn handle_approve_plan(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let fgi = state.rest.foreground;
+    state.rest.fg_mut().awaiting_approval = false;
+    state.rest.fg_mut().approval_reason = None;
+    // Name the on-disk plan so the model can re-read it if needed.
+    let plan_path = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.plan_path().display().to_string())
+        .unwrap_or_else(|| "the session plan.md".to_string());
+    answer_plan_ready(state, crate::tool::plan::plan_approved_text(&plan_path));
+    // Leave Plan BEFORE resuming: the round finishes into `finish_tool_round` →
+    // `start_stream_task`, which reads `agent_mode` to size the advertised tool
+    // surface, so the continuation must already be in the restored (executing) mode.
+    restore_plan_return_mode(state);
+    process_tools(state, fgi, client, handle);
+    Ok(())
+}
+
+/// Handle `Action::ApprovePlanCompact` (`a` on a paused `plan_ready`): like
+/// [`handle_approve_plan`], plus arm the compaction-with-seed rail so the
+/// exploratory context collapses to the approved plan before execution.
+///
+/// ORDERING: we do NOT compact here. Answering the call re-enters `process_tools`
+/// → `finish_tool_round` → a fresh stream carrying the approval result, and
+/// `handle_compact` refuses (and would race) while that stream is live. Instead we
+/// arm `pending_plan_compact` + `pending_plan_seed`; the deferred/idle drain fires
+/// `handle_compact(preserve_n = 0)` once THIS session settles, and
+/// `apply_compaction_result` seeds `plan.md` as the first post-compaction user turn
+/// and auto-wakes the execution stream.
+pub(super) fn handle_approve_plan_compact(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let fgi = state.rest.foreground;
+    state.rest.fg_mut().awaiting_approval = false;
+    state.rest.fg_mut().approval_reason = None;
+    answer_plan_ready(
+        state,
+        crate::tool::plan::plan_approved_compact_text().to_string(),
+    );
+    restore_plan_return_mode(state);
+    state.rest.pending_plan_seed = true;
+    state.rest.pending_plan_compact = true;
+    process_tools(state, fgi, client, handle);
+    Ok(())
+}
+
+/// Handle `Action::DenyPlan` (`n`/Esc on a paused `plan_ready`): answer the call
+/// with the "keep discussing" result and STAY in Plan mode, then resume the round
+/// so the model receives the feedback and can revise + re-present its plan.
+pub(super) fn handle_deny_plan(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
+    let fgi = state.rest.foreground;
+    state.rest.fg_mut().awaiting_approval = false;
+    state.rest.fg_mut().approval_reason = None;
+    answer_plan_ready(state, crate::tool::plan::plan_denied_text().to_string());
+    // Mode stays Plan — nothing else to do beyond continuing the round.
+    process_tools(state, fgi, client, handle);
     Ok(())
 }

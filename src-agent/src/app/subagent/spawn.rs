@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::app::state::AgentMode;
 use crate::model::agent_def::AgentRegistry;
 use crate::model::app_config::AppConfig;
 use crate::model::settings::Settings;
@@ -73,6 +74,7 @@ pub fn spawn_subagent(
     task: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    mode: AgentMode,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
@@ -80,8 +82,17 @@ pub fn spawn_subagent(
     // Resolve the agent's route (its own model+provider, else inherit Main).
     let resolved = crate::app::resolve::resolve_agent(config, settings, agent)?;
 
-    // The effective allow-list + isolated seed conversation + step budget.
-    let tools = agent.effective_tools();
+    // The effective allow-list + isolated seed conversation + step budget. While
+    // the PARENT session is in Plan mode, the delegated sub-agent must stay
+    // read-only too — fold its allow-list down through the same whitelist used
+    // by the main advertise fold (`tool_allowed_in_plan`). This only ever
+    // NARROWS whatever the agent declared; `seqthink` is never ADDED here (it
+    // stays main-agent-only — a sub-agent has no user to ask "enter plan mode"
+    // on its behalf).
+    let mut tools = agent.effective_tools();
+    if mode == AgentMode::Plan {
+        tools.retain(|n| crate::tool::tool_allowed_in_plan(n));
+    }
     let convo = context::build_seed(agent, awareness, memory_md, task);
     // None = unbounded (natural termination when model returns no tool calls).
     // Some(n) = explicit per-agent cap from the agent-def `steps` field.

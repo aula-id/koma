@@ -280,6 +280,11 @@ pub fn draw(
                     let v = if st.sliding_cache { "on" } else { "off" };
                     vec![Span::styled(v, Style::default().fg(palette.accent))]
                 }
+                SettingField::BashSaving => {
+                    // Boolean toggle: on/off (whether bash/git_operator save output).
+                    let v = if st.bash_saving { "on" } else { "off" };
+                    vec![Span::styled(v, Style::default().fg(palette.accent))]
+                }
                 SettingField::InternetMode => {
                     // Enum toggle: simple (in-process DDG) vs full (scrapion subprocess).
                     let v = st.internet_mode.as_str();

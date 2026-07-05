@@ -109,6 +109,18 @@ pub(in crate::app::runtime) fn apply_action(
             chat::handle_deny_tool(state)?;
         }
 
+        Action::ApprovePlan => {
+            chat::handle_approve_plan(state, client, handle)?;
+        }
+
+        Action::ApprovePlanCompact => {
+            chat::handle_approve_plan_compact(state, client, handle)?;
+        }
+
+        Action::DenyPlan => {
+            chat::handle_deny_plan(state, client, handle)?;
+        }
+
         Action::SaveCreds { endpoint, api_key, model } => {
             settings_creds::handle_save_creds(endpoint, api_key, model, state, client, handle)?;
         }
