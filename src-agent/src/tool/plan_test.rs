@@ -1,24 +1,24 @@
 use super::*;
 
 #[test]
-fn parse_plan_ready_accepts_summary_and_plan() {
-    let args = json!({ "summary": "  do the thing  ", "plan": " step 1\nstep 2 " });
-    let (summary, plan) = parse_plan_ready_args(&args).unwrap();
-    assert_eq!(summary, "do the thing");
+fn parse_plan_ready_accepts_highlights_and_plan() {
+    let args = json!({ "highlights": "  do the thing  ", "plan": " step 1\nstep 2 " });
+    let (highlights, plan) = parse_plan_ready_args(&args).unwrap();
+    assert_eq!(highlights, "do the thing");
     assert_eq!(plan, "step 1\nstep 2");
 }
 
 #[test]
-fn parse_plan_ready_rejects_missing_summary() {
+fn parse_plan_ready_rejects_missing_highlights() {
     let args = json!({ "plan": "step 1" });
     let err = parse_plan_ready_args(&args).unwrap_err();
     assert!(err.starts_with("error:"), "got: {err}");
-    assert!(err.contains("summary"));
+    assert!(err.contains("highlights"));
 }
 
 #[test]
 fn parse_plan_ready_rejects_blank_plan() {
-    let args = json!({ "summary": "s", "plan": "   " });
+    let args = json!({ "highlights": "s", "plan": "   " });
     let err = parse_plan_ready_args(&args).unwrap_err();
     assert!(err.starts_with("error:"), "got: {err}");
     assert!(err.contains("plan"));
@@ -26,7 +26,7 @@ fn parse_plan_ready_rejects_blank_plan() {
 
 #[test]
 fn parse_plan_ready_rejects_non_string() {
-    let args = json!({ "summary": 42, "plan": "step" });
+    let args = json!({ "highlights": 42, "plan": "step" });
     assert!(parse_plan_ready_args(&args).is_err());
 }
 

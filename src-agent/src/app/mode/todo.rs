@@ -97,20 +97,37 @@ pub struct TodoItem {
     pub content: String,
     pub status: TodoStatus,
     pub priority: TodoPriority,
+    /// Immutable/pinned marker (used by the plan-mode rail items). Inert for
+    /// the regular working TODO.md; defaults to `false` for back-compat.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 impl TodoItem {
     /// Serialize back to the markdown checkbox line format:
-    /// `- [x] content (high)`
+    /// `- [x] content (high)`, or `- [x] content (high) [locked]` when pinned.
     pub fn to_line(&self) -> String {
-        format!(
-            "- [{}] {} ({})",
-            self.status.checkbox_char(),
-            self.content,
-            self.priority.label(),
-        )
+        if self.locked {
+            format!(
+                "- [{}] {} ({}) [locked]",
+                self.status.checkbox_char(),
+                self.content,
+                self.priority.label(),
+            )
+        } else {
+            format!(
+                "- [{}] {} ({})",
+                self.status.checkbox_char(),
+                self.content,
+                self.priority.label(),
+            )
+        }
     }
 }
+
+/// The two immutable rail items pinned to the tail of every plan todo list.
+pub const PLAN_RAIL_SERVE: &str = "serve plan to user";
+pub const PLAN_RAIL_SAVE: &str = "save plan to file & prompt approval";
 
 /// Parse the contents of a `TODO.md` file into a list of [`TodoItem`]s.
 ///
@@ -144,6 +161,14 @@ pub fn parse_todo_file(content: &str) -> Vec<TodoItem> {
             _ => TodoStatus::Pending,
         };
 
+        // Detect + strip a trailing " [locked]" marker before parsing
+        // priority/content, so back-compat lines (without the marker) parse
+        // identically to before.
+        let (rest, locked) = match rest.strip_suffix("[locked]") {
+            Some(stripped) => (stripped.trim_end(), true),
+            None => (rest, false),
+        };
+
         // Extract priority from trailing "(high|medium|low)" if present.
         let (content, priority) = if let Some(idx) = rest.rfind('(') {
             if rest.ends_with(')') {
@@ -156,9 +181,33 @@ pub fn parse_todo_file(content: &str) -> Vec<TodoItem> {
             (rest.to_string(), TodoPriority::Medium)
         };
 
-        items.push(TodoItem { content, status, priority });
+        items.push(TodoItem { content, status, priority, locked });
     }
     items
+}
+
+/// Load a plan-todo list from an explicit path (the session-scoped
+/// `plan_todos.md`, distinct from the per-directory working `TODO.md`).
+/// Returns an empty `Vec` if the file is absent or unreadable.
+pub fn load_todos_from(path: &std::path::Path) -> Vec<TodoItem> {
+    std::fs::read_to_string(path)
+        .map(|c| parse_todo_file(&c))
+        .unwrap_or_default()
+}
+
+/// Write a plan-todo list to an explicit path, atomically (temp file +
+/// rename) so a crash mid-write never leaves a truncated file. Serializes
+/// via [`TodoItem::to_line`].
+pub fn save_todos_to(path: &std::path::Path, items: &[TodoItem]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content: String = items
+        .iter()
+        .map(|item| item.to_line())
+        .collect::<Vec<_>>()
+        .join("\n");
+    crate::model::memory::atomic_write(path, format!("{content}\n").as_bytes())
 }
 
 /// Working state for the `/todo` task-panel.
@@ -173,6 +222,13 @@ pub struct TodoState {
     pub selected: usize,
     /// Session pwd_hash for disk reads (used by periodic refresh).
     pub pwd_hash: String,
+    /// When the overlay was opened while the session was in plan mode, the
+    /// session-scoped `plan_todos.md` path to read/write instead of the
+    /// per-directory `memory/TODO.md`. `None` for the normal working list.
+    /// Daemon-only concern: the client never needs the path itself, only the
+    /// resulting items (which already project via `TodoItemSnapshot`), so this
+    /// is NOT threaded through the snapshot/shadow projection.
+    pub plan_path: Option<std::path::PathBuf>,
     /// Timestamp of the last disk refresh.
     pub last_refresh: Instant,
 }
@@ -183,6 +239,7 @@ impl Default for TodoState {
             items: Vec::new(),
             selected: 0,
             pwd_hash: String::new(),
+            plan_path: None,
             last_refresh: Instant::now(),
         }
     }
@@ -191,7 +248,7 @@ impl Default for TodoState {
 impl TodoState {
     /// Build the panel from an initial item list, cursor at the top.
     pub fn new(items: Vec<TodoItem>, pwd_hash: String) -> Self {
-        Self { items, selected: 0, pwd_hash, last_refresh: Instant::now() }
+        Self { items, selected: 0, pwd_hash, plan_path: None, last_refresh: Instant::now() }
     }
 
     /// Move the LIST cursor up (saturating at 0).
@@ -214,14 +271,21 @@ impl TodoState {
         }
     }
 
-    /// Re-read `memory/TODO.md` from disk and refresh the item list in-place.
-    /// The cursor stays on the same row index (clamped if the list shrank).
+    /// Re-read the backing file from disk and refresh the item list in-place.
+    /// When `plan_path` is set (the overlay was opened in plan mode) this reads
+    /// the session-scoped `plan_todos.md`; otherwise the per-directory
+    /// `memory/TODO.md`. The cursor stays on the same row index (clamped if the
+    /// list shrank).
     pub fn refresh_from_disk(&mut self) {
-        let items = crate::model::store::memory_dir(&self.pwd_hash)
-            .ok()
-            .and_then(|dir| std::fs::read_to_string(dir.join("TODO.md")).ok())
-            .map(|c| parse_todo_file(&c))
-            .unwrap_or_default();
+        let items = if let Some(path) = &self.plan_path {
+            load_todos_from(path)
+        } else {
+            crate::model::store::memory_dir(&self.pwd_hash)
+                .ok()
+                .and_then(|dir| std::fs::read_to_string(dir.join("TODO.md")).ok())
+                .map(|c| parse_todo_file(&c))
+                .unwrap_or_default()
+        };
         self.refresh(items);
         self.last_refresh = Instant::now();
     }
@@ -244,41 +308,49 @@ impl TodoState {
     }
 
     /// The currently-selected item, if any.
-    #[allow(dead_code)] // public API; consumers index directly or use reset_to_pending
     pub fn current(&self) -> Option<&TodoItem> {
         self.items.get(self.selected)
     }
 
     /// Reset the selected item's status to `Pending`, write the updated list
-    /// back to `memory/TODO.md`, and re-read from disk so the overlay reflects
-    /// the change. Only the user can do this — it signals the model to redo
-    /// the todo.
+    /// back to disk (`plan_todos.md` when `plan_path` is set, else the
+    /// per-directory `memory/TODO.md`), and re-read from disk so the overlay
+    /// reflects the change. Only the user can do this — it signals the model
+    /// to redo the todo. Locked items (the plan-mode rails) are guarded by the
+    /// caller ([`crate::controller::input::todo::handle_todo`]) — this is a
+    /// no-op if called on one anyway, as a defense-in-depth backstop.
     pub fn reset_to_pending(&mut self) {
         // Re-read from disk first so we don't clobber writes the model made via
         // todowrite since our last refresh.
         self.refresh_from_disk();
         if let Some(item) = self.items.get_mut(self.selected) {
-            if item.status == TodoStatus::Pending {
-                return; // Already pending — nothing to do.
+            if item.locked || item.status == TodoStatus::Pending {
+                return; // Locked, or already pending — nothing to do.
             }
             item.status = TodoStatus::Pending;
+        } else {
+            return;
         }
         // Write the full list back to disk atomically (temp + rename) so a
         // crash mid-write never leaves a truncated file.
-        let Ok(memory_dir) = crate::model::store::memory_dir(&self.pwd_hash) else {
-            return;
-        };
-        let path = memory_dir.join("TODO.md");
-        let content: String = self
-            .items
-            .iter()
-            .map(|item| item.to_line())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let _ = std::fs::create_dir_all(&memory_dir);
-        let tmp = path.with_extension("md.tmp");
-        if std::fs::write(&tmp, format!("{content}\n")).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+        if let Some(path) = self.plan_path.clone() {
+            let _ = save_todos_to(&path, &self.items);
+        } else {
+            let Ok(memory_dir) = crate::model::store::memory_dir(&self.pwd_hash) else {
+                return;
+            };
+            let path = memory_dir.join("TODO.md");
+            let content: String = self
+                .items
+                .iter()
+                .map(|item| item.to_line())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = std::fs::create_dir_all(&memory_dir);
+            let tmp = path.with_extension("md.tmp");
+            if std::fs::write(&tmp, format!("{content}\n")).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
         }
         self.refresh_from_disk();
     }
