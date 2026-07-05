@@ -58,13 +58,22 @@ fn status_symbol_animated(s: &TodoStatus) -> String {
     }
 }
 
+/// Dim suffix marking a locked (plan-mode rail) item — distinct from the
+/// status circle, so the two auto-managed rails read as fixed/system rows
+/// rather than editable model steps. Mirrors the `[locked]` marker
+/// `TodoItem::to_line` appends to the markdown format.
+const LOCKED_SUFFIX: &str = " (locked)";
+
 /// Build one sidebar row for a todo item. The status symbol + content fill the
-/// full width. The selected row carries the inverse highlight.
+/// full width, with a dim `(locked)` suffix appended for locked (plan-mode
+/// rail) items. The selected row carries the inverse highlight.
 fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette) -> Line<'a> {
     let sym = status_symbol_animated(&item.status);
     let sym_width = sym.chars().count();
-    let label = truncate(&item.content, width.saturating_sub(sym_width + 1));
-    let used = sym_width + 1 + label.chars().count();
+    let suffix = if item.locked { LOCKED_SUFFIX } else { "" };
+    let suffix_width = suffix.chars().count();
+    let label = truncate(&item.content, width.saturating_sub(sym_width + 1 + suffix_width));
+    let used = sym_width + 1 + label.chars().count() + suffix_width;
     let pad = width.saturating_sub(used);
 
     if selected {
@@ -73,6 +82,9 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
             Span::styled(format!("{sym} "), hl),
             Span::styled(label, hl),
         ];
+        if item.locked {
+            spans.push(Span::styled(suffix, hl));
+        }
         if pad > 0 {
             spans.push(Span::styled(" ".repeat(pad), hl));
         }
@@ -82,10 +94,14 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
             TodoStatus::Completed | TodoStatus::Cancelled => Style::default().fg(palette.dim),
             _ => Style::default().fg(palette.fg),
         };
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled(format!("{sym} "), Style::default().fg(palette.dim)),
             Span::styled(label, name_style),
-        ])
+        ];
+        if item.locked {
+            spans.push(Span::styled(suffix, Style::default().fg(palette.dim)));
+        }
+        Line::from(spans)
     }
 }
 
@@ -100,13 +116,18 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
         TodoStatus::InProgress => Style::default().fg(palette.accent),
         _ => Style::default().fg(palette.fg),
     };
-    lines.push(Line::from(vec![
+    let mut top_line = vec![
         Span::styled("status: ", Style::default().fg(palette.dim)),
         Span::styled(item.status.display().to_string(), status_style),
         Span::styled("   ·   ", Style::default().fg(palette.dim)),
         Span::styled("priority: ", Style::default().fg(palette.dim)),
         Span::styled(item.priority.label().to_string(), Style::default().fg(palette.fg)),
-    ]));
+    ];
+    if item.locked {
+        top_line.push(Span::styled("   ·   ", Style::default().fg(palette.dim)));
+        top_line.push(Span::styled("locked (system-managed)", Style::default().fg(palette.dim)));
+    }
+    lines.push(Line::from(top_line));
 
     // State hint text
     match item.status {
