@@ -14,14 +14,22 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Padding, Paragraph, Wrap},
     Frame,
 };
 
 use crate::app::mode::OnboardState;
 use crate::view::theme::Palette;
+
+/// Warning/yellow tone for the "not permanent" callout box. `Palette` has no
+/// dedicated warning role (its `accent` is user-configurable and may itself be
+/// any colour, including yellow), so — matching the house convention used for
+/// other warning callouts (e.g. the tool-approval box in
+/// `view::chat::overlays::render_tool_approval` and `YOLO_RED` in
+/// `view::settings::mod`) — this is a fixed raw colour rather than a palette lookup.
+const WARN: Color = Color::Rgb(255, 180, 60);
 
 /// Total width (chars) of the content block. Clamped to the available area.
 const BLOCK_W: u16 = 64;
@@ -110,7 +118,41 @@ pub fn draw(frame: &mut Frame, state: &OnboardState, palette: &Palette) {
         render_line(frame, line, row);
         row += 1;
     }
-    row += 2; // two blank rows before the footer
+    row += 2; // two blank rows before the box
+
+    // Callout: reassure the user this pick isn't permanent — small yellow
+    // bordered box, same left edge as everything else in the block (not
+    // full-width across the screen).
+    const CALLOUT_H: u16 = 4; // top border + 2 content rows + bottom border
+    if row + CALLOUT_H <= body_h {
+        let callout_rect = Rect {
+            x: bx,
+            y: body_y + row,
+            width: block_w,
+            height: CALLOUT_H,
+        };
+        let block = Block::bordered()
+            .border_style(Style::default().fg(WARN))
+            .padding(Padding::horizontal(1));
+        let inner = block.inner(callout_rect);
+        frame.render_widget(block, callout_rect);
+        let lines = vec![
+            Line::from(Span::styled(
+                "you can change this anytime in /settings",
+                Style::default().fg(WARN),
+            )),
+            Line::from(Span::styled(
+                "or type /free to switch to the free tier later",
+                Style::default().fg(WARN),
+            )),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: true }),
+            inner,
+        );
+        row += CALLOUT_H;
+    }
+    row += 1; // blank row before the footer
 
     // Footer key hints.
     render_line(
