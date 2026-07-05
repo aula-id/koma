@@ -14,6 +14,14 @@ use crate::view::theme::Palette;
 ///   behaviour.
 /// - `Normal`: *risky* tools (write/delete) pause the turn for a `y/n` user
 ///   approval; *safe* tools (read/dir_list/dir_cache_update) still run inline.
+/// - `Plan`: a read-only planning/exploration mode — the tool surface is
+///   restricted to non-mutating tools (browsing, reasoning) so the model can
+///   investigate freely without risking a change. It is exited either by the
+///   model submitting a plan for approval, or manually via `/mode` /
+///   Shift+Tab; leaving it restores whatever mode was active before entering
+///   (see `AppStateRest::plan_return_mode`). (Read-only tool enforcement and
+///   the plan-approval flow land in a later wave — this variant currently
+///   only changes the mode label + system-prompt nudge.)
 /// - `Yolo`: *risky* tools run inline with NO classifier call and NO `y/n`
 ///   prompt — the harness is fully bypassed. The deterministic workspace path
 ///   guard (WC) still applies, so writes stay inside the project. This mode is
@@ -26,6 +34,7 @@ pub enum AgentMode {
     #[default]
     Auto,
     Normal,
+    Plan,
     Yolo,
 }
 
@@ -35,27 +44,31 @@ impl AgentMode {
         match self {
             AgentMode::Auto => "auto",
             AgentMode::Normal => "normal",
+            AgentMode::Plan => "plan",
             AgentMode::Yolo => "yolo",
         }
     }
     /// Advance to the next mode for the interactive toggle (Shift+Tab / bare
     /// `/mode`), respecting the YOLO arm gate.
     ///
-    /// - `yolo_armed == true`:  Auto → Normal → Yolo → Auto (full three-way cycle).
-    /// - `yolo_armed == false`: Auto → Normal → Auto (Yolo is skipped). If `self`
-    ///   is somehow `Yolo` while unarmed (shouldn't happen — disarming drops the
-    ///   mode), it folds straight back to Auto so the user can never linger there.
+    /// - `yolo_armed == true`:  Auto → Normal → Plan → Yolo → Auto (full cycle).
+    /// - `yolo_armed == false`: Auto → Normal → Plan → Auto (Yolo is skipped). If
+    ///   `self` is somehow `Yolo` while unarmed (shouldn't happen — disarming
+    ///   drops the mode), it folds straight back to Auto so the user can never
+    ///   linger there.
     pub fn cycle(self, yolo_armed: bool) -> Self {
         if yolo_armed {
             match self {
                 AgentMode::Auto => AgentMode::Normal,
-                AgentMode::Normal => AgentMode::Yolo,
+                AgentMode::Normal => AgentMode::Plan,
+                AgentMode::Plan => AgentMode::Yolo,
                 AgentMode::Yolo => AgentMode::Auto,
             }
         } else {
             match self {
                 AgentMode::Auto => AgentMode::Normal,
-                AgentMode::Normal => AgentMode::Auto,
+                AgentMode::Normal => AgentMode::Plan,
+                AgentMode::Plan => AgentMode::Auto,
                 // Unarmed + Yolo (defensive): drop back to Auto.
                 AgentMode::Yolo => AgentMode::Auto,
             }

@@ -404,15 +404,21 @@ pub fn list_sessions_for(pwd_hash: &str) -> Result<Vec<SessionMeta>> {
     for row in rows {
         let path = session_dir(pwd_hash, &row.uuid)?;
 
-        // Count non-System messages for the list view; 0 on any parse failure
-        // (e.g. a session that's registered but never saved messages.json yet).
-        let messages_path = path.join("messages.json");
-        let message_count = match std::fs::read(&messages_path) {
-            Ok(bytes) => serde_json::from_slice::<Vec<ChatMessage>>(&bytes)
-                .map(|msgs| msgs.iter().filter(|m| m.role != Role::System).count())
-                .unwrap_or(0),
-            Err(_) => 0,
-        };
+        // Count non-System messages for the list view. Prefer the msglog sqlite
+        // (one indexed COUNT(*) query — see `message_count`'s docs for why a
+        // plain count already excludes System rows); fall back to parsing the
+        // legacy `messages.json` for pre-msglog sessions that have never had a
+        // `messages.sqlite` written. 0 on any parse failure (e.g. a session
+        // that's registered but never saved messages.json yet).
+        let message_count = crate::model::msglog::message_count(&path).unwrap_or_else(|| {
+            let messages_path = path.join("messages.json");
+            match std::fs::read(&messages_path) {
+                Ok(bytes) => serde_json::from_slice::<Vec<ChatMessage>>(&bytes)
+                    .map(|msgs| msgs.iter().filter(|m| m.role != Role::System).count())
+                    .unwrap_or(0),
+                Err(_) => 0,
+            }
+        });
 
         // The registry's updated_at (unix seconds) is the "modified" time; the
         // picker view formats it as an elapsed duration. Saturating add keeps a
@@ -458,13 +464,17 @@ pub fn list_all_sessions() -> Result<Vec<SessionMeta>> {
         // workdir, which could differ on a machine where the path no longer exists.
         let path = session_dir(&row.pwd_hash, &row.uuid)?;
 
-        let messages_path = path.join("messages.json");
-        let message_count = match std::fs::read(&messages_path) {
-            Ok(bytes) => serde_json::from_slice::<Vec<crate::dto::chat::ChatMessage>>(&bytes)
-                .map(|msgs| msgs.iter().filter(|m| m.role != crate::dto::chat::Role::System).count())
-                .unwrap_or(0),
-            Err(_) => 0,
-        };
+        // See the parallel block in `list_sessions_for` for why msglog is tried
+        // first and what the `messages.json` fallback covers.
+        let message_count = crate::model::msglog::message_count(&path).unwrap_or_else(|| {
+            let messages_path = path.join("messages.json");
+            match std::fs::read(&messages_path) {
+                Ok(bytes) => serde_json::from_slice::<Vec<crate::dto::chat::ChatMessage>>(&bytes)
+                    .map(|msgs| msgs.iter().filter(|m| m.role != crate::dto::chat::Role::System).count())
+                    .unwrap_or(0),
+                Err(_) => 0,
+            }
+        });
 
         let modified = row
             .updated_at

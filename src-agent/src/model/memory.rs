@@ -43,7 +43,10 @@ const MAX_SLUG_LEN: usize = 80;
 /// first, then renaming over the target. This prevents concurrent readers from
 /// seeing a half-written file. The rename is atomic on POSIX (and NTFS) so
 /// another process either sees the old content or the new one, never a partial.
-fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+///
+/// `pub(crate)` so the `plan_ready` interception (which persists the presented
+/// plan to `<session>/plan.md`) can reuse the same primitive.
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let file_name = path
         .file_name()

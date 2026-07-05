@@ -360,6 +360,7 @@ pub struct SettingsSnapshot {
     pub allowed_folders: Vec<String>,
     pub short_send_enabled: bool,
     pub sliding_cache: bool,
+    pub bash_saving: bool,
     pub internet_mode: String,
     pub cwd: String,
     pub list_editing: bool,

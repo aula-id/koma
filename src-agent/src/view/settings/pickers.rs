@@ -11,7 +11,7 @@ use crate::view::theme::Palette;
 /// modal over a dimmed backdrop.
 ///
 /// Mirrors the `/agents` tool picker (`view/agents.rs::draw_tool_picker`) but
-/// SIMPLER — the option set is the fixed [`ModelRole::ALL`] (4 entries), so there
+/// SIMPLER — the option set is the fixed [`ModelRole::ALL`] (5 entries), so there
 /// is no "type to filter" line. Each role is a `[ ] label` / `[x] label` row; the
 /// cursor row carries the inverse highlight. A footer line shows the key hints.
 ///

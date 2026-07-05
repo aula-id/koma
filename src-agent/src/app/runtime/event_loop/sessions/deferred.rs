@@ -168,6 +168,84 @@ pub(super) fn drain_deferred_and_resume(
         dirty = true;
     }
 
+    // --- drain TAC-classify verdicts + resume the parked round ---
+    // A risky tool call parked on the classifier (see `approval::process_tools`)
+    // spawned an off-thread classify task that sends its `(call_id, verdict)` back
+    // over `classify_rx`. Stage the verdict for the PARKED call (its id must match
+    // the call at `tool_idx`) and clear the park, then RE-ENTER `process_tools`,
+    // which consumes the staged verdict via the SAME three-way branch the old
+    // inline `block_on` drove — only now the 1-12s classify never froze the event
+    // loop. A verdict for any other id (a stale delivery from an interrupted /
+    // superseded turn), or one arriving when nothing is parked, is dropped. This is
+    // its OWN resume gate, separate from the deferred-work gate above: a classify
+    // park and a tool-task/sub-agent park never coexist (the classifier gate runs
+    // BEFORE dispatch/delegation), so the two gates can't double-resume a round.
+    {
+        // Narrow scope for the `rx` borrow (mirrors the tool-task drain above) so it
+        // is released before we touch `pending_classify_verdict` / re-enter
+        // `process_tools` on the same runtime.
+        let mut received: Vec<(String, crate::app::harness::Verdict)> = Vec::new();
+        if let Some(rx) = state.rest.sessions[idx].classify_rx.as_mut() {
+            while let Ok(pair) = rx.try_recv() {
+                received.push(pair);
+            }
+        }
+        let mut resume_classify = false;
+        for (call_id, verdict) in received {
+            // Match only a verdict for the call this round is PARKED on. Once one
+            // matches, `awaiting_classify` flips false, so a second delivery in the
+            // same drain can never double-stage.
+            let matches_parked = state.rest.sessions[idx].awaiting_classify
+                && state.rest.sessions[idx]
+                    .pending_tool_calls
+                    .get(state.rest.sessions[idx].tool_idx)
+                    .map(|c| c.id == call_id)
+                    .unwrap_or(false);
+            if matches_parked {
+                state.rest.sessions[idx].pending_classify_verdict = Some((call_id, verdict));
+                state.rest.sessions[idx].awaiting_classify = false;
+                resume_classify = true;
+                dirty = true;
+            }
+            // else: stale/mismatched, or nothing parked — drop silently
+        }
+        if resume_classify {
+            resume_after_subagents(state, idx, client, handle);
+            dirty = true;
+        }
+    }
+
+    // --- plan-approval compaction: fire once the post-approval turn settles ---
+    // `handle_approve_plan_compact` armed `pending_plan_compact` and answered the
+    // plan_ready call, then let the model stream a brief post-approval turn. The
+    // MOMENT this session goes idle we run compaction with preserve_n = 0;
+    // `apply_compaction_result` then seeds the approved plan (`pending_plan_seed`)
+    // and auto-wakes the execution stream. Gated on `idx == foreground` because
+    // `handle_compact` acts on `fg()` — this keeps the drain's `idx` and the
+    // compaction's target the same session (in local + daemon-per-session,
+    // `foreground` IS the owning session). `handle_compact`'s own busy-guard is
+    // already satisfied since `!is_working()` implies `!waiting`. Placed BEFORE the
+    // background-completion nudges so firing it (which sets `waiting`) makes those
+    // `!is_working()` gates fall through this tick — never double-launching a stream.
+    if state.rest.pending_plan_compact
+        && idx == state.rest.foreground
+        && !state.rest.sessions[idx].is_working()
+        && client.is_some()
+        && state.rest.sessions[idx].session.is_some()
+    {
+        state.rest.pending_plan_compact = false;
+        // `handle_compact` wants `&mut Option<_>`; it only reads it (Arc::clone), so
+        // a cloned local satisfies the signature without disturbing the drain's `&`.
+        let mut client_owned = client.clone();
+        let _ = crate::app::runtime::commands::compact::handle_compact(
+            state,
+            &mut client_owned,
+            handle,
+            Some(0),
+        );
+        dirty = true;
+    }
+
     // --- bg-bash completion NUDGE: inject + auto-wake when idle ---
     // A finished bg-bash job is buffered in `pending_bash_nudges` (above). The
     // moment this session is idle (no turn in flight, nothing parked, no running
@@ -219,6 +297,8 @@ pub(super) fn drain_deferred_and_resume(
             rt.tool_results.clear();
             rt.pending_tool_tasks.clear();
             rt.awaiting_tool_tasks = false;
+            rt.awaiting_classify = false;
+            rt.pending_classify_verdict = None;
         }
         // Snap THIS session's OWN view to the newest line as its auto-wake stream starts
         // (C2): scroll is per-session, so this only affects `sessions[idx]` — a client
@@ -291,6 +371,8 @@ pub(super) fn drain_deferred_and_resume(
             rt.tool_results.clear();
             rt.pending_tool_tasks.clear();
             rt.awaiting_tool_tasks = false;
+            rt.awaiting_classify = false;
+            rt.pending_classify_verdict = None;
         }
         state.rest.reset_scroll_at(idx);
         state.rest.sessions[idx].status = "thinking".into();

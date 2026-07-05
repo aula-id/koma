@@ -157,6 +157,85 @@ pub(crate) fn warm_session(
     }
 }
 
+/// Recompute the project-awareness summary for `session_id` OFF the event-loop
+/// thread, delivering the result via the dedicated `awareness_rx`/`awareness_tx`
+/// channel (see [`crate::app::state::AppStateRest::awareness_rx`]) instead of
+/// `handle.block_on` — the summarize call is an unbounded network round-trip and
+/// used to freeze the whole TUI while it ran (the `cd` and post-`/compact`
+/// recomputes were the two remaining `block_on` sites; startup warming already
+/// went through this pattern via `warm_session`/`WarmEvent::WarmAwareness`).
+///
+/// `route`/`main_route` are the caller's already-resolved Awareness/Main routes
+/// (moved in, not borrowed, so the spawned task is `'static`); `client`/`settings`/
+/// `workdir` are the same Send-safe snapshot the two call sites already prepared
+/// before their old `block_on`. Lazily opens the channel pair on first call and
+/// stashes both ends in `state.rest` (mirrors `warm_session`'s `warm_rx` setup,
+/// but this pair is created once and kept — never replaced — since multiple
+/// recomputes across different sessions/times must not strand each other).
+///
+/// The call is capped at 60s via `tokio::time::timeout`; a hung upstream times
+/// out to `None` (via `.ok().flatten()`), matching `summarize`'s own "best-effort,
+/// `None` on any failure" contract.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_awareness_recompute(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+    session_id: String,
+    client: Arc<OpenRouterClient>,
+    settings: crate::model::settings::Settings,
+    workdir: std::path::PathBuf,
+    route: crate::app::resolve::Resolved,
+    main_route: Option<crate::app::resolve::Resolved>,
+) {
+    let tx = match state.rest.awareness_tx.clone() {
+        Some(tx) => tx,
+        None => {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            state.rest.awareness_rx = Some(rx);
+            state.rest.awareness_tx = Some(tx.clone());
+            tx
+        }
+    };
+    handle.spawn(async move {
+        let summary = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            match main_route {
+                Some(ref m) => {
+                    crate::app::awareness::summarize_with_fallback(
+                        &client,
+                        &settings,
+                        route.conn(),
+                        &route.model_id,
+                        route.provider(),
+                        &workdir,
+                        m.conn(),
+                        &m.model_id,
+                        m.provider(),
+                    )
+                    .await
+                }
+                None => {
+                    crate::app::awareness::summarize(
+                        &client,
+                        &settings,
+                        route.conn(),
+                        &route.model_id,
+                        route.provider(),
+                        &workdir,
+                    )
+                    .await
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        // Best-effort delivery: if the app has since dropped the receiver (closed
+        // channel — shouldn't happen, the receiver is held for the app's lifetime
+        // once created), the send is simply a no-op.
+        let _ = tx.send((session_id, summary));
+    });
+}
+
 /// Build a fresh per-session client.
 ///
 /// The client is now KEYLESS — it carries no creds/model/provider/effort, only

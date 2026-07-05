@@ -35,6 +35,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.allowed_folders.clone(),
             s.short_send_enabled,
             s.sliding_cache,
+            s.bash_saving,
             s.internet_mode,
             s.providers.clone(),
             s.oauth_drafts.clone(),
@@ -60,6 +61,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         allowed_folders,
         short_send_enabled,
         sliding_cache,
+        bash_saving,
         internet_mode,
         provider_drafts,
         oauth_drafts,
@@ -182,6 +184,9 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // Sliding-cache toggle: no client rebuild needed; a later
             // wave's summarization logic reads this flag per-send.
             sess.settings.sliding_cache = sliding_cache;
+            // Bash-saving toggle: no client rebuild needed; the tool
+            // context reads this flag per-spawn.
+            sess.settings.bash_saving = bash_saving;
             // Internet-mode toggle: no client rebuild needed; the tool
             // dispatch layer reads this flag per-request.
             sess.settings.internet_mode = internet_mode;

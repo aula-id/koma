@@ -142,9 +142,7 @@ impl SettingsState {
             if self.mm_provider_is_openrouter() && !m.model_id.is_empty() {
                 v.push(ModelField::Route);
             }
-            if m.is_edit() {
-                v.push(ModelField::Role);
-            }
+            v.push(ModelField::Role);
         }
         v.push(ModelField::Save);
         v.push(ModelField::Cancel);

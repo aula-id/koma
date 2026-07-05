@@ -137,6 +137,32 @@ pub fn user_message_ids(session_dir: &Path) -> Vec<i64> {
     inner(session_dir).unwrap_or_default()
 }
 
+/// Count of messages in the session's SQLite archive, or `None` if the
+/// archive doesn't exist yet (a pre-msglog-era session that has never had
+/// `append` called on it — callers should fall back to the legacy
+/// `messages.json` count in that case).
+///
+/// `msglog::append` is only ever called with `Role::User`, `Role::Assistant`,
+/// or `Role::Tool` (see the call sites across `app/runtime`) — `Role::System`
+/// rows are never written to this table — so a plain `COUNT(*)` already
+/// equals "count of non-System messages", matching the legacy
+/// `messages.json`-based count without needing a `WHERE role != 'system'`
+/// filter.
+pub fn message_count(session_dir: &Path) -> Option<usize> {
+    // Check existence up front: `open()` (via `Connection::open`) would
+    // otherwise create an empty `messages.sqlite` for a session that never
+    // had one, silently reporting 0 instead of "no DB, use the fallback".
+    if !session_dir.join("messages.sqlite").exists() {
+        return None;
+    }
+    fn inner(session_dir: &Path) -> Result<usize> {
+        let conn = open(session_dir)?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+    inner(session_dir).ok()
+}
+
 /// Highest `messages.id` in the archive, or 0 when empty / unreadable.
 /// Best-effort.
 #[allow(dead_code)] // consumed by later phases (short-send summary/router)
@@ -191,3 +217,7 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "query_test.rs"]
+mod query_test;
