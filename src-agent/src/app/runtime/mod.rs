@@ -68,6 +68,7 @@ pub use mcp_daemon::run_mcp_daemon;
 // / `super::reconcile_session_lock` continue to resolve correctly.
 pub(crate) use session_mgmt::{
     build_client, reconcile_session_lock, spawn_awareness_recompute, warm_session,
+    warm_session_background,
 };
 
 pub(super) type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
