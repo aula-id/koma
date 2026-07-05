@@ -6,6 +6,7 @@
 
 #![allow(unused_imports)]
 
+mod cache;
 mod ledger;
 mod queries;
 mod types;

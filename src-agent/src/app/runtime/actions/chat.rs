@@ -130,6 +130,10 @@ pub(super) fn handle_submit(
     // awaiting_tool_tasks=true or stale pending ids from a prior halt path.
     state.rest.fg_mut().pending_tool_tasks.clear();
     state.rest.fg_mut().awaiting_tool_tasks = false;
+    // Same for the TAC-classify park lane: a new submit must never inherit a stale
+    // awaiting_classify / pending verdict from a prior halted turn.
+    state.rest.fg_mut().awaiting_classify = false;
+    state.rest.fg_mut().pending_classify_verdict = None;
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.
@@ -587,6 +591,10 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
     state.rest.fg_mut().abort_running_subagents(false);
     state.rest.fg_mut().pending_tool_tasks.clear();
     state.rest.fg_mut().awaiting_tool_tasks = false;
+    // Drop any TAC-classify park too (deny is a turn-halt): clear the flag + any
+    // staged verdict so the halted round can't later resume off a stale verdict.
+    state.rest.fg_mut().awaiting_classify = false;
+    state.rest.fg_mut().pending_classify_verdict = None;
     state.rest.fg_mut().status = "denied — stopped".into();
     Ok(())
 }

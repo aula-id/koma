@@ -66,7 +66,9 @@ pub use mcp_daemon::run_mcp_daemon;
 // Re-export session management helpers at the `runtime` level so sibling
 // submodules that use `crate::app::runtime::build_client` / `super::warm_session`
 // / `super::reconcile_session_lock` continue to resolve correctly.
-pub(crate) use session_mgmt::{build_client, reconcile_session_lock, warm_session};
+pub(crate) use session_mgmt::{
+    build_client, reconcile_session_lock, spawn_awareness_recompute, warm_session,
+};
 
 pub(super) type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 

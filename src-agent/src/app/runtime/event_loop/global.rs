@@ -156,6 +156,45 @@ pub(super) fn service_global(
         }
     }
 
+    // Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),
+    // mirroring the `sec_health_rx` drain just above. Distinct from `warm_rx`:
+    // that channel is REPLACED per warm, so a recompute in flight when a new warm
+    // starts would be stranded — this pair is created once and kept for the app's
+    // lifetime. Route each `(session_id, summary)` by id (same C4 pattern as
+    // `WarmEvent::WarmAwareness` below) since `service_global` runs outside any
+    // client bracket and the foreground cursor is stale scratch here. Loop (not a
+    // single `try_recv`) so a burst of recomputes (e.g. several quick `cd`s)
+    // doesn't lag a tick behind. Non-blocking (try_recv).
+    if let Some(mut arx) = state.rest.awareness_rx.take() {
+        let mut keep = true;
+        loop {
+            match arx.try_recv() {
+                Ok((session_id, summary)) => {
+                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
+                        s.awareness_summary = summary;
+                    }
+                    // Session gone (closed since the recompute was spawned) → the
+                    // result is simply dropped, same contract as `WarmAwareness`.
+                    dirty = true;
+                }
+                // Channel drained for now: keep listening on later ticks.
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                // Sender dropped without sending — shouldn't happen (the spawn
+                // always sends), but stay clean and stop polling.
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        if keep {
+            state.rest.awareness_rx = Some(arx);
+        } else {
+            // Also drop the paired sender so a future recompute reopens a fresh pair.
+            state.rest.awareness_tx = None;
+        }
+    }
+
     // Drain the startup-warming channel. Fully independent of streaming: the
     // background catalogue + awareness tasks each send one [`WarmEvent`]. ALWAYS
     // fold the result into `state.rest.*` (the cache / summary) regardless of the

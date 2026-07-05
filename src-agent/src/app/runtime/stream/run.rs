@@ -9,20 +9,30 @@ use crate::app::state::{AgentMode, AppState, AppStateRest};
 use crate::dto::chat::{ChatMessage, Role};
 use crate::service::openrouter::OpenRouterClient;
 
-/// Abort the in-flight task and stop listening to it: aborts the task handle,
-/// drops the active receiver (so any late events from the task vanish), and
-/// clears the waiting flag.
+/// Fully cancel the foreground session's in-flight turn before its conversation is
+/// cut/replaced: abort the stream task, drop the active receiver (so late events
+/// vanish), clear `waiting`, AND tear down the whole agentic round — approval,
+/// deferred-tool, sub-agent, and classifier lanes — via
+/// [`SessionRuntime::interrupt`]. Delegating to `interrupt()` keeps ONE source of
+/// truth for round teardown, so a parked classifier verdict (or a deferred tool /
+/// a delegated sub-agent) can never resume onto the truncated conversation after
+/// the caller cuts it. Also clears THIS session's compaction animation/timer, which
+/// `interrupt()` deliberately leaves to the caller (exactly as `handle_interrupt`
+/// does), so a mid-`/compact` abort can't wedge the spinner.
+///
+/// Sole caller: the message-rewind picker ([`crate::app::runtime::actions`]'s
+/// `handle_rewind_to_message`), which needs exactly this full cancellation before
+/// it truncates the conversation.
 pub(crate) fn abort_current(rest: &mut AppStateRest) {
     let rt = rest.fg_mut();
-    if let Some(h) = rt.current_task.take() {
-        h.abort();
-    }
-    rt.active_rx = None;
-    rt.waiting = false;
-    // Tear down THIS session's in-flight compaction animation / deferred apply so an
-    // interrupt (Esc) or `/new` mid-compact doesn't leave the spinner stuck (and
-    // forcing a per-tick redraw) forever. Per-session now (C4) — clear it on the same
-    // foreground runtime we just aborted.
+    // Round teardown: interrupt() aborts the task handle, drops active_rx, clears
+    // waiting, tears down the approval / deferred-tool / sub-agent / classifier
+    // state, and commits any partial assistant buffer with an [interrupted] marker
+    // (the rewind caller truncates that away). This is what closes the "rewind
+    // during a classifier/deferred park executes the abandoned tool" hole.
+    rt.interrupt();
+    // Compaction anim/timer are NOT touched by interrupt(); clear them here so a
+    // mid-`/compact` abort doesn't leave the spinner stuck (per-session, C4).
     rt.compact_anim_start = None;
     rt.compact_apply_at = None;
     rt.compact_pending = None;
