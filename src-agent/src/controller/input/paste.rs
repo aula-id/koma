@@ -2,6 +2,7 @@
 
 use crate::app::mode::Mode;
 use crate::app::state::AppState;
+use crate::controller::input::onboard_provider::arm_catalogue;
 
 /// Feed `text` into a SINGLE-LINE field through `sink`, one char at a time,
 /// dropping every `\r`/`\n` (and bare CR from CRLF) so a multi-line clipboard
@@ -159,11 +160,33 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             paste_single_line(text, |c| h.query.push(c));
             h.refilter();
         }
-        // No text entry on the effort picker, loading splash, usage dashboard,
-        // the message-rewind picker, the session hub, the quit-confirm overlay,
-        // the security control panel, or the background-bash panel — paste is a
-        // no-op in all of them.
-        Mode::Effort(_)
+        Mode::OnboardProvider(op) => {
+            use crate::app::mode::onboard_provider::OnboardProviderStep;
+            use crate::app::mode::settings::OAuthFlowState;
+            match op.step {
+                // ModelSelect omnisearch: feed the query (single-line) + re-arm the
+                // network catalogue fetch, exactly as a typed char does.
+                OnboardProviderStep::ModelSelect => {
+                    paste_single_line(text, |c| {
+                        op.query.push(c);
+                        op.result_sel = 0;
+                    });
+                    arm_catalogue(op, &mut state.rest);
+                }
+                // Login: only the paste-token field accepts text.
+                OnboardProviderStep::Login => {
+                    if let OAuthFlowState::CodexPaste { input } = &mut op.oauth_flow {
+                        paste_single_line(text, |c| input.push(c));
+                    }
+                }
+            }
+        }
+        // No text entry on the connection chooser, effort picker, loading splash,
+        // usage dashboard, the message-rewind picker, the session hub, the
+        // quit-confirm overlay, the security control panel, or the background-bash
+        // panel — paste is a no-op in all of them.
+        Mode::Onboard(_)
+        | Mode::Effort(_)
         | Mode::Loading(_)
         | Mode::Usage(_)
         | Mode::MessageRewind(_)

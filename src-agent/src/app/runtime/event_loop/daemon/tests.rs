@@ -314,22 +314,27 @@ fn close_all_then_all_closed_true() {
     assert!(state.rest.sessions.iter().all(|s| !s.is_working()), "no tombstone reads as working");
 }
 
-/// The forwarded `/quit` kill-all path simulation.
+/// The daemon-side `should_quit` sweep simulation (daemon/mod.rs ~363-366): a
+/// landing/onboarding `request_quit` (or any other daemon-side path) setting
+/// `state.rest.should_quit` must latch a REAL daemon shutdown — the same flag
+/// `ClientRequest::QuitDaemon` sets — not merely close sessions with nothing left
+/// to break the loop or unlink the socket.
 #[test]
-fn should_quit_flag_drives_close_all() {
+fn should_quit_flag_drives_shutdown() {
     let mut state = AppState::new(Mode::Chat);
     let _id1 = push_session(&mut state);
     let (mut hub, _runner_tx) = DaemonHub::new();
 
     state.rest.should_quit = true;
+    assert!(!hub.should_shutdown(), "not yet latched before the sweep");
 
     if state.rest.should_quit {
-        hub.close_all_sessions(&mut state);
         state.rest.should_quit = false;
+        hub.request_shutdown();
     }
 
-    assert!(!state.rest.should_quit, "flag cleared by the daemon close path");
-    assert!(all_sessions_closed(&state), "kill-all flag closed every session");
+    assert!(!state.rest.should_quit, "flag cleared by the sweep");
+    assert!(hub.should_shutdown(), "sweep latches the same flag QuitDaemon sets");
 }
 
 // ─── daemon stage 11: detached-approval park timeout + parked cadence ─────

@@ -84,6 +84,8 @@ pub(super) fn handle_submit(
     // Uses the tri-state `model_image_capability` so an unknown/missing/stale
     // catalogue never wrongly blocks (fail-open: `Unknown` => allow).
     if had_image {
+        // Resolve the SAME route the send will use so the capability guard checks the
+        // model that actually receives the image.
         let main = state.rest.fg().session.as_ref().and_then(|sess| {
             crate::app::resolve::resolve_role(
                 &state.rest.config,

@@ -16,14 +16,15 @@ use crate::app::mode::settings::{
 };
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState,
-    PickerState, RewindEntry, RewindState, SessionHub, SessionKind, UsageMetric, UsageNavState,
-    UsageRange, UsageView, WarmStatus,
+    OnboardProviderState, OnboardProviderStep, OnboardState, PickerState, RewindEntry, RewindState,
+    SessionHub, SessionKind, UsageMetric, UsageNavState, UsageRange, UsageView, WarmStatus,
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelModalSnapshot, OAuthDraftSnapshot,
-    PathPickerSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot,
+    OnboardProviderSnapshot, OnboardSnapshot, PathPickerSnapshot, PickerSnapshot, RewindSnapshot,
+    SecuritySnapshot, SessionHubSnapshot,
     SettingsSnapshot, TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
@@ -37,6 +38,30 @@ use crate::model::store::SessionMeta;
 // the daemon); they only need to be faithful enough to DRAW. None hold a channel /
 // `Instant`-clock that must keep ticking except `Loading::started`, which is
 // re-anchored from the projected elapsed-ms so its footer counter matches.
+
+/// Rebuild the first-run connection chooser ([`OnboardState`]) from its projection.
+pub(crate) fn shadow_onboard(o: OnboardSnapshot) -> OnboardState {
+    OnboardState { cursor: o.cursor }
+}
+
+/// Rebuild the guided provider onboarding wizard ([`OnboardProviderState`]) from its
+/// projection. The reused OAuth connect-flow + the provider token decode through the
+/// same helpers the Settings shadow uses (unknown provider → Codex, unknown step →
+/// Login — never lost). The model-result list is recomputed at render time from the
+/// projected catalogue, so it isn't reconstructed here.
+pub(crate) fn shadow_onboard_provider(s: OnboardProviderSnapshot) -> OnboardProviderState {
+    OnboardProviderState {
+        step: match s.step.as_str() {
+            "model_select" => OnboardProviderStep::ModelSelect,
+            _ => OnboardProviderStep::Login,
+        },
+        oauth_flow: shadow_oauth_flow(s.oauth_flow),
+        new_conn_uuid: s.new_conn_uuid,
+        provider: s.provider.as_deref().map(shadow_oauth_provider),
+        query: s.query,
+        result_sel: s.result_sel,
+    }
+}
 
 /// Rebuild the first-run wizard form ([`KeyInputForm`]) from its projection.
 pub(crate) fn shadow_key_input(f: KeyInputSnapshot) -> KeyInputForm {
@@ -589,6 +614,7 @@ pub(crate) fn shadow_api_type(t: &str) -> ApiType {
     match t {
         "anthropic" => ApiType::AnthropicCompatible,
         "codex" => ApiType::Codex,
+        "koma_free" => ApiType::KomaFree,
         _ => ApiType::OpenAiCompatible,
     }
 }

@@ -30,6 +30,7 @@ impl ApiType {
             ApiType::OpenAiCompatible   => "OpenAI",
             ApiType::AnthropicCompatible => "Anthropic",
             ApiType::Codex               => "Codex",
+            ApiType::KomaFree            => "koma free",
         }
     }
 
@@ -44,20 +45,23 @@ impl ApiType {
             ApiType::OpenAiCompatible   => "OpenAI compatible",
             ApiType::AnthropicCompatible => "Anthropic compatible (not wired)",
             ApiType::Codex               => "Codex (OAuth)",
+            ApiType::KomaFree            => "koma free (keyless)",
         }
     }
 
-    /// Flip between the two USER-SELECTABLE variants. `Codex` is set only via
-    /// OAuth resolution (never chosen in the providers modal), so it is EXCLUDED
-    /// from the rotation: toggling off it lands back on the default and no
-    /// user-selectable variant ever toggles INTO it. Kept for forward-compat;
-    /// not called from the UI since the Type field was removed.
+    /// Flip between the two USER-SELECTABLE variants. `Codex` and `KomaFree` are
+    /// set only via OAuth resolution / the koma-free chooser (never chosen in the
+    /// providers modal), so both are EXCLUDED from the rotation: toggling off them
+    /// lands back on the default and no user-selectable variant ever toggles INTO
+    /// them. Kept for forward-compat; not called from the UI since the Type field
+    /// was removed.
     #[allow(dead_code)]
     pub fn toggle(self) -> Self {
         match self {
             ApiType::OpenAiCompatible   => ApiType::AnthropicCompatible,
             ApiType::AnthropicCompatible => ApiType::OpenAiCompatible,
             ApiType::Codex               => ApiType::OpenAiCompatible,
+            ApiType::KomaFree            => ApiType::OpenAiCompatible,
         }
     }
 }

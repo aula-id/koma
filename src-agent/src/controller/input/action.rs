@@ -87,6 +87,25 @@ pub enum Action {
     /// Deny a paused `plan_ready` call (`n`/Esc in the plan-approval modal): answer
     /// it with the "keep discussing" result and STAY in Plan mode.
     DenyPlan,
+    // --- Onboard chooser actions (first-run connection pick) ---
+    /// Enter on the "koma free" row: configure the keyless free tier (mint/reuse a
+    /// koma-free provider + Main model in the global config), create a session, and
+    /// drop straight into Chat. No credentials screen.
+    SetupKomaFree,
+    /// Enter on the "provider" row: open the guided provider onboarding wizard
+    /// ([`crate::app::mode::Mode::OnboardProvider`]) — OAuth login → pick a model →
+    /// save it as the global Main model → Chat.
+    OnboardProvider,
+    /// Enter on the "custom" row: open the existing first-run credentials wizard
+    /// ([`crate::app::mode::Mode::KeyInput`]) for an own-endpoint + API-key setup.
+    OnboardCustom,
+    /// Enter on a model row in the guided provider wizard's ModelSelect step: bind the
+    /// chosen model id (inner `String`) as the GLOBAL Main model on the just-created
+    /// OAuth connection, persist `config.json`, warm a session, and drop into Chat.
+    OnboardProviderSaveModel(String),
+    /// Esc from the guided provider wizard's Login picker: return to the first-run
+    /// connection chooser ([`crate::app::mode::Mode::Onboard`]).
+    OnboardProviderBack,
     // --- KeyInput actions ---
     /// Setup wizard finished; carry the entered endpoint, api key, and model out
     /// so the runtime can build a provider-agnostic config from them.

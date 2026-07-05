@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::app::mode::{KeyInputForm, Mode, PickerState};
+use crate::app::mode::{KeyInputForm, Mode, OnboardState, PickerState};
 use crate::app::resolve::resolve_role;
 use crate::app::state::{AppState, SessionRuntime};
 use crate::config::DEFAULT_MODEL;
@@ -102,22 +102,19 @@ fn build_startup(
         state
     } else {
         let (lk, lm, lp) = prefill_creds();
-        // "Is this user configured?" is whether the MAIN role resolves to a route
-        // with a non-empty api_key — `resolve_role` consults the global
-        // `config.providers`/`config.models` AND the legacy per-field fallback, so a
-        // populated ~/.koma/config.json (provider + Main model) counts even with no
-        // legacy session key, and a legacy-only session still counts via the fallback.
-        // Probe with a Settings reflecting the prefilled legacy creds so the fallback
-        // path has them to work with.
+        // Route to onboarding when Main doesn't resolve to a usable route. Empty config
+        // → legacy fallback with no key is not usable → onboard. A configured/usable Main
+        // skips the chooser. Probe with a Settings reflecting the prefilled legacy creds
+        // so resolve_role can evaluate the route against them.
         let probe = Settings {
             api_key: lk.clone().unwrap_or_default(),
             model: lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             provider: lp.clone().unwrap_or_default(),
             ..Default::default()
         };
-        let key_known = resolve_role(&config, &probe, ModelRole::Main)
-            .is_some_and(|r| !r.api_key.is_empty());
-        let mut state = if key_known {
+        let unconfigured = resolve_role(&config, &probe, ModelRole::Main)
+            .is_none_or(|r| !r.is_usable());
+        let mut state = if !unconfigured {
             // Returning user: spawn a fresh session pre-loaded with the last
             // creds and drop straight into chat. The credential prompt only
             // appears on the very first run. Per-session changes via /settings.
@@ -155,14 +152,10 @@ fn build_startup(
             }
             st
         } else {
-            // First ever run on this machine: prompt for credentials (lazy — no
-            // session dir is created until the user confirms).
-            AppState::new(Mode::KeyInput(KeyInputForm::prefilled(
-                lk.clone().unwrap_or_default(),
-                lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-                true,  // first_run
-                false, // from_picker
-            )))
+            // First ever run on this machine: show the connection CHOOSER (koma free /
+            // provider / custom) — lazy, no session dir is created until the user picks
+            // a path. Each choice routes to its own setup action (see `Mode::Onboard`).
+            AppState::new(Mode::Onboard(Box::new(OnboardState { cursor: 0 })))
         };
         state.rest.last_key = lk;
         state.rest.last_model = lm;
@@ -232,7 +225,7 @@ fn build_startup(
         .as_ref()
         .filter(|s| {
             resolve_role(&state.rest.config, &s.settings, ModelRole::Main)
-                .is_some_and(|r| !r.api_key.is_empty())
+                .is_some_and(|r| r.is_usable())
         })
         .map(|_| build_client());
 
@@ -343,10 +336,10 @@ fn install_daemon_session(
     runtime.id = session_id.to_string();
     runtime.held_lock = Some(sess.path.clone());
 
-    // KeyInput only when NO usable Main route resolves (global providers/models + legacy
-    // fallback), not just on an empty `api_key` — computed before `sess` moves in.
-    let no_creds = resolve_role(&state.rest.config, &sess.settings, ModelRole::Main)
-        .is_none_or(|r| r.api_key.is_empty());
+    // Onboard when Main resolves but is not usable (or doesn't resolve). Computed
+    // before `sess` moves in.
+    let unconfigured = resolve_role(&state.rest.config, &sess.settings, ModelRole::Main)
+        .is_none_or(|r| !r.is_usable());
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 
@@ -368,16 +361,12 @@ fn install_daemon_session(
     // Seed this session's cumulative token counters from its own (possibly empty) ledger.
     state.rest.load_token_totals(0, &sess_path);
 
-    if no_creds {
-        // No usable creds yet — prompt for them through the client. The client renders
-        // KeyInput and forwards the entered creds to the daemon (#122).
+    if unconfigured {
+        // Nothing configured yet — show the connection CHOOSER through the client. The
+        // client renders `Mode::Onboard` and forwards the pick to the daemon; each
+        // choice routes to its own setup action (koma free / provider / custom).
         *client = None;
-        *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
-            state.rest.last_key.clone().unwrap_or_default(),
-            state.rest.last_model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            true,  // first_run framing
-            false, // not from picker
-        ));
+        *state.mode_mut() = Mode::Onboard(Box::new(OnboardState { cursor: 0 }));
     } else {
         *client = Some(build_client());
         // Land in Chat first, THEN warm (warm_session may upgrade to Loading).

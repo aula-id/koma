@@ -221,6 +221,18 @@ impl DaemonHub {
         self.shutdown
     }
 
+    /// Latch the SAME shutdown flag [`ClientRequest::QuitDaemon`] sets, but from a
+    /// DAEMON-SIDE source rather than a client request — specifically, the
+    /// `should_quit` sweep in [`daemon_loop`] when a landing/onboarding chokepoint
+    /// (`request_quit` on `Mode::Onboard`/`OnboardProvider`/first-run `KeyInput`, or
+    /// the zero-sessions case) sets `state.rest.should_quit = true` even though the
+    /// daemon has no local TUI to break out of. Reusing `shutdown` (not a second
+    /// flag) means [`should_shutdown`](Self::should_shutdown) — and every teardown
+    /// path gated on it — behaves identically regardless of which source latched it.
+    pub(in crate::app::runtime) fn request_shutdown(&mut self) {
+        self.shutdown = true;
+    }
+
     /// Number of clients currently ENROLLED (registered, attached or not). The
     /// self-exit grace timer (daemon stage 10) treats ANY enrolled client — even one
     /// mid-`Attach` handshake — as "a client is present", so a daemon never reaps

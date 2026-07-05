@@ -10,6 +10,7 @@
 //! the receiver (on interrupt / `/new` / a new request) silently discards any
 //! events the old task still emits — no generation tagging required.
 
+pub mod koma_free;
 pub mod oauth;
 pub mod openrouter;
 

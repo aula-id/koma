@@ -26,7 +26,10 @@
 
 mod utils;
 mod providers;
-mod oauth;
+// `pub(crate)` so the guided provider onboarding wizard's view
+// (`view::onboard_provider`) can REUSE the OAuth connect-flow sub-renderers
+// (`draw_picker` / `draw_message` / `draw_paste` / `draw_failed`).
+pub(crate) mod oauth;
 mod pickers;
 mod modals;
 

@@ -168,3 +168,181 @@ fn resolve_role_falls_back_to_kilocode_oauth_conn() {
     assert_eq!(resolved.account_id, "org-456");
     assert_eq!(resolved.oauth_uuid, "kilo-uuid");
 }
+
+#[test]
+fn main_koma_default_with_legacy_key_falls_to_legacy_not_koma_free() {
+    // A user WITH a legacy api_key falls to the legacy settings route: even with
+    // `settings.model` set to koma/apple, Main resolves to the legacy key + model
+    // @ DEFAULT_BASE_URL (OpenAI-compatible wire), never the koma-free tier.
+    let config = AppConfig::default();
+    let settings = Settings {
+        api_key: "sk-or-legacy".to_string(),
+        model: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_ne!(resolved.api_type, ApiType::KomaFree);
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
+    assert_eq!(resolved.api_key, "sk-or-legacy");
+}
+
+#[test]
+fn main_with_legacy_key_and_real_model_still_uses_legacy_main() {
+    // Legacy keyed user with their OWN explicit (non-koma) model: UNCHANGED — the old
+    // settings-fields route (their key + model @ DEFAULT_BASE_URL, OpenAI-compatible wire).
+    let config = AppConfig::default();
+    let settings = Settings {
+        api_key: "sk-or-legacy".to_string(),
+        model: "openai/gpt-4o".to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
+    assert_eq!(resolved.model_id, "openai/gpt-4o");
+    assert_eq!(resolved.api_key, "sk-or-legacy");
+}
+
+#[test]
+fn reassigned_main_on_real_provider_wins_over_koma_free_entry() {
+    // After onboarding, config has a KomaFree provider + a koma/apple Main entry. The user
+    // then adds a real (keyed) provider + model and assigns Main to it GLOBALLY; the
+    // /settings role-steal removes Main from the koma-free entry (same global scope),
+    // leaving it role-less. resolve_role(Main) must return the REAL model — not koma/apple —
+    // even though the koma-free entry is still listed FIRST and settings.model is still the
+    // koma/apple default. (This is the "configured user assigns Main to a real model → step
+    // 2 wins, koma-free never fires" guarantee.)
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-koma".to_string(),
+        name: "koma free".to_string(),
+        api_type: ApiType::KomaFree,
+        endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
+        api_key: String::new(),
+    });
+    config.providers.push(ProviderConn {
+        uuid: "prov-real".to_string(),
+        name: "real".to_string(),
+        endpoint: "https://real.example".to_string(),
+        api_key: "key-real".to_string(),
+        ..ProviderConn::default()
+    });
+    // koma-free entry FIRST, but Main was stolen away by the reassignment (roles empty now).
+    config.models.push(ModelEntry {
+        uuid: "model-koma".to_string(),
+        name: "koma free".to_string(),
+        model_id: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        provider_uuid: "prov-koma".to_string(),
+        roles: vec![],
+        ..ModelEntry::default()
+    });
+    // The reassigned Main on the real keyed provider.
+    config.models.push(ModelEntry {
+        uuid: "model-real".to_string(),
+        name: "My Main".to_string(),
+        model_id: "vendor/real-model".to_string(),
+        provider_uuid: "prov-real".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings {
+        model: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.model_id, "vendor/real-model");
+    assert_eq!(resolved.endpoint, "https://real.example");
+    assert_eq!(resolved.api_key, "key-real");
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_ne!(resolved.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+}
+
+#[test]
+fn configured_dangling_main_does_not_force_koma_free() {
+    // A configured install (real keyed provider + a Main model) whose Main entry points at a
+    // DANGLING provider_uuid, with settings.model set to koma/apple. Main can't resolve the
+    // assigned entry (dangling provider), so it falls through to the legacy settings route
+    // (OpenAI-compatible @ DEFAULT_BASE_URL) rather than the koma-free tier.
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-real".to_string(),
+        name: "real".to_string(),
+        endpoint: "https://real.example".to_string(),
+        api_key: "key-real".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-main".to_string(),
+        name: "Main".to_string(),
+        model_id: "vendor/real-model".to_string(),
+        provider_uuid: "prov-missing".to_string(), // DANGLING — no such provider.
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings {
+        model: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    // Falls to legacy_main (settings.model @ DEFAULT_BASE_URL) — NOT the koma-free tier.
+    assert_ne!(resolved.api_type, ApiType::KomaFree);
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
+}
+
+#[test]
+fn session_reassigned_main_wins_over_leftover_global_koma_free_main() {
+    // Duplicate-Main hazard guard: a LOCAL (session) reassignment CANNOT strip the GLOBAL
+    // koma-free entry's Main role (the /settings steal is scope-matched: `other.session_only
+    // == draft.session_only`), so BOTH entries hold Main — the koma-free one GLOBAL, the new
+    // one SESSION. resolve_role checks `session_models` FIRST, so the real session Main wins
+    // and the leftover global koma-free Main never shadows it (which would otherwise force
+    // koma/apple via from_entry's KomaFree branch).
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-koma".to_string(),
+        name: "koma free".to_string(),
+        api_type: ApiType::KomaFree,
+        endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
+        api_key: String::new(),
+    });
+    config.providers.push(ProviderConn {
+        uuid: "prov-real".to_string(),
+        name: "real".to_string(),
+        endpoint: "https://real.example".to_string(),
+        api_key: "key-real".to_string(),
+        ..ProviderConn::default()
+    });
+    // GLOBAL koma-free Main entry — still holds Main (a session reassignment can't strip it).
+    config.models.push(ModelEntry {
+        uuid: "model-koma".to_string(),
+        name: "koma free".to_string(),
+        model_id: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        provider_uuid: "prov-koma".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    // SESSION override: Main on the real provider (checked before config.models).
+    let settings = Settings {
+        model: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        session_models: vec![ModelEntry {
+            uuid: "model-sess".to_string(),
+            name: "Session Main".to_string(),
+            model_id: "vendor/session-model".to_string(),
+            provider_uuid: "prov-real".to_string(),
+            roles: vec![ModelRole::Main],
+            ..ModelEntry::default()
+        }],
+        ..Default::default()
+    };
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
+    assert_eq!(resolved.model_id, "vendor/session-model");
+    assert_eq!(resolved.endpoint, "https://real.example");
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+}
