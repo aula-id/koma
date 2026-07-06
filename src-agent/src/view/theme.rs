@@ -138,11 +138,89 @@ pub fn light() -> Palette {
     }
 }
 
+/// Build the FOREST palette — a dark earthy canvas with warm autumn tones.
+pub fn forest() -> Palette {
+    Palette {
+        bg: Color::Rgb(51, 61, 41),
+        fg: Color::Rgb(194, 197, 170),
+        dim: Color::Rgb(164, 172, 134),
+        accent: Color::Rgb(166, 138, 100),
+        panel: Color::Rgb(65, 72, 51),
+        sel_fg: Color::Rgb(51, 61, 41),
+        sel_bg: Color::Rgb(166, 138, 100),
+        success: Color::Rgb(101, 109, 74),
+        warn: Color::Rgb(147, 102, 57),
+        error: Color::Rgb(176, 74, 52),
+        info: Color::Rgb(122, 150, 130),
+        heat: [
+            Color::Rgb(65, 72, 51),
+            Color::Rgb(101, 109, 74),
+            Color::Rgb(166, 138, 100),
+            Color::Rgb(147, 102, 57),
+            Color::Rgb(176, 74, 52),
+        ],
+    }
+}
+
+/// Build the AUTUMN palette — a warm dark canvas with burnt orange and amber tones.
+pub fn autumn() -> Palette {
+    Palette {
+        bg: Color::Rgb(46, 42, 32),
+        fg: Color::Rgb(241, 220, 167),
+        dim: Color::Rgb(186, 165, 135),
+        accent: Color::Rgb(255, 203, 105),
+        panel: Color::Rgb(61, 55, 41),
+        sel_fg: Color::Rgb(46, 42, 32),
+        sel_bg: Color::Rgb(255, 203, 105),
+        success: Color::Rgb(155, 155, 122),
+        warn: Color::Rgb(232, 172, 101),
+        error: Color::Rgb(200, 90, 60),
+        info: Color::Rgb(125, 155, 134),
+        heat: [
+            Color::Rgb(61, 55, 41),
+            Color::Rgb(121, 125, 98),
+            Color::Rgb(186, 165, 135),
+            Color::Rgb(232, 172, 101),
+            Color::Rgb(200, 90, 60),
+        ],
+    }
+}
+
+/// Build the WARM palette — a light peachy canvas with coral accents.
+pub fn warm() -> Palette {
+    Palette {
+        bg: Color::Rgb(255, 228, 213),
+        fg: Color::Rgb(91, 58, 48),
+        dim: Color::Rgb(150, 102, 86),
+        accent: Color::Rgb(224, 96, 63),
+        panel: Color::Rgb(251, 212, 180),
+        sel_fg: Color::Rgb(255, 228, 213),
+        sel_bg: Color::Rgb(224, 96, 63),
+        success: Color::Rgb(95, 140, 66),
+        warn: Color::Rgb(200, 120, 20),
+        error: Color::Rgb(198, 50, 45),
+        info: Color::Rgb(46, 120, 168),
+        heat: [
+            Color::Rgb(253, 220, 197),
+            Color::Rgb(246, 196, 146),
+            Color::Rgb(249, 177, 110),
+            Color::Rgb(248, 161, 116),
+            Color::Rgb(247, 144, 122),
+        ],
+    }
+}
+
 /// A palette constructor — one entry in [`PALETTES`], keyed by its config name.
 type PaletteFn = fn() -> Palette;
 
 /// Registry of named palettes. Add a palette = add one line here + its constructor.
-pub const PALETTES: &[(&str, PaletteFn)] = &[("dark", dark), ("light", light)];
+pub const PALETTES: &[(&str, PaletteFn)] = &[
+    ("dark", dark),
+    ("light", light),
+    ("forest", forest),
+    ("autumn", autumn),
+    ("warm", warm),
+];
 
 /// Build a [`Palette`] by looking up `cfg.palette` in [`PALETTES`], falling back to
 /// [`dark`] for an unknown name.
