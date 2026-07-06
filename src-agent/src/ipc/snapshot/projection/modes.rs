@@ -234,6 +234,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
             crate::app::mode::settings::ModelFilterMode::Local  => "local",
             crate::app::mode::settings::ModelFilterMode::Global => "global",
         }.to_string(),
+        palette_sel: st.palette_sel,
     }
 }
 
