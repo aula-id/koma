@@ -139,10 +139,9 @@ pub(super) fn handle_submit(
     // awaiting_classify / pending verdict from a prior halted turn.
     state.rest.fg_mut().awaiting_classify = false;
     state.rest.fg_mut().pending_classify_verdict = None;
-    // A genuine new user message ends any plan-execution window: drop the approved-plan
-    // stash so the tool-call classifier stops being told "a plan is approved" (it would
-    // otherwise carry the plan preamble into an unrelated turn's classification).
-    state.rest.fg_mut().approved_plan = None;
+    // NOTE: approved_plan is intentionally NOT cleared here — it must survive
+    // continue-nudges so the classifier stays plan-aware through the whole
+    // execution; it's cleared only when a new plan is entered (set_agent_mode).
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.
