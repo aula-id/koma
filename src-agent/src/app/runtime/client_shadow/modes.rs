@@ -247,6 +247,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
             "global" => crate::app::mode::settings::ModelFilterMode::Global,
             _        => crate::app::mode::settings::ModelFilterMode::All,
         },
+        palette_sel: s.palette_sel,
     }
 }
 

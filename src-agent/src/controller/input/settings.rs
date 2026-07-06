@@ -614,23 +614,49 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 Action::None
             }
             KeyCode::Up => {
-                s.up();
+                // Appearance: Up/Down move the palette-list cursor; every other
+                // category moves the field cursor.
+                if s.current_field() == SettingField::Palette {
+                    s.palette_up();
+                } else {
+                    s.up();
+                }
                 Action::None
             }
             KeyCode::Down | KeyCode::Tab => {
-                s.down();
+                if s.current_field() == SettingField::Palette {
+                    s.palette_down();
+                } else {
+                    s.down();
+                }
                 Action::None
             }
-            // Theme/awareness toggle / start editing text field / enter a path list.
             KeyCode::Enter => {
-                s.enter();
+                // Palette: LIVE-APPLY the cursored palette. Persist it into the
+                // GLOBAL config AND mirror it into the draft (so the Esc-save path
+                // writes the same value instead of reverting), WITHOUT leaving
+                // Settings — the whole UI (this screen included) then repaints in
+                // the new palette on the next projected frame and the `· selected`
+                // tag follows `config.palette`. Every other field toggles/edits.
+                if s.current_field() == SettingField::Palette {
+                    if let Some((name, _)) = crate::view::theme::PALETTES.get(s.palette_sel) {
+                        let name = name.to_string();
+                        s.palette = name.clone();
+                        rest.config.palette = name;
+                        if let Err(e) = rest.config.save() {
+                            rest.fg_mut().status = format!("config save failed: {e}");
+                        }
+                    }
+                } else {
+                    s.enter();
+                }
                 Action::None
             }
             KeyCode::Left => {
-                // Palette/Accent fields: cycle backward. Any other field: back to sidebar.
-                if s.current_field() == SettingField::Palette {
-                    s.cycle_palette(false);
-                } else if s.current_field() == SettingField::Accent {
+                // Palette: ← returns to the sidebar (nav is Up/Down + Enter now).
+                // Accent (deprecated, no longer in any category) keeps its backward
+                // cycle for safety; every other field also returns to the sidebar.
+                if s.current_field() == SettingField::Accent {
                     s.cycle_accent(false);
                 } else {
                     s.focus_sidebar();
@@ -638,9 +664,9 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 Action::None
             }
             KeyCode::Right => {
-                if s.current_field() == SettingField::Palette {
-                    s.cycle_palette(true);
-                } else if s.current_field() == SettingField::Accent {
+                // Accent (deprecated) keeps its forward cycle; Palette no longer
+                // cycles (Enter applies instead), so Right is otherwise inert.
+                if s.current_field() == SettingField::Accent {
                     s.cycle_accent(true);
                 }
                 Action::None

@@ -425,6 +425,10 @@ pub struct SettingsSnapshot {
     /// Wire token for [`ModelFilterMode`]: `"all"`, `"local"`, or `"global"`.
     #[serde(default)]
     pub model_filter: String,
+    /// Cursor index into `view::theme::PALETTES` for the Appearance palette list.
+    /// `#[serde(default)]` keeps an older peer's snapshot decoding cleanly (→ 0).
+    #[serde(default)]
+    pub palette_sel: usize,
 }
 
 // -- mode payload projections (stage 3: secondary full-screen views) -----------
