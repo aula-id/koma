@@ -471,9 +471,9 @@ pub(super) fn render_message_block(
 /// band-colored spaces out to the full body width so the band runs edge to edge.
 /// One blank band row is emitted above and below the text (vertical padding).
 fn render_user_message(content: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
-    let band = Style::default().bg(palette.user_band);
-    let rail = Style::default().fg(palette.accent).bg(palette.user_band);
-    let text = Style::default().fg(palette.accent).bg(palette.user_band);
+    let band = Style::default().bg(palette.panel);
+    let rail = Style::default().fg(palette.accent).bg(palette.panel);
+    let text = Style::default().fg(palette.accent).bg(palette.panel);
     let full_w = wrap_w + 2;
     // Text sits after the 1-col rail AND a 1-col gap, so it wraps to `full_w - 2`.
     let inner = full_w.saturating_sub(2).max(1);

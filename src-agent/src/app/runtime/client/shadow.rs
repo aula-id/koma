@@ -183,6 +183,9 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // helper, unknown → Dark); accent is an opaque palette key copied verbatim.
     shadow.rest.config.theme = shadow_theme(&global.theme);
     shadow.rest.config.accent = global.accent;
+    // Palette registry key: copied verbatim (opaque like `accent`), else the shadow
+    // config stays at the `dark` default and a `light`/custom daemon renders wrong.
+    shadow.rest.config.palette = global.palette;
     // Agent mode: decode from the wire token so the header reflects the current mode.
     // "yolo" must be decoded explicitly — falling to the `_ => Auto` default would
     // silently drop the loud-red Yolo header on the thin client.

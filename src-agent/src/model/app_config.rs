@@ -36,6 +36,10 @@ fn default_accent() -> String {
     "green".to_string()
 }
 
+fn default_palette() -> String {
+    "dark".to_string()
+}
+
 /// Mint a fresh random UUID (v4) as a `String`. Used as the serde default for
 /// the `uuid` field of [`ProviderConn`] / [`ModelEntry`] / [`McpServerEntry`] so
 /// entries read from an old config file without a uuid get a stable identity on
@@ -315,8 +319,14 @@ pub struct McpServerEntry {
 /// or when the file is absent entirely.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Active theme palette name (see view::theme::PALETTES). Replaces `theme`+`accent`.
+    #[serde(default = "default_palette")]
+    pub palette: String,
+    /// DEPRECATED (kept for back-compat / old config.json round-trip; no longer read
+    /// by the renderer — palette selection now lives in `palette`). Do not remove yet.
     #[serde(default)]
     pub theme: ThemeMode,
+    /// DEPRECATED — see `palette`. Kept for back-compat; no longer drives rendering.
     #[serde(default = "default_accent")]
     pub accent: String,
     /// Global catalogue of API provider connections, keyed by uuid.
@@ -344,6 +354,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            palette: default_palette(),
             theme: ThemeMode::default(),
             accent: default_accent(),
             providers: Vec::new(),

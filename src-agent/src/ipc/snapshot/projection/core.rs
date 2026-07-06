@@ -184,6 +184,9 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             .map(|since| since.elapsed().as_millis() as u64),
         theme: theme_token(&state.rest.config.theme).to_string(),
         accent: state.rest.config.accent.clone(),
+        // Opaque registry key (like `accent`) — copied verbatim so the thin client
+        // rebuilds the chosen palette instead of silently defaulting to `dark`.
+        palette: state.rest.config.palette.clone(),
         mode,
         toast: state.rest.fg().toast.as_ref().map(|(msg, _until, kind)| {
             let kind = match kind {
