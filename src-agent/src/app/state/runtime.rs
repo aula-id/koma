@@ -176,6 +176,15 @@ pub struct SessionRuntime {
     /// match, skips re-gating, runs the interception, and clears it. `None`
     /// normally.
     pub approved_worktree_call: Option<String>,
+    /// The plan text (truncated) the user most recently APPROVED for execution, or
+    /// `None` when no plan is executing. Set by the plan-approval handlers
+    /// (`handle_approve_plan` / `handle_approve_plan_compact`) and PREPENDED to the
+    /// tool-call classifier's (TAC) conversation context in `process_tools`, so the
+    /// classifier — which keeps running as the safety net — is TOLD the plan was
+    /// approved and ALLOWS the tool calls that carry it out, flagging only genuinely
+    /// off-plan / destructive actions. Cleared on the next genuine user submit and on
+    /// (re)entering Plan mode, so it never leaks past the plan's execution window.
+    pub approved_plan: Option<String>,
     // --- deferred tool-task lane (parallel to the sub-agent lane below) ---
     /// Tool-call ids of DEFERRED tools (see [`crate::tool::DEFERRED_TOOLS`] — the
     /// heavy/blocking ones: read / write / edit / delete / bash / grep / glob /
@@ -480,6 +489,7 @@ impl SessionRuntime {
             awaiting_approval: false,
             approval_reason: None,
             approved_worktree_call: None,
+            approved_plan: None,
             pending_tool_tasks: Vec::new(),
             awaiting_tool_tasks: false,
             tool_task_rx: None,
