@@ -111,6 +111,37 @@ fn tee_written_on_nonzero_exit_even_when_small_and_unfiltered() {
 }
 
 #[test]
+fn git_redirect_regex_matches_command_position_not_dot_git_paths() {
+    // Same pattern as the GIT_RE static in `Bash::run` — kept in sync manually
+    // since the static itself is private to that function's body.
+    let git_re = Regex::new(r"(?:^|[\s;&|(])git\b").unwrap();
+
+    for cmd in [
+        "git status",
+        "git",
+        "cd /tmp && git push",
+        "echo $(git log)",
+        "foo; git commit",
+        "  git diff".trim(),
+    ] {
+        assert!(git_re.is_match(cmd), "expected git-as-command match: {cmd:?}");
+    }
+
+    for cmd in [
+        ".git",
+        "cat dir/.git/config",
+        "rm -rf .git",
+        "ls .git",
+        "foo.git",
+        ".gitignore",
+        ".github",
+        "cat .gitignore",
+    ] {
+        assert!(!git_re.is_match(cmd), "expected no match for .git path/name: {cmd:?}");
+    }
+}
+
+#[test]
 fn early_exit_never_tees() {
     let dir = TempDir::new("early-no-write");
     let opts = OutputOpts { saving: true, log_dir: Some(dir.path().to_path_buf()) };
