@@ -12,7 +12,7 @@ use crate::app::state::AppStateRest;
 use crate::dto::chat::Role;
 use crate::view::theme::Palette;
 use super::helpers::{
-    push_thinking_line, render_block, split_thinking, truncate_chars, THINK_BAR,
+    push_thinking_line, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
 };
 
 /// Render the transcript area into `body_chunk`.
@@ -65,6 +65,14 @@ pub(super) fn render_transcript(
             .filter(|m| m.role == Role::Tool)
             .filter_map(|m| m.tool_call_id.as_deref())
             .collect();
+        // tool_call_id → result content, harvested from the `tool`-role result
+        // messages so each call can render its own result inline. Borrows from
+        // `committed`, valid for this frame.
+        let tool_results: std::collections::HashMap<&str, &str> = committed
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref().map(|id| (id, m.content.as_str())))
+            .collect();
         if cache.blocks.len() > committed.len() {
             cache.blocks.clear(); // shrank → stale prefix can't be trusted
         }
@@ -72,7 +80,9 @@ pub(super) fn render_transcript(
         for msg in committed.iter().skip(start) {
             // One block per message, index-aligned with `committed`. A hidden
             // harness tool result yields an EMPTY block (skipped at assembly), so
-            // the cache never falls out of step with the message list.
+            // the cache never falls out of step with the message list. A `tool`-role
+            // result now renders EMPTY here — its output is rendered inline under its
+            // own call by `render_tool_lines`, so the cached block stays trivial.
             cache.blocks.push(render_message_block(msg, palette, wrap_w));
         }
 
@@ -95,7 +105,16 @@ pub(super) fn render_transcript(
             let has_body = !block.is_empty();
             let tool_lines: Vec<Line<'static>> = committed
                 .get(i)
-                .map(|m| render_tool_lines(m, &completed_tool_ids, has_body, palette, wrap_w))
+                .map(|m| {
+                    render_tool_lines(
+                        m,
+                        &completed_tool_ids,
+                        has_body,
+                        palette,
+                        wrap_w,
+                        &tool_results,
+                    )
+                })
                 .unwrap_or_default();
 
             // Empty blocks (hidden harness messages) with no tool lines leave no
@@ -209,6 +228,152 @@ pub(super) fn render_transcript(
     } // cache borrow ends
 }
 
+/// Map a tool's function name to a short box LABEL, or `None` when the tool's
+/// result should NOT be boxed (terse-status tools keep the compact one-liner).
+/// MCP (`mcp__…`) and security (`sec_…`) tool families collapse to one label each.
+fn tool_box_label(name: &str) -> Option<&'static str> {
+    if name.starts_with("mcp__") {
+        return Some("mcp");
+    }
+    if name.starts_with("sec_") {
+        return Some("sec");
+    }
+    Some(match name {
+        "bash" => "bash",
+        "read" => "read",
+        "grep" => "grep",
+        "glob" => "glob",
+        "dir_list" => "dir",
+        "git_operator" | "git_cred" | "git_worktree" => "git",
+        "web_fetch" | "web_search" => "web",
+        "recall" => "memory",
+        _ => return None, // None → not boxed, keep the single-line rendering
+    })
+}
+
+/// Render a tool call as a clean, quote-less signature for the transcript header:
+/// `bash(ls src-agent/)`, `git_operator(log --oneline -5)`, `grep(fn main)`,
+/// `read(Cargo.toml)`. Display-only; the real JSON sent to the model is untouched.
+/// Unmapped tools (mcp__*, sec_*, future) fall back to their object values, or the
+/// raw args if parsing fails.
+fn format_tool_signature(name: &str, args_json: &str) -> String {
+    let v: serde_json::Value =
+        serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
+    let inner = tool_signature_inner(name, &v).unwrap_or_else(|| generic_inner(&v, args_json));
+    // Collapse newlines/runs of whitespace so the header stays one line, then cap.
+    let flat = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+    let capped = truncate_chars(&flat, 60);
+    format!("{name}({capped})")
+}
+
+/// The salient argument(s) for a known tool, positional and quote-less. `None`
+/// means "not specially mapped" → caller uses the generic fallback.
+fn tool_signature_inner(name: &str, v: &serde_json::Value) -> Option<String> {
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let arr = |k: &str| {
+        v.get(k).and_then(|x| x.as_array()).map(|a| {
+            a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(" ")
+        })
+    };
+    match name {
+        "bash" => s("command"),
+        "git_operator" => arr("args"),
+        "git_cred" => {
+            let action = s("action")?;
+            Some(match s("key") {
+                Some(k) => format!("{action} {k}"),
+                None => action,
+            })
+        }
+        "git_worktree" => {
+            let action = s("action")?;
+            let extra = s("path").or_else(|| s("name")).or_else(|| s("branch"));
+            Some(match extra {
+                Some(e) => format!("{action} {e}"),
+                None => action,
+            })
+        }
+        "read" | "write" | "edit" | "delete" | "cd" => s("path"),
+        "dir_list" => s("path").or_else(|| arr("paths")),
+        "grep" | "glob" => s("pattern"),
+        "web_fetch" | "web_download" => s("url"),
+        "web_search" => s("query"),
+        "remember" => s("slug").or_else(|| s("description")),
+        "forget" | "recall" => s("slug"),
+        "task" => {
+            let agent = s("agent")?;
+            Some(match s("prompt") {
+                Some(p) => format!("{agent}: {p}"),
+                None => agent,
+            })
+        }
+        "todowrite" => v
+            .get("todos")
+            .and_then(|x| x.as_array())
+            .map(|a| format!("{} todos", a.len())),
+        "bash_output" | "bash_kill" => s("job_id"),
+        "task_output" | "task_kill" => v.get("id").map(|x| match x {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// Generic fallback for unmapped tools: the object's scalar/array values joined,
+/// or the raw args string if it isn't a JSON object / failed to parse.
+fn generic_inner(v: &serde_json::Value, raw: &str) -> String {
+    match v {
+        serde_json::Value::Object(map) => {
+            let parts: Vec<String> = map
+                .values()
+                .filter_map(|val| match val {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Bool(b) => Some(b.to_string()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    serde_json::Value::Array(a) => Some(
+                        a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(" "),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            if parts.is_empty() { raw.to_string() } else { parts.join(", ") }
+        }
+        _ => raw.to_string(),
+    }
+}
+
+/// Render a completed tool call's RESULT: a rounded-dotted box for output-producing
+/// tools, else the compact dim one-liner. Empty/whitespace results and the harness
+/// plan-nudge render nothing. Narrow panes (`wrap_w < 8`) skip the box.
+fn render_tool_result(
+    content: &str,
+    name: &str,
+    palette: &Palette,
+    wrap_w: usize,
+) -> Vec<Line<'static>> {
+    if content.starts_with(crate::dto::chat::PLAN_NUDGE_MARK) {
+        return Vec::new();
+    }
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+    if let Some(lbl) = tool_box_label(name) {
+        if wrap_w >= 8 {
+            return render_tool_box(content, lbl, palette, wrap_w);
+        }
+    }
+    // Terse fallback: first line only, truncated, dim, under a 4-col indent.
+    let first = truncate_chars(content.lines().next().unwrap_or(""), 80);
+    render_block(
+        vec![vec![Span::styled(first, Style::default().fg(palette.dim))]],
+        "    ",
+        palette.dim,
+        wrap_w,
+        false,
+    )
+}
+
 /// Build ONE message's visual block (the body, sans the fresh tool-call lines).
 ///
 /// This is the per-message renderer the main transcript caches AND the
@@ -220,8 +385,9 @@ pub(super) fn render_transcript(
 ///   rendered dim+italic with the blockquote bar, then the body as markdown. The
 ///   per-tool-call lines are NOT included here — they carry a live ⚙→✓ glyph and
 ///   are appended fresh by [`render_tool_lines`] at assembly time.
-/// - `Tool`     → compact dim one-liner (first line, truncated); a hidden harness
-///   nudge yields an EMPTY block (no visual trace).
+/// - `Tool`     → EMPTY block: a tool result is now rendered inline directly under
+///   its own call in [`render_tool_lines`], so the standalone tool block carries no
+///   output here (and is skipped at assembly).
 /// - `System`   → EMPTY block (never shown).
 ///
 /// An empty `Vec` means "no visual block"; callers skip it (and its separator).
@@ -251,16 +417,7 @@ pub(super) fn render_message_block(
             // ALWAYS yellow (a warn cue): koma can't guarantee the model read the
             // image, and the model-visible strip warning is injected separately at
             // send. Styled like a tool-call card (icon + dim text) but in warn.
-            let mut lines = render_block(
-                vec![vec![Span::styled(
-                    msg.content.to_string(),
-                    Style::default().fg(palette.accent),
-                )]],
-                "★ ",
-                palette.accent,
-                wrap_w,
-                true,
-            );
+            let mut lines = render_user_message(&msg.content, palette, wrap_w);
             lines.extend(render_attachment_card(&msg.attachments));
             lines
         }
@@ -300,27 +457,67 @@ pub(super) fn render_message_block(
             }
             render_block(logical, "● ", palette.fg, wrap_w, false)
         }
-        Role::Tool => {
-            // Harness-internal tool results (the silent "plan first" nudge) carry a
-            // hide-marker: fed to the model, never shown → EMPTY block.
-            if msg.content.starts_with(crate::dto::chat::PLAN_NUDGE_MARK) {
-                return Vec::new();
-            }
-            // Compact dim block: just the first line of the tool output, truncated.
-            // Tool results are not markdown-rendered; a plain dim indent reads as a
-            // sub-item under its now-checked (`✓`) call (the finished turn as a list).
-            let first = msg.content.lines().next().unwrap_or("");
-            let first = truncate_chars(first, 80);
-            render_block(
-                vec![vec![Span::styled(first, Style::default().fg(palette.dim))]],
-                "    ",
-                palette.dim,
-                wrap_w,
-                false,
-            )
-        }
+        // Tool results are now rendered inline directly under their own call in
+        // `render_tool_lines`, so the standalone tool block is empty (and skipped at
+        // assembly).
+        Role::Tool => Vec::new(),
         Role::System => Vec::new(),
     }
+}
+
+/// Render a `★`-less user message as a full-width band: a solid accent rail in
+/// column 0, a 1-column band-colored gap in column 1, then the message text
+/// (accent on the gray band) starting in column 2, each visual line padded with
+/// band-colored spaces out to the full body width so the band runs edge to edge.
+/// One blank band row is emitted above and below the text (vertical padding).
+fn render_user_message(content: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
+    let band = Style::default().bg(palette.user_band);
+    let rail = Style::default().fg(palette.accent).bg(palette.user_band);
+    let text = Style::default().fg(palette.accent).bg(palette.user_band);
+    let full_w = wrap_w + 2;
+    // Text sits after the 1-col rail AND a 1-col gap, so it wraps to `full_w - 2`.
+    let inner = full_w.saturating_sub(2).max(1);
+
+    let mut out: Vec<Line<'static>> = Vec::new();
+    // Top padding: a blank band row (rail + gap + band fill).
+    out.push(band_row(&rail, &band, full_w, Vec::new()));
+    for logical in content.split('\n') {
+        let wrapped =
+            crate::view::markdown::wrap_spans(&[Span::styled(logical.to_string(), text)], inner);
+        for visual in wrapped {
+            // wrap_spans inserts word-separator spaces with the DEFAULT style (no bg),
+            // which would punch dark holes through the band — flatten each visual line
+            // into ONE span carrying the band `text` style so spaces inherit the bg.
+            let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
+            out.push(band_row(&rail, &band, full_w, vec![Span::styled(line_text, text)]));
+        }
+    }
+    // Bottom padding.
+    out.push(band_row(&rail, &band, full_w, Vec::new()));
+    out
+}
+
+/// Assemble one band row: a solid-accent rail cell in column 0, a band-colored
+/// gap cell in column 1, then the (already `text`-styled) wrapped span run, then
+/// a band-colored right-pad out to `full_w` columns so the band reaches the full
+/// body width.
+fn band_row(
+    rail: &Style,
+    band: &Style,
+    full_w: usize,
+    text_spans: Vec<Span<'static>>,
+) -> Line<'static> {
+    let text_cols: usize = text_spans.iter().map(|s| s.content.chars().count()).sum();
+    let mut spans = vec![
+        Span::styled("▌", *rail), // col 0: half-width accent rail (left half block)
+        Span::styled(" ", *band), // col 1: band-colored gap
+    ];
+    spans.extend(text_spans); // col 2+: text on band
+    let used = 2 + text_cols;
+    if used < full_w {
+        spans.push(Span::styled(" ".repeat(full_w - used), *band));
+    }
+    Line::from(spans)
 }
 
 /// Render a `!` user-shell entry's block: a `$ <cmd>` header (accent bullet +
@@ -427,12 +624,17 @@ fn render_attachment_card(
 /// is empty (`has_body == false`) — then the first tool line takes the `● ` bullet
 /// so a pure tool-call turn isn't a bullet-less orphan. A non-Assistant message
 /// or one with no tool calls yields no lines.
+///
+/// Once a call's result has landed (its id is in `completed`), that result is
+/// appended inline directly under the call's header — tight, no separator — via
+/// [`render_tool_result`], looked up in `tool_results` by call id.
 pub(super) fn render_tool_lines(
     msg: &crate::dto::chat::ChatMessage,
     completed: &std::collections::HashSet<&str>,
     has_body: bool,
     palette: &Palette,
     wrap_w: usize,
+    tool_results: &std::collections::HashMap<&str, &str>,
 ) -> Vec<Line<'static>> {
     if msg.role != Role::Assistant {
         return Vec::new();
@@ -499,12 +701,11 @@ pub(super) fn render_tool_lines(
             }
         }
 
-        let args = truncate_chars(&call.function.arguments, 60);
         lines.push(Line::from(vec![
             prefix,
             Span::styled(glyph, glyph_style),
             Span::styled(
-                format!("{}({})", call.function.name, args),
+                format_tool_signature(&call.function.name, &call.function.arguments),
                 Style::default().fg(palette.dim),
             ),
         ]));
@@ -545,6 +746,14 @@ pub(super) fn render_tool_lines(
                 )]));
             }
         }
+
+        // The result glues directly under THIS call — tight, no separator. Only once
+        // the result has landed (`done`). Output tools get a box; others a terse line.
+        if done {
+            if let Some(result) = tool_results.get(call.id.as_str()) {
+                lines.extend(render_tool_result(result, &call.function.name, palette, wrap_w));
+            }
+        }
     }
     lines
 }
@@ -572,13 +781,20 @@ pub(super) fn assemble_messages(
         .filter(|m| m.role == Role::Tool)
         .filter_map(|m| m.tool_call_id.as_deref())
         .collect();
+    // tool_call_id → result content, so each call can render its own result inline
+    // (mirrors the main transcript renderer).
+    let tool_results: std::collections::HashMap<&str, &str> = messages
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .filter_map(|m| m.tool_call_id.as_deref().map(|id| (id, m.content.as_str())))
+        .collect();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut first = true;
     for msg in messages {
         let block = render_message_block(msg, palette, wrap_w);
         let has_body = !block.is_empty();
-        let tool_lines = render_tool_lines(msg, &completed, has_body, palette, wrap_w);
+        let tool_lines = render_tool_lines(msg, &completed, has_body, palette, wrap_w, &tool_results);
         // Empty block with no tool lines (system / hidden harness) → no trace.
         if block.is_empty() && tool_lines.is_empty() {
             continue;
