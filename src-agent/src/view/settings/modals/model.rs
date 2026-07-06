@@ -83,7 +83,7 @@ pub(in crate::view::settings) fn draw_model_modal(
         .title(Span::styled(title, Style::default().fg(palette.accent)));
     let inner = modal_block.inner(popup);
 
-    crate::view::clear_and_fill(frame, popup, palette.panel);
+    crate::view::clear_and_fill(frame, popup, palette.bg);
     frame.render_widget(modal_block, popup);
 
     if inner.width == 0 || inner.height == 0 {
