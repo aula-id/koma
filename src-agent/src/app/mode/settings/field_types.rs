@@ -8,8 +8,13 @@ pub enum SettingField {
     ApiKey,
     Model,
     Provider,
+    // deprecated: superseded by Palette
     Theme,
+    // deprecated: superseded by Palette
     Accent,
+    /// Palette picker (Stage 4): arrow-cycles a named colour palette from
+    /// [`crate::view::theme::PALETTES`]; replaces the Theme + Accent rows.
+    Palette,
     Name,
     Workdir,
     /// Toggle: whether the project-awareness summary is generated/injected.
@@ -50,6 +55,7 @@ impl SettingField {
             SettingField::Provider          => "Provider",
             SettingField::Theme             => "Theme",
             SettingField::Accent            => "Accent",
+            SettingField::Palette           => "Theme",
             SettingField::Name              => "Session name",
             SettingField::Workdir           => "Workdir",
             SettingField::AwarenessEnabled  => "Awareness",
@@ -83,7 +89,7 @@ pub const SETTING_CATEGORIES: &[SettingCategory] = &[
     SettingCategory {
         name: "Appearance",
         group: "general",
-        fields: &[SettingField::Theme, SettingField::Accent],
+        fields: &[SettingField::Palette],
     },
     SettingCategory {
         name: "Session",

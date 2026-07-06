@@ -382,6 +382,11 @@ pub struct SettingsSnapshot {
     pub name: String,
     pub theme: String,
     pub accent: String,
+    /// Active palette name (see `view::theme::PALETTES`). `#[serde(default)]`
+    /// keeps an older peer's snapshot (pre-palette) decoding cleanly — a missing
+    /// value falls back to the dark palette at render time.
+    #[serde(default)]
+    pub palette: String,
     pub workdir: Vec<String>,
     pub awareness_enabled: bool,
     pub awareness_inherit: bool,

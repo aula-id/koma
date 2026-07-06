@@ -61,6 +61,9 @@ pub struct SettingsState {
     pub theme: ThemeMode,
     /// Draft global accent name (one of [`ACCENTS`]).
     pub accent: String,
+    /// Draft global palette name (one of [`crate::view::theme::PALETTES`]);
+    /// the Appearance category's single arrow-cycled field.
+    pub palette: String,
     /// Draft working-directory path list for this session (min 1 entry on save).
     pub workdir: Vec<String>,
     /// Draft: project-awareness summary enabled.
@@ -237,6 +240,7 @@ impl SettingsState {
             name: session.name.clone(),
             theme: config.theme.clone(),
             accent: config.accent.clone(),
+            palette: config.palette.clone(),
             workdir,
             awareness_enabled: session.settings.awareness_enabled,
             awareness_inherit: session.settings.awareness_inherit,
@@ -342,6 +346,9 @@ impl SettingsState {
             SettingField::Accent => {
                 // Accent is cycled with arrow keys; Enter is intentionally a no-op.
             }
+            SettingField::Palette => {
+                // Palette is cycled with arrow keys; Enter is intentionally a no-op.
+            }
             SettingField::AwarenessEnabled => {
                 self.awareness_enabled = !self.awareness_enabled;
             }
@@ -407,5 +414,22 @@ impl SettingsState {
             (cur + len - 1) % len
         };
         self.accent = ACCENTS[next].to_string();
+    }
+
+    /// Cycle the palette draft to the next/previous entry in the palette
+    /// registry ([`crate::view::theme::PALETTES`]), wrapping. Mirrors
+    /// [`cycle_accent`](Self::cycle_accent) but over palette NAMES.
+    pub fn cycle_palette(&mut self, forward: bool) {
+        let names: Vec<&str> = crate::view::theme::PALETTES.iter().map(|(n, _)| *n).collect();
+        if names.is_empty() {
+            return;
+        }
+        let cur = names.iter().position(|n| *n == self.palette).unwrap_or(0);
+        let next = if forward {
+            (cur + 1) % names.len()
+        } else {
+            (cur + names.len() - 1) % names.len()
+        };
+        self.palette = names[next].to_string();
     }
 }

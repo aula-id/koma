@@ -627,8 +627,10 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 Action::None
             }
             KeyCode::Left => {
-                // Accent field: cycle backward. Any other field: go back to sidebar.
-                if s.current_field() == SettingField::Accent {
+                // Palette/Accent fields: cycle backward. Any other field: back to sidebar.
+                if s.current_field() == SettingField::Palette {
+                    s.cycle_palette(false);
+                } else if s.current_field() == SettingField::Accent {
                     s.cycle_accent(false);
                 } else {
                     s.focus_sidebar();
@@ -636,7 +638,9 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
                 Action::None
             }
             KeyCode::Right => {
-                if s.current_field() == SettingField::Accent {
+                if s.current_field() == SettingField::Palette {
+                    s.cycle_palette(true);
+                } else if s.current_field() == SettingField::Accent {
                     s.cycle_accent(true);
                 }
                 Action::None

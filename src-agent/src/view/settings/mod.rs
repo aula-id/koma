@@ -267,6 +267,12 @@ pub fn draw(
                     let tint: Color = resolve_accent(&st.accent, dark);
                     vec![Span::styled(st.accent.as_str(), Style::default().fg(tint))]
                 }
+                SettingField::Palette => {
+                    // Show the palette name tinted with the SELECTED palette's accent,
+                    // resolved from the draft name so it updates live as you cycle.
+                    let pv = selected_palette(&st.palette);
+                    vec![Span::styled(st.palette.clone(), Style::default().fg(pv.accent))]
+                }
                 SettingField::AwarenessEnabled => {
                     // Boolean toggle: on/off.
                     let v = if st.awareness_enabled { "on" } else { "off" };
@@ -372,7 +378,20 @@ pub fn draw(
             detail_lines.push(Line::from(spans));
     }
 
-    frame.render_widget(Paragraph::new(detail_lines), detail_inner);
+    // Appearance (the Palette-bearing category) gets a live swatch preview box
+    // below the field rows: split detail_inner into [rows: Min(0), preview:
+    // Length]. Every other category renders the rows full-height as before.
+    if cat_fields.contains(&SettingField::Palette) {
+        const PREVIEW_H: u16 = 6;
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(PREVIEW_H)])
+            .split(detail_inner);
+        frame.render_widget(Paragraph::new(detail_lines), split[0]);
+        draw_palette_preview(frame, &st.palette, palette, split[1]);
+    } else {
+        frame.render_widget(Paragraph::new(detail_lines), detail_inner);
+    }
 
     } // end else (non-stub category)
 
@@ -449,7 +468,12 @@ pub fn draw(
         } else if on_list_field {
             "Enter manage list"
         } else if st.in_detail {
-            "↑/↓ field · Enter edit/toggle · ←/→ accent · ← back"
+            if SETTING_CATEGORIES[st.cat].fields.contains(&SettingField::Palette) {
+                // Appearance: the single Palette field is arrow-cycled.
+                "↑/↓ field · ←/→ theme · ← back"
+            } else {
+                "↑/↓ field · Enter edit/toggle · ←/→ accent · ← back"
+            }
         } else {
             "↑/↓ category · →/Enter fields · Esc save & close"
         };
@@ -574,4 +598,66 @@ pub fn draw(
             draw_role_picker(frame, picker, palette, frame.area());
         }
     }
+}
+
+/// Resolve a palette draft NAME to its concrete [`Palette`], falling back to
+/// [`dark`](crate::view::theme::dark) for an unknown name. Mirrors
+/// [`crate::view::theme::palette`] but keyed by a raw name (the settings draft)
+/// rather than the whole `AppConfig`.
+fn selected_palette(name: &str) -> Palette {
+    crate::view::theme::PALETTES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, build)| build())
+        .unwrap_or_else(crate::view::theme::dark)
+}
+
+/// Render the live palette-swatch preview box for the Appearance category.
+///
+/// `draft_name` is the currently-cycled palette draft, so the swatches update
+/// live as the user arrows through palettes. Swatch colours come from that
+/// DRAFT palette; the box border + role labels use the ACTIVE `palette` (so the
+/// frame around the preview matches the rest of the UI). The bordered-box idiom
+/// mirrors `settings/pickers.rs`.
+fn draw_palette_preview(frame: &mut Frame, draft_name: &str, palette: &Palette, area: Rect) {
+    if area.height < 3 || area.width < 3 {
+        return;
+    }
+    let pv = selected_palette(draft_name);
+
+    let block = Block::bordered()
+        .border_style(Style::default().fg(palette.dim))
+        .title(Span::styled(" preview ", Style::default().fg(palette.dim)))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // 3×3 grid of (swatch colour, role label). Each swatch is a 2-col block
+    // painted via the cell BACKGROUND (from the draft palette); the label
+    // follows in the active palette's dim tint. Includes the required roles
+    // (bg, fg, accent, panel, success, warn, error) plus dim + sel_bg.
+    let grid: [[(Color, &str); 3]; 3] = [
+        [(pv.bg,  "bg"),  (pv.accent, "accent"), (pv.success, "success")],
+        [(pv.fg,  "fg"),  (pv.panel,  "panel"),  (pv.warn,    "warn")],
+        [(pv.dim, "dim"), (pv.sel_bg, "sel_bg"), (pv.error,   "error")],
+    ];
+    let dim = Style::default().fg(palette.dim);
+    let lines: Vec<Line> = grid
+        .iter()
+        .map(|cells| {
+            let mut spans: Vec<Span> = Vec::new();
+            for (ci, (color, name)) in cells.iter().enumerate() {
+                if ci > 0 {
+                    spans.push(Span::raw("  ")); // inter-column gap
+                }
+                spans.push(Span::styled("  ", Style::default().bg(*color)));
+                spans.push(Span::styled(format!(" {:<7}", *name), dim));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
