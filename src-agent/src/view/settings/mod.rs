@@ -629,11 +629,19 @@ fn draw_palette_list(
         let bstyle =
             Style::default().fg(if is_cursor { palette.accent } else { palette.dim });
 
-        // --- top border: `┌─ {name}[ · selected] ───┐`, `w` cols wide ---
+        // --- top border: `┌─ [> ]{name}[ · selected] ───┐`, `w` cols wide ---
         let label = if is_applied {
-            format!(" {name} · selected ")
+            if is_cursor {
+                format!(" > {name} · selected ")
+            } else {
+                format!(" {name} · selected ")
+            }
         } else {
-            format!(" {name} ")
+            if is_cursor {
+                format!(" > {name} ")
+            } else {
+                format!(" {name} ")
+            }
         };
         let used = 2 /*┌─*/ + label.chars().count();
         let fill = w.saturating_sub(used + 1 /*┐*/);

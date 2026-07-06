@@ -365,6 +365,10 @@ pub(super) fn run_swapper(
     // whole `AppState` (+ its version-check channel) at 60fps; only the small hub is cloned.
     let mut shadow = AppState::new(Mode::Chat);
 
+    // Load the user's real config from disk so the hub matches the selected
+    // theme palette (the swapper is detached and gets no live config deltas).
+    shadow.rest.config = crate::model::app_config::AppConfig::load();
+
     loop {
         let frame_start = Instant::now();
 
