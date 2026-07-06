@@ -13,11 +13,6 @@ use crate::view::theme::Palette;
 
 use super::format::{now_secs, fmt_cost, fmt_tokens_u64, METRIC_LABEL_W};
 
-pub(crate) const HEAT_EMPTY: Color = Color::Rgb(35, 35, 35);
-pub(crate) const HEAT_1: Color = Color::Rgb(0, 120, 60);
-pub(crate) const HEAT_2: Color = Color::Rgb(100, 160, 50);
-pub(crate) const HEAT_3: Color = Color::Rgb(200, 140, 0);
-pub(crate) const HEAT_4: Color = Color::Rgb(220, 50, 50);
 pub(crate) const CELL: &str = "\u{2588}";
 pub(crate) const RULE: &str = "\u{2500}";
 pub(crate) const BAR_CHARS: [char; 9] = [
@@ -86,27 +81,27 @@ fn build_hourly_horizontal_chart(
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(25);
 
     for (&v, &h) in values.iter().zip(epochs.iter()) {
-        let col = heat_color(v, p33, p66, p90, false);
+        let col = heat_color(v, p33, p66, p90, false, palette);
         let fill = if max_val <= 0.0 { 0usize } else { ((v / max_val) * bar_w as f64).round() as usize };
         let hour = (((h + tz) % 86400) / 3600) as usize;
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(bar_w + 2);
         let label_style = if hour == current_hour {
-            Style::default().fg(palette.accent).bg(HEAT_EMPTY).add_modifier(Modifier::BOLD)
+            Style::default().fg(palette.accent).bg(palette.heat[0]).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(palette.dim).bg(HEAT_EMPTY)
+            Style::default().fg(palette.dim).bg(palette.heat[0])
         };
         spans.push(Span::styled(format!("{hour:02}"), label_style));
         for j in 0..bar_w {
             if j < fill {
-                spans.push(Span::styled(CELL, Style::default().fg(col).bg(HEAT_EMPTY)));
+                spans.push(Span::styled(CELL, Style::default().fg(col).bg(palette.heat[0])));
             } else {
-                spans.push(Span::styled(CELL, Style::default().fg(HEAT_EMPTY).bg(HEAT_EMPTY)));
+                spans.push(Span::styled(CELL, Style::default().fg(palette.heat[0]).bg(palette.heat[0])));
             }
         }
         let val_str = bar_metric_label(v, metric);
         spans.push(Span::styled(
             format!(" {val_str:>width$}", width = METRIC_LABEL_W - 1),
-            Style::default().fg(palette.dim).bg(HEAT_EMPTY),
+            Style::default().fg(palette.dim).bg(palette.heat[0]),
         ));
         lines.push(Line::from(spans));
     }
@@ -147,26 +142,26 @@ fn build_day_horizontal_chart(
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(8);
 
     for (i, (&v, label)) in values.iter().zip(labels.iter()).enumerate() {
-        let col = heat_color(v, p33, p66, p90, false);
+        let col = heat_color(v, p33, p66, p90, false, palette);
         let fill = if max_val <= 0.0 { 0usize } else { ((v / max_val) * bar_w as f64).round() as usize };
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(bar_w + 2);
         let label_style = if i == 6 {
-            Style::default().fg(palette.accent).bg(HEAT_EMPTY).add_modifier(Modifier::BOLD)
+            Style::default().fg(palette.accent).bg(palette.heat[0]).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(palette.dim).bg(HEAT_EMPTY)
+            Style::default().fg(palette.dim).bg(palette.heat[0])
         };
         spans.push(Span::styled(format!("{label} "), label_style));
         for j in 0..bar_w {
             if j < fill {
-                spans.push(Span::styled(CELL, Style::default().fg(col).bg(HEAT_EMPTY)));
+                spans.push(Span::styled(CELL, Style::default().fg(col).bg(palette.heat[0])));
             } else {
-                spans.push(Span::styled(CELL, Style::default().fg(HEAT_EMPTY).bg(HEAT_EMPTY)));
+                spans.push(Span::styled(CELL, Style::default().fg(palette.heat[0]).bg(palette.heat[0])));
             }
         }
         let val_str = bar_metric_label(v, metric);
         spans.push(Span::styled(
             format!(" {val_str:>width$}", width = METRIC_LABEL_W - 1),
-            Style::default().fg(palette.dim).bg(HEAT_EMPTY),
+            Style::default().fg(palette.dim).bg(palette.heat[0]),
         ));
         lines.push(Line::from(spans));
     }
@@ -201,7 +196,7 @@ fn build_heatmap_yearly(
             let day = grid_start + (col as i64 * ROWS as i64 + row as i64) * 86400;
             let future = day > today;
             let v = if future { -1.0 } else { map.get(&day).map(|b| metric_val(b, metric)).unwrap_or(0.0) };
-            spans.push(Span::styled(CELL, Style::default().fg(heat_color(v, p33, p66, p90, future))));
+            spans.push(Span::styled(CELL, Style::default().fg(heat_color(v, p33, p66, p90, future, palette))));
         }
         result.push(Line::from(spans));
     }
@@ -234,17 +229,17 @@ pub(crate) fn build_session_hourly_heatmap(
     for i in 0..n_hours {
         let epoch = first + i as i64 * 3600;
         let v = map.get(&epoch).map(|b| b.cost).unwrap_or(0.0);
-        let col = heat_color(v, p33, p66, p90, false);
+        let col = heat_color(v, p33, p66, p90, false, palette);
         let fill = if max_val <= 0.0 { 0usize } else { ((v / max_val) * bar_w as f64).round() as usize };
         let tz = crate::model::usage::local_utc_offset_secs();
         let hour = (((epoch + tz) % 86400) / 3600) as usize;
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(bar_w + 1);
-        spans.push(Span::styled(format!("{hour:02}"), Style::default().fg(palette.dim).bg(HEAT_EMPTY)));
+        spans.push(Span::styled(format!("{hour:02}"), Style::default().fg(palette.dim).bg(palette.heat[0])));
         for j in 0..bar_w {
             if j < fill {
-                spans.push(Span::styled(CELL, Style::default().fg(col).bg(HEAT_EMPTY)));
+                spans.push(Span::styled(CELL, Style::default().fg(col).bg(palette.heat[0])));
             } else {
-                spans.push(Span::styled(CELL, Style::default().fg(HEAT_EMPTY).bg(HEAT_EMPTY)));
+                spans.push(Span::styled(CELL, Style::default().fg(palette.heat[0]).bg(palette.heat[0])));
             }
         }
         lines.push(Line::from(spans));
@@ -257,11 +252,11 @@ pub(crate) fn build_session_hourly_heatmap(
 fn heat_legend(palette: &Palette) -> Line<'static> {
     Line::from(vec![
         Span::styled("     cheap ", Style::default().fg(palette.dim)),
-        Span::styled(CELL, Style::default().fg(HEAT_EMPTY)),
-        Span::styled(CELL, Style::default().fg(HEAT_1)),
-        Span::styled(CELL, Style::default().fg(HEAT_2)),
-        Span::styled(CELL, Style::default().fg(HEAT_3)),
-        Span::styled(CELL, Style::default().fg(HEAT_4)),
+        Span::styled(CELL, Style::default().fg(palette.heat[0])),
+        Span::styled(CELL, Style::default().fg(palette.heat[1])),
+        Span::styled(CELL, Style::default().fg(palette.heat[2])),
+        Span::styled(CELL, Style::default().fg(palette.heat[3])),
+        Span::styled(CELL, Style::default().fg(palette.heat[4])),
         Span::styled(" expensive", Style::default().fg(palette.dim)),
     ])
 }
@@ -274,13 +269,13 @@ pub(crate) fn bar_metric_label(v: f64, metric: UsageMetric) -> String {
     }
 }
 
-fn heat_color(v: f64, p33: f64, p66: f64, p90: f64, future: bool) -> Color {
-    if future || v < 0.0 || v == 0.0 { return HEAT_EMPTY; }
-    if p33 >= p90 { return HEAT_2; }
-    if v <= p33 { HEAT_1 }
-    else if v <= p66 { HEAT_2 }
-    else if v <= p90 { HEAT_3 }
-    else { HEAT_4 }
+fn heat_color(v: f64, p33: f64, p66: f64, p90: f64, future: bool, palette: &Palette) -> Color {
+    if future || v < 0.0 || v == 0.0 { return palette.heat[0]; }
+    if p33 >= p90 { return palette.heat[2]; }
+    if v <= p33 { palette.heat[1] }
+    else if v <= p66 { palette.heat[2] }
+    else if v <= p90 { palette.heat[3] }
+    else { palette.heat[4] }
 }
 
 fn metric_val(b: &SpendBucket, metric: UsageMetric) -> f64 {

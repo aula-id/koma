@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::{Alignment, Margin, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
@@ -14,15 +14,15 @@ use super::helpers::truncate_chars;
 
 /// Render the header line ("koma" + mode indicator) into `chunk`.
 ///
-/// Mode colours are fixed regardless of theme: Normal = green, Auto = yellow,
-/// Plan = calm cyan (read-only, nothing to fear), Yolo = LOUD red (harness
-/// bypassed — make it unmistakable).
+/// Mode colours follow the palette's semantic roles: Normal = success (green),
+/// Auto = warn (yellow), Plan = info (calm cyan — read-only, nothing to fear),
+/// Yolo = error (LOUD red — harness bypassed, make it unmistakable).
 pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
-        crate::app::state::AgentMode::Normal => ("●", "normal",   Color::Rgb(80, 220, 80)),
-        crate::app::state::AgentMode::Auto   => ("»", "auto",     Color::Rgb(255, 210, 60)),
-        crate::app::state::AgentMode::Plan   => ("●", "planning", Color::Rgb(80, 200, 255)),
-        crate::app::state::AgentMode::Yolo   => ("!", "yooloo",   Color::Rgb(255, 60, 60)),
+        crate::app::state::AgentMode::Normal => ("●", "normal",   palette.success),
+        crate::app::state::AgentMode::Auto   => ("»", "auto",     palette.warn),
+        crate::app::state::AgentMode::Plan   => ("●", "planning", palette.info),
+        crate::app::state::AgentMode::Yolo   => ("!", "yooloo",   palette.error),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.
@@ -75,7 +75,7 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        header_spans.extend(plan_shimmer_spans(mode_label, elapsed_ms));
+        header_spans.extend(plan_shimmer_spans(mode_label, elapsed_ms, palette));
     } else {
         header_spans.push(Span::styled(mode_icon, Style::default().fg(mode_color)));
         header_spans.push(Span::raw(" "));
@@ -104,10 +104,10 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
 /// `super::helpers`): the phase is derived straight from wall-clock
 /// milliseconds, so it advances on every redraw with nothing to reset. Per-char
 /// spans keep the colour mapping trivial and multibyte-safe (`chars()`).
-fn plan_shimmer_spans(text: &str, elapsed_ms: u128) -> Vec<Span<'static>> {
-    const BASE: Color = Color::Rgb(80, 200, 255);
-    const SHOULDER: Color = Color::Rgb(140, 225, 255);
-    const PEAK: Color = Color::Rgb(200, 245, 255);
+fn plan_shimmer_spans(text: &str, elapsed_ms: u128, palette: &Palette) -> Vec<Span<'static>> {
+    let base = palette.info;
+    let shoulder = crate::view::theme::lighten(palette.info, 0.33);
+    let peak = crate::view::theme::lighten(palette.info, 0.66);
     const FRAME_MS: u128 = 90; // sweep advance cadence
     const GAP: usize = 3; // pause length after the highlight exits, before it wraps
 
@@ -125,13 +125,13 @@ fn plan_shimmer_spans(text: &str, elapsed_ms: u128) -> Vec<Span<'static>> {
         // flat base colour. Otherwise the char at `pos` is the bright peak, and
         // its immediate neighbours (when in bounds) are the dimmer shoulders.
         let color = if pos >= n {
-            BASE
+            base
         } else if i == pos {
-            PEAK
+            peak
         } else if i + 1 == pos || i == pos + 1 {
-            SHOULDER
+            shoulder
         } else {
-            BASE
+            base
         };
         spans.push(Span::styled(
             ch.to_string(),
