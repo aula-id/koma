@@ -288,7 +288,14 @@ pub async fn run_agent_loop(
             return;
         }
 
-        let assistant_text = outcome.text;
+        // Decode any echoed-back escaped reasoning tag BEFORE this text goes
+        // anywhere: it is the single upstream source for every downstream use
+        // this step — the isolated conversation commit (both the no-tool and
+        // tool-call branches below), the stall-nudge commit, and the delivered
+        // report (via `finalize_report` / `last_text`). Mirrors the interactive
+        // engine's `final_answer` + `turn.rs` tool-call-turn decode; only decode,
+        // strip nothing else.
+        let assistant_text = crate::dto::chat::unescape_reasoning_tags(&outcome.text).into_owned();
         let tool_calls = outcome.tool_calls;
         // Attach this step's captured thinking to the committed assistant message
         // so the full-screen viewer can render it. `None` when the model emitted

@@ -270,7 +270,12 @@ pub(crate) fn advance_turn(
         let mut committed = false;
         if let Some(sess) = rt.session.as_mut() {
             if !pending.is_empty() {
-                let content = buf.clone().unwrap_or_default();
+                // Decode any echoed-back escaped reasoning tag so the persisted
+                // assistant message keeps the REAL `<think>` (the outbound wire
+                // escape is transient). This tool-call path BYPASSES `final_answer`,
+                // so it decodes here; only decode — strip nothing else.
+                let raw = buf.clone().unwrap_or_default();
+                let content = crate::dto::chat::unescape_reasoning_tags(&raw).into_owned();
                 let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
                 sess.conversation
                     .push_assistant_with_tools(content, pending.clone(), reasoning, reasoning_details);
