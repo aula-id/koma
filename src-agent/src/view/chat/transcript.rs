@@ -474,25 +474,26 @@ pub(super) fn render_tool_lines(
                     Span::styled("plan ready", Style::default().fg(palette.dim)),
                 ]));
                 // Digest body: the same dim left rule the reasoning block uses
-                // (THINK_BAR — one rail, never a box), the text in fg, hung under a
-                // 2-col indent and wrapped to the pane width. All lines, no truncation.
+                // (THINK_BAR — one rail, never a box), hung under a 2-col indent and
+                // laid out to the pane width. The digest carries real Markdown
+                // (**bold**, `code`, headings, lists), so it's rendered through the
+                // block-aware markdown renderer instead of raw-styled per line; the
+                // renderer already wraps/boxes each block, so its visual lines are
+                // pushed as-is (NOT re-wrapped via `wrap_spans`) with the bar prefixed.
                 let bar_style = Style::default().fg(palette.dim);
                 let inner_w = wrap_w.saturating_sub(2 + THINK_BAR.chars().count()).max(1);
-                for sline in digest.lines() {
-                    if sline.trim().is_empty() {
-                        lines.push(Line::from(vec![
-                            Span::raw("  "),
-                            Span::styled(THINK_BAR, bar_style),
-                        ]));
-                        continue;
-                    }
-                    let spans =
-                        vec![Span::styled(sline.to_string(), Style::default().fg(palette.fg))];
-                    for visual in crate::view::markdown::wrap_spans(&spans, inner_w) {
-                        let mut line = vec![Span::raw("  "), Span::styled(THINK_BAR, bar_style)];
-                        line.extend(visual);
-                        lines.push(Line::from(line));
-                    }
+                for visual in crate::view::markdown::render(&digest, palette, inner_w) {
+                    let mut line = vec![Span::raw("  "), Span::styled(THINK_BAR, bar_style)];
+                    line.extend(visual);
+                    lines.push(Line::from(line));
+                }
+                // Trailing clearance: 5 bar-only blank rows so the bottom approval
+                // pane doesn't cover the last lines of the plan.
+                for _ in 0..5 {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(THINK_BAR, bar_style),
+                    ]));
                 }
                 continue;
             }

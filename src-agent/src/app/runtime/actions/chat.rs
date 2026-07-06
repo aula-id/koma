@@ -139,6 +139,10 @@ pub(super) fn handle_submit(
     // awaiting_classify / pending verdict from a prior halted turn.
     state.rest.fg_mut().awaiting_classify = false;
     state.rest.fg_mut().pending_classify_verdict = None;
+    // A genuine new user message ends any plan-execution window: drop the approved-plan
+    // stash so the tool-call classifier stops being told "a plan is approved" (it would
+    // otherwise carry the plan preamble into an unrelated turn's classification).
+    state.rest.fg_mut().approved_plan = None;
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.
@@ -621,16 +625,20 @@ fn answer_plan_ready(state: &mut AppState, result: String) {
     }
 }
 
-/// Leave Plan mode, restoring the mode stashed when it was entered. Consumes
-/// `plan_return_mode` (defaulting to `Auto`); a stashed `Yolo` that is no longer
-/// armed downgrades to `Auto` so Plan approval can never silently re-enter Yolo.
+/// Leave Plan mode on plan approval, ALWAYS returning to `Auto` (the default
+/// execution mode) regardless of the pre-plan mode — the one exception is an armed
+/// `Yolo` stashed on entry, which is preserved. Consumes `plan_return_mode`.
 /// `set_agent_mode` does the rebuild/save on the Plan→ret transition and also
 /// clears `plan_return_mode` (already `None` after the `take`, so it's a no-op).
 fn restore_plan_return_mode(state: &mut AppState) {
-    let mut ret = state.rest.plan_return_mode.take().unwrap_or(AgentMode::Auto);
-    if ret == AgentMode::Yolo && !state.rest.yolo_armed {
-        ret = AgentMode::Auto;
-    }
+    // Approving a plan always returns to Auto (default execution mode), regardless
+    // of the pre-plan mode — keep only an armed Yolo.
+    let stashed = state.rest.plan_return_mode.take();
+    let ret = if stashed == Some(AgentMode::Yolo) && state.rest.yolo_armed {
+        AgentMode::Yolo
+    } else {
+        AgentMode::Auto
+    };
     state.rest.set_agent_mode(ret);
 }
 
@@ -645,15 +653,41 @@ pub(super) fn handle_approve_plan(
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
-    // Name the on-disk plan so the model can re-read it if needed.
-    let plan_path = state
+    // Read the approved plan off disk and embed its full body in the tool
+    // result, instead of just naming the path — the session dir can sit
+    // outside every configured workspace root, so a bare pointer sends the
+    // model off to `read` a path it may not be allowed to open (see the
+    // `resolve_read` sessions-tree bypass in `tool/mod.rs` for the other half
+    // of this fix). Falls back to the old pointer-only text if the read fails
+    // (no session, or the file vanished) so nothing regresses.
+    let plan_path_opt = state.rest.fg().session.as_ref().map(|s| s.plan_path());
+    let plan_body = plan_path_opt
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let approve_text = match plan_body {
+        Some(body) => crate::tool::plan::plan_approved_text_with_body(&body),
+        None => {
+            let plan_path = plan_path_opt
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "the session plan.md".to_string());
+            crate::tool::plan::plan_approved_text(&plan_path)
+        }
+    };
+    answer_plan_ready(state, approve_text);
+    // Make the tool-call classifier PLAN-AWARE for the execution that follows: stash
+    // the approved plan text (truncated) on the fg session so `process_tools`
+    // prepends it to the classifier context. The classifier keeps running (safety net
+    // intact) but now allows the tool calls that carry out the plan. A read failure →
+    // no stash (classifier behaves exactly as before). Cleared on the next user submit
+    // / plan re-entry so it never leaks past this execution.
+    let approved_plan = state
         .rest
         .fg()
         .session
         .as_ref()
-        .map(|s| s.plan_path().display().to_string())
-        .unwrap_or_else(|| "the session plan.md".to_string());
-    answer_plan_ready(state, crate::tool::plan::plan_approved_text(&plan_path));
+        .and_then(|s| std::fs::read_to_string(s.plan_path()).ok())
+        .map(|t| t.chars().take(2000).collect::<String>());
+    state.rest.fg_mut().approved_plan = approved_plan;
     // Leave Plan BEFORE resuming: the round finishes into `finish_tool_round` →
     // `start_stream_task`, which reads `agent_mode` to size the advertised tool
     // surface, so the continuation must already be in the restored (executing) mode.
@@ -687,6 +721,20 @@ pub(super) fn handle_approve_plan_compact(
         state,
         crate::tool::plan::plan_approved_compact_text().to_string(),
     );
+    // Make the tool-call classifier PLAN-AWARE for the post-compaction execution:
+    // stash the approved plan text (truncated) on the fg session so `process_tools`
+    // prepends it to the classifier context. The stash SURVIVES the compaction — the
+    // plan-seeded auto-wake in `apply_compaction_result` does not clear it — so the
+    // classifier stays plan-aware for the seeded execution stream. A read failure →
+    // no stash. Cleared on the next user submit / plan re-entry.
+    let approved_plan = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .and_then(|s| std::fs::read_to_string(s.plan_path()).ok())
+        .map(|t| t.chars().take(2000).collect::<String>());
+    state.rest.fg_mut().approved_plan = approved_plan;
     // Leaving Plan here (via set_agent_mode) drops the plan checklist so it doesn't
     // bleed into `/todo` (independent of the plan.md seed the compaction re-reads).
     restore_plan_return_mode(state);
