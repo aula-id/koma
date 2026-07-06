@@ -139,10 +139,9 @@ pub(super) fn handle_submit(
     // awaiting_classify / pending verdict from a prior halted turn.
     state.rest.fg_mut().awaiting_classify = false;
     state.rest.fg_mut().pending_classify_verdict = None;
-    // A genuine new user message ends any plan-execution window: drop the approved-plan
-    // stash so the tool-call classifier stops being told "a plan is approved" (it would
-    // otherwise carry the plan preamble into an unrelated turn's classification).
-    state.rest.fg_mut().approved_plan = None;
+    // NOTE: approved_plan is intentionally NOT cleared here — it must survive
+    // continue-nudges so the classifier stays plan-aware through the whole
+    // execution; it's cleared only when a new plan is entered (set_agent_mode).
     // Phase label for the comet: a single word the shimmer sweeps across
     // (the elapsed counter is appended by the renderer). No trailing dots —
     // the comet supplies the motion, `· Ns` supplies the elapsed.
@@ -699,16 +698,21 @@ pub(super) fn handle_approve_plan(
 }
 
 /// Handle `Action::ApprovePlanCompact` (`a` on a paused `plan_ready`): like
-/// [`handle_approve_plan`], plus arm the compaction-with-seed rail so the
-/// exploratory context collapses to the approved plan before execution.
+/// [`handle_approve_plan`], but instead of executing on the bloated planning
+/// context, COMPACT FIRST so the model executes from a clean, plan-led context.
 ///
-/// ORDERING: we do NOT compact here. Answering the call re-enters `process_tools`
-/// → `finish_tool_round` → a fresh stream carrying the approval result, and
-/// `handle_compact` refuses (and would race) while that stream is live. Instead we
-/// arm `pending_plan_compact` + `pending_plan_seed`; the deferred/idle drain fires
-/// `handle_compact(preserve_n = 0)` once THIS session settles, and
-/// `apply_compaction_result` seeds `plan.md` as the first post-compaction user turn
-/// and auto-wakes the execution stream.
+/// FLOW (compact-first → seed drives execution): answer the parked `plan_ready`
+/// call, PAIR that answer into history, abandon the parked round, then fire
+/// `handle_compact(preserve_n = 0)` SYNCHRONOUSLY — collapsing the whole
+/// exploratory history to a summary. When that async compaction lands,
+/// `apply_compaction_result` (gated on `pending_plan_seed`) injects the approved
+/// `plan.md` as a fresh user turn and AUTO-WAKES the execution stream.
+///
+/// We deliberately do NOT call `process_tools` (that would immediately execute the
+/// plan on the UN-compacted context — the bug this fixes); compaction fires
+/// SYNCHRONOUSLY here instead of via a deferred/idle rail (an earlier design fired
+/// it only AFTER the whole execution turn drained — far too late, so the
+/// immediate-execute always won the race).
 pub(super) fn handle_approve_plan_compact(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
@@ -738,9 +742,84 @@ pub(super) fn handle_approve_plan_compact(
     // Leaving Plan here (via set_agent_mode) drops the plan checklist so it doesn't
     // bleed into `/todo` (independent of the plan.md seed the compaction re-reads).
     restore_plan_return_mode(state);
+    // Arm the one-shot seed so `apply_compaction_result` injects plan.md as the first
+    // post-compaction user turn and auto-wakes execution.
     state.rest.pending_plan_seed = true;
-    state.rest.pending_plan_compact = true;
-    process_tools(state, fgi, client, handle);
+
+    // Answer any TRAILING pending tool calls that follow `plan_ready` in the same
+    // parallel batch. `answer_plan_ready` only advances `tool_idx` past the
+    // `plan_ready` call itself — calls at `pending_tool_calls[tool_idx..]` are still
+    // unanswered at this point. Left dangling, their assistant `tool_calls` entry has
+    // no matching tool result in the RAW `conversation.messages()` that
+    // `handle_compact` compacts from (`split_for_compaction`, NOT the sanitized
+    // `history()`) — strict providers (OpenAI/codex/OpenRouter) 400 on that dangling
+    // group, which surfaces as `StreamEvent::Error`, drops `pending_plan_seed`, and
+    // leaves the plan un-executed. Mirrors `handle_deny_tool`'s denied-ids flush
+    // (chat.rs `handle_deny_tool`) so every tool_call id is answered before the round
+    // is abandoned.
+    let trailing_ids: Vec<String> = state.rest.sessions[fgi]
+        .pending_tool_calls
+        .iter()
+        .skip(state.rest.sessions[fgi].tool_idx)
+        .map(|c| c.id.clone())
+        .collect();
+
+    // Pair the parked `plan_ready` tool-call before compacting. `answer_plan_ready`
+    // only STAGED the approval in `tool_results`; the assistant message that called
+    // `plan_ready` is already committed to history (advance_turn's
+    // `push_assistant_with_tools`). Compacting now would send that assistant turn
+    // with a DANGLING tool-call (no matching tool result) in the summary request —
+    // strict providers (OpenAI/codex/OpenRouter) 400 on that, which surfaces as
+    // `StreamEvent::Error`, drops the seed, and leaves the plan un-executed. Flush
+    // the staged result into the conversation (mirrors `finish_tool_round`, minus
+    // the re-stream) so the wire stays valid; the paired call+result collapse into
+    // the summary anyway. This also keeps history valid if the compaction itself
+    // fails, so the session can't wedge on a later turn.
+    let staged: Vec<(String, String)> = state.rest.sessions[fgi].tool_results.clone();
+    {
+        let rt = &mut state.rest.sessions[fgi];
+        if let Some(sess) = rt.session.as_mut() {
+            for (id, result) in &staged {
+                let _ = msglog::append(&sess.path, Role::Tool, result, None);
+                sess.conversation.push_tool(id.clone(), result.clone());
+            }
+            for id in &trailing_ids {
+                let _ = msglog::append(
+                    &sess.path,
+                    Role::Tool,
+                    "skipped — plan approved, compacting context",
+                    None,
+                );
+                sess.conversation.push_tool(
+                    id.clone(),
+                    "skipped — plan approved, compacting context".to_string(),
+                );
+            }
+            let _ = sess.save();
+        }
+    }
+    // Abandon the parked round: clear its per-round buffers (we are NOT resuming via
+    // `process_tools` — the post-compaction plan seed drives execution instead).
+    state.rest.sessions[fgi].pending_tool_calls.clear();
+    state.rest.sessions[fgi].tool_idx = 0;
+    state.rest.sessions[fgi].tool_results.clear();
+
+    // Satisfy `handle_compact`'s busy-guard so compaction ACTUALLY fires. During a
+    // parked plan approval the fg session still has `waiting == true` (only
+    // `advance_turn`'s final-answer branch clears it; the tool-call branch that
+    // parked us left it set), and `handle_compact` BAILS *and clears
+    // `pending_plan_seed`* when `fg().waiting` — which would silently kill the whole
+    // flow. `awaiting_approval` is already cleared above and `streaming` is None
+    // (taken in `advance_turn`), so clearing `waiting` makes `is_working()` false;
+    // `handle_compact` then re-sets `waiting = true` itself.
+    state.rest.fg_mut().waiting = false;
+    // Compact-first: collapse the entire planning history NOW (preserve_n = 0). The
+    // async result lands as `StreamEvent::Compacted` → `apply_compaction_result`,
+    // which seeds plan.md and auto-wakes the execution stream. `client` is already
+    // the `&mut Option<_>` the handler owns (no clone needed, unlike the deferred
+    // drain which holds a `&`).
+    let _ =
+        crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
     Ok(())
 }
 
