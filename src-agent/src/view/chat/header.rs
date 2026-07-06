@@ -31,10 +31,8 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     let header_inner_w = frame.area().width.saturating_sub(2 + 4) as usize;
     let brand = "koma";
 
-    // Version badge — HARDCODED colours (NOT palette.accent, which is themeable):
-    // green when up-to-date, red current + green "[latest]" when an update is known.
-    const GREEN: Color = Color::Rgb(57, 255, 20);
-    const RED: Color = Color::Rgb(255, 60, 60);
+    // Version badge — uses semantic palette roles:
+    // success when up-to-date, error current + success "[latest]" when an update is known.
     let cur = crate::model::store::current_version();
     let update = rest
         .latest_version
@@ -51,12 +49,12 @@ pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest,
     if let Some(v) = update {
         let latest = format!("[{}]", v.version);
         badge_w += cur.chars().count() + 1 + latest.chars().count(); // cur + space + "[latest]"
-        badge_spans.push(Span::styled(cur, Style::default().fg(RED)));
+        badge_spans.push(Span::styled(cur, Style::default().fg(palette.error)));
         badge_spans.push(Span::raw(" "));
-        badge_spans.push(Span::styled(latest, Style::default().fg(GREEN)));
+        badge_spans.push(Span::styled(latest, Style::default().fg(palette.success)));
     } else {
         badge_w += cur.chars().count();
-        badge_spans.push(Span::styled(cur, Style::default().fg(GREEN)));
+        badge_spans.push(Span::styled(cur, Style::default().fg(palette.success)));
     }
 
     // Gap = available width minus the FULL badge width minus mode string chars; floor at 1.

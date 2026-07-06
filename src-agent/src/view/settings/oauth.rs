@@ -4,7 +4,7 @@
 
 use ratatui::{
     layout::{Constraint, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Cell, Paragraph, Row, Table, Wrap},
     Frame,
@@ -234,7 +234,7 @@ pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area
 /// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
 pub(crate) fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
     let lines = vec![
-        Line::from(Span::styled(msg.to_string(), Style::default().fg(Color::Red))),
+        Line::from(Span::styled(msg.to_string(), Style::default().fg(palette.error))),
         Line::from(""),
         Line::from(Span::styled(
             "enter/esc dismiss",
