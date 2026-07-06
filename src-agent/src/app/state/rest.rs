@@ -174,14 +174,7 @@ pub struct AppStateRest {
     /// whenever `agent_mode != Plan`. See `set_agent_mode`, the single
     /// choke-point that maintains this invariant.
     pub plan_return_mode: Option<AgentMode>,
-    /// One-shot signal set by `handle_approve_plan_compact`: the user approved a
-    /// plan AND asked to compact history to it. Consumed by the deferred/idle
-    /// drain (`event_loop::sessions::deferred`) once the foreground session goes
-    /// idle, which then fires `handle_compact` with `preserve_n = 0`. Kept
-    /// separate from `pending_plan_seed` because compaction is TRIGGERED here but
-    /// the plan is SEEDED later, in `apply_compaction_result`.
-    pub pending_plan_compact: bool,
-    /// One-shot signal, also set by `handle_approve_plan_compact`: after the
+    /// One-shot signal set by `handle_approve_plan_compact`: after the
     /// plan-approval compaction completes, `apply_compaction_result` reads
     /// `<session>/plan.md` and appends it as the first post-compaction user turn
     /// so the model executes from a clean context that leads with the plan. A
@@ -405,7 +398,6 @@ impl AppStateRest {
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
             plan_return_mode: None,
-            pending_plan_compact: false,
             pending_plan_seed: false,
             launch_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             endpoints_rx: None,
