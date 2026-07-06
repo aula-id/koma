@@ -222,6 +222,16 @@ pub fn to_wire_with_images(
                     .or_else(|| m.content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK))
                     .map(str::to_string);
                 let text = stripped.unwrap_or(m.content);
+                // Escape whitelisted reasoning tags on the WIRE COPY ONLY (never
+                // storage): DATA carrying a literal `<think>`/`</think>` — e.g. a
+                // git-log of koma's own commit messages — must not read as a real
+                // reasoning delimiter to the model or the receive-side ThinkSplit.
+                // Every other `<`/`>` is untouched. Mirrors the wire-only
+                // `sanitize_tool_arguments` repair below; any tag the model echoes
+                // back is decoded before persistence (stream::final_answer /
+                // stream::turn). The System branch above is intentionally NOT
+                // escaped (koma-authored, trusted).
+                let text = crate::dto::chat::escape_reasoning_tags(&text).into_owned();
                 WireContent::Text(text)
             };
             // Repair any tool-call argument string on the way OUT. A provider that
@@ -264,7 +274,9 @@ fn attachment_parts(
     let mut parts: Vec<WirePart> = Vec::with_capacity(1 + attachments.len());
     parts.push(WirePart::Text(ContentPart {
         kind: "text",
-        text: text.to_string(),
+        // Wire-copy reasoning-tag escape (same as the plain-text branch): keep DATA
+        // tags out of the delimiter path. Storage keeps the real tag.
+        text: crate::dto::chat::escape_reasoning_tags(text).into_owned(),
         cache_control: None,
     }));
 

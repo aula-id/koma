@@ -1084,6 +1084,11 @@ impl SessionRuntime {
             if !b.is_empty() {
                 let mut committed = false;
                 if let Some(sess) = self.session.as_mut() {
+                    // Decode any echoed-back escaped reasoning tag BEFORE persisting,
+                    // so both the msglog append and push_assistant store the REAL
+                    // `<think>` (mirrors turn.rs's tool-call-turn decode; this path
+                    // bypasses `final_answer` too).
+                    let b = crate::dto::chat::unescape_reasoning_tags(&b).into_owned();
                     let content = format!("{b}  [interrupted]");
                     let _ = crate::model::msglog::append(
                         &sess.path,

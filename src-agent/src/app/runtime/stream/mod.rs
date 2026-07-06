@@ -34,6 +34,11 @@ pub(crate) use spawn::spawn_task;
 /// message (empty after stripping) still promotes reasoning correctly.
 pub(super) fn final_answer(content: String, reasoning: Option<String>) -> (String, Option<String>) {
     let content = crate::dto::chat::strip_tool_call_tags(&content);
+    // Decode any escaped reasoning tag the model echoed back so the COMMITTED /
+    // persisted message stores the REAL `<think>` (the outbound wire escape in
+    // `dto::chat::escape_reasoning_tags` is transient). No-op when nothing was
+    // escaped. Covers `finish_stream` + the no-tools branch of `advance_turn`.
+    let content = crate::dto::chat::unescape_reasoning_tags(&content).into_owned();
     if content.trim().is_empty() {
         match reasoning {
             Some(r) if !r.trim().is_empty() => (r, None), // reasoning becomes the answer

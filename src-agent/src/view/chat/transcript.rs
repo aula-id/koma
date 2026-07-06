@@ -165,6 +165,10 @@ pub(super) fn render_transcript(
             // call that is still being emitted. Render nothing if the result is empty.
             if !partial_content.is_empty() {
                 let stripped = crate::dto::chat::strip_tool_call_tags(partial_content);
+                // Decode any escaped reasoning tag echoed mid-stream so it doesn't
+                // flash as `&lt;think&gt;` before finalize. Display-only, on the
+                // partial buffer; committed text already reads real from storage.
+                let stripped = crate::dto::chat::unescape_reasoning_tags(&stripped).into_owned();
                 if !stripped.is_empty() {
                     logical.push(vec![Span::styled(
                         stripped,
