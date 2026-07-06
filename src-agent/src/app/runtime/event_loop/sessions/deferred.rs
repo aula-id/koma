@@ -215,37 +215,6 @@ pub(super) fn drain_deferred_and_resume(
         }
     }
 
-    // --- plan-approval compaction: fire once the post-approval turn settles ---
-    // `handle_approve_plan_compact` armed `pending_plan_compact` and answered the
-    // plan_ready call, then let the model stream a brief post-approval turn. The
-    // MOMENT this session goes idle we run compaction with preserve_n = 0;
-    // `apply_compaction_result` then seeds the approved plan (`pending_plan_seed`)
-    // and auto-wakes the execution stream. Gated on `idx == foreground` because
-    // `handle_compact` acts on `fg()` — this keeps the drain's `idx` and the
-    // compaction's target the same session (in local + daemon-per-session,
-    // `foreground` IS the owning session). `handle_compact`'s own busy-guard is
-    // already satisfied since `!is_working()` implies `!waiting`. Placed BEFORE the
-    // background-completion nudges so firing it (which sets `waiting`) makes those
-    // `!is_working()` gates fall through this tick — never double-launching a stream.
-    if state.rest.pending_plan_compact
-        && idx == state.rest.foreground
-        && !state.rest.sessions[idx].is_working()
-        && client.is_some()
-        && state.rest.sessions[idx].session.is_some()
-    {
-        state.rest.pending_plan_compact = false;
-        // `handle_compact` wants `&mut Option<_>`; it only reads it (Arc::clone), so
-        // a cloned local satisfies the signature without disturbing the drain's `&`.
-        let mut client_owned = client.clone();
-        let _ = crate::app::runtime::commands::compact::handle_compact(
-            state,
-            &mut client_owned,
-            handle,
-            Some(0),
-        );
-        dirty = true;
-    }
-
     // --- bg-bash completion NUDGE: inject + auto-wake when idle ---
     // A finished bg-bash job is buffered in `pending_bash_nudges` (above). The
     // moment this session is idle (no turn in flight, nothing parked, no running
