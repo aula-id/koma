@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 use crate::app::mode::settings::ProviderModal;
@@ -48,7 +48,7 @@ pub(in crate::view::settings) fn draw_provider_modal(
         .title(Span::styled(" Add API provider ", Style::default().fg(palette.accent)));
     let inner = modal_block.inner(popup);
 
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.panel);
     frame.render_widget(modal_block, popup);
 
     if inner.width == 0 || inner.height == 0 {
