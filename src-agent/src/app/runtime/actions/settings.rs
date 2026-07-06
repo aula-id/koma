@@ -24,6 +24,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.name.clone(),
             s.theme.clone(),
             s.accent.clone(),
+            s.palette.clone(),
             s.workdir.clone(),
             s.awareness_enabled,
             s.awareness_inherit,
@@ -50,6 +51,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         name,
         theme,
         accent,
+        palette,
         workdir,
         awareness_enabled,
         awareness_inherit,
@@ -204,6 +206,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //    save.
         state.rest.config.theme = theme;
         state.rest.config.accent = accent;
+        state.rest.config.palette = palette;
         state.rest.config.providers = provider_conns;
         state.rest.config.models = model_entries;
         if let Err(e) = state.rest.config.save() {
