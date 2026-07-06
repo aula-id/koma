@@ -176,7 +176,7 @@ pub fn draw(
         // Appearance: a coolors-style vertical list of palette swatch boxes REPLACES
         // the old Theme value row + 3×3 preview. Up/Down move the cursor (accent
         // border); Enter applies live; the `· selected` tag follows `config.palette`.
-        draw_palette_list(frame, st, palette, rest.config.palette.as_str(), detail_inner);
+        draw_palette_list(frame, rest, st, palette, rest.config.palette.as_str(), detail_inner);
     } else if cat_fields.is_empty() {
         // Stub placeholder for other categories with no fields yet.
         let stub_text = "(stub)";
@@ -600,9 +600,16 @@ pub fn draw(
 ///
 /// Boxes are built to the detail inner width (mirroring the markdown code-block box
 /// idiom) so they never overflow the pane; the swatch strip is clipped to the inner
-/// width on a very narrow terminal. Vertical overflow is left to the `Paragraph`.
+/// width on a very narrow terminal.
+///
+/// Vertical overflow used to be left to the `Paragraph` (which simply clips), but
+/// with enough registry entries the boxes overran the detail pane. Instead we
+/// window the list around `st.palette_sel` (à la `scroll_window`, keyed off
+/// `rest.settings_palette_offset`) and only render the boxes that fit, with a
+/// dim `↑/↓ N more` hint line spending any leftover row budget.
 fn draw_palette_list(
     frame: &mut Frame,
+    rest: &AppStateRest,
     st: &SettingsState,
     palette: &Palette,
     applied: &str,
@@ -620,8 +627,32 @@ fn draw_palette_list(
     // BACKGROUND from the ENTRY's palette. `SW` is one swatch block's width.
     const SW: usize = 2;
 
+    // Each entry renders as a fixed 3-row box: top border, swatch row, bottom
+    // border (no gap between boxes). Window the registry around the cursor so
+    // only the boxes that fit in `area` are ever built.
+    const PER_BOX_ROWS: usize = 3;
+    let area_h = area.height as usize;
+    let visible = (area_h / PER_BOX_ROWS).max(1);
+    let (start, end) = crate::view::scroll::scroll_window(
+        &rest.settings_palette_offset,
+        st.palette_sel,
+        PALETTES.len(),
+        visible,
+    );
+    let hidden_above = start;
+    let hidden_below = PALETTES.len().saturating_sub(end);
+    // Leftover rows (area not evenly divisible by 3) fund the scroll hints, one
+    // row apiece — skip a hint rather than overflow the pane if there's no room.
+    let leftover = area_h.saturating_sub(visible * PER_BOX_ROWS);
+
     let mut lines: Vec<Line> = Vec::new();
-    for (i, (name, build)) in PALETTES.iter().enumerate() {
+    if hidden_above > 0 && leftover >= 1 {
+        lines.push(Line::from(Span::styled(
+            format!(" ↑ {hidden_above} more"),
+            Style::default().fg(palette.dim),
+        )));
+    }
+    for (i, (name, build)) in PALETTES.iter().enumerate().take(end).skip(start) {
         let pv = build();
         let is_cursor = i == st.palette_sel;
         let is_applied = *name == applied;
@@ -683,6 +714,12 @@ fn draw_palette_list(
         lines.push(Line::from(Span::styled(
             format!("└{}┘", "─".repeat(w.saturating_sub(2))),
             bstyle,
+        )));
+    }
+    if hidden_below > 0 && leftover >= 2 {
+        lines.push(Line::from(Span::styled(
+            format!(" ↓ {hidden_below} more"),
+            Style::default().fg(palette.dim),
         )));
     }
 
