@@ -126,12 +126,15 @@ pub struct Delta {
 
 /// One streamed fragment of a tool call. `index` identifies which tool call in
 /// the assistant turn this fragment belongs to (the model may stream several in
-/// parallel). `id` and `function.name` arrive once; `function.arguments` is the
-/// fragment to append to that call's growing argument string.
+/// parallel). It is `None` when a provider OMITS the field on a frame — kept
+/// distinct from an explicit `Some(0)` so an argument-only continuation is merged
+/// into the call already in progress instead of being misrouted to slot 0 (which
+/// manufactured phantom empty-argument calls). `id` and `function.name` arrive
+/// once; `function.arguments` is the fragment to append to that call's growing
+/// argument string. `apply_tool_call_delta` performs the merge.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCallDelta {
-    #[serde(default)]
-    pub index: usize,
+    pub index: Option<usize>,
     pub id: Option<String>,
     pub function: Option<FunctionDelta>,
 }

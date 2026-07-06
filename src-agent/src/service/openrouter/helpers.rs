@@ -8,7 +8,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::{APP_TITLE, HTTP_REFERER};
 use crate::dto::chat::ToolCall;
-use crate::dto::openrouter::ReasoningConfig;
+use crate::dto::openrouter::{ReasoningConfig, ToolCallDelta};
 use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
 
@@ -144,6 +144,74 @@ pub(super) fn sanitize_tool_acc(tool_acc: &mut Vec<ToolCall>) {
     }
 }
 
+/// A fresh tool-call slot, pre-tagged `kind: "function"` to match the wire shape
+/// the streaming accumulator emitted before the merge was extracted here. Keeps
+/// the assembled [`ToolCall`] byte-identical for the standard path.
+fn new_tool_slot() -> ToolCall {
+    ToolCall {
+        kind: "function".into(),
+        ..Default::default()
+    }
+}
+
+/// Merge one streamed [`ToolCallDelta`] into the growing tool-call accumulator.
+///
+/// Providers disagree on how they chunk a streamed tool call. The strict
+/// "merge by `index`" reconstruction OpenAI documents breaks on two dialects
+/// seen on the OpenRouter chat-completions path when a reasoning model
+/// interleaves thinking with tool calls:
+///
+/// * an argument-continuation frame that OMITS `index` (deserialised as
+///   `index: None`) — strict merge misroutes its args to slot 0; and
+/// * a frame that RE-ANNOUNCES an already-seen call `id` under a *new* `index`
+///   — strict merge opens a second, half-empty slot.
+///
+/// Both manufacture a phantom `tool({})` call with empty arguments that then
+/// dispatches and fails ("missing required argument"). This resolver is robust
+/// to both by preferring an id match, then an explicit index, then the
+/// in-progress (last) slot — while staying byte-identical to the strict path for
+/// the standard case (an `index` on every frame, `id` + `name` on the first, and
+/// argument-only continuations sharing that same index).
+pub(super) fn apply_tool_call_delta(acc: &mut Vec<ToolCall>, d: &ToolCallDelta) {
+    // Treat an empty-string id as absent so it never coalesces or clobbers.
+    let id = d.id.as_deref().filter(|s| !s.is_empty());
+
+    // 1. Resolve the slot this fragment belongs to.
+    let target = if let Some(pos) = id.and_then(|id| acc.iter().position(|c| c.id == id)) {
+        // (a) A slot already carries this id → coalesce onto it, whatever `index`
+        //     this frame claims. Catches a provider that re-announces the same
+        //     call id under a new index (strict index-merge forked a phantom).
+        pos
+    } else if let Some(i) = d.index {
+        // (b) Standard OpenAI path: grow to the announced index and target it.
+        while acc.len() <= i {
+            acc.push(new_tool_slot());
+        }
+        i
+    } else {
+        // (c) No matching id and no index → an index-less continuation of the call
+        //     already in progress; append to the last slot (opening one if empty).
+        if acc.is_empty() {
+            acc.push(new_tool_slot());
+        }
+        acc.len() - 1
+    };
+
+    // 2. Merge this fragment's fields into the resolved slot.
+    let slot = &mut acc[target];
+    if let Some(id) = id {
+        slot.id = id.to_string(); // never overwrite a good id with an empty one
+    }
+    if let Some(f) = &d.function {
+        if let Some(name) = f.name.as_deref().filter(|s| !s.is_empty()) {
+            slot.function.name = name.to_string(); // never clobber a good name with empty
+        }
+        if let Some(args) = &f.arguments {
+            slot.function.arguments.push_str(args);
+        }
+    }
+}
+
 /// Build a provider-routing directive from a provider slug.
 ///
 /// Returns `None` for an empty slug (OpenRouter default routing) and
@@ -228,5 +296,104 @@ pub(super) fn clean_error(status: reqwest::StatusCode, body: &str) -> String {
         format!("{status}")
     } else {
         format!("{status}: {trimmed}")
+    }
+}
+
+#[cfg(test)]
+mod apply_tool_call_delta_tests {
+    use super::*;
+    use crate::dto::openrouter::FunctionDelta;
+
+    /// Build a `ToolCallDelta` the way a provider streams one. `function` is only
+    /// attached when a name and/or an argument fragment is present (matching a
+    /// bare id-only frame, which carries no `function`).
+    fn delta(
+        index: Option<usize>,
+        id: Option<&str>,
+        name: Option<&str>,
+        args: Option<&str>,
+    ) -> ToolCallDelta {
+        let function = if name.is_some() || args.is_some() {
+            Some(FunctionDelta {
+                name: name.map(str::to_string),
+                arguments: args.map(str::to_string),
+            })
+        } else {
+            None
+        };
+        ToolCallDelta {
+            index,
+            id: id.map(str::to_string),
+            function,
+        }
+    }
+
+    // 1. STANDARD: index on every frame, id+name on the first, args-only
+    //    continuations sharing that index → one clean call. Must be byte-identical
+    //    to the old strict-index merge.
+    #[test]
+    fn standard_index_on_every_frame() {
+        let mut acc = Vec::new();
+        apply_tool_call_delta(&mut acc, &delta(Some(0), Some("a"), Some("read"), None));
+        apply_tool_call_delta(&mut acc, &delta(Some(0), None, None, Some("{\"path\":")));
+        apply_tool_call_delta(&mut acc, &delta(Some(0), None, None, Some("\"x\"}")));
+
+        assert_eq!(acc.len(), 1);
+        assert_eq!(acc[0].id, "a");
+        assert_eq!(acc[0].kind, "function");
+        assert_eq!(acc[0].function.name, "read");
+        assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);
+    }
+
+    // 2. ABSENT-INDEX CONTINUATION: first frame carries index+id+name, the
+    //    continuation OMITS index → args must land on the in-progress call, not
+    //    fork an empty slot 0 while the real call loses its arguments.
+    #[test]
+    fn absent_index_continuation_appends_to_in_progress_call() {
+        let mut acc = Vec::new();
+        apply_tool_call_delta(&mut acc, &delta(Some(0), Some("a"), Some("read"), None));
+        apply_tool_call_delta(&mut acc, &delta(None, None, None, Some(r#"{"path":"x"}"#)));
+
+        assert_eq!(acc.len(), 1, "index-less continuation must not open a new slot");
+        assert_eq!(acc[0].id, "a");
+        assert_eq!(acc[0].function.name, "read");
+        assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);
+    }
+
+    // 3. RE-ANNOUNCED ID AT NEW INDEX: same id resent under a new index → coalesce
+    //    onto the existing slot (regardless of index), no empty phantom.
+    #[test]
+    fn reannounced_id_at_new_index_coalesces() {
+        let mut acc = Vec::new();
+        apply_tool_call_delta(&mut acc, &delta(Some(0), Some("a"), Some("read"), None));
+        apply_tool_call_delta(&mut acc, &delta(Some(1), Some("a"), None, Some(r#"{"path":"x"}"#)));
+
+        assert_eq!(acc.len(), 1, "a re-announced id must coalesce, not fork a phantom slot");
+        assert_eq!(acc[0].id, "a");
+        assert_eq!(acc[0].function.name, "read");
+        assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);
+    }
+
+    // 4. TWO GENUINE PARALLEL CALLS: distinct ids at distinct indices → two
+    //    distinct correct calls (regression guard against over-merging).
+    #[test]
+    fn two_genuine_parallel_calls_stay_distinct() {
+        let mut acc = Vec::new();
+        apply_tool_call_delta(
+            &mut acc,
+            &delta(Some(0), Some("a"), Some("read"), Some(r#"{"path":"x"}"#)),
+        );
+        apply_tool_call_delta(
+            &mut acc,
+            &delta(Some(1), Some("b"), Some("grep"), Some(r#"{"pattern":"y"}"#)),
+        );
+
+        assert_eq!(acc.len(), 2, "distinct ids at distinct indices must not merge");
+        assert_eq!(acc[0].id, "a");
+        assert_eq!(acc[0].function.name, "read");
+        assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);
+        assert_eq!(acc[1].id, "b");
+        assert_eq!(acc[1].function.name, "grep");
+        assert_eq!(acc[1].function.arguments, r#"{"pattern":"y"}"#);
     }
 }
