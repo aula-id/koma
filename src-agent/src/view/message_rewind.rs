@@ -76,7 +76,7 @@ pub fn draw(
             Style::default().fg(palette.dim),
         ));
     let inner = block.inner(rect);
-    crate::view::clear_and_fill(frame, rect, palette.panel);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
 
     if inner.width == 0 || inner.height == 0 {

@@ -138,7 +138,7 @@ pub(super) fn render_file_palette(
                 .title(Span::styled(title, Style::default().fg(palette.dim)))
                 .padding(Padding::horizontal(1));
             let inner = block.inner(popup);
-            crate::view::clear_and_fill(frame, popup, palette.panel);
+            crate::view::clear_and_fill(frame, popup, palette.bg);
             frame.render_widget(block, popup);
             frame.render_widget(Paragraph::new(rows), inner);
         }
@@ -186,7 +186,7 @@ pub(super) fn render_toast(
             .title(Span::styled(title, Style::default().fg(border_color)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
-        crate::view::clear_and_fill(frame, rect, palette.panel);
+        crate::view::clear_and_fill(frame, rect, palette.bg);
         frame.render_widget(block, rect);
         frame.render_widget(Paragraph::new(rows), inner);
     }
@@ -248,7 +248,7 @@ pub(super) fn render_tool_approval(
             .title(Span::styled(" plan ready ", Style::default().fg(warn)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
-        crate::view::clear_and_fill(frame, rect, palette.panel);
+        crate::view::clear_and_fill(frame, rect, palette.bg);
         frame.render_widget(block, rect);
         frame.render_widget(Paragraph::new(rows), inner);
         return;
@@ -383,7 +383,7 @@ pub(super) fn render_tool_approval(
         .title(Span::styled(" approve ", Style::default().fg(warn)))
         .padding(Padding::horizontal(1));
     let inner = block.inner(rect);
-    crate::view::clear_and_fill(frame, rect, palette.panel);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(rows), inner);
 }

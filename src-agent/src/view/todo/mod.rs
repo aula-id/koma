@@ -213,7 +213,7 @@ pub fn render_todo_overlay(
         .border_style(Style::default().fg(palette.dim))
         .title(Span::styled(title, Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
-    crate::view::clear_and_fill(frame, rect, palette.panel);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
 
     if inner.width == 0 || inner.height == 0 {
