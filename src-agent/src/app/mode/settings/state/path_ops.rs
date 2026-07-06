@@ -28,6 +28,7 @@ impl SettingsState {
             | SettingField::AllowedFolders
             | SettingField::Theme
             | SettingField::Accent
+            | SettingField::Palette
             | SettingField::AwarenessEnabled
             | SettingField::AwarenessSource
             | SettingField::AwarenessModel

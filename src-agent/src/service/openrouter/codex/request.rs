@@ -189,6 +189,11 @@ pub(super) fn build_input(
             Role::User => {
                 if m.attachments.is_empty() {
                     let text = strip_marks(&m.content);
+                    // Wire-copy reasoning-tag escape (user content is DATA): keep a
+                    // literal `<think>` out of the delimiter path. Storage keeps the
+                    // real tag; mirrors `strip_marks` as a wire-only transform. The
+                    // System/developer branch above is intentionally NOT escaped.
+                    let text = crate::dto::chat::escape_reasoning_tags(&text).into_owned();
                     input.push(InputItem::Message {
                         role: "user",
                         content: vec![ContentItem::InputText { text }],
@@ -198,7 +203,8 @@ pub(super) fn build_input(
                     // first part; the marker stays visible even if a part is
                     // stripped. Marks are never present on attachment-bearing turns.
                     let mut content = vec![ContentItem::InputText {
-                        text: m.content.clone(),
+                        // Wire-copy reasoning-tag escape (user content is DATA).
+                        text: crate::dto::chat::escape_reasoning_tags(&m.content).into_owned(),
                     }];
                     // Gate image parts on the resolved model's capability, exactly
                     // like `attachment_parts`; an unreadable file is skipped.
@@ -241,7 +247,11 @@ pub(super) fn build_input(
                             input.push(InputItem::Message {
                                 role: "assistant",
                                 content: vec![ContentItem::OutputText {
-                                    text: m.content.clone(),
+                                    // Wire-copy reasoning-tag escape (assistant text
+                                    // replayed from history is DATA). Storage keeps
+                                    // the real tag (decoded before persist).
+                                    text: crate::dto::chat::escape_reasoning_tags(&m.content)
+                                        .into_owned(),
                                 }],
                             });
                         }
@@ -261,7 +271,11 @@ pub(super) fn build_input(
                         if !m.content.is_empty() {
                             input.push(InputItem::Message {
                                 role: "assistant",
-                                content: vec![ContentItem::OutputText { text: m.content }],
+                                // Wire-copy reasoning-tag escape (assistant text is DATA).
+                                content: vec![ContentItem::OutputText {
+                                    text: crate::dto::chat::escape_reasoning_tags(&m.content)
+                                        .into_owned(),
+                                }],
                             });
                         }
                     }
@@ -270,7 +284,10 @@ pub(super) fn build_input(
             Role::Tool => {
                 input.push(InputItem::FunctionCallOutput {
                     call_id: m.tool_call_id.unwrap_or_default(),
-                    output: m.content,
+                    // Wire-copy reasoning-tag escape (tool output is DATA — this is
+                    // exactly the git-log-of-commit-messages case). Storage keeps the
+                    // real tag verbatim.
+                    output: crate::dto::chat::escape_reasoning_tags(&m.content).into_owned(),
                 });
             }
         }

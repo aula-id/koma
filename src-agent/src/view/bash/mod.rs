@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
@@ -130,7 +130,7 @@ pub fn render_bash_overlay(
         .border_style(Style::default().fg(palette.dim))
         .title(Span::styled(" bash ", Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
 
     if inner.width == 0 || inner.height == 0 {

@@ -193,6 +193,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         name: st.name.clone(),
         theme: theme_token(&st.theme).to_string(),
         accent: st.accent.clone(),
+        palette: st.palette.clone(),
         workdir: st.workdir.clone(),
         awareness_enabled: st.awareness_enabled,
         awareness_inherit: st.awareness_inherit,
@@ -233,6 +234,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
             crate::app::mode::settings::ModelFilterMode::Local  => "local",
             crate::app::mode::settings::ModelFilterMode::Global => "global",
         }.to_string(),
+        palette_sel: st.palette_sel,
     }
 }
 

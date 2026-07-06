@@ -118,7 +118,7 @@ fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &P
             let at: String = logical.chars().nth(col).map(String::from).unwrap_or_default();
             let after: String = logical.chars().skip(col + 1).collect();
             if !before.is_empty() {
-                spans.push(Span::raw(before));
+                spans.push(Span::styled(before, Style::default().fg(palette.fg)));
             }
             if at.is_empty() {
                 spans.push(Span::styled("\u{2588}", Style::default().fg(palette.accent)));
@@ -129,10 +129,10 @@ fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &P
                 ));
             }
             if !after.is_empty() {
-                spans.push(Span::raw(after));
+                spans.push(Span::styled(after, Style::default().fg(palette.fg)));
             }
         } else {
-            spans.push(Span::raw(*logical));
+            spans.push(Span::styled(*logical, Style::default().fg(palette.fg)));
         }
 
         // Wrapped visual rows for this logical line (prefix + content).

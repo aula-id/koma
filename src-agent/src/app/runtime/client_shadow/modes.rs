@@ -180,6 +180,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         name: s.name,
         theme: shadow_theme(&s.theme),
         accent: s.accent,
+        palette: s.palette,
         workdir: s.workdir,
         awareness_enabled: s.awareness_enabled,
         awareness_inherit: s.awareness_inherit,
@@ -246,6 +247,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
             "global" => crate::app::mode::settings::ModelFilterMode::Global,
             _        => crate::app::mode::settings::ModelFilterMode::All,
         },
+        palette_sel: s.palette_sel,
     }
 }
 

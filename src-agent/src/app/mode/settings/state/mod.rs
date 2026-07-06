@@ -61,6 +61,13 @@ pub struct SettingsState {
     pub theme: ThemeMode,
     /// Draft global accent name (one of [`ACCENTS`]).
     pub accent: String,
+    /// Draft global palette name (one of [`crate::view::theme::PALETTES`]);
+    /// mirrors the applied `config.palette` so the Esc-save path writes it back.
+    pub palette: String,
+    /// Cursor index into [`crate::view::theme::PALETTES`] for the Appearance
+    /// palette list (coolors-style picker). Up/Down move it; Enter applies the
+    /// cursored palette live. Seeded to the index of `config.palette` in `from`.
+    pub palette_sel: usize,
     /// Draft working-directory path list for this session (min 1 entry on save).
     pub workdir: Vec<String>,
     /// Draft: project-awareness summary enabled.
@@ -237,6 +244,13 @@ impl SettingsState {
             name: session.name.clone(),
             theme: config.theme.clone(),
             accent: config.accent.clone(),
+            palette: config.palette.clone(),
+            // Seed the palette-list cursor to the applied palette so the accent
+            // border and the `· selected` tag coincide on open (fallback 0).
+            palette_sel: crate::view::theme::PALETTES
+                .iter()
+                .position(|(n, _)| *n == config.palette)
+                .unwrap_or(0),
             workdir,
             awareness_enabled: session.settings.awareness_enabled,
             awareness_inherit: session.settings.awareness_inherit,
@@ -273,6 +287,13 @@ impl SettingsState {
     /// Return the [`SettingField`] currently highlighted in the detail pane.
     pub fn current_field(&self) -> SettingField {
         super::SETTING_CATEGORIES[self.cat].fields[self.field]
+    }
+
+    /// `true` when the selected category is "Appearance" (the palette picker).
+    /// Mirrors [`is_providers_category`](Self::is_providers_category) so the view
+    /// can short-circuit into the coolors-style palette list.
+    pub fn is_appearance_category(&self) -> bool {
+        super::SETTING_CATEGORIES[self.cat].name == "Appearance"
     }
 
     /// Move the cursor up.
@@ -342,6 +363,12 @@ impl SettingsState {
             SettingField::Accent => {
                 // Accent is cycled with arrow keys; Enter is intentionally a no-op.
             }
+            SettingField::Palette => {
+                // Palette is applied via Up/Down + Enter in the input handler
+                // (live-apply needs `config`, which `enter()` cannot reach). The
+                // handler intercepts Enter for the Palette field before calling
+                // `enter()`, so this arm is intentionally unreachable.
+            }
             SettingField::AwarenessEnabled => {
                 self.awareness_enabled = !self.awareness_enabled;
             }
@@ -407,5 +434,27 @@ impl SettingsState {
             (cur + len - 1) % len
         };
         self.accent = ACCENTS[next].to_string();
+    }
+
+    /// Move the Appearance palette-list cursor to the PREVIOUS entry in the
+    /// palette registry ([`crate::view::theme::PALETTES`]), wrapping. Guards an
+    /// empty registry. Enter (in the input handler) applies the cursored palette
+    /// live — this only moves the cursor.
+    pub fn palette_up(&mut self) {
+        let len = crate::view::theme::PALETTES.len();
+        if len == 0 {
+            return;
+        }
+        self.palette_sel = (self.palette_sel + len - 1) % len;
+    }
+
+    /// Move the Appearance palette-list cursor to the NEXT entry in the palette
+    /// registry, wrapping. Guards an empty registry.
+    pub fn palette_down(&mut self) {
+        let len = crate::view::theme::PALETTES.len();
+        if len == 0 {
+            return;
+        }
+        self.palette_sel = (self.palette_sel + 1) % len;
     }
 }
