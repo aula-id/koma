@@ -53,7 +53,7 @@ mod subagents;
 mod transcript;
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph},
@@ -72,6 +72,7 @@ use crate::view::theme::Palette;
 /// When `rest.fg().pending_steer` is empty, chunk [2] has zero height (hidden)
 /// and the transcript keeps its full space.
 pub(crate) fn layout_chunks(rest: &AppStateRest, area: Rect) -> std::rc::Rc<[Rect]> {
+    let area = area.inner(Margin { horizontal: 0, vertical: 1 });
     let input_rows = input::input_row_count(rest, area.width, area.height);
     let input_h = (input_rows as u16) + 2;
     let n = rest.fg().pending_steer.len();
