@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 
@@ -83,7 +83,7 @@ pub(super) fn draw_tool_picker(
         .title(Span::styled(title, Style::default().fg(palette.accent)));
     let inner = modal_block.inner(popup);
 
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.panel);
     frame.render_widget(modal_block, popup);
 
     // Bail out if the inner area is too small to render content.
@@ -212,7 +212,7 @@ pub(super) fn draw_model_picker(
         .title(Span::styled(" model ", Style::default().fg(palette.accent)));
     let inner = modal_block.inner(popup);
 
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.panel);
     frame.render_widget(modal_block, popup);
 
     if inner.width == 0 || inner.height == 0 {

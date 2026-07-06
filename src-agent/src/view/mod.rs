@@ -46,6 +46,15 @@ use crate::app::state::{AppState, AppStateRest};
 /// that differs from Main, in which case the label shows the Planner's model.
 /// Session overrides win; falls back to the legacy `settings.model` field;
 /// defaults to empty string when there is no session at all.
+/// Clear a rect and fill it with a solid background, so overlays/popups render on
+/// the theme's raised-surface color instead of the terminal's default background
+/// (which is what a bare `Clear` leaves behind). Draw your Block/Paragraph AFTER
+/// this — widgets with default (bg: None) styles won't overwrite the fill.
+pub(crate) fn clear_and_fill(frame: &mut ratatui::Frame, rect: ratatui::layout::Rect, bg: ratatui::style::Color) {
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    frame.buffer_mut().set_style(rect, ratatui::style::Style::default().bg(bg));
+}
+
 fn resolved_main_model(rest: &AppStateRest) -> String {
     rest.fg().session.as_ref()
         .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode))

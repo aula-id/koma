@@ -37,7 +37,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
 use crate::app::mode::settings::OAuthFlowState;
@@ -542,7 +542,7 @@ pub fn draw(
             .title(Span::styled(title, Style::default().fg(palette.dim)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(popup);
-        frame.render_widget(Clear, popup);
+        crate::view::clear_and_fill(frame, popup, palette.panel);
         frame.render_widget(block, popup);
         frame.render_widget(Paragraph::new(rows), inner);
     }

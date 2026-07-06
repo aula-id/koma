@@ -8,7 +8,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Padding, Paragraph},
+    widgets::{Block, Padding, Paragraph},
     Frame,
 };
 use crate::app::state::AppStateRest;
@@ -76,7 +76,7 @@ pub(super) fn render_command_palette(
         .title(Span::styled(" commands ", Style::default().fg(palette.dim)))
         .padding(Padding::horizontal(1));
     let inner = block.inner(popup);
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.panel);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(rows), inner);
     true
@@ -138,7 +138,7 @@ pub(super) fn render_file_palette(
                 .title(Span::styled(title, Style::default().fg(palette.dim)))
                 .padding(Padding::horizontal(1));
             let inner = block.inner(popup);
-            frame.render_widget(Clear, popup);
+            crate::view::clear_and_fill(frame, popup, palette.panel);
             frame.render_widget(block, popup);
             frame.render_widget(Paragraph::new(rows), inner);
         }
@@ -186,7 +186,7 @@ pub(super) fn render_toast(
             .title(Span::styled(title, Style::default().fg(border_color)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
-        frame.render_widget(Clear, rect);
+        crate::view::clear_and_fill(frame, rect, palette.panel);
         frame.render_widget(block, rect);
         frame.render_widget(Paragraph::new(rows), inner);
     }
@@ -248,7 +248,7 @@ pub(super) fn render_tool_approval(
             .title(Span::styled(" plan ready ", Style::default().fg(warn)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
-        frame.render_widget(Clear, rect);
+        crate::view::clear_and_fill(frame, rect, palette.panel);
         frame.render_widget(block, rect);
         frame.render_widget(Paragraph::new(rows), inner);
         return;
@@ -383,7 +383,7 @@ pub(super) fn render_tool_approval(
         .title(Span::styled(" approve ", Style::default().fg(warn)))
         .padding(Padding::horizontal(1));
     let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
+    crate::view::clear_and_fill(frame, rect, palette.panel);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(rows), inner);
 }

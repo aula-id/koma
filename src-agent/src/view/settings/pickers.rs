@@ -1,7 +1,7 @@
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 use ratatui::layout::Rect;
@@ -63,7 +63,7 @@ pub(super) fn draw_role_picker(
         .title(Span::styled(" roles ", Style::default().fg(palette.accent)));
     let inner = modal_block.inner(popup);
 
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.panel);
     frame.render_widget(modal_block, popup);
 
     if inner.width == 0 || inner.height == 0 {

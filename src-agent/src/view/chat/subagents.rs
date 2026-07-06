@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 use crate::app::state::AppStateRest;
@@ -77,7 +77,7 @@ pub(super) fn render_subagents_panel(
         .border_style(Style::default().fg(palette.dim))
         .title(Span::styled(panel_title, Style::default().fg(palette.dim)));
     let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
+    crate::view::clear_and_fill(frame, rect, palette.panel);
     frame.render_widget(block, rect);
 
     if inner.width == 0 || inner.height == 0 {
