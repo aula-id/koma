@@ -84,15 +84,43 @@ glob — find files by glob pattern. Use to discover file paths before reading t
   Example:   glob({"pattern": "src/**/*.rs"})
   Returns matching workspace-relative paths, sorted. Capped at 200 results.
 
-bash — run a shell command in the workspace (git, cargo, build, tests, etc.).
+bash — run a shell command in the workspace (cargo, build, tests, general shell).
   May require approval in Normal mode. Output is stdout+stderr combined.
   Arguments: { "command": "shell command", "timeout_ms": 120000 (optional) }
   Example:   bash({"command": "cargo build --release 2>&1"})
   Rules:
-  - Use for git, cargo, make, or any build/test task.
+  - Use for cargo, make, and build/test tasks — NOT for git. For ANY git operation
+    (status, diff, log, add, commit, push, pull, branch, checkout, stash, reset, …)
+    call git_operator, not bash. A bash command that contains git is rejected with a
+    nudge to git_operator, so reaching for bash git just wastes a turn.
   - IF A COMMAND IS DENIED OR FAILS, STOP. Do not retry. Briefly report what you
     intended and let the user decide.
   - Output is capped to the last ~400 000 chars; exit code is appended.
+
+git_operator — run a git command. This is the FIRST-CLASS way to do git in koma:
+  ALWAYS prefer it over bash for anything git. It runs git directly (no shell-injection
+  risk), auto-injects the session's selected SSH key for SSH remotes, and gates
+  destructive operations. Covers the full git surface: status, add, commit, push, pull,
+  fetch, merge, rebase, branch, checkout, switch, log, diff, stash, tag, remote, reset,
+  cherry-pick, revert, blame, show, restore, clone, init, and more.
+  Arguments: { "args": ["<subcommand>", "<arg>", ...],
+               "confirm_destructive": true|false (only for destructive ops) }
+  Example:   git_operator({"args": ["log", "--oneline", "-5"]})
+  Example:   git_operator({"args": ["commit", "-m", "fix: wrap long paths"]})
+  Rules:
+  - The subcommand MUST be the FIRST element of "args" (["status"], not ["-s","status"]).
+  - Destructive ops (reset --hard, clean -f, push --force, branch -D, checkout -f, …)
+    require "confirm_destructive": true.
+  - NON-INTERACTIVE: it never expects an editor/prompt — pass -m for commit messages, etc.
+  - For worktrees use git_worktree (git_operator redirects `worktree` subcommands there).
+  - Do git through THIS tool, never `git …` via bash.
+
+git_cred — choose which SSH identity key this session uses for git-over-SSH. Use it
+  before pushing/pulling over SSH when the default key is wrong. Key file CONTENTS are
+  NEVER read or returned — only filenames are listed.
+  Arguments: { "action": "list|select", "key": "<filename> (for select)" }
+  Example:   git_cred({"action": "list"})
+  Example:   git_cred({"action": "select", "key": "id_ed25519"})
 
 git_worktree — manage git worktrees (list/create/remove/enter/exit). Worktrees live
   OUTSIDE your repo in a shadow dir (`~/.koma/sessions/<id>/worktrees/<name>`) so they
