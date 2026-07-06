@@ -19,6 +19,9 @@ pub struct Palette {
     pub dim: Color,
     /// User messages, active field highlight, selection background.
     pub accent: Color,
+    /// Full-width background band behind user messages (a subtle raised-panel
+    /// gray, distinct from `dim`).
+    pub user_band: Color,
     /// Foreground on a selected list row (overlaid on `sel_bg`).
     pub sel_fg: Color,
     /// Background for the selected list row.
@@ -75,6 +78,12 @@ pub fn palette(cfg: &AppConfig) -> Palette {
         (Color::Rgb(20, 20, 20), Color::Gray)
     };
 
+    let user_band = if dark {
+        Color::Rgb(43, 47, 56)
+    } else {
+        Color::Rgb(228, 230, 235)
+    };
+
     // Color::Black/Color::White are ANSI palette colors; when text is rendered BOLD,
     // terminals brighten ANSI black to "bright black" (gray), making the inverse
     // footer/selection text look gray instead of black. True-color RGB values bypass
@@ -83,5 +92,5 @@ pub fn palette(cfg: &AppConfig) -> Palette {
     let sel_fg = if dark { Color::Rgb(0, 0, 0) } else { Color::Rgb(255, 255, 255) };
     let sel_bg = accent;
 
-    Palette { fg, dim, accent, sel_fg, sel_bg }
+    Palette { fg, dim, accent, sel_fg, sel_bg, user_band }
 }
