@@ -156,3 +156,15 @@ pub fn palette(cfg: &AppConfig) -> Palette {
         .map(|(_, build)| build())
         .unwrap_or_else(dark)
 }
+
+/// Lighten a color toward white by `t` in [0,1]. Non-Rgb colors pass through.
+pub(crate) fn lighten(c: Color, t: f32) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => {
+            let f = t.clamp(0.0, 1.0);
+            let lerp = |x: u8| (x as f32 + (255.0 - x as f32) * f).round() as u8;
+            Color::Rgb(lerp(r), lerp(g), lerp(b))
+        }
+        other => other,
+    }
+}
