@@ -36,7 +36,7 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -45,13 +45,6 @@ use ratatui::{
 use crate::app::mode::{SecSel, SecurityState};
 use crate::app::sec::InstallHealthEntry;
 use crate::view::theme::Palette;
-
-/// LOUD red used for the armed/enabled YOLO state (checkbox + warning). Bright enough to
-/// read as a real danger marker against the panel, matching the house "no box, loud text"
-/// convention for warnings.
-const YOLO_RED: Color = Color::Rgb(255, 60, 60);
-/// GREEN used for the ARMED/active YOLO checkbox indicator — distinct from the red warning line.
-const YOLO_GREEN: Color = Color::Rgb(0, 200, 83);
 
 /// Render the `/security` control panel for `st` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
@@ -127,7 +120,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                     // stopped so the user can start it from here.
                     let (box_label, base_style) = if st.status.running {
                         // Running indicator reuses the active-green (same green as armed YOLO).
-                        ("[x] Daemon running", Style::default().fg(YOLO_GREEN).add_modifier(Modifier::BOLD))
+                        ("[x] Daemon running", Style::default().fg(palette.success).add_modifier(Modifier::BOLD))
                     } else {
                         ("[ ] Daemon stopped", Style::default().fg(palette.fg))
                     };
@@ -166,7 +159,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         info_spans.push(Span::styled(
                             "[!!]",
                             Style::default()
-                                .fg(Color::Rgb(255, 200, 0))
+                                .fg(palette.warn)
                                 .add_modifier(Modifier::BOLD),
                         ));
                         info_spans.push(Span::styled(" dependency not installed", dim_style));
@@ -191,7 +184,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         // Daemon is running: original behaviour. Checked = armed. Selection
                         // highlight is NOT gated on `active`.
                         let (box_label, base_style) = if st.yolo_armed {
-                            ("[x] Enable YOLO mode", Style::default().fg(YOLO_GREEN).add_modifier(Modifier::BOLD))
+                            ("[x] Enable YOLO mode", Style::default().fg(palette.success).add_modifier(Modifier::BOLD))
                         } else {
                             ("[ ] Enable YOLO mode", Style::default().fg(palette.fg))
                         };
@@ -203,7 +196,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         if st.yolo_armed {
                             lines.push(Line::from(Span::styled(
                                 "! YOLO MODE ENABLED",
-                                Style::default().fg(YOLO_RED).add_modifier(Modifier::BOLD),
+                                Style::default().fg(palette.error).add_modifier(Modifier::BOLD),
                             )));
                         } else {
                             lines.push(Line::from(Span::styled(
@@ -273,7 +266,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         Span::styled(
                             "  [!!]",
                             Style::default()
-                                .fg(Color::Rgb(255, 200, 0))
+                                .fg(palette.warn)
                                 .add_modifier(Modifier::BOLD),
                         )
                     } else {

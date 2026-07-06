@@ -100,6 +100,9 @@ pub struct GlobalSnapshot {
     pub work_elapsed_ms: Option<u64>,
     pub theme: String,
     pub accent: String,
+    /// Active palette registry name (see `view::theme::PALETTES`). Projected verbatim
+    /// like `accent`; the thin client rebuilds its palette from this.
+    pub palette: String,
     pub mode: ModeSnapshot,
     pub toast: Option<(String, String)>,
     pub models_cache: Option<Vec<crate::dto::openrouter::ModelInfo>>,
@@ -379,6 +382,11 @@ pub struct SettingsSnapshot {
     pub name: String,
     pub theme: String,
     pub accent: String,
+    /// Active palette name (see `view::theme::PALETTES`). `#[serde(default)]`
+    /// keeps an older peer's snapshot (pre-palette) decoding cleanly — a missing
+    /// value falls back to the dark palette at render time.
+    #[serde(default)]
+    pub palette: String,
     pub workdir: Vec<String>,
     pub awareness_enabled: bool,
     pub awareness_inherit: bool,
@@ -417,6 +425,10 @@ pub struct SettingsSnapshot {
     /// Wire token for [`ModelFilterMode`]: `"all"`, `"local"`, or `"global"`.
     #[serde(default)]
     pub model_filter: String,
+    /// Cursor index into `view::theme::PALETTES` for the Appearance palette list.
+    /// `#[serde(default)]` keeps an older peer's snapshot decoding cleanly (→ 0).
+    #[serde(default)]
+    pub palette_sel: usize,
 }
 
 // -- mode payload projections (stage 3: secondary full-screen views) -----------

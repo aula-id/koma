@@ -263,3 +263,97 @@ pub(super) fn render_block(
     }
     out
 }
+
+/// Render a completed tool RESULT as a rounded, light-dotted box.
+///
+/// Layout: a `╭┄ {label} ┄…┄╮` top border (label in the accent colour, dotted
+/// edges dim), up to five ITALIC+DIM content rows, a literal `...` overflow row
+/// when the result has MORE than five lines, and a `╰┄…┄╯` bottom border. Every
+/// row is indented four columns so the box hangs under its tool-call line; the box
+/// body is `wrap_w - 2` columns wide, making every emitted line exactly the
+/// transcript body width (`wrap_w + 2`) and never more.
+///
+/// Each source line is TRUNCATED (never wrapped) to a single visual row via
+/// [`truncate_chars`], so the emitted [`Line`] count is deterministic — one Line
+/// per box row — which the transcript's follow-scroll math depends on. Callers box
+/// only output-producing tools with non-empty content; terse/empty results keep
+/// the compact single-line rendering instead.
+pub(super) fn render_tool_box(
+    content: &str,
+    label: &str,
+    palette: &Palette,
+    wrap_w: usize,
+) -> Vec<Line<'static>> {
+    // Box body width: a fixed 2-col indent + `bw` == body width, so the box never
+    // overruns the pane. Inner text width drops the 4 cols of chrome (`┆ ` on the left
+    // + ` ┆` on the right). All arithmetic saturates so a pathologically narrow pane
+    // can't underflow/panic.
+    let bw = wrap_w;
+    let iw = bw.saturating_sub(4);
+
+    let dim = Style::default().fg(palette.dim);
+    let dim_italic = Style::default().fg(palette.dim).add_modifier(Modifier::ITALIC);
+    let accent = Style::default().fg(palette.accent);
+    // Shared 2-col indent on EVERY row so the box aligns under the ✓ glyph.
+    // `render_block` can't be reused here: it indents the first row 4 cols and the
+    // rest 2, which would stagger the box edges.
+    let indent = "  ";
+
+    // One box content row: `┆ ` + `text` truncated+padded to `iw` (italic+dim) +
+    // ` ┆`. `truncate_chars` appends `…` when it cuts, so the source is capped at
+    // `iw - 1` to leave a column for it, then the string is padded back out to
+    // EXACTLY `iw` for a flush right edge (mirrors `code_row`). The extra `.take(iw)`
+    // is a belt-and-suspenders clamp (also handles `iw == 0`).
+    let content_row = move |text: &str| -> Line<'static> {
+        let mut s: String = if text.chars().count() > iw {
+            truncate_chars(text, iw.saturating_sub(1)).chars().take(iw).collect()
+        } else {
+            text.to_string()
+        };
+        let pad = iw.saturating_sub(s.chars().count());
+        if pad > 0 {
+            s.push_str(&" ".repeat(pad));
+        }
+        Line::from(vec![
+            Span::raw(indent),
+            Span::styled("┆ ", dim),
+            Span::styled(s, dim_italic),
+            Span::styled(" ┆", dim),
+        ])
+    };
+
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    // --- top border: ╭┄ {label} ┄…┄╮ (label accent, dotted edges dim) ---
+    let label_txt = format!(" {label} ");
+    // Clamp the label so `╭┄` + label + `╮` can never exceed the box width `bw`
+    // on a narrow pane (otherwise the top border overruns the transcript body).
+    let label_txt: String = label_txt.chars().take(bw.saturating_sub(3)).collect();
+    // Columns before the fill run: `╭┄` (2) + label + `╮` (1); saturating so a tiny
+    // pane just drops the fill run rather than underflowing.
+    let used = 2 + label_txt.chars().count() + 1;
+    let fill = bw.saturating_sub(used);
+    out.push(Line::from(vec![
+        Span::raw(indent),
+        Span::styled("╭┄", dim),
+        Span::styled(label_txt, accent),
+        Span::styled(format!("{}╮", "┄".repeat(fill)), dim),
+    ]));
+
+    // --- content rows: at most 5 real lines; a `...` row ONLY when there are more ---
+    let lines: Vec<&str> = content.lines().collect();
+    for &line in lines.iter().take(5) {
+        out.push(content_row(line));
+    }
+    if lines.len() > 5 {
+        out.push(content_row("..."));
+    }
+
+    // --- bottom border: ╰┄…┄╯ ---
+    out.push(Line::from(vec![
+        Span::raw(indent),
+        Span::styled(format!("╰{}╯", "┄".repeat(bw.saturating_sub(2))), dim),
+    ]));
+
+    out
+}

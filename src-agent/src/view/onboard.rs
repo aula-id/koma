@@ -14,7 +14,7 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Padding, Paragraph, Wrap},
     Frame,
@@ -22,14 +22,6 @@ use ratatui::{
 
 use crate::app::mode::OnboardState;
 use crate::view::theme::Palette;
-
-/// Warning/yellow tone for the "not permanent" callout box. `Palette` has no
-/// dedicated warning role (its `accent` is user-configurable and may itself be
-/// any colour, including yellow), so — matching the house convention used for
-/// other warning callouts (e.g. the tool-approval box in
-/// `view::chat::overlays::render_tool_approval` and `YOLO_RED` in
-/// `view::settings::mod`) — this is a fixed raw colour rather than a palette lookup.
-const WARN: Color = Color::Rgb(255, 180, 60);
 
 /// Total width (chars) of the content block. Clamped to the available area.
 const BLOCK_W: u16 = 64;
@@ -132,18 +124,18 @@ pub fn draw(frame: &mut Frame, state: &OnboardState, palette: &Palette) {
             height: CALLOUT_H,
         };
         let block = Block::bordered()
-            .border_style(Style::default().fg(WARN))
+            .border_style(Style::default().fg(palette.warn))
             .padding(Padding::horizontal(1));
         let inner = block.inner(callout_rect);
         frame.render_widget(block, callout_rect);
         let lines = vec![
             Line::from(Span::styled(
                 "you can change this anytime in /settings",
-                Style::default().fg(WARN),
+                Style::default().fg(palette.warn),
             )),
             Line::from(Span::styled(
                 "or type /free to switch to the free tier later",
-                Style::default().fg(WARN),
+                Style::default().fg(palette.warn),
             )),
         ];
         frame.render_widget(

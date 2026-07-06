@@ -64,13 +64,17 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
         return DiffResult::full();
     }
 
-    // --- structural: theme / accent palette changed ---
+    // --- structural: theme / accent / palette changed ---
     // The daemon builds the outer palette via `theme::palette(&state.rest.config)` BEFORE
     // dispatching to any mode renderer, so without this the client stays in the default
     // palette (Dark/green) until the next structural change forces a full resync. A full
     // snapshot ensures the client's `rest.config` palette stays in sync with the daemon's.
+    // `palette` is the registry key (`config.palette`) picked live in the Appearance
+    // settings; gating on it here lets Enter-apply repaint the whole UI while STAYING in
+    // Settings (no mode change to piggyback on).
     if prev.global.theme != next.global.theme
         || prev.global.accent != next.global.accent
+        || prev.global.palette != next.global.palette
         || prev.global.agent_mode != next.global.agent_mode
         || prev.global.latest_version != next.global.latest_version
     {

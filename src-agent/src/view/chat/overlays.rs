@@ -6,9 +6,9 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Padding, Paragraph},
+    widgets::{Block, Padding, Paragraph},
     Frame,
 };
 use crate::app::state::AppStateRest;
@@ -76,7 +76,7 @@ pub(super) fn render_command_palette(
         .title(Span::styled(" commands ", Style::default().fg(palette.dim)))
         .padding(Padding::horizontal(1));
     let inner = block.inner(popup);
-    frame.render_widget(Clear, popup);
+    crate::view::clear_and_fill(frame, popup, palette.bg);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(rows), inner);
     true
@@ -138,7 +138,7 @@ pub(super) fn render_file_palette(
                 .title(Span::styled(title, Style::default().fg(palette.dim)))
                 .padding(Padding::horizontal(1));
             let inner = block.inner(popup);
-            frame.render_widget(Clear, popup);
+            crate::view::clear_and_fill(frame, popup, palette.bg);
             frame.render_widget(block, popup);
             frame.render_widget(Paragraph::new(rows), inner);
         }
@@ -159,7 +159,7 @@ pub(super) fn render_toast(
     // Toast is per-session (C6): render the FOREGROUND session's toast.
     if let Some((msg, _, kind)) = rest.fg().toast.as_ref() {
         let (border_color, title, max_rows) = match kind {
-            crate::app::state::ToastKind::Error => (Color::Rgb(255, 90, 90), " error ", 6u16),
+            crate::app::state::ToastKind::Error => (palette.error, " error ", 6u16),
             crate::app::state::ToastKind::Info => (palette.accent, " info ", 10u16),
         };
         let tw = transcript_chunk.width;
@@ -186,7 +186,7 @@ pub(super) fn render_toast(
             .title(Span::styled(title, Style::default().fg(border_color)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
-        frame.render_widget(Clear, rect);
+        crate::view::clear_and_fill(frame, rect, palette.bg);
         frame.render_widget(block, rect);
         frame.render_widget(Paragraph::new(rows), inner);
     }
@@ -212,7 +212,7 @@ pub(super) fn render_tool_approval(
     rest: &AppStateRest,
     palette: &Palette,
 ) {
-    let warn = Color::Rgb(255, 180, 60);
+    let warn = palette.warn;
 
     // plan_ready is a DISTINCT approval — a finished plan presented for the user's
     // y/a/n decision. The plan SUMMARY is rendered as normal transcript content
@@ -248,7 +248,7 @@ pub(super) fn render_tool_approval(
             .title(Span::styled(" plan ready ", Style::default().fg(warn)))
             .padding(Padding::horizontal(1));
         let inner = block.inner(rect);
-        frame.render_widget(Clear, rect);
+        crate::view::clear_and_fill(frame, rect, palette.bg);
         frame.render_widget(block, rect);
         frame.render_widget(Paragraph::new(rows), inner);
         return;
@@ -383,7 +383,7 @@ pub(super) fn render_tool_approval(
         .title(Span::styled(" approve ", Style::default().fg(warn)))
         .padding(Padding::horizontal(1));
     let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(rows), inner);
 }

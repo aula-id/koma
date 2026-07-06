@@ -20,7 +20,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 use crate::app::mode::RewindState;
@@ -76,7 +76,7 @@ pub fn draw(
             Style::default().fg(palette.dim),
         ));
     let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
     frame.render_widget(block, rect);
 
     if inner.width == 0 || inner.height == 0 {

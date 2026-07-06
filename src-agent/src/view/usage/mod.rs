@@ -369,13 +369,13 @@ fn draw_role_split(frame: &mut Frame, split: &crate::model::usage::RoleSplit, pa
         Line::from(vec![
             Span::styled("main ", Style::default().fg(palette.dim)),
             Span::styled(format!("{:>8}  ", fmt_cost(split.main_cost)), Style::default().fg(palette.fg)),
-            Span::styled(main_bar, Style::default().fg(HEAT_1)),
+            Span::styled(main_bar, Style::default().fg(palette.heat[1])),
             Span::styled(format!("  {:>3}%  {:>3}c", main_pct, split.main_calls), Style::default().fg(palette.dim)),
         ]),
         Line::from(vec![
             Span::styled("sub  ", Style::default().fg(palette.dim)),
             Span::styled(format!("{:>8}  ", fmt_cost(split.sub_cost)), Style::default().fg(palette.fg)),
-            Span::styled(sub_bar, Style::default().fg(HEAT_3)),
+            Span::styled(sub_bar, Style::default().fg(palette.heat[3])),
             Span::styled(format!("  {:>3}%  {:>3}c", sub_pct, split.sub_calls), Style::default().fg(palette.dim)),
         ]),
     ];
