@@ -341,7 +341,7 @@ impl Tool for Bash {
         // start), so cheats like `cd /tmp && git status` or `echo $(git log)`
         // are caught too.
         static GIT_RE: OnceLock<Regex> = OnceLock::new();
-        let git_re = GIT_RE.get_or_init(|| Regex::new(r"\bgit\b").unwrap());
+        let git_re = GIT_RE.get_or_init(|| Regex::new(r"(?:^|[\s;&|(])git\b").unwrap());
         if git_re.is_match(command.trim()) {
             return Ok(
                 "error: use the git_operator tool for git commands, not bash. \
