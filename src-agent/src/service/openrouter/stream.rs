@@ -13,8 +13,8 @@ use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
 
 use super::helpers::{
-    auth_headers, clean_error, emit, is_openrouter, provider_routing_for, reasoning_config,
-    sanitize_tool_acc,
+    apply_tool_call_delta, auth_headers, clean_error, emit, is_openrouter, provider_routing_for,
+    reasoning_config, sanitize_tool_acc,
 };
 use super::client::OpenRouterClient;
 use super::types::Conn;
@@ -283,27 +283,15 @@ impl OpenRouterClient {
                             }
                         }
                         if let Some(tcs) = &choice.delta.tool_calls {
+                            // Merge each streamed fragment into the accumulator.
+                            // `apply_tool_call_delta` routes by id (coalescing a
+                            // re-announced call), then explicit index, then the
+                            // in-progress slot for an index-less continuation —
+                            // robust to providers that omit `index` or re-announce
+                            // an id at a new index, which the old strict "merge by
+                            // index" loop turned into phantom empty-argument calls.
                             for d in tcs {
-                                // Grow the accumulator so `index` is in range,
-                                // then merge this fragment into its slot.
-                                while tool_acc.len() <= d.index {
-                                    tool_acc.push(ToolCall {
-                                        kind: "function".into(),
-                                        ..Default::default()
-                                    });
-                                }
-                                let acc = &mut tool_acc[d.index];
-                                if let Some(id) = &d.id {
-                                    acc.id = id.clone();
-                                }
-                                if let Some(f) = &d.function {
-                                    if let Some(n) = &f.name {
-                                        acc.function.name = n.clone();
-                                    }
-                                    if let Some(a) = &f.arguments {
-                                        acc.function.arguments.push_str(a);
-                                    }
-                                }
+                                apply_tool_call_delta(&mut tool_acc, d);
                             }
                         }
                     }
