@@ -3,7 +3,7 @@
 
 use ratatui::{
     layout::{Margin, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -418,7 +418,7 @@ pub(super) fn render_message_block(
             // image, and the model-visible strip warning is injected separately at
             // send. Styled like a tool-call card (icon + dim text) but in warn.
             let mut lines = render_user_message(&msg.content, palette, wrap_w);
-            lines.extend(render_attachment_card(&msg.attachments));
+            lines.extend(render_attachment_card(&msg.attachments, palette));
             lines
         }
         Role::Assistant => {
@@ -553,40 +553,36 @@ fn render_shell_block(body: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<
     render_block(logical, "$ ", palette.accent, wrap_w, true)
 }
 
-/// Render a background-bash completion nudge as a single compact line: a GREEN
-/// `✓` glyph followed by the dim per-job summary (line 1 of `body`). The remaining
-/// lines of `body` are model-only context and are NOT displayed. Styled like a
-/// tool-call sub-line (2-col indent + dim text), not a `★` user turn. The green is
-/// hardcoded (theme-independent, like the orange attachment card) so the check
-/// always reads as "success".
+/// Render a background-bash completion nudge as a single compact line: a
+/// `palette.success` `✓` glyph followed by the dim per-job summary (line 1 of
+/// `body`). The remaining lines of `body` are model-only context and are NOT
+/// displayed. Styled like a tool-call sub-line (2-col indent + dim text), not
+/// a `★` user turn.
 fn render_bash_nudge_block(body: &str, palette: &Palette) -> Vec<Line<'static>> {
     let summary = body.lines().next().unwrap_or("").to_string();
-    let green = Color::Rgb(0, 200, 83);
     vec![Line::from(vec![
         Span::raw("  "),
-        Span::styled("\u{2713} ", Style::default().fg(green)),
+        Span::styled("\u{2713} ", Style::default().fg(palette.success)),
         Span::styled(summary, Style::default().fg(palette.dim)),
     ])]
 }
 
-/// Render the orange attachment folder-tree lines for a user message that
-/// carries image attachments. Minimalist design: an "images" root line, then
-/// one tree branch per attachment (├─ for non-last, └─ for the last).
+/// Render the warn-coloured attachment folder-tree lines for a user message
+/// that carries image attachments. Minimalist design: an "images" root line,
+/// then one tree branch per attachment (├─ for non-last, └─ for the last).
 /// Returns an empty `Vec` when there are no attachments.
 ///
-/// ALWAYS orange-coloured (fixed Color::Rgb(255, 180, 60)), matching the approval
-/// card in overlays.rs — independent of the theme palette so it always reads as
-/// a warn cue.
+/// Uses `palette.warn`, matching the approval card in overlays.rs, so it
+/// always reads as a warn cue.
 fn render_attachment_card(
     attachments: &[crate::dto::chat::Attachment],
+    palette: &Palette,
 ) -> Vec<Line<'static>> {
     if attachments.is_empty() {
         return Vec::new();
     }
-    // Fixed orange colour matching the tool-approval card in overlays.rs.
-    let orange = Color::Rgb(255, 180, 60);
-    let style = Style::default().fg(orange);
-    let dim = Style::default().fg(orange).add_modifier(Modifier::DIM);
+    let style = Style::default().fg(palette.warn);
+    let dim = Style::default().fg(palette.warn).add_modifier(Modifier::DIM);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Root: "  images"

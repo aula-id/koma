@@ -18,7 +18,7 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -31,14 +31,10 @@ use crate::view::theme::Palette;
 /// Width the key column is padded to (so descriptions align in a column).
 const KEY_W: usize = 16;
 
-/// Hardcoded "newer version available" green (NOT themeable — matches the header
-/// badge in `view::chat::header`).
-const GREEN: Color = Color::Rgb(57, 255, 20);
-
 /// Render the help reference for `st` using the given colour `palette`.
 ///
-/// Colours flow through `palette`, except the fixed `GREEN` "update available"
-/// accent in the "Updating koma" block (it mirrors the non-themeable header badge).
+/// Colours flow through `palette`, including the `palette.success` "update
+/// available" accent in the "Updating koma" block (mirrors the header badge).
 pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Palette) {
     // Height of the "Updating koma" block: label + current/available + run-command,
     // plus one extra line when the update carries a release message. A trailing
@@ -88,7 +84,7 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Pa
     )];
     if let Some((latest, _)) = &st.update {
         cur_spans.push(Span::styled("  ·  available ", dim));
-        cur_spans.push(Span::styled(format!("[{latest}]"), Style::default().fg(GREEN)));
+        cur_spans.push(Span::styled(format!("[{latest}]"), Style::default().fg(palette.success)));
     }
     update_lines.push(Line::from(cur_spans));
     // How to update.
