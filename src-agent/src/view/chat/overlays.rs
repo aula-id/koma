@@ -76,7 +76,7 @@ pub(super) fn render_command_palette(
         .title(Span::styled(" commands ", Style::default().fg(palette.dim)))
         .padding(Padding::horizontal(1));
     let inner = block.inner(popup);
-    crate::view::clear_and_fill(frame, popup, palette.panel);
+    crate::view::clear_and_fill(frame, popup, palette.bg);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(rows), inner);
     true
