@@ -35,6 +35,7 @@ pub mod theme;
 pub mod usage;
 
 use ratatui::Frame;
+use ratatui::style::Style;
 use crate::app::mode::Mode;
 use crate::app::resolve::resolve_turn_model;
 use crate::app::state::{AppState, AppStateRest};
@@ -62,6 +63,13 @@ fn resolved_main_model(rest: &AppStateRest) -> String {
 /// colour decisions flow through a single source of truth.
 pub fn draw(frame: &mut Frame, state: &AppState) {
     let palette = theme::palette(&state.rest.config);
+    // Paint the whole frame with the theme canvas background first, so every
+    // otherwise-unstyled cell — across ALL modes at once — picks up the palette bg.
+    // Mode renderers draw their own styled cells on top; only untouched cells keep
+    // this. (`frame.area()` is hoisted into a local so it isn't a shared borrow of
+    // `frame` while `buffer_mut()` holds the mutable borrow.)
+    let area = frame.area();
+    frame.buffer_mut().set_style(area, Style::default().bg(palette.bg));
     // The catalogue is now per-endpoint and fetched on demand: pass BOTH the
     // cached models and the endpoint they were fetched for, so each omnisearch view
     // can tell "this is my provider's catalogue" (filter locally) from "still

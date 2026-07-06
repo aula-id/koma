@@ -100,6 +100,9 @@ pub struct GlobalSnapshot {
     pub work_elapsed_ms: Option<u64>,
     pub theme: String,
     pub accent: String,
+    /// Active palette registry name (see `view::theme::PALETTES`). Projected verbatim
+    /// like `accent`; the thin client rebuilds its palette from this.
+    pub palette: String,
     pub mode: ModeSnapshot,
     pub toast: Option<(String, String)>,
     pub models_cache: Option<Vec<crate::dto::openrouter::ModelInfo>>,

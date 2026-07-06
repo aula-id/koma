@@ -115,6 +115,8 @@ mod roundtrip_tests {
             // pair would alias the struct default and hide a dropped field).
             theme: "light".to_string(),
             accent: "cyan".to_string(),
+            // Non-default palette so the round-trip proves it survives (de)serialize.
+            palette: "light".to_string(),
             // Use a populated stage-2 payload (KeyInput) so a full mode projection
             // gets round-trip coverage, not just the unit/struct-light variants.
             mode: ModeSnapshot::KeyInput(KeyInputSnapshot {
