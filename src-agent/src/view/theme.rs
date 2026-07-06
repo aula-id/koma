@@ -210,6 +210,126 @@ pub fn warm() -> Palette {
     }
 }
 
+/// Build the COLD SYMPHONY palette — a light cool blue canvas with smooth blue accents.
+pub fn cold_symphony() -> Palette {
+    Palette {
+        bg: Color::Rgb(226, 234, 252),
+        fg: Color::Rgb(30, 52, 92),
+        dim: Color::Rgb(95, 120, 165),
+        accent: Color::Rgb(74, 124, 224),
+        panel: Color::Rgb(192, 211, 249),
+        sel_fg: Color::Rgb(226, 234, 252),
+        sel_bg: Color::Rgb(74, 124, 224),
+        success: Color::Rgb(60, 150, 110),
+        warn: Color::Rgb(200, 140, 40),
+        error: Color::Rgb(205, 70, 70),
+        info: Color::Rgb(106, 153, 241),
+        heat: [
+            Color::Rgb(218, 255, 239),
+            Color::Rgb(169, 240, 229),
+            Color::Rgb(120, 224, 219),
+            Color::Rgb(136, 175, 244),
+            Color::Rgb(106, 153, 241),
+        ],
+    }
+}
+
+/// Build the WINTER palette — a light frosty canvas with cool pink accents.
+pub fn winter() -> Palette {
+    Palette {
+        bg: Color::Rgb(239, 247, 246),
+        fg: Color::Rgb(42, 58, 68),
+        dim: Color::Rgb(110, 135, 145),
+        accent: Color::Rgb(214, 110, 164),
+        panel: Color::Rgb(209, 247, 243),
+        sel_fg: Color::Rgb(239, 247, 246),
+        sel_bg: Color::Rgb(214, 110, 164),
+        success: Color::Rgb(70, 160, 120),
+        warn: Color::Rgb(200, 140, 40),
+        error: Color::Rgb(205, 80, 90),
+        info: Color::Rgb(70, 175, 205),
+        heat: [
+            Color::Rgb(209, 247, 243),
+            Color::Rgb(178, 247, 239),
+            Color::Rgb(123, 223, 242),
+            Color::Rgb(245, 198, 218),
+            Color::Rgb(242, 181, 212),
+        ],
+    }
+}
+
+/// Build the MONOKAI palette — a classic dark theme with vibrant neon accents.
+pub fn monokai() -> Palette {
+    Palette {
+        bg: Color::Rgb(39, 40, 34),
+        fg: Color::Rgb(248, 248, 242),
+        dim: Color::Rgb(117, 113, 94),
+        accent: Color::Rgb(249, 38, 114),
+        panel: Color::Rgb(62, 61, 50),
+        sel_fg: Color::Rgb(248, 248, 242),
+        sel_bg: Color::Rgb(73, 72, 62),
+        success: Color::Rgb(166, 226, 46),
+        warn: Color::Rgb(253, 151, 31),
+        error: Color::Rgb(249, 38, 114),
+        info: Color::Rgb(102, 217, 239),
+        heat: [
+            Color::Rgb(73, 72, 62),
+            Color::Rgb(166, 226, 46),
+            Color::Rgb(230, 219, 116),
+            Color::Rgb(253, 151, 31),
+            Color::Rgb(249, 38, 114),
+        ],
+    }
+}
+
+/// Build the VSCODE palette — Microsoft's Visual Studio Code dark theme.
+pub fn vscode() -> Palette {
+    Palette {
+        bg: Color::Rgb(30, 30, 30),
+        fg: Color::Rgb(212, 212, 212),
+        dim: Color::Rgb(128, 128, 128),
+        accent: Color::Rgb(86, 156, 214),
+        panel: Color::Rgb(37, 37, 38),
+        sel_fg: Color::Rgb(212, 212, 212),
+        sel_bg: Color::Rgb(38, 79, 120),
+        success: Color::Rgb(106, 153, 85),
+        warn: Color::Rgb(220, 220, 170),
+        error: Color::Rgb(244, 71, 71),
+        info: Color::Rgb(79, 193, 255),
+        heat: [
+            Color::Rgb(58, 61, 65),
+            Color::Rgb(106, 153, 85),
+            Color::Rgb(220, 220, 170),
+            Color::Rgb(206, 145, 120),
+            Color::Rgb(244, 71, 71),
+        ],
+    }
+}
+
+/// Build the GITHUB DARK palette — GitHub's dark theme with cool blue accents.
+pub fn github_dark() -> Palette {
+    Palette {
+        bg: Color::Rgb(13, 17, 23),
+        fg: Color::Rgb(201, 209, 217),
+        dim: Color::Rgb(139, 148, 158),
+        accent: Color::Rgb(88, 166, 255),
+        panel: Color::Rgb(22, 27, 34),
+        sel_fg: Color::Rgb(201, 209, 217),
+        sel_bg: Color::Rgb(22, 51, 86),
+        success: Color::Rgb(63, 185, 80),
+        warn: Color::Rgb(210, 153, 34),
+        error: Color::Rgb(248, 81, 73),
+        info: Color::Rgb(121, 192, 255),
+        heat: [
+            Color::Rgb(22, 27, 34),
+            Color::Rgb(63, 185, 80),
+            Color::Rgb(210, 153, 34),
+            Color::Rgb(219, 109, 40),
+            Color::Rgb(248, 81, 73),
+        ],
+    }
+}
+
 /// A palette constructor — one entry in [`PALETTES`], keyed by its config name.
 type PaletteFn = fn() -> Palette;
 
@@ -220,6 +340,11 @@ pub const PALETTES: &[(&str, PaletteFn)] = &[
     ("forest", forest),
     ("autumn", autumn),
     ("warm", warm),
+    ("cold symphony", cold_symphony),
+    ("winter", winter),
+    ("monokai", monokai),
+    ("vscode", vscode),
+    ("github dark", github_dark),
 ];
 
 /// Build a [`Palette`] by looking up `cfg.palette` in [`PALETTES`], falling back to

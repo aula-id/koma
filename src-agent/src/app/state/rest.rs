@@ -80,6 +80,10 @@ pub struct AppStateRest {
     pub todo_offset: std::cell::Cell<usize>,
     pub key_input_results_offset: std::cell::Cell<usize>,
     pub settings_dir_picker_offset: std::cell::Cell<usize>,
+    /// Persisted scroll offset for the Appearance category's palette box list
+    /// (`draw_palette_list`). Boxes are 3 rows tall (border + swatch + border);
+    /// this drives `scroll_window` so the window follows `SettingsState::palette_sel`.
+    pub settings_palette_offset: std::cell::Cell<usize>,
     pub model_modal_results_offset: std::cell::Cell<usize>,
     pub model_modal_route_offset: std::cell::Cell<usize>,
     pub agents_tool_picker_offset: std::cell::Cell<usize>,
@@ -373,6 +377,7 @@ impl AppStateRest {
             todo_offset: std::cell::Cell::new(0),
             key_input_results_offset: std::cell::Cell::new(0),
             settings_dir_picker_offset: std::cell::Cell::new(0),
+            settings_palette_offset: std::cell::Cell::new(0),
             model_modal_results_offset: std::cell::Cell::new(0),
             model_modal_route_offset: std::cell::Cell::new(0),
             agents_tool_picker_offset: std::cell::Cell::new(0),
