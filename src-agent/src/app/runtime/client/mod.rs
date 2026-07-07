@@ -187,6 +187,122 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
     });
 }
 
+// ─── host-relay: the GUI host IS the daemon client ───────────────────────────────
+//
+// The desktop GUI (`crate::app::runtime::gui`) runs a `tao`/GTK event loop on its
+// main thread and CANNOT host tokio there (`event_loop.run` diverges). So the daemon
+// connection + the headless fold loop run HERE on a background client-thread with its
+// own tokio runtime — the daemon->JS direction pushes JSON envelopes out through the
+// `push` sink (an `EventLoopProxy::send_event` closure the host supplies), and the
+// JS->daemon direction arrives as [`HostCtl`] control messages + a shared `live_req`
+// the ipc thread forwards `SubmitInput` through.
+
+/// Control messages from the GUI ipc thread (main tao thread) to the host-relay
+/// client-thread. `SubmitInput` does NOT ride this channel — it goes straight to the
+/// live daemon via the shared `live_req` sender — so this carries only the
+/// session-lifecycle intents the client-thread owns.
+pub(super) enum HostCtl {
+    /// The webview page booted / reloaded: re-push the full authoritative state.
+    Ready,
+    /// Attach to this existing session UUID (a hub `SelectSession` pick).
+    Select(String),
+    /// Mint a fresh session UUID + attach (the hub `[+ new session]` row).
+    New,
+}
+
+/// Headless attach used by the R4 host-relay: ensure the session's daemon is up,
+/// connect + handshake. Build-skew auto-restart is added in the R5 headless variant.
+fn attach_host(handle: &tokio::runtime::Handle, session_id: &str) -> Result<Connection> {
+    super::manage::ensure_daemon_running(session_id, false)
+        .map_err(|e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"))?;
+    let sock_path = store::daemon_sock_path(session_id)?;
+    connect_attach_and_handshake(handle, &sock_path)
+}
+
+/// Run the host-relay client on a background thread: own a tokio runtime, attach to a
+/// session-daemon, and drive the headless fold loop that PUSHES the shadow state into
+/// the webview. The `push` sink hands a ready JSON envelope to the main tao thread;
+/// `ctl_rx` carries [`HostCtl`] intents from the ipc handler; `live_req` is the shared
+/// slot the ipc handler forwards `SubmitInput` through (updated on every (re)attach).
+///
+/// R4: boots straight into an attached session (`opts.session`, else a minted uuid)
+/// and re-attaches on an `Attach` transition. The detached swapper (a `ToSwapper`
+/// transition / a cold boot into the hub) is added in R5.
+pub(super) fn run_host_relay(
+    opts: crate::cli::Opts,
+    push: impl Fn(String) + Send + 'static,
+    ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
+    live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+) {
+    // The client owns no sessions; it needs the config dirs only to resolve sockets.
+    let _ = store::ensure_dirs();
+
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("[gui] could not build the host-relay tokio runtime: {e}");
+            return;
+        }
+    };
+    let handle = rt.handle().clone();
+
+    let mut push_state = render::PushState::new();
+
+    // R4: the first (and, absent a swapper, only) session to attach.
+    let mut next: Option<String> =
+        Some(opts.session.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()));
+
+    while let Some(id) = next.take() {
+        let mut conn = match attach_host(&handle, &id) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[gui] host-relay could not attach session {id}: {e:#}");
+                break;
+            }
+        };
+
+        // Publish this connection's request sender so the ipc handler's `Submit` lands
+        // on the CURRENT daemon; take the handshake's prebuffered frames for the fold.
+        if let Ok(mut g) = live_req.lock() {
+            *g = Some(conn.req_tx.clone());
+        }
+        let prebuffered = std::mem::take(&mut conn.prebuffered);
+
+        // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
+        // sub-agent mints an inert AbortHandle, which needs a runtime in scope) —
+        // SCOPED so the guard drops before `teardown_connection`'s `block_on`.
+        let transition = {
+            let _rt_ctx = handle.enter();
+            render::push_loop(
+                &push,
+                &conn.frame_rx,
+                &conn.req_tx,
+                prebuffered,
+                &ctl_rx,
+                &mut push_state,
+            )
+        };
+
+        // Retract the live sender before teardown so a late `Submit` can't race a
+        // half-torn-down connection, then flush the polite `Detach`.
+        if let Ok(mut g) = live_req.lock() {
+            *g = None;
+        }
+        teardown_connection(&handle, conn);
+        push_state.reset();
+
+        match transition {
+            render::HostTransition::Attach(new_id) => next = Some(new_id),
+            // No swapper yet (R5): a socket close / window close ends the relay.
+            render::HostTransition::Exit | render::HostTransition::ToSwapper => break,
+        }
+    }
+
+    // Drop the runtime LAST so the active connection's reader task is cancelled after
+    // the loop exits.
+    drop(rt);
+}
+
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
 ///
 /// A two-state run-loop ([`ClientState`]): ATTACHED (render a daemon's frames + forward

@@ -611,6 +611,162 @@ impl PushState {
             hub_json: None,
         }
     }
+
+    /// Forget every last-pushed value so the next [`serialize_and_push`] re-emits the
+    /// FULL current state. Called on a `Ready` (the page (re)booted and needs a fresh
+    /// authoritative snapshot), so a webview reload never renders against stale deltas.
+    pub(super) fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+/// What [`push_loop`] resolved to — the instruction the host-relay state machine in
+/// [`super::run_host_relay`] acts on next. Mirrors [`ClientTransition`] for the
+/// headless GUI host (no terminal): leave, fall back to the swapper, or attach a
+/// different session.
+pub(super) enum HostTransition {
+    /// Leave the host entirely (the control channel closed — the window is gone).
+    Exit,
+    /// Detach and show the local session swapper (the daemon's socket closed, or it
+    /// signalled `OpenSwapper`). `run_host_relay` rebuilds the hub from discovery.
+    ToSwapper,
+    /// Attach to this session UUID (a hub `SelectSession`/`NewSession`, or a daemon
+    /// `NewSession` hand-off). A minted uuid for a new session; an existing id otherwise.
+    Attach(String),
+}
+
+/// The HEADLESS twin of [`render_loop`]: fold the daemon's frames into the shadow and
+/// PUSH the resulting state to the webview instead of drawing it to a terminal. Same
+/// 16ms cadence, same non-blocking frame drain + local-animation advance + toast
+/// sweep, but the crossterm input poll is gone (input arrives as `HostCtl` from the
+/// ipc thread and `SubmitInput` goes straight to the daemon over `req_tx`).
+///
+/// Each frame, in order: (0) drain `ctl_rx` — `Ready` forces a full re-push, a
+/// `Select`/`New` returns an [`HostTransition::Attach`]; (a) drain every queued
+/// [`DaemonFrame`] and apply it (an `OpenSwapper`/`NewSession` hand-off returns the
+/// matching transition, a closed socket returns [`HostTransition::ToSwapper`]); (b)
+/// advance the local-clock animations + sweep the toast; (c) serialise the shadow and
+/// push whatever changed; then pace to the frame budget. Returns when a transition is
+/// resolved.
+#[allow(clippy::too_many_lines)]
+pub(super) fn push_loop(
+    push: &dyn Fn(String),
+    frame_rx: &Receiver<DaemonFrame>,
+    req_tx: &Sender<ClientRequest>,
+    prebuffered: Vec<DaemonFrame>,
+    ctl_rx: &Receiver<super::HostCtl>,
+    last: &mut PushState,
+) -> HostTransition {
+    use std::sync::mpsc::TryRecvError;
+
+    // The shadow is a real AppState reconstructed purely from frames (identical to
+    // `render_loop`); the first Snapshot replaces the neutral placeholder.
+    let mut shadow = AppState::new(Mode::Chat);
+    shadow.rest.fg_mut().status = "attaching…".into();
+
+    let mut expected: u64 = 0;
+    let mut seeded = false;
+    let mut awaiting_resync = false;
+
+    // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
+    // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
+    // this early, so the throwaways here are never acted on.
+    {
+        let mut select_requested = false;
+        let mut open_swapper_requested = false;
+        let mut new_session_requested: Option<bool> = None;
+        for frame in prebuffered {
+            apply_frame(
+                frame,
+                &mut shadow,
+                &mut expected,
+                &mut seeded,
+                &mut awaiting_resync,
+                &mut select_requested,
+                &mut open_swapper_requested,
+                &mut new_session_requested,
+                req_tx,
+            );
+        }
+    }
+
+    loop {
+        let frame_start = Instant::now();
+
+        // --- (0) control messages from the ipc thread (NON-BLOCKING) ---
+        loop {
+            match ctl_rx.try_recv() {
+                // The page (re)booted: re-push the full authoritative state this frame.
+                Ok(super::HostCtl::Ready) => last.reset(),
+                // A hub pick / new-session request: hand back to the state machine to
+                // detach + attach the chosen (or freshly minted) session.
+                Ok(super::HostCtl::Select(id)) => return HostTransition::Attach(id),
+                Ok(super::HostCtl::New) => {
+                    return HostTransition::Attach(uuid::Uuid::new_v4().to_string())
+                }
+                Err(TryRecvError::Empty) => break,
+                // The ipc side hung up (window gone) — leave the host.
+                Err(TryRecvError::Disconnected) => return HostTransition::Exit,
+            }
+        }
+
+        // --- (a) drain every queued incoming frame (NON-BLOCKING) ---
+        let mut select_requested = false;
+        let mut open_swapper_requested = false;
+        let mut new_session_requested: Option<bool> = None;
+        loop {
+            match frame_rx.try_recv() {
+                Ok(frame) => {
+                    apply_frame(
+                        frame,
+                        &mut shadow,
+                        &mut expected,
+                        &mut seeded,
+                        &mut awaiting_resync,
+                        &mut select_requested,
+                        &mut open_swapper_requested,
+                        &mut new_session_requested,
+                        req_tx,
+                    );
+                }
+                Err(TryRecvError::Empty) => break,
+                // The reader task dropped its sender: the daemon's socket closed. Fall
+                // back to the swapper so the user can pick another session.
+                Err(TryRecvError::Disconnected) => return HostTransition::ToSwapper,
+            }
+        }
+
+        // `/resume` hand-off from the daemon: detach + show the swapper.
+        if open_swapper_requested {
+            return HostTransition::ToSwapper;
+        }
+        // `/new` hand-off from the daemon: attach a freshly minted session. (The `kill`
+        // flag is a daemon-side reap the headless host does not drive in W0; a plain
+        // detach-then-attach is fine — the old daemon keeps cooking, resumable.)
+        if new_session_requested.is_some() {
+            return HostTransition::Attach(uuid::Uuid::new_v4().to_string());
+        }
+        // `/select` transcript dump needs a terminal the host does not own — ignore it.
+
+        // --- (b) advance LOCAL-clock animations + sweep the toast ---
+        advance_local_animations(&mut shadow);
+        {
+            let fg = shadow.rest.fg_mut();
+            if let Some((_, until, _)) = fg.toast.as_ref() {
+                if Instant::now() >= *until {
+                    fg.toast = None;
+                }
+            }
+        }
+
+        // --- (c) serialise + push whatever changed (the draw seam) ---
+        serialize_and_push(&shadow, push, last);
+
+        // --- frame pacing: sleep the remainder of the ~16ms budget ---
+        if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
 }
 
 /// Resolve a ratatui [`Color`] to a `#rrggbb` string, mirroring the fallbacks the

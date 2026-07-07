@@ -70,20 +70,15 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
     }
 }
 
-/// Events delivered from the pty reader thread (or the ipc handler) to the
-/// main event loop.
+/// Events delivered to the main `tao` event loop from the ipc handler (window
+/// commands) or the host-relay client-thread (state pushes).
 enum UserEvent {
-    /// A chunk of raw pty output, base64-encoded, to hand to xterm.js.
-    Pty(String),
-    /// The pty reader hit EOF/error: the koma client exited — tear the window down.
-    ChildExited,
-    /// A custom-titlebar window command posted from `koma.js`.
+    /// A custom-titlebar window command posted from the webview.
     Win(WinCmd),
     /// A ready-to-inject JSON envelope from the host-relay client-thread. The main
     /// thread hands it to `window.__komaClient.push(...)` via `evaluate_script`. The
     /// payload is a COMPLETE JSON object (tagged on `k` — `Snapshot`/`StreamMsg`/
     /// `Reasoning`/`Status`/`Hub`), so it is embedded verbatim (not quoted).
-    #[allow(dead_code)] // emitted starting R4; the arm below consumes it now
     Push(String),
 }
 
@@ -106,16 +101,6 @@ enum WinCmd {
 #[derive(serde::Deserialize)]
 #[serde(tag = "t")]
 enum ClientMsg {
-    /// Keystrokes / paste: `d` is base64-encoded UTF-8 bytes to write to the pty.
-    #[serde(rename = "data")]
-    Data { d: String },
-    /// xterm computed a new grid size -> resize the pty (TIOCSWINSZ -> SIGWINCH).
-    #[serde(rename = "resize")]
-    Resize { cols: u16, rows: u16 },
-    /// The page defined `window.__koma` and is ready for pty output: start the
-    /// reader thread (exactly once) so no early bytes are lost.
-    #[serde(rename = "ready")]
-    Ready,
     /// Custom-titlebar window command: drag / minimize / toggle-maximize / close.
     #[serde(rename = "win")]
     Win { a: String },
@@ -172,95 +157,20 @@ fn parse_resize_dir(dir: &str) -> Option<tao::window::ResizeDirection> {
     }
 }
 
-pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-    use std::io::{Read, Write};
+pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     use std::sync::{Arc, Mutex};
     use tao::{
         dpi::LogicalSize,
         event::{Event, WindowEvent},
-        event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
+        event_loop::{ControlFlow, EventLoopBuilder},
         window::WindowBuilder,
     };
     use wry::WebViewBuilder;
 
-    // --- 1. Spawn the real koma client in a PTY --------------------------------
-    // Bare `koma` (no args): the default path mints its own session + daemon and
-    // runs the client. NO `--session` (default overwrites it), NO `koma gui`
-    // (recursion), NO setsid/null-stdio (the PTY *is* its controlling terminal).
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .context("failed to open pty")?;
+    use super::client::{run_host_relay, HostCtl};
+    use crate::ipc::proto::ClientRequest;
 
-    let exe = std::env::current_exe().context("cannot resolve current executable path")?;
-    let mut cmd = CommandBuilder::new(exe);
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    // Tells the koma client it's running under the GUI host, so its render loop
-    // emits a private OSC 5380 with its canvas bg whenever the palette changes
-    // (see client/render.rs render_loop) — the webview listens and repaints its
-    // window gutter live. Normal terminal use never sets this, so it's fully
-    // gated off outside `koma gui`.
-    cmd.env("KOMA_GUI", "1");
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
-    }
-
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .context("failed to spawn koma client in pty")?;
-    eprintln!("[gui] spawned pty child pid={:?}", child.process_id());
-    // Parent drops its slave handle so the master read EOFs when the child exits.
-    drop(pair.slave);
-
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .context("failed to clone pty reader")?;
-    let writer = pair
-        .master
-        .take_writer()
-        .context("failed to take pty writer")?;
-    let master = pair.master; // retained for resize()
-
-    // --- 1b. Resolve the *configured* palette canvas bg, for the webview gutter -
-    // xterm's cell grid rarely divides the window's pixel size evenly, leaving a
-    // remainder strip on the right/bottom that shows through as the container
-    // background. That container must match koma's ACTUAL palette (not a
-    // hardcoded near-black) or the gutter reads as a visible seam whenever the
-    // user runs a non-default palette (e.g. `autumn` = #2e2a20). `AppConfig::load`
-    // already falls back to `AppConfig::default()` on any error, and
-    // `theme::palette` falls back to `dark()` for an unknown name, so this is
-    // infallible; on top of that we defensively fall back to pure black.
-    // Same rationale applies to the titlebar/button glyph FOREGROUND: resolve it
-    // from the SAME palette so the custom titlebar text/buttons match the
-    // configured theme instead of a hardcoded near-white, with a sane fallback
-    // for non-Rgb palette variants.
-    let (bg_hex, fg_hex) = {
-        use ratatui::style::Color;
-        let cfg = crate::model::app_config::AppConfig::load();
-        let palette = crate::view::theme::palette(&cfg);
-        let bg_hex = match palette.bg {
-            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-            Color::Black => "#000000".to_string(),
-            _ => "#000000".to_string(),
-        };
-        let fg_hex = match palette.fg {
-            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-            _ => "#c8d3f5".to_string(),
-        };
-        (bg_hex, fg_hex)
-    };
-
-    // --- 2. Event loop + window ------------------------------------------------
+    // --- 1. Event loop + window (frameless, transparent) -----------------------
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("koma")
@@ -272,32 +182,49 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         .context("failed to build GUI window")?;
     let proxy = event_loop.create_proxy();
 
-    // Shared handles for the (Fn, not FnMut) ipc handler: the pty writer + master
-    // live behind mutexes; the reader + proxy sit in an Option the `ready`
-    // handshake takes exactly once to launch the reader thread. Starting the
-    // reader only after `ready` guarantees the first pty bytes reach a page that
-    // already defined `window.__koma.write`.
-    let writer = Arc::new(Mutex::new(writer));
-    let master = Arc::new(Mutex::new(master));
-    // A dedicated clone the ipc handler sends `Win` commands through directly
-    // (titlebar drag / min / max / close / edge-resize) — separate from the
-    // reader/proxy pair below, which the `ready` handshake takes exactly once.
+    // --- 2. Host-relay wiring --------------------------------------------------
+    // The GUI host IS the daemon client, but this main thread is owned by tao/GTK
+    // (`event_loop.run` diverges — no tokio here). So the daemon connection + the
+    // headless fold loop run on a BACKGROUND client-thread with its own tokio runtime
+    // (`run_host_relay`). daemon->JS: the client-thread pushes JSON envelopes out
+    // through a closure that fires `UserEvent::Push` at this event loop, which the §4
+    // arm injects via `window.__komaClient.push(...)`. JS->daemon: the ipc handler
+    // sends `HostCtl` intents (Ready / SelectSession / NewSession) over `ctl_tx` and
+    // forwards a chat `Submit` straight to the live daemon through the shared `live_req`.
+    let (ctl_tx, ctl_rx) = std::sync::mpsc::channel::<HostCtl>();
+    let live_req: Arc<Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>> =
+        Arc::new(Mutex::new(None));
+
+    {
+        let push_proxy = proxy.clone();
+        let live_req = Arc::clone(&live_req);
+        std::thread::spawn(move || {
+            run_host_relay(
+                opts,
+                // The event loop may already be gone (window closed) — a failed send
+                // is fine (the thread is about to be torn down with the process).
+                move |json| {
+                    let _ = push_proxy.send_event(UserEvent::Push(json));
+                },
+                ctl_rx,
+                live_req,
+            );
+        });
+    }
+
+    // Handles captured by the (Fn) ipc handler: a proxy for titlebar `Win` commands,
+    // the control sender for session intents, and the shared live-request sender a
+    // chat `Submit` is forwarded through.
     let win_proxy = proxy.clone();
-    #[allow(clippy::type_complexity)]
-    let reader_boot: Arc<Mutex<Option<(Box<dyn Read + Send>, EventLoopProxy<UserEvent>)>>> =
-        Arc::new(Mutex::new(Some((reader, proxy))));
+    let ipc_ctl = ctl_tx;
+    let ipc_req = Arc::clone(&live_req);
 
-    // --- 3. WebView + ipc handler (xterm -> pty) -------------------------------
-    let ipc_writer = Arc::clone(&writer);
-    let ipc_master = Arc::clone(&master);
-    let ipc_boot = Arc::clone(&reader_boot);
-
+    // --- 3. WebView + ipc handler ----------------------------------------------
     let wv_builder = WebViewBuilder::new()
         .with_devtools(true)
-        .with_initialization_script(format!(
-            "window.__komaBg='{bg_hex}';window.__komaFg='{fg_hex}';window.__komaOS='{}';",
-            std::env::consts::OS
-        ))
+        // Palette now rides `Snapshot.palette` (pushed live), so only the platform
+        // hint the React chrome reads at boot is injected here.
+        .with_initialization_script(format!("window.__komaOS='{}';", std::env::consts::OS))
         .with_url("koma://localhost/index.html")
         .with_transparent(true)
         .with_custom_protocol("koma".into(), |_webview_id, request| {
@@ -309,58 +236,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                 Err(_) => return, // malformed / unknown -> ignore, never panic
             };
             match msg {
-                ClientMsg::Data { d } => {
-                    if let Ok(bytes) = STANDARD.decode(d) {
-                        if let Ok(mut w) = ipc_writer.lock() {
-                            let _ = w.write_all(&bytes);
-                            let _ = w.flush();
-                        }
-                    }
-                }
-                ClientMsg::Resize { cols, rows } => {
-                    eprintln!("[gui] ipc: resize {cols}x{rows}");
-                    if let Ok(m) = ipc_master.lock() {
-                        let _ = m.resize(PtySize {
-                            rows,
-                            cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        });
-                    }
-                }
-                ClientMsg::Ready => {
-                    eprintln!("[gui] ipc: READY -> starting reader");
-                    // Take reader+proxy once; lock is released before the thread
-                    // spawns (the take happens inside `and_then`, dropping the guard).
-                    let boot = ipc_boot.lock().ok().and_then(|mut g| g.take());
-                    if let Some((mut reader, proxy)) = boot {
-                        std::thread::spawn(move || {
-                            let mut buf = [0u8; 65536];
-                            let mut first = true;
-                            loop {
-                                match reader.read(&mut buf) {
-                                    // EOF or read error (pty master EIO on child exit).
-                                    Ok(0) | Err(_) => {
-                                        eprintln!("[gui] reader: pty EOF/err -> ChildExited");
-                                        let _ = proxy.send_event(UserEvent::ChildExited);
-                                        break;
-                                    }
-                                    Ok(n) => {
-                                        if first {
-                                            first = false;
-                                            eprintln!("[gui] reader: first {n} bytes from pty");
-                                        }
-                                        let b64 = STANDARD.encode(&buf[..n]);
-                                        // base64 alphabet is quote-safe.
-                                        if proxy.send_event(UserEvent::Pty(b64)).is_err() {
-                                            break; // event loop gone
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
+                // Custom-titlebar window commands (the window is undecorated).
                 ClientMsg::Win { a } => {
                     let cmd = match a.as_str() {
                         "drag" => Some(WinCmd::Drag),
@@ -378,11 +254,29 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                         let _ = win_proxy.send_event(UserEvent::Win(WinCmd::Resize(dir)));
                     }
                 }
-                // Host-relay bridge (native-React client). R1: parse + log only, so
-                // the wire format is validated before any behaviour is wired up.
-                ClientMsg::Req(req) => {
-                    eprintln!("[gui] ipc req: {req:?}");
-                }
+                // Host-relay bridge (native-React client): route each request to the
+                // client-thread (session intents) or the live daemon (chat submit).
+                ClientMsg::Req(req) => match req {
+                    // Page (re)booted: ask the client-thread to re-push full state.
+                    GuiReq::Ready => {
+                        let _ = ipc_ctl.send(HostCtl::Ready);
+                    }
+                    // Chat send: forward straight to the currently-attached daemon.
+                    GuiReq::Submit { text } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SubmitInput { text });
+                            }
+                        }
+                    }
+                    // Hub pick / new session: the client-thread (re)attaches.
+                    GuiReq::SelectSession { id } => {
+                        let _ = ipc_ctl.send(HostCtl::Select(id));
+                    }
+                    GuiReq::NewSession => {
+                        let _ = ipc_ctl.send(HostCtl::New);
+                    }
+                },
             }
         });
     // wry's default `.build(&window)` on Linux attaches the webview via a
@@ -426,36 +320,22 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         }
     }
 
-    // --- 4. Run: pty -> xterm on the main thread; child cleanup on close -------
-    // `run` diverges (`!`); `window` stays live in this frame, `webview` + `child`
-    // move into the closure. Killing the child tears down the client on window
-    // close; its detached daemon persists for `/resume` (same as closing a term).
-    let mut first_pty_event = true;
+    // --- 4. Run: push host state to JS + drive the frameless titlebar ----------
+    // `run` diverges (`!`); `window` + `webview` move into the closure. On close we
+    // just exit the loop — the host-relay client-thread's daemon is a SEPARATE
+    // detached process that keeps cooking (resumable via the swapper), exactly like
+    // closing a terminal; the process exit drops the client-thread with it.
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(UserEvent::Pty(b64)) => {
-                if first_pty_event {
-                    first_pty_event = false;
-                    eprintln!("[gui] evaluate_script: first pty chunk pushed to xterm");
-                }
-                let _ = webview.evaluate_script(&format!("window.__koma.write('{b64}')"));
-            }
             // Host-relay state push: inject the authoritative JSON envelope into the
             // native-React client. `json` is a complete JSON object, embedded verbatim.
             Event::UserEvent(UserEvent::Push(json)) => {
                 let _ = webview.evaluate_script(&format!("window.__komaClient.push({json})"));
             }
-            Event::UserEvent(UserEvent::ChildExited) => {
-                eprintln!("[gui] child exited -> closing");
-                let _ = child.kill();
-                let _ = child.wait();
-                *control_flow = ControlFlow::Exit;
-            }
             // Custom-titlebar window commands: the window is undecorated, so
-            // drag / minimize / maximize / close / edge-resize all have to be
-            // driven from here via tao's `Window` methods rather than native
-            // OS titlebar chrome.
+            // drag / minimize / maximize / close / edge-resize all have to be driven
+            // from here via tao's `Window` methods rather than native OS chrome.
             Event::UserEvent(UserEvent::Win(cmd)) => match cmd {
                 WinCmd::Drag => {
                     let _ = window.drag_window();
@@ -464,8 +344,6 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                 WinCmd::ToggleMax => window.set_maximized(!window.is_maximized()),
                 WinCmd::Close => {
                     eprintln!("[gui] titlebar close -> closing");
-                    let _ = child.kill();
-                    let _ = child.wait();
                     *control_flow = ControlFlow::Exit;
                 }
                 WinCmd::Resize(dir) => {
@@ -477,8 +355,6 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                 ..
             } => {
                 eprintln!("[gui] window close requested");
-                let _ = child.kill();
-                let _ = child.wait();
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
