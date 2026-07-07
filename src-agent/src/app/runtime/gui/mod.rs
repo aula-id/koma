@@ -117,6 +117,36 @@ enum ClientMsg {
     /// `e`/`w`/`n`/`s`/`ne`/`nw`/`se`/`sw`.
     #[serde(rename = "winresize")]
     WinResize { dir: String },
+    /// The native-React client protocol (host-relay bridge). Tagged `"req"` on the
+    /// outer `t`; the inner [`GuiReq`] carries the actual request keyed on `r`
+    /// (`Ready` / `Submit` / `SelectSession` / `NewSession`). This is the ONLY
+    /// inbound channel once the PTY-for-chat path is retired — the page drives the
+    /// daemon through it, and the host pushes authoritative state back via
+    /// `window.__komaClient.push(...)`.
+    #[serde(rename = "req")]
+    Req(GuiReq),
+}
+
+/// The native-React client -> host request, carried inside [`ClientMsg::Req`] and
+/// internally tagged on `r`. Mirrors the JS→Rust half of the host-relay bridge
+/// contract exactly:
+///   - `Ready` — the page booted; the host sends its first push (a `Hub` if it is
+///     in the swapper, else a `Snapshot`).
+///   - `Submit { text }` — a chat send; forwarded to the attached daemon as
+///     [`ClientRequest::SubmitInput`].
+///   - `SelectSession { id }` — a hub pick; the host-thread attaches to that daemon.
+///   - `NewSession` — the hub `[+ new session]` row; mint a fresh uuid + attach.
+///
+/// Deserialised from the SAME JSON map as the outer [`ClientMsg`] (serde internal
+/// tagging strips `t`, then this reads `r`), so `{ "t":"req", "r":"Submit",
+/// "text":"…" }` round-trips into `ClientMsg::Req(GuiReq::Submit { text })`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "r")]
+enum GuiReq {
+    Ready,
+    Submit { text: String },
+    SelectSession { id: String },
+    NewSession,
 }
 
 /// Map a `koma.js` resize-handle direction string to tao's [`tao::window::ResizeDirection`].
@@ -341,6 +371,11 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                     if let Some(dir) = parse_resize_dir(&dir) {
                         let _ = win_proxy.send_event(UserEvent::Win(WinCmd::Resize(dir)));
                     }
+                }
+                // Host-relay bridge (native-React client). R1: parse + log only, so
+                // the wire format is validated before any behaviour is wired up.
+                ClientMsg::Req(req) => {
+                    eprintln!("[gui] ipc req: {req:?}");
                 }
             }
         });
