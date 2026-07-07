@@ -18,13 +18,15 @@
   --color-koma-grip: color-mix(in srgb, var(--koma-fg, #c8d3f5) 22%, var(--koma-bg, #0b0e14));
   --color-koma-head: color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
 
-  /* Palette ROLES (1:1 with the TUI theme.rs roles). Only bg/fg are pushed by
-     the host today; the rest default to the TUI dark-theme values and are
-     derived from fg/bg via color-mix so they track a live palette repaint.
-     `applyPaletteVars` may later set --koma-accent/etc. from a fuller push. */
-  --color-koma-dim: color-mix(in srgb, var(--koma-fg, #c8d3f5) 66%, var(--koma-bg, #0b0e14));
+  /* Palette ROLES (1:1 with the TUI theme.rs roles). The host now pushes the
+     full role set (bg/fg + accent/dim/panel) on every Snapshot and
+     applyPaletteVars sets the matching --koma-* vars, so dim/accent and the
+     user-message band (= the TUI `panel` role) consume the REAL theme values
+     instead of color-mix guesses that drift on non-default themes. warn/success/
+     info/error aren't pushed yet, so they keep their dark-theme fallback. */
+  --color-koma-dim: var(--koma-dim, #adadad);
   --color-koma-accent: var(--koma-accent, #39ff14);
-  --color-koma-band: color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+  --color-koma-band: var(--koma-panel, #2b2f38);
   --color-koma-warn: var(--koma-warn, #ffb43c);
   --color-koma-success: var(--koma-success, #00c853);
   --color-koma-info: var(--koma-info, #50c8ff);

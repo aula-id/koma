@@ -11,12 +11,14 @@ import {
   Folder,
   GitBranch,
   Globe,
+  Image as ImageIcon,
+  Images,
   Plug,
   Search,
   Shield,
   Terminal,
 } from 'lucide-react'
-import { useKoma, type ChatMessage, type ToolCallView } from '../store/koma'
+import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { MessageBody } from './MessageBody'
 import { Composer } from './Composer'
 
@@ -85,6 +87,21 @@ function fallbackSignature(name: string, args: string): string {
   return `${name}(${truncateChars(inner, 60)})`
 }
 
+// plan_ready digest: the composed checklist + plan Markdown the daemon rewrites
+// into the tool call's `highlights` arg (transcript.rs `render_tool_lines` reads
+// the same field). Parsed out so it renders as a real Markdown block instead of
+// the terse `plan_ready(…)` signature. Returns null on any parse miss → the
+// caller falls back to the generic tool-call line.
+function planDigest(args: string): string | null {
+  try {
+    const parsed = JSON.parse(args)
+    const h = parsed?.highlights
+    return typeof h === 'string' && h.trim() !== '' ? h : null
+  } catch {
+    return null
+  }
+}
+
 // ---- Tool RESULT: the dotted box (helpers.rs `render_tool_box`). Rounded,
 // light-dashed edges → a CSS `border border-dashed` card; the `╭┄ label ┄╮`
 // chip → a family icon + accent label; `┆` side glyphs → the dashed border.
@@ -137,6 +154,32 @@ function TerseResult({ output }: { output: string }) {
 // completed `✓` (Check) in accent. Result is glued directly under its own call.
 const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) {
   const done = call.status === 'done'
+
+  // plan_ready: a "plan ready" header + the FULL Markdown digest (the rewritten
+  // `highlights` arg) rendered behind the dim quote rail — mirrors the TUI's
+  // render_tool_lines special case, NOT the terse one-line signature. Falls
+  // through to the generic row if the digest can't be parsed out.
+  if (call.name === 'plan_ready') {
+    const digest = planDigest(call.args)
+    if (digest != null) {
+      return (
+        <div>
+          <div className="flex items-center gap-1.5 text-[12.5px] text-koma-dim">
+            {done ? (
+              <Check size={12} className="flex-none text-koma-accent" />
+            ) : (
+              <Cog size={12} className="flex-none animate-spin text-koma-dim" />
+            )}
+            <span>plan ready</span>
+          </div>
+          <div className="mt-1 border-l-2 border-koma-dim pl-3">
+            <MessageBody text={digest} />
+          </div>
+        </div>
+      )
+    }
+  }
+
   const meta = toolBoxMeta(call.name)
   const signature = call.signature ?? fallbackSignature(call.name, call.args)
   const hasOutput = call.output != null && call.output.trim() !== ''
@@ -184,16 +227,84 @@ function ReasoningBlock({ text, defaultOpen }: { text: string; defaultOpen: bool
   )
 }
 
+// ---- Image attachment card (transcript.rs `render_attachment_card`): the warn-
+// coloured list under a user message that carries `[Image #N]` attachments. The
+// TUI's `images` folder-tree (├─/└─ connectors) maps to an Images-icon header +
+// one ImageIcon row per attachment, all in the warn role — koma can't guarantee
+// the model actually read the image, so it's always a warn cue.
+function AttachmentCard({ attachments }: { attachments: AttachmentEntry[] }) {
+  return (
+    <div className="mt-1.5 rounded-md border border-dashed border-koma-warn/50 px-2 py-1.5 text-[11.5px] text-koma-warn">
+      <div className="flex items-center gap-1">
+        <Images size={12} className="flex-none" />
+        <span>images</span>
+      </div>
+      <div className="mt-0.5 space-y-0.5 pl-1">
+        {attachments.map((a) => (
+          <div key={a.markerN} className="flex items-center gap-1 opacity-90">
+            <ImageIcon size={11} className="flex-none" />
+            <span className="truncate">
+              [Image #{a.markerN}] {a.name}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ---- USER message: the full-width BAND (transcript.rs `render_user_message`).
 // `▌` left rail (fg=accent) → a solid accent left bar; text = accent on the
-// panel-tinted band; runs edge-to-edge.
-function UserMessage({ content }: { content: string }) {
+// panel-tinted band; runs edge-to-edge. When the message carries image
+// attachments, the warn card hangs below it (mirrors the TUI: content first,
+// then the card).
+function UserMessage({ content, attachments }: { content: string; attachments?: AttachmentEntry[] }) {
   return (
-    <div className="flex overflow-hidden rounded-md bg-koma-band">
-      <div className="w-[3px] flex-none bg-koma-accent" />
-      <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
-        {content}
+    <div>
+      <div className="flex overflow-hidden rounded-md bg-koma-band">
+        <div className="w-[3px] flex-none bg-koma-accent" />
+        <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
+          {content}
+        </div>
       </div>
+      {attachments && attachments.length > 0 && <AttachmentCard attachments={attachments} />}
+    </div>
+  )
+}
+
+// ---- `!` user-shell entry (transcript.rs `render_shell_block`): a `$ <cmd>`
+// header in accent over the captured output in dim. The host strips SHELL_MARK
+// and tags kind='shell'; `content` is `$ <cmd>\n<output…>`. A header-less body
+// degrades gracefully (the whole first line becomes the command).
+function ShellMessage({ content }: { content: string }) {
+  const lines = content.split('\n')
+  const header = lines[0] ?? '$'
+  const cmd = header.startsWith('$ ') ? header.slice(2) : header
+  const output = lines.slice(1).join('\n')
+  return (
+    <div className="font-mono text-[12.5px]">
+      <div className="flex items-start gap-1.5">
+        <span className="flex-none select-none text-koma-accent">$</span>
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-koma-accent">{cmd}</span>
+      </div>
+      {output.trim() !== '' && (
+        <div className="mt-0.5 whitespace-pre-wrap break-words pl-4 text-koma-dim">{output}</div>
+      )}
+    </div>
+  )
+}
+
+// ---- bg-bash completion nudge (transcript.rs `render_bash_nudge_block`): ONE
+// compact dim line — a success Check (the TUI's green `✓`, mapped to a lucide
+// icon, never a literal char) + the summary (line 1 of the body). The remaining
+// lines are model-only context and are NOT shown.
+function BashNudgeMessage({ content }: { content: string }) {
+  const summary = content.split('\n')[0] ?? ''
+  if (summary.trim() === '') return null
+  return (
+    <div className="flex items-center gap-1.5 pl-1 text-[12px] text-koma-dim">
+      <Check size={12} className="flex-none text-koma-success" />
+      <span className="truncate">{summary}</span>
     </div>
   )
 }
@@ -234,9 +345,15 @@ const AssistantMessage = memo(function AssistantMessage({
   )
 })
 
-// Dispatch a committed message to its role framing.
+// Dispatch a committed message to its role framing. A user message may carry a
+// special `kind` (host-detected + sentinel-stripped): shell / bash-nudge render
+// distinctly, everything else is the normal accent band (+ attachment card).
 function Message({ m }: { m: ChatMessage }) {
-  if (m.role === 'user') return <UserMessage content={m.content} />
+  if (m.role === 'user') {
+    if (m.kind === 'shell') return <ShellMessage content={m.content} />
+    if (m.kind === 'bashNudge') return <BashNudgeMessage content={m.content} />
+    return <UserMessage content={m.content} attachments={m.attachments} />
+  }
   return (
     <AssistantMessage
       content={m.content}
