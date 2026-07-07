@@ -87,8 +87,8 @@ export function Composer() {
     e.target.value = ''
   }
 
-  const removeAttachment = (id: string) => {
-    req({ r: 'RemoveAttachment', id })
+  const removeAttachment = (markerN: number) => {
+    req({ r: 'RemoveAttachment', markerN })
   }
 
   return (
@@ -104,12 +104,12 @@ export function Composer() {
         <div className="flex flex-wrap gap-1">
           {attachments.map((a) => (
             <span
-              key={a.id}
+              key={a.markerN}
               className="flex items-center gap-1 rounded border border-koma-border bg-koma-panel px-1.5 py-0.5 text-[11px] text-koma-fg opacity-80"
             >
               <span className="max-w-[140px] truncate">{a.name}</span>
               <button
-                onClick={() => removeAttachment(a.id)}
+                onClick={() => removeAttachment(a.markerN)}
                 aria-label={`Remove ${a.name}`}
                 className="flex-none opacity-60 transition-opacity hover:opacity-100"
               >

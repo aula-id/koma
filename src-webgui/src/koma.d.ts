@@ -16,8 +16,8 @@ declare global {
     | { r: 'AttachPath'; path: string }
     // Omnisearch: fuzzy workspace file search (mirrors the @-palette).
     | { r: 'FileSearch'; query: string }
-    // Drop a single staged attachment.
-    | { r: 'RemoveAttachment'; id: string }
+    // Drop a single staged attachment by its `[Image #N]` marker number.
+    | { r: 'RemoveAttachment'; markerN: number }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
