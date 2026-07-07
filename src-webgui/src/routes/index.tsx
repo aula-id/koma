@@ -1,6 +1,6 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Terminal } from '../components/Terminal'
+import { ChatView } from '../components/ChatView'
 import { Titlebar, getPlatform } from '../components/Titlebar'
 import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
@@ -105,7 +105,7 @@ function RootLayout() {
 }
 
 function IndexPage() {
-  return <Terminal />
+  return <ChatView />
 }
 
 function SettingsPage() {
