@@ -109,6 +109,12 @@ export type PushEnvelope =
       bash: BashJobEntry[]
       attachments: AttachmentEntry[]
     }
+  // Swap-START signal pushed the instant a Select/New is acted on host-side,
+  // BEFORE teardown, so the loader rises deterministically across the
+  // uninterruptible attach gap (matches Rust PushEnvelope::Switching { to }).
+  // `to` is the target session id/uuid — resolved to a friendly hub label,
+  // falling back to any optimistic label already raised, then a generic one.
+  | { k: 'Switching'; to: string }
   | { k: 'StreamMsg'; session: string; text: string }
   | { k: 'Reasoning'; session: string; text: string }
   | { k: 'Status'; session: string; working: boolean; toast: string | null }
@@ -303,6 +309,20 @@ export const useKoma = create<KomaState>((set) => ({
           ui: { ...s.ui, switchingTo: null },
         }))
         applyPaletteVars(env.palette)
+        break
+      case 'Switching':
+        set((s) => {
+          // Prefer an optimistic label ResumePalette already raised (the
+          // friendly name the user clicked); otherwise resolve the target id
+          // against the hub rows; else fall back to a generic label (e.g. a
+          // daemon-driven new session with no hub row yet). Never clobber a
+          // nicer label with a raw uuid.
+          if (s.ui.switchingTo) return s
+          const row =
+            s.hub.cooking.find((c) => c.id === env.to) ??
+            s.hub.history.find((h) => h.id === env.to)
+          return { ui: { ...s.ui, switchingTo: row?.name ?? 'session' } }
+        })
         break
       case 'StreamMsg':
         set((s) => ({ session: { ...s.session, stream: env.text } }))

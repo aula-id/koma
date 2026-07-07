@@ -28,6 +28,7 @@ function RootLayout() {
   const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const closeOmniSearch = useKoma((s) => s.closeOmniSearch)
   const cancelSwitching = useKoma((s) => s.cancelSwitching)
+  const req = useKoma((s) => s.req)
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
   // can feed the koma store, then announce readiness so it sends the first
@@ -106,9 +107,10 @@ function RootLayout() {
       <SwitchingOverlay
         onCancel={() => {
           // Best-effort bail: the in-flight swap can't be interrupted, so
-          // just drop the loader and reopen the hub so the user can pick
-          // again (or wait — the pending Snapshot still lands and clears
-          // any future loader normally).
+          // tell the host to drop back to the swapper once the target lands
+          // (Rust GuiReq::CancelSwitch), then drop the loader and reopen the
+          // hub locally so the user can pick again.
+          req({ r: 'CancelSwitch' })
           cancelSwitching()
           setOverlay('resume')
         }}
