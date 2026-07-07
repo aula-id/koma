@@ -126,6 +126,12 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     let mut cmd = CommandBuilder::new(exe);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    // Tells the koma client it's running under the GUI host, so its render loop
+    // emits a private OSC 5380 with its canvas bg whenever the palette changes
+    // (see client/render.rs render_loop) — the webview listens and repaints its
+    // window gutter live. Normal terminal use never sets this, so it's fully
+    // gated off outside `koma gui`.
+    cmd.env("KOMA_GUI", "1");
     if let Ok(cwd) = std::env::current_dir() {
         cmd.cwd(cwd);
     }
