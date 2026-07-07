@@ -366,6 +366,30 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         }
     }
 
+    // --- 3c. Linux: opt-in software-rendering fallback for broken/old GPUs -----
+    // webkit2gtk's accelerated compositing path can render a fully blank window
+    // on some old/broken GPU drivers; the GL/compositor env vars (WEBKIT_DISABLE_
+    // COMPOSITING_MODE etc.) don't fix this on affected machines. The canonical
+    // fix is forcing webkit's own internal software renderer via its
+    // `hardware-acceleration-policy` setting. This is opt-in (never touches
+    // modern/working GPUs) behind KOMA_GUI_SOFTWARE=1, since forcing software
+    // rendering is strictly slower and shouldn't be the default. Linux-only;
+    // no-op on macOS/Windows.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("KOMA_GUI_SOFTWARE").is_ok() {
+            use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
+            use wry::WebViewExtUnix;
+            let wk = webview.webview(); // webkit2gtk::WebView
+            if let Some(settings) = WebViewExt::settings(&wk) {
+                settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
+            }
+            eprintln!(
+                "[gui] KOMA_GUI_SOFTWARE=1: forced webkit software rendering (hardware-acceleration-policy=Never)"
+            );
+        }
+    }
+
     // --- 4. Run: pty -> xterm on the main thread; child cleanup on close -------
     // `run` diverges (`!`); `window` stays live in this frame, `webview` + `child`
     // move into the closure. Killing the child tears down the client on window

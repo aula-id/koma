@@ -64,8 +64,19 @@ objc2-app-kit = { version = "0.3", optional = true, default-features = false, fe
     "NSColor",
 ] }
 
+# Linux-only: lets us reach into wry's underlying `webkit2gtk::WebView` and flip
+# its `hardware-acceleration-policy` setting to `Never`, which is the canonical
+# fix for "webkit2gtk renders a blank window" on old/broken GPU drivers (distinct
+# from GL/compositor env vars, which don't affect this). Opt-in via the
+# KOMA_GUI_SOFTWARE=1 env var (see src/app/runtime/gui/mod.rs). Version + feature
+# set pinned to match wry's own internal webkit2gtk dependency exactly (see
+# wry-0.52.1 Cargo.toml) so both crates unify on a single copy instead of
+# pulling in two conflicting webkit2gtk-sys builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.1", optional = true, features = ["v2_38"] }
+
 [features]
-gui = ["dep:wry", "dep:tao", "dep:portable-pty", "dep:objc2-app-kit"]
+gui = ["dep:wry", "dep:tao", "dep:portable-pty", "dep:objc2-app-kit", "dep:webkit2gtk"]
 
 [[bin]]
 name = "koma"
