@@ -254,6 +254,22 @@ impl DaemonHub {
                 self.deregister(idx);
             }
 
+            // GUI chip removal: unstage one attachment by its `[Image #N]` marker number
+            // from THIS client's foreground `pending_attachments` (the C2 bracket already
+            // points the cursor at this client's view), and strip its marker from the
+            // daemon composer input so the daemon's own reconcile stays consistent. No
+            // model round-trip — the staged bytes are simply dropped from the next submit.
+            ClientRequest::RemoveAttachment { marker_n } => {
+                let fg = state.rest.fg_mut();
+                fg.pending_attachments.retain(|a| a.marker_n != marker_n);
+                let marker = format!("[Image #{marker_n}]");
+                if fg.input.contains(&marker) {
+                    fg.input = fg.input.replace(&marker, "");
+                    fg.cursor = fg.cursor.min(fg.input.chars().count());
+                }
+                self.send_to(idx, DaemonEvent::Ack);
+            }
+
             // --- mutating: each client drives its OWN foreground (C2) ---
             // The single-writer gate is RELAXED: any client may now submit / send keys /
             // paste / approve / `/new` / switch / attach-select against its own foreground
@@ -466,7 +482,8 @@ impl DaemonHub {
             | ClientRequest::Detach
             | ClientRequest::Resync
             | ClientRequest::ListSessions
-            | ClientRequest::Status => {
+            | ClientRequest::Status
+            | ClientRequest::RemoveAttachment { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }
