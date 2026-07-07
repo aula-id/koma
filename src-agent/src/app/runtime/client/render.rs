@@ -697,6 +697,11 @@ enum PushEnvelope {
         models: Vec<PushModel>,
         mcp: Vec<PushMcpServer>,
     },
+    /// One-shot live model-id catalogue for `provider` (uuid), answering a
+    /// `ListModels` — the Connector ModelForm REPLACES its model-id picker options with
+    /// `models`. Pushed out-of-band (not fingerprinted) whenever the daemon answers a
+    /// `ListModels`; `provider` is echoed so the form can drop a stale/out-of-order reply.
+    ModelList { provider: String, models: Vec<String> },
 }
 
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
@@ -895,6 +900,18 @@ pub(super) fn push_loop(
                     // full snapshot — see `ipc::snapshot::diff`).
                     if let DaemonEvent::Snapshot(snap) = &frame.event {
                         current_config = Some(ConfigProjection::from_global(&snap.global));
+                    }
+                    // Live model-id catalogue reply (Connector model picker): re-push it as
+                    // a `ModelList` envelope BEFORE folding (the fold treats it as a
+                    // non-visual no-op, keeping the seq gap-free).
+                    if let DaemonEvent::ModelList { provider, models } = &frame.event {
+                        let env = PushEnvelope::ModelList {
+                            provider: provider.clone(),
+                            models: models.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
                     }
                     apply_frame(
                         frame,

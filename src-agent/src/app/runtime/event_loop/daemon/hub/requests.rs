@@ -302,6 +302,48 @@ impl DaemonHub {
                 self.send_to(idx, DaemonEvent::FileSearchResults { query, items });
             }
 
+            // GUI Connector model picker: fetch the live model-id catalogue for a
+            // provider (`GET {endpoint}/models`). Read-only wrt session state, but a
+            // NETWORK call — so it must NOT run inline on the loop thread. Resolve the
+            // provider's (endpoint, api_key) from config, then SPAWN the GET on the tokio
+            // handle; the task ships a `ListModelsReply` back over the hub's channel, which
+            // `drain_list_models` turns into a seq'd `ModelList` frame to THIS client next
+            // tick (so the per-client seq stays gap-free — a background task can't advance
+            // it). An unknown provider uuid is a silent no-op (no reply). Mirrors the
+            // FileSearch one-shot pattern, async.
+            ClientRequest::ListModels { provider } => {
+                if let Some(p) = state.rest.config.providers.iter().find(|p| p.uuid == provider) {
+                    let endpoint = p.endpoint.clone();
+                    let api_key = p.api_key.clone();
+                    let client_id = self.clients[idx].id;
+                    let tx = self.list_models_tx.clone();
+                    let prov = provider.clone();
+                    let c = crate::app::runtime::session_mgmt::build_client();
+                    handle.spawn(async move {
+                        let conn = crate::service::openrouter::Conn {
+                            endpoint: &endpoint,
+                            api_key: &api_key,
+                            api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+                            account_id: "",
+                            oauth_uuid: "",
+                            install_id: "",
+                        };
+                        // On any error, reply with an EMPTY list (the picker shows nothing)
+                        // rather than stranding the request with no answer.
+                        let models = c
+                            .list_models(conn)
+                            .await
+                            .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        let _ = tx.send(super::core::ListModelsReply {
+                            client_id,
+                            provider: prov,
+                            models,
+                        });
+                    });
+                }
+            }
+
             // GUI chip removal: unstage one attachment by its `[Image #N]` marker number
             // from THIS client's foreground `pending_attachments` (the C2 bracket already
             // points the cursor at this client's view), and strip its marker from the
@@ -587,6 +629,64 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI model CRUD (Connector ModelForm). Build a `ModelEntry` (parsing the
+            // lowercase role tokens; an empty `route` → `None`), then upsert with per-scope
+            // role-steal into either the GLOBAL catalogue (`config.models`, persisted via
+            // `config.save`) or the foreground session's LOCAL override layer
+            // (`settings.session_models`, persisted via `sess.save`). The two scopes keep
+            // the role invariant independently — same split the TUI Settings save uses.
+            ClientRequest::SetModel {
+                uuid,
+                name,
+                model_id,
+                provider_uuid,
+                route,
+                roles,
+                scope,
+            } => {
+                let roles = roles.iter().filter_map(|r| parse_model_role(r)).collect();
+                let entry = crate::model::app_config::ModelEntry {
+                    uuid: uuid.unwrap_or_default(),
+                    name: name.trim().to_string(),
+                    model_id: model_id.trim().to_string(),
+                    provider_uuid,
+                    route: route.filter(|r| !r.trim().is_empty()),
+                    roles,
+                    role: None,
+                };
+                let result = if scope == "local" {
+                    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                        crate::model::app_config::upsert_model_entry(
+                            &mut sess.settings.session_models,
+                            entry,
+                        );
+                        sess.save()
+                    } else {
+                        Ok(()) // no foreground session to hold a local override
+                    }
+                } else {
+                    state.rest.config.upsert_model(entry);
+                    state.rest.config.save()
+                };
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI model delete: remove by uuid from the addressed scope + persist.
+            ClientRequest::DeleteModel { uuid, scope } => {
+                let result = if scope == "local" {
+                    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                        sess.settings.session_models.retain(|m| m.uuid != uuid);
+                        sess.save()
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    state.rest.config.remove_model_by_uuid(&uuid);
+                    state.rest.config.save()
+                };
+                self.ack_or_error(idx, result);
+            }
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.
@@ -631,7 +731,8 @@ impl DaemonHub {
             | ClientRequest::ListSessions
             | ClientRequest::Status
             | ClientRequest::RemoveAttachment { .. }
-            | ClientRequest::FileSearch { .. } => {
+            | ClientRequest::FileSearch { .. }
+            | ClientRequest::ListModels { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }
@@ -644,5 +745,21 @@ impl DaemonHub {
             Ok(()) => self.send_to(idx, DaemonEvent::Ack),
             Err(e) => self.send_to(idx, DaemonEvent::Error(format!("{e:#}"))),
         }
+    }
+}
+
+/// Map a lowercase role token (`"main"`/`"awareness"`/`"safeguard"`/`"compactor"`/
+/// `"planner"`) from the GUI `SetModel` request to its [`ModelRole`]. Unknown tokens
+/// yield `None` and are dropped (a forgiving parse — the ModelForm only emits valid
+/// tokens, but a version-skewed webview never crashes the daemon).
+fn parse_model_role(s: &str) -> Option<crate::model::app_config::ModelRole> {
+    use crate::model::app_config::ModelRole;
+    match s {
+        "main" => Some(ModelRole::Main),
+        "awareness" => Some(ModelRole::Awareness),
+        "safeguard" => Some(ModelRole::Safeguard),
+        "compactor" => Some(ModelRole::Compactor),
+        "planner" => Some(ModelRole::Planner),
+        _ => None,
     }
 }

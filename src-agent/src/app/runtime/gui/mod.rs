@@ -217,6 +217,26 @@ enum GuiReq {
     },
     /// Remove a provider by uuid (Connector arm-delete).
     DeleteProvider { uuid: String },
+    /// Upsert a model (Connector ModelForm). `uuid` is absent for a new model; `roles`
+    /// are lowercase tokens; `scope` is `"global"`/`"local"`.
+    SetModel {
+        #[serde(default)]
+        uuid: Option<String>,
+        name: String,
+        #[serde(rename = "modelId")]
+        model_id: String,
+        #[serde(rename = "providerUuid")]
+        provider_uuid: String,
+        #[serde(default)]
+        route: Option<String>,
+        roles: Vec<String>,
+        scope: String,
+    },
+    /// Remove a model by uuid from the addressed `scope` (Connector arm-delete).
+    DeleteModel { uuid: String, scope: String },
+    /// Fetch the live model-id catalogue for a provider (Connector model picker). The
+    /// daemon replies out-of-band; the host re-pushes it as a `ModelList` envelope.
+    ListModels { provider: String },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -530,6 +550,43 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::DeleteProvider { uuid });
+                            }
+                        }
+                    }
+                    GuiReq::SetModel {
+                        uuid,
+                        name,
+                        model_id,
+                        provider_uuid,
+                        route,
+                        roles,
+                        scope,
+                    } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetModel {
+                                    uuid,
+                                    name,
+                                    model_id,
+                                    provider_uuid,
+                                    route,
+                                    roles,
+                                    scope,
+                                });
+                            }
+                        }
+                    }
+                    GuiReq::DeleteModel { uuid, scope } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::DeleteModel { uuid, scope });
+                            }
+                        }
+                    }
+                    GuiReq::ListModels { provider } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::ListModels { provider });
                             }
                         }
                     }

@@ -320,6 +320,13 @@ pub(in crate::app::runtime) fn daemon_loop(
         //    handling below so a closed-state snapshot reflects the tombstones.
         hub.drain_inbound(state, client, handle);
 
+        // 3-bis. Reply to any async `ListModels` GET that landed since the last tick with
+        //     a seq'd `ModelList` frame to the requesting client (the GUI Connector model
+        //     picker). Kept off the per-request path (the fetch is a network GET spawned by
+        //     the `ListModels` handler) and routed through `send_to` so the per-client seq
+        //     stays gap-free.
+        hub.drain_list_models();
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the
