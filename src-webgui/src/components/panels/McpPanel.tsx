@@ -2,22 +2,11 @@ import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { McpListView } from './mcp/McpListView'
 import { McpEditView } from './mcp/McpEditView'
-
-type Transport = 'stdio' | 'http'
-
-type Server = {
-  id: string
-  name: string
-  enabled: boolean
-  transport: Transport
-  command: string
-  args: string
-  env: string
-  url: string
-}
+import { useKoma } from '../../store/koma'
+import type { McpServer } from '../../types/config'
 
 let seq = 0
-function blankServer(): Server {
+function blankServer(): McpServer {
   seq += 1
   return {
     id: `srv-${seq}`,
@@ -34,11 +23,13 @@ function blankServer(): Server {
 const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 
 // Design reference: master -> detail slide, inline form, inline arm-delete — no
-// popups. State is local and starts EMPTY; Add fills it so the whole add/edit/
-// remove loop is demoable without any backend.
+// popups. `servers` is the authoritative config slice (pushed by the host);
+// add/edit/delete/enable emit GuiReqs and wait for the host's Config push to
+// reflect back, rather than mutating local state optimistically.
 export function McpPanel() {
-  const [servers, setServers] = useState<Server[]>([])
-  const [draft, setDraft] = useState<Server | null>(null)
+  const servers = useKoma((s) => s.config.mcp)
+  const req = useKoma((s) => s.req)
+  const [draft, setDraft] = useState<McpServer | null>(null)
   const [isNew, setIsNew] = useState(false)
   const [armed, setArmed] = useState<string | null>(null)
 
@@ -46,22 +37,23 @@ export function McpPanel() {
     setDraft(blankServer())
     setIsNew(true)
   }
-  const openEdit = (s: Server) => {
+  const openEdit = (s: McpServer) => {
     setDraft({ ...s })
     setIsNew(false)
   }
-  const patch = (p: Partial<Server>) => setDraft((d) => (d ? { ...d, ...p } : d))
+  const patch = (p: Partial<McpServer>) => setDraft((d) => (d ? { ...d, ...p } : d))
   const cancel = () => setDraft(null)
   const save = () => {
     if (!draft || !draft.name.trim()) return
-    setServers((list) =>
-      isNew ? [...list, draft] : list.map((s) => (s.id === draft.id ? draft : s)),
-    )
+    req({ r: 'SetMcpServer', server: draft })
     setDraft(null)
   }
   const remove = (id: string) => {
-    setServers((list) => list.filter((s) => s.id !== id))
+    req({ r: 'DeleteMcpServer', id })
     setArmed(null)
+  }
+  const toggleEnable = (id: string, enabled: boolean) => {
+    req({ r: 'EnableMcpServer', id, enabled })
   }
 
   return (
@@ -97,6 +89,7 @@ export function McpPanel() {
               onArm={(id) => setArmed(id)}
               onDisarm={() => setArmed(null)}
               onConfirm={remove}
+              onToggleEnable={toggleEnable}
             />
           </motion.div>
         )}

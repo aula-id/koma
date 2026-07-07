@@ -1,29 +1,27 @@
 import { Plus, Pencil, Trash2, Check, X } from 'lucide-react'
-
-type Transport = 'stdio' | 'http'
-
-type Server = {
-  id: string
-  name: string
-  enabled: boolean
-  transport: Transport
-  command: string
-  args: string
-  env: string
-  url: string
-}
+import type { McpServer } from '../../../types/config'
 
 type Props = {
-  servers: Server[]
+  servers: McpServer[]
   armed: string | null
   onAdd: () => void
-  onEdit: (s: Server) => void
+  onEdit: (s: McpServer) => void
   onArm: (id: string) => void
   onDisarm: () => void
   onConfirm: (id: string) => void
+  onToggleEnable: (id: string, enabled: boolean) => void
 }
 
-export function McpListView({ servers, armed, onAdd, onEdit, onArm, onDisarm, onConfirm }: Props) {
+export function McpListView({
+  servers,
+  armed,
+  onAdd,
+  onEdit,
+  onArm,
+  onDisarm,
+  onConfirm,
+  onToggleEnable,
+}: Props) {
   return (
     <>
       <div className="flex-1 overflow-auto py-1">
@@ -59,8 +57,11 @@ export function McpListView({ servers, armed, onAdd, onEdit, onArm, onDisarm, on
               </div>
             ) : (
               <>
-                <span
-                  className={`h-2 w-2 flex-none rounded-full ${s.enabled ? 'bg-emerald-500' : 'bg-koma-fg/25'}`}
+                <button
+                  onClick={() => onToggleEnable(s.id, !s.enabled)}
+                  aria-label={s.enabled ? 'Disable' : 'Enable'}
+                  title={s.enabled ? 'Disable' : 'Enable'}
+                  className={`h-2 w-2 flex-none rounded-full transition-opacity hover:opacity-70 ${s.enabled ? 'bg-emerald-500' : 'bg-koma-fg/25'}`}
                 />
                 <button onClick={() => onEdit(s)} className="min-w-0 flex-1 text-left">
                   <div className="flex items-center gap-2">

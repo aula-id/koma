@@ -1,23 +1,11 @@
 import { Field, TextInput, Toggle, Segmented } from '../form'
 import { DetailHeader, FormActions } from '../helpers'
-
-type Transport = 'stdio' | 'http'
-
-type Server = {
-  id: string
-  name: string
-  enabled: boolean
-  transport: Transport
-  command: string
-  args: string
-  env: string
-  url: string
-}
+import type { McpServer } from '../../../types/config'
 
 type Props = {
-  draft: Server
+  draft: McpServer
   isNew: boolean
-  onChange: (patch: Partial<Server>) => void
+  onChange: (patch: Partial<McpServer>) => void
   onSave: () => void
   onCancel: () => void
 }
