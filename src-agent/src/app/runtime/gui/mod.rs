@@ -134,6 +134,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         .slave
         .spawn_command(cmd)
         .context("failed to spawn koma client in pty")?;
+    eprintln!("[gui] spawned pty child pid={:?}", child.process_id());
     // Parent drops its slave handle so the master read EOFs when the child exits.
     drop(pair.slave);
 
@@ -173,6 +174,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     let ipc_boot = Arc::clone(&reader_boot);
 
     let webview = WebViewBuilder::new()
+        .with_devtools(true)
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
         })
@@ -191,6 +193,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                     }
                 }
                 ClientMsg::Resize { cols, rows } => {
+                    eprintln!("[gui] ipc: resize {cols}x{rows}");
                     if let Ok(m) = ipc_master.lock() {
                         let _ = m.resize(PtySize {
                             rows,
@@ -201,20 +204,27 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                     }
                 }
                 ClientMsg::Ready => {
+                    eprintln!("[gui] ipc: READY -> starting reader");
                     // Take reader+proxy once; lock is released before the thread
                     // spawns (the take happens inside `and_then`, dropping the guard).
                     let boot = ipc_boot.lock().ok().and_then(|mut g| g.take());
                     if let Some((mut reader, proxy)) = boot {
                         std::thread::spawn(move || {
                             let mut buf = [0u8; 65536];
+                            let mut first = true;
                             loop {
                                 match reader.read(&mut buf) {
                                     // EOF or read error (pty master EIO on child exit).
                                     Ok(0) | Err(_) => {
+                                        eprintln!("[gui] reader: pty EOF/err -> ChildExited");
                                         let _ = proxy.send_event(UserEvent::ChildExited);
                                         break;
                                     }
                                     Ok(n) => {
+                                        if first {
+                                            first = false;
+                                            eprintln!("[gui] reader: first {n} bytes from pty");
+                                        }
                                         let b64 = STANDARD.encode(&buf[..n]);
                                         // base64 alphabet is quote-safe.
                                         if proxy.send_event(UserEvent::Pty(b64)).is_err() {
@@ -236,13 +246,19 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     // `run` diverges (`!`); `window` stays live in this frame, `webview` + `child`
     // move into the closure. Killing the child tears down the client on window
     // close; its detached daemon persists for `/resume` (same as closing a term).
+    let mut first_pty_event = true;
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(UserEvent::Pty(b64)) => {
+                if first_pty_event {
+                    first_pty_event = false;
+                    eprintln!("[gui] evaluate_script: first pty chunk pushed to xterm");
+                }
                 let _ = webview.evaluate_script(&format!("window.__koma.write('{b64}')"));
             }
             Event::UserEvent(UserEvent::ChildExited) => {
+                eprintln!("[gui] child exited -> closing");
                 let _ = child.kill();
                 let _ = child.wait();
                 *control_flow = ControlFlow::Exit;
@@ -251,6 +267,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
+                eprintln!("[gui] window close requested");
                 let _ = child.kill();
                 let _ = child.wait();
                 *control_flow = ControlFlow::Exit;
