@@ -1,0 +1,14 @@
+@font-face {
+  font-family: 'KomaMono';
+  src: url('koma://localhost/fonts/jetbrains-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'KomaMono';
+  src: url('koma://localhost/fonts/jetbrains-mono-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}

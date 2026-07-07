@@ -32,6 +32,8 @@ mod lifecycle;
 mod mcp_daemon;
 mod signals;
 mod session_mgmt;
+#[cfg(feature = "gui")]
+pub mod gui;
 
 // Re-export the sync-loop <-> per-client-task bridge message so the per-client
 // connection task in `crate::ipc::conn` (outside this module tree) can name it.

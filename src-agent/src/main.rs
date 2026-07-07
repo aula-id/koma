@@ -14,6 +14,7 @@
 //! | `koma --resume` | open the session hub. |
 //! | `koma alone` | standalone no-daemon TUI ([`app::run`]); REFUSES if a daemon is already alive. The escape hatch (alias for `--local`). |
 //! | `koma daemon <status\|kill\|restart\|clean>` | daemon management CLI then exit. |
+//! | `koma gui` | feature-gated (`--features gui`) desktop client — a wry webview hosting xterm.js that renders the real koma terminal client spawned in a PTY. |
 //! | `koma --internet-fullmode-install [--force]` | provision Python full-mode (browser) env then exit. |
 //! | `koma --internet-fullmode-uninstall` | remove Python full-mode env then exit. |
 //!
@@ -165,6 +166,18 @@ fn main() -> anyhow::Result<()> {
     // `--attach`. Stays in this branch (loops forever) until QuitDaemon / Ctrl-C.
     if opts.daemon {
         return app::run_daemon(opts);
+    }
+
+    // --- desktop GUI path: feature-gated wry + xterm.js client (spawns the real
+    // koma terminal client in a PTY). Default builds omit the `gui` feature. ---
+    #[cfg(feature = "gui")]
+    if opts.gui {
+        return app::run_gui(opts);
+    }
+    #[cfg(not(feature = "gui"))]
+    if opts.gui {
+        eprintln!("koma was built without the `gui` feature. Rebuild with: cargo build --features gui");
+        std::process::exit(1);
     }
 
     // --- explicit thin-client path: attach to an ALREADY-running daemon ---
