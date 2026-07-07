@@ -20,11 +20,10 @@ function Empty({ children }: { children: string }) {
   return <div className="px-3 py-1.5 text-[12px] text-koma-fg opacity-35">{children}</div>
 }
 
-// Design-phase stub of the /resume hub. The search row shares a layoutId AND
-// width with the titlebar pill and is anchored at the same top spot (mt-[5px],
-// h-[22px]), so opening swaps the pill's content in place — no downward slide,
-// no widening — and just reveals the dropdown below. Cooking (live) + History
-// (past) mirror the real hub; both empty. Inert search/rows. No backdrop dim.
+// Design-phase stub of the /resume hub. Search row shares layoutId + width with
+// the titlebar 'change session' pill, anchored at the same spot (no slide); the
+// dropdown reveals below. New session is inline with the Cooking header and
+// opens the folder prompt. Cooking (live) + History (past) mirror the real hub.
 export function ResumePalette({ onClose, onNewSession }: ResumePaletteProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -59,14 +58,18 @@ export function ResumePalette({ onClose, onNewSession }: ResumePaletteProps) {
             transition={{ duration: 0.16, ease: 'easeOut', delay: 0.02 }}
             className="max-h-[50vh] overflow-auto border-t border-koma-border py-1"
           >
-            <Label>Cooking</Label>
-            <button
-              onClick={onNewSession}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
-            >
-              <Plus size={14} className="flex-none" />
-              New session
-            </button>
+            <div className="flex items-center justify-between px-3 pb-1 pt-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
+                Cooking
+              </span>
+              <button
+                onClick={onNewSession}
+                className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
+              >
+                <Plus size={12} className="flex-none" />
+                New session
+              </button>
+            </div>
             <Empty>No live sessions</Empty>
             <Label>History</Label>
             <Empty>No past sessions</Empty>
