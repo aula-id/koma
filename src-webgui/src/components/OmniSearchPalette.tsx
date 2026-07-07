@@ -9,14 +9,17 @@ type OmniSearchPaletteProps = {
   onClose: () => void
 }
 
-// Fuzzy workspace-file search + attach overlay. Mirrors ResumePalette's
+// Fuzzy workspace-file search + insert overlay. Mirrors ResumePalette's
 // overlay skeleton (full-screen backdrop with click-to-close, shared
 // search-pill layoutId, Esc-to-close) but drives a live FileSearch request as
-// the user types (debounced) and attaches the selected result instead of
-// switching sessions.
+// the user types (debounced) and inserts the selected result's path into the
+// composer draft instead of switching sessions. Picks are NOT routed through
+// AttachPath: the daemon's attachment ingest is image-only, so a non-image
+// path attached that way silently corrupts the shared composer buffer.
 export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
   const results = useKoma((s) => s.session.searchResults)
   const req = useKoma((s) => s.req)
+  const insertToComposer = useKoma((s) => s.insertToComposer)
   const [query, setQuery] = useState('')
 
   useEffect(() => {
@@ -36,7 +39,10 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
   }, [query, req])
 
   const pick = (path: string) => {
-    req({ r: 'AttachPath', path })
+    // Dir rows (non-attachable) come back with path === "" — guarded out at
+    // the render call site below, but double-guard here too.
+    if (!path) return
+    insertToComposer(path)
     onClose()
   }
 
@@ -70,16 +76,27 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
             {results.length === 0 ? (
               <Empty>No matches</Empty>
             ) : (
-              results.map((r) => (
-                <button
-                  key={r.path}
-                  onClick={() => pick(r.path)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
-                >
-                  <FileIcon size={12} className="flex-none opacity-50" />
-                  <span className="truncate">{r.label}</span>
-                </button>
-              ))
+              results.map((r, i) => {
+                // Directory rows (non-attachable) come back with path === ""
+                // from the daemon — render them disabled and key by label+
+                // index instead of path (multiple dir rows would otherwise
+                // collide on the empty-string key).
+                const disabled = r.path === ''
+                return (
+                  <button
+                    key={r.path || `${r.label}-${i}`}
+                    onClick={() => pick(r.path)}
+                    disabled={disabled}
+                    aria-disabled={disabled}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors ${
+                      disabled ? 'cursor-default opacity-40' : 'hover:bg-koma-hover'
+                    }`}
+                  >
+                    <FileIcon size={12} className="flex-none opacity-50" />
+                    <span className="truncate">{r.label}</span>
+                  </button>
+                )
+              })
             )}
           </motion.div>
         </div>
