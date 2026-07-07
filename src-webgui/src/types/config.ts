@@ -21,7 +21,11 @@ export type McpServer = {
   url: string
 }
 
-export type Provider = { id: string; name: string; endpoint: string; apiKey: string }
+// `hasKey` is a presence flag, NOT the key itself — the daemon never sends the
+// plaintext API key to the webview (devtools are enabled; it'd be DOM/console
+// readable). ProviderForm's key input always starts empty on edit; saving with
+// it blank keeps the existing stored key (see `upsert_provider` daemon-side).
+export type Provider = { id: string; name: string; endpoint: string; hasKey: boolean }
 
 export type OAuthProv = 'OpenAI' | 'Kilo Code' | 'Anthropic'
 export type OAuthConn = { id: string; provider: OAuthProv; account: string }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { DetailHeader } from './helpers'
 import { ConnectorListView } from './connector/ConnectorListView'
-import { ProviderForm } from './connector/ProviderForm'
+import { ProviderForm, type ProviderSavePayload } from './connector/ProviderForm'
 import { OAuthConnect } from './connector/OAuthConnect'
 import { ModelForm } from './connector/ModelForm'
 import { useKoma } from '../../store/koma'
@@ -36,9 +36,11 @@ export function ConnectorPanel() {
 
   const back = () => setView({ kind: 'list' })
 
-  const saveProvider = (d: Provider) => {
+  const saveProvider = (d: ProviderSavePayload) => {
     // Flat payload matching the daemon's GuiReq::SetProvider. `uuid` is `null`
     // for a new provider (synthetic `d.id` placeholder → daemon mints a uuid).
+    // `apiKey` is the typed value only — empty means "leave unchanged" (the
+    // form never sees the real stored key; see `ProviderForm`).
     const isNew = view.kind === 'provider' ? view.isNew : false
     req({ r: 'SetProvider', uuid: isNew ? null : d.id, name: d.name, endpoint: d.endpoint, apiKey: d.apiKey })
     back()
@@ -88,7 +90,7 @@ export function ConnectorPanel() {
               conns={conns}
               models={models}
               armed={armed}
-              onAddProvider={() => setView({ kind: 'provider', draft: { id: nid('prov'), name: '', endpoint: '', apiKey: '' }, isNew: true })}
+              onAddProvider={() => setView({ kind: 'provider', draft: { id: nid('prov'), name: '', endpoint: '', hasKey: false }, isNew: true })}
               onAddModel={() => setView({ kind: 'model', draft: { id: nid('model'), name: '', modelId: '', provider: '', route: '', roles: [], scope: 'global' }, isNew: true })}
               onConnectOAuth={() => setView({ kind: 'oauth' })}
               onEditProvider={(p) => setView({ kind: 'provider', draft: { ...p }, isNew: false })}
