@@ -399,6 +399,46 @@ impl AppConfig {
         self.oauth_conns.iter().position(|c| c.uuid == uuid)
     }
 
+    /// Upsert an API provider by uuid (the GUI Connector ProviderForm). A `Some(uuid)`
+    /// matching an existing provider EDITS it in place — updating `name`/`endpoint`/
+    /// `api_key` while PRESERVING its `api_type` (the form doesn't expose the wire type,
+    /// so an OAuth/Codex/koma-free provider keeps its transport). A `None`/empty uuid, or
+    /// a uuid with no match, CREATES a new [`ApiType::OpenAiCompatible`] provider (the
+    /// default the TUI providers modal also starts from). The caller persists via
+    /// [`Self::save`] afterwards.
+    pub fn upsert_provider(
+        &mut self,
+        uuid: Option<String>,
+        name: String,
+        endpoint: String,
+        api_key: String,
+    ) {
+        let uuid = uuid.filter(|u| !u.is_empty());
+        if let Some(u) = uuid.as_deref() {
+            if let Some(slot) = self.providers.iter_mut().find(|p| p.uuid == u) {
+                slot.name = name;
+                slot.endpoint = endpoint;
+                slot.api_key = api_key;
+                // `api_type` intentionally preserved (not exposed by the GUI form).
+                return;
+            }
+        }
+        self.providers.push(ProviderConn {
+            uuid: uuid.unwrap_or_else(new_uuid),
+            name,
+            api_type: ApiType::OpenAiCompatible,
+            endpoint,
+            api_key,
+        });
+    }
+
+    /// Remove the provider with `uuid` (no-op if none matches). Models referencing the
+    /// removed provider keep their now-dangling `provider_uuid` (surfaces empty in the
+    /// UI for re-pick), matching the TUI Settings-save behaviour — no cascade.
+    pub fn remove_provider_by_uuid(&mut self, uuid: &str) {
+        self.providers.retain(|p| p.uuid != uuid);
+    }
+
     /// Upsert an MCP server by uuid: replace the entry whose uuid matches, else append.
     /// An entry arriving with an EMPTY uuid is treated as brand-new (a fresh uuid is
     /// minted). Config-layer setter shared by the GUI `SetMcpServer` handler; the caller

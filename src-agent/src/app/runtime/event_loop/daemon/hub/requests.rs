@@ -561,6 +561,32 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI provider CRUD (Connector ProviderForm). Upsert by uuid via the
+            // config-layer setter (preserving wire type on edit, minting OpenAI-compatible
+            // on create), then persist. Config-global; any client may drive it.
+            ClientRequest::SetProvider {
+                uuid,
+                name,
+                endpoint,
+                api_key,
+            } => {
+                state.rest.config.upsert_provider(
+                    uuid,
+                    name.trim().to_string(),
+                    endpoint.trim().to_string(),
+                    api_key,
+                );
+                let result = state.rest.config.save();
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI provider delete: drop by uuid + persist (models keep any dangling ref).
+            ClientRequest::DeleteProvider { uuid } => {
+                state.rest.config.remove_provider_by_uuid(&uuid);
+                let result = state.rest.config.save();
+                self.ack_or_error(idx, result);
+            }
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.
