@@ -169,6 +169,14 @@ type UiSlice = {
   // than routed through AttachPath. Composer consumes this via useEffect and
   // clears it with consumeComposerInsert so it doesn't re-fire on rerender.
   composerInsert: string | null
+  // Full-screen session-swap overlay: set optimistically the moment
+  // SelectSession/NewSession is emitted from ResumePalette, holding the
+  // target session's display name. There is no host-pushed "swap started"
+  // signal on this build (the attach can block synchronously for several
+  // seconds — build-skew daemon restarts, cold session spawn), so the next
+  // authoritative Snapshot is the only reliable clear point. `null` = no
+  // swap in flight.
+  switchingTo: string | null
 }
 
 type KomaState = {
@@ -191,6 +199,14 @@ type KomaState = {
   insertToComposer: (path: string) => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void
+  // Optimistically raise the session-swap overlay with the target's display
+  // name. Called right before the SelectSession/NewSession request is sent.
+  startSwitching: (name: string) => void
+  // Best-effort cancel: dismisses the overlay locally. The in-flight swap on
+  // the host side cannot be interrupted, so this only stops showing the
+  // loader — the eventual Snapshot for the target session still lands and is
+  // applied normally.
+  cancelSwitching: () => void
 }
 
 const initialSession: SessionSlice = {
@@ -216,6 +232,7 @@ const initialHub: HubSlice = {
 const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
+  switchingTo: null,
 }
 
 const initialConfig: ConfigSlice = {
@@ -281,6 +298,9 @@ export const useKoma = create<KomaState>((set) => ({
             attachments: env.attachments ?? [],
           },
           palette: env.palette,
+          // Any Snapshot is authoritative proof the swap (if one was in
+          // flight) has landed — clear the loader.
+          ui: { ...s.ui, switchingTo: null },
         }))
         applyPaletteVars(env.palette)
         break
@@ -322,4 +342,6 @@ export const useKoma = create<KomaState>((set) => ({
   closeOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: false } })),
   insertToComposer: (path) => set((s) => ({ ui: { ...s.ui, composerInsert: path } })),
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
+  startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
+  cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
 }))

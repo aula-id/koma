@@ -8,6 +8,7 @@ import { Sidebar, type SidebarView } from '../components/Sidebar'
 import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
+import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { useKoma } from '../store/koma'
 
 const SIDEBAR_MIN = 150
@@ -26,6 +27,7 @@ function RootLayout() {
   // it's reachable without prop drilling; see koma.ts's ui slice.
   const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const closeOmniSearch = useKoma((s) => s.closeOmniSearch)
+  const cancelSwitching = useKoma((s) => s.cancelSwitching)
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
   // can feed the koma store, then announce readiness so it sends the first
@@ -101,6 +103,16 @@ function RootLayout() {
       )}
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
+      <SwitchingOverlay
+        onCancel={() => {
+          // Best-effort bail: the in-flight swap can't be interrupted, so
+          // just drop the loader and reopen the hub so the user can pick
+          // again (or wait — the pending Snapshot still lands and clears
+          // any future loader normally).
+          cancelSwitching()
+          setOverlay('resume')
+        }}
+      />
       <ResizeHandles />
     </div>
   )
