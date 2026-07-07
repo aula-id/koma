@@ -130,6 +130,21 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
         return DiffResult::full();
     }
 
+    // --- structural: the GLOBAL config catalogue changed (GUI Connector/MCP) ---
+    // The projected provider/model/MCP catalogue (+ the foreground session's local
+    // model overrides) rides no incremental delta and changes only on a discrete
+    // config edit (a GUI setter, or a Settings/MCP save). A change forces a full
+    // snapshot so the GUI host re-derives + re-pushes its `Config` envelope; the TUI
+    // client simply rebuilds (it ignores these fields). Cheap-correct: config edits
+    // are rare relative to streaming.
+    if prev.global.providers != next.global.providers
+        || prev.global.config_models != next.global.config_models
+        || prev.global.session_models != next.global.session_models
+        || prev.global.mcp_servers != next.global.mcp_servers
+    {
+        return DiffResult::full();
+    }
+
     // --- structural: the session SET (count or id order) changed ---
     // A different length or a reordered/replaced id list can't be expressed by the
     // per-session deltas (which address sessions by id and assume the set is

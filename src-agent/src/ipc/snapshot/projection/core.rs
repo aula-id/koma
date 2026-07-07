@@ -198,6 +198,19 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         models_cache: state.rest.models_cache.clone(),
         models_cache_endpoint: state.rest.models_cache_endpoint.clone(),
         models_cache_failed: state.rest.models_cache_failed.clone(),
+        // Authoritative GLOBAL config catalogue for the native-React GUI's Connector +
+        // MCP panels. `session_models` is the foreground session's per-session override
+        // layer (the "local" scope); the rest mirror `AppConfig` directly.
+        providers: state.rest.config.providers.clone(),
+        config_models: state.rest.config.models.clone(),
+        session_models: state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| s.settings.session_models.clone())
+            .unwrap_or_default(),
+        mcp_servers: state.rest.config.mcp_servers.clone(),
         agent_viewer: state.rest.agent_viewer,
         agent_viewer_scroll: state.rest.agent_viewer_scroll,
         agent_viewer_follow: state.rest.agent_viewer_follow,
