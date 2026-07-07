@@ -31,6 +31,18 @@ export type HubHistoryEntry = {
   currentDir: boolean
 }
 
+export type SubAgentEntry = {
+  name: string
+  status: 'running' | 'done' | 'killed' | 'error'
+  summary: string
+}
+
+export type BashJobEntry = {
+  id: string
+  cmd: string
+  status: 'running' | 'done' | 'killed' | 'error'
+}
+
 export type PushEnvelope =
   | {
       k: 'Snapshot'
@@ -39,6 +51,8 @@ export type PushEnvelope =
       messages: ChatMessage[]
       title: string
       palette: PaletteColors
+      subagents: SubAgentEntry[]
+      bash: BashJobEntry[]
     }
   | { k: 'StreamMsg'; session: string; text: string }
   | { k: 'Reasoning'; session: string; text: string }
@@ -58,6 +72,8 @@ type SessionSlice = {
   working: boolean
   stream: string
   reasoning: string
+  subagents: SubAgentEntry[]
+  bash: BashJobEntry[]
 }
 
 type HubSlice = {
@@ -85,6 +101,8 @@ const initialSession: SessionSlice = {
   working: false,
   stream: '',
   reasoning: '',
+  subagents: [],
+  bash: [],
 }
 
 const initialHub: HubSlice = {
@@ -128,6 +146,8 @@ export const useKoma = create<KomaState>((set) => ({
             state: env.state,
             messages: env.messages,
             title: env.title,
+            subagents: env.subagents,
+            bash: env.bash,
           },
           palette: env.palette,
         }))
