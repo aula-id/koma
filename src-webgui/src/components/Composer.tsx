@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
 } from 'react'
-import { Loader2, Paperclip, Search, Send, X } from 'lucide-react'
+import { ArrowUp, Loader2, Paperclip, Search, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
 // Reads a File's bytes and resolves to a bare base64 string (no `data:` URL
@@ -39,6 +39,16 @@ export function Composer() {
   const [input, setInput] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Auto-grow the textarea with its content, up to a cap (then it scrolls).
+  // Runs on every input change (incl. programmatic clears + omnisearch inserts).
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+  }, [input])
 
   // Consume one-shot omnisearch-pick signals: append the picked path into
   // the draft text (not an attachment — the daemon's ingest is image-only,
@@ -109,77 +119,99 @@ export function Composer() {
     req({ r: 'RemoveAttachment', markerN })
   }
 
+  const canSend = input.trim() !== ''
+
   return (
-    <div
-      onDrop={onDrop}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      className={`flex flex-col gap-1.5 border-t border-koma-border px-2 py-2 transition-colors ${
-        dragOver ? 'bg-koma-hover' : ''
-      }`}
-    >
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {attachments.map((a) => (
-            <span
-              key={a.markerN}
-              className="flex items-center gap-1 rounded border border-koma-border bg-koma-panel px-1.5 py-0.5 text-[11px] text-koma-fg opacity-80"
-            >
-              <span className="max-w-[140px] truncate">{a.name}</span>
-              <button
-                onClick={() => removeAttachment(a.markerN)}
-                aria-label={`Remove ${a.name}`}
-                className="flex-none opacity-60 transition-opacity hover:opacity-100"
+    // claude.ai-style composer pinned at the bottom: a single rounded card
+    // (textarea on top, an action bar below) that grows with its content. Drag
+    // a file anywhere over the card to attach; the card rings on drag-over.
+    <div className="px-2 pb-3 pt-1">
+      <div
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        className={`flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors ${
+          dragOver ? 'border-koma-accent bg-koma-hover' : 'border-koma-border'
+        }`}
+      >
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {attachments.map((a) => (
+              <span
+                key={a.markerN}
+                className="flex items-center gap-1 rounded-lg border border-koma-border bg-koma-panel2 px-2 py-1 text-[11px] text-koma-fg opacity-90"
               >
-                <X size={11} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-end gap-2">
-        {working && <Loader2 size={14} className="flex-none animate-spin text-koma-fg opacity-60" />}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={onFilePicked}
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          aria-label="Attach file"
-          title="Attach file"
-          className="flex h-[32px] w-[32px] flex-none items-center justify-center rounded-md border border-koma-border bg-koma-panel text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
-        >
-          <Paperclip size={14} />
-        </button>
-        <button
-          onClick={openOmniSearch}
-          aria-label="Search workspace files"
-          title="Search workspace files"
-          className="flex h-[32px] w-[32px] flex-none items-center justify-center rounded-md border border-koma-border bg-koma-panel text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
-        >
-          <Search size={14} />
-        </button>
+                <span className="max-w-[140px] truncate">{a.name}</span>
+                <button
+                  onClick={() => removeAttachment(a.markerN)}
+                  aria-label={`Remove ${a.name}`}
+                  className="flex-none opacity-60 transition-opacity hover:opacity-100"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <textarea
+          ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           placeholder="Message koma…"
           rows={1}
-          className="min-h-[32px] flex-1 resize-none rounded-md border border-koma-border bg-koma-panel px-2.5 py-1.5 text-[13px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
+          className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-[14px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
         />
-        <button
-          onClick={submit}
-          disabled={!input.trim()}
-          aria-label="Send"
-          className="flex h-[32px] w-[32px] flex-none items-center justify-center rounded-md border border-koma-border bg-koma-panel text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100 disabled:opacity-30"
-        >
-          <Send size={14} />
-        </button>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={onFilePicked}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach file"
+              title="Attach file"
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+            >
+              <Paperclip size={16} />
+            </button>
+            <button
+              onClick={openOmniSearch}
+              aria-label="Search workspace files"
+              title="Search workspace files"
+              className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+            >
+              <Search size={16} />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {working && (
+              <Loader2 size={16} className="flex-none animate-spin text-koma-fg opacity-60" />
+            )}
+            <button
+              onClick={submit}
+              disabled={!canSend}
+              aria-label="Send"
+              title="Send"
+              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
+                canSend
+                  ? 'bg-koma-accent text-koma-bg hover:opacity-90'
+                  : 'bg-koma-hover text-koma-fg opacity-40'
+              }`}
+            >
+              <ArrowUp size={16} />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
