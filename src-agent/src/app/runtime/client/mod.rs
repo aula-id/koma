@@ -215,6 +215,13 @@ pub(super) enum HostCtl {
     /// while attached (the sweep must not stall the 16ms loop). This keeps the live
     /// session list current instead of frozen at the one cold build-at-boot.
     RefreshHub,
+    /// Best-effort CANCEL of a session switch (the React loader's Cancel button): bail to
+    /// the hub. An in-flight attach can't be interrupted (the client-thread is blocked in
+    /// `attach_session_headless` and never polls this channel then), so this is queued and
+    /// acted on once the current/target attach lands — `push_loop` returns
+    /// `HostTransition::ToSwapper` and `host_swapper` pushes a fresh `Hub` (clearing the
+    /// loader). In the swapper it is a harmless hub re-push.
+    ToSwapper,
 }
 
 /// The host-relay run-loop's next step, mirroring [`ClientState`] for the headless
@@ -369,14 +376,25 @@ fn host_swapper(
             // Page reloaded (`Ready`) OR the ResumePalette opened (`RefreshHub`):
             // rediscover the live set + re-push the hub. In the swapper the blocking
             // discovery sweep is fine — nothing renders on this thread here.
-            Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) => {
+            // (`ToSwapper` — a cancel that lands while already detached — is a harmless
+            // hub re-push here: we are already showing the hub.)
+            Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
                 let hub = build_local_hub(current);
                 push_state.reset();
                 render::push_hub(&hub, push, push_state);
             }
-            // A hub pick → attach that session; `[+ new session]` → mint + attach.
-            Ok(HostCtl::Select(id)) => return HostStep::Attach(id),
-            Ok(HostCtl::New) => return HostStep::Attach(uuid::Uuid::new_v4().to_string()),
+            // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
+            // swap-START loader signal first (this thread will BLOCK in the attach next, so
+            // this push is the last thing the webview hears until the new Snapshot lands).
+            Ok(HostCtl::Select(id)) => {
+                render::push_switching(push, &id);
+                return HostStep::Attach(id);
+            }
+            Ok(HostCtl::New) => {
+                let new_id = uuid::Uuid::new_v4().to_string();
+                render::push_switching(push, &new_id);
+                return HostStep::Attach(new_id);
+            }
             // The ipc side hung up (window gone) — leave the host.
             Err(_) => return HostStep::Done,
         }
