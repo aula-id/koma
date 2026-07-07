@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { McpServer, Provider, Model, ModelListEntry } from '../types/config'
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
@@ -75,6 +76,12 @@ export type PushEnvelope =
   | { k: 'Status'; session: string; working: boolean; toast: string | null }
   | { k: 'Hub'; state: string; cooking: HubCookingEntry[]; history: HubHistoryEntry[] }
   | { k: 'SearchResults'; query: string; items: SearchResultEntry[] }
+  // Authoritative config projection (mcp/providers/models) — global, not
+  // per-session. REPLACES the whole config slice, pushed on config change and
+  // on (re)attach.
+  | { k: 'Config'; mcp: McpServer[]; providers: Provider[]; models: Model[] }
+  // Reply to GuiReq ListModels — live per-provider model-id catalogue.
+  | { k: 'ModelList'; provider: string; items: ModelListEntry[] }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -101,6 +108,15 @@ type HubSlice = {
   history: HubHistoryEntry[]
 }
 
+// Global config (not per-session) — authoritative from the daemon's
+// AppConfig projection. Always REPLACED wholesale by a Config push, never
+// accumulated.
+type ConfigSlice = {
+  mcp: McpServer[]
+  providers: Provider[]
+  models: Model[]
+}
+
 // Local-only UI state (never pushed by the host, never sent upstream) — the
 // omnisearch overlay's open/closed flag. Kept in the store (rather than
 // component state) so the Composer, nested under a different route subtree
@@ -121,6 +137,10 @@ type KomaState = {
   hub: HubSlice
   palette: PaletteColors
   ui: UiSlice
+  config: ConfigSlice
+  // Live per-provider model-id catalogue, keyed by the most recent
+  // ListModels reply's provider (see ModelForm's provider-select trigger).
+  modelList: ModelListEntry[]
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -159,6 +179,14 @@ const initialUi: UiSlice = {
   composerInsert: null,
 }
 
+const initialConfig: ConfigSlice = {
+  mcp: [],
+  providers: [],
+  models: [],
+}
+
+const initialModelList: ModelListEntry[] = []
+
 const initialPalette: PaletteColors = {
   bg: '#0b0e14',
   fg: '#c8d3f5',
@@ -184,6 +212,8 @@ export const useKoma = create<KomaState>((set) => ({
   hub: initialHub,
   palette: initialPalette,
   ui: initialUi,
+  config: initialConfig,
+  modelList: initialModelList,
 
   push: (env) => {
     switch (env.k) {
@@ -221,6 +251,12 @@ export const useKoma = create<KomaState>((set) => ({
         break
       case 'SearchResults':
         set((s) => ({ session: { ...s.session, searchResults: env.items } }))
+        break
+      case 'Config':
+        set(() => ({ config: { mcp: env.mcp, providers: env.providers, models: env.models } }))
+        break
+      case 'ModelList':
+        set(() => ({ modelList: env.items }))
         break
     }
   },
