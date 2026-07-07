@@ -29,6 +29,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const cooking = useKoma((s) => s.hub.cooking)
   const history = useKoma((s) => s.hub.history)
   const req = useKoma((s) => s.req)
+  const startSwitching = useKoma((s) => s.startSwitching)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -50,12 +51,17 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
     return () => window.clearInterval(interval)
   }, [req])
 
-  const selectSession = (id: string) => {
+  const selectSession = (id: string, name: string) => {
+    // Optimistic: fires the full-screen swap overlay immediately, since the
+    // host gives no "swap started" push and the attach can block for
+    // seconds. Cleared by the next authoritative Snapshot (see koma.ts).
+    startSwitching(name)
     req({ r: 'SelectSession', id })
     onClose()
   }
 
   const newSession = () => {
+    startSwitching('new session')
     req({ r: 'NewSession' })
     onClose()
   }
@@ -108,7 +114,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               cookingSessions.map((c) => (
                 <button
                   key={c.id}
-                  onClick={() => c.id && selectSession(c.id)}
+                  onClick={() => c.id && selectSession(c.id, c.name)}
                   className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
                 >
                   <span className="flex min-w-0 items-center gap-1.5">
@@ -135,7 +141,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               history.map((h) => (
                 <button
                   key={h.id}
-                  onClick={() => selectSession(h.id)}
+                  onClick={() => selectSession(h.id, h.name)}
                   className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
                 >
                   <span className="truncate">{h.name}</span>
