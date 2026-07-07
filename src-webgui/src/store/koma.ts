@@ -45,14 +45,8 @@ export type PushEnvelope =
   | { k: 'Status'; session: string; working: boolean; toast: string | null }
   | { k: 'Hub'; state: string; cooking: HubCookingEntry[]; history: HubHistoryEntry[] }
 
-// JS -> Rust request payloads. (Promoted to a global ambient type in
-// koma.d.ts alongside the rest of the window bridge contract in a later
-// step; kept local for now since there are no consumers yet.)
-export type GuiReq =
-  | { r: 'Ready' }
-  | { r: 'Submit'; text: string }
-  | { r: 'SelectSession'; id: string }
-  | { r: 'NewSession' }
+// GuiReq (JS -> Rust request payloads) is a global ambient type declared in
+// koma.d.ts alongside the rest of the window bridge contract.
 
 // ---- Store shape --------------------------------------------------------
 
@@ -104,6 +98,21 @@ const initialPalette: PaletteColors = {
   fg: '#c8d3f5',
 }
 
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+// Live palette sync: repaint the --koma-bg/--koma-fg CSS vars whenever a
+// Snapshot lands with a palette (home of the glue that used to live in
+// Terminal.tsx's OSC 5380 handler).
+function applyPaletteVars(palette: PaletteColors) {
+  if (typeof document === 'undefined') return
+  if (palette?.bg && HEX_RE.test(palette.bg)) {
+    document.documentElement.style.setProperty('--koma-bg', palette.bg)
+  }
+  if (palette?.fg && HEX_RE.test(palette.fg)) {
+    document.documentElement.style.setProperty('--koma-fg', palette.fg)
+  }
+}
+
 export const useKoma = create<KomaState>((set) => ({
   session: initialSession,
   hub: initialHub,
@@ -122,6 +131,7 @@ export const useKoma = create<KomaState>((set) => ({
           },
           palette: env.palette,
         }))
+        applyPaletteVars(env.palette)
         break
       case 'StreamMsg':
         set((s) => ({ session: { ...s.session, stream: env.text } }))
