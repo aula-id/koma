@@ -391,9 +391,10 @@ over sec_remote (stateful socket).\n",
     let (mut mcp_tools, mut advertise): (Vec<crate::dto::openrouter::ToolDef>, Vec<String>) =
         match state.rest.mcp_manager.as_ref() {
             Some(mgr) => {
+                let (defs, mcp_names) = mgr.advertise_cached();
                 let mut names = crate::tool::main_tool_names();
-                names.extend(mgr.tool_names());
-                (mgr.tool_defs(), names)
+                names.extend(mcp_names);
+                (defs, names)
             }
             None => (Vec::new(), crate::tool::main_tool_names()),
         };
