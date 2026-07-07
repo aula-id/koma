@@ -151,7 +151,9 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
 }
 
 /// What [`run_swapper`] resolved to — the instruction [`super::client_run`] acts on.
-pub(super) enum SwapperOutcome {
+// `pub(crate)` (was `pub(super)`, visibility only): the feature-gated `runtime::gui` client
+// resolves the same outcome from its egui-driven per-key handling of the `/resume` picker.
+pub(crate) enum SwapperOutcome {
     /// Attach to the session with this UUID (spawning its daemon if needed). For a
     /// `[+ new session]` pick this is a freshly-minted UUID; for a live cooking row it
     /// is that session's id; for a history row it is the on-disk session's id.
@@ -174,7 +176,10 @@ pub(super) enum SwapperOutcome {
 /// the background probe thread, never on the input/render thread — the caller
 /// ([`run_swapper`]) hands over whatever the probe thread last produced. The SAME function
 /// backs both the live merge and the immediate post-kill refresh.
-fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: Option<&str>) {
+// `pub(crate)` (was private `fn`, visibility only): the feature-gated `runtime::gui` client
+// reuses this to merge its OWN background discovery-probe snapshots into the `/resume` hub
+// each frame, exactly as `run_swapper`'s loop does.
+pub(crate) fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: Option<&str>) {
     // Capture focus + selection identity before rebuild.
     let saved_focus = hub.focus;
     let saved_query = hub.history_query.clone();
@@ -452,7 +457,10 @@ impl Drop for ProbeGuard {
 ///
 /// `current_id` is threaded through only so the post-nuke inline refresh
 /// ([`apply_snapshot`]) keeps the `is_foreground` flag correct.
-fn handle_swapper_key(
+// `pub(crate)` (was private `fn`, visibility only): the feature-gated `runtime::gui` client
+// feeds its synthesized crossterm key events through this SAME handler so its egui `/resume`
+// picker behaves identically to the terminal swapper (it drives one key/frame, not the loop).
+pub(crate) fn handle_swapper_key(
     hub: &mut SessionHub,
     key: &KeyEvent,
     current_id: Option<&str>,

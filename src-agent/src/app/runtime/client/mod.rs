@@ -34,7 +34,12 @@ pub(crate) mod input;
 // `bridge::WRITER_FLUSH_TIMEOUT` to mirror `teardown_connection`'s flush-then-join exactly,
 // reusing the SAME constant rather than redefining it.
 pub(crate) mod bridge;
-mod swapper;
+// Bumped `mod` -> `pub(crate) mod` (visibility only, same reuse rationale as `connect`/
+// `shadow`/`input`/`bridge` above): the feature-gated `runtime::gui` client reuses this
+// module's `build_local_hub` (already `pub(crate)`) plus `SwapperOutcome`, `handle_swapper_key`,
+// and `apply_snapshot` (each bumped to `pub(crate)` in `swapper`) to drive the `/resume` picker
+// one key/frame at a time under egui — it cannot call the blocking `run_swapper` loop.
+pub(crate) mod swapper;
 
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
