@@ -6,7 +6,7 @@ export type Platform = 'macos' | 'linux' | 'windows'
 
 // Shared spring + width so the 'change session' pill and the resume palette /
 // rename overlay morph between matching footprints.
-export const CMD_SEARCH_SPRING = { type: 'spring', stiffness: 450, damping: 34, mass: 0.6 } as const
+export const CMD_SEARCH_SPRING = { type: 'spring', stiffness: 450, damping: 50, mass: 0.6 } as const
 export const CMD_SEARCH_WIDTH = 'w-[340px] max-w-[46vw]'
 
 export function getPlatform(): Platform {

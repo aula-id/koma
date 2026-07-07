@@ -48,7 +48,7 @@ const DEMO_ROUTES: { id: string; label: string; priceIn?: string; priceOut?: str
   { id: 'venice', label: 'Venice', priceIn: '0.14', priceOut: '0.28' },
   { id: 'deepinfra', label: 'DeepInfra', priceIn: '0.40', priceOut: '2.00', uptime: 98 },
 ]
-const SLIDE = { type: 'spring', stiffness: 520, damping: 42 } as const
+const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 
 let seq = 0
 const nid = (p: string) => {

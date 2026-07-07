@@ -31,7 +31,7 @@ function blankServer(): Server {
   }
 }
 
-const SLIDE = { type: 'spring', stiffness: 520, damping: 42 } as const
+const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 
 // Design reference: master -> detail slide, inline form, inline arm-delete — no
 // popups. State is local and starts EMPTY; Add fills it so the whole add/edit/
