@@ -133,6 +133,16 @@ pub enum ClientRequest {
     /// Toggle the `enabled` flag on the MCP server with `uuid` (the list-row switch),
     /// persist, and live-reconnect the manager.
     EnableMcpServer { uuid: String, enabled: bool },
+    /// Upsert a provider (Connector ProviderForm). `uuid` is `None` for a new provider
+    /// (minted OpenAI-compatible) or `Some` to edit by uuid (preserving its wire type).
+    SetProvider {
+        uuid: Option<String>,
+        name: String,
+        endpoint: String,
+        api_key: String,
+    },
+    /// Remove the provider with `uuid` and persist.
+    DeleteProvider { uuid: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────

@@ -206,6 +206,17 @@ enum GuiReq {
     DeleteMcpServer { uuid: String },
     /// Toggle an MCP server's enabled flag by uuid (McpPanel list switch).
     EnableMcpServer { uuid: String, enabled: bool },
+    /// Upsert a provider (Connector ProviderForm). `uuid` is absent for a new provider.
+    SetProvider {
+        #[serde(default)]
+        uuid: Option<String>,
+        name: String,
+        endpoint: String,
+        #[serde(rename = "apiKey")]
+        api_key: String,
+    },
+    /// Remove a provider by uuid (Connector arm-delete).
+    DeleteProvider { uuid: String },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -495,6 +506,30 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::EnableMcpServer { uuid, enabled });
+                            }
+                        }
+                    }
+                    GuiReq::SetProvider {
+                        uuid,
+                        name,
+                        endpoint,
+                        api_key,
+                    } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetProvider {
+                                    uuid,
+                                    name,
+                                    endpoint,
+                                    api_key,
+                                });
+                            }
+                        }
+                    }
+                    GuiReq::DeleteProvider { uuid } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::DeleteProvider { uuid });
                             }
                         }
                     }
