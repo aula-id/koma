@@ -79,6 +79,12 @@ enum UserEvent {
     ChildExited,
     /// A custom-titlebar window command posted from `koma.js`.
     Win(WinCmd),
+    /// A ready-to-inject JSON envelope from the host-relay client-thread. The main
+    /// thread hands it to `window.__komaClient.push(...)` via `evaluate_script`. The
+    /// payload is a COMPLETE JSON object (tagged on `k` — `Snapshot`/`StreamMsg`/
+    /// `Reasoning`/`Status`/`Hub`), so it is embedded verbatim (not quoted).
+    #[allow(dead_code)] // emitted starting R4; the arm below consumes it now
+    Push(String),
 }
 
 /// Window-management commands the HTML titlebar (drag region, minimize /
@@ -434,6 +440,11 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                     eprintln!("[gui] evaluate_script: first pty chunk pushed to xterm");
                 }
                 let _ = webview.evaluate_script(&format!("window.__koma.write('{b64}')"));
+            }
+            // Host-relay state push: inject the authoritative JSON envelope into the
+            // native-React client. `json` is a complete JSON object, embedded verbatim.
+            Event::UserEvent(UserEvent::Push(json)) => {
+                let _ = webview.evaluate_script(&format!("window.__komaClient.push({json})"));
             }
             Event::UserEvent(UserEvent::ChildExited) => {
                 eprintln!("[gui] child exited -> closing");
