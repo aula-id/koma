@@ -5,6 +5,8 @@ import { Titlebar, getPlatform } from '../components/Titlebar'
 import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
 import { Sidebar, type SidebarView } from '../components/Sidebar'
+import { ResumePalette } from '../components/ResumePalette'
+import { NewSessionDialog } from '../components/NewSessionDialog'
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -13,6 +15,7 @@ function RootLayout() {
   // Resolved once — window.__komaOS is injected by the Rust host before the app
   // boots and never changes for the lifetime of the window.
   const [platform] = useState(getPlatform)
+  const [overlay, setOverlay] = useState<'none' | 'resume' | 'newSession'>('none')
   const [activeView, setActiveView] = useState<SidebarView>('explore')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -53,7 +56,11 @@ function RootLayout() {
 
   return (
     <div id="app" className={`os-${platform}`}>
-      <Titlebar />
+      <Titlebar
+        onSearch={() => setOverlay('resume')}
+        onNewSession={() => setOverlay('newSession')}
+        paletteOpen={overlay === 'resume'}
+      />
       <div className="absolute inset-x-0 top-8 bottom-0 flex overflow-hidden">
         <ActivityBar activeView={activeView} sidebarOpen={sidebarOpen} onSelect={selectView} />
         {sidebarOpen && (
@@ -69,6 +76,13 @@ function RootLayout() {
           <Outlet />
         </main>
       </div>
+      {overlay === 'resume' && (
+        <ResumePalette
+          onClose={() => setOverlay('none')}
+          onNewSession={() => setOverlay('newSession')}
+        />
+      )}
+      {overlay === 'newSession' && <NewSessionDialog onClose={() => setOverlay('none')} />}
       <ResizeHandles />
     </div>
   )
