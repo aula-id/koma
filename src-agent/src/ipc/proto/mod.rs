@@ -39,6 +39,18 @@ pub struct SessionStatus {
     pub working: bool,   // is the session's agent currently cooking?
 }
 
+/// One workspace-file hit from a [`ClientRequest::FileSearch`] (the GUI omnisearch
+/// overlay). `label` is the display string exactly as the `@`-palette produces it (the
+/// workspace-relative path, `[N]`-prefixed in multi-root mode, trailing `/` for a dir);
+/// `path` is the ABSOLUTE on-disk path the daemon resolved from it, ready to hand back
+/// as an [`ClientRequest::Paste`]/attach target (empty for a directory row, which is not
+/// attachable).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FileSearchItem {
+    pub path: String,
+    pub label: String,
+}
+
 // ─── client -> daemon ────────────────────────────────────────────────────────
 
 /// A request sent from a TUI client to the daemon over the unix socket.
@@ -67,6 +79,11 @@ pub enum ClientRequest {
     /// The TUI has no equivalent request (it drops attachments by deleting the marker in
     /// the composer); this is the GUI's explicit remove path.
     RemoveAttachment { marker_n: usize },
+    /// Fuzzy-search the foreground session's workspace file index (the `@`-palette engine)
+    /// for the GUI omnisearch overlay. Read-only: the daemon runs `DirCache::search` and
+    /// replies with a one-shot [`DaemonEvent::FileSearchResults`] WITHOUT attaching or
+    /// mutating state. `limit` caps the result count (defaults to the palette cap).
+    FileSearch { query: String, limit: Option<usize> },
     ApproveTool { approve: bool },
     /// Answer a paused `plan_ready` approval. `decision` is one of `"approve"`,
     /// `"compact"` (approve + compact history to the plan), or `"deny"` (keep
@@ -130,6 +147,10 @@ pub enum DaemonEvent {
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
     Status(SessionStatus),
+    /// One-shot reply to a [`ClientRequest::FileSearch`]: the resolved workspace-file
+    /// hits for `query` (echoed so the GUI can drop a stale/out-of-order reply). Sent
+    /// WITHOUT attaching or snapshotting — a metadata reply like [`Status`].
+    FileSearchResults { query: String, items: Vec<FileSearchItem> },
 }
 
 // ─── mode discriminant ───────────────────────────────────────────────────────

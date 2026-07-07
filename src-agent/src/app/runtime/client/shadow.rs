@@ -105,7 +105,13 @@ pub(super) fn apply_frame(
         // `Status` is a discovery-only reply consumed by the SYNC `probe_status` path,
         // never the async attach client — but a frame is a frame, so handle it as a
         // non-visual no-op here for exhaustiveness rather than panic.
-        DaemonEvent::Ack | DaemonEvent::Error(_) | DaemonEvent::Status(_) => false,
+        // `FileSearchResults` is intercepted by the GUI host's `push_loop` BEFORE this
+        // fold (it re-pushes a `SearchResults` envelope); if it reaches here (the TUI
+        // client, which never sends `FileSearch`) it is a non-visual no-op.
+        DaemonEvent::Ack
+        | DaemonEvent::Error(_)
+        | DaemonEvent::Status(_)
+        | DaemonEvent::FileSearchResults { .. } => false,
     }
 }
 
