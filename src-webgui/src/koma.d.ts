@@ -6,6 +6,7 @@ declare global {
     | { r: 'Submit'; text: string }
     | { r: 'SelectSession'; id: string }
     | { r: 'NewSession' }
+    | { r: 'RefreshHub' }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

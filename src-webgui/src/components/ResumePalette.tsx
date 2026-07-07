@@ -38,6 +38,18 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // Live-session-listing fix: the host only discovers live sessions on
+  // demand. Ask for a fresh Hub the moment this overlay opens, then keep
+  // nudging it on a short interval while it stays open so newly-cooked
+  // sessions show up without needing to close/reopen the palette.
+  useEffect(() => {
+    req({ r: 'RefreshHub' })
+    const interval = window.setInterval(() => {
+      req({ r: 'RefreshHub' })
+    }, 1500)
+    return () => window.clearInterval(interval)
+  }, [req])
+
   const selectSession = (id: string) => {
     req({ r: 'SelectSession', id })
     onClose()
@@ -99,7 +111,17 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                   onClick={() => c.id && selectSession(c.id)}
                   className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
                 >
-                  <span className="truncate">{c.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {c.working && (
+                      <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
+                    )}
+                    <span className="truncate">{c.name}</span>
+                    {c.foreground && (
+                      <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide opacity-50">
+                        current
+                      </span>
+                    )}
+                  </span>
                   {c.dirLabel && (
                     <span className="ml-2 flex-none truncate text-[11px] opacity-40">{c.dirLabel}</span>
                   )}
