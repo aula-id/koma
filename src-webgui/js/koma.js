@@ -3,6 +3,8 @@
 //   pty  -> host -> window.__koma.write(base64)         -> term.write(Uint8Array)
 //   term -> window.ipc.postMessage(JSON {data,resize})  -> host -> pty
 (function () {
+  console.log('[koma.js] script loaded');
+  try {
   const term = new Terminal({
     fontFamily: '"KomaMono", monospace',
     fontSize: 14,
@@ -49,8 +51,13 @@
     return true;
   });
 
-  try { term.loadAddon(new WebglAddon.WebglAddon()); } catch (e) { /* webgl may be unavailable; canvas fallback */ }
+  try {
+    const _webgl = new WebglAddon.WebglAddon();
+    _webgl.onContextLoss(function () { try { _webgl.dispose(); } catch (e) {} });
+    term.loadAddon(_webgl);
+  } catch (e) { /* WebGL unavailable — xterm falls back to its DOM renderer */ }
 
+  let firstWrite = true;
   window.__koma = {
     term,
     // pty -> xterm: host base64's raw pty bytes; decode to a Uint8Array so
@@ -59,6 +66,10 @@
       const bin = atob(b64);
       const arr = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      if (firstWrite) {
+        firstWrite = false;
+        console.log('[koma.js] first pty write, bytes=' + arr.length);
+      }
       term.write(arr);
     },
   };
@@ -89,6 +100,8 @@
   // grid ends up mis-sized. Fire `ready` exactly once, only after this.
   function boot() {
     try { fit.fit(); } catch (e) {}
+    console.log('[koma.js] boot: cols=' + term.cols + ' rows=' + term.rows);
+    term.writeln('\x1b[90m[koma gui] boot ok — ' + term.cols + 'x' + term.rows + ', waiting for pty...\x1b[0m');
     post({ t: 'ready' });
   }
   if (document.fonts && document.fonts.ready) {
@@ -97,5 +110,9 @@
       .then(boot).catch(boot);
   } else {
     boot();
+  }
+  } catch (e) {
+    console.error('[koma.js] init failed', e);
+    try { document.body.innerText = 'koma.js init failed: ' + (e && e.stack || e); } catch (_){}
   }
 })();
