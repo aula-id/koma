@@ -7,6 +7,10 @@ declare global {
     | { r: 'SelectSession'; id: string }
     | { r: 'NewSession' }
     | { r: 'RefreshHub' }
+    // Cancel an in-flight session switch (the loader's Cancel button). Best
+    // effort: the attach can't be interrupted, so the host queues it and drops
+    // to the swapper once the target lands (matches Rust GuiReq::CancelSwitch).
+    | { r: 'CancelSwitch' }
     // Composer attach: raw bytes (clipboard-image paste / file-picker / drag
     // drop) the host persists to a scratch path and ingests via the existing
     // attachment core.
