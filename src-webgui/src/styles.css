@@ -110,17 +110,3 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
   max-width: 1024px;
   height: 100%;
 }
-
-/* xterm.js hardcodes `overflow-y: scroll` on its internally-generated
-   .xterm-viewport element (see @xterm/xterm/css/xterm.css), which always
-   reserves scrollbar-gutter width even when nothing needs scrolling. That
-   element isn't ours to style via Tailwind classes, so bridge it here:
-   scrolling still works, only the visible track/gutter is suppressed. */
-.xterm-viewport {
-  scrollbar-width: none;
-}
-.xterm-viewport::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
-}

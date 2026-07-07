@@ -45,7 +45,6 @@ rmcp = { version = "1.8", default-features = false, features = ["client", "trans
 # is set to). Linux (webkit2gtk) does not need this feature to honor transparency.
 wry = { version = "0.52", optional = true, features = ["transparent"] }
 tao = { version = "0.35", optional = true }
-portable-pty = { version = "0.9", optional = true }
 
 # macOS-only: lets us clear WKWebView's `underPageBackgroundColor`, which wry
 # 0.52.1 never touches on macOS (it only sets the legacy `drawsBackground`
@@ -65,7 +64,7 @@ objc2-app-kit = { version = "0.3", optional = true, default-features = false, fe
 ] }
 
 [features]
-gui = ["dep:wry", "dep:tao", "dep:portable-pty", "dep:objc2-app-kit"]
+gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit"]
 
 [[bin]]
 name = "koma"
