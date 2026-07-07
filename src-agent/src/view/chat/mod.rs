@@ -50,7 +50,7 @@ mod input;
 mod overlays;
 mod status;
 mod subagents;
-mod transcript;
+pub(crate) mod transcript;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},

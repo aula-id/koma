@@ -503,11 +503,45 @@ pub(super) fn client_select_dump(
 // so an unchanged frame emits nothing.
 
 /// One committed conversation turn in a [`PushEnvelope::Snapshot`].
+///
+/// `content` + `reasoning` are the plain text body + display-only thinking (unchanged
+/// from W0-W3). `toolCalls` is the fuller turn projection W4 adds: an assistant turn's
+/// requested tool calls, each already JOINED to its paired `Role::Tool` result so React
+/// can render the TUI's `● call → inline result box` grammar 1:1 without accumulating
+/// (the host pushes the AUTHORITATIVE full array; React REPLACES). Empty for non-tool
+/// turns (skipped from the wire) and for user messages.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PushMsg {
     role: &'static str,
     content: String,
     reasoning: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<PushToolCall>,
+}
+
+/// One tool CALL on an assistant [`PushMsg`], with its paired result folded in (the
+/// TUI resolves call→result live by `tool_call_id`; the projection does the same join
+/// so React doesn't need the raw `Role::Tool` messages). Mirrors `render_tool_lines`
+/// (`view/chat/transcript.rs:631`):
+/// - `signature` = `format_tool_signature(name,args)`, the quote-less `name(args)`
+///   header the TUI shows (already flattened + capped at 60 chars).
+/// - `label` = the box label (`bash`/`read`/`grep`/…) when this tool's output is BOXED
+///   (`tool_box_label`), else `None` → React renders the terse one-liner fallback.
+/// - `output` = the paired `Role::Tool` result content (`None` while in-flight).
+/// - `status` = `"done"` once a matching `Role::Tool` result exists, else `"pending"`
+///   (drives the ⚙→✓ glyph flip; resolved fresh each Snapshot so a late-landing result
+///   re-emits — see the folded fingerprint).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushToolCall {
+    id: String,
+    name: String,
+    args: String,
+    signature: String,
+    label: Option<String>,
+    output: Option<String>,
+    status: &'static str,
 }
 
 /// One STAGED (not-yet-sent) composer attachment chip in a [`PushEnvelope::Snapshot`].
@@ -1037,24 +1071,73 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
     };
 
     // Committed transcript: skip System/Tool (chrome the chat view never shows as a
-    // bubble), carry role + content + display-only reasoning for user/assistant.
+    // bubble), carry role + content + display-only reasoning for user/assistant, plus
+    // the assistant's tool CALLS with each paired RESULT folded in. The `Role::Tool`
+    // result messages stay filtered out as standalone bubbles — their content is joined
+    // onto the requesting call's `output`, exactly how the TUI renders it inline under
+    // the call (`view/chat/transcript.rs:631`, join by `tool_call_id`).
     let messages: Vec<PushMsg> = fg
         .session
         .as_ref()
         .map(|s| {
-            s.conversation
-                .messages()
+            let msgs = s.conversation.messages();
+            // tool_call_id → result content, harvested from the `Role::Tool` result
+            // messages (same lookup the TUI builds fresh each frame). Presence of an
+            // entry == the call COMPLETED (⚙→✓).
+            let tool_results: std::collections::HashMap<&str, &str> = msgs
                 .iter()
+                .filter(|m| m.role == Role::Tool)
+                .filter_map(|m| {
+                    m.tool_call_id.as_deref().map(|id| (id, m.content.as_str()))
+                })
+                .collect();
+            msgs.iter()
                 .filter_map(|m| {
                     let role = match m.role {
                         Role::User => "user",
                         Role::Assistant => "assistant",
                         Role::System | Role::Tool => return None,
                     };
+                    // Project the assistant's requested tool calls (if any), joining
+                    // each to its paired result so React renders call→result 1:1.
+                    let tool_calls: Vec<PushToolCall> = m
+                        .tool_calls
+                        .as_ref()
+                        .map(|calls| {
+                            calls
+                                .iter()
+                                .map(|c| {
+                                    let output = tool_results
+                                        .get(c.id.as_str())
+                                        .map(|s| s.to_string());
+                                    PushToolCall {
+                                        signature: crate::view::chat::transcript::format_tool_signature(
+                                            &c.function.name,
+                                            &c.function.arguments,
+                                        ),
+                                        label: crate::view::chat::transcript::tool_box_label(
+                                            &c.function.name,
+                                        )
+                                        .map(str::to_string),
+                                        status: if output.is_some() {
+                                            "done"
+                                        } else {
+                                            "pending"
+                                        },
+                                        id: c.id.clone(),
+                                        name: c.function.name.clone(),
+                                        args: c.function.arguments.clone(),
+                                        output,
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     Some(PushMsg {
                         role,
                         content: m.content.clone(),
                         reasoning: m.reasoning.clone(),
+                        tool_calls,
                     })
                 })
                 .collect()
@@ -1127,6 +1210,16 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             m.role.hash(&mut h);
             m.content.hash(&mut h);
             m.reasoning.hash(&mut h);
+            // Fold tool calls in so a call landing OR its result arriving a round later
+            // (status pending→done, output None→Some) re-emits the Snapshot — the join
+            // is resolved fresh here, not baked into the message identity.
+            m.tool_calls.len().hash(&mut h);
+            for c in &m.tool_calls {
+                c.id.hash(&mut h);
+                c.args.hash(&mut h);
+                c.status.hash(&mut h);
+                c.output.hash(&mut h);
+            }
         }
         // Fold sub-agents in so a status/list change re-emits the Snapshot.
         subagents.len().hash(&mut h);
