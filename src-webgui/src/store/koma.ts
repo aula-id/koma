@@ -43,6 +43,18 @@ export type BashJobEntry = {
   status: 'running' | 'done' | 'killed' | 'error'
 }
 
+export type AttachmentEntry = {
+  id: string
+  name: string
+  relPath: string
+  mime: string | null
+}
+
+export type SearchResultEntry = {
+  path: string
+  label: string
+}
+
 export type PushEnvelope =
   | {
       k: 'Snapshot'
@@ -53,11 +65,13 @@ export type PushEnvelope =
       palette: PaletteColors
       subagents: SubAgentEntry[]
       bash: BashJobEntry[]
+      attachments: AttachmentEntry[]
     }
   | { k: 'StreamMsg'; session: string; text: string }
   | { k: 'Reasoning'; session: string; text: string }
   | { k: 'Status'; session: string; working: boolean; toast: string | null }
   | { k: 'Hub'; state: string; cooking: HubCookingEntry[]; history: HubHistoryEntry[] }
+  | { k: 'SearchResults'; query: string; items: SearchResultEntry[] }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -74,6 +88,8 @@ type SessionSlice = {
   reasoning: string
   subagents: SubAgentEntry[]
   bash: BashJobEntry[]
+  attachments: AttachmentEntry[]
+  searchResults: SearchResultEntry[]
 }
 
 type HubSlice = {
@@ -82,15 +98,26 @@ type HubSlice = {
   history: HubHistoryEntry[]
 }
 
+// Local-only UI state (never pushed by the host, never sent upstream) — the
+// omnisearch overlay's open/closed flag. Kept in the store (rather than
+// component state) so the Composer, nested under a different route subtree
+// than RootLayout's overlay mount point, can open it without prop drilling.
+type UiSlice = {
+  omnisearchOpen: boolean
+}
+
 type KomaState = {
   session: SessionSlice
   hub: HubSlice
   palette: PaletteColors
+  ui: UiSlice
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
   // JS -> Rust: typed request helper, tags the envelope { t: 'req', ...g }.
   req: (g: GuiReq) => void
+  openOmniSearch: () => void
+  closeOmniSearch: () => void
 }
 
 const initialSession: SessionSlice = {
@@ -103,12 +130,18 @@ const initialSession: SessionSlice = {
   reasoning: '',
   subagents: [],
   bash: [],
+  attachments: [],
+  searchResults: [],
 }
 
 const initialHub: HubSlice = {
   state: null,
   cooking: [],
   history: [],
+}
+
+const initialUi: UiSlice = {
+  omnisearchOpen: false,
 }
 
 const initialPalette: PaletteColors = {
@@ -135,6 +168,7 @@ export const useKoma = create<KomaState>((set) => ({
   session: initialSession,
   hub: initialHub,
   palette: initialPalette,
+  ui: initialUi,
 
   push: (env) => {
     switch (env.k) {
@@ -148,6 +182,9 @@ export const useKoma = create<KomaState>((set) => ({
             title: env.title,
             subagents: env.subagents,
             bash: env.bash,
+            // Defensive fallback: tolerates a host build that hasn't started
+            // projecting attachments[] on the Snapshot envelope yet.
+            attachments: env.attachments ?? [],
           },
           palette: env.palette,
         }))
@@ -167,6 +204,9 @@ export const useKoma = create<KomaState>((set) => ({
           hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
         }))
         break
+      case 'SearchResults':
+        set((s) => ({ session: { ...s.session, searchResults: env.items } }))
+        break
     }
   },
 
@@ -177,4 +217,7 @@ export const useKoma = create<KomaState>((set) => ({
       /* ipc unavailable */
     }
   },
+
+  openOmniSearch: () => set(() => ({ ui: { omnisearchOpen: true } })),
+  closeOmniSearch: () => set(() => ({ ui: { omnisearchOpen: false } })),
 }))
