@@ -6,7 +6,7 @@ import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
 import { Sidebar, type SidebarView } from '../components/Sidebar'
 import { ResumePalette } from '../components/ResumePalette'
-import { NewSessionDialog } from '../components/NewSessionDialog'
+import { RenameOverlay } from '../components/RenameOverlay'
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -15,7 +15,7 @@ function RootLayout() {
   // Resolved once — window.__komaOS is injected by the Rust host before the app
   // boots and never changes for the lifetime of the window.
   const [platform] = useState(getPlatform)
-  const [overlay, setOverlay] = useState<'none' | 'resume' | 'newSession'>('none')
+  const [overlay, setOverlay] = useState<'none' | 'resume' | 'rename'>('none')
   const [activeView, setActiveView] = useState<SidebarView>('explore')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -58,8 +58,8 @@ function RootLayout() {
     <div id="app" className={`os-${platform}`}>
       <Titlebar
         onSearch={() => setOverlay('resume')}
-        onNewSession={() => setOverlay('newSession')}
-        paletteOpen={overlay === 'resume'}
+        onRename={() => setOverlay('rename')}
+        overlayOpen={overlay !== 'none'}
       />
       <div className="absolute inset-x-0 top-8 bottom-0 flex overflow-hidden">
         <ActivityBar activeView={activeView} sidebarOpen={sidebarOpen} onSelect={selectView} />
@@ -79,10 +79,12 @@ function RootLayout() {
       {overlay === 'resume' && (
         <ResumePalette
           onClose={() => setOverlay('none')}
-          onNewSession={() => setOverlay('newSession')}
+          onNewSession={() => {
+              /* TODO: open native folder picker via host ipc, then start session */
+            }}
         />
       )}
-      {overlay === 'newSession' && <NewSessionDialog onClose={() => setOverlay('none')} />}
+      {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       <ResizeHandles />
     </div>
   )

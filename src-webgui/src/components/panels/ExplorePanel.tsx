@@ -6,7 +6,7 @@ function Empty({ children }: { children: string }) {
 
 export function ExplorePanel() {
   return (
-    <>
+    <div className="h-full overflow-auto">
       <AccordionSection title="File changed">
         <Empty>No changes</Empty>
       </AccordionSection>
@@ -16,6 +16,6 @@ export function ExplorePanel() {
       <AccordionSection title="Agents">
         <Empty>No agents</Empty>
       </AccordionSection>
-    </>
+    </div>
   )
 }
