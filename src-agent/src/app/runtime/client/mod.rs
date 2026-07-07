@@ -425,6 +425,7 @@ fn host_attached(
             prebuffered,
             ctl_rx,
             push_state,
+            current.as_deref(),
         )
     };
 
