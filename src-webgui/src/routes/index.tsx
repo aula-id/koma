@@ -1,5 +1,5 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Terminal } from '../components/Terminal'
 import { Titlebar, getPlatform } from '../components/Titlebar'
 import { ResizeHandles } from '../components/ResizeHandles'
@@ -7,6 +7,7 @@ import { ActivityBar } from '../components/ActivityBar'
 import { Sidebar, type SidebarView } from '../components/Sidebar'
 import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
+import { useKoma } from '../store/koma'
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -19,6 +20,19 @@ function RootLayout() {
   const [activeView, setActiveView] = useState<SidebarView>('explore')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(240)
+
+  // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
+  // can feed the koma store, then announce readiness so it sends the first
+  // push (Hub if swapper else Snapshot).
+  useEffect(() => {
+    window.__komaClient = {
+      push: (j) => useKoma.getState().push(JSON.parse(j)),
+    }
+    useKoma.getState().req({ r: 'Ready' })
+    return () => {
+      window.__komaClient = undefined
+    }
+  }, [])
 
   // Click the active view's icon to collapse/expand; click another to switch to
   // it (and ensure the sidebar is open).
