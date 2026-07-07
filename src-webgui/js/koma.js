@@ -34,6 +34,8 @@
   document.body.style.backgroundColor = komaBg;
   var termEl = document.getElementById('term');
   if (termEl) termEl.style.backgroundColor = komaBg;
+  var titlebarEl = document.getElementById('titlebar');
+  if (titlebarEl) titlebarEl.style.backgroundColor = komaBg;
 
   // Live palette sync: koma (in GUI mode) emits its canvas bg via private OSC 5380
   // whenever the palette changes; repaint the xterm theme + window gutter to match.
@@ -45,6 +47,8 @@
         document.body.style.backgroundColor = data;
         var el = document.getElementById('term');
         if (el) el.style.backgroundColor = data;
+        var tb = document.getElementById('titlebar');
+        if (tb) tb.style.backgroundColor = data;
       }
       return true; // handled — do not render the sequence
     });
@@ -104,6 +108,39 @@
 
   function post(obj) {
     try { window.ipc.postMessage(JSON.stringify(obj)); } catch (e) {}
+  }
+
+  // Custom titlebar: the window is undecorated (tao `with_decorations(false)`),
+  // so drag / minimize / maximize / close all have to be driven host-side via
+  // ipc — the host's `event_loop.run` closure calls the actual tao `Window`
+  // methods (drag_window / set_minimized / set_maximized / exit).
+  var titlebar = document.getElementById('titlebar');
+  if (titlebar) {
+    titlebar.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      if (e.target.closest('.win-btn')) return; // buttons handle themselves
+      if (e.detail === 2) { post({ t: 'win', a: 'max' }); return; } // dbl-click = toggle max
+      post({ t: 'win', a: 'drag' });
+    });
+  }
+  function bindBtn(id, a) {
+    var b = document.getElementById(id);
+    if (b) b.addEventListener('click', function () { post({ t: 'win', a: a }); });
+  }
+  bindBtn('btn-min', 'min');
+  bindBtn('btn-max', 'max');
+  bindBtn('btn-close', 'close');
+
+  // Custom edge/corner resize handles -> host drag_resize_window(direction).
+  var handles = document.querySelectorAll('.rz');
+  for (var i = 0; i < handles.length; i++) {
+    (function (h) {
+      h.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        post({ t: 'winresize', dir: h.getAttribute('data-dir') });
+      });
+    })(handles[i]);
   }
 
   // keystrokes / paste -> pty (UTF-8 bytes, base64'd)

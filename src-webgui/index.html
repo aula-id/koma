@@ -7,12 +7,57 @@
 <link rel="stylesheet" href="koma://localhost/css/fonts.css">
 <style>
   html, body { margin:0; padding:0; height:100%; background:#0b0e14; overflow:hidden; }
-  #term { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+
+  #titlebar {
+    position: absolute; top: 0; left: 0; right: 0; height: 32px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 4px 0 12px; box-sizing: border-box;
+    -webkit-user-select: none; user-select: none;
+    font-family: monospace; font-size: 12px; color: #c8d3f5;
+    background: #0b0e14;
+    z-index: 10;
+  }
+  #title { opacity: 0.75; pointer-events: none; }
+  #winctl { display: flex; gap: 2px; }
+  .win-btn {
+    width: 34px; height: 24px; border: none; background: transparent;
+    color: #c8d3f5; font-family: monospace; font-size: 13px; line-height: 1;
+    cursor: pointer; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .win-btn:hover { background: rgba(255,255,255,0.12); }
+  .win-close:hover { background: #e81123; color: #fff; }
+
+  #term { position:absolute; top:32px; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; }
   #term > .terminal { flex: 0 0 auto; }
+
+  /* Custom edge/corner resize handles — the window is undecorated, so these
+     drive tao's drag_resize_window() instead of native OS chrome. */
+  .rz { position: absolute; z-index: 20; }
+  .rz-n { top: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+  .rz-s { bottom: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+  .rz-e { top: 6px; right: 0; bottom: 6px; width: 6px; cursor: ew-resize; }
+  .rz-w { top: 6px; left: 0; bottom: 6px; width: 6px; cursor: ew-resize; }
+  .rz-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; z-index: 21; }
+  .rz-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; z-index: 21; }
+  .rz-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; z-index: 21; }
+  .rz-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; z-index: 21; }
 </style>
 </head>
 <body>
+  <div id="titlebar">
+    <span id="title">koma</span>
+    <div id="winctl">
+      <button class="win-btn" id="btn-min" aria-label="Minimize">&#x2013;</button>
+      <button class="win-btn" id="btn-max" aria-label="Maximize">&#x2610;</button>
+      <button class="win-btn win-close" id="btn-close" aria-label="Close">&#x2715;</button>
+    </div>
+  </div>
   <div id="term"></div>
+  <div class="rz rz-n" data-dir="n"></div><div class="rz rz-s" data-dir="s"></div>
+  <div class="rz rz-e" data-dir="e"></div><div class="rz rz-w" data-dir="w"></div>
+  <div class="rz rz-ne" data-dir="ne"></div><div class="rz rz-nw" data-dir="nw"></div>
+  <div class="rz rz-se" data-dir="se"></div><div class="rz rz-sw" data-dir="sw"></div>
   <script src="koma://localhost/js/xterm.js"></script>
   <script src="koma://localhost/js/addon-fit.js"></script>
   <script src="koma://localhost/js/addon-webgl.js"></script>
