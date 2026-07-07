@@ -5,12 +5,18 @@
 (function () {
   console.log('[koma.js] script loaded');
   try {
+  // The host (Rust, run_gui) resolves koma's CONFIGURED palette canvas bg
+  // (view::theme::palette(cfg).bg) and injects it as window.__komaBg via a
+  // wry initialization script, so it's set before this script runs. Falls
+  // back to black if missing/malformed (matches the palette's own default).
+  var komaBg = (window.__komaBg && /^#[0-9a-fA-F]{6}$/.test(window.__komaBg)) ? window.__komaBg : '#000000';
+
   const term = new Terminal({
     fontFamily: '"KomaMono", monospace',
     fontSize: 14,
     cursorBlink: true,
     allowProposedApi: true,
-    theme: { background: '#0b0e14', foreground: '#c8d3f5' },
+    theme: { background: komaBg, foreground: '#c8d3f5' },
     scrollback: 10000,
   });
 
@@ -21,6 +27,13 @@
   try { term.loadAddon(new ClipboardAddon.ClipboardAddon()); } catch (e) {}
 
   term.open(document.getElementById('term'));
+
+  // Match the container + body bg to the resolved palette so the cols/rows
+  // remainder gutter (right/bottom strip xterm can't fill with whole cells)
+  // reads as the same color instead of a visibly different near-black seam.
+  document.body.style.backgroundColor = komaBg;
+  var termEl = document.getElementById('term');
+  if (termEl) termEl.style.backgroundColor = komaBg;
 
   // Ctrl+Shift+C copies the current selection, Ctrl+Shift+V pastes from the
   // system clipboard. Plain Ctrl+C is left alone so it still sends SIGINT to
@@ -93,6 +106,20 @@
 
   // window resize -> refit (fit() triggers onResize above)
   window.addEventListener('resize', function () { try { fit.fit(); } catch (e) {} });
+
+  // ResizeObserver on #term catches container size changes the window
+  // 'resize' event misses (e.g. layout/DPI shifts without a window resize),
+  // so any non-remainder margin gets refit away too. rAF-debounced so rapid
+  // observer callbacks collapse to one fit() per frame.
+  if (window.ResizeObserver) {
+    var _pending = false;
+    var ro = new ResizeObserver(function () {
+      if (_pending) return;
+      _pending = true;
+      requestAnimationFrame(function () { _pending = false; try { fit.fit(); } catch (e) {} });
+    });
+    ro.observe(document.getElementById('term'));
+  }
 
   // Gate the initial fit/ready handshake on the bundled font actually being
   // loaded: xterm measures cell size from the active font, so if we fit()
