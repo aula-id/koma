@@ -143,6 +143,12 @@ enum GuiReq {
     SelectSession { id: String },
     NewSession,
     RefreshHub,
+    /// Cancel an in-progress session switch (the full-screen loader's Cancel button):
+    /// best-effort bail back to the hub. Forwarded as [`HostCtl::ToSwapper`]. The swap
+    /// itself can't be interrupted (the host-thread blocks in the attach), so this is
+    /// acted on once the target lands — the host then drops to the swapper and pushes a
+    /// fresh `Hub`, which clears the loader React-side.
+    CancelSwitch,
     /// Attach RAW file bytes from the page (a clipboard-image paste, a drag-drop, or a
     /// file-picker pick). The host base64-decodes `bytes_b64`, writes them to a
     /// host-writable scratch path (preserving `name`'s extension so the daemon's
@@ -445,6 +451,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     // (works while attached too — see `host_swapper` / `push_loop`).
                     GuiReq::RefreshHub => {
                         let _ = ipc_ctl.send(HostCtl::RefreshHub);
+                    }
+                    // Cancel-switch: best-effort bail to the hub (acted on once the
+                    // in-flight attach lands — the swap can't be interrupted mid-flight).
+                    GuiReq::CancelSwitch => {
+                        let _ = ipc_ctl.send(HostCtl::ToSwapper);
                     }
                     // Attach raw file bytes: decode, spill to a scratch path, and forward
                     // as a Paste of that path so the daemon's existing ingest stages it.

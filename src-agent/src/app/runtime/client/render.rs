@@ -714,6 +714,16 @@ enum PushEnvelope {
         /// array — React REPLACES on each Snapshot; empty once the message is sent.
         attachments: Vec<PushAttachment>,
     },
+    /// Swap-START signal: the host is about to tear down the current attach and connect
+    /// a different (or freshly minted) session. `to` is the target session id/uuid — the
+    /// authoritative identifier React maps to a friendly hub label (an unknown id, e.g. a
+    /// brand-new session, has no row yet, so the overlay falls back to a generic label).
+    /// Pushed the instant a `Select`/`New` is acted on, BEFORE teardown, so React can
+    /// raise a deterministic full-screen loader across the (uninterruptible, possibly
+    /// multi-second build-skew) attach gap during which NOTHING else is pushed. Cleared
+    /// naturally by the next `Snapshot { state:"attached" }` — whose `session` equals `to`
+    /// on a resolved swap.
+    Switching { to: String },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
     StreamMsg { session: String, text: String },
@@ -757,6 +767,18 @@ enum PushEnvelope {
     /// `models`. Pushed out-of-band (not fingerprinted) whenever the daemon answers a
     /// `ListModels`; `provider` is echoed so the form can drop a stale/out-of-order reply.
     ModelList { provider: String, models: Vec<String> },
+}
+
+/// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
+/// swap seam (a hub `Select`/`New` in either host state, a daemon `NewSession` hand-off)
+/// the instant BEFORE teardown, so React raises a full-screen loader across the attach
+/// gap; the next attached `Snapshot` clears it. Fire-and-forget: a serialise failure is
+/// swallowed (the loader just never rises — no worse than before this signal existed).
+pub(super) fn push_switching(push: &dyn Fn(String), to: &str) {
+    let env = PushEnvelope::Switching { to: to.to_string() };
+    if let Ok(json) = serde_json::to_string(&env) {
+        push(json);
+    }
 }
 
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
@@ -904,12 +926,23 @@ pub(super) fn push_loop(
             match ctl_rx.try_recv() {
                 // The page (re)booted: re-push the full authoritative state this frame.
                 Ok(super::HostCtl::Ready) => last.reset(),
-                // A hub pick / new-session request: hand back to the state machine to
-                // detach + attach the chosen (or freshly minted) session.
-                Ok(super::HostCtl::Select(id)) => return HostTransition::Attach(id),
-                Ok(super::HostCtl::New) => {
-                    return HostTransition::Attach(uuid::Uuid::new_v4().to_string())
+                // A hub pick / new-session request: signal swap-START (so React raises the
+                // loader BEFORE this attached push_loop returns + the connection is torn
+                // down — the ONLY seam still holding a live socket), then hand back to the
+                // state machine to detach + attach the chosen (or freshly minted) session.
+                Ok(super::HostCtl::Select(id)) => {
+                    push_switching(push, &id);
+                    return HostTransition::Attach(id);
                 }
+                Ok(super::HostCtl::New) => {
+                    let new_id = uuid::Uuid::new_v4().to_string();
+                    push_switching(push, &new_id);
+                    return HostTransition::Attach(new_id);
+                }
+                // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
+                // this simply drops to the hub AFTER the current/queued attach resolves —
+                // `host_swapper` then pushes a fresh `Hub`, and the loader clears on it.
+                Ok(super::HostCtl::ToSwapper) => return HostTransition::ToSwapper,
                 // The ResumePalette opened: kick a hub refresh OFF this thread (the
                 // discovery sweep blocks). Coalesced by `refresh_inflight` so a burst of
                 // RefreshHubs while the palette stays open runs at most one sweep; the
@@ -995,7 +1028,11 @@ pub(super) fn push_loop(
         // flag is a daemon-side reap the headless host does not drive in W0; a plain
         // detach-then-attach is fine — the old daemon keeps cooking, resumable.)
         if new_session_requested.is_some() {
-            return HostTransition::Attach(uuid::Uuid::new_v4().to_string());
+            let new_id = uuid::Uuid::new_v4().to_string();
+            // Same swap-START loader signal as a hub `New` — this is a daemon-driven attach
+            // gap, equally frozen until the new session's first Snapshot.
+            push_switching(push, &new_id);
+            return HostTransition::Attach(new_id);
         }
         // `/select` transcript dump needs a terminal the host does not own — ignore it.
 
