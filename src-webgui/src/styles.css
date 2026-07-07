@@ -55,15 +55,6 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
 .win-btn:hover { background: rgba(255,255,255,0.12); }
 .win-close:hover { background: #e81123; color: #fff; }
 
-/* Centered, max-width column for the terminal. The absolute inner xterm
-   container positions against this (position: relative). Side gutters fall
-   back to #app's background. */
-.term-shell {
-  position: relative;
-  width: calc(100% - 48px);
-  max-width: 1024px;
-  height: 100%;
-}
 
 /* Custom edge/corner resize handles — the window is undecorated, so these
    drive tao's drag_resize_window() instead of native OS chrome. */
@@ -108,4 +99,28 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
   font-weight: 700;
   font-style: normal;
   font-display: swap;
+}
+
+/* Centered, max-width column for the terminal. The absolute inner xterm
+   container positions against this (position: relative). Side gutters fall
+   back to #app's background. */
+.term-shell {
+  position: relative;
+  width: calc(100% - 48px);
+  max-width: 1024px;
+  height: 100%;
+}
+
+/* xterm.js hardcodes `overflow-y: scroll` on its internally-generated
+   .xterm-viewport element (see @xterm/xterm/css/xterm.css), which always
+   reserves scrollbar-gutter width even when nothing needs scrolling. That
+   element isn't ours to style via Tailwind classes, so bridge it here:
+   scrolling still works, only the visible track/gutter is suppressed. */
+.xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
