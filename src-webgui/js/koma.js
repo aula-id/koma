@@ -35,6 +35,21 @@
   var termEl = document.getElementById('term');
   if (termEl) termEl.style.backgroundColor = komaBg;
 
+  // Live palette sync: koma (in GUI mode) emits its canvas bg via private OSC 5380
+  // whenever the palette changes; repaint the xterm theme + window gutter to match.
+  try {
+    term.parser.registerOscHandler(5380, function (data) {
+      if (/^#[0-9a-fA-F]{6}$/.test(data)) {
+        komaBg = data;
+        try { term.options.theme = Object.assign({}, term.options.theme, { background: data }); } catch (e) {}
+        document.body.style.backgroundColor = data;
+        var el = document.getElementById('term');
+        if (el) el.style.backgroundColor = data;
+      }
+      return true; // handled — do not render the sequence
+    });
+  } catch (e) { /* parser API unavailable — static window.__komaBg still applies */ }
+
   // Ctrl+Shift+C copies the current selection, Ctrl+Shift+V pastes from the
   // system clipboard. Plain Ctrl+C is left alone so it still sends SIGINT to
   // the koma client running in the pty. The clipboard addon handles OSC 52
