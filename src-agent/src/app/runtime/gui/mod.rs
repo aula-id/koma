@@ -342,7 +342,6 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                 }
             }
         })
-        .with_url("koma://localhost/index.html")
         .build(&window)
         .context("failed to build webview")?;
 
@@ -389,6 +388,17 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
             );
         }
     }
+
+    // --- 3d. Load the page now that render policy is settled -------------------
+    // Deferred from the `WebViewBuilder` chain: `.with_url(...)` there would load
+    // + first-render the page DURING `.build(&window)`, before the Linux
+    // KOMA_GUI_SOFTWARE policy above is applied — webkit doesn't re-render under
+    // a policy change after the fact, so a broken/blank first render would stick.
+    // Loading explicitly here, after both the macOS and Linux blocks, guarantees
+    // the first page render happens under the corrected settings.
+    webview
+        .load_url("koma://localhost/index.html")
+        .context("failed to load koma:// URL into webview")?;
 
     // --- 4. Run: pty -> xterm on the main thread; child cleanup on close -------
     // `run` diverges (`!`); `window` stays live in this frame, `webview` + `child`
