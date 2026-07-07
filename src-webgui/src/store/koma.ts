@@ -80,8 +80,9 @@ export type PushEnvelope =
   // per-session. REPLACES the whole config slice, pushed on config change and
   // on (re)attach.
   | { k: 'Config'; mcp: McpServer[]; providers: Provider[]; models: Model[] }
-  // Reply to GuiReq ListModels — live per-provider model-id catalogue.
-  | { k: 'ModelList'; provider: string; items: ModelListEntry[] }
+  // Reply to GuiReq ListModels — live per-provider model-id catalogue. Field
+  // is `models` to match the daemon's PushEnvelope::ModelList { provider, models }.
+  | { k: 'ModelList'; provider: string; models: ModelListEntry[] }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -256,7 +257,7 @@ export const useKoma = create<KomaState>((set) => ({
         set(() => ({ config: { mcp: env.mcp, providers: env.providers, models: env.models } }))
         break
       case 'ModelList':
-        set(() => ({ modelList: env.items }))
+        set(() => ({ modelList: env.models }))
         break
     }
   },

@@ -45,15 +45,28 @@ export function McpPanel() {
   const cancel = () => setDraft(null)
   const save = () => {
     if (!draft || !draft.name.trim()) return
-    req({ r: 'SetMcpServer', server: draft })
+    // Flat payload matching the daemon's GuiReq::SetMcpServer. `uuid` is the
+    // daemon config uuid on edit; `null` for a new server (the client-side
+    // `draft.id` is a synthetic placeholder, so the daemon mints a real uuid).
+    req({
+      r: 'SetMcpServer',
+      uuid: isNew ? null : draft.id,
+      name: draft.name,
+      enabled: draft.enabled,
+      transport: draft.transport,
+      command: draft.command,
+      args: draft.args,
+      env: draft.env,
+      url: draft.url,
+    })
     setDraft(null)
   }
   const remove = (id: string) => {
-    req({ r: 'DeleteMcpServer', id })
+    req({ r: 'DeleteMcpServer', uuid: id })
     setArmed(null)
   }
   const toggleEnable = (id: string, enabled: boolean) => {
-    req({ r: 'EnableMcpServer', id, enabled })
+    req({ r: 'EnableMcpServer', uuid: id, enabled })
   }
 
   return (

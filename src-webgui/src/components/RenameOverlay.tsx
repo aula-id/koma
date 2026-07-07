@@ -29,7 +29,7 @@ export function RenameOverlay({ onClose }: RenameOverlayProps) {
 
   const confirm = () => {
     const trimmed = name.trim()
-    if (trimmed) req({ r: 'RenameSession', name: trimmed })
+    if (trimmed) req({ r: 'Rename', name: trimmed })
     onClose()
   }
 
