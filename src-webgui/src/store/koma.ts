@@ -336,6 +336,16 @@ export const useKoma = create<KomaState>((set) => ({
       case 'Hub':
         set((s) => ({
           hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
+          // Deterministic failure-recovery clear: host_swapper pushes a fresh
+          // Hub on EVERY path back to the swapper, including the
+          // attach-failure/degrade path (which never emits a Snapshot). A
+          // valid in-flight swap can't produce a spurious Hub here either —
+          // ResumePalette (the only source of RefreshHub) is unmounted by
+          // startSwitching's caller before the request is sent, so its
+          // RefreshHub polling interval is already torn down. Net: any Hub
+          // that arrives while switchingTo is set means the swap bounced
+          // back to the hub, so clear the loader unconditionally.
+          ui: { ...s.ui, switchingTo: null },
         }))
         break
       case 'SearchResults':
