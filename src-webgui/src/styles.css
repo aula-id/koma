@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* Streamdown ships its keyframe animations (sd-fadeIn/blurIn/…) as a plain
+   stylesheet; its utility CLASSES live as strings inside its dist JS, so
+   Tailwind must be told to scan that dist (classes aren't in our source
+   tree). Without the @source lines below the markdown renders unstyled — the
+   classic "why is my markdown flat" trap. */
+@import "streamdown/styles.css";
+@source "../node_modules/streamdown/dist/*.js";
+
 @theme {
   --color-koma-fg: var(--koma-fg, #c8d3f5);
   --color-koma-bg: var(--koma-bg, #0b0e14);
@@ -9,6 +17,52 @@
   --color-koma-hover: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14));
   --color-koma-grip: color-mix(in srgb, var(--koma-fg, #c8d3f5) 22%, var(--koma-bg, #0b0e14));
   --color-koma-head: color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+
+  /* Palette ROLES (1:1 with the TUI theme.rs roles). Only bg/fg are pushed by
+     the host today; the rest default to the TUI dark-theme values and are
+     derived from fg/bg via color-mix so they track a live palette repaint.
+     `applyPaletteVars` may later set --koma-accent/etc. from a fuller push. */
+  --color-koma-dim: color-mix(in srgb, var(--koma-fg, #c8d3f5) 66%, var(--koma-bg, #0b0e14));
+  --color-koma-accent: var(--koma-accent, #39ff14);
+  --color-koma-band: color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+  --color-koma-warn: var(--koma-warn, #ffb43c);
+  --color-koma-success: var(--koma-success, #00c853);
+  --color-koma-info: var(--koma-info, #50c8ff);
+  --color-koma-error: var(--koma-error, #ff3c3c);
+
+  /* shadcn-style semantic tokens Streamdown's dist references
+     (text-foreground, bg-muted, border-border, text-muted-foreground,
+     text-primary…). Tailwind v4 only emits those classes if the tokens
+     exist — map them onto the koma palette so Streamdown adopts our theme. */
+  --color-background: var(--koma-bg, #0b0e14);
+  --color-foreground: var(--koma-fg, #c8d3f5);
+  --color-muted: color-mix(in srgb, var(--koma-fg, #c8d3f5) 6%, var(--koma-bg, #0b0e14));
+  --color-muted-foreground: color-mix(in srgb, var(--koma-fg, #c8d3f5) 60%, var(--koma-bg, #0b0e14));
+  --color-border: color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+  --color-primary: var(--koma-accent, #39ff14);
+  --color-primary-foreground: var(--koma-bg, #0b0e14);
+}
+
+/* Markdown body 1:1 palette overrides. Streamdown gives sensible defaults;
+   these re-tint the roles the TUI grammar assigns to `accent`/`dim`:
+   inline code + H1/H2 headings + links = accent; blockquote = dim + a thin
+   left bar (the TUI's `│ ` quote glyph). */
+.koma-md {
+  color: var(--color-koma-fg);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.koma-md > :first-child { margin-top: 0; }
+.koma-md > :last-child { margin-bottom: 0; }
+/* inline code only — never recolor highlighted code-block tokens (pre code) */
+.koma-md :not(pre) > code { color: var(--color-koma-accent); }
+.koma-md h1, .koma-md h2 { color: var(--color-koma-accent); }
+.koma-md a { color: var(--color-koma-accent); text-decoration: underline; }
+.koma-md blockquote {
+  border-left: 2px solid var(--color-koma-dim);
+  color: var(--color-koma-dim);
+  padding-left: 0.75rem;
+  font-style: normal;
 }
 
 html, body, #root { margin: 0; height: 100%; background: transparent; overflow: hidden; }
