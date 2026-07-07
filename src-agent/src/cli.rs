@@ -137,6 +137,8 @@ pub struct Opts {
     /// socket and create-or-loads exactly session `<id>`. `None` on a bare `koma` until
     /// `main` mints one; a stray `--session` on a path that ignores it is harmless.
     pub session: Option<String>,
+    /// When `true`, launch the feature-gated desktop GUI (`koma gui` positional verb).
+    pub gui: bool,
 }
 
 /// Parse command-line arguments into [`Opts`].
@@ -211,6 +213,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("agents") => opts.resume = true,
         Some("alone") => opts.local = true,
         Some("update") => opts.update = true,
+        Some("gui") => opts.gui = true,
         Some("daemon") => {
             opts.subcommand = Some(match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
                 Some(sub) => DaemonCli::Run(sub),

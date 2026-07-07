@@ -30,7 +30,7 @@ use crate::ipc::proto::{ClientRequest, KeyWire};
 /// open (sub-agents panel / viewer / tool-approval), matching where the daemon's chat
 /// composer actually consumes these keys. (`/help` is now its own mode, so the
 /// `Mode::Chat` guard already excludes it.)
-pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
+pub(crate) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
     // Only echo in plain Chat with no modal overlay capturing keys. In any other mode
     // (or with a modal open) the daemon routes the key elsewhere, so faking a text
     // edit would desync until the next snapshot corrects it.
@@ -65,7 +65,7 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
 }
 
 /// What a key handled inside the mirrored `/quit` overlay tells the render loop to do.
-pub(super) enum QuitConfirmKey {
+pub(crate) enum QuitConfirmKey {
     /// Tear down the client process (the request to act on it was already queued).
     ExitClient,
     /// Stay attached and keep rendering (cancel, or a swallowed stray key).
@@ -116,7 +116,7 @@ pub(super) enum QuitConfirmKey {
 ///
 /// `selected` is the shadow's current focus index (mirrored from the daemon), used to
 /// resolve what `Enter` activates.
-pub(super) fn handle_quit_confirm_key(
+pub(crate) fn handle_quit_confirm_key(
     key: &KeyEvent,
     req_tx: &Sender<ClientRequest>,
     selected: usize,

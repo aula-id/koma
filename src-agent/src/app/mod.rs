@@ -34,6 +34,8 @@ pub mod version;
 
 pub use runtime::client_run;
 pub use runtime::run;
+#[cfg(feature = "gui")]
+pub use runtime::gui::run_gui;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
 pub use runtime::run_mcp_daemon;
