@@ -531,19 +531,22 @@ impl McpManager {
         }
     }
 
-    /// Cached, non-blocking twin of the advertise accessors ([`Self::tool_defs`] +
-    /// [`Self::tool_names`]) for the request-build hot path, returning both in ONE call
-    /// so defs and names always come from the same cache read.
+    /// Advertise accessors ([`Self::tool_defs`] + [`Self::tool_names`]) for the
+    /// request-build path, returning both in ONE call so defs and names always come
+    /// from the same read.
     ///
     /// - **Local** — the snapshot walk is pure in-memory, so serve it live.
-    /// - **Proxy** — [`Self::tool_defs`]/[`Self::tool_names`] serve a cache primed at
-    ///   `connect_proxy`. That prime races the global daemon's own (background) server
-    ///   connect, so it can be seeded EMPTY and, without this, never recovers. On a
-    ///   stale OR empty cache this kicks a single-flight BACKGROUND `McpRequest::List`
-    ///   refresh (never blocking this call — same discipline as
-    ///   [`Self::server_status_cached`]) and returns the current cached value. An empty
-    ///   cache is always treated as stale, so it keeps retrying until the daemon has
-    ///   listed its tools; the next turn then advertises them.
+    /// - **Proxy** — the `(defs, names)` cache primed at `connect_proxy` races the
+    ///   global daemon's own (background) server connect and can be seeded EMPTY. An
+    ///   empty cache is exactly the cold-start window (first run, or a freshly spawned
+    ///   session daemon on `/new`) where the model needs the tools THIS turn, so on an
+    ///   empty cache we pay a single blocking live `McpRequest::List` INLINE (the
+    ///   daemon answers a List straight from its snapshot, so it is fast; bounded by
+    ///   `proxy_request`'s IO timeout). Once the daemon has connected its servers this
+    ///   returns them immediately; while it is still connecting it returns empty and we
+    ///   simply retry inline next turn. A NON-empty cache is served immediately and, if
+    ///   stale, refreshed by a single-flight BACKGROUND `List` (never blocking the warm
+    ///   path) so a later-added/removed server is eventually reflected.
     pub fn advertise_cached(self: &Arc<Self>) -> (Vec<ToolDef>, Vec<String>) {
         use std::sync::atomic::Ordering;
 
@@ -558,11 +561,35 @@ impl McpManager {
             (c.0.clone(), c.1.clone(), c.0.is_empty())
         };
 
-        let stale = empty
-            || match *self.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) {
-                Some(at) => at.elapsed() >= STATUS_CACHE_TTL,
-                None => true,
-            };
+        // Empty cache: cold-start window — fetch live INLINE so the tools are on the
+        // wire this turn instead of a turn later.
+        if empty {
+            if let McpBackend::Proxy { sock, cache } = &self.backend {
+                match proxy_request(sock, &McpRequest::List) {
+                    Ok(McpResponse::Tools { defs, names }) => {
+                        *cache.lock().unwrap_or_else(|p| p.into_inner()) =
+                            (defs.clone(), names.clone());
+                        *self
+                            .advertise_cache_at
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+                        return (defs, names);
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("mcp proxy: inline advertise List failed: {e:#}"),
+                }
+            }
+            // Daemon not ready yet (or a transient error) — return the empty cache;
+            // the next turn retries inline.
+            return (defs, names);
+        }
+
+        // Non-empty cache: serve it now; if stale, kick a single-flight BACKGROUND
+        // refresh so a later config change is eventually reflected without blocking.
+        let stale = match *self.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) {
+            Some(at) => at.elapsed() >= STATUS_CACHE_TTL,
+            None => true,
+        };
 
         if stale
             && self
