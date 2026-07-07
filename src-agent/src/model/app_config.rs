@@ -185,7 +185,7 @@ pub enum ModelRole {
 /// `api_key` (no key ever crosses the wire). Note `Default::default()` yields an
 /// EMPTY `uuid` (the `new_uuid` serde default is a deserialize-only fallback), so
 /// callers that need a real id set it explicitly.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConn {
     #[serde(default = "new_uuid")]
     pub uuid: String,
@@ -218,7 +218,7 @@ pub struct ProviderConn {
 /// reconstruction of the `/agents` model catalogue (just `uuid`/`name`/`model_id`/
 /// `provider_uuid`). As with [`ProviderConn`], `Default::default()` yields an empty
 /// `uuid`; the reconstruction sets it explicitly.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelEntry {
     #[serde(default = "new_uuid")]
     pub uuid: String,

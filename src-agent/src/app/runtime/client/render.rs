@@ -587,6 +587,55 @@ struct PushHistory {
     current_dir: bool,
 }
 
+/// One provider row in a [`PushEnvelope::Config`] (the Connector panel's ProviderForm
+/// model). `id` is the config uuid (stable identity a `SetProvider`/`DeleteProvider`
+/// round-trips); `api_key` is projected verbatim — this GUI is local-only (feature-
+/// gated, same machine + user), so there is no remote-leak surface, and the form needs
+/// the current value to edit in place.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushProvider {
+    id: String,
+    name: String,
+    endpoint: String,
+    api_key: String,
+}
+
+/// One model row in a [`PushEnvelope::Config`] (the Connector panel's ModelForm model).
+/// `id` is the config/session-override uuid; `provider` is the serving provider's uuid
+/// (matches the ProviderForm option value); `roles` are the lowercase role tokens; and
+/// `scope` is `"global"` (from `AppConfig.models`) or `"local"` (from the foreground
+/// session's `settings.session_models`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushModel {
+    id: String,
+    name: String,
+    model_id: String,
+    provider: String,
+    route: String,
+    roles: Vec<&'static str>,
+    scope: &'static str,
+}
+
+/// One MCP-server row in a [`PushEnvelope::Config`] (the McpPanel Server model). `id` is
+/// the config uuid. The daemon stores `args` as a `Vec<String>` and `env` as ordered
+/// `(key,value)` pairs; both are rendered back into the panel's single-line STRING forms
+/// (`args` space-joined, `env` as `K=V, K2=V2`) so the round-trip matches the form
+/// exactly (a `SetMcpServer` re-parses them daemon-side).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushMcpServer {
+    id: String,
+    name: String,
+    enabled: bool,
+    transport: &'static str,
+    command: String,
+    args: String,
+    env: String,
+    url: String,
+}
+
 /// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
 /// field name matches the contract verbatim (camelCase where the contract uses it).
 #[derive(serde::Serialize)]
@@ -637,6 +686,17 @@ enum PushEnvelope {
         query: String,
         items: Vec<crate::ipc::proto::FileSearchItem>,
     },
+    /// The authoritative GLOBAL config catalogue for the Connector + MCP panels. React
+    /// REPLACES its config slices on each push. Emitted whenever the projected config
+    /// changes (a full snapshot carries it) and re-emitted on `Ready` (page reload) so a
+    /// fresh webview always has the current catalogue. `models` folds the global scope
+    /// and the foreground session's local-override scope into one list, each row tagged
+    /// with its `scope`.
+    Config {
+        providers: Vec<PushProvider>,
+        models: Vec<PushModel>,
+        mcp: Vec<PushMcpServer>,
+    },
 }
 
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
@@ -653,6 +713,10 @@ pub(super) struct PushState {
     status: Option<(bool, Option<String>)>,
     /// Last serialised `Hub` JSON (the swapper is diffed as a whole).
     hub_json: Option<String>,
+    /// Last serialised `Config` JSON (the global config catalogue, diffed as a whole so
+    /// an unchanged config emits nothing). Cleared by [`reset`](Self::reset) on `Ready`
+    /// so a page reload re-emits the full current catalogue.
+    config_json: Option<String>,
 }
 
 impl PushState {
@@ -663,6 +727,7 @@ impl PushState {
             reasoning: String::new(),
             status: None,
             hub_json: None,
+            config_json: None,
         }
     }
 
@@ -724,6 +789,11 @@ pub(super) fn push_loop(
     let mut seeded = false;
     let mut awaiting_resync = false;
 
+    // Latest authoritative config catalogue, cached off each incoming full snapshot so
+    // `push_config` can (re)emit the `Config` envelope every frame (dedup'd) — including
+    // after a `Ready` reset, without waiting for the daemon to resend a snapshot.
+    let mut current_config: Option<ConfigProjection> = None;
+
     // --- attached-state hub refresh (RefreshHub) ---
     // Cross-daemon discovery (`build_local_hub` → `list_live_sessions`) BLOCKS on a
     // per-socket Status probe, so it must NOT run inline on this 16ms fold loop (it
@@ -747,6 +817,11 @@ pub(super) fn push_loop(
         let mut open_swapper_requested = false;
         let mut new_session_requested: Option<bool> = None;
         for frame in prebuffered {
+            // Cache the config off any prebuffered full snapshot (normally none — Hello
+            // is first, so the attach Snapshot lands in the live drain — but stay safe).
+            if let DaemonEvent::Snapshot(snap) = &frame.event {
+                current_config = Some(ConfigProjection::from_global(&snap.global));
+            }
             apply_frame(
                 frame,
                 &mut shadow,
@@ -814,6 +889,12 @@ pub(super) fn push_loop(
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);
                         }
+                    }
+                    // Cache the authoritative config off every full snapshot so the
+                    // `Config` envelope can be (re)emitted below (a config edit forces a
+                    // full snapshot — see `ipc::snapshot::diff`).
+                    if let DaemonEvent::Snapshot(snap) = &frame.event {
+                        current_config = Some(ConfigProjection::from_global(&snap.global));
                     }
                     apply_frame(
                         frame,
@@ -883,6 +964,10 @@ pub(super) fn push_loop(
 
         // --- (c) serialise + push whatever changed (the draw seam) ---
         serialize_and_push(&shadow, push, last);
+        // Config catalogue (Connector + MCP panels): emit whenever it changed since the
+        // last frame, or re-emit after a `Ready` reset. Independent of the per-session
+        // draw so a page reload always re-pushes the current global config.
+        push_config(current_config.as_ref(), push, last);
 
         // --- frame pacing: sleep the remainder of the ~16ms budget ---
         if let Some(rem) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
@@ -1178,6 +1263,115 @@ pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushS
     if let Ok(json) = serde_json::to_string(&env) {
         if last.hub_json.as_deref() != Some(json.as_str()) {
             last.hub_json = Some(json.clone());
+            push(json);
+        }
+    }
+}
+
+/// The GUI-relevant slice of the daemon's authoritative config, cached by
+/// [`push_loop`] from each incoming full [`crate::ipc::proto::StateSnapshot`] so the
+/// `Config` envelope can be (re)built + diffed independently of the frame stream — e.g.
+/// re-emitted on a `Ready` reload without waiting for the next snapshot. Mirrors the
+/// four `GlobalSnapshot` config fields: `models` is the GLOBAL scope, `session_models`
+/// the foreground session's LOCAL override scope.
+struct ConfigProjection {
+    providers: Vec<crate::model::app_config::ProviderConn>,
+    models: Vec<crate::model::app_config::ModelEntry>,
+    session_models: Vec<crate::model::app_config::ModelEntry>,
+    mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
+}
+
+impl ConfigProjection {
+    /// Snapshot the config slice off a [`crate::ipc::proto::GlobalSnapshot`].
+    fn from_global(g: &crate::ipc::proto::GlobalSnapshot) -> Self {
+        Self {
+            providers: g.providers.clone(),
+            models: g.config_models.clone(),
+            session_models: g.session_models.clone(),
+            mcp_servers: g.mcp_servers.clone(),
+        }
+    }
+}
+
+/// Map a persisted [`crate::model::app_config::ModelRole`] to its lowercase wire token
+/// (matches the React role tokens + the config serde form).
+fn role_token(r: crate::model::app_config::ModelRole) -> &'static str {
+    use crate::model::app_config::ModelRole;
+    match r {
+        ModelRole::Main => "main",
+        ModelRole::Awareness => "awareness",
+        ModelRole::Safeguard => "safeguard",
+        ModelRole::Compactor => "compactor",
+        ModelRole::Planner => "planner",
+    }
+}
+
+/// Build one [`PushModel`] from a persisted [`crate::model::app_config::ModelEntry`],
+/// tagged with its `scope` (`"global"` / `"local"`). Roles fold in the legacy single-
+/// role field via `effective_roles`.
+fn push_model(m: &crate::model::app_config::ModelEntry, scope: &'static str) -> PushModel {
+    PushModel {
+        id: m.uuid.clone(),
+        name: m.name.clone(),
+        model_id: m.model_id.clone(),
+        provider: m.provider_uuid.clone(),
+        route: m.route.clone().unwrap_or_default(),
+        roles: m.effective_roles().into_iter().map(role_token).collect(),
+        scope,
+    }
+}
+
+/// Serialise `cfg` into a [`PushEnvelope::Config`] and push it if it changed since the
+/// last call. Called every frame from [`push_loop`]; `last.config_json` dedups so an
+/// unchanged catalogue is silent, and a `Ready` reset re-emits the full current config.
+/// A `None` projection (no snapshot seen yet) is a no-op.
+fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String), last: &mut PushState) {
+    let Some(cfg) = cfg else { return };
+    use crate::model::app_config::McpTransport;
+
+    let providers: Vec<PushProvider> = cfg
+        .providers
+        .iter()
+        .map(|p| PushProvider {
+            id: p.uuid.clone(),
+            name: p.name.clone(),
+            endpoint: p.endpoint.clone(),
+            api_key: p.api_key.clone(),
+        })
+        .collect();
+
+    // Global scope first, then the foreground session's local overrides, each tagged.
+    let mut models: Vec<PushModel> = cfg.models.iter().map(|m| push_model(m, "global")).collect();
+    models.extend(cfg.session_models.iter().map(|m| push_model(m, "local")));
+
+    let mcp: Vec<PushMcpServer> = cfg
+        .mcp_servers
+        .iter()
+        .map(|s| PushMcpServer {
+            id: s.uuid.clone(),
+            name: s.name.clone(),
+            enabled: s.enabled,
+            transport: match s.transport {
+                McpTransport::Stdio => "stdio",
+                McpTransport::Http => "http",
+            },
+            command: s.command.clone(),
+            // Render the daemon's array/pair forms back into the panel's STRING forms.
+            args: s.args.join(" "),
+            env: s
+                .env
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            url: s.url.clone(),
+        })
+        .collect();
+
+    let env = PushEnvelope::Config { providers, models, mcp };
+    if let Ok(json) = serde_json::to_string(&env) {
+        if last.config_json.as_deref() != Some(json.as_str()) {
+            last.config_json = Some(json.clone());
             push(json);
         }
     }

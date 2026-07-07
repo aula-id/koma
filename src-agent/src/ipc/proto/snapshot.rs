@@ -108,6 +108,23 @@ pub struct GlobalSnapshot {
     pub models_cache: Option<Vec<crate::dto::openrouter::ModelInfo>>,
     pub models_cache_endpoint: Option<String>,
     pub models_cache_failed: Option<String>,
+    /// GLOBAL config catalogue projected authoritatively for the native-React GUI's
+    /// Connector + MCP panels (the daemon owns `AppConfig`; a thin client can't read
+    /// `config.json`). `providers`/`config_models`/`mcp_servers` mirror
+    /// `AppConfig.{providers,models,mcp_servers}`; `session_models` is the foreground
+    /// session's per-session model override layer (`settings.session_models`, the
+    /// "local" scope). The GUI host derives a `Config` push envelope from these; a
+    /// change to any of them forces a full snapshot (see `ipc::snapshot::diff`). The
+    /// TUI client ignores these fields (its Agents view rebuilds a keyless catalogue
+    /// separately), so they add wire data only, no shadow behaviour change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<crate::model::app_config::ProviderConn>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_models: Vec<crate::model::app_config::ModelEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_models: Vec<crate::model::app_config::ModelEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
     pub agent_viewer: Option<usize>,
     pub agent_viewer_scroll: u16,
     pub agent_viewer_follow: bool,
