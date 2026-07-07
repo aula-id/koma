@@ -511,6 +511,56 @@ impl DaemonHub {
                 }
             }
 
+            // GUI MCP CRUD (McpPanel). Build an `McpServerEntry` from the panel's form
+            // (mapping the single-line args/env STRING forms into the daemon's array/pair
+            // forms via the SAME `parse_args`/`parse_env` the TUI editor uses), upsert it
+            // into `config.mcp_servers` by uuid (a `None`/empty uuid mints a new one), then
+            // persist + live-reconnect the MCP manager via the mode-independent
+            // `save_and_reload_mcp`. Any client may drive this (config is global; the C2
+            // bracket is irrelevant here).
+            ClientRequest::SetMcpServer {
+                uuid,
+                name,
+                enabled,
+                transport,
+                command,
+                args,
+                env,
+                url,
+            } => {
+                let entry = crate::model::app_config::McpServerEntry {
+                    uuid: uuid.unwrap_or_default(),
+                    name: name.trim().to_string(),
+                    enabled,
+                    transport: if transport == "http" {
+                        crate::model::app_config::McpTransport::Http
+                    } else {
+                        crate::model::app_config::McpTransport::Stdio
+                    },
+                    command: command.trim().to_string(),
+                    args: crate::app::mode::mcp::parse_args(&args),
+                    env: crate::app::mode::mcp::parse_env(&env),
+                    url: url.trim().to_string(),
+                };
+                state.rest.config.upsert_mcp_server(entry);
+                let result = crate::app::runtime::actions::save_and_reload_mcp(state);
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
+            ClientRequest::DeleteMcpServer { uuid } => {
+                state.rest.config.remove_mcp_server_by_uuid(&uuid);
+                let result = crate::app::runtime::actions::save_and_reload_mcp(state);
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI MCP enable toggle: set the `enabled` flag by uuid, persist + reconnect.
+            ClientRequest::EnableMcpServer { uuid, enabled } => {
+                state.rest.config.set_mcp_enabled_by_uuid(&uuid, enabled);
+                let result = crate::app::runtime::actions::save_and_reload_mcp(state);
+                self.ack_or_error(idx, result);
+            }
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.

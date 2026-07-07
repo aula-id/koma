@@ -38,6 +38,10 @@ mod settings;
 // keeps the dormant re-export warning-free at this commit.
 #[allow(unused_imports)]
 pub(in crate::app::runtime) use session::create_session_for_pwd;
+// Re-export the mode-independent MCP save+reload so the daemon's GUI config setters
+// (`SetMcpServer`/`DeleteMcpServer`/`EnableMcpServer`) can persist + live-reconnect the
+// MCP manager without a `Mode::Mcp` in scope.
+pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
 mod settings_creds;
 
 /// Apply one `Action` (the decoded result of a keystroke) by mutating state and,

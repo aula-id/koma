@@ -106,6 +106,33 @@ pub enum ClientRequest {
     /// atomic rename path (fixes the "rename not working" gap where `NewSession.name`
     /// was accept-ignored). An empty/whitespace name is a no-op.
     RenameSession { name: String },
+
+    // ─── GUI config setters (Connector + MCP panels) ─────────────────────────
+    // All gui-gated: the TUI drives config through `Mode::Settings`/`Mode::Mcp` and
+    // never sends these. Each mutates the daemon's authoritative `AppConfig` (or the
+    // foreground session's local model overrides) + persists, reusing the SAME
+    // config-layer setters/parsers the TUI editors use. The resulting config change
+    // forces a full snapshot, so the GUI host re-derives + re-pushes its `Config`
+    // envelope (see `ipc::snapshot::diff`).
+    /// Upsert an MCP server. `uuid` is `None` for a brand-new server (the daemon mints
+    /// one) or `Some` to edit an existing one by uuid. `args`/`env` are the panel's
+    /// single-line STRING forms (space-separated args; `K=V, K2=V2` env); the daemon
+    /// parses them into its array/pair forms. `transport` is `"stdio"` or `"http"`.
+    SetMcpServer {
+        uuid: Option<String>,
+        name: String,
+        enabled: bool,
+        transport: String,
+        command: String,
+        args: String,
+        env: String,
+        url: String,
+    },
+    /// Remove the MCP server with `uuid`, persist, and live-reconnect the manager.
+    DeleteMcpServer { uuid: String },
+    /// Toggle the `enabled` flag on the MCP server with `uuid` (the list-row switch),
+    /// persist, and live-reconnect the manager.
+    EnableMcpServer { uuid: String, enabled: bool },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
