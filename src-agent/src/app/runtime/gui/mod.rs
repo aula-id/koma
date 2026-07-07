@@ -524,9 +524,35 @@ impl eframe::App for GuiApp {
             self.teardown_attached(req_tx, writer_handle);
         }
     }
+
+    /// Paint the window clear (the surface behind the panel, and anything the panel fill misses)
+    /// with the active theme's canvas bg instead of eframe's default dark grey — the other half of
+    /// the black-wedge fix (see [`GuiApp::paint`]'s panel fill + [`GuiApp::theme_bg`]). Recomputed
+    /// each frame from the live shadow config so it tracks the palette picker. `clear_color` wants
+    /// its value in sRGB gamma space, so convert via `to_normalized_gamma_f32` (the exact call the
+    /// trait's own default uses).
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        self.theme_bg().to_normalized_gamma_f32()
+    }
 }
 
 impl GuiApp {
+    /// The active theme's canvas background as an [`egui::Color32`] — the SAME `palette.bg`
+    /// [`crate::view::draw`] paints the terminal canvas with. Resolved from the LIVE shadow config
+    /// on every call through the shared [`crate::view::theme::palette`] (never a duplicated colour
+    /// table), so it tracks the palette picker's live changes. Used for BOTH the panel fill behind
+    /// the ratatui texture ([`Self::paint`]) and the window clear ([`eframe::App::clear_color`]) so
+    /// the right/bottom margin the floor()'d cell-grid can't cover matches the terminal canvas
+    /// instead of eframe's default dark panel — killing the black corner wedge.
+    fn theme_bg(&self) -> egui::Color32 {
+        match crate::view::theme::palette(&self.shadow.rest.config).bg {
+            ratatui::style::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+            // Every registered palette's `bg` is an RGB literal, so this arm is unreachable in
+            // practice; fall back to the `dark` canvas (black) rather than panic on a stray Color.
+            _ => egui::Color32::BLACK,
+        }
+    }
+
     /// Pre-size the soft backend to the egui panel, render the shadow through the UNCHANGED view,
     /// and present the rasterised image — steps (c-pre)/(c)/(d), shared by the attached + swapper
     /// frames (both render `self.shadow` — the swapper writes its hub onto it first).
@@ -551,6 +577,16 @@ impl GuiApp {
         // (c) render the shadow into the software backend via the UNCHANGED view. The backend's
         // error type is `Infallible`, so the draw cannot actually fail.
         let _ = self.terminal.draw(|f| crate::view::draw(f, &self.shadow));
+
+        // (c-bg) fill the WHOLE panel with the active theme's canvas bg BEFORE presenting the
+        // texture. The grid is `floor(panel_px / cell_px)` cells, so the rasterised image falls a
+        // few px short of the panel on the right + bottom; without this the leftover margin shows
+        // eframe's default dark panel as a black corner wedge. Painting `ui.max_rect()` (the full
+        // panel, zero rounding) with the SAME `palette.bg` `view::draw` uses (`theme_bg`) makes
+        // that margin seam-free with the terminal canvas. Emitted before `ui.add` so the texture,
+        // added at the top-left (the root `Ui` has no margin), draws ON TOP of the fill.
+        let bg = self.theme_bg();
+        ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
 
         // (d) present the rasterised terminal image. The soft backend was pre-sized to the panel
         // above, so the widget's own resize (identical dims) is a no-op; it just uploads the
@@ -714,9 +750,16 @@ impl GuiApp {
     ) {
         let _ = req_tx.send(ClientRequest::Detach);
         drop(req_tx);
+        // Build the `timeout` (and its inner `Sleep`) INSIDE the async block, so it is
+        // constructed while `block_on` has this runtime's context ENTERED. Passing
+        // `tokio::time::timeout(..)` as the `block_on` ARGUMENT instead builds the `Sleep`
+        // FIRST (Rust evaluates the argument before the call): with no runtime entered yet it
+        // tries to register with the current thread's timer, finds none, and panics "there is
+        // no reactor running". `block_on` only enters the context to DRIVE the future it is
+        // handed — it can't rescue one that already panicked while being constructed.
         let _ = self
             ._rt
-            .block_on(tokio::time::timeout(WRITER_FLUSH_TIMEOUT, writer_handle));
+            .block_on(async move { tokio::time::timeout(WRITER_FLUSH_TIMEOUT, writer_handle).await });
     }
 
     /// Drive the local `/resume` swapper with this frame's egui input, returning the resolved
