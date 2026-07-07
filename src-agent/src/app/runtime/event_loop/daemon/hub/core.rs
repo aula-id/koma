@@ -42,6 +42,16 @@ pub(crate) enum HubInbound {
     Disconnect { client_id: u64 },
 }
 
+/// An async [`ClientRequest::ListModels`] result, tagged with the client that asked, so
+/// the daemon loop's [`DaemonHub::drain_list_models`] can reply to exactly that client via
+/// the per-client seq'd `send_to` (a background task can't touch the per-client seq
+/// directly). `models` is the fetched model-id list, EMPTY on a failed/empty GET.
+pub(super) struct ListModelsReply {
+    pub(super) client_id: u64,
+    pub(super) provider: String,
+    pub(super) models: Vec<String>,
+}
+
 /// One enrolled client in the hub registry.
 pub(super) struct HubClient {
     /// Loop-assigned connection id (matches the per-client task's `client_id`).
@@ -124,6 +134,15 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// gap between that fresh on-disk fingerprint and this stored one is exactly the
     /// stale-daemon skew the handshake exists to catch.
     pub(super) version: String,
+    /// Sender the async `ListModels` fetch tasks ship their [`ListModelsReply`] back on.
+    /// Kept here (a hub-owned clone) so the paired `list_models_rx` never observes a
+    /// premature `Disconnected`; the `ListModels` handler clones this into each spawned
+    /// GET task.
+    pub(super) list_models_tx: std::sync::mpsc::Sender<ListModelsReply>,
+    /// Receiver drained each tick by [`drain_list_models`](Self::drain_list_models),
+    /// which turns each landed reply into a seq'd `ModelList` frame to the requesting
+    /// client.
+    pub(super) list_models_rx: Receiver<ListModelsReply>,
 }
 
 impl DaemonHub {
@@ -139,15 +158,44 @@ impl DaemonHub {
     /// rebuild.
     pub(in crate::app::runtime) fn new() -> (Self, Sender<HubInbound>) {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        let (list_models_tx, list_models_rx) = std::sync::mpsc::channel();
         (
             Self {
                 msg_rx,
                 clients: Vec::new(),
                 shutdown: false,
                 version: crate::model::store::build_fingerprint(),
+                list_models_tx,
+                list_models_rx,
             },
             msg_tx,
         )
+    }
+
+    /// Drain any landed [`ListModelsReply`]s and reply to each requesting client with a
+    /// seq'd [`DaemonEvent::ModelList`]. Called once per tick by the daemon loop. Uses
+    /// `send_to` so the per-client monotonic seq stays gap-free (a background GET task
+    /// can't advance it itself). A reply whose client has since detached/vanished — or is
+    /// not yet attached — is silently dropped (the picker is gone). The hub owns a
+    /// `list_models_tx` clone, so `Disconnected` never fires; handle it as "stop draining"
+    /// for robustness anyway.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_list_models(&mut self) {
+        // `try_recv` yields `Err` on both Empty and (never, since the hub holds a tx
+        // clone) Disconnected — either way, stop draining. So `while let Ok(..)` is
+        // exactly the drain-until-empty loop.
+        while let Ok(reply) = self.list_models_rx.try_recv() {
+            if let Some(i) = self.clients.iter().position(|c| c.id == reply.client_id) {
+                if self.clients[i].attached {
+                    self.send_to(
+                        i,
+                        crate::ipc::proto::DaemonEvent::ModelList {
+                            provider: reply.provider,
+                            models: reply.models,
+                        },
+                    );
+                }
+            }
+        }
     }
 
     /// Build the mode payload for client `idx`'s streaming projection, REUSING THAT

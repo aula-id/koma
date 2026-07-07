@@ -399,6 +399,17 @@ impl AppConfig {
         self.oauth_conns.iter().position(|c| c.uuid == uuid)
     }
 
+    /// Upsert a model into the GLOBAL catalogue by uuid, with per-role steal (see
+    /// [`upsert_model_entry`]). The caller persists via [`Self::save`] afterwards.
+    pub fn upsert_model(&mut self, entry: ModelEntry) {
+        upsert_model_entry(&mut self.models, entry);
+    }
+
+    /// Remove the global model with `uuid` (no-op if none matches).
+    pub fn remove_model_by_uuid(&mut self, uuid: &str) {
+        self.models.retain(|m| m.uuid != uuid);
+    }
+
     /// Upsert an API provider by uuid (the GUI Connector ProviderForm). A `Some(uuid)`
     /// matching an existing provider EDITS it in place — updating `name`/`endpoint`/
     /// `api_key` while PRESERVING its `api_type` (the form doesn't expose the wire type,
@@ -531,5 +542,32 @@ impl AppConfig {
         let json = serde_json::to_vec_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
+    }
+}
+
+/// Upsert `entry` into a model `list` by uuid with per-role STEAL (the invariant that
+/// each role is held by at most ONE model within a given scope): every role `entry` now
+/// holds is first removed from every OTHER model in `list`, then `entry` replaces its
+/// uuid-match (or is appended). An `entry` arriving with an EMPTY uuid is treated as
+/// brand-new (a fresh uuid is minted).
+///
+/// Scope-agnostic on purpose: the GLOBAL catalogue (`AppConfig::models`, via
+/// [`AppConfig::upsert_model`]) and each session's LOCAL override layer
+/// (`settings.session_models`, called directly by the GUI `SetModel` handler) each keep
+/// the invariant INDEPENDENTLY, so a global Main and a session Main can coexist (session
+/// wins at resolve). Mirrors the TUI settings modal's per-scope role-steal, lifted to the
+/// config layer so the daemon's gui handler and the mode share one implementation.
+pub(crate) fn upsert_model_entry(list: &mut Vec<ModelEntry>, mut entry: ModelEntry) {
+    if entry.uuid.is_empty() {
+        entry.uuid = new_uuid();
+    }
+    for other in list.iter_mut() {
+        if other.uuid != entry.uuid {
+            other.roles.retain(|r| !entry.roles.contains(r));
+        }
+    }
+    match list.iter_mut().find(|m| m.uuid == entry.uuid) {
+        Some(slot) => *slot = entry,
+        None => list.push(entry),
     }
 }

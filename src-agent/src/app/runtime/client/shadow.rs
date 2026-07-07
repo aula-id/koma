@@ -107,11 +107,14 @@ pub(super) fn apply_frame(
         // non-visual no-op here for exhaustiveness rather than panic.
         // `FileSearchResults` is intercepted by the GUI host's `push_loop` BEFORE this
         // fold (it re-pushes a `SearchResults` envelope); if it reaches here (the TUI
-        // client, which never sends `FileSearch`) it is a non-visual no-op.
+        // client, which never sends `FileSearch`) it is a non-visual no-op. `ModelList` is
+        // the same story: the GUI host intercepts it (re-pushes a `ModelList` envelope),
+        // and the TUI client never sends `ListModels`, so it folds as a no-op here.
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
-        | DaemonEvent::FileSearchResults { .. } => false,
+        | DaemonEvent::FileSearchResults { .. }
+        | DaemonEvent::ModelList { .. } => false,
     }
 }
 

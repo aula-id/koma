@@ -143,6 +143,27 @@ pub enum ClientRequest {
     },
     /// Remove the provider with `uuid` and persist.
     DeleteProvider { uuid: String },
+    /// Upsert a model (Connector ModelForm). `uuid` is `None` for a new model. `roles`
+    /// are lowercase role tokens (`"main"`/`"awareness"`/…); `scope` is `"global"`
+    /// (persisted to `AppConfig.models`) or `"local"` (the foreground session's
+    /// `settings.session_models`). Applied with per-scope role-steal.
+    SetModel {
+        uuid: Option<String>,
+        name: String,
+        model_id: String,
+        provider_uuid: String,
+        route: Option<String>,
+        roles: Vec<String>,
+        scope: String,
+    },
+    /// Remove the model with `uuid` from the `scope` catalogue (`"global"`/`"local"`)
+    /// and persist.
+    DeleteModel { uuid: String, scope: String },
+    /// Fetch the live model-id catalogue for the provider with uuid `provider` (a
+    /// `GET {endpoint}/models`) to populate the Connector ModelForm's model-id picker.
+    /// Read-only + async: the daemon spawns the network GET and replies out-of-band with
+    /// a [`DaemonEvent::ModelList`] on a later tick (mirrors the `FileSearch` one-shot).
+    ListModels { provider: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -196,6 +217,13 @@ pub enum DaemonEvent {
     /// hits for `query` (echoed so the GUI can drop a stale/out-of-order reply). Sent
     /// WITHOUT attaching or snapshotting — a metadata reply like [`Status`].
     FileSearchResults { query: String, items: Vec<FileSearchItem> },
+    /// One-shot reply to a [`ClientRequest::ListModels`]: the live model-id catalogue
+    /// (`GET {endpoint}/models`) for the provider uuid echoed in `provider` (so the GUI
+    /// can drop a stale/out-of-order reply). Delivered on a LATER tick than the request
+    /// (the fetch is async) via the hub's per-client seq'd `send_to`, so it never
+    /// breaks the seq stream; an empty `models` marks a failed/empty fetch. The GUI host
+    /// re-pushes it as a `ModelList` envelope; the TUI shadow treats it as a no-op.
+    ModelList { provider: String, models: Vec<String> },
 }
 
 // ─── mode discriminant ───────────────────────────────────────────────────────
