@@ -69,12 +69,28 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
     }
 }
 
-/// Events delivered from the pty reader thread to the main event loop.
+/// Events delivered from the pty reader thread (or the ipc handler) to the
+/// main event loop.
 enum UserEvent {
     /// A chunk of raw pty output, base64-encoded, to hand to xterm.js.
     Pty(String),
     /// The pty reader hit EOF/error: the koma client exited — tear the window down.
     ChildExited,
+    /// A custom-titlebar window command posted from `koma.js`.
+    Win(WinCmd),
+}
+
+/// Window-management commands the HTML titlebar (drag region, minimize /
+/// maximize / close buttons, edge resize handles) posts over ipc, since the
+/// window is undecorated (`with_decorations(false)`) and has no native
+/// titlebar to drive these.
+#[derive(Clone, Copy)]
+enum WinCmd {
+    Drag,
+    Minimize,
+    ToggleMax,
+    Close,
+    Resize(tao::window::ResizeDirection),
 }
 
 /// Messages posted from `koma.js` via `window.ipc.postMessage(JSON.stringify(..))`.
@@ -93,6 +109,30 @@ enum ClientMsg {
     /// reader thread (exactly once) so no early bytes are lost.
     #[serde(rename = "ready")]
     Ready,
+    /// Custom-titlebar window command: drag / minimize / toggle-maximize / close.
+    #[serde(rename = "win")]
+    Win { a: String },
+    /// Custom edge/corner resize-handle drag; `dir` is one of
+    /// `e`/`w`/`n`/`s`/`ne`/`nw`/`se`/`sw`.
+    #[serde(rename = "winresize")]
+    WinResize { dir: String },
+}
+
+/// Map a `koma.js` resize-handle direction string to tao's [`tao::window::ResizeDirection`].
+/// Unknown strings are ignored by the caller (returns `None`).
+fn parse_resize_dir(dir: &str) -> Option<tao::window::ResizeDirection> {
+    use tao::window::ResizeDirection;
+    match dir {
+        "e" => Some(ResizeDirection::East),
+        "w" => Some(ResizeDirection::West),
+        "n" => Some(ResizeDirection::North),
+        "s" => Some(ResizeDirection::South),
+        "ne" => Some(ResizeDirection::NorthEast),
+        "nw" => Some(ResizeDirection::NorthWest),
+        "se" => Some(ResizeDirection::SouthEast),
+        "sw" => Some(ResizeDirection::SouthWest),
+        _ => None,
+    }
 }
 
 pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
@@ -179,6 +219,8 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     let window = WindowBuilder::new()
         .with_title("koma")
         .with_inner_size(LogicalSize::new(1024.0, 680.0))
+        .with_decorations(false)
+        .with_resizable(true)
         .build(&event_loop)
         .context("failed to build GUI window")?;
     let proxy = event_loop.create_proxy();
@@ -190,6 +232,10 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     // already defined `window.__koma.write`.
     let writer = Arc::new(Mutex::new(writer));
     let master = Arc::new(Mutex::new(master));
+    // A dedicated clone the ipc handler sends `Win` commands through directly
+    // (titlebar drag / min / max / close / edge-resize) — separate from the
+    // reader/proxy pair below, which the `ready` handshake takes exactly once.
+    let win_proxy = proxy.clone();
     #[allow(clippy::type_complexity)]
     let reader_boot: Arc<Mutex<Option<(Box<dyn Read + Send>, EventLoopProxy<UserEvent>)>>> =
         Arc::new(Mutex::new(Some((reader, proxy))));
@@ -263,6 +309,23 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                         });
                     }
                 }
+                ClientMsg::Win { a } => {
+                    let cmd = match a.as_str() {
+                        "drag" => Some(WinCmd::Drag),
+                        "min" => Some(WinCmd::Minimize),
+                        "max" => Some(WinCmd::ToggleMax),
+                        "close" => Some(WinCmd::Close),
+                        _ => None,
+                    };
+                    if let Some(cmd) = cmd {
+                        let _ = win_proxy.send_event(UserEvent::Win(cmd));
+                    }
+                }
+                ClientMsg::WinResize { dir } => {
+                    if let Some(dir) = parse_resize_dir(&dir) {
+                        let _ = win_proxy.send_event(UserEvent::Win(WinCmd::Resize(dir)));
+                    }
+                }
             }
         })
         .with_url("koma://localhost/index.html")
@@ -290,6 +353,26 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                 let _ = child.wait();
                 *control_flow = ControlFlow::Exit;
             }
+            // Custom-titlebar window commands: the window is undecorated, so
+            // drag / minimize / maximize / close / edge-resize all have to be
+            // driven from here via tao's `Window` methods rather than native
+            // OS titlebar chrome.
+            Event::UserEvent(UserEvent::Win(cmd)) => match cmd {
+                WinCmd::Drag => {
+                    let _ = window.drag_window();
+                }
+                WinCmd::Minimize => window.set_minimized(true),
+                WinCmd::ToggleMax => window.set_maximized(!window.is_maximized()),
+                WinCmd::Close => {
+                    eprintln!("[gui] titlebar close -> closing");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    *control_flow = ControlFlow::Exit;
+                }
+                WinCmd::Resize(dir) => {
+                    let _ = window.drag_resize_window(dir);
+                }
+            },
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
