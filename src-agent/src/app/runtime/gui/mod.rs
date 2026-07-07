@@ -172,6 +172,14 @@ enum GuiReq {
         #[serde(rename = "markerN")]
         marker_n: usize,
     },
+    /// Omnisearch: fuzzy-search the workspace file index. Forwarded as
+    /// [`ClientRequest::FileSearch`]; the daemon's one-shot reply is re-pushed to JS as a
+    /// `SearchResults` envelope by the host `push_loop`. Select a result → `AttachPath`.
+    FileSearch {
+        query: String,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -402,6 +410,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::RemoveAttachment { marker_n });
+                            }
+                        }
+                    }
+                    // Omnisearch: run the daemon's @-palette fuzzy search; its one-shot
+                    // reply is re-pushed to JS as a `SearchResults` envelope by `push_loop`.
+                    GuiReq::FileSearch { query, limit } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::FileSearch { query, limit });
                             }
                         }
                     }

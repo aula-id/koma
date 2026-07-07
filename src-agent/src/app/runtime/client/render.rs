@@ -13,7 +13,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use crate::app::mode::{Mode, QuitConfirmState, SessionHub, SessionKind};
 use crate::app::state::AppState;
 use crate::dto::chat::Role;
-use crate::ipc::proto::{ClientRequest, DaemonFrame, KeyWire};
+use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, KeyWire};
 use crate::view;
 
 use super::input::{handle_quit_confirm_key, local_echo, send_overlay_cancel, QuitConfirmKey};
@@ -629,6 +629,14 @@ enum PushEnvelope {
         cooking: Vec<PushCooking>,
         history: Vec<PushHistory>,
     },
+    /// One-shot omnisearch results for `query` — the GUI overlay REPLACES its list with
+    /// `items` (each `{ path, label }`; an empty `path` marks a non-attachable dir row).
+    /// Pushed out-of-band (not fingerprinted) whenever the daemon answers a `FileSearch`;
+    /// `query` is echoed so the overlay can drop a stale/out-of-order reply.
+    SearchResults {
+        query: String,
+        items: Vec<crate::ipc::proto::FileSearchItem>,
+    },
 }
 
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
@@ -694,7 +702,7 @@ pub(super) enum HostTransition {
 /// advance the local-clock animations + sweep the toast; (c) serialise the shadow and
 /// push whatever changed; then pace to the frame budget. Returns when a transition is
 /// resolved.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn push_loop(
     push: &dyn Fn(String),
     frame_rx: &Receiver<DaemonFrame>,
@@ -795,6 +803,18 @@ pub(super) fn push_loop(
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {
+                    // Omnisearch reply: intercept the one-shot `FileSearchResults` and
+                    // re-push it to JS as a `SearchResults` envelope BEFORE folding (the
+                    // fold treats it as a non-visual no-op, keeping the seq gap-free).
+                    if let DaemonEvent::FileSearchResults { query, items } = &frame.event {
+                        let env = PushEnvelope::SearchResults {
+                            query: query.clone(),
+                            items: items.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
+                    }
                     apply_frame(
                         frame,
                         &mut shadow,

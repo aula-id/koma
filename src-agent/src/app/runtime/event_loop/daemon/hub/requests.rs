@@ -254,6 +254,54 @@ impl DaemonHub {
                 self.deregister(idx);
             }
 
+            // GUI omnisearch: run the EXISTING `@`-palette fuzzy search over this client's
+            // foreground workspace index and reply with a one-shot results frame. Strictly
+            // READ-ONLY — `DirCache::search` is a memoized in-memory read-lock call (the
+            // per-tick snapshot projection already runs it), so it does NOT block and needs
+            // no off-thread hop; it must NOT attach, snapshot, or touch the foreground. Each
+            // hit is resolved to an absolute path (mirroring the `@`-picker's `[N]`-prefix
+            // strip + workdir join) so the GUI can attach the pick straight back via Paste;
+            // directory rows carry an empty `path` (not attachable).
+            ClientRequest::FileSearch { query, limit } => {
+                let fg = state.rest.fg();
+                let raw = fg
+                    .dir_cache
+                    .read()
+                    .map(|c| c.search(&query, limit.unwrap_or(200)))
+                    .unwrap_or_default();
+                let workdirs = fg.session.as_ref().map(|s| s.workdirs()).unwrap_or_default();
+                let items = raw
+                    .into_iter()
+                    .map(|entry| {
+                        if entry.ends_with('/') {
+                            return crate::ipc::proto::FileSearchItem {
+                                path: String::new(),
+                                label: entry,
+                            };
+                        }
+                        // Strip a leading multi-root `[N]` prefix to (ws_idx, bare path);
+                        // single-root entries are the bare relative path (ws_idx 0).
+                        let (ws_idx, bare) = match entry.strip_prefix('[') {
+                            Some(after) => match after.find(']') {
+                                Some(end) => (
+                                    after[..end].parse::<usize>().unwrap_or(0),
+                                    after[end + 1..].to_string(),
+                                ),
+                                None => (0usize, entry.clone()),
+                            },
+                            None => (0usize, entry.clone()),
+                        };
+                        let path = workdirs
+                            .get(ws_idx)
+                            .or_else(|| workdirs.first())
+                            .map(|root| root.join(&bare).to_string_lossy().into_owned())
+                            .unwrap_or_else(|| bare.clone());
+                        crate::ipc::proto::FileSearchItem { path, label: entry }
+                    })
+                    .collect();
+                self.send_to(idx, DaemonEvent::FileSearchResults { query, items });
+            }
+
             // GUI chip removal: unstage one attachment by its `[Image #N]` marker number
             // from THIS client's foreground `pending_attachments` (the C2 bracket already
             // points the cursor at this client's view), and strip its marker from the
@@ -483,7 +531,8 @@ impl DaemonHub {
             | ClientRequest::Resync
             | ClientRequest::ListSessions
             | ClientRequest::Status
-            | ClientRequest::RemoveAttachment { .. } => {
+            | ClientRequest::RemoveAttachment { .. }
+            | ClientRequest::FileSearch { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }
