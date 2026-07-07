@@ -1,0 +1,91 @@
+@import "tailwindcss";
+html, body, #root { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+
+/* Custom window chrome (frameless titlebar + resize handles). The Rust host
+   makes the window transparent, so #app supplies the visible rounded canvas.
+   Kept as plain (unlayered) CSS so it always wins over Tailwind's layered
+   utility classes regardless of source order. */
+#app {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--koma-bg, #0b0e14);
+}
+
+#titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 0 12px;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--koma-fg, #c8d3f5);
+  background: var(--koma-bg, #0b0e14);
+  z-index: 10;
+}
+#title { opacity: 0.75; pointer-events: none; }
+#winctl { display: flex; gap: 2px; }
+.win-btn {
+  width: 34px; height: 24px; border: none; background: transparent;
+  color: var(--koma-fg, #c8d3f5); font-family: monospace; font-size: 13px; line-height: 1;
+  cursor: pointer; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.win-btn:hover { background: rgba(255,255,255,0.12); }
+.win-close:hover { background: #e81123; color: #fff; }
+
+#term { position: absolute; top: 32px; left: 0; right: 0; bottom: 0; }
+
+/* Custom edge/corner resize handles — the window is undecorated, so these
+   drive tao's drag_resize_window() instead of native OS chrome. */
+.rz { position: absolute; z-index: 20; }
+.rz-n { top: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rz-s { bottom: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rz-e { top: 6px; right: 0; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rz-w { top: 6px; left: 0; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rz-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; z-index: 21; }
+.rz-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; z-index: 21; }
+.rz-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; z-index: 21; }
+.rz-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; z-index: 21; }
+
+/* macOS: left-side traffic lights, title on the right. Default (Linux/Windows)
+   layout above is unchanged. #app carries the os-<platform> class (set by
+   RootLayout from window.__komaOS), replacing the old body.os-macos scoping. */
+.os-macos#app { border-radius: 16px; }
+.os-macos #winctl { order: -1; gap: 8px; align-items: center; }
+.os-macos #titlebar { padding: 0 12px 0 10px; }
+.os-macos #title { opacity: 0.6; font-size: 18px; font-weight: 700; }
+.os-macos .win-btn {
+  width: 12px; height: 12px; border-radius: 50%; padding: 0;
+  margin: 0; font-size: 0; color: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+}
+.os-macos #btn-close { background: #ff5f57; order: 0; }
+.os-macos #btn-min   { background: #febc2e; order: 1; }
+.os-macos #btn-max   { background: #28c840; order: 2; }
+.os-macos .win-btn:hover { font-size: 9px; }
+.os-macos .win-close:hover { background: #ff5f57; color: rgba(0,0,0,0.55); }
+
+@font-face {
+  font-family: 'KomaMono';
+  src: url('/fonts/jetbrains-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KomaMono';
+  src: url('/fonts/jetbrains-mono-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

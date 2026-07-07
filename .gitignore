@@ -2,3 +2,5 @@
 /target
 .env
 **/*.pyc
+src-webgui/node_modules/
+src-webgui/dist/
