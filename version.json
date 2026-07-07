@@ -1,4 +1,4 @@
 {
-  "version": "0.2.24",
+  "version": "0.2.25",
   "message": "feat: koma-free keyless tier - start koma with zero setup. New 3-way first-run chooser (koma free / provider / custom): koma free routes everything to a free hosted model with no API key, provider runs a guided OAuth login then model pick, custom keeps the endpoint+key flow. /free toggles any session onto the free tier and back."
 }
