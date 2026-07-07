@@ -180,6 +180,11 @@ enum GuiReq {
         #[serde(default)]
         limit: Option<usize>,
     },
+    /// Rename the foreground session (the RenameOverlay submit). Forwarded verbatim as
+    /// [`ClientRequest::RenameSession`], which sets the session's name + persists it
+    /// (registry + settings) daemon-side; the resulting title change re-emits the
+    /// Snapshot so `Snapshot.title` — which the overlay prefills from — updates.
+    Rename { name: String },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -419,6 +424,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::FileSearch { query, limit });
+                            }
+                        }
+                    }
+                    // Rename the foreground session: forward to the attached daemon,
+                    // which persists it and re-emits the Snapshot (title updates).
+                    GuiReq::Rename { name } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::RenameSession { name });
                             }
                         }
                     }

@@ -488,6 +488,29 @@ impl DaemonHub {
                 }
             }
 
+            // Rename the foreground session (the GUI RenameOverlay). The C2 LOAD
+            // bracket in `handle_request` already pointed the acting cursor at THIS
+            // client's foreground, so `fg_mut().session` is exactly the session the
+            // rename targets. Reuse the SAME clean, mode-independent
+            // `store::rename_session` the `/rename` slash-command and the Settings
+            // save use (name + settings.name + SQLite registry + `sess.save()`), so
+            // the daemon never forks the rename logic. An empty/whitespace name is a
+            // no-op Ack; a rename error surfaces as an `Error` frame.
+            ClientRequest::RenameSession { name } => {
+                let trimmed = name.trim().to_string();
+                if trimmed.is_empty() {
+                    self.send_to(idx, DaemonEvent::Ack);
+                } else if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    let result = crate::model::store::rename_session(sess, &trimmed);
+                    self.ack_or_error(idx, result);
+                } else {
+                    self.send_to(
+                        idx,
+                        DaemonEvent::Error("no foreground session to rename".into()),
+                    );
+                }
+            }
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.
