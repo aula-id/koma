@@ -34,18 +34,6 @@ libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
-eframe = { version = "0.34", optional = true }
-egui = { version = "0.34", optional = true }
-egui_ratatui = { version = "2.2", optional = true }
-# egui_ratatui pulls soft_ratatui with default-features = false, so it ships NO fonts. We
-# depend on it directly, with the `cosmic-text` feature (cosmic-text + swash shaping/layout) so
-# `koma gui` renders the bundled Nerd Font (assets/fonts) with real glyph shaping + fallback +
-# block/box-drawing special-casing — braille spinners + box-drawing rules render without tofu or
-# gaps (the old `embedded-ttf` RustType path did neither). Names SoftBackend/CosmicText.
-soft_ratatui = { version = "0.2", optional = true, features = ["cosmic-text"] }
-
-[features]
-gui = ["dep:eframe", "dep:egui", "dep:egui_ratatui", "dep:soft_ratatui"]
 
 [[bin]]
 name = "koma"

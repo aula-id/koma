@@ -14,10 +14,8 @@ use super::render::TOAST_TTL;
 /// while `awaiting_resync` only a fresh `Snapshot` is applied (it reseeds the seq +
 /// clears the flag). `Ack` / `Error` frames advance the seq but are non-visual
 /// (an `Error` could surface as a toast in a later refinement).
-// `pub(crate)` (was `pub(super)`) so the feature-gated `runtime::gui` client folds daemon
-// frames into its shadow through the exact same path as the terminal render loop.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_frame(
+pub(super) fn apply_frame(
     frame: DaemonFrame,
     shadow: &mut AppState,
     expected: &mut u64,
@@ -477,9 +475,7 @@ pub(super) fn session_by_id_mut<'a>(
 /// the client maintains its own: set it the moment the foreground session is working
 /// (and not paused for approval) and it isn't already running; clear it the moment
 /// work ends or an approval prompt takes over.
-// `pub(crate)` (was `pub(super)`) so the feature-gated `runtime::gui` client can advance the
-// same local comet clock between snapshots that the terminal render loop does.
-pub(crate) fn reconcile_work_clock(shadow: &mut AppState) {
+pub(super) fn reconcile_work_clock(shadow: &mut AppState) {
     let fg = shadow.rest.fg();
     let shimmer = fg.waiting && !fg.awaiting_approval;
     if shimmer {
