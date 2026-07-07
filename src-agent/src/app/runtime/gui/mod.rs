@@ -185,6 +185,27 @@ enum GuiReq {
     /// (registry + settings) daemon-side; the resulting title change re-emits the
     /// Snapshot so `Snapshot.title` — which the overlay prefills from — updates.
     Rename { name: String },
+
+    // ─── GUI config setters (Connector + MCP panels) ─────────────────────────
+    // Forwarded to the attached daemon (which owns `AppConfig`) as the matching
+    // gui-gated [`ClientRequest`]; the daemon mutates + persists config and re-emits a
+    // fresh `Config` push. Field shapes mirror the panel form models exactly.
+    /// Upsert an MCP server (McpPanel add/edit). `uuid` is absent for a new server.
+    SetMcpServer {
+        #[serde(default)]
+        uuid: Option<String>,
+        name: String,
+        enabled: bool,
+        transport: String,
+        command: String,
+        args: String,
+        env: String,
+        url: String,
+    },
+    /// Remove an MCP server by uuid (McpPanel arm-delete).
+    DeleteMcpServer { uuid: String },
+    /// Toggle an MCP server's enabled flag by uuid (McpPanel list switch).
+    EnableMcpServer { uuid: String, enabled: bool },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -433,6 +454,47 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::RenameSession { name });
+                            }
+                        }
+                    }
+                    // GUI config setters: forward each to the attached daemon, which owns
+                    // `AppConfig`, persists the change, and re-pushes a fresh `Config`.
+                    GuiReq::SetMcpServer {
+                        uuid,
+                        name,
+                        enabled,
+                        transport,
+                        command,
+                        args,
+                        env,
+                        url,
+                    } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetMcpServer {
+                                    uuid,
+                                    name,
+                                    enabled,
+                                    transport,
+                                    command,
+                                    args,
+                                    env,
+                                    url,
+                                });
+                            }
+                        }
+                    }
+                    GuiReq::DeleteMcpServer { uuid } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::DeleteMcpServer { uuid });
+                            }
+                        }
+                    }
+                    GuiReq::EnableMcpServer { uuid, enabled } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::EnableMcpServer { uuid, enabled });
                             }
                         }
                     }

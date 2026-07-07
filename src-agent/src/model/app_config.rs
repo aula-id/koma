@@ -399,6 +399,36 @@ impl AppConfig {
         self.oauth_conns.iter().position(|c| c.uuid == uuid)
     }
 
+    /// Upsert an MCP server by uuid: replace the entry whose uuid matches, else append.
+    /// An entry arriving with an EMPTY uuid is treated as brand-new (a fresh uuid is
+    /// minted). Config-layer setter shared by the GUI `SetMcpServer` handler; the caller
+    /// persists via [`Self::save`] afterwards.
+    pub fn upsert_mcp_server(&mut self, mut entry: McpServerEntry) {
+        if entry.uuid.is_empty() {
+            entry.uuid = new_uuid();
+        }
+        match self.mcp_servers.iter_mut().find(|s| s.uuid == entry.uuid) {
+            Some(slot) => *slot = entry,
+            None => self.mcp_servers.push(entry),
+        }
+    }
+
+    /// Remove the MCP server with `uuid` (no-op if none matches).
+    pub fn remove_mcp_server_by_uuid(&mut self, uuid: &str) {
+        self.mcp_servers.retain(|s| s.uuid != uuid);
+    }
+
+    /// Set the `enabled` flag on the MCP server with `uuid`; returns whether one matched.
+    pub fn set_mcp_enabled_by_uuid(&mut self, uuid: &str, enabled: bool) -> bool {
+        match self.mcp_servers.iter_mut().find(|s| s.uuid == uuid) {
+            Some(s) => {
+                s.enabled = enabled;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Idempotent migration seed: synthesize the global provider/model catalogue
     /// from the legacy per-session `settings.*` fields the first time it's empty.
     ///

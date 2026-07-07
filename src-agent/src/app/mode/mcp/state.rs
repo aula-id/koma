@@ -272,7 +272,7 @@ impl McpState {
 }
 
 /// Split raw args text into a `Vec<String>` on any whitespace, dropping empties.
-pub(super) fn parse_args(raw: &str) -> Vec<String> {
+pub(crate) fn parse_args(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(|s| s.to_string()).collect()
 }
 
@@ -282,7 +282,7 @@ pub(super) fn parse_args(raw: &str) -> Vec<String> {
 /// contain `=`). Blank entries and entries without a non-empty key are dropped.
 /// The value is taken verbatim after the `=` (only outer whitespace trimmed), so
 /// a `KEY=` yields an empty value.
-pub(super) fn parse_env(raw: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_env(raw: &str) -> Vec<(String, String)> {
     raw.split(',')
         .filter_map(|pair| {
             let pair = pair.trim();
