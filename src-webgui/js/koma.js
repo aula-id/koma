@@ -103,15 +103,11 @@
     return true;
   });
 
-  if (!window.__komaSoftware) {
-    try {
-      const _webgl = new WebglAddon.WebglAddon();
-      _webgl.onContextLoss(function () { try { _webgl.dispose(); } catch (e) {} });
-      term.loadAddon(_webgl);
-    } catch (e) { /* WebGL unavailable — xterm falls back to its DOM renderer */ }
-  } else {
-    console.log('[koma.js] software mode: skipping WebGL, using DOM renderer');
-  }
+  try {
+    const _webgl = new WebglAddon.WebglAddon();
+    _webgl.onContextLoss(function () { try { _webgl.dispose(); } catch (e) {} });
+    term.loadAddon(_webgl);
+  } catch (e) { /* WebGL unavailable — xterm falls back to its DOM renderer */ }
 
   let firstWrite = true;
   window.__koma = {
