@@ -1,18 +1,23 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, useAnimationControls } from 'framer-motion'
 import { Check, X } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
+import { useKoma } from '../store/koma'
 
 type RenameOverlayProps = {
   onClose: () => void
 }
 
-// Design-phase stub. Reuses the search-bar location: the titlebar 'rename'
-// button morphs (shared layoutId) into this input. Confirm (check) / cancel (X)
-// or Esc close it. Clicking OUTSIDE does not close — instead the bar wiggles so
-// the user knows to confirm/cancel first.
+// Reuses the search-bar location: the titlebar 'rename' button morphs (shared
+// layoutId) into this input, prefilled with the current session title.
+// Confirm (check) sends RenameSession + closes; cancel (X) / Esc discard.
+// Clicking OUTSIDE does not close — instead the bar wiggles so the user knows
+// to confirm/cancel first.
 export function RenameOverlay({ onClose }: RenameOverlayProps) {
   const controls = useAnimationControls()
+  const title = useKoma((s) => s.session.title)
+  const req = useKoma((s) => s.req)
+  const [name, setName] = useState(title)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -21,6 +26,12 @@ export function RenameOverlay({ onClose }: RenameOverlayProps) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const confirm = () => {
+    const trimmed = name.trim()
+    if (trimmed) req({ r: 'RenameSession', name: trimmed })
+    onClose()
+  }
 
   const wiggle = () => {
     controls.start({
@@ -43,11 +54,16 @@ export function RenameOverlay({ onClose }: RenameOverlayProps) {
         >
           <input
             autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') confirm()
+            }}
             placeholder="Rename session…"
             className="w-full bg-transparent text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
           />
           <button
-            onClick={onClose}
+            onClick={confirm}
             title="Confirm"
             aria-label="Confirm rename"
             className="flex h-4 w-4 flex-none items-center justify-center rounded text-koma-fg opacity-60 transition-colors hover:text-emerald-500 hover:opacity-100"
