@@ -514,10 +514,24 @@ pub(super) fn client_select_dump(
 #[serde(rename_all = "camelCase")]
 struct PushMsg {
     role: &'static str,
+    /// Special render kind for a USER message, detected daemon-side from its
+    /// invisible sentinel prefix and STRIPPED out of `content` so React never
+    /// renders a raw sentinel char: `"shell"` (a `!`-shell `$ cmd`+output entry,
+    /// `render_shell_block`) or `"bashNudge"` (a bg-bash completion nudge,
+    /// `render_bash_nudge_block`). `None`/absent on a plain user or assistant
+    /// message → React renders the normal user band / assistant block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
     content: String,
     reasoning: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tool_calls: Vec<PushToolCall>,
+    /// Image attachments carried by this (user) message — each `[Image #N]`
+    /// marker's on-disk basename + kind, so React can render the warn attachment
+    /// card (mirrors `render_attachment_card`, `transcript.rs:581`). Empty on
+    /// messages with no attachments (skipped from the wire).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<PushAttachment>,
 }
 
 /// One tool CALL on an assistant [`PushMsg`], with its paired result folded in (the
@@ -581,12 +595,18 @@ struct PushBashJob {
     status: &'static str,
 }
 
-/// The canvas bg/fg the React client paints its chrome with (resolved from the
-/// shadow's palette, so a themed daemon repaints the window live).
+/// The palette roles the React chat paints with (resolved from the shadow's TUI
+/// [`crate::view::theme::Palette`], so a themed daemon repaints the chat live).
+/// `bg`/`fg` drive the window chrome; `accent`/`dim`/`panel` are the same three
+/// roles `view::draw` uses for the chat grammar (accent bullets/rails, dim
+/// thinking/tool text, the user-message band = `panel`), each `#rrggbb`.
 #[derive(serde::Serialize, PartialEq, Clone)]
 struct PushPalette {
     bg: String,
     fg: String,
+    accent: String,
+    dim: String,
+    panel: String,
 }
 
 /// A COOKING-pane row in a [`PushEnvelope::Hub`]. The synthetic `[+ new session]`
@@ -1063,11 +1083,16 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .unwrap_or_else(|| "koma".to_string());
 
-    // Palette from the shadow config (a themed daemon repaints the window live).
+    // Palette from the shadow config (a themed daemon repaints the chat live).
+    // The same TUI roles `view::draw` uses, so every non-default theme's chat
+    // colours are correct — not just bg/fg. Fallbacks mirror the dark palette.
     let pal = crate::view::theme::palette(&shadow.rest.config);
     let palette = PushPalette {
         bg: color_hex(pal.bg, "#000000"),
         fg: color_hex(pal.fg, "#c8d3f5"),
+        accent: color_hex(pal.accent, "#39ff14"),
+        dim: color_hex(pal.dim, "#adadad"),
+        panel: color_hex(pal.panel, "#2b2f38"),
     };
 
     // Committed transcript: skip System/Tool (chrome the chat view never shows as a
@@ -1098,6 +1123,48 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
                         Role::Assistant => "assistant",
                         Role::System | Role::Tool => return None,
                     };
+                    // Resolve the render `kind` + display `content` + `reasoning`,
+                    // mirroring what `render_message_block` does per role:
+                    // - USER: peel an invisible SHELL_MARK / BASH_NUDGE_MARK prefix
+                    //   into a `kind` and STRIP it so React never sees a raw sentinel
+                    //   char (the marks are format chars, not visible text).
+                    // - ASSISTANT: peel any legacy "wanderer" thinking lead-in out of
+                    //   the body into the reasoning/dim channel — reusing the TUI's
+                    //   `split_thinking` so there is zero drift — so it never renders
+                    //   as plain answer text; the native reasoning (if any) sits on top.
+                    let (kind, content, reasoning): (Option<&'static str>, String, Option<String>) =
+                        match m.role {
+                            Role::User => {
+                                if let Some(body) =
+                                    m.content.strip_prefix(crate::dto::chat::SHELL_MARK)
+                                {
+                                    (Some("shell"), body.to_string(), m.reasoning.clone())
+                                } else if let Some(body) =
+                                    m.content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
+                                {
+                                    (Some("bashNudge"), body.to_string(), m.reasoning.clone())
+                                } else {
+                                    (None, m.content.clone(), m.reasoning.clone())
+                                }
+                            }
+                            Role::Assistant => {
+                                let (thinking, body) =
+                                    crate::view::chat::helpers::split_thinking(&m.content);
+                                let reasoning = match (m.reasoning.as_deref(), thinking) {
+                                    (Some(r), Some(t)) => Some(format!("{r}\n{}", t.trim_end())),
+                                    (Some(r), None) => Some(r.to_string()),
+                                    (None, Some(t)) => {
+                                        let t = t.trim_end();
+                                        if t.is_empty() { None } else { Some(t.to_string()) }
+                                    }
+                                    (None, None) => None,
+                                };
+                                (None, body.to_string(), reasoning)
+                            }
+                            // Unreachable (System/Tool already returned None above), but
+                            // keep the match total without an unwrap.
+                            _ => (None, m.content.clone(), m.reasoning.clone()),
+                        };
                     // Project the assistant's requested tool calls (if any), joining
                     // each to its paired result so React renders call→result 1:1.
                     let tool_calls: Vec<PushToolCall> = m
@@ -1133,11 +1200,24 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
                                 .collect()
                         })
                         .unwrap_or_default();
+                    // Image attachments on this (user) message → the warn card in
+                    // React (all attachments are images today; keep `kind` general).
+                    let attachments: Vec<PushAttachment> = m
+                        .attachments
+                        .iter()
+                        .map(|a| PushAttachment {
+                            marker_n: a.marker_n,
+                            name: a.file_name().to_string(),
+                            kind: if a.mime.starts_with("image/") { "image" } else { "file" },
+                        })
+                        .collect();
                     Some(PushMsg {
                         role,
-                        content: m.content.clone(),
-                        reasoning: m.reasoning.clone(),
+                        kind,
+                        content,
+                        reasoning,
                         tool_calls,
+                        attachments,
                     })
                 })
                 .collect()
@@ -1205,11 +1285,23 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         title.hash(&mut h);
         palette.bg.hash(&mut h);
         palette.fg.hash(&mut h);
+        // Fold the fuller palette roles in so a theme swap that keeps bg/fg but
+        // changes accent/dim/panel still re-emits the Snapshot (repaints the chat).
+        palette.accent.hash(&mut h);
+        palette.dim.hash(&mut h);
+        palette.panel.hash(&mut h);
         messages.len().hash(&mut h);
         for m in &messages {
             m.role.hash(&mut h);
+            m.kind.hash(&mut h);
             m.content.hash(&mut h);
             m.reasoning.hash(&mut h);
+            // Fold message attachments in so an image attach re-emits the Snapshot.
+            m.attachments.len().hash(&mut h);
+            for a in &m.attachments {
+                a.marker_n.hash(&mut h);
+                a.name.hash(&mut h);
+            }
             // Fold tool calls in so a call landing OR its result arriving a round later
             // (status pending→done, output None→Some) re-emits the Snapshot — the join
             // is resolved fresh here, not baked into the message identity.

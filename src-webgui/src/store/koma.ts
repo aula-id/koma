@@ -28,15 +28,28 @@ export type ToolCallView = {
 
 export type ChatMessage = {
   role: 'user' | 'assistant'
+  // Special render kind for a USER message — the host strips the invisible
+  // sentinel and tags it: 'shell' (a `!`-shell `$ cmd`+output entry) or
+  // 'bashNudge' (a bg-bash completion nudge). Absent on a plain message.
+  kind?: 'shell' | 'bashNudge'
   content: string
   reasoning: string | null
   // Present only on an assistant message that requested tool calls.
   toolCalls?: ToolCallView[]
+  // Image attachments on a user message (mirrors the TUI warn attachment card).
+  attachments?: AttachmentEntry[]
 }
 
+// The full palette roles the host pushes (render.rs `PushPalette`,
+// `rename_all = "camelCase"`) — the same TUI theme.rs roles `view::draw` uses.
+// `bg`/`fg` paint the window chrome; `accent`/`dim`/`panel` drive the chat
+// grammar (accent bullets/rails, dim thinking/tool text, the user band = panel).
 export type PaletteColors = {
   bg: string
   fg: string
+  accent: string
+  dim: string
+  panel: string
 }
 
 export type HubCookingEntry = {
@@ -216,21 +229,31 @@ const initialModelList: ModelListEntry[] = []
 const initialPalette: PaletteColors = {
   bg: '#0b0e14',
   fg: '#c8d3f5',
+  accent: '#39ff14',
+  dim: '#adadad',
+  panel: '#2b2f38',
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
 
-// Live palette sync: repaint the --koma-bg/--koma-fg CSS vars whenever a
-// Snapshot lands with a palette (home of the glue that used to live in
-// Terminal.tsx's OSC 5380 handler).
+// Live palette sync: repaint the --koma-* CSS vars whenever a Snapshot lands
+// with a palette (home of the glue that used to live in Terminal.tsx's OSC 5380
+// handler). Sets the full role set — bg/fg (chrome) plus accent/dim/panel — so
+// styles.css can consume the REAL theme roles instead of color-mix guesses, and
+// every non-default theme's chat colours track the daemon live. Each var is set
+// only when its value is a valid hex, so a partial/legacy push never clobbers a
+// role with garbage (the CSS fallback holds).
 function applyPaletteVars(palette: PaletteColors) {
   if (typeof document === 'undefined') return
-  if (palette?.bg && HEX_RE.test(palette.bg)) {
-    document.documentElement.style.setProperty('--koma-bg', palette.bg)
+  const root = document.documentElement.style
+  const setVar = (name: string, val: string | undefined) => {
+    if (val && HEX_RE.test(val)) root.setProperty(name, val)
   }
-  if (palette?.fg && HEX_RE.test(palette.fg)) {
-    document.documentElement.style.setProperty('--koma-fg', palette.fg)
-  }
+  setVar('--koma-bg', palette?.bg)
+  setVar('--koma-fg', palette?.fg)
+  setVar('--koma-accent', palette?.accent)
+  setVar('--koma-dim', palette?.dim)
+  setVar('--koma-panel', palette?.panel)
 }
 
 export const useKoma = create<KomaState>((set) => ({

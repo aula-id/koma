@@ -45,7 +45,11 @@
 //! commands filtered in real time. Up/Down navigate the list; Tab completes.
 
 mod header;
-mod helpers;
+// `helpers` is otherwise private to the chat view, but the GUI host reuses ONE
+// function from it (`split_thinking`, itself `pub(crate)`) to peel the legacy
+// wanderer thinking lead-in in its push projection — keep the module reachable
+// so that single path resolves. Every other helper stays `pub(super)`.
+pub(crate) mod helpers;
 mod input;
 mod overlays;
 mod status;

@@ -150,7 +150,7 @@ pub(super) fn fmt_count(n: u64) -> String {
 ///
 /// Only lines whose FIRST colon-delimited token is a wanderer word count; a
 /// wanderer word appearing mid-sentence (no leading `Word:` pattern) is ignored.
-pub(super) fn split_thinking(content: &str) -> (Option<&str>, &str) {
+pub(crate) fn split_thinking(content: &str) -> (Option<&str>, &str) {
     let corpus = crate::resources::wanderer_words();
     // Walk lines recording byte offsets. For each line, check whether the token
     // before the first ':' (trimmed, lowercased) is in the wanderer corpus.
