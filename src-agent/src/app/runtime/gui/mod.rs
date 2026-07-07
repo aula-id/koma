@@ -127,6 +127,10 @@ enum ClientMsg {
 ///     [`ClientRequest::SubmitInput`].
 ///   - `SelectSession { id }` — a hub pick; the host-thread attaches to that daemon.
 ///   - `NewSession` — the hub `[+ new session]` row; mint a fresh uuid + attach.
+///   - `RefreshHub` — the ResumePalette overlay opened (and may re-emit while open):
+///     ask the host to re-run cross-daemon discovery and push a FRESH `Hub` envelope,
+///     so the live-session list is current even while ATTACHED (it was previously only
+///     built once, cold, in the swapper). This is the live-session-listing fix.
 ///
 /// Deserialised from the SAME JSON map as the outer [`ClientMsg`] (serde internal
 /// tagging strips `t`, then this reads `r`), so `{ "t":"req", "r":"Submit",
@@ -138,6 +142,7 @@ enum GuiReq {
     Submit { text: String },
     SelectSession { id: String },
     NewSession,
+    RefreshHub,
 }
 
 /// Map a `koma.js` resize-handle direction string to tao's [`tao::window::ResizeDirection`].
@@ -275,6 +280,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     }
                     GuiReq::NewSession => {
                         let _ = ipc_ctl.send(HostCtl::New);
+                    }
+                    // ResumePalette opened: re-discover live sessions + re-push the hub
+                    // (works while attached too — see `host_swapper` / `push_loop`).
+                    GuiReq::RefreshHub => {
+                        let _ = ipc_ctl.send(HostCtl::RefreshHub);
                     }
                 },
             }
