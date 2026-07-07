@@ -62,6 +62,11 @@ pub enum ClientRequest {
     Shell { cmd: String },
     SendKey(KeyWire),
     Paste { text: String },
+    /// Drop a single STAGED attachment (a GUI chip) by its `[Image #N]` marker number,
+    /// unstaging it from the foreground session's `pending_attachments` before submit.
+    /// The TUI has no equivalent request (it drops attachments by deleting the marker in
+    /// the composer); this is the GUI's explicit remove path.
+    RemoveAttachment { marker_n: usize },
     ApproveTool { approve: bool },
     /// Answer a paused `plan_ready` approval. `decision` is one of `"approve"`,
     /// `"compact"` (approve + compact history to the plan), or `"deny"` (keep

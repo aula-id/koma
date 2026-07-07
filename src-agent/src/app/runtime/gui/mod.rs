@@ -165,6 +165,13 @@ enum GuiReq {
     /// [`ClientRequest::Paste`]: an image path is ingested into `pending_attachments`;
     /// a non-image path is handled by the daemon's paste path as before.
     AttachPath { path: String },
+    /// Drop a staged attachment chip by its `[Image #N]` marker number (`markerN`).
+    /// Forwarded as [`ClientRequest::RemoveAttachment`], which unstages it daemon-side;
+    /// the resulting `pending_attachments` change re-emits the Snapshot (chips update).
+    RemoveAttachment {
+        #[serde(rename = "markerN")]
+        marker_n: usize,
+    },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -263,10 +270,18 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let (ctl_tx, ctl_rx) = std::sync::mpsc::channel::<HostCtl>();
     let live_req: Arc<Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>> =
         Arc::new(Mutex::new(None));
+    // The marker numbers of the currently-STAGED attachments (mirrors the attached
+    // session's `pending_attachments`, maintained by the fold loop). A chat `Submit`
+    // carries only React's typed text, so the host appends any staged `[Image #N]`
+    // markers to it before forwarding — otherwise the daemon's submit-time reconcile
+    // (which keeps only attachments whose marker survived in the sent text) would drop
+    // every staged image. Empty whenever detached.
+    let live_marks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
 
     {
         let push_proxy = proxy.clone();
         let live_req = Arc::clone(&live_req);
+        let live_marks = Arc::clone(&live_marks);
         std::thread::spawn(move || {
             run_host_relay(
                 opts,
@@ -277,6 +292,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 },
                 ctl_rx,
                 live_req,
+                live_marks,
             );
         });
     }
@@ -287,6 +303,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let win_proxy = proxy.clone();
     let ipc_ctl = ctl_tx;
     let ipc_req = Arc::clone(&live_req);
+    let ipc_marks = Arc::clone(&live_marks);
 
     // --- 3. WebView + ipc handler ----------------------------------------------
     let wv_builder = WebViewBuilder::new()
@@ -331,7 +348,21 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         let _ = ipc_ctl.send(HostCtl::Ready);
                     }
                     // Chat send: forward straight to the currently-attached daemon.
+                    // Append any staged attachment markers React's text doesn't already
+                    // carry, so the daemon's submit-time reconcile keeps the images.
                     GuiReq::Submit { text } => {
+                        let mut text = text;
+                        if let Ok(marks) = ipc_marks.lock() {
+                            for n in marks.iter() {
+                                let marker = format!("[Image #{n}]");
+                                if !text.contains(&marker) {
+                                    if !text.is_empty() {
+                                        text.push(' ');
+                                    }
+                                    text.push_str(&marker);
+                                }
+                            }
+                        }
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::SubmitInput { text });
@@ -365,6 +396,14 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     // Attach an existing on-disk file by path (omnisearch pick).
                     GuiReq::AttachPath { path } => {
                         forward_paste(&ipc_req, path);
+                    }
+                    // Drop a staged attachment chip by its marker number.
+                    GuiReq::RemoveAttachment { marker_n } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::RemoveAttachment { marker_n });
+                            }
+                        }
                     }
                 },
             }

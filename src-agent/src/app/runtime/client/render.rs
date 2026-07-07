@@ -510,6 +510,20 @@ struct PushMsg {
     reasoning: Option<String>,
 }
 
+/// One STAGED (not-yet-sent) composer attachment chip in a [`PushEnvelope::Snapshot`].
+/// Mirrors the daemon's `pending_attachments`: `marker_n` (serialised `markerN`) ties
+/// the chip to its `[Image #N]` marker so React can round-trip it back in a
+/// `RemoveAttachment`; `name` is the on-disk basename; `kind` is `"image"`/`"file"`
+/// derived from the sniffed mime. Authoritative full array — React REPLACES on each
+/// Snapshot (a stage/drop re-emits the Snapshot via the folded fingerprint).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushAttachment {
+    marker_n: usize,
+    name: String,
+    kind: &'static str,
+}
+
 /// One sub-agent row in a [`PushEnvelope::Snapshot`] (list + status only — the live
 /// transcript/report is NOT shipped this wave). `name` is the agent definition name,
 /// `summary` is the compact one-line label (the truncated task), and `status` is the
@@ -592,6 +606,9 @@ enum PushEnvelope {
         /// Foreground session's background-bash jobs (list + status). Authoritative
         /// full array — React REPLACES on each Snapshot, never accumulates.
         bash: Vec<PushBashJob>,
+        /// Foreground session's STAGED composer attachments (chips). Authoritative full
+        /// array — React REPLACES on each Snapshot; empty once the message is sent.
+        attachments: Vec<PushAttachment>,
     },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
@@ -686,6 +703,7 @@ pub(super) fn push_loop(
     ctl_rx: &Receiver<super::HostCtl>,
     last: &mut PushState,
     current_session: Option<&str>,
+    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -835,6 +853,14 @@ pub(super) fn push_loop(
             }
         }
 
+        // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---
+        // The ipc thread appends these `[Image #N]` markers to a chat send so the daemon's
+        // submit-time reconcile keeps the staged images (React's text carries no markers).
+        if let Ok(mut marks) = live_marks.lock() {
+            marks.clear();
+            marks.extend(shadow.rest.fg().pending_attachments.iter().map(|a| a.marker_n));
+        }
+
         // --- (c) serialise + push whatever changed (the draw seam) ---
         serialize_and_push(&shadow, push, last);
 
@@ -948,6 +974,23 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .collect();
 
+    // Staged composer attachments: the foreground session's `pending_attachments` (not
+    // yet sent). `marker_n` ties each chip to its `[Image #N]` marker; `kind` is derived
+    // from the sniffed mime (all attachments are images today, but keep it general).
+    let attachments: Vec<PushAttachment> = fg
+        .pending_attachments
+        .iter()
+        .map(|a| PushAttachment {
+            marker_n: a.marker_n,
+            name: a.file_name().to_string(),
+            kind: if a.mime.starts_with("image/") {
+                "image"
+            } else {
+                "file"
+            },
+        })
+        .collect();
+
     // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
     let fp = {
         use std::hash::{Hash, Hasher};
@@ -976,6 +1019,13 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             b.cmd.hash(&mut h);
             b.status.hash(&mut h);
         }
+        // Fold staged attachments in so a stage/drop re-emits the Snapshot (chips).
+        attachments.len().hash(&mut h);
+        for a in &attachments {
+            a.marker_n.hash(&mut h);
+            a.name.hash(&mut h);
+            a.kind.hash(&mut h);
+        }
         h.finish()
     };
     if last.snapshot_fp != Some(fp) {
@@ -988,6 +1038,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             palette,
             subagents,
             bash,
+            attachments,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);

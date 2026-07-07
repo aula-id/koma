@@ -294,6 +294,7 @@ pub(super) fn run_host_relay(
     push: impl Fn(String) + Send + 'static,
     ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
     live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    live_marks: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
 ) {
     // The client owns no sessions; it needs the config dirs only to resolve sockets.
     let _ = store::ensure_dirs();
@@ -332,6 +333,7 @@ pub(super) fn run_host_relay(
                 &push,
                 &ctl_rx,
                 &live_req,
+                &live_marks,
                 &mut push_state,
                 &mut current_session_id,
                 id,
@@ -391,6 +393,7 @@ fn host_attached(
     push: &dyn Fn(String),
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     push_state: &mut render::PushState,
     current: &mut Option<String>,
     id: String,
@@ -426,13 +429,18 @@ fn host_attached(
             ctl_rx,
             push_state,
             current.as_deref(),
+            live_marks,
         )
     };
 
-    // Retract the live sender before teardown so a late `Submit` can't race a
-    // half-torn-down connection, then flush the polite `Detach`.
+    // Retract the live sender + clear the staged-marker mirror before teardown so a
+    // late `Submit` can't race a half-torn-down connection or append stale markers,
+    // then flush the polite `Detach`.
     if let Ok(mut g) = live_req.lock() {
         *g = None;
+    }
+    if let Ok(mut m) = live_marks.lock() {
+        m.clear();
     }
     teardown_connection(handle, conn);
 
