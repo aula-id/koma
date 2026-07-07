@@ -656,6 +656,7 @@ pub(super) fn push_loop(
     prebuffered: Vec<DaemonFrame>,
     ctl_rx: &Receiver<super::HostCtl>,
     last: &mut PushState,
+    current_session: Option<&str>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -667,6 +668,21 @@ pub(super) fn push_loop(
     let mut expected: u64 = 0;
     let mut seeded = false;
     let mut awaiting_resync = false;
+
+    // --- attached-state hub refresh (RefreshHub) ---
+    // Cross-daemon discovery (`build_local_hub` → `list_live_sessions`) BLOCKS on a
+    // per-socket Status probe, so it must NOT run inline on this 16ms fold loop (it
+    // would stall frame folding + animation for the whole multi-socket sweep). Instead
+    // a `RefreshHub` spawns a ONE-SHOT worker thread that runs the blocking sweep off
+    // this thread and ships the built `SessionHub` back over `hub_rx`; the loop drains
+    // it non-blocking and calls `push_hub` (which diffs `last.hub_json`, so a no-change
+    // refresh is silent and repeated palette-opens are cheap). `refresh_inflight`
+    // coalesces bursts — React may re-emit RefreshHub on an interval while the palette
+    // stays open — so at most one sweep runs at a time. `current_owned` flags the
+    // attached row as `is_foreground` in the rebuilt hub.
+    let (hub_tx, hub_rx) = std::sync::mpsc::channel::<SessionHub>();
+    let mut refresh_inflight = false;
+    let current_owned: Option<String> = current_session.map(str::to_string);
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -704,9 +720,21 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::New) => {
                     return HostTransition::Attach(uuid::Uuid::new_v4().to_string())
                 }
-                // Attached-state hub refresh — implemented off-thread in W1-R2 (the
-                // cross-daemon sweep must not block this 16ms fold loop). No-op for now.
-                Ok(super::HostCtl::RefreshHub) => {}
+                // The ResumePalette opened: kick a hub refresh OFF this thread (the
+                // discovery sweep blocks). Coalesced by `refresh_inflight` so a burst of
+                // RefreshHubs while the palette stays open runs at most one sweep; the
+                // result is drained + pushed below.
+                Ok(super::HostCtl::RefreshHub) => {
+                    if !refresh_inflight {
+                        refresh_inflight = true;
+                        let tx = hub_tx.clone();
+                        let cur = current_owned.clone();
+                        std::thread::spawn(move || {
+                            let hub = super::build_local_hub(cur.as_deref());
+                            let _ = tx.send(hub);
+                        });
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -759,6 +787,22 @@ pub(super) fn push_loop(
                 if Instant::now() >= *until {
                     fg.toast = None;
                 }
+            }
+        }
+
+        // --- (b-bis) attached-state hub refresh: push any completed off-thread sweep ---
+        // Drain the worker channel to the NEWEST built hub (non-blocking), clear the
+        // in-flight latch, and push it. `push_hub` diffs `last.hub_json`, so an
+        // unchanged live set emits nothing. This is what keeps the React ResumePalette's
+        // cooking/history current while ATTACHED, not frozen at the cold boot build.
+        {
+            let mut latest_hub: Option<SessionHub> = None;
+            while let Ok(hub) = hub_rx.try_recv() {
+                latest_hub = Some(hub);
+                refresh_inflight = false;
+            }
+            if let Some(hub) = latest_hub {
+                push_hub(&hub, push, last);
             }
         }
 
