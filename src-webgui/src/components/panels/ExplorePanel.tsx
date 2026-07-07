@@ -1,19 +1,32 @@
 import { useState } from 'react'
+import { Bot, Terminal, Loader2, Check, CircleX, CircleSlash, type LucideIcon } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
 
+// Shared status -> icon/tone map for both the Agents and Bash rows. Mirrors
+// the TUI's run-state grammar: running = live/spinning, done = settled-good,
+// error = settled-bad, killed = settled-neutral (dimmed, no color signal).
+const STATUS_ICON: Record<string, LucideIcon> = {
+  running: Loader2,
+  done: Check,
+  error: CircleX,
+  killed: CircleSlash,
+}
+
 const STATUS_TONE: Record<string, string> = {
-  running: 'text-amber-500',
-  done: 'text-emerald-500',
-  killed: 'text-koma-fg opacity-50',
-  error: 'text-red-500',
+  running: 'text-koma-accent',
+  done: 'text-koma-success',
+  error: 'text-koma-error',
+  killed: 'text-koma-dim opacity-60',
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const Icon = STATUS_ICON[status] ?? CircleSlash
+  const tone = STATUS_TONE[status] ?? 'text-koma-dim opacity-60'
   return (
-    <span className={`flex-none text-[10px] uppercase tracking-wide ${STATUS_TONE[status] ?? 'opacity-50'}`}>
-      {status}
+    <span className={`flex-none ${tone}`} title={status}>
+      <Icon size={13} strokeWidth={2} className={status === 'running' ? 'animate-spin' : ''} />
     </span>
   )
 }
@@ -33,7 +46,7 @@ export function ExplorePanel() {
         <Empty>No changes</Empty>
       </AccordionSection>
       <AccordionSection
-        title="Bash"
+        title={`Bash · ${bash.length}`}
         open={open.bash}
         onToggle={() => setOpen((s) => ({ ...s, bash: !s.bash }))}
       >
@@ -41,7 +54,8 @@ export function ExplorePanel() {
           <Empty>No bash sessions</Empty>
         ) : (
           bash.map((b) => (
-            <div key={b.id} className="flex items-center justify-between gap-2 px-5 py-1.5">
+            <div key={b.id} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
+              <Terminal size={13} className="flex-none text-koma-fg opacity-45" />
               <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{b.cmd}</span>
               <StatusBadge status={b.status} />
             </div>
@@ -49,7 +63,7 @@ export function ExplorePanel() {
         )}
       </AccordionSection>
       <AccordionSection
-        title="Agents"
+        title={`Agents · ${subagents.length}`}
         open={open.agents}
         onToggle={() => setOpen((s) => ({ ...s, agents: !s.agents }))}
       >
@@ -57,8 +71,9 @@ export function ExplorePanel() {
           <Empty>No agents</Empty>
         ) : (
           subagents.map((a, i) => (
-            <div key={`${a.name}-${i}`} className="flex items-center justify-between gap-2 px-5 py-1.5">
-              <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{a.name}</span>
+            <div key={`${a.name}-${i}`} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
+              <Bot size={13} className="flex-none text-koma-fg opacity-45" />
+              <span className="min-w-0 flex-1 truncate text-[13px] text-koma-fg">{a.name}</span>
               <StatusBadge status={a.status} />
             </div>
           ))
