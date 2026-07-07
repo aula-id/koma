@@ -91,12 +91,7 @@ function RootLayout() {
         </main>
       </div>
       {overlay === 'resume' && (
-        <ResumePalette
-          onClose={() => setOverlay('none')}
-          onNewSession={() => {
-              /* TODO: open native folder picker via host ipc, then start session */
-            }}
-        />
+        <ResumePalette onClose={() => setOverlay('none')} />
       )}
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
       <ResizeHandles />

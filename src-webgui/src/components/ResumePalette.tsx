@@ -2,10 +2,10 @@ import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Search, Plus } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
+import { useKoma } from '../store/koma'
 
 type ResumePaletteProps = {
   onClose: () => void
-  onNewSession: () => void
 }
 
 function Label({ children }: { children: string }) {
@@ -20,11 +20,16 @@ function Empty({ children }: { children: string }) {
   return <div className="px-3 py-1.5 text-[12px] text-koma-fg opacity-35">{children}</div>
 }
 
-// Design-phase stub of the /resume hub. Search row shares layoutId + width with
-// the titlebar 'change session' pill, anchored at the same spot (no slide); the
-// dropdown reveals below. New session is inline with the Cooking header and
-// opens the folder prompt. Cooking (live) + History (past) mirror the real hub.
-export function ResumePalette({ onClose, onNewSession }: ResumePaletteProps) {
+// The /resume hub. Search row shares layoutId + width with the titlebar
+// 'change session' pill, anchored at the same spot (no slide); the dropdown
+// reveals below. New session is inline with the Cooking header. Cooking
+// (live) + History (past) are driven straight off the koma store's hub
+// slice, itself an authoritative mirror of the host's Hub push envelope.
+export function ResumePalette({ onClose }: ResumePaletteProps) {
+  const cooking = useKoma((s) => s.hub.cooking)
+  const history = useKoma((s) => s.hub.history)
+  const req = useKoma((s) => s.req)
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -32,6 +37,21 @@ export function ResumePalette({ onClose, onNewSession }: ResumePaletteProps) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const selectSession = (id: string) => {
+    req({ r: 'SelectSession', id })
+    onClose()
+  }
+
+  const newSession = () => {
+    req({ r: 'NewSession' })
+    onClose()
+  }
+
+  // The host may include a synthetic `kind: 'new'` entry in `cooking` (see
+  // bridge contract) — the header button below already covers that
+  // affordance, so only render the live session rows here.
+  const cookingSessions = cooking.filter((c) => c.kind === 'session')
 
   return (
     <div className="absolute inset-0 z-50" onMouseDown={onClose}>
@@ -63,16 +83,46 @@ export function ResumePalette({ onClose, onNewSession }: ResumePaletteProps) {
                 Cooking
               </span>
               <button
-                onClick={onNewSession}
+                onClick={newSession}
                 className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
               >
                 <Plus size={12} className="flex-none" />
                 New session
               </button>
             </div>
-            <Empty>No live sessions</Empty>
+            {cookingSessions.length === 0 ? (
+              <Empty>No live sessions</Empty>
+            ) : (
+              cookingSessions.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => c.id && selectSession(c.id)}
+                  className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
+                >
+                  <span className="truncate">{c.name}</span>
+                  {c.dirLabel && (
+                    <span className="ml-2 flex-none truncate text-[11px] opacity-40">{c.dirLabel}</span>
+                  )}
+                </button>
+              ))
+            )}
             <Label>History</Label>
-            <Empty>No past sessions</Empty>
+            {history.length === 0 ? (
+              <Empty>No past sessions</Empty>
+            ) : (
+              history.map((h) => (
+                <button
+                  key={h.id}
+                  onClick={() => selectSession(h.id)}
+                  className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
+                >
+                  <span className="truncate">{h.name}</span>
+                  {h.dirLabel && (
+                    <span className="ml-2 flex-none truncate text-[11px] opacity-40">{h.dirLabel}</span>
+                  )}
+                </button>
+              ))
+            )}
           </motion.div>
         </div>
       </div>
