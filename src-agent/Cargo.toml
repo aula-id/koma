@@ -34,6 +34,17 @@ libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
+eframe = { version = "0.34", optional = true }
+egui = { version = "0.34", optional = true }
+egui_ratatui = { version = "2.2", optional = true }
+# egui_ratatui pulls soft_ratatui with default-features = false, so it ships NO fonts. We
+# depend on it directly, with the `embedded-ttf` feature (TrueType via RustType) so `koma gui`
+# renders with the bundled Nerd Font (assets/fonts) instead of the built-in bitmap atlas —
+# needed for Nerd-Font private-use icons + crisp scaling. Names SoftBackend/EmbeddedTTF.
+soft_ratatui = { version = "0.2", optional = true, features = ["embedded-ttf"] }
+
+[features]
+gui = ["dep:eframe", "dep:egui", "dep:egui_ratatui", "dep:soft_ratatui"]
 
 [[bin]]
 name = "koma"

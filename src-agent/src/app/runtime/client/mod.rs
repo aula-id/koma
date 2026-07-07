@@ -21,11 +21,19 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-mod connect;
+// `connect`, `shadow`, and `input` are `pub(crate)` (not private `mod`) so the feature-gated
+// `runtime::gui` client — a sibling under `runtime` — can reuse this client's connect/attach
+// primitive, its frame-folding shadow logic, and its key handling (render-ahead echo + the
+// mirrored `/quit` overlay keys) verbatim (visibility only; no logic differs).
+pub(crate) mod connect;
 mod render;
-mod shadow;
-mod input;
-mod bridge;
+pub(crate) mod shadow;
+pub(crate) mod input;
+// Bumped `mod` -> `pub(crate) mod` (visibility only, same reuse rationale as `connect`/
+// `shadow`/`input` above): the feature-gated `runtime::gui` client's `on_exit` needs
+// `bridge::WRITER_FLUSH_TIMEOUT` to mirror `teardown_connection`'s flush-then-join exactly,
+// reusing the SAME constant rather than redefining it.
+pub(crate) mod bridge;
 mod swapper;
 
 use std::io::{stdout, Stdout};
