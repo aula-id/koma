@@ -1,18 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Field, TextInput, Segmented, Chips, Select, Combobox } from '../form'
 import { FormActions } from '../helpers'
-
-type Role = 'main' | 'awareness' | 'safeguard' | 'compactor' | 'planner'
-type Scope = 'global' | 'local'
-type Model = {
-  id: string
-  name: string
-  modelId: string
-  provider: string
-  route: string
-  roles: Role[]
-  scope: Scope
-}
+import { useKoma } from '../../../store/koma'
+import type { Role, Model } from '../../../types/config'
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'main', label: 'main' },
@@ -20,16 +10,6 @@ const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'safeguard', label: 'safeguard' },
   { value: 'compactor', label: 'compactor' },
   { value: 'planner', label: 'planner' },
-]
-// Placeholder pool ONLY to demo the model-id omnisearch interaction (koma
-// itself fetches this live per-provider from GET {endpoint}/models).
-const DEMO_MODEL_IDS = [
-  'anthropic/claude-opus-4',
-  'anthropic/claude-sonnet-4',
-  'openai/gpt-4.1',
-  'openai/gpt-4o',
-  'google/gemini-2.5-pro',
-  'deepseek/deepseek-v3',
 ]
 // Placeholder pool ONLY to demo the Route field (koma's OpenRouter upstream-
 // provider picker: real prices/uptime come from the model's live endpoint
@@ -93,6 +73,15 @@ export function ModelForm({
   const toggleRole = (r: Role) =>
     setD((x) => ({ ...x, roles: x.roles.includes(r) ? x.roles.filter((y) => y !== r) : [...x.roles, r] }))
 
+  const modelList = useKoma((s) => s.modelList)
+  const req = useKoma((s) => s.req)
+  // Live per-provider model-id catalogue fetch, triggered whenever the
+  // provider field changes (replaces DEMO_MODEL_IDS).
+  useEffect(() => {
+    if (d.provider.trim()) req({ r: 'ListModels', provider: d.provider })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.provider])
+
   // Route (OpenRouter-style upstream provider picker) only makes sense once a
   // model id is chosen, and only for API-key providers — not OAuth connections
   // (mirrors koma: Route is OpenRouter-only, gated behind provider + model).
@@ -116,7 +105,7 @@ export function ModelForm({
           <Combobox
             value={d.modelId}
             onChange={(v) => patch({ modelId: v })}
-            options={DEMO_MODEL_IDS}
+            options={modelList}
             placeholder="Search or type a model id…"
           />
         </Field>
