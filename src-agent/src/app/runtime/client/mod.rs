@@ -210,24 +210,78 @@ pub(super) enum HostCtl {
     New,
 }
 
-/// Headless attach used by the R4 host-relay: ensure the session's daemon is up,
-/// connect + handshake. Build-skew auto-restart is added in the R5 headless variant.
-fn attach_host(handle: &tokio::runtime::Handle, session_id: &str) -> Result<Connection> {
-    super::manage::ensure_daemon_running(session_id, false)
-        .map_err(|e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"))?;
-    let sock_path = store::daemon_sock_path(session_id)?;
-    connect_attach_and_handshake(handle, &sock_path)
+/// The host-relay run-loop's next step, mirroring [`ClientState`] for the headless
+/// GUI host: show the swapper, attach a session, or leave.
+enum HostStep {
+    /// Show the detached session swapper (the hub) and wait for a pick.
+    Swapper,
+    /// Attach to this session UUID and fold its frames into pushes.
+    Attach(String),
+    /// Leave the host-relay entirely (the window is gone).
+    Done,
 }
 
-/// Run the host-relay client on a background thread: own a tokio runtime, attach to a
-/// session-daemon, and drive the headless fold loop that PUSHES the shadow state into
-/// the webview. The `push` sink hands a ready JSON envelope to the main tao thread;
+/// Headless twin of [`attach_session`]: attach + build-skew auto-restart WITHOUT a
+/// terminal spinner (the GUI host owns no TTY). Ensures the daemon is up, connects +
+/// handshakes, and on a CONFIRMED build mismatch restarts the stale daemon via the
+/// SAME silent [`super::manage::restart_daemon`] machinery (`quiet = true`) — at most
+/// once — then reconnects. A daemon that sends no `Hello` is never restarted on that
+/// absence alone (mirrors [`attach_session`]'s loop guard).
+fn attach_session_headless(
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+) -> Result<Connection> {
+    super::manage::ensure_daemon_running(session_id, false).map_err(|e| {
+        anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}")
+    })?;
+
+    let sock_path = store::daemon_sock_path(session_id)?;
+    let my_fingerprint = store::build_fingerprint();
+
+    let mut conn = connect_attach_and_handshake(handle, &sock_path)?;
+    let mut already_restarted = false;
+    while conn
+        .daemon_version
+        .as_deref()
+        .is_some_and(|v| v != my_fingerprint)
+    {
+        if already_restarted {
+            eprintln!(
+                "koma: daemon still reports a different build after a restart; \
+                 continuing against it"
+            );
+            break;
+        }
+        already_restarted = true;
+
+        // Tear down the stale connection's bridge before restarting (drop the request
+        // sender so the writer drains + exits; the reader observes the daemon's death
+        // as EOF), then restart SILENTLY (no alt-screen spinner — there is no TTY).
+        drop(conn.req_tx);
+        drop(conn.frame_rx);
+        super::manage::restart_daemon(session_id, true)
+            .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
+
+        conn = connect_attach_and_handshake(handle, &sock_path)?;
+    }
+    Ok(conn)
+}
+
+/// Run the host-relay client on a background thread: own a tokio runtime and run the
+/// two-state machine (swapper / attached) that PUSHES the shadow state into the
+/// webview. The `push` sink hands a ready JSON envelope to the main tao thread;
 /// `ctl_rx` carries [`HostCtl`] intents from the ipc handler; `live_req` is the shared
 /// slot the ipc handler forwards `SubmitInput` through (updated on every (re)attach).
 ///
-/// R4: boots straight into an attached session (`opts.session`, else a minted uuid)
-/// and re-attaches on an `Attach` transition. The detached swapper (a `ToSwapper`
-/// transition / a cold boot into the hub) is added in R5.
+/// Startup: `--session <id>` attaches straight to that session; otherwise the host
+/// opens cold into the SWAPPER (the hub) so the user picks a live session, a history
+/// session, or `[+ new session]`. A detach (socket close, or the daemon's `OpenSwapper`
+/// hand-off) falls back to the swapper; a failed attach degrades to the swapper rather
+/// than crashing.
+///
+/// W0 scope: the swapper RENDERS the hub and resolves `SelectSession` / `NewSession`
+/// to an attach. The full in-hub key semantics (Ctrl+X nuke, history delete, cursor
+/// nav) are W1 — the client-side keyboard swapper is not driven here.
 pub(super) fn run_host_relay(
     opts: crate::cli::Opts,
     push: impl Fn(String) + Send + 'static,
@@ -247,60 +301,136 @@ pub(super) fn run_host_relay(
     let handle = rt.handle().clone();
 
     let mut push_state = render::PushState::new();
+    // The session the host is (or was) attached to, so the swapper flags the row it
+    // came from as `is_foreground` and a `ToSwapper` fallback remembers it.
+    let mut current_session_id: Option<String> = None;
 
-    // R4: the first (and, absent a swapper, only) session to attach.
-    let mut next: Option<String> =
-        Some(opts.session.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()));
+    // Startup: attach directly to `--session`, else open cold into the swapper.
+    let mut step = match opts.session.clone() {
+        Some(id) => HostStep::Attach(id),
+        None => HostStep::Swapper,
+    };
 
-    while let Some(id) = next.take() {
-        let mut conn = match attach_host(&handle, &id) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[gui] host-relay could not attach session {id}: {e:#}");
-                break;
-            }
-        };
-
-        // Publish this connection's request sender so the ipc handler's `Submit` lands
-        // on the CURRENT daemon; take the handshake's prebuffered frames for the fold.
-        if let Ok(mut g) = live_req.lock() {
-            *g = Some(conn.req_tx.clone());
-        }
-        let prebuffered = std::mem::take(&mut conn.prebuffered);
-
-        // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
-        // sub-agent mints an inert AbortHandle, which needs a runtime in scope) —
-        // SCOPED so the guard drops before `teardown_connection`'s `block_on`.
-        let transition = {
-            let _rt_ctx = handle.enter();
-            render::push_loop(
+    loop {
+        step = match step {
+            HostStep::Done => break,
+            HostStep::Swapper => host_swapper(
                 &push,
-                &conn.frame_rx,
-                &conn.req_tx,
-                prebuffered,
                 &ctl_rx,
                 &mut push_state,
-            )
+                current_session_id.as_deref(),
+            ),
+            HostStep::Attach(id) => host_attached(
+                &handle,
+                &push,
+                &ctl_rx,
+                &live_req,
+                &mut push_state,
+                &mut current_session_id,
+                id,
+            ),
         };
-
-        // Retract the live sender before teardown so a late `Submit` can't race a
-        // half-torn-down connection, then flush the polite `Detach`.
-        if let Ok(mut g) = live_req.lock() {
-            *g = None;
-        }
-        teardown_connection(&handle, conn);
-        push_state.reset();
-
-        match transition {
-            render::HostTransition::Attach(new_id) => next = Some(new_id),
-            // No swapper yet (R5): a socket close / window close ends the relay.
-            render::HostTransition::Exit | render::HostTransition::ToSwapper => break,
-        }
     }
 
     // Drop the runtime LAST so the active connection's reader task is cancelled after
     // the loop exits.
     drop(rt);
+}
+
+/// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
+/// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
+/// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
+/// the relay.
+///
+/// W0: no background live-refresh probe and no in-hub keyboard nav (those are W1) — the
+/// hub is a static snapshot until the user picks. React animates any spinner locally.
+fn host_swapper(
+    push: &dyn Fn(String),
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    push_state: &mut render::PushState,
+    current: Option<&str>,
+) -> HostStep {
+    // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
+    let hub = build_local_hub(current);
+    push_state.reset();
+    render::push_hub(&hub, push, push_state);
+
+    loop {
+        match ctl_rx.recv() {
+            // Page reloaded: rediscover the live set + re-push the hub.
+            Ok(HostCtl::Ready) => {
+                let hub = build_local_hub(current);
+                push_state.reset();
+                render::push_hub(&hub, push, push_state);
+            }
+            // A hub pick → attach that session; `[+ new session]` → mint + attach.
+            Ok(HostCtl::Select(id)) => return HostStep::Attach(id),
+            Ok(HostCtl::New) => return HostStep::Attach(uuid::Uuid::new_v4().to_string()),
+            // The ipc side hung up (window gone) — leave the host.
+            Err(_) => return HostStep::Done,
+        }
+    }
+}
+
+/// The ATTACHED arm: attach `id` (build-skew safe), publish its request sender for the
+/// ipc `Submit`, fold its frames into pushes via [`render::push_loop`], then tear the
+/// connection down and translate the loop's [`render::HostTransition`] into the next
+/// [`HostStep`]. A failed attach degrades to the swapper rather than crashing.
+#[allow(clippy::too_many_arguments)]
+fn host_attached(
+    handle: &tokio::runtime::Handle,
+    push: &dyn Fn(String),
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    push_state: &mut render::PushState,
+    current: &mut Option<String>,
+    id: String,
+) -> HostStep {
+    let mut conn = match attach_session_headless(handle, &id) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[gui] host-relay could not attach session {id}: {e:#}");
+            // Degrade to the swapper (fresh discovery) — the user can pick again.
+            return HostStep::Swapper;
+        }
+    };
+    *current = Some(id);
+
+    // Publish this connection's request sender so the ipc handler's `Submit` lands on
+    // the CURRENT daemon; take the handshake's prebuffered frames for the fold.
+    if let Ok(mut g) = live_req.lock() {
+        *g = Some(conn.req_tx.clone());
+    }
+    let prebuffered = std::mem::take(&mut conn.prebuffered);
+    push_state.reset();
+
+    // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
+    // sub-agent mints an inert AbortHandle, which needs a runtime in scope) — SCOPED
+    // so the guard drops before `teardown_connection`'s `block_on`.
+    let transition = {
+        let _rt_ctx = handle.enter();
+        render::push_loop(
+            push,
+            &conn.frame_rx,
+            &conn.req_tx,
+            prebuffered,
+            ctl_rx,
+            push_state,
+        )
+    };
+
+    // Retract the live sender before teardown so a late `Submit` can't race a
+    // half-torn-down connection, then flush the polite `Detach`.
+    if let Ok(mut g) = live_req.lock() {
+        *g = None;
+    }
+    teardown_connection(handle, conn);
+
+    match transition {
+        render::HostTransition::Attach(new_id) => HostStep::Attach(new_id),
+        render::HostTransition::ToSwapper => HostStep::Swapper,
+        render::HostTransition::Exit => HostStep::Done,
+    }
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
