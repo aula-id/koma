@@ -5,18 +5,23 @@
 (function () {
   console.log('[koma.js] script loaded');
   try {
+  document.body.classList.add('os-' + (window.__komaOS || 'linux'));
   // The host (Rust, run_gui) resolves koma's CONFIGURED palette canvas bg
   // (view::theme::palette(cfg).bg) and injects it as window.__komaBg via a
   // wry initialization script, so it's set before this script runs. Falls
   // back to black if missing/malformed (matches the palette's own default).
   var komaBg = (window.__komaBg && /^#[0-9a-fA-F]{6}$/.test(window.__komaBg)) ? window.__komaBg : '#000000';
+  // Same deal for the titlebar text + button glyph FOREGROUND: the host resolves
+  // koma's CONFIGURED palette fg (view::theme::palette(cfg).fg) and injects it as
+  // window.__komaFg. Falls back to the old hardcoded color if missing/malformed.
+  var komaFg = (window.__komaFg && /^#[0-9a-fA-F]{6}$/.test(window.__komaFg)) ? window.__komaFg : '#c8d3f5';
 
   const term = new Terminal({
     fontFamily: '"KomaMono", monospace',
     fontSize: 14,
     cursorBlink: true,
     allowProposedApi: true,
-    theme: { background: komaBg, foreground: '#c8d3f5' },
+    theme: { background: komaBg, foreground: komaFg },
     scrollback: 10000,
   });
 
@@ -31,28 +36,43 @@
   // Match the container + body bg to the resolved palette so the cols/rows
   // remainder gutter (right/bottom strip xterm can't fill with whole cells)
   // reads as the same color instead of a visibly different near-black seam.
-  document.body.style.backgroundColor = komaBg;
+  var appEl = document.getElementById('app');
+  if (appEl) appEl.style.backgroundColor = komaBg;
   var termEl = document.getElementById('term');
   if (termEl) termEl.style.backgroundColor = komaBg;
   var titlebarEl = document.getElementById('titlebar');
   if (titlebarEl) titlebarEl.style.backgroundColor = komaBg;
 
-  // Live palette sync: koma (in GUI mode) emits its canvas bg via private OSC 5380
-  // whenever the palette changes; repaint the xterm theme + window gutter to match.
+  // Drives the titlebar text + non-macOS button glyph color via a CSS custom
+  // property (see index.html's #titlebar / .win-btn `color: var(--koma-fg, ...)`).
+  function applyFg(fg) { document.documentElement.style.setProperty('--koma-fg', fg); }
+  applyFg(komaFg);
+
+  // Live palette sync: koma (in GUI mode) emits its canvas bg + titlebar fg via a
+  // private OSC 5380 whenever the palette changes, as `#rrggbb,#rrggbb` (bg first,
+  // fg second); repaint the xterm theme + window gutter + titlebar to match.
   try {
     term.parser.registerOscHandler(5380, function (data) {
-      if (/^#[0-9a-fA-F]{6}$/.test(data)) {
-        komaBg = data;
-        try { term.options.theme = Object.assign({}, term.options.theme, { background: data }); } catch (e) {}
-        document.body.style.backgroundColor = data;
+      var parts = String(data).split(',');
+      var bg = parts[0], fg = parts[1];
+      if (bg && /^#[0-9a-fA-F]{6}$/.test(bg)) {
+        komaBg = bg;
+        try { term.options.theme = Object.assign({}, term.options.theme, { background: bg }); } catch (e) {}
+        var appEl2 = document.getElementById('app');
+        if (appEl2) appEl2.style.backgroundColor = bg;
         var el = document.getElementById('term');
-        if (el) el.style.backgroundColor = data;
+        if (el) el.style.backgroundColor = bg;
         var tb = document.getElementById('titlebar');
-        if (tb) tb.style.backgroundColor = data;
+        if (tb) tb.style.backgroundColor = bg;
+      }
+      if (fg && /^#[0-9a-fA-F]{6}$/.test(fg)) {
+        komaFg = fg;
+        applyFg(fg);
+        try { term.options.theme = Object.assign({}, term.options.theme, { foreground: fg }); } catch (e) {}
       }
       return true; // handled — do not render the sequence
     });
-  } catch (e) { /* parser API unavailable — static window.__komaBg still applies */ }
+  } catch (e) { /* parser API unavailable — static window.__komaBg/__komaFg still applies */ }
 
   // Ctrl+Shift+C copies the current selection, Ctrl+Shift+V pastes from the
   // system clipboard. Plain Ctrl+C is left alone so it still sends SIGINT to
