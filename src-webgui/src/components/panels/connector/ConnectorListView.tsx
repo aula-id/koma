@@ -1,22 +1,7 @@
 import { useState } from 'react'
-import type { ReactNode } from 'react'
 import { AccordionSection } from '../../AccordionSection'
 import { Empty, AddBtn, Row } from '../helpers'
-
-type Provider = { id: string; name: string; endpoint: string; apiKey: string }
-type OAuthProv = 'OpenAI' | 'Kilo Code' | 'Anthropic'
-type OAuthConn = { id: string; provider: OAuthProv; account: string }
-type Scope = 'global' | 'local'
-type Role = 'main' | 'awareness' | 'safeguard' | 'compactor' | 'planner'
-type Model = {
-  id: string
-  name: string
-  modelId: string
-  provider: string
-  route: string
-  roles: Role[]
-  scope: Scope
-}
+import type { Provider, OAuthConn, Model } from '../../../types/config'
 
 type Props = {
   providers: Provider[]

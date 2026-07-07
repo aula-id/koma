@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { Field, TextInput } from '../form'
 import { FormActions } from '../helpers'
-
-type Provider = { id: string; name: string; endpoint: string; apiKey: string }
+import type { Provider } from '../../../types/config'
 
 export function ProviderForm({ draft, onSave, onCancel }: { draft: Provider; onSave: (d: Provider) => void; onCancel: () => void }) {
   const [d, setD] = useState(draft)

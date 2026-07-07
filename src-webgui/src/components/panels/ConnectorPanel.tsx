@@ -5,21 +5,8 @@ import { ConnectorListView } from './connector/ConnectorListView'
 import { ProviderForm } from './connector/ProviderForm'
 import { OAuthConnect } from './connector/OAuthConnect'
 import { ModelForm } from './connector/ModelForm'
-
-type Provider = { id: string; name: string; endpoint: string; apiKey: string }
-type OAuthProv = 'OpenAI' | 'Kilo Code' | 'Anthropic'
-type OAuthConn = { id: string; provider: OAuthProv; account: string }
-type Scope = 'global' | 'local'
-type Role = 'main' | 'awareness' | 'safeguard' | 'compactor' | 'planner'
-type Model = {
-  id: string
-  name: string
-  modelId: string
-  provider: string
-  route: string
-  roles: Role[]
-  scope: Scope
-}
+import { useKoma } from '../../store/koma'
+import type { Provider, OAuthProv, OAuthConn, Model } from '../../types/config'
 
 const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 
@@ -37,22 +24,24 @@ type View =
 
 // Design reference: Connector = 3 catalogues (Providers / OAuth / Models) as a
 // master accordion list; add/edit slides to an inline detail form; delete arms
-// inline. Local state, starts empty, no popups, no backend.
+// inline. Providers/models are the authoritative config slice (pushed by the
+// host); OAuth stays a local-only stub (untouched, no backend).
 export function ConnectorPanel() {
-  const [providers, setProviders] = useState<Provider[]>([])
+  const providers = useKoma((s) => s.config.providers)
+  const models = useKoma((s) => s.config.models)
+  const req = useKoma((s) => s.req)
   const [conns, setConns] = useState<OAuthConn[]>([])
-  const [models, setModels] = useState<Model[]>([])
   const [view, setView] = useState<View>({ kind: 'list' })
   const [armed, setArmed] = useState<string | null>(null)
 
   const back = () => setView({ kind: 'list' })
 
   const saveProvider = (d: Provider) => {
-    setProviders((l) => (view.kind === 'provider' && view.isNew ? [...l, d] : l.map((x) => (x.id === d.id ? d : x))))
+    req({ r: 'SetProvider', provider: d })
     back()
   }
   const saveModel = (d: Model) => {
-    setModels((l) => (view.kind === 'model' && view.isNew ? [...l, d] : l.map((x) => (x.id === d.id ? d : x))))
+    req({ r: 'SetModel', model: d })
     back()
   }
   const connect = (provider: OAuthProv) => {
@@ -85,9 +74,9 @@ export function ConnectorPanel() {
               onEditModel={(m) => setView({ kind: 'model', draft: { ...m }, isNew: false })}
               onArm={(id) => setArmed(id)}
               onDisarm={() => setArmed(null)}
-              onConfirmProvider={(id) => { setProviders((l) => l.filter((x) => x.id !== id)); setArmed(null) }}
+              onConfirmProvider={(id) => { req({ r: 'DeleteProvider', id }); setArmed(null) }}
               onConfirmOAuth={(id) => { setConns((l) => l.filter((x) => x.id !== id)); setArmed(null) }}
-              onConfirmModel={(id) => { setModels((l) => l.filter((x) => x.id !== id)); setArmed(null) }}
+              onConfirmModel={(id) => { req({ r: 'DeleteModel', id }); setArmed(null) }}
             />
           </motion.div>
         ) : (
