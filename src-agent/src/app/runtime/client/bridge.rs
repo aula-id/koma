@@ -13,12 +13,7 @@ pub(super) const REQ_POLL: Duration = Duration::from_millis(4);
 /// runtime is dropped. The writer drains-and-returns the instant its channel closes
 /// (well under one `REQ_POLL`), so this is only a safety ceiling against a wedged
 /// socket — exit must never hang on a misbehaving daemon write half.
-//
-// Bumped `pub(super)` -> `pub(crate)` (visibility only — same constant, not redefined) so
-// the feature-gated `runtime::gui` client — a sibling under `runtime`, not a descendant of
-// `client` — can reuse it in its own `on_exit` teardown, which mirrors
-// `client::mod::teardown_connection`'s sender-drop-then-join sequencing exactly.
-pub(crate) const WRITER_FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
+pub(super) const WRITER_FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Reader task: decode framed [`DaemonFrame`]s off the socket and push them onto the
 /// loop's incoming channel. On socket EOF / cap violation / decode error it returns,

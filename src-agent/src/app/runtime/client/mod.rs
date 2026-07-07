@@ -21,25 +21,12 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-// `connect`, `shadow`, and `input` are `pub(crate)` (not private `mod`) so the feature-gated
-// `runtime::gui` client — a sibling under `runtime` — can reuse this client's connect/attach
-// primitive, its frame-folding shadow logic, and its key handling (render-ahead echo + the
-// mirrored `/quit` overlay keys) verbatim (visibility only; no logic differs).
-pub(crate) mod connect;
+mod connect;
 mod render;
-pub(crate) mod shadow;
-pub(crate) mod input;
-// Bumped `mod` -> `pub(crate) mod` (visibility only, same reuse rationale as `connect`/
-// `shadow`/`input` above): the feature-gated `runtime::gui` client's `on_exit` needs
-// `bridge::WRITER_FLUSH_TIMEOUT` to mirror `teardown_connection`'s flush-then-join exactly,
-// reusing the SAME constant rather than redefining it.
-pub(crate) mod bridge;
-// Bumped `mod` -> `pub(crate) mod` (visibility only, same reuse rationale as `connect`/
-// `shadow`/`input`/`bridge` above): the feature-gated `runtime::gui` client reuses this
-// module's `build_local_hub` (already `pub(crate)`) plus `SwapperOutcome`, `handle_swapper_key`,
-// and `apply_snapshot` (each bumped to `pub(crate)` in `swapper`) to drive the `/resume` picker
-// one key/frame at a time under egui — it cannot call the blocking `run_swapper` loop.
-pub(crate) mod swapper;
+mod shadow;
+mod input;
+mod bridge;
+mod swapper;
 
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};

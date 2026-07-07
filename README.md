@@ -47,10 +47,6 @@ Installs to `~/.local/bin` — no sudo required. Then run `koma` and start a ses
 
 More at **[koma.run](https://koma.run)**.
 
-### Desktop GUI (optional)
-
-`koma gui` opens the same TUI in a native desktop window instead of your terminal emulator — same daemon, same session, just rendered through `eframe`/`egui` and a software ratatui backend instead of crossterm. It's entirely feature-gated (`--features gui`): the default `cargo install`/`cargo build` stays lean and headless-safe, pulling in no windowing, GL, or X11/Wayland dependencies, so servers and CI are unaffected. Release binaries that ship the GUI build with `cargo build --release --features gui`. Supported on macOS and Linux; Windows is untested and not explicitly gated out, so it may or may not work today.
-
 ---
 
 *Curious how it works under the hood? See [`ARCHITECTURE.md`](ARCHITECTURE.md).*
