@@ -43,11 +43,14 @@ export type BashJobEntry = {
   status: 'running' | 'done' | 'killed' | 'error'
 }
 
+// Mirrors the Rust host's `PushAttachment` (render.rs, `rename_all = "camelCase"`):
+// `markerN` (the daemon's `[Image #N]` marker number) round-trips back in
+// `RemoveAttachment`; `name` is the on-disk basename; `kind` is the mime-derived
+// chip kind. Full array — REPLACED on each Snapshot, never accumulated.
 export type AttachmentEntry = {
-  id: string
+  markerN: number
   name: string
-  relPath: string
-  mime: string | null
+  kind: 'image' | 'file'
 }
 
 export type SearchResultEntry = {
