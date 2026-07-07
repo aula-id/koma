@@ -148,6 +148,26 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         .context("failed to take pty writer")?;
     let master = pair.master; // retained for resize()
 
+    // --- 1b. Resolve the *configured* palette canvas bg, for the webview gutter -
+    // xterm's cell grid rarely divides the window's pixel size evenly, leaving a
+    // remainder strip on the right/bottom that shows through as the container
+    // background. That container must match koma's ACTUAL palette (not a
+    // hardcoded near-black) or the gutter reads as a visible seam whenever the
+    // user runs a non-default palette (e.g. `autumn` = #2e2a20). `AppConfig::load`
+    // already falls back to `AppConfig::default()` on any error, and
+    // `theme::palette` falls back to `dark()` for an unknown name, so this is
+    // infallible; on top of that we defensively fall back to pure black.
+    let bg_hex = {
+        use ratatui::style::Color;
+        let cfg = crate::model::app_config::AppConfig::load();
+        let palette = crate::view::theme::palette(&cfg);
+        match palette.bg {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            Color::Black => "#000000".to_string(),
+            _ => "#000000".to_string(),
+        }
+    };
+
     // --- 2. Event loop + window ------------------------------------------------
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let window = WindowBuilder::new()
@@ -175,6 +195,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
 
     let webview = WebViewBuilder::new()
         .with_devtools(true)
+        .with_initialization_script(format!("window.__komaBg = '{bg_hex}';"))
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
         })
