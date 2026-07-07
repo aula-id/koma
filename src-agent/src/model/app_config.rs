@@ -417,6 +417,11 @@ impl AppConfig {
     /// a uuid with no match, CREATES a new [`ApiType::OpenAiCompatible`] provider (the
     /// default the TUI providers modal also starts from). The caller persists via
     /// [`Self::save`] afterwards.
+    ///
+    /// The plaintext key is never round-tripped to the webview (see [`PushProvider`] in
+    /// `client::render`), so an EMPTY incoming `api_key` on edit means "unchanged" — the
+    /// existing stored key is preserved. Only a non-empty incoming key overwrites it. On
+    /// create, an empty key just stores empty (nothing to preserve).
     pub fn upsert_provider(
         &mut self,
         uuid: Option<String>,
@@ -429,7 +434,9 @@ impl AppConfig {
             if let Some(slot) = self.providers.iter_mut().find(|p| p.uuid == u) {
                 slot.name = name;
                 slot.endpoint = endpoint;
-                slot.api_key = api_key;
+                if !api_key.is_empty() {
+                    slot.api_key = api_key;
+                }
                 // `api_type` intentionally preserved (not exposed by the GUI form).
                 return;
             }

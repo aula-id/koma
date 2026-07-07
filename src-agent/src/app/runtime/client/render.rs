@@ -589,16 +589,17 @@ struct PushHistory {
 
 /// One provider row in a [`PushEnvelope::Config`] (the Connector panel's ProviderForm
 /// model). `id` is the config uuid (stable identity a `SetProvider`/`DeleteProvider`
-/// round-trips); `api_key` is projected verbatim — this GUI is local-only (feature-
-/// gated, same machine + user), so there is no remote-leak surface, and the form needs
-/// the current value to edit in place.
+/// round-trips). The plaintext `api_key` is NEVER sent to the webview (devtools are
+/// enabled, and the key would sit readable in the DOM/console) — only `has_key`, a
+/// presence flag the form uses to render a "leave blank to keep" placeholder. Saving
+/// with a blank key preserves the existing stored key (see `upsert_provider`).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PushProvider {
     id: String,
     name: String,
     endpoint: String,
-    api_key: String,
+    has_key: bool,
 }
 
 /// One model row in a [`PushEnvelope::Config`] (the Connector panel's ModelForm model).
@@ -1353,7 +1354,7 @@ fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String), last: &mut
             id: p.uuid.clone(),
             name: p.name.clone(),
             endpoint: p.endpoint.clone(),
-            api_key: p.api_key.clone(),
+            has_key: !p.api_key.is_empty(),
         })
         .collect();
 

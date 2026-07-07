@@ -43,7 +43,7 @@ export function ConnectorListView({
             key={p.id}
             title={p.name || '(unnamed)'}
             subtitle={p.endpoint || '—'}
-            right={<span className="text-[11px] text-koma-fg opacity-45">{p.apiKey ? '••••' : '—'}</span>}
+            right={<span className="text-[11px] text-koma-fg opacity-45">{p.hasKey ? '••••' : '—'}</span>}
             confirmLabel={`Remove "${p.name || 'provider'}"?`}
             armed={armed === p.id}
             onEdit={() => onEditProvider(p)}
