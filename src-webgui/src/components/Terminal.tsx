@@ -226,10 +226,12 @@ export function Terminal() {
   }, [])
 
   return (
-    <div
-      ref={containerRef}
-      className="absolute inset-0"
-      style={{ backgroundColor: 'var(--koma-bg, #000)' }}
-    />
+    <div className="term-shell">
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ backgroundColor: 'var(--koma-bg, #000)' }}
+      />
+    </div>
   )
 }

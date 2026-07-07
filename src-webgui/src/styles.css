@@ -1,4 +1,16 @@
 @import "tailwindcss";
+
+@theme {
+  --color-koma-fg: var(--koma-fg, #c8d3f5);
+  --color-koma-bg: var(--koma-bg, #0b0e14);
+  --color-koma-panel: color-mix(in srgb, var(--koma-fg, #c8d3f5) 6%, var(--koma-bg, #0b0e14));
+  --color-koma-panel2: color-mix(in srgb, var(--koma-fg, #c8d3f5) 4%, var(--koma-bg, #0b0e14));
+  --color-koma-border: color-mix(in srgb, var(--koma-fg, #c8d3f5) 10%, var(--koma-bg, #0b0e14));
+  --color-koma-hover: color-mix(in srgb, var(--koma-fg, #c8d3f5) 8%, var(--koma-bg, #0b0e14));
+  --color-koma-grip: color-mix(in srgb, var(--koma-fg, #c8d3f5) 22%, var(--koma-bg, #0b0e14));
+  --color-koma-head: color-mix(in srgb, var(--koma-fg, #c8d3f5) 12%, var(--koma-bg, #0b0e14));
+}
+
 html, body, #root { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 
 /* Custom window chrome (frameless titlebar + resize handles). The Rust host
@@ -43,7 +55,15 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
 .win-btn:hover { background: rgba(255,255,255,0.12); }
 .win-close:hover { background: #e81123; color: #fff; }
 
-#term { position: absolute; top: 32px; left: 0; right: 0; bottom: 0; }
+/* Centered, max-width column for the terminal. The absolute inner xterm
+   container positions against this (position: relative). Side gutters fall
+   back to #app's background. */
+.term-shell {
+  position: relative;
+  width: calc(100% - 48px);
+  max-width: 1024px;
+  height: 100%;
+}
 
 /* Custom edge/corner resize handles — the window is undecorated, so these
    drive tao's drag_resize_window() instead of native OS chrome. */
