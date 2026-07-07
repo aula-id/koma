@@ -1,89 +1,12 @@
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>koma</title>
-<link rel="stylesheet" href="koma://localhost/css/xterm.css">
-<link rel="stylesheet" href="koma://localhost/css/fonts.css">
-<style>
-  html, body { margin:0; padding:0; height:100%; background:transparent; overflow:hidden; }
-  #app { position:absolute; inset:0; border-radius:10px; overflow:hidden; background:#0b0e14; }
-
-  #titlebar {
-    position: absolute; top: 0; left: 0; right: 0; height: 32px;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 4px 0 12px; box-sizing: border-box;
-    -webkit-user-select: none; user-select: none;
-    font-family: monospace; font-size: 12px; color: var(--koma-fg, #c8d3f5);
-    background: #0b0e14;
-    z-index: 10;
-  }
-  #title { opacity: 0.75; pointer-events: none; }
-  #winctl { display: flex; gap: 2px; }
-  .win-btn {
-    width: 34px; height: 24px; border: none; background: transparent;
-    color: var(--koma-fg, #c8d3f5); font-family: monospace; font-size: 13px; line-height: 1;
-    cursor: pointer; border-radius: 4px;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .win-btn:hover { background: rgba(255,255,255,0.12); }
-  .win-close:hover { background: #e81123; color: #fff; }
-
-  #term { position:absolute; top:32px; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; }
-  #term > .terminal { flex: 0 0 auto; }
-
-  /* Custom edge/corner resize handles — the window is undecorated, so these
-     drive tao's drag_resize_window() instead of native OS chrome. */
-  .rz { position: absolute; z-index: 20; }
-  .rz-n { top: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
-  .rz-s { bottom: 0; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
-  .rz-e { top: 6px; right: 0; bottom: 6px; width: 6px; cursor: ew-resize; }
-  .rz-w { top: 6px; left: 0; bottom: 6px; width: 6px; cursor: ew-resize; }
-  .rz-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; z-index: 21; }
-  .rz-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; z-index: 21; }
-  .rz-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; z-index: 21; }
-  .rz-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; z-index: 21; }
-
-  /* macOS: left-side traffic lights, title on the right. Default (Linux/Windows)
-     layout above is unchanged. */
-  body.os-macos #winctl { order: -1; gap: 8px; align-items: center; }
-  body.os-macos #app { border-radius: 16px; }
-  body.os-macos #titlebar { padding: 0 10px; }
-  body.os-macos #title { opacity: 0.6; font-size: 18px; font-weight: 700; }
-  body.os-macos .win-btn {
-    width: 12px; height: 12px; border-radius: 50%; padding: 0;
-    margin: 0; font-size: 0; color: rgba(0,0,0,0.55);
-    display: flex; align-items: center; justify-content: center; line-height: 1;
-  }
-  body.os-macos #btn-close { background: #ff5f57; order: 0; }
-  body.os-macos #btn-min   { background: #febc2e; order: 1; }
-  body.os-macos #btn-max   { background: #28c840; order: 2; }
-  body.os-macos .win-btn:hover { font-size: 9px; }
-  body.os-macos .win-close:hover { background: #ff5f57; color: rgba(0,0,0,0.55); }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>koma</title>
 </head>
 <body>
-  <div id="app">
-    <div id="titlebar">
-      <span id="title">koma</span>
-      <div id="winctl">
-        <button class="win-btn" id="btn-min" aria-label="Minimize">&#x2013;</button>
-        <button class="win-btn" id="btn-max" aria-label="Maximize">&#x2610;</button>
-        <button class="win-btn win-close" id="btn-close" aria-label="Close">&#x2715;</button>
-      </div>
-    </div>
-    <div id="term"></div>
-    <div class="rz rz-n" data-dir="n"></div><div class="rz rz-s" data-dir="s"></div>
-    <div class="rz rz-e" data-dir="e"></div><div class="rz rz-w" data-dir="w"></div>
-    <div class="rz rz-ne" data-dir="ne"></div><div class="rz rz-nw" data-dir="nw"></div>
-    <div class="rz rz-se" data-dir="se"></div><div class="rz rz-sw" data-dir="sw"></div>
-  </div>
-  <script src="koma://localhost/js/xterm.js"></script>
-  <script src="koma://localhost/js/addon-fit.js"></script>
-  <script src="koma://localhost/js/addon-webgl.js"></script>
-  <script src="koma://localhost/js/addon-clipboard.js"></script>
-  <script src="koma://localhost/js/addon-unicode11.js"></script>
-  <script src="koma://localhost/js/addon-web-links.js"></script>
-  <script src="koma://localhost/js/koma.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

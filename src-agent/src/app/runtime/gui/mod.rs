@@ -23,10 +23,11 @@ use include_dir::{include_dir, Dir};
 use std::borrow::Cow;
 use wry::http::{Request, Response, StatusCode};
 
-/// The `src-webgui/` directory (vendored xterm.js + addons + glue), embedded
-/// at compile time. `$CARGO_MANIFEST_DIR` is `src-agent/`, so this resolves to
-/// the repo-root `src-webgui/` tree.
-static WEBUI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src-webgui");
+/// The `src-webgui/dist/` directory (Vite-built React app), embedded at
+/// compile time. `$CARGO_MANIFEST_DIR` is `src-agent/`, so this resolves to
+/// the repo-root `src-webgui/dist/` tree produced by `build.rs` running
+/// `npm run build` when the `gui` feature is enabled.
+static WEBUI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../src-webgui/dist");
 
 /// Guess a MIME type from a file extension for the `koma://` protocol handler.
 fn mime_for(path: &str) -> &'static str {
