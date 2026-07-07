@@ -7,6 +7,7 @@ import { ActivityBar } from '../components/ActivityBar'
 import { Sidebar, type SidebarView } from '../components/Sidebar'
 import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
+import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { useKoma } from '../store/koma'
 
 const SIDEBAR_MIN = 150
@@ -20,6 +21,11 @@ function RootLayout() {
   const [activeView, setActiveView] = useState<SidebarView>('explore')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(240)
+  // Omnisearch is opened from the Composer, which lives under a different
+  // route subtree than this layout — kept in the store (not local state) so
+  // it's reachable without prop drilling; see koma.ts's ui slice.
+  const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
+  const closeOmniSearch = useKoma((s) => s.closeOmniSearch)
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
   // can feed the koma store, then announce readiness so it sends the first
@@ -94,6 +100,7 @@ function RootLayout() {
         <ResumePalette onClose={() => setOverlay('none')} />
       )}
       {overlay === 'rename' && <RenameOverlay onClose={() => setOverlay('none')} />}
+      {omnisearchOpen && <OmniSearchPalette onClose={closeOmniSearch} />}
       <ResizeHandles />
     </div>
   )
