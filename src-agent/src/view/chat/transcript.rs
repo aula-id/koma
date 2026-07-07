@@ -235,7 +235,7 @@ pub(super) fn render_transcript(
 /// Map a tool's function name to a short box LABEL, or `None` when the tool's
 /// result should NOT be boxed (terse-status tools keep the compact one-liner).
 /// MCP (`mcp__…`) and security (`sec_…`) tool families collapse to one label each.
-fn tool_box_label(name: &str) -> Option<&'static str> {
+pub(crate) fn tool_box_label(name: &str) -> Option<&'static str> {
     if name.starts_with("mcp__") {
         return Some("mcp");
     }
@@ -260,7 +260,7 @@ fn tool_box_label(name: &str) -> Option<&'static str> {
 /// `read(Cargo.toml)`. Display-only; the real JSON sent to the model is untouched.
 /// Unmapped tools (mcp__*, sec_*, future) fall back to their object values, or the
 /// raw args if parsing fails.
-fn format_tool_signature(name: &str, args_json: &str) -> String {
+pub(crate) fn format_tool_signature(name: &str, args_json: &str) -> String {
     let v: serde_json::Value =
         serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
     let inner = tool_signature_inner(name, &v).unwrap_or_else(|| generic_inner(&v, args_json));
