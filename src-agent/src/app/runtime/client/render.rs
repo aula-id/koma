@@ -10,7 +10,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::app::mode::{Mode, QuitConfirmState};
+use crate::app::mode::{Mode, QuitConfirmState, SessionHub, SessionKind};
 use crate::app::state::AppState;
 use crate::dto::chat::Role;
 use crate::ipc::proto::{ClientRequest, DaemonFrame, KeyWire};
@@ -489,4 +489,349 @@ pub(super) fn client_select_dump(
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     terminal.clear()?;
     Ok(())
+}
+
+// ─── host-relay push envelopes (native-React GUI client) ─────────────────────────
+//
+// The GUI host is itself the daemon client (see `crate::app::runtime::gui`): instead
+// of drawing the shadow `AppState` to a terminal, it SERIALISES it into the JSON
+// envelopes the React client consumes and pushes them through
+// `window.__komaClient.push(...)`. These structs are the Rust half of the bridge
+// contract — `#[serde(tag = "k")]` names each envelope, matching the JS `push`
+// dispatcher's `k` switch EXACTLY. The host always pushes AUTHORITATIVE full values
+// (React REPLACES on `StreamMsg` / `Reasoning`, never appends); [`PushState`] dedups
+// so an unchanged frame emits nothing.
+
+/// One committed conversation turn in a [`PushEnvelope::Snapshot`].
+#[derive(serde::Serialize)]
+struct PushMsg {
+    role: &'static str,
+    content: String,
+    reasoning: Option<String>,
+}
+
+/// The canvas bg/fg the React client paints its chrome with (resolved from the
+/// shadow's palette, so a themed daemon repaints the window live).
+#[derive(serde::Serialize, PartialEq, Clone)]
+struct PushPalette {
+    bg: String,
+    fg: String,
+}
+
+/// A COOKING-pane row in a [`PushEnvelope::Hub`]. The synthetic `[+ new session]`
+/// row carries only `kind`/`id`/`name`; a real session row fills the rest (the
+/// session-only fields are `Option` + skip-if-none so the two shapes match the
+/// contract's per-row shape).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushCooking {
+    kind: &'static str,
+    id: Option<String>,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    working: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    foreground: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dir_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_dir: Option<bool>,
+}
+
+/// A HISTORY-pane row in a [`PushEnvelope::Hub`] (an on-disk session not currently
+/// live). `id` is the session UUID (the on-disk dir name); `last_active` is unix ms.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushHistory {
+    id: String,
+    name: String,
+    last_active: u64,
+    dir_label: String,
+    current_dir: bool,
+}
+
+/// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
+/// field name matches the contract verbatim (camelCase where the contract uses it).
+#[derive(serde::Serialize)]
+#[serde(tag = "k")]
+enum PushEnvelope {
+    /// Structural / commit tick (the catch-all): the full committed transcript +
+    /// title + palette for `session`. `state` is always `"attached"`.
+    Snapshot {
+        session: String,
+        state: &'static str,
+        messages: Vec<PushMsg>,
+        title: String,
+        palette: PushPalette,
+    },
+    /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
+    /// frame the buffer changes; an empty `text` clears the bubble on commit.
+    StreamMsg { session: String, text: String },
+    /// The FULL live reasoning buffer (React REPLACES). Empty `text` clears it.
+    Reasoning { session: String, text: String },
+    /// Working flag + optional toast. React animates the spinner locally; the host
+    /// only says whether the session is working and what toast (if any) to show.
+    Status {
+        session: String,
+        working: bool,
+        toast: Option<String>,
+    },
+    /// The detached session swapper: the `[+ new session]` row + live cooking rows +
+    /// on-disk history. `state` is always `"swapper"`.
+    Hub {
+        state: &'static str,
+        cooking: Vec<PushCooking>,
+        history: Vec<PushHistory>,
+    },
+}
+
+/// Per-connection dedup memory for the push pipeline: the last values pushed, so
+/// [`serialize_and_push`] / [`push_hub`] only emit an envelope when something
+/// actually changed (the fold loop calls them every ~16ms).
+pub(super) struct PushState {
+    /// Fingerprint of the last `Snapshot` (session + messages + title + palette).
+    snapshot_fp: Option<u64>,
+    /// Last streaming buffer pushed (`None` once cleared).
+    stream: Option<String>,
+    /// Last reasoning buffer pushed (empty once cleared).
+    reasoning: String,
+    /// Last `(working, toast)` pushed.
+    status: Option<(bool, Option<String>)>,
+    /// Last serialised `Hub` JSON (the swapper is diffed as a whole).
+    hub_json: Option<String>,
+}
+
+impl PushState {
+    pub(super) fn new() -> Self {
+        Self {
+            snapshot_fp: None,
+            stream: None,
+            reasoning: String::new(),
+            status: None,
+            hub_json: None,
+        }
+    }
+}
+
+/// Resolve a ratatui [`Color`] to a `#rrggbb` string, mirroring the fallbacks the
+/// GUI host uses elsewhere (near-black bg, near-white fg for non-Rgb palettes).
+fn color_hex(c: ratatui::style::Color, fallback: &str) -> String {
+    match c {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => fallback.to_string(),
+    }
+}
+
+/// Serialise the foreground session of `shadow` into the push envelopes and emit any
+/// that changed since the last call, through `push` (the host's
+/// `window.__komaClient.push` sink). This is the headless twin of `terminal.draw`:
+/// the fold loop calls it every frame instead of painting.
+///
+/// Emits, in order, only when changed: a `Snapshot` (committed transcript + title +
+/// palette), a `StreamMsg` (full live buffer, or empty to clear on commit), a
+/// `Reasoning` (full live thinking, or empty to clear), and a `Status` (working +
+/// toast). `PushState` holds the last-pushed values so a quiescent frame is silent.
+pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last: &mut PushState) {
+    let fg = shadow.rest.fg();
+    let session = fg.id.clone();
+
+    // Title: the session's display name, falling back to its id, then a constant.
+    let title = fg
+        .session
+        .as_ref()
+        .map(|s| {
+            if s.settings.name.is_empty() {
+                s.id.clone()
+            } else {
+                s.settings.name.clone()
+            }
+        })
+        .unwrap_or_else(|| "koma".to_string());
+
+    // Palette from the shadow config (a themed daemon repaints the window live).
+    let pal = crate::view::theme::palette(&shadow.rest.config);
+    let palette = PushPalette {
+        bg: color_hex(pal.bg, "#000000"),
+        fg: color_hex(pal.fg, "#c8d3f5"),
+    };
+
+    // Committed transcript: skip System/Tool (chrome the chat view never shows as a
+    // bubble), carry role + content + display-only reasoning for user/assistant.
+    let messages: Vec<PushMsg> = fg
+        .session
+        .as_ref()
+        .map(|s| {
+            s.conversation
+                .messages()
+                .iter()
+                .filter_map(|m| {
+                    let role = match m.role {
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::System | Role::Tool => return None,
+                    };
+                    Some(PushMsg {
+                        role,
+                        content: m.content.clone(),
+                        reasoning: m.reasoning.clone(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
+    let fp = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        session.hash(&mut h);
+        title.hash(&mut h);
+        palette.bg.hash(&mut h);
+        palette.fg.hash(&mut h);
+        messages.len().hash(&mut h);
+        for m in &messages {
+            m.role.hash(&mut h);
+            m.content.hash(&mut h);
+            m.reasoning.hash(&mut h);
+        }
+        h.finish()
+    };
+    if last.snapshot_fp != Some(fp) {
+        last.snapshot_fp = Some(fp);
+        let env = PushEnvelope::Snapshot {
+            session: session.clone(),
+            state: "attached",
+            messages,
+            title,
+            palette,
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+
+    // --- StreamMsg: full live buffer; empty text clears the bubble on commit ---
+    match &fg.streaming {
+        Some(text) => {
+            if last.stream.as_deref() != Some(text.as_str()) {
+                last.stream = Some(text.clone());
+                emit(push, &PushEnvelope::StreamMsg {
+                    session: session.clone(),
+                    text: text.clone(),
+                });
+            }
+        }
+        None => {
+            if last.stream.is_some() {
+                last.stream = None;
+                emit(push, &PushEnvelope::StreamMsg {
+                    session: session.clone(),
+                    text: String::new(),
+                });
+            }
+        }
+    }
+
+    // --- Reasoning: full live thinking buffer; empty text clears it ---
+    if !fg.stream_reasoning.is_empty() {
+        if last.reasoning != fg.stream_reasoning {
+            last.reasoning = fg.stream_reasoning.clone();
+            emit(push, &PushEnvelope::Reasoning {
+                session: session.clone(),
+                text: fg.stream_reasoning.clone(),
+            });
+        }
+    } else if !last.reasoning.is_empty() {
+        last.reasoning.clear();
+        emit(push, &PushEnvelope::Reasoning {
+            session: session.clone(),
+            text: String::new(),
+        });
+    }
+
+    // --- Status: working flag (waiting or mid-stream) + optional toast ---
+    let working = fg.waiting || fg.streaming.is_some();
+    let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
+    let status = (working, toast);
+    if last.status.as_ref() != Some(&status) {
+        last.status = Some(status.clone());
+        emit(push, &PushEnvelope::Status {
+            session,
+            working: status.0,
+            toast: status.1,
+        });
+    }
+}
+
+/// Serialise a [`SessionHub`] into a `Hub` envelope and push it if it changed since
+/// the last call (the swapper is diffed as one whole JSON blob — the panes are small
+/// metadata Vecs). Called by the host's swapper state while detached from any daemon.
+pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushState) {
+    use std::time::UNIX_EPOCH;
+
+    let cooking: Vec<PushCooking> = hub
+        .cooking
+        .iter()
+        .map(|e| match e.kind {
+            SessionKind::NewSession => PushCooking {
+                kind: "new",
+                id: None,
+                name: e.name.clone(),
+                working: None,
+                foreground: None,
+                dir_label: None,
+                current_dir: None,
+            },
+            SessionKind::Session => PushCooking {
+                kind: "session",
+                id: e.session_id.clone(),
+                name: e.name.clone(),
+                working: Some(e.working),
+                foreground: Some(e.is_foreground),
+                dir_label: Some(e.dir_label.clone()),
+                current_dir: Some(e.is_current_dir),
+            },
+        })
+        .collect();
+
+    let history: Vec<PushHistory> = hub
+        .history
+        .iter()
+        .map(|h| PushHistory {
+            id: h
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            name: h.name.clone(),
+            last_active: h
+                .last_active
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            dir_label: h.dir_label.clone(),
+            current_dir: h.is_current_dir,
+        })
+        .collect();
+
+    let env = PushEnvelope::Hub {
+        state: "swapper",
+        cooking,
+        history,
+    };
+    if let Ok(json) = serde_json::to_string(&env) {
+        if last.hub_json.as_deref() != Some(json.as_str()) {
+            last.hub_json = Some(json.clone());
+            push(json);
+        }
+    }
+}
+
+/// Serialise `env` and hand it to `push`, dropping it silently on the (never-
+/// expected) serialisation error rather than panicking mid-frame.
+fn emit(push: &dyn Fn(String), env: &PushEnvelope) {
+    if let Ok(json) = serde_json::to_string(env) {
+        push(json);
+    }
 }
