@@ -1,4 +1,4 @@
-import { memo, useState, type ComponentType } from 'react'
+import { memo, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
 import {
   Brain,
   Check,
@@ -259,9 +259,34 @@ export function ChatView() {
   // remounting it.
   const showLive = stream.length > 0 || (working && reasoning.trim() !== '')
 
+  // Scroll-anchored to BOTTOM: auto-stick to the newest content as the
+  // transcript / live stream grows, but RELEASE the moment the user scrolls up
+  // to read back, and RE-STICK once they return to the bottom. `stickRef` is a
+  // ref (not state) so the scroll handler never triggers a re-render, and the
+  // pin runs in a layout effect (before paint) so streaming never flickers.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickRef = useRef(true)
+
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    stickRef.current = distanceFromBottom < 40
+  }
+
+  useLayoutEffect(() => {
+    if (!stickRef.current) return
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages, stream, reasoning, showLive])
+
   return (
     <div className="term-shell flex flex-col">
-      <div className="flex-1 space-y-4 overflow-y-auto px-2 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
+      >
         {messages.map((m, i) => (
           <Message key={i} m={m} />
         ))}
