@@ -192,6 +192,16 @@ pub struct McpManager {
     /// so N rapid callers (panel render + snapshot projection, both ~10Hz) don't each
     /// kick off their own blocking `server_status()` call.
     status_refreshing: std::sync::atomic::AtomicBool,
+    /// Single-flight guard for the background advertise-cache refresh spawned by
+    /// [`Self::advertise_cached`] on the `Proxy` backend (mirrors `status_refreshing`):
+    /// only one `McpRequest::List` refresh may be in flight at a time.
+    advertise_refreshing: std::sync::atomic::AtomicBool,
+    /// Last-refreshed timestamp for the `Proxy` advertise cache. `None` = never
+    /// refreshed since construction, so the connect-time prime (which races the global
+    /// daemon's background server connect and can be seeded EMPTY) is treated as stale
+    /// and the first [`Self::advertise_cached`] call kicks a refresh. Local backends
+    /// ignore this (they serve live).
+    advertise_cache_at: Mutex<Option<std::time::Instant>>,
 }
 
 impl McpManager {
@@ -212,6 +222,8 @@ impl McpManager {
             },
             status_cache: Mutex::new((None, std::collections::HashMap::new())),
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
+            advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
+            advertise_cache_at: Mutex::new(None),
         });
 
         for server in servers {
@@ -261,6 +273,8 @@ impl McpManager {
             },
             status_cache: Mutex::new((None, std::collections::HashMap::new())),
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
+            advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
+            advertise_cache_at: Mutex::new(None),
         }))
     }
 
@@ -515,6 +529,65 @@ impl McpManager {
                 cache.lock().unwrap_or_else(|p| p.into_inner()).1.clone()
             }
         }
+    }
+
+    /// Cached, non-blocking twin of the advertise accessors ([`Self::tool_defs`] +
+    /// [`Self::tool_names`]) for the request-build hot path, returning both in ONE call
+    /// so defs and names always come from the same cache read.
+    ///
+    /// - **Local** — the snapshot walk is pure in-memory, so serve it live.
+    /// - **Proxy** — [`Self::tool_defs`]/[`Self::tool_names`] serve a cache primed at
+    ///   `connect_proxy`. That prime races the global daemon's own (background) server
+    ///   connect, so it can be seeded EMPTY and, without this, never recovers. On a
+    ///   stale OR empty cache this kicks a single-flight BACKGROUND `McpRequest::List`
+    ///   refresh (never blocking this call — same discipline as
+    ///   [`Self::server_status_cached`]) and returns the current cached value. An empty
+    ///   cache is always treated as stale, so it keeps retrying until the daemon has
+    ///   listed its tools; the next turn then advertises them.
+    pub fn advertise_cached(self: &Arc<Self>) -> (Vec<ToolDef>, Vec<String>) {
+        use std::sync::atomic::Ordering;
+
+        // Local: pure in-memory snapshot walk — serve live, no cache needed.
+        let cache = match &self.backend {
+            McpBackend::Local { .. } => return (self.tool_defs(), self.tool_names()),
+            McpBackend::Proxy { cache, .. } => cache,
+        };
+
+        let (defs, names, empty) = {
+            let c = cache.lock().unwrap_or_else(|p| p.into_inner());
+            (c.0.clone(), c.1.clone(), c.0.is_empty())
+        };
+
+        let stale = empty
+            || match *self.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) {
+                Some(at) => at.elapsed() >= STATUS_CACHE_TTL,
+                None => true,
+            };
+
+        if stale
+            && self
+                .advertise_refreshing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            let mgr = Arc::clone(self);
+            std::thread::spawn(move || {
+                if let McpBackend::Proxy { sock, cache } = &mgr.backend {
+                    match proxy_request(sock, &McpRequest::List) {
+                        Ok(McpResponse::Tools { defs, names }) => {
+                            *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("mcp proxy: advertise refresh List failed: {e:#}"),
+                    }
+                }
+                *mgr.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(std::time::Instant::now());
+                mgr.advertise_refreshing.store(false, Ordering::Release);
+            });
+        }
+
+        (defs, names)
     }
 
     /// Per-server discovered-tool count, keyed by server uuid.
