@@ -258,10 +258,13 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     let webview = WebViewBuilder::new()
         .with_devtools(true)
         .with_transparent(true)
-        .with_initialization_script(format!(
-            "window.__komaBg='{bg_hex}';window.__komaFg='{fg_hex}';window.__komaOS='{}';",
-            std::env::consts::OS
-        ))
+        .with_initialization_script({
+            let software = std::env::var("KOMA_GUI_SOFTWARE").is_ok();
+            format!(
+                "window.__komaBg='{bg_hex}';window.__komaFg='{fg_hex}';window.__komaOS='{}';window.__komaSoftware={software};",
+                std::env::consts::OS
+            )
+        })
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
         })
