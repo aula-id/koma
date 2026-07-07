@@ -98,6 +98,14 @@ pub enum ClientRequest {
     QuitDaemon,
     EditorWrapW(usize),
     OpenSessionHub,
+    /// Rename the requesting client's FOREGROUND session (the GUI RenameOverlay
+    /// submit). Sets the session's display name + persists via
+    /// [`crate::model::store::rename_session`] (in-memory `name`/`settings.name` +
+    /// the SQLite registry). The TUI has no equivalent request — it renames through
+    /// the `/rename` slash-command / the Settings save — so this is the GUI's direct
+    /// atomic rename path (fixes the "rename not working" gap where `NewSession.name`
+    /// was accept-ignored). An empty/whitespace name is a no-op.
+    RenameSession { name: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
