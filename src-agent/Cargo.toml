@@ -35,6 +35,15 @@ libc = "0.2"
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
 
+# --- feature = "gui": xterm.js + wry desktop client. All optional; the default
+# build pulls NONE of these (headless-safe, lean `cargo install`). ---
+wry = { version = "0.52", optional = true }
+tao = { version = "0.35", optional = true }
+portable-pty = { version = "0.9", optional = true }
+
+[features]
+gui = ["dep:wry", "dep:tao", "dep:portable-pty"]
+
 [[bin]]
 name = "koma"
 path = "src/main.rs"
