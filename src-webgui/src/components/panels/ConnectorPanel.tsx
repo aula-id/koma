@@ -71,10 +71,7 @@ export function ConnectorPanel() {
         {view.kind === 'list' ? (
           <motion.div
             key="list"
-            initial={{ x: '-25%', opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: '-25%', opacity: 0 }}
-            transition={SLIDE}
+            className="absolute inset-0"
           >
             <ConnectorListView
               providers={providers}
