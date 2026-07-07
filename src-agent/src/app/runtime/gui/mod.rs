@@ -229,8 +229,8 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         .with_title("koma")
         .with_inner_size(LogicalSize::new(1024.0, 680.0))
         .with_decorations(false)
-        .with_transparent(true)
         .with_resizable(true)
+        .with_transparent(true)
         .build(&event_loop)
         .context("failed to build GUI window")?;
     let proxy = event_loop.create_proxy();
@@ -255,16 +255,14 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     let ipc_master = Arc::clone(&master);
     let ipc_boot = Arc::clone(&reader_boot);
 
-    let webview = WebViewBuilder::new()
+    let wv_builder = WebViewBuilder::new()
         .with_devtools(true)
+        .with_initialization_script(format!(
+            "window.__komaBg='{bg_hex}';window.__komaFg='{fg_hex}';window.__komaOS='{}';",
+            std::env::consts::OS
+        ))
+        .with_url("koma://localhost/index.html")
         .with_transparent(true)
-        .with_initialization_script({
-            let software = std::env::var("KOMA_GUI_SOFTWARE").is_ok();
-            format!(
-                "window.__komaBg='{bg_hex}';window.__komaFg='{fg_hex}';window.__komaOS='{}';window.__komaSoftware={software};",
-                std::env::consts::OS
-            )
-        })
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
         })
@@ -344,9 +342,27 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
                     }
                 }
             }
-        })
-        .build(&window)
-        .context("failed to build webview")?;
+        });
+    // wry's default `.build(&window)` on Linux attaches the webview via a
+    // fragile X11 foreign-window reparenting path (a second GtkWindow bolted
+    // onto tao's X11 surface) that, on some GPUs, renders the DOM to an
+    // uncomposited surface -> a live but invisible (blank/gray) window. The
+    // fix (same one Tauri uses) is to attach the webview directly to tao's
+    // real GTK widget hierarchy via `build_gtk(window.default_vbox())`
+    // instead of going through the X11 reparenting path at all.
+    #[cfg(target_os = "linux")]
+    let webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window
+            .default_vbox()
+            .ok_or_else(|| anyhow::anyhow!("tao window has no default_vbox (GTK)"))?;
+        wv_builder
+            .build_gtk(vbox)
+            .context("failed to build webview (gtk)")?
+    };
+    #[cfg(not(target_os = "linux"))]
+    let webview = wv_builder.build(&window).context("failed to build webview")?;
 
     // --- 3b. macOS: clear WKWebView's `underPageBackgroundColor` -----------------
     // wry 0.52.1's "transparent" feature (enabled on our `wry` dependency above)
@@ -367,41 +383,6 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
             ns_webview.setUnderPageBackgroundColor(Some(&NSColor::clearColor()));
         }
     }
-
-    // --- 3c. Linux: opt-in software-rendering fallback for broken/old GPUs -----
-    // webkit2gtk's accelerated compositing path can render a fully blank window
-    // on some old/broken GPU drivers; the GL/compositor env vars (WEBKIT_DISABLE_
-    // COMPOSITING_MODE etc.) don't fix this on affected machines. The canonical
-    // fix is forcing webkit's own internal software renderer via its
-    // `hardware-acceleration-policy` setting. This is opt-in (never touches
-    // modern/working GPUs) behind KOMA_GUI_SOFTWARE=1, since forcing software
-    // rendering is strictly slower and shouldn't be the default. Linux-only;
-    // no-op on macOS/Windows.
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var("KOMA_GUI_SOFTWARE").is_ok() {
-            use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
-            use wry::WebViewExtUnix;
-            let wk = webview.webview(); // webkit2gtk::WebView
-            if let Some(settings) = WebViewExt::settings(&wk) {
-                settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
-            }
-            eprintln!(
-                "[gui] KOMA_GUI_SOFTWARE=1: forced webkit software rendering (hardware-acceleration-policy=Never)"
-            );
-        }
-    }
-
-    // --- 3d. Load the page now that render policy is settled -------------------
-    // Deferred from the `WebViewBuilder` chain: `.with_url(...)` there would load
-    // + first-render the page DURING `.build(&window)`, before the Linux
-    // KOMA_GUI_SOFTWARE policy above is applied — webkit doesn't re-render under
-    // a policy change after the fact, so a broken/blank first render would stick.
-    // Loading explicitly here, after both the macOS and Linux blocks, guarantees
-    // the first page render happens under the corrected settings.
-    webview
-        .load_url("koma://localhost/index.html")
-        .context("failed to load koma:// URL into webview")?;
 
     // --- 4. Run: pty -> xterm on the main thread; child cleanup on close -------
     // `run` diverges (`!`); `window` stays live in this frame, `webview` + `child`

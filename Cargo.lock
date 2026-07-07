@@ -42,7 +42,6 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
- "webkit2gtk",
  "wry",
 ]
 
