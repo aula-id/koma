@@ -3,10 +3,35 @@ import type { McpServer, Provider, Model, ModelListEntry } from '../types/config
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
+// One tool call folded onto its assistant message, with its paired result.
+// Mirrors the host's fuller turn projection (render.rs `PushToolCall`,
+// `rename_all = "camelCase"`): the assistant message holds the calls; each
+// `Role::Tool` result is joined back by id and inlined as `output`, matching
+// how the TUI resolves completion (⚙→✓) + the result box FRESH every frame.
+// All fields optional-tolerant: a host build that hasn't started projecting
+// the fuller shape yet simply omits `toolCalls`, and the UI degrades to the
+// plain message body.
+export type ToolCallView = {
+  id: string
+  // Raw tool name, e.g. "bash", "read", "grep", "mcp__foo__bar".
+  name: string
+  // Raw stringified-JSON arguments object (as the model emitted them).
+  args: string
+  // Pre-formatted display signature, e.g. `bash(ls src-agent/)`. Optional —
+  // derived client-side from name+args when the host doesn't supply it.
+  signature?: string
+  // Paired Role::Tool result content; null while the call is in flight.
+  output: string | null
+  // "done" once a matching tool result exists; "pending" otherwise.
+  status: 'pending' | 'done'
+}
+
 export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   reasoning: string | null
+  // Present only on an assistant message that requested tool calls.
+  toolCalls?: ToolCallView[]
 }
 
 export type PaletteColors = {

@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { Streamdown } from 'streamdown'
-import { code } from '@streamdown/code'
+import { komaCode } from './komaShiki'
 
 // Streaming-safe markdown + code renderer. Wraps Streamdown (Vercel) which is
 // a react-markdown-compatible renderer purpose-built for the partial/
@@ -32,8 +32,9 @@ export const MessageBody = memo(function MessageBody({
       mode={streaming ? 'streaming' : 'static'}
       // Repair-before-parse while live; off on the committed final frame.
       parseIncompleteMarkdown={streaming}
-      // Shiki highlighter (JS regex engine, no WASM) + copy button.
-      plugins={{ code }}
+      // Trimmed Shiki highlighter (JS regex engine, no WASM; ~16 langs) +
+      // copy button. See komaShiki.ts for why we don't use the stock plugin.
+      plugins={{ code: komaCode }}
       shikiTheme={['github-dark', 'github-dark']}
       // Line numbers are noise inside a chat bubble; drop them.
       lineNumbers={false}
