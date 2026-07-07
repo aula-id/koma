@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -33,9 +34,20 @@ export function Composer() {
   const attachments = useKoma((s) => s.session.attachments)
   const req = useKoma((s) => s.req)
   const openOmniSearch = useKoma((s) => s.openOmniSearch)
+  const composerInsert = useKoma((s) => s.ui.composerInsert)
+  const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
   const [input, setInput] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Consume one-shot omnisearch-pick signals: append the picked path into
+  // the draft text (not an attachment — the daemon's ingest is image-only,
+  // see attachFiles below), then ack so it doesn't re-fire on rerender.
+  useEffect(() => {
+    if (composerInsert === null) return
+    setInput((prev) => (prev.length > 0 ? `${prev} ${composerInsert}` : composerInsert))
+    consumeComposerInsert()
+  }, [composerInsert, consumeComposerInsert])
 
   const submit = () => {
     const text = input.trim()
@@ -53,6 +65,12 @@ export function Composer() {
 
   const attachFiles = async (files: FileList | File[]) => {
     for (const file of Array.from(files)) {
+      // Images only — the daemon's attachment ingest (Paste{path}) only
+      // ingests image extensions; a non-image file falls through to
+      // inserting its raw path into the shared composer buffer, silently
+      // corrupting the session. Silently skip non-image files here; use
+      // omnisearch to reference non-image workspace files by path instead.
+      if (!file.type.startsWith('image/')) continue
       try {
         const bytesB64 = await readFileAsBase64(file)
         req({ r: 'AttachFile', name: file.name, bytesB64, mime: file.type || undefined })
@@ -121,7 +139,14 @@ export function Composer() {
       )}
       <div className="flex items-end gap-2">
         {working && <Loader2 size={14} className="flex-none animate-spin text-koma-fg opacity-60" />}
-        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilePicked} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={onFilePicked}
+        />
         <button
           onClick={() => fileInputRef.current?.click()}
           aria-label="Attach file"

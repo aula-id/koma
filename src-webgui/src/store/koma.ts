@@ -107,6 +107,13 @@ type HubSlice = {
 // than RootLayout's overlay mount point, can open it without prop drilling.
 type UiSlice = {
   omnisearchOpen: boolean
+  // One-shot signal: a workspace path picked from OmniSearchPalette, queued
+  // for the Composer to append into its local draft text. The daemon's
+  // attachment ingest is image-only, so omnisearch picks are inserted as a
+  // plain path reference (for the model to read via its own tools) rather
+  // than routed through AttachPath. Composer consumes this via useEffect and
+  // clears it with consumeComposerInsert so it doesn't re-fire on rerender.
+  composerInsert: string | null
 }
 
 type KomaState = {
@@ -121,6 +128,10 @@ type KomaState = {
   req: (g: GuiReq) => void
   openOmniSearch: () => void
   closeOmniSearch: () => void
+  // Queue a workspace path for the Composer to insert into its draft text.
+  insertToComposer: (path: string) => void
+  // Composer-side ack: clears the one-shot signal after consuming it.
+  consumeComposerInsert: () => void
 }
 
 const initialSession: SessionSlice = {
@@ -145,6 +156,7 @@ const initialHub: HubSlice = {
 
 const initialUi: UiSlice = {
   omnisearchOpen: false,
+  composerInsert: null,
 }
 
 const initialPalette: PaletteColors = {
@@ -221,6 +233,8 @@ export const useKoma = create<KomaState>((set) => ({
     }
   },
 
-  openOmniSearch: () => set(() => ({ ui: { omnisearchOpen: true } })),
-  closeOmniSearch: () => set(() => ({ ui: { omnisearchOpen: false } })),
+  openOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: true } })),
+  closeOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: false } })),
+  insertToComposer: (path) => set((s) => ({ ui: { ...s.ui, composerInsert: path } })),
+  consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
 }))
