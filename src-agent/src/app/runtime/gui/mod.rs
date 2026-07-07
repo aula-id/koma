@@ -346,6 +346,26 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         .build(&window)
         .context("failed to build webview")?;
 
+    // --- 3b. macOS: clear WKWebView's `underPageBackgroundColor` -----------------
+    // wry 0.52.1's "transparent" feature (enabled on our `wry` dependency above)
+    // only clears the legacy `drawsBackground` WKWebViewConfiguration flag on
+    // macOS/iOS; it never touches `underPageBackgroundColor`. On macOS 12+,
+    // WKWebView paints that color (opaque by default) behind the page
+    // independently of `drawsBackground`, which produces exactly the "opaque
+    // square behind the rounded #app corners" symptom even though both
+    // `with_transparent(true)` calls (tao window + wry webview) are honored.
+    // Clear it explicitly via the real `WKWebView` handle wry exposes through
+    // `WebViewExtMacOS`. macOS-only; no-op on Linux/Windows.
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSColor;
+        use wry::WebViewExtMacOS;
+        unsafe {
+            let ns_webview = webview.webview();
+            ns_webview.setUnderPageBackgroundColor(Some(&NSColor::clearColor()));
+        }
+    }
+
     // --- 4. Run: pty -> xterm on the main thread; child cleanup on close -------
     // `run` diverges (`!`); `window` stays live in this frame, `webview` + `child`
     // move into the closure. Killing the child tears down the client on window

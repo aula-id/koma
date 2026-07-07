@@ -23,6 +23,7 @@ dependencies = [
  "include_dir",
  "infer",
  "libc",
+ "objc2-app-kit",
  "percent-encoding",
  "portable-pty",
  "pulldown-cmark",

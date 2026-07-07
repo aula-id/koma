@@ -37,12 +37,35 @@ rmcp = { version = "1.8", default-features = false, features = ["client", "trans
 
 # --- feature = "gui": xterm.js + wry desktop client. All optional; the default
 # build pulls NONE of these (headless-safe, lean `cargo install`). ---
-wry = { version = "0.52", optional = true }
+# NOTE: wry's "transparent" cargo feature is REQUIRED for `with_transparent`
+# to have any effect at all on macOS/iOS (wry-0.52.1 src/wkwebview/mod.rs
+# gates the WKWebViewConfiguration `drawsBackground=NO` call behind
+# `#[cfg(feature = "transparent")]`; without it the call is compiled out and
+# the webview stays fully opaque no matter what `WebViewBuilder::with_transparent`
+# is set to). Linux (webkit2gtk) does not need this feature to honor transparency.
+wry = { version = "0.52", optional = true, features = ["transparent"] }
 tao = { version = "0.35", optional = true }
 portable-pty = { version = "0.9", optional = true }
 
+# macOS-only: lets us clear WKWebView's `underPageBackgroundColor`, which wry
+# 0.52.1 never touches on macOS (it only sets the legacy `drawsBackground`
+# KVC flag via the "transparent" feature above). On macOS 12+, WKWebView
+# paints an opaque `underPageBackgroundColor` behind the page independently
+# of `drawsBackground`, which is exactly the "opaque square behind the
+# rounded corners" symptom. Target-gated so it never touches non-macOS
+# builds; optional + only pulled in by the `gui` feature so the default
+# build stays lean. Version/feature set mirrors wry's own internal use of
+# this same crate (see wry-0.52.1 Cargo.toml) to avoid duplicate/conflicting
+# objc2 stacks.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSColor",
+] }
+
 [features]
-gui = ["dep:wry", "dep:tao", "dep:portable-pty"]
+gui = ["dep:wry", "dep:tao", "dep:portable-pty", "dep:objc2-app-kit"]
 
 [[bin]]
 name = "koma"
