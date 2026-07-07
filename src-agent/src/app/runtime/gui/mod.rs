@@ -143,6 +143,70 @@ enum GuiReq {
     SelectSession { id: String },
     NewSession,
     RefreshHub,
+    /// Attach RAW file bytes from the page (a clipboard-image paste, a drag-drop, or a
+    /// file-picker pick). The host base64-decodes `bytes_b64`, writes them to a
+    /// host-writable scratch path (preserving `name`'s extension so the daemon's
+    /// image-path sniff still fires), then forwards a [`ClientRequest::Paste`] of that
+    /// path — reusing the daemon's EXISTING attachment ingest (image paths land in
+    /// `pending_attachments`; other files fall through to the daemon's paste handling).
+    /// `mime` is carried for the contract but the daemon sniffs by extension/bytes.
+    AttachFile {
+        name: String,
+        // Carried for the bridge contract; the daemon sniffs by extension/bytes so the
+        // host never needs to read it (the scratch write preserves `name`'s extension).
+        #[serde(default)]
+        #[allow(dead_code)]
+        mime: Option<String>,
+        #[serde(rename = "bytesB64")]
+        bytes_b64: String,
+    },
+    /// Attach an EXISTING on-disk file by path (an omnisearch pick — the file already
+    /// lives in the workspace, so no bytes are shipped). Forwarded verbatim as a
+    /// [`ClientRequest::Paste`]: an image path is ingested into `pending_attachments`;
+    /// a non-image path is handled by the daemon's paste path as before.
+    AttachPath { path: String },
+}
+
+/// Write `bytes` to a host-writable scratch file, returning its absolute path.
+///
+/// Used by the [`GuiReq::AttachFile`] raw-bytes route: the host can't address the
+/// daemon's per-session `images/` dir (it knows neither `pwd_hash` nor the session
+/// uuid), so it drops the incoming bytes into `<tmp>/koma/gui-attach/<uuid>-<name>`
+/// and hands the daemon that path via [`ClientRequest::Paste`] — the daemon then
+/// re-copies it into the session's `images/` on ingest. The original basename +
+/// extension are preserved (behind a uuid to avoid collisions) so the daemon's
+/// extension-based image sniff still fires. Returns `None` on any fs error (the ipc
+/// handler must never panic).
+fn write_attach_scratch(name: &str, bytes: &[u8]) -> Option<std::path::PathBuf> {
+    let mut dir = std::env::temp_dir();
+    dir.push("koma");
+    dir.push("gui-attach");
+    std::fs::create_dir_all(&dir).ok()?;
+    let base = std::path::Path::new(name)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "file".to_string());
+    let unique = format!("{}-{}", uuid::Uuid::new_v4(), base);
+    let path = dir.join(unique);
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+/// Forward a `ClientRequest::Paste { text: path }` to the currently-attached daemon
+/// through the shared live-request slot. Shared by the [`GuiReq::AttachFile`] and
+/// [`GuiReq::AttachPath`] arms — both funnel a filesystem path into the daemon's
+/// existing paste/attachment ingest. A missing live sender (no session attached yet)
+/// is a silent no-op.
+fn forward_paste(
+    live_req: &std::sync::Mutex<Option<std::sync::mpsc::Sender<crate::ipc::proto::ClientRequest>>>,
+    path: String,
+) {
+    if let Ok(g) = live_req.lock() {
+        if let Some(tx) = g.as_ref() {
+            let _ = tx.send(crate::ipc::proto::ClientRequest::Paste { text: path });
+        }
+    }
 }
 
 /// Map a `koma.js` resize-handle direction string to tao's [`tao::window::ResizeDirection`].
@@ -285,6 +349,22 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     // (works while attached too — see `host_swapper` / `push_loop`).
                     GuiReq::RefreshHub => {
                         let _ = ipc_ctl.send(HostCtl::RefreshHub);
+                    }
+                    // Attach raw file bytes: decode, spill to a scratch path, and forward
+                    // as a Paste of that path so the daemon's existing ingest stages it.
+                    GuiReq::AttachFile { name, bytes_b64, .. } => {
+                        use base64::Engine;
+                        if let Ok(bytes) =
+                            base64::engine::general_purpose::STANDARD.decode(bytes_b64.as_bytes())
+                        {
+                            if let Some(path) = write_attach_scratch(&name, &bytes) {
+                                forward_paste(&ipc_req, path.to_string_lossy().into_owned());
+                            }
+                        }
+                    }
+                    // Attach an existing on-disk file by path (omnisearch pick).
+                    GuiReq::AttachPath { path } => {
+                        forward_paste(&ipc_req, path);
                     }
                 },
             }
