@@ -208,6 +208,13 @@ pub(super) enum HostCtl {
     Select(String),
     /// Mint a fresh session UUID + attach (the hub `[+ new session]` row).
     New,
+    /// Re-run cross-daemon discovery + push a FRESH `Hub` envelope. Fired when the
+    /// React ResumePalette overlay opens (and may re-fire while it stays open).
+    /// Handled in BOTH host states: inline in `host_swapper` (nothing renders there,
+    /// so the blocking sweep is fine), and OFF the fold thread in `render::push_loop`
+    /// while attached (the sweep must not stall the 16ms loop). This keeps the live
+    /// session list current instead of frozen at the one cold build-at-boot.
+    RefreshHub,
 }
 
 /// The host-relay run-loop's next step, mirroring [`ClientState`] for the headless
@@ -357,8 +364,10 @@ fn host_swapper(
 
     loop {
         match ctl_rx.recv() {
-            // Page reloaded: rediscover the live set + re-push the hub.
-            Ok(HostCtl::Ready) => {
+            // Page reloaded (`Ready`) OR the ResumePalette opened (`RefreshHub`):
+            // rediscover the live set + re-push the hub. In the swapper the blocking
+            // discovery sweep is fine — nothing renders on this thread here.
+            Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) => {
                 let hub = build_local_hub(current);
                 push_state.reset();
                 render::push_hub(&hub, push, push_state);

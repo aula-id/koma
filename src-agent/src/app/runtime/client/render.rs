@@ -704,6 +704,9 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::New) => {
                     return HostTransition::Attach(uuid::Uuid::new_v4().to_string())
                 }
+                // Attached-state hub refresh — implemented off-thread in W1-R2 (the
+                // cross-daemon sweep must not block this 16ms fold loop). No-op for now.
+                Ok(super::HostCtl::RefreshHub) => {}
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
