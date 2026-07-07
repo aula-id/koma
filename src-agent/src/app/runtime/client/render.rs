@@ -522,6 +522,17 @@ struct PushSubAgent {
     summary: String,
 }
 
+/// One background-bash job row in a [`PushEnvelope::Snapshot`] (list + status only).
+/// `id` is the model-facing job id (`bash-<n>`), `cmd` is the shell command, and
+/// `status` is the canonical lifecycle string `running`/`done`/`killed`/`error`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushBashJob {
+    id: String,
+    cmd: String,
+    status: &'static str,
+}
+
 /// The canvas bg/fg the React client paints its chrome with (resolved from the
 /// shadow's palette, so a themed daemon repaints the window live).
 #[derive(serde::Serialize, PartialEq, Clone)]
@@ -578,6 +589,9 @@ enum PushEnvelope {
         /// Foreground session's sub-agents (list + status). Authoritative full array —
         /// React REPLACES on each Snapshot, never accumulates.
         subagents: Vec<PushSubAgent>,
+        /// Foreground session's background-bash jobs (list + status). Authoritative
+        /// full array — React REPLACES on each Snapshot, never accumulates.
+        bash: Vec<PushBashJob>,
     },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
@@ -916,6 +930,24 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .collect();
 
+    // Background-bash jobs: the foreground session's registry (running + finished),
+    // list + status only. `id` = model-facing `bash-<n>`, `cmd` = the command,
+    // `status` = canonical lifecycle string.
+    let bash: Vec<PushBashJob> = fg
+        .bash_jobs
+        .iter()
+        .map(|job| PushBashJob {
+            id: format!("bash-{}", job.id),
+            cmd: job.command.clone(),
+            status: match job.snapshot_status() {
+                crate::app::bgbash::BashJobStatus::Running => "running",
+                crate::app::bgbash::BashJobStatus::Done(_) => "done",
+                crate::app::bgbash::BashJobStatus::Killed => "killed",
+                crate::app::bgbash::BashJobStatus::Error(_) => "error",
+            },
+        })
+        .collect();
+
     // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
     let fp = {
         use std::hash::{Hash, Hasher};
@@ -937,6 +969,13 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             sa.status.hash(&mut h);
             sa.summary.hash(&mut h);
         }
+        // Fold bash jobs in so a status/list change re-emits the Snapshot.
+        bash.len().hash(&mut h);
+        for b in &bash {
+            b.id.hash(&mut h);
+            b.cmd.hash(&mut h);
+            b.status.hash(&mut h);
+        }
         h.finish()
     };
     if last.snapshot_fp != Some(fp) {
@@ -948,6 +987,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             title,
             palette,
             subagents,
+            bash,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
