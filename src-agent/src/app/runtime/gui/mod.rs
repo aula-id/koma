@@ -203,15 +203,24 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
     // already falls back to `AppConfig::default()` on any error, and
     // `theme::palette` falls back to `dark()` for an unknown name, so this is
     // infallible; on top of that we defensively fall back to pure black.
-    let bg_hex = {
+    // Same rationale applies to the titlebar/button glyph FOREGROUND: resolve it
+    // from the SAME palette so the custom titlebar text/buttons match the
+    // configured theme instead of a hardcoded near-white, with a sane fallback
+    // for non-Rgb palette variants.
+    let (bg_hex, fg_hex) = {
         use ratatui::style::Color;
         let cfg = crate::model::app_config::AppConfig::load();
         let palette = crate::view::theme::palette(&cfg);
-        match palette.bg {
+        let bg_hex = match palette.bg {
             Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
             Color::Black => "#000000".to_string(),
             _ => "#000000".to_string(),
-        }
+        };
+        let fg_hex = match palette.fg {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            _ => "#c8d3f5".to_string(),
+        };
+        (bg_hex, fg_hex)
     };
 
     // --- 2. Event loop + window ------------------------------------------------
@@ -220,6 +229,7 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
         .with_title("koma")
         .with_inner_size(LogicalSize::new(1024.0, 680.0))
         .with_decorations(false)
+        .with_transparent(true)
         .with_resizable(true)
         .build(&event_loop)
         .context("failed to build GUI window")?;
@@ -247,7 +257,11 @@ pub fn run_gui(_opts: crate::cli::Opts) -> Result<()> {
 
     let webview = WebViewBuilder::new()
         .with_devtools(true)
-        .with_initialization_script(format!("window.__komaBg = '{bg_hex}';"))
+        .with_transparent(true)
+        .with_initialization_script(format!(
+            "window.__komaBg='{bg_hex}';window.__komaFg='{fg_hex}';window.__komaOS='{}';",
+            std::env::consts::OS
+        ))
         .with_custom_protocol("koma".into(), |_webview_id, request| {
             handle_koma_request(request)
         })

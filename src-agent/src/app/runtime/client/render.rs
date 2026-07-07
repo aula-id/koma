@@ -109,7 +109,7 @@ pub(super) fn render_loop(
     // once here (env doesn't change mid-run); `last_gui_bg` diffs so the OSC is only
     // emitted on an actual palette change, not every ~60fps frame.
     let gui_mode = std::env::var("KOMA_GUI").is_ok();
-    let mut last_gui_bg: Option<ratatui::style::Color> = None;
+    let mut last_gui_theme: Option<(ratatui::style::Color, ratatui::style::Color)> = None;
 
     // Apply any frames the pre-render handshake pulled off the wire while hunting for
     // `Hello` (task #142) BEFORE the live drain, through the SAME `apply_frame` path so
@@ -247,18 +247,26 @@ pub(super) fn render_loop(
         // sees this escape. Diffed against `last_gui_bg` so it's only emitted when
         // `/settings` actually changes the palette, not every ~60fps frame.
         if gui_mode {
-            let bg = crate::view::theme::palette(&shadow.rest.config).bg;
-            if last_gui_bg != Some(bg) {
-                last_gui_bg = Some(bg);
-                let hex = match bg {
+            let pal = crate::view::theme::palette(&shadow.rest.config);
+            let bg = pal.bg;
+            let fg = pal.fg;
+            if last_gui_theme != Some((bg, fg)) {
+                last_gui_theme = Some((bg, fg));
+                let bg_hex = match bg {
                     ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
                     _ => "#000000".to_string(),
                 };
-                // Private OSC 5380: tell the GUI host our canvas bg so it repaints the
-                // window gutter to match. Emitted only when the palette changes; gated on
-                // KOMA_GUI so normal terminals never see it. ST-terminated (ESC backslash).
+                let fg_hex = match fg {
+                    ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    _ => "#c8d3f5".to_string(),
+                };
+                // Private OSC 5380: tell the GUI host our canvas bg + titlebar fg so it
+                // repaints the window gutter and titlebar text/buttons to match. Payload
+                // is `#rrggbb,#rrggbb` (bg first, fg second). Emitted only when the
+                // palette changes; gated on KOMA_GUI so normal terminals never see it.
+                // ST-terminated (ESC backslash).
                 let mut out = stdout();
-                let _ = write!(out, "\x1b]5380;{hex}\x1b\\");
+                let _ = write!(out, "\x1b]5380;{bg_hex},{fg_hex}\x1b\\");
                 let _ = out.flush();
             }
         }
