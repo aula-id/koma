@@ -510,6 +510,18 @@ struct PushMsg {
     reasoning: Option<String>,
 }
 
+/// One sub-agent row in a [`PushEnvelope::Snapshot`] (list + status only — the live
+/// transcript/report is NOT shipped this wave). `name` is the agent definition name,
+/// `summary` is the compact one-line label (the truncated task), and `status` is the
+/// canonical lifecycle string `running`/`done`/`killed`/`error`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushSubAgent {
+    name: String,
+    status: &'static str,
+    summary: String,
+}
+
 /// The canvas bg/fg the React client paints its chrome with (resolved from the
 /// shadow's palette, so a themed daemon repaints the window live).
 #[derive(serde::Serialize, PartialEq, Clone)]
@@ -563,6 +575,9 @@ enum PushEnvelope {
         messages: Vec<PushMsg>,
         title: String,
         palette: PushPalette,
+        /// Foreground session's sub-agents (list + status). Authoritative full array —
+        /// React REPLACES on each Snapshot, never accumulates.
+        subagents: Vec<PushSubAgent>,
     },
     /// The FULL live streaming buffer (React REPLACES the live bubble). Emitted every
     /// frame the buffer changes; an empty `text` clears the bubble on commit.
@@ -883,6 +898,24 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .unwrap_or_default();
 
+    // Sub-agents: the foreground session's spawned agents (running + finished), list +
+    // status only (no live transcript this wave). `name` = agent name, `summary` = the
+    // compact one-line label, `status` = canonical lifecycle string.
+    let subagents: Vec<PushSubAgent> = fg
+        .subagents
+        .iter()
+        .map(|sa| PushSubAgent {
+            name: sa.agent_name.clone(),
+            status: match &sa.status {
+                crate::app::subagent::SubAgentStatus::Running => "running",
+                crate::app::subagent::SubAgentStatus::Done(_) => "done",
+                crate::app::subagent::SubAgentStatus::Killed => "killed",
+                crate::app::subagent::SubAgentStatus::Error(_) => "error",
+            },
+            summary: sa.label.clone(),
+        })
+        .collect();
+
     // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
     let fp = {
         use std::hash::{Hash, Hasher};
@@ -897,6 +930,13 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             m.content.hash(&mut h);
             m.reasoning.hash(&mut h);
         }
+        // Fold sub-agents in so a status/list change re-emits the Snapshot.
+        subagents.len().hash(&mut h);
+        for sa in &subagents {
+            sa.name.hash(&mut h);
+            sa.status.hash(&mut h);
+            sa.summary.hash(&mut h);
+        }
         h.finish()
     };
     if last.snapshot_fp != Some(fp) {
@@ -907,6 +947,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             messages,
             title,
             palette,
+            subagents,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
