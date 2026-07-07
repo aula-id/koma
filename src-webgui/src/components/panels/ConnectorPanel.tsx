@@ -37,11 +37,27 @@ export function ConnectorPanel() {
   const back = () => setView({ kind: 'list' })
 
   const saveProvider = (d: Provider) => {
-    req({ r: 'SetProvider', provider: d })
+    // Flat payload matching the daemon's GuiReq::SetProvider. `uuid` is `null`
+    // for a new provider (synthetic `d.id` placeholder → daemon mints a uuid).
+    const isNew = view.kind === 'provider' ? view.isNew : false
+    req({ r: 'SetProvider', uuid: isNew ? null : d.id, name: d.name, endpoint: d.endpoint, apiKey: d.apiKey })
     back()
   }
   const saveModel = (d: Model) => {
-    req({ r: 'SetModel', model: d })
+    // Flat payload matching the daemon's GuiReq::SetModel. `d.provider` holds
+    // the serving provider's uuid (providerOptions is keyed by uuid); empty
+    // route → null.
+    const isNew = view.kind === 'model' ? view.isNew : false
+    req({
+      r: 'SetModel',
+      uuid: isNew ? null : d.id,
+      name: d.name,
+      modelId: d.modelId,
+      providerUuid: d.provider,
+      route: d.route.trim() ? d.route : null,
+      roles: d.roles,
+      scope: d.scope,
+    })
     back()
   }
   const connect = (provider: OAuthProv) => {
@@ -49,8 +65,13 @@ export function ConnectorPanel() {
     back()
   }
 
+  // ModelForm's Provider select stores the chosen option's `value` into
+  // model.provider, which crosses the wire as `providerUuid` and is resolved by
+  // the daemon via `p.uuid == provider` (SetModel + ListModels). So the value
+  // MUST be the provider uuid, not its name. OAuth conns stay label-valued
+  // (local stub — no daemon uuid to resolve against).
   const providerOptions = [
-    ...providers.map((p) => ({ value: p.name, label: p.name })),
+    ...providers.map((p) => ({ value: p.id, label: p.name })),
     ...conns.map((c) => ({ value: `${c.provider} (oauth)`, label: `${c.provider} (oauth)` })),
   ]
 
@@ -74,9 +95,14 @@ export function ConnectorPanel() {
               onEditModel={(m) => setView({ kind: 'model', draft: { ...m }, isNew: false })}
               onArm={(id) => setArmed(id)}
               onDisarm={() => setArmed(null)}
-              onConfirmProvider={(id) => { req({ r: 'DeleteProvider', id }); setArmed(null) }}
+              onConfirmProvider={(id) => { req({ r: 'DeleteProvider', uuid: id }); setArmed(null) }}
               onConfirmOAuth={(id) => { setConns((l) => l.filter((x) => x.id !== id)); setArmed(null) }}
-              onConfirmModel={(id) => { req({ r: 'DeleteModel', id }); setArmed(null) }}
+              onConfirmModel={(id) => {
+                // DeleteModel needs the scope to pick global vs session-local list.
+                const scope = models.find((m) => m.id === id)?.scope ?? 'global'
+                req({ r: 'DeleteModel', uuid: id, scope })
+                setArmed(null)
+              }}
             />
           </motion.div>
         ) : (

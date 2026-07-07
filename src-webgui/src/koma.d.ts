@@ -19,20 +19,47 @@ declare global {
     // Drop a single staged attachment by its `[Image #N]` marker number.
     | { r: 'RemoveAttachment'; markerN: number }
     // Rename the foreground session (no id — daemon resolves current session,
-    // mirrors RefreshHub/Submit's implicit-session pattern).
-    | { r: 'RenameSession'; name: string }
-    // MCP server CRUD — upserts by id/name (covers add + edit).
-    | { r: 'SetMcpServer'; server: import('./types/config').McpServer }
-    | { r: 'DeleteMcpServer'; id: string }
-    | { r: 'EnableMcpServer'; id: string; enabled: boolean }
-    // Provider CRUD — upserts by id (covers add + edit).
-    | { r: 'SetProvider'; provider: import('./types/config').Provider }
-    | { r: 'DeleteProvider'; id: string }
-    // Model CRUD (roles + scope carried on the model itself) — upserts by id.
-    | { r: 'SetModel'; model: import('./types/config').Model }
-    | { r: 'DeleteModel'; id: string }
-    // Live model-id catalogue fetch for a given provider; reply lands as the
-    // ModelList push envelope.
+    // mirrors RefreshHub/Submit's implicit-session pattern). Tag is `Rename`
+    // to match the daemon's GuiReq variant.
+    | { r: 'Rename'; name: string }
+    // MCP server CRUD. Fields are FLAT (not a nested `server`) to match the
+    // daemon's GuiReq. `uuid` is the daemon config uuid on edit, `null` for a
+    // new server (the daemon mints one). `args`/`env` cross as the panel's
+    // single-line STRING forms (space-joined args, "K=V, K2=V2" env).
+    | {
+        r: 'SetMcpServer'
+        uuid: string | null
+        name: string
+        enabled: boolean
+        transport: import('./types/config').Transport
+        command: string
+        args: string
+        env: string
+        url: string
+      }
+    | { r: 'DeleteMcpServer'; uuid: string }
+    | { r: 'EnableMcpServer'; uuid: string; enabled: boolean }
+    // Provider CRUD (flat). `uuid` is the daemon config uuid on edit, `null`
+    // for a new provider.
+    | { r: 'SetProvider'; uuid: string | null; name: string; endpoint: string; apiKey: string }
+    | { r: 'DeleteProvider'; uuid: string }
+    // Model CRUD (flat; roles + scope carried on the model). `uuid` is the
+    // daemon config/override uuid on edit, `null` for a new model.
+    // `providerUuid` is the serving provider's uuid; `route` is `null` when
+    // unset. `scope` picks the global catalogue vs the session-local override.
+    | {
+        r: 'SetModel'
+        uuid: string | null
+        name: string
+        modelId: string
+        providerUuid: string
+        route: string | null
+        roles: import('./types/config').Role[]
+        scope: import('./types/config').Scope
+      }
+    | { r: 'DeleteModel'; uuid: string; scope: import('./types/config').Scope }
+    // Live model-id catalogue fetch for a given provider (by uuid); reply lands
+    // as the ModelList push envelope.
     | { r: 'ListModels'; provider: string }
 
   interface KomaClient {
