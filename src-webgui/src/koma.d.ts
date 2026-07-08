@@ -117,6 +117,9 @@ declare global {
     // (DenyPlan, "chat more"). No id: foreground session. Mirrors the daemon's
     // ClientRequest::PlanDecision.
     | { r: 'PlanDecision'; decision: 'approve' | 'compact' | 'deny' }
+    // Trigger conversation compaction on demand (the UsageFooter's compact
+    // button) — same effect as the TUI's /compact. No id: foreground session.
+    | { r: 'Compact' }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
