@@ -120,6 +120,10 @@ declare global {
     // Trigger conversation compaction on demand (the UsageFooter's compact
     // button) — same effect as the TUI's /compact. No id: foreground session.
     | { r: 'Compact' }
+    // Fetch the original/modified contents of a File-changed path for a Monaco
+    // diff tab. `path` is exactly as the fileChanges record carries it. Reply
+    // lands as the FileDiff push envelope (guaranteed for every request).
+    | { r: 'FileDiff'; path: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

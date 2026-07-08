@@ -13,6 +13,7 @@
     "framer-motion": "^12.42.2",
     "lottie-react": "^2.4.1",
     "lucide-react": "^1.23.0",
+    "monaco-editor": "^0.55.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "streamdown": "^2.5.0",
