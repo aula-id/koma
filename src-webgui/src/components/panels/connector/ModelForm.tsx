@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Circle, CircleDot } from 'lucide-react'
+import { Circle, CircleDot, Loader2 } from 'lucide-react'
 import { Field, TextInput, Segmented, Chips, Select, Combobox } from '../form'
 import { FormActions } from '../helpers'
 import { useKoma } from '../../../store/koma'
-import type { Role, Model } from '../../../types/config'
+import type { Role, Model, RouteEntry } from '../../../types/config'
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'main', label: 'main' },
@@ -12,17 +12,22 @@ const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'compactor', label: 'compactor' },
   { value: 'planner', label: 'planner' },
 ]
-// Placeholder pool ONLY to demo the Route field (koma's OpenRouter upstream-
-// provider picker: real prices/uptime come from the model's live endpoint
-// list, fetched per-model — this is just the interaction/layout demo).
-const DEMO_ROUTES: { id: string; label: string; priceIn?: string; priceOut?: string; uptime?: number }[] = [
-  { id: 'auto', label: 'Auto (OpenRouter routes)' },
-  { id: 'digitalocean', label: 'DigitalOcean', priceIn: '0.10', priceOut: '0.28', uptime: 97 },
-  { id: 'xiaomi', label: 'Xiaomi', priceIn: '0.14', priceOut: '0.28', uptime: 100 },
-  { id: 'parasail', label: 'Parasail', priceIn: '0.14', priceOut: '0.28' },
-  { id: 'venice', label: 'Venice', priceIn: '0.14', priceOut: '0.28' },
-  { id: 'deepinfra', label: 'DeepInfra', priceIn: '0.40', priceOut: '2.00', uptime: 98 },
-]
+
+// The stored route id for an endpoint — the pinned upstream provider string the
+// daemon persists on the model (SetModel.route). Prefer an explicit endpoint id,
+// fall back to the provider name.
+const routeId = (r: RouteEntry) => r.name ?? r.providerName
+
+// OpenRouter pricing is USD-PER-TOKEN (e.g. "0.0000006"); render it as the more
+// familiar USD-per-MILLION-tokens. Returns undefined for missing/non-numeric.
+function perMillion(price?: string): string | undefined {
+  if (price == null || price === '') return undefined
+  const n = Number(price)
+  if (!Number.isFinite(n)) return undefined
+  const perM = n * 1_000_000
+  if (perM === 0) return '0'
+  return perM.toFixed(perM < 1 ? 3 : 2).replace(/\.?0+$/, '')
+}
 
 function RouteRow({
   label,
@@ -85,6 +90,7 @@ export function ModelForm({
     setD((x) => ({ ...x, roles: x.roles.includes(r) ? x.roles.filter((y) => y !== r) : [...x.roles, r] }))
 
   const modelList = useKoma((s) => s.modelList)
+  const routeList = useKoma((s) => s.routeList)
   const req = useKoma((s) => s.req)
   // Live per-provider model-id catalogue fetch, triggered whenever the
   // provider field changes (replaces DEMO_MODEL_IDS).
@@ -97,6 +103,28 @@ export function ModelForm({
   // model id is chosen, and only for API-key providers — not OAuth connections
   // (mirrors koma: Route is OpenRouter-only, gated behind provider + model).
   const showRoute = d.modelId.trim() !== '' && d.provider.trim() !== '' && !d.provider.trim().endsWith('(oauth)')
+
+  // On-demand ROUTE fetch (replaces DEMO_ROUTES): whenever a provider+model_id
+  // pair is set, ask the host for the model's live OpenRouter endpoints
+  // (debounced; refires on either change). The reply lands in store.routeList
+  // echoing the provider+modelId it was fetched for.
+  useEffect(() => {
+    if (!showRoute) return
+    const t = window.setTimeout(() => {
+      req({ r: 'ListRoutes', provider: d.provider, modelId: d.modelId })
+    }, 250)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.provider, d.modelId, showRoute])
+
+  // Only trust a reply that matches the CURRENT provider+model_id (a stale reply
+  // from a prior selection is ignored). `null` = still loading.
+  const routes =
+    routeList && routeList.provider === d.provider && routeList.modelId === d.modelId
+      ? routeList.routes
+      : null
+  const routesLoading = showRoute && routes === null
+  const selectedRoute = d.route || 'auto'
 
   return (
     <>
@@ -123,17 +151,37 @@ export function ModelForm({
         {showRoute && (
           <Field label="Route">
             <div className="flex flex-col gap-0.5 rounded border border-koma-border p-1">
-              {DEMO_ROUTES.map((r) => (
-                <RouteRow
-                  key={r.id}
-                  label={r.label}
-                  priceIn={r.priceIn}
-                  priceOut={r.priceOut}
-                  uptime={r.uptime}
-                  selected={(d.route || 'auto') === r.id}
-                  onClick={() => patch({ route: r.id })}
-                />
-              ))}
+              {/* "Auto" is always the default row — let OpenRouter route. */}
+              <RouteRow
+                label="Auto (OpenRouter routes)"
+                selected={selectedRoute === 'auto'}
+                onClick={() => patch({ route: 'auto' })}
+              />
+              {routesLoading ? (
+                <div className="flex items-center gap-2 px-2 py-1 text-[11px] text-koma-fg opacity-50">
+                  <Loader2 size={12} className="flex-none animate-spin" />
+                  Loading routes…
+                </div>
+              ) : routes && routes.length > 0 ? (
+                routes.map((r, i) => {
+                  const id = routeId(r)
+                  return (
+                    <RouteRow
+                      key={`${id}-${i}`}
+                      label={r.providerName}
+                      priceIn={perMillion(r.pricePrompt)}
+                      priceOut={perMillion(r.priceCompletion)}
+                      uptime={r.uptimeLast30m}
+                      selected={selectedRoute === id}
+                      onClick={() => patch({ route: id })}
+                    />
+                  )
+                })
+              ) : (
+                <div className="px-2 py-1 text-[11px] text-koma-fg opacity-40">
+                  No upstream routes — using Auto.
+                </div>
+              )}
             </div>
           </Field>
         )}

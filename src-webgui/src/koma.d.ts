@@ -65,6 +65,16 @@ declare global {
     // Live model-id catalogue fetch for a given provider (by uuid); reply lands
     // as the ModelList push envelope.
     | { r: 'ListModels'; provider: string }
+    // Live per-model ROUTE (OpenRouter upstream-endpoint) fetch: real provider
+    // names + price/uptime for the chosen provider+model_id. Reply lands as the
+    // ModelRoutes push envelope. Non-OpenRouter providers reply with an empty
+    // routes list (the UI then shows only the synthetic "Auto" row).
+    | { r: 'ListRoutes'; provider: string; modelId: string }
+    // Set the global agent mode (koma's Auto/Normal/Plan/Yolo). No id — the
+    // daemon sets the process-global agent_mode via its set_agent_mode
+    // choke-point (Plan enter/leave handling); the new token rides the next
+    // Snapshot back to all clients. `mode` is the lowercase label token.
+    | { r: 'SetMode'; mode: string }
     // Interrupt the running turn (the composer STOP button) — koma's
     // Esc-interrupt equivalent. No id: the daemon resolves the foreground
     // session (mirrors Submit's implicit-session pattern).

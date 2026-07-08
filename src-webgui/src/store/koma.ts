@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { McpServer, Provider, Model, ModelListEntry } from '../types/config'
+import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
@@ -160,6 +160,11 @@ export type PushEnvelope =
   // Reply to GuiReq ListModels — live per-provider model-id catalogue. Field
   // is `models` to match the daemon's PushEnvelope::ModelList { provider, models }.
   | { k: 'ModelList'; provider: string; models: ModelListEntry[] }
+  // Reply to GuiReq ListRoutes — live per-model OpenRouter endpoint list. Echoes
+  // the provider+modelId it was fetched for so ModelForm can discard a stale
+  // reply that no longer matches its current selection. Empty `routes` = a
+  // non-OpenRouter provider (UI shows only the synthetic "Auto" row).
+  | { k: 'ModelRoutes'; provider: string; modelId: string; routes: RouteEntry[] }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -236,6 +241,10 @@ type KomaState = {
   // Live per-provider model-id catalogue, keyed by the most recent
   // ListModels reply's provider (see ModelForm's provider-select trigger).
   modelList: ModelListEntry[]
+  // Live per-model route (OpenRouter endpoint) list from the most recent
+  // ListRoutes reply — carries the provider+modelId it was fetched for so the
+  // consumer can ignore a stale reply. `null` until the first reply lands.
+  routeList: { provider: string; modelId: string; routes: RouteEntry[] } | null
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -311,6 +320,8 @@ const initialConfig: ConfigSlice = {
 
 const initialModelList: ModelListEntry[] = []
 
+const initialRouteList: KomaState['routeList'] = null
+
 const initialPalette: PaletteColors = {
   bg: '#0b0e14',
   fg: '#c8d3f5',
@@ -348,6 +359,7 @@ export const useKoma = create<KomaState>((set) => ({
   ui: initialUi,
   config: initialConfig,
   modelList: initialModelList,
+  routeList: initialRouteList,
 
   push: (env) => {
     switch (env.k) {
@@ -445,6 +457,11 @@ export const useKoma = create<KomaState>((set) => ({
         break
       case 'ModelList':
         set(() => ({ modelList: env.models }))
+        break
+      case 'ModelRoutes':
+        set(() => ({
+          routeList: { provider: env.provider, modelId: env.modelId, routes: env.routes },
+        }))
         break
     }
   },
