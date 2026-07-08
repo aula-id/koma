@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { File as FileIcon, Search } from 'lucide-react'
+import { ChevronRight, File as FileIcon, Folder as FolderIcon, Search } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
 import { useKoma } from '../store/koma'
 import { Empty } from './panels/helpers'
@@ -38,12 +38,20 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
     return () => window.clearTimeout(t)
   }, [query, req])
 
+  // FILE pick: insert the path into the composer draft and close (attach flow).
   const pick = (path: string) => {
-    // Dir rows (non-attachable) come back with path === "" — guarded out at
-    // the render call site below, but double-guard here too.
     if (!path) return
     insertToComposer(path)
     onClose()
+  }
+
+  // FOLDER drill-in: re-drive the search with the folder's path so its contents
+  // list (FileSearch lists a dir's children when the query is that dir path).
+  // Dir rows come back with path === "" (only `label` carries the dir path), so
+  // drill on the label. Keeps the overlay open — no attach, no close.
+  const drill = (dirPath: string) => {
+    if (!dirPath) return
+    setQuery(dirPath)
   }
 
   return (
@@ -77,23 +85,26 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
               <Empty>No matches</Empty>
             ) : (
               results.map((r, i) => {
-                // Directory rows (non-attachable) come back with path === ""
-                // from the daemon — render them disabled and key by label+
-                // index instead of path (multiple dir rows would otherwise
-                // collide on the empty-string key).
-                const disabled = r.path === ''
+                // Directory rows come back with path === "" from the daemon
+                // (only `label` carries the dir path). They are NO LONGER dead:
+                // clicking a folder DRILLS IN — re-drives the search with the
+                // folder path so its contents list. File rows still attach.
+                // Key by label+index for dirs (they'd collide on the empty
+                // path key).
+                const isDir = r.path === ''
                 return (
                   <button
                     key={r.path || `${r.label}-${i}`}
-                    onClick={() => pick(r.path)}
-                    disabled={disabled}
-                    aria-disabled={disabled}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors ${
-                      disabled ? 'cursor-default opacity-40' : 'hover:bg-koma-hover'
-                    }`}
+                    onClick={() => (isDir ? drill(r.label) : pick(r.path))}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
                   >
-                    <FileIcon size={12} className="flex-none opacity-50" />
-                    <span className="truncate">{r.label}</span>
+                    {isDir ? (
+                      <FolderIcon size={12} className="flex-none text-koma-accent opacity-70" />
+                    ) : (
+                      <FileIcon size={12} className="flex-none opacity-50" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{r.label}</span>
+                    {isDir && <ChevronRight size={12} className="flex-none opacity-40" />}
                   </button>
                 )
               })
