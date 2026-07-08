@@ -31,7 +31,7 @@ export function ToastContainer() {
   const isError = toast?.kind === 'error'
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-4 z-[70] flex justify-center px-4">
+    <div className="pointer-events-none absolute inset-x-0 top-12 z-[70] flex justify-end px-4">
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -40,7 +40,7 @@ export function ToastContainer() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.98 }}
             transition={{ duration: 0.16, ease: 'easeOut' }}
-            className={`pointer-events-auto flex max-w-[520px] items-start gap-2 rounded-md border px-3 py-2 shadow-lg backdrop-blur-sm ${
+            className={`pointer-events-auto flex max-w-[340px] items-start gap-2 rounded-md border px-2.5 py-1.5 shadow-lg backdrop-blur-sm ${
               isError
                 ? 'border-koma-error/50 bg-koma-error/10 text-koma-error'
                 : 'border-koma-border bg-koma-panel/95 text-koma-fg'

@@ -102,6 +102,11 @@ declare global {
     // The host persists config.palette + live-repaints via the next Config push
     // (palette role set). Used by the onboarding theme picker.
     | { r: 'SetTheme'; name: string }
+    // Onboarding "Koma Free" tile: mint (or reuse) the keyless free-tier
+    // provider + model, mirroring the TUI first-run chooser's
+    // `Action::SetupKomaFree`. Unit variant — no fields. The host re-pushes
+    // Config once done, which flips useNeedsOnboarding and unmounts onboarding.
+    | { r: 'SetupKomaFree' }
     // Answer a parked TOOL approval (risky/classifier-flagged pause). `approve`
     // = the TUI's y/Y (true) vs n/N/Esc (false). No id: the daemon resolves the
     // foreground session and applies Action::ApproveTool/DenyTool to the paused

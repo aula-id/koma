@@ -217,11 +217,14 @@ pub(super) fn apply_tool_call_delta(acc: &mut Vec<ToolCall>, d: &ToolCallDelta) 
 /// Returns `None` for an empty slug (OpenRouter default routing) and
 /// `Some(ProviderRouting)` with `allow_fallbacks: false` otherwise, strictly
 /// pinning the request to that single provider. Free helper so every request
-/// path (streaming, `complete`, `complete_with`) shares one routing rule.
+/// path (streaming, `complete`, `complete_with`) shares one routing rule. The
+/// literal sentinel `"auto"` (any case, surrounding whitespace ignored) is
+/// treated identically to an empty slug — a self-heal for any already-persisted
+/// GUI-authored config that stored the literal string instead of `None`.
 pub(super) fn provider_routing_for(
     provider: &str,
 ) -> Option<crate::dto::openrouter::ProviderRouting> {
-    if provider.is_empty() {
+    if provider.is_empty() || provider.trim().eq_ignore_ascii_case("auto") {
         None
     } else {
         Some(crate::dto::openrouter::ProviderRouting {

@@ -157,7 +157,7 @@ export function ModelForm({
               <RouteRow
                 label="Auto"
                 selected={selectedRoute === 'auto'}
-                onClick={() => patch({ route: 'auto' })}
+                onClick={() => patch({ route: '' })}
               />
               {routesLoading ? (
                 <div className="flex items-center gap-2 px-2 py-1 text-[11px] text-koma-fg opacity-50">
