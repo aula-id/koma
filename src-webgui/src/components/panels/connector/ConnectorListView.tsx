@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AccordionSection } from '../../AccordionSection'
-import { Empty, AddBtn, Row } from '../helpers'
+import { Empty, AddBtn, Row, ScopePill } from '../helpers'
 import type { Provider, OAuthConn, Model } from '../../../types/config'
 
 type Props = {
@@ -86,7 +86,7 @@ export function ConnectorListView({
         {models.map((m) => (
           <Row
             key={m.id}
-            leading={<span title={m.scope} className="flex-none font-mono text-[10px] text-koma-fg opacity-55">{m.scope === 'global' ? '[glob]' : '[local]'}</span>}
+            leading={<ScopePill scope={m.scope} />}
             title={m.name || '(unnamed)'}
             subtitle={`${m.modelId || '—'}${m.provider ? ' · ' + m.provider : ''}`}
             right={m.roles.length ? <span className="text-[10px] text-koma-fg opacity-55">{m.roles[0]}{m.roles.length > 1 ? ` +${m.roles.length - 1}` : ''}</span> : undefined}

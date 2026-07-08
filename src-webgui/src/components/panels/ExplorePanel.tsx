@@ -69,7 +69,7 @@ export function ExplorePanel() {
         {bash.length === 0 ? (
           <Empty>No bash sessions</Empty>
         ) : (
-          bash.map((b) => (
+          [...bash].reverse().map((b) => (
             <div key={b.id} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
               <Terminal size={13} className="flex-none text-koma-fg opacity-45" />
               <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{b.cmd}</span>
@@ -89,7 +89,7 @@ export function ExplorePanel() {
         {subagents.length === 0 ? (
           <Empty>No agents</Empty>
         ) : (
-          subagents.map((a, i) => {
+          [...subagents].reverse().map((a, i) => {
             const id = a.id
             return (
               <div key={id ?? `${a.name}-${i}`} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">

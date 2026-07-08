@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { ArrowUp, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { ModelPicker } from './ModelPicker'
 
 // Reads a File's bytes and resolves to a bare base64 string (no `data:` URL
 // prefix) for the AttachFile GuiReq.
@@ -191,6 +192,8 @@ export function Composer() {
             >
               <Search size={16} />
             </button>
+            {/* Session model quick-picker — compact, drops UP above the composer. */}
+            <ModelPicker />
           </div>
 
           <div className="flex items-center gap-2">

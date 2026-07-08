@@ -82,6 +82,24 @@ export function Empty({ children }: { children: string }) {
   return <div className="px-5 py-1.5 text-[12px] text-koma-fg opacity-35">{children}</div>
 }
 
+// Compact rounded scope badge (replaces literal "[glob]"/"[local]" text) —
+// palette-tinted: accent for global (shared across sessions), dim/neutral for
+// local (this session only).
+export function ScopePill({ scope }: { scope: 'global' | 'local' }) {
+  return (
+    <span
+      title={scope}
+      className={`flex-none rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+        scope === 'global'
+          ? 'bg-koma-accent/15 text-koma-accent'
+          : 'bg-koma-fg/10 text-koma-fg opacity-60'
+      }`}
+    >
+      {scope === 'global' ? 'glob' : 'local'}
+    </span>
+  )
+}
+
 export function AddBtn({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button
