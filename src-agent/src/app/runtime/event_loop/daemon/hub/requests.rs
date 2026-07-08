@@ -5,6 +5,7 @@ use crate::app::mode::Mode;
 use crate::app::state::AppState;
 use crate::controller::command::Command;
 use crate::controller::input::{handle_key, handle_paste, Action};
+use crate::dto::chat::Role;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus, StateSnapshot};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
@@ -795,8 +796,30 @@ impl DaemonHub {
             // `GlobalSnapshot.input` / the `InputChanged` delta — NOT auto-sent). The
             // core guards a non-user / out-of-range `index` as a clean no-op.
             ClientRequest::RewindTo { index } => {
-                let result = apply_action(Action::RewindToMessage(index), state, client, handle);
-                self.ack_or_error(idx, result);
+                // `index` is the GUI's DISPLAY index — the position in the pushed
+                // `messages` array, which FILTERS OUT System + Tool rows (render.rs's
+                // projection). `Action::RewindToMessage` indexes the RAW
+                // `Conversation::messages()` vec (System at [0], Tool interspersed), so
+                // the display index must be remapped to its vec position — skipping the
+                // SAME System + Tool rows — or it lands on a non-user row and no-ops
+                // (no truncation). Resolve the vec index off the foreground conversation.
+                let vec_index = state.rest.fg().session.as_ref().and_then(|s| {
+                    s.conversation
+                        .messages()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, m)| !matches!(m.role, Role::System | Role::Tool))
+                        .nth(index)
+                        .map(|(vi, _)| vi)
+                });
+                if let Some(vi) = vec_index {
+                    let result =
+                        apply_action(Action::RewindToMessage(vi), state, client, handle);
+                    self.ack_or_error(idx, result);
+                } else {
+                    // Out-of-range / no session — nothing to rewind to; ack cleanly.
+                    self.send_to(idx, DaemonEvent::Ack);
+                }
             }
 
             // GUI composer mode selector: set the GLOBAL agent mode via the SAME

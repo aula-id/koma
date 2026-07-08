@@ -374,18 +374,18 @@ const AssistantMessage = memo(function AssistantMessage({
 // special `kind` (host-detected + sentinel-stripped): shell / bash-nudge render
 // distinctly, everything else is the normal accent band (+ attachment card).
 function Message({ m, index }: { m: ChatMessage; index: number }) {
-  const req = useKoma((s) => s.req)
   const refillComposer = useKoma((s) => s.refillComposer)
+  const stageRewind = useKoma((s) => s.stageRewind)
   if (m.role === 'user') {
     if (m.kind === 'shell') return <ShellMessage content={m.content} />
     if (m.kind === 'bashNudge') return <BashNudgeMessage content={m.content} />
-    // Rewind TO this message: the daemon drops everything after `index` and
-    // aborts any in-flight turn; we optimistically drop the text back into the
-    // composer for editing + resend (the host also refills its own input, but
-    // the GUI composer is local-state, so we mirror it here).
+    // Edit → STAGE a rewind (does NOT truncate on click): refill the composer with
+    // this message's text and remember its display index. The actual rewind
+    // (abort + truncate messages.json) fires on SEND (Composer.submit), so the chat
+    // stays visible and the edit is cancelable — clear the composer to back out.
     const onEdit = () => {
-      req({ r: 'RewindTo', index })
       refillComposer(m.content)
+      stageRewind(index)
     }
     return <UserMessage content={m.content} attachments={m.attachments} onEdit={onEdit} />
   }
