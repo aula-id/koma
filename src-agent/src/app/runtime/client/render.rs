@@ -814,10 +814,15 @@ enum PushEnvelope {
     Reasoning { session: String, text: String },
     /// Working flag + optional toast. React animates the spinner locally; the host
     /// only says whether the session is working and what toast (if any) to show.
+    /// `toastKind` carries the toast SEVERITY (`"error"` / `"info"`) so React can colour
+    /// a safeguard/harness block red vs an informational notice neutrally — the daemon's
+    /// `ToastKind` (the third field of `fg.toast`) is otherwise dropped on the wire.
     Status {
         session: String,
         working: bool,
         toast: Option<String>,
+        #[serde(rename = "toastKind")]
+        toast_kind: Option<&'static str>,
     },
     /// The detached session swapper: the `[+ new session]` row + live cooking rows +
     /// on-disk history. `state` is always `"swapper"`.
@@ -916,8 +921,8 @@ pub(super) struct PushState {
     stream: Option<String>,
     /// Last reasoning buffer pushed (empty once cleared).
     reasoning: String,
-    /// Last `(working, toast)` pushed.
-    status: Option<(bool, Option<String>)>,
+    /// Last `(working, toast, toast_kind)` pushed.
+    status: Option<(bool, Option<String>, Option<&'static str>)>,
     /// Last serialised `Hub` JSON (the swapper is diffed as a whole).
     hub_json: Option<String>,
     /// Last serialised `Config` JSON (the global config catalogue, diffed as a whole so
@@ -1656,16 +1661,23 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         });
     }
 
-    // --- Status: working flag (waiting or mid-stream) + optional toast ---
+    // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
+    // The toast TEXT and its `ToastKind` severity both ride here; a safeguard/harness
+    // block surfaces as an Error toast (set_toast), an informational notice as Info.
     let working = fg.waiting || fg.streaming.is_some();
     let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
-    let status = (working, toast);
+    let toast_kind = fg.toast.as_ref().map(|(_, _, k)| match k {
+        crate::app::state::ToastKind::Error => "error",
+        crate::app::state::ToastKind::Info => "info",
+    });
+    let status = (working, toast, toast_kind);
     if last.status.as_ref() != Some(&status) {
         last.status = Some(status.clone());
         emit(push, &PushEnvelope::Status {
             session,
             working: status.0,
             toast: status.1,
+            toast_kind: status.2,
         });
     }
 }
