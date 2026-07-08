@@ -794,7 +794,11 @@ enum PushEnvelope {
         /// i.e. an empty/first-run `~/.koma/config.json`. React shows the full-screen
         /// onboarding flow (theme → connection) instead of the normal start screen when
         /// this is set; it clears the instant a provider + Main model land.
-        #[serde(rename = "needsOnboarding")]
+        ///
+        /// Serialised as `firstRun` to match the React store's authoritative Config
+        /// envelope contract (`ConfigSlice.firstRun`) — same boolean semantics
+        /// (`true` = show onboarding).
+        #[serde(rename = "firstRun")]
         needs_onboarding: bool,
     },
     /// One-shot live model-id catalogue for `provider` (uuid), answering a
