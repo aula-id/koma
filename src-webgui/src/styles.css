@@ -9,6 +9,16 @@
 @source "../node_modules/streamdown/dist/*.js";
 
 @theme {
+  /* Global mono font. The bundled KomaMono (JetBrains Mono, @font-face below)
+     is the ONE family for the entire GUI — chrome, panels, forms, buttons,
+     chat. Overriding Tailwind v4's --font-sans/--font-mono (and the preflight
+     --default-font-family that keys the base <body> font off --font-sans)
+     makes every `font-sans`/`font-mono` utility AND the un-utilitied base text
+     resolve to the mono stack, so nothing falls back to a UI/sans face. */
+  --font-sans: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-mono: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --default-font-family: var(--font-sans);
+
   --color-koma-fg: var(--koma-fg, #c8d3f5);
   --color-koma-bg: var(--koma-bg, #0b0e14);
   --color-koma-panel: color-mix(in srgb, var(--koma-fg, #c8d3f5) 6%, var(--koma-bg, #0b0e14));
@@ -77,7 +87,16 @@
   display: block;
 }
 
-html, body, #root { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  /* Belt-and-braces app-wide mono: the @theme --font-sans override already
+     drives Tailwind's preflight, but pin the family on the roots too so any
+     stray unstyled node still inherits KomaMono. */
+  font-family: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+}
 
 /* Custom window chrome (frameless titlebar + resize handles). The Rust host
    makes the window transparent, so #app supplies the visible rounded canvas.
@@ -89,6 +108,7 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
   overflow: hidden;
   border-radius: 10px;
   background: var(--koma-bg, #0b0e14);
+  font-family: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
 }
 
 #titlebar {
@@ -104,7 +124,7 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
   box-sizing: border-box;
   -webkit-user-select: none;
   user-select: none;
-  font-family: monospace;
+  font-family: 'KomaMono', monospace;
   font-size: 12px;
   color: var(--koma-fg, #c8d3f5);
   background: var(--koma-bg, #0b0e14);
@@ -114,7 +134,7 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
 #winctl { display: flex; gap: 2px; }
 .win-btn {
   width: 34px; height: 24px; border: none; background: transparent;
-  color: var(--koma-fg, #c8d3f5); font-family: monospace; font-size: 13px; line-height: 1;
+  color: var(--koma-fg, #c8d3f5); font-family: 'KomaMono', monospace; font-size: 13px; line-height: 1;
   cursor: pointer; border-radius: 4px;
   display: flex; align-items: center; justify-content: center;
 }
