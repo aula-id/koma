@@ -181,7 +181,7 @@ export type PushEnvelope =
   // + generic host toasts). `kind` is the severity token ("error"/"info") the
   // host now carries alongside the text so the GUI can colour error vs info —
   // optional-tolerant: a host build that doesn't project it yet defaults to info.
-  | { k: 'Status'; session: string; working: boolean; toast: string | null; kind?: string }
+  | { k: 'Status'; session: string; working: boolean; toast: string | null; toastKind?: string }
   | {
       k: 'Hub'
       state: string
@@ -564,7 +564,7 @@ export const useKoma = create<KomaState>((set) => ({
               ? {
                   ...s.ui,
                   toastSeq: seq,
-                  toast: { id: seq, text: env.toast as string, kind: env.kind === 'error' ? 'error' : 'info' },
+                  toast: { id: seq, text: env.toast as string, kind: env.toastKind === 'error' ? 'error' : 'info' },
                 }
               : s.ui,
           }
