@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ChevronRight, File as FileIcon, Folder as FolderIcon, Search } from 'lucide-react'
+import { Check, ChevronRight, File as FileIcon, Folder as FolderIcon, FolderPlus, Search } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
 import { useKoma } from '../store/koma'
 import { Empty } from './panels/helpers'
@@ -54,6 +54,16 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
     setQuery(dirPath)
   }
 
+  // FOLDER attach: insert the folder PATH into the composer draft and close —
+  // the same insert flow as a file pick (ui.composerInsert), so the model can
+  // read the directory via its own tools. Used by the per-row check button and
+  // the confirm-current-folder button beside the search input.
+  const attachFolder = (dirPath: string) => {
+    if (!dirPath) return
+    insertToComposer(dirPath)
+    onClose()
+  }
+
   return (
     <div className="absolute inset-0 z-50" onMouseDown={onClose}>
       <div
@@ -74,6 +84,23 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
               placeholder="Search workspace files to attach…"
               className="w-full bg-transparent text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
             />
+            {/* Attach the CURRENT folder (whatever path is in the query box after
+                drilling in). Commit via onMouseDown+preventDefault so the input
+                blur/close never races the click. */}
+            {query.trim() !== '' && (
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  attachFolder(query.trim())
+                }}
+                aria-label="Attach current folder"
+                title="Attach current folder"
+                className="flex flex-none items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-koma-fg opacity-60 transition-colors hover:bg-koma-hover hover:opacity-100"
+              >
+                <FolderPlus size={13} className="flex-none" />
+              </button>
+            )}
           </motion.div>
           <motion.div
             initial={{ opacity: 0, y: -4 }}
@@ -93,19 +120,38 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
                 // path key).
                 const isDir = r.path === ''
                 return (
-                  <button
+                  <div
                     key={r.path || `${r.label}-${i}`}
-                    onClick={() => (isDir ? drill(r.label) : pick(r.path))}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
+                    className="flex w-full items-center gap-1 px-3 py-1.5 text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
                   >
-                    {isDir ? (
-                      <FolderIcon size={12} className="flex-none text-koma-accent opacity-70" />
-                    ) : (
-                      <FileIcon size={12} className="flex-none opacity-50" />
+                    {/* Primary action: file rows ATTACH (pick), folder rows
+                        DRILL IN. */}
+                    <button
+                      onClick={() => (isDir ? drill(r.label) : pick(r.path))}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      {isDir ? (
+                        <FolderIcon size={12} className="flex-none text-koma-accent opacity-70" />
+                      ) : (
+                        <FileIcon size={12} className="flex-none opacity-50" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate">{r.label}</span>
+                    </button>
+                    {isDir && (
+                      <>
+                        {/* Attach THIS folder's path (distinct from drilling in). */}
+                        <button
+                          onClick={() => attachFolder(r.label)}
+                          aria-label="Attach folder"
+                          title="Attach folder"
+                          className="flex flex-none items-center rounded p-0.5 text-koma-fg opacity-50 transition-colors hover:bg-koma-panel2 hover:text-koma-accent hover:opacity-100"
+                        >
+                          <Check size={12} className="flex-none" />
+                        </button>
+                        <ChevronRight size={12} className="flex-none opacity-40" />
+                      </>
                     )}
-                    <span className="min-w-0 flex-1 truncate">{r.label}</span>
-                    {isDir && <ChevronRight size={12} className="flex-none opacity-40" />}
-                  </button>
+                  </div>
                 )
               })
             )}
