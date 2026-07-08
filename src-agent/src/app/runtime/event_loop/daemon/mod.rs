@@ -327,6 +327,11 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     stays gap-free.
         hub.drain_list_models();
 
+        // 3-ter. Same one-shot drain for any async `ListRoutes` GET (the GUI Connector
+        //     ModelForm ROUTE picker): turn each landed provider-route list into a seq'd
+        //     `ModelRoutes` frame to the requesting client.
+        hub.drain_list_routes();
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the

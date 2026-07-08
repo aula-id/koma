@@ -344,6 +344,85 @@ impl DaemonHub {
                 }
             }
 
+            // GUI Connector ModelForm route picker: fetch ONE model's live provider-route
+            // list (`GET {endpoint}/models/{model_id}/endpoints`). Same async-spawn contract
+            // as `ListModels` — a NETWORK call that must NOT run inline. Only fired for an
+            // OpenRouter-style ROUTABLE provider (the endpoints API is OpenRouter-specific);
+            // a non-OpenRouter (or unknown) provider replies with an EMPTY route list so the
+            // form shows only "Auto" rather than stranding the request. The spawned task maps
+            // each `ModelEndpoint` to the flat GUI subset (`ModelEndpointWire`) and ships a
+            // `ListRoutesReply`, which `drain_list_routes` turns into a seq'd `ModelRoutes`
+            // frame to THIS client next tick.
+            ClientRequest::ListRoutes { provider, model_id } => {
+                let is_openrouter = state
+                    .rest
+                    .config
+                    .providers
+                    .iter()
+                    .find(|p| p.uuid == provider)
+                    .map(|p| {
+                        p.api_type.is_routable()
+                            && p.endpoint.to_lowercase().contains("openrouter")
+                    })
+                    .unwrap_or(false);
+                let client_id = self.clients[idx].id;
+                let tx = self.list_routes_tx.clone();
+                if !is_openrouter {
+                    // Non-OpenRouter / unknown provider: reply immediately with an empty
+                    // route list (the form falls back to "Auto" only). No network call.
+                    let _ = tx.send(super::core::ListRoutesReply {
+                        client_id,
+                        provider,
+                        model_id,
+                        routes: Vec::new(),
+                    });
+                } else if let Some(p) =
+                    state.rest.config.providers.iter().find(|p| p.uuid == provider)
+                {
+                    let endpoint = p.endpoint.clone();
+                    let api_key = p.api_key.clone();
+                    let prov = provider.clone();
+                    let mid = model_id.clone();
+                    let c = crate::app::runtime::session_mgmt::build_client();
+                    handle.spawn(async move {
+                        let conn = crate::service::openrouter::Conn {
+                            endpoint: &endpoint,
+                            api_key: &api_key,
+                            api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+                            account_id: "",
+                            oauth_uuid: "",
+                            install_id: "",
+                        };
+                        // On any error, reply with an EMPTY route list (the form shows only
+                        // "Auto") rather than stranding the request with no answer.
+                        let routes = c
+                            .list_model_endpoints(conn, &mid)
+                            .await
+                            .map(|eps| {
+                                eps.into_iter()
+                                    .map(|ep| crate::ipc::proto::ModelEndpointWire {
+                                        name: ep.name,
+                                        provider_name: ep.provider_name,
+                                        price_prompt: ep.pricing.as_ref().and_then(|p| p.prompt.clone()),
+                                        price_completion: ep
+                                            .pricing
+                                            .as_ref()
+                                            .and_then(|p| p.completion.clone()),
+                                        uptime_last_30m: ep.uptime_last_30m,
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        let _ = tx.send(super::core::ListRoutesReply {
+                            client_id,
+                            provider: prov,
+                            model_id: mid,
+                            routes,
+                        });
+                    });
+                }
+            }
+
             // GUI chip removal: unstage one attachment by its `[Image #N]` marker number
             // from THIS client's foreground `pending_attachments` (the C2 bracket already
             // points the cursor at this client's view), and strip its marker from the
@@ -853,7 +932,8 @@ impl DaemonHub {
             | ClientRequest::Status
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
-            | ClientRequest::ListModels { .. } => {
+            | ClientRequest::ListModels { .. }
+            | ClientRequest::ListRoutes { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }

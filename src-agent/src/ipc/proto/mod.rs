@@ -164,6 +164,15 @@ pub enum ClientRequest {
     /// Read-only + async: the daemon spawns the network GET and replies out-of-band with
     /// a [`DaemonEvent::ModelList`] on a later tick (mirrors the `FileSearch` one-shot).
     ListModels { provider: String },
+    /// Fetch the live PROVIDER-ROUTE list for one model (a `GET
+    /// {endpoint}/models/{model_id}/endpoints`) to populate the Connector ModelForm's
+    /// ROUTE picker with the model's REAL routes (provider name + prompt/completion price
+    /// + uptime) instead of the hardcoded demo list. `model_id` is the verbatim
+    /// `author/slug` id. Read-only + async like [`ListModels`]: the daemon gates on the
+    /// provider being an OpenRouter-style routable endpoint (non-OpenRouter → empty), spawns
+    /// the network GET, and replies out-of-band with a [`DaemonEvent::ModelRoutes`] on a
+    /// later tick. gui-gated.
+    ListRoutes { provider: String, model_id: String },
     /// Set the active theme (the GUI onboarding theme step + the future Settings gear).
     /// `name` is a [`crate::view::theme::PALETTES`] registry key (an unknown name falls
     /// back to the dark palette at render time). The daemon writes `AppConfig.palette`
@@ -257,6 +266,20 @@ pub enum DaemonEvent {
     /// breaks the seq stream; an empty `models` marks a failed/empty fetch. The GUI host
     /// re-pushes it as a `ModelList` envelope; the TUI shadow treats it as a no-op.
     ModelList { provider: String, models: Vec<String> },
+    /// One-shot reply to a [`ClientRequest::ListRoutes`]: the model's live provider-route
+    /// list (`GET {endpoint}/models/{model_id}/endpoints`), each route flattened to the
+    /// GUI subset ([`ModelEndpointWire`]: provider name + prompt/completion price + uptime).
+    /// `provider`/`model_id` are echoed so the ModelForm can drop a stale/out-of-order reply
+    /// (a provider/model-id change refetches). Delivered on a LATER tick than the request
+    /// (the fetch is async) via the hub's per-client seq'd `send_to`; an EMPTY `routes`
+    /// marks a non-OpenRouter provider or a failed/empty fetch (the form shows only "Auto").
+    /// The GUI host re-pushes it as a `RouteList` envelope; the TUI shadow treats it as a
+    /// no-op.
+    ModelRoutes {
+        provider: String,
+        model_id: String,
+        routes: Vec<ModelEndpointWire>,
+    },
 }
 
 // ─── mode discriminant ───────────────────────────────────────────────────────

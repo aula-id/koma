@@ -701,6 +701,22 @@ struct PushMcpServer {
     url: String,
 }
 
+/// One provider-route row in a [`PushEnvelope::RouteList`] (the Connector ModelForm's
+/// live ROUTE picker). Flattened from a daemon `ModelEndpointWire`: `providerName` is the
+/// serving provider's display name; `pricePrompt`/`priceCompletion` are USD-per-token
+/// strings ("0" = free, `null` = unknown); `uptimeLast30m` is the rolling uptime percent
+/// (`null` = unknown). React prepends a synthetic "Auto" option client-side; picking a
+/// route round-trips its provider name as the model's pinned `route` string.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushRoute {
+    name: Option<String>,
+    provider_name: Option<String>,
+    price_prompt: Option<String>,
+    price_completion: Option<String>,
+    uptime_last_30m: Option<f64>,
+}
+
 /// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
 /// field name matches the contract verbatim (camelCase where the contract uses it).
 #[derive(serde::Serialize)]
@@ -806,6 +822,19 @@ enum PushEnvelope {
     /// `models`. Pushed out-of-band (not fingerprinted) whenever the daemon answers a
     /// `ListModels`; `provider` is echoed so the form can drop a stale/out-of-order reply.
     ModelList { provider: String, models: Vec<String> },
+    /// One-shot live provider-route list for `modelId` under `provider` (uuid), answering a
+    /// `ListRoutes` — the Connector ModelForm REPLACES its ROUTE picker options with the
+    /// model's REAL routes (`routes`, each a `PushRoute`) instead of the hardcoded demo
+    /// list. Pushed out-of-band (not fingerprinted) whenever the daemon answers a
+    /// `ListRoutes`; `provider`/`modelId` are echoed so the form can drop a stale reply (a
+    /// provider/model-id change refetches). An EMPTY `routes` means a non-OpenRouter
+    /// provider or a failed fetch — the form shows only its synthetic "Auto" default.
+    #[serde(rename_all = "camelCase")]
+    RouteList {
+        provider: String,
+        model_id: String,
+        routes: Vec<PushRoute>,
+    },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -1050,6 +1079,28 @@ pub(super) fn push_loop(
                         let env = PushEnvelope::ModelList {
                             provider: provider.clone(),
                             models: models.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
+                    }
+                    // Live provider-route reply (Connector ModelForm route picker): re-push
+                    // it as a `RouteList` envelope BEFORE folding (a non-visual fold no-op),
+                    // flattening each wire route to the camelCase `PushRoute` JS contract.
+                    if let DaemonEvent::ModelRoutes { provider, model_id, routes } = &frame.event {
+                        let env = PushEnvelope::RouteList {
+                            provider: provider.clone(),
+                            model_id: model_id.clone(),
+                            routes: routes
+                                .iter()
+                                .map(|r| PushRoute {
+                                    name: r.name.clone(),
+                                    provider_name: r.provider_name.clone(),
+                                    price_prompt: r.price_prompt.clone(),
+                                    price_completion: r.price_completion.clone(),
+                                    uptime_last_30m: r.uptime_last_30m,
+                                })
+                                .collect(),
                         };
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);

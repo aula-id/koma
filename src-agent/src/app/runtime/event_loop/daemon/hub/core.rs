@@ -52,6 +52,18 @@ pub(super) struct ListModelsReply {
     pub(super) models: Vec<String>,
 }
 
+/// An async [`ClientRequest::ListRoutes`] result, tagged with the client that asked, so
+/// [`DaemonHub::drain_list_routes`] can reply to exactly that client via the per-client
+/// seq'd `send_to`. `routes` is the model's flattened provider-route list, EMPTY on a
+/// non-OpenRouter provider or a failed/empty GET. `provider`/`model_id` are echoed so the
+/// GUI ModelForm can drop a stale reply (a provider/model-id change refetches).
+pub(super) struct ListRoutesReply {
+    pub(super) client_id: u64,
+    pub(super) provider: String,
+    pub(super) model_id: String,
+    pub(super) routes: Vec<crate::ipc::proto::ModelEndpointWire>,
+}
+
 /// One enrolled client in the hub registry.
 pub(super) struct HubClient {
     /// Loop-assigned connection id (matches the per-client task's `client_id`).
@@ -143,6 +155,14 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// which turns each landed reply into a seq'd `ModelList` frame to the requesting
     /// client.
     pub(super) list_models_rx: Receiver<ListModelsReply>,
+    /// Sender the async `ListRoutes` fetch tasks ship their [`ListRoutesReply`] back on
+    /// (a hub-owned clone, so the paired `list_routes_rx` never observes a premature
+    /// `Disconnected`). Mirrors `list_models_tx`.
+    pub(super) list_routes_tx: std::sync::mpsc::Sender<ListRoutesReply>,
+    /// Receiver drained each tick by [`drain_list_routes`](Self::drain_list_routes),
+    /// which turns each landed reply into a seq'd `ModelRoutes` frame to the requesting
+    /// client.
+    pub(super) list_routes_rx: Receiver<ListRoutesReply>,
 }
 
 impl DaemonHub {
@@ -159,6 +179,7 @@ impl DaemonHub {
     pub(in crate::app::runtime) fn new() -> (Self, Sender<HubInbound>) {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (list_models_tx, list_models_rx) = std::sync::mpsc::channel();
+        let (list_routes_tx, list_routes_rx) = std::sync::mpsc::channel();
         (
             Self {
                 msg_rx,
@@ -167,6 +188,8 @@ impl DaemonHub {
                 version: crate::model::store::build_fingerprint(),
                 list_models_tx,
                 list_models_rx,
+                list_routes_tx,
+                list_routes_rx,
             },
             msg_tx,
         )
@@ -191,6 +214,28 @@ impl DaemonHub {
                         crate::ipc::proto::DaemonEvent::ModelList {
                             provider: reply.provider,
                             models: reply.models,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Drain any landed [`ListRoutesReply`]s and reply to each requesting client with a
+    /// seq'd [`DaemonEvent::ModelRoutes`]. Called once per tick by the daemon loop — the
+    /// exact `drain_list_models` mirror for the ModelForm route picker (a background GET
+    /// task can't advance the per-client seq, so the reply is turned into a `send_to`
+    /// frame here). A reply whose client has since detached/vanished is silently dropped.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_list_routes(&mut self) {
+        while let Ok(reply) = self.list_routes_rx.try_recv() {
+            if let Some(i) = self.clients.iter().position(|c| c.id == reply.client_id) {
+                if self.clients[i].attached {
+                    self.send_to(
+                        i,
+                        crate::ipc::proto::DaemonEvent::ModelRoutes {
+                            provider: reply.provider,
+                            model_id: reply.model_id,
+                            routes: reply.routes,
                         },
                     );
                 }

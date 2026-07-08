@@ -110,11 +110,14 @@ pub(super) fn apply_frame(
         // client, which never sends `FileSearch`) it is a non-visual no-op. `ModelList` is
         // the same story: the GUI host intercepts it (re-pushes a `ModelList` envelope),
         // and the TUI client never sends `ListModels`, so it folds as a no-op here.
+        // `ModelRoutes` follows `ModelList` exactly (GUI host re-pushes a `RouteList`
+        // envelope; the TUI never sends `ListRoutes`), so it too folds as a no-op.
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
         | DaemonEvent::FileSearchResults { .. }
-        | DaemonEvent::ModelList { .. } => false,
+        | DaemonEvent::ModelList { .. }
+        | DaemonEvent::ModelRoutes { .. } => false,
     }
 }
 
