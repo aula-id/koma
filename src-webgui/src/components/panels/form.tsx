@@ -66,7 +66,9 @@ export function Segmented<T extends string>({
   )
 }
 
-// Multi-select chips with a checkmark on selected options.
+// Multi-select toggle chips — clear on/off state: ON = FILLED (accent tint +
+// accent border + check), OFF = OUTLINE (dim border, faded). Reads as a row of
+// distinct on/off switches rather than a subtle highlight.
 export function Chips<T extends string>({
   value,
   options,
@@ -84,14 +86,19 @@ export function Chips<T extends string>({
           <button
             key={o.value}
             type="button"
+            aria-pressed={on}
             onClick={() => onToggle(o.value)}
-            className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] transition-colors ${
+            className={`flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] transition-colors ${
               on
-                ? 'border-koma-grip bg-koma-hover text-koma-fg'
-                : 'border-koma-border text-koma-fg opacity-55 hover:opacity-80'
+                ? 'border-koma-accent bg-koma-accent/15 text-koma-fg opacity-100'
+                : 'border-koma-border text-koma-fg opacity-45 hover:opacity-80'
             }`}
           >
-            {on && <Check size={11} className="flex-none" />}
+            {on ? (
+              <Check size={11} className="flex-none text-koma-accent" />
+            ) : (
+              <span className="h-[11px] w-[11px] flex-none rounded-full border border-koma-border" />
+            )}
             {o.label}
           </button>
         )
