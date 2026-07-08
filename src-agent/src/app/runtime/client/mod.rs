@@ -234,6 +234,20 @@ pub(super) enum HostCtl {
     /// requests (a `SetModel { scope:"local" }`, `SetSessionMain`) are no-ops here — there
     /// is no session to hold a local override yet.
     ConfigMutate(ClientRequest),
+    /// UN-ATTACHED live model-id fetch (the GUI Connector ModelForm's model-id picker while
+    /// onboarding / in the swapper, where the ipc `live_req` daemon path is `None`). The
+    /// swapper resolves `provider` (uuid) from the GLOBAL config, runs the `GET
+    /// {endpoint}/models` OFF-thread (a network call must never block the ctl loop), and
+    /// pushes the SAME `ModelList` envelope the attached daemon path produces — ALWAYS a
+    /// reply (an EMPTY list on an unknown provider or any fetch error), so the React picker's
+    /// spinner can never hang.
+    ListModels { provider: String },
+    /// UN-ATTACHED twin of [`ListModels`](Self::ListModels) for the ROUTE picker: fetch one
+    /// model's live provider-route list (`GET {endpoint}/models/{model_id}/endpoints`)
+    /// off-thread and push a `RouteList` envelope (echoing `provider` + `model_id`). EMPTY
+    /// routes for a non-OpenRouter provider (the endpoints API is OpenRouter-specific) or any
+    /// fetch error — again ALWAYS a reply so the form falls back to "Auto" instead of hanging.
+    ListRoutes { provider: String, model_id: String },
 }
 
 /// The host-relay run-loop's next step, mirroring [`ClientState`] for the headless
@@ -317,7 +331,7 @@ fn attach_session_headless(
 /// nav) are W1 — the client-side keyboard swapper is not driven here.
 pub(super) fn run_host_relay(
     opts: crate::cli::Opts,
-    push: impl Fn(String) + Send + 'static,
+    push: impl Fn(String) + Clone + Send + 'static,
     ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
     live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     live_marks: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
@@ -349,6 +363,7 @@ pub(super) fn run_host_relay(
         step = match step {
             HostStep::Done => break,
             HostStep::Swapper => host_swapper(
+                &handle,
                 &push,
                 &ctl_rx,
                 &mut push_state,
@@ -478,7 +493,7 @@ fn apply_global_config_req(
                 name: name.trim().to_string(),
                 model_id: model_id.trim().to_string(),
                 provider_uuid: provider_uuid.clone(),
-                route: route.clone().filter(|r| !r.trim().is_empty()),
+                route: ModelEntry::normalize_route(route.clone()),
                 roles,
                 role: None,
             });
@@ -525,8 +540,89 @@ fn apply_global_config_req(
             cfg.set_mcp_enabled_by_uuid(uuid, *enabled);
             true
         }
+        // GUI onboarding "koma free" (pre-session): mint/reuse the keyless Koma Free
+        // provider + Main model directly in the on-disk config — the SAME
+        // `ensure_koma_free_config` the daemon + TUI paths use, so the entries are
+        // identical whether this runs attached or during onboarding. Returning `true`
+        // makes the caller persist + re-push `Config`, which clears `firstRun`.
+        ClientRequest::SetupKomaFree => {
+            crate::service::koma_free::ensure_koma_free_config(cfg);
+            true
+        }
         _ => false,
     }
+}
+
+/// UN-ATTACHED GUI model-picker fetch (a [`HostCtl::ListModels`] serviced by the swapper):
+/// load the GLOBAL config, resolve the provider by uuid, and `GET {endpoint}/models`,
+/// returning the model ids. Returns an EMPTY list on an unknown provider OR any fetch error
+/// — the caller ALWAYS pushes a reply, so the React picker's spinner clears. Mirrors the
+/// daemon's attached-path `ClientRequest::ListModels` handler (`hub::requests`), but sources
+/// the provider from disk since the swapper holds no in-memory `AppConfig`.
+async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
+    let cfg = crate::model::app_config::AppConfig::load();
+    let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) else {
+        return Vec::new();
+    };
+    let c = crate::app::runtime::session_mgmt::build_client();
+    let conn = crate::service::openrouter::Conn {
+        endpoint: &p.endpoint,
+        api_key: &p.api_key,
+        api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+        account_id: "",
+        oauth_uuid: "",
+        install_id: "",
+    };
+    c.list_models(conn)
+        .await
+        .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
+        .unwrap_or_default()
+}
+
+/// UN-ATTACHED GUI route-picker fetch (a [`HostCtl::ListRoutes`] serviced by the swapper):
+/// load the GLOBAL config, resolve the provider by uuid, GATE on it being an OpenRouter-
+/// style routable endpoint (the model-endpoints API is OpenRouter-specific — a non-OpenRouter
+/// provider gets an immediate EMPTY list with no network call), then `GET
+/// {endpoint}/models/{model_id}/endpoints`, flattening each route to the wire subset.
+/// Returns EMPTY on an unknown/non-OpenRouter provider OR any fetch error (the caller always
+/// pushes a reply → the form falls back to "Auto"). Mirrors the daemon's attached-path
+/// `ClientRequest::ListRoutes` handler, including its OpenRouter gate.
+async fn fetch_routes_for_provider(
+    provider: &str,
+    model_id: &str,
+) -> Vec<crate::ipc::proto::ModelEndpointWire> {
+    let cfg = crate::model::app_config::AppConfig::load();
+    let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) else {
+        return Vec::new();
+    };
+    // OpenRouter-only gate, mirroring the daemon path: the endpoints API is OpenRouter-
+    // specific, so a non-OpenRouter provider yields an empty route list (form → "Auto").
+    if !(p.api_type.is_routable() && p.endpoint.to_lowercase().contains("openrouter")) {
+        return Vec::new();
+    }
+    let c = crate::app::runtime::session_mgmt::build_client();
+    let conn = crate::service::openrouter::Conn {
+        endpoint: &p.endpoint,
+        api_key: &p.api_key,
+        api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+        account_id: "",
+        oauth_uuid: "",
+        install_id: "",
+    };
+    c.list_model_endpoints(conn, model_id)
+        .await
+        .map(|eps| {
+            eps.into_iter()
+                .map(|ep| crate::ipc::proto::ModelEndpointWire {
+                    name: ep.name,
+                    provider_name: ep.provider_name,
+                    price_prompt: ep.pricing.as_ref().and_then(|pr| pr.prompt.clone()),
+                    price_completion: ep.pricing.as_ref().and_then(|pr| pr.completion.clone()),
+                    uptime_last_30m: ep.uptime_last_30m,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
@@ -536,8 +632,9 @@ fn apply_global_config_req(
 ///
 /// W0: no background live-refresh probe and no in-hub keyboard nav (those are W1) — the
 /// hub is a static snapshot until the user picks. React animates any spinner locally.
-fn host_swapper(
-    push: &dyn Fn(String),
+fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
+    handle: &tokio::runtime::Handle,
+    push: &P,
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     push_state: &mut render::PushState,
     current: Option<&str>,
@@ -572,6 +669,29 @@ fn host_swapper(
             // repaint and `needsOnboarding` clears. Stay in the swapper (no attach).
             Ok(HostCtl::ConfigMutate(req)) => {
                 apply_swapper_config_mutation(&req, push, push_state);
+            }
+            // UN-ATTACHED live model / route fetch (the GUI Connector picker during
+            // onboarding / in the swapper, where there is no attached daemon to forward a
+            // `ListModels`/`ListRoutes` to). Resolve the provider from the GLOBAL config and
+            // run the network GET OFF this thread — a blocking HTTP call must never stall the
+            // ctl loop — then push the SAME `ModelList`/`RouteList` envelope the attached
+            // daemon path emits. The spawned worker ALWAYS pushes a reply (an EMPTY list on an
+            // unknown provider or any fetch error), so the React picker's spinner can never
+            // hang. A clone of the (Clone) push sink rides into the task so it can reach the
+            // webview after this arm hands control back to the recv loop below.
+            Ok(HostCtl::ListModels { provider }) => {
+                let push2 = P::clone(push);
+                handle.spawn(async move {
+                    let models = fetch_models_for_provider(&provider).await;
+                    render::push_model_list(&push2, provider, models);
+                });
+            }
+            Ok(HostCtl::ListRoutes { provider, model_id }) => {
+                let push2 = P::clone(push);
+                handle.spawn(async move {
+                    let routes = fetch_routes_for_provider(&provider, &model_id).await;
+                    render::push_route_list(&push2, provider, model_id, routes);
+                });
             }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
             // swap-START loader signal first (this thread will BLOCK in the attach next, so

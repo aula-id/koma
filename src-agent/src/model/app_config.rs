@@ -255,6 +255,24 @@ impl ModelEntry {
             Vec::new()
         }
     }
+
+    /// Normalize a raw `route` string before persisting it onto a `ModelEntry`:
+    /// trims whitespace, then maps both an empty string and the literal `"auto"`
+    /// sentinel (case-insensitive) to `None` (automatic OpenRouter routing). The
+    /// GUI's Auto row round-trips the literal string `"auto"` through this same
+    /// path that empty-route already went through — collapse both to `None` so
+    /// nothing ever persists an `only: ["auto"]` provider pin (which upstream
+    /// 404s: "No allowed providers are available for the selected model").
+    pub fn normalize_route(route: Option<String>) -> Option<String> {
+        route.and_then(|r| {
+            let trimmed = r.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+    }
 }
 
 /// Wire transport an MCP server speaks. `Stdio` (the default) launches a child

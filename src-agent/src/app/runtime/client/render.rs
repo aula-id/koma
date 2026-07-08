@@ -917,6 +917,42 @@ pub(super) fn push_switching(push: &dyn Fn(String), to: &str) {
     }
 }
 
+/// Emit a one-shot `ModelList` envelope (out-of-band, un-fingerprinted) for the GUI
+/// Connector model-id picker. Shared by the UN-ATTACHED swapper fallback
+/// ([`super::host_swapper`]) so a detached `ListModels` lands the SAME envelope the attached
+/// `push_loop` re-push produces — byte-compatible (echoed `provider` + `models`).
+pub(super) fn push_model_list(push: &dyn Fn(String), provider: String, models: Vec<String>) {
+    emit(push, &PushEnvelope::ModelList { provider, models });
+}
+
+/// Emit a one-shot `RouteList` envelope for the GUI Connector route picker, flattening each
+/// daemon `ModelEndpointWire` to the camelCase `PushRoute` JS contract — the SAME mapping the
+/// attached `push_loop` does. Shared by the UN-ATTACHED swapper fallback so a detached
+/// `ListRoutes` lands the SAME envelope (echoed `provider` + `modelId`; an EMPTY `routes`
+/// leaves the form showing only its synthetic "Auto").
+pub(super) fn push_route_list(
+    push: &dyn Fn(String),
+    provider: String,
+    model_id: String,
+    routes: Vec<crate::ipc::proto::ModelEndpointWire>,
+) {
+    let env = PushEnvelope::RouteList {
+        provider,
+        model_id,
+        routes: routes
+            .iter()
+            .map(|r| PushRoute {
+                name: r.name.clone(),
+                provider_name: r.provider_name.clone(),
+                price_prompt: r.price_prompt.clone(),
+                price_completion: r.price_completion.clone(),
+                uptime_last_30m: r.uptime_last_30m,
+            })
+            .collect(),
+    };
+    emit(push, &env);
+}
+
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
 /// [`serialize_and_push`] / [`push_hub`] only emit an envelope when something
 /// actually changed (the fold loop calls them every ~16ms).
@@ -1108,6 +1144,18 @@ pub(super) fn push_loop(
                 // the authoritative config and re-pushes a fresh `Config` on the change.
                 Ok(super::HostCtl::ConfigMutate(req)) => {
                     let _ = req_tx.send(req);
+                }
+                // A live model / route fetch raced in while attached (the ipc handler routes
+                // these straight to the daemon via `live_req` when attached; they only land
+                // here if the attach state flipped between the detached-check and the send).
+                // Forward the equivalent daemon request — the daemon fetches + replies
+                // out-of-band and the `ModelList`/`ModelRoutes` frame is re-pushed above — so
+                // the reply is never dropped on the race.
+                Ok(super::HostCtl::ListModels { provider }) => {
+                    let _ = req_tx.send(ClientRequest::ListModels { provider });
+                }
+                Ok(super::HostCtl::ListRoutes { provider, model_id }) => {
+                    let _ = req_tx.send(ClientRequest::ListRoutes { provider, model_id });
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.

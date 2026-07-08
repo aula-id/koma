@@ -15,9 +15,9 @@ use anyhow::Result;
 use crate::app::mode::{KeyInputForm, Mode, OnboardProviderState, OnboardState};
 use crate::app::runtime::build_client;
 use crate::app::state::AppState;
-use crate::model::app_config::{new_uuid, ApiType, ModelEntry, ModelRole, ProviderConn};
+use crate::model::app_config::{new_uuid, ModelEntry, ModelRole};
 use crate::model::store;
-use crate::service::koma_free::{KOMA_FREE_ENDPOINT, KOMA_FREE_MODEL};
+use crate::service::koma_free::KOMA_FREE_MODEL;
 use crate::service::openrouter::OpenRouterClient;
 
 /// Handle [`Action::SetupKomaFree`](crate::controller::input::Action::SetupKomaFree):
@@ -35,57 +35,10 @@ pub(super) fn handle_setup_koma_free(
     client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    // The koma-free `X-Koma` header must never be empty. `install_id` is serde-default
-    // + Default-minted, but mint one defensively if it somehow got cleared, then the
-    // `save()` below persists it.
-    if state.rest.config.install_id.is_empty() {
-        state.rest.config.install_id = new_uuid();
-    }
-
-    // Reuse an existing koma-free provider if one is already configured; otherwise
-    // mint it. Resolve the uuid into an owned String FIRST so the immutable `find`
-    // borrow ends before the `push` mutable borrow.
-    let existing_provider = state
-        .rest
-        .config
-        .providers
-        .iter()
-        .find(|p| p.api_type == ApiType::KomaFree)
-        .map(|p| p.uuid.clone());
-    let provider_uuid = match existing_provider {
-        Some(uuid) => uuid,
-        None => {
-            let uuid = new_uuid();
-            state.rest.config.providers.push(ProviderConn {
-                uuid: uuid.clone(),
-                name: "koma free".to_string(),
-                api_type: ApiType::KomaFree,
-                endpoint: KOMA_FREE_ENDPOINT.to_string(),
-                // Keyless: auth rides the X-Koma / X-Session headers.
-                api_key: String::new(),
-            });
-            uuid
-        }
-    };
-
-    // Ensure a Main-role koma-free model entry exists (reuse if this provider already
-    // has one). This handler explicitly writes KOMA_FREE_ENDPOINT and KOMA_FREE_MODEL;
-    // resolve::from_entry just passes them through (no forcing). Pin model_id to the
-    // canonical id for clarity.
-    let has_main_model = state.rest.config.models.iter().any(|m| {
-        m.provider_uuid == provider_uuid && m.effective_roles().contains(&ModelRole::Main)
-    });
-    if !has_main_model {
-        state.rest.config.models.push(ModelEntry {
-            uuid: new_uuid(),
-            name: "koma free".to_string(),
-            model_id: KOMA_FREE_MODEL.to_string(),
-            provider_uuid: provider_uuid.clone(),
-            route: None,
-            roles: vec![ModelRole::Main],
-            role: None,
-        });
-    }
+    // Mint/reuse the koma-free provider + Main-role model in the global config. Shared
+    // with the GUI `SetupKomaFree` path (see `crate::service::koma_free`) so both mint
+    // byte-identical entries; idempotent + ensures a non-empty `install_id`.
+    crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
 
     if let Err(e) = state.rest.config.save() {
         state.rest.fg_mut().status = format!("config save failed: {e}");

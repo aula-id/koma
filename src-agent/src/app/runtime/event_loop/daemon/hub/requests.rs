@@ -730,7 +730,7 @@ impl DaemonHub {
                     name: name.trim().to_string(),
                     model_id: model_id.trim().to_string(),
                     provider_uuid,
-                    route: route.filter(|r| !r.trim().is_empty()),
+                    route: crate::model::app_config::ModelEntry::normalize_route(route),
                     roles,
                     role: None,
                 };
@@ -775,6 +775,19 @@ impl DaemonHub {
             // `palette`), so the GUI host re-derives + re-pushes its Config palette live.
             ClientRequest::SetTheme { name } => {
                 state.rest.config.palette = name;
+                let result = state.rest.config.save();
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
+            // Main-role koma-free model in the GLOBAL config (the non-key equivalent of the
+            // TUI's `Action::SetupKomaFree`), then persist. Only the CONFIG mutation is
+            // shared with the TUI path (via `ensure_koma_free_config`) — the daemon owns no
+            // first-run session-create / mode-switch here (a GUI session already exists on
+            // this attached path). Config-global; any client may drive it. The config change
+            // forces a full snapshot, so the GUI host re-pushes `Config` (clearing `firstRun`).
+            ClientRequest::SetupKomaFree => {
+                crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
                 let result = state.rest.config.save();
                 self.ack_or_error(idx, result);
             }

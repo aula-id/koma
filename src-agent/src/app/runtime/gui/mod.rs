@@ -259,6 +259,13 @@ enum GuiReq {
     /// to `~/.koma/config.json` on the swapper thread when PRE-SESSION (onboarding runs
     /// before any session exists) via [`HostCtl::ConfigMutate`].
     SetTheme { name: String },
+    /// The GUI onboarding "koma free" choice: mint/reuse the keyless Koma Free provider +
+    /// a Main-role model in the GLOBAL config. Routed EXACTLY like the config setters via
+    /// `forward_config_req` (works ATTACHED through the daemon and UN-ATTACHED through the
+    /// swapper's `ConfigMutate` path), reusing the shared
+    /// [`crate::service::koma_free::ensure_koma_free_config`] mutation — the resulting
+    /// `Config` re-push clears `firstRun`, which is what dismisses the GUI onboarding overlay.
+    SetupKomaFree,
 
     // ─── GUI turn/session controls (stop button + kill buttons + model picker) ────
     // Same forward-to-attached-daemon pattern as `Submit`: lock `ipc_req` + send the
@@ -369,6 +376,32 @@ fn forward_config_req(
         }
     }
     let _ = ctl.send(super::client::HostCtl::ConfigMutate(req));
+}
+
+/// Route a live-catalogue fetch to the ATTACHED daemon when a session is live, else to the
+/// host/swapper thread — the ListModels/ListRoutes twin of [`forward_config_req`].
+///
+/// Unlike a config setter (which the swapper applies to disk as a single
+/// [`HostCtl::ConfigMutate`] wrapping the SAME `ClientRequest`), a catalogue fetch is
+/// SERVICED differently on each side — the attached daemon runs it as a `ClientRequest` and
+/// replies over the frame stream, while the un-attached swapper runs it as a distinct
+/// [`HostCtl`] variant that does the network GET itself — so the two carry different payloads
+/// and the caller supplies both. This is what makes the Connector model/route pickers work
+/// during onboarding (no session attached), where the plain daemon-only path silently drops
+/// the request and strands the picker's spinner.
+fn forward_or_host(
+    live_req: &std::sync::Mutex<Option<std::sync::mpsc::Sender<crate::ipc::proto::ClientRequest>>>,
+    ctl: &std::sync::mpsc::Sender<super::client::HostCtl>,
+    attached: crate::ipc::proto::ClientRequest,
+    detached: super::client::HostCtl,
+) {
+    if let Ok(g) = live_req.lock() {
+        if let Some(tx) = g.as_ref() {
+            let _ = tx.send(attached);
+            return;
+        }
+    }
+    let _ = ctl.send(detached);
 }
 
 /// Map a `koma.js` resize-handle direction string to tao's [`tao::window::ResizeDirection`].
@@ -700,21 +733,39 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     GuiReq::SetTheme { name } => {
                         forward_config_req(&ipc_req, &ipc_ctl, ClientRequest::SetTheme { name });
                     }
-                    GuiReq::ListModels { provider } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::ListModels { provider });
-                            }
-                        }
+                    // Onboarding "koma free" choice: mint/reuse the keyless Koma Free provider
+                    // + Main model. Dual-routed like the config setters (attached → daemon;
+                    // pre-session → swapper ConfigMutate), so it works during onboarding too.
+                    GuiReq::SetupKomaFree => {
+                        forward_config_req(&ipc_req, &ipc_ctl, ClientRequest::SetupKomaFree);
                     }
-                    // Route picker: forward to the attached daemon, which fetches the model's
-                    // OpenRouter endpoints and replies out-of-band (host re-pushes RouteList).
+                    // Model picker: forward to the attached daemon (fetch + out-of-band
+                    // ModelList re-push) when a session is live, else hand the fetch to the
+                    // swapper/host thread as a `HostCtl::ListModels` so the Connector picker
+                    // still populates during onboarding / the empty state (NO daemon attached).
+                    GuiReq::ListModels { provider } => {
+                        forward_or_host(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::ListModels {
+                                provider: provider.clone(),
+                            },
+                            HostCtl::ListModels { provider },
+                        );
+                    }
+                    // Route picker: same dual routing — the attached daemon (or, un-attached,
+                    // the swapper/host thread) fetches the model's OpenRouter endpoints and
+                    // pushes a `RouteList` envelope.
                     GuiReq::ListRoutes { provider, model_id } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::ListRoutes { provider, model_id });
-                            }
-                        }
+                        forward_or_host(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::ListRoutes {
+                                provider: provider.clone(),
+                                model_id: model_id.clone(),
+                            },
+                            HostCtl::ListRoutes { provider, model_id },
+                        );
                     }
                     // Stop button: interrupt the running turn on the attached daemon.
                     GuiReq::Interrupt => {

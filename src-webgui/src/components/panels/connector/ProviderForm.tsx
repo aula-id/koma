@@ -14,7 +14,7 @@ export type ProviderSavePayload = { id: string; name: string; endpoint: string; 
 // canonical endpoints (note the non-obvious ones: Groq `/openai/v1`, Fireworks
 // `/inference/v1`, DeepInfra `/v1/openai`, Mimo token-plan host). "Custom" is
 // handled separately (blank manual form).
-const PREDEFINED: { name: string; endpoint: string }[] = [
+export const PREDEFINED: { name: string; endpoint: string }[] = [
   { name: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1' },
   { name: 'DeepSeek', endpoint: 'https://api.deepseek.com' },
   { name: 'Mimo (token plan)', endpoint: 'https://token-plan-sgp.xiaomimimo.com/v1' },
@@ -26,14 +26,31 @@ const PREDEFINED: { name: string; endpoint: string }[] = [
   { name: 'DeepInfra', endpoint: 'https://api.deepinfra.com/v1/openai' },
 ]
 
-export function ProviderForm({ draft, onSave, onCancel }: { draft: Provider; onSave: (d: ProviderSavePayload) => void; onCancel: () => void }) {
-  const [d, setD] = useState(draft)
+export function ProviderForm({
+  draft,
+  onSave,
+  onCancel,
+  preset,
+}: {
+  draft: Provider
+  onSave: (d: ProviderSavePayload) => void
+  onCancel: () => void
+  // Onboarding pre-selects a preset (or an explicit "custom") on its own pick
+  // screen and hands it in here — when supplied, skip the internal 'pick'
+  // step entirely and pre-fill name/endpoint from the preset (undefined for
+  // "custom", leaving the draft's blank name/endpoint as-is).
+  preset?: { name: string; endpoint: string } | 'custom'
+}) {
+  const [d, setD] = useState<Provider>(() =>
+    preset && preset !== 'custom' ? { ...draft, name: preset.name, endpoint: preset.endpoint } : draft,
+  )
   // Always starts empty — the real key is never available to prefill.
   const [apiKey, setApiKey] = useState('')
   // A brand-new provider (empty name + endpoint) leads with the marketplace
-  // picker; editing an existing one jumps straight to the manual form.
+  // picker; editing an existing one jumps straight to the manual form. A
+  // caller-supplied `preset` (onboarding) always skips straight to the form.
   const isNewDraft = draft.name.trim() === '' && draft.endpoint.trim() === ''
-  const [step, setStep] = useState<'pick' | 'form'>(isNewDraft ? 'pick' : 'form')
+  const [step, setStep] = useState<'pick' | 'form'>(preset !== undefined ? 'form' : isNewDraft ? 'pick' : 'form')
   const patch = (p: Partial<Provider>) => setD((x) => ({ ...x, ...p }))
   const keyPlaceholder = d.hasKey ? '•••••••• (unchanged — leave blank to keep)' : 'sk-…'
 

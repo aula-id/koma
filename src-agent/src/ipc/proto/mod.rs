@@ -181,6 +181,16 @@ pub enum ClientRequest {
     /// palette live. gui-gated: the TUI picks the theme in `Mode::Settings`. `theme`/
     /// `accent` are the deprecated legacy fields and are left untouched.
     SetTheme { name: String },
+    /// Mint (or reuse) the keyless Koma Free provider + a Main-role "koma free" model in
+    /// the GLOBAL config — the GUI onboarding "koma free" choice, the non-key equivalent of
+    /// the TUI first-run chooser's `Action::SetupKomaFree`. Idempotent: reuses an existing
+    /// `ApiType::KomaFree` provider (and its Main model) rather than duplicating (see
+    /// [`crate::service::koma_free::ensure_koma_free_config`]). Persisted like the other
+    /// config setters; the resulting config change re-pushes a fresh `Config` (a Main route
+    /// now resolves → `firstRun` clears, dismissing the GUI onboarding overlay). Applied on
+    /// BOTH the attached-daemon path and the pre-session swapper path, like
+    /// `SetProvider`/`SetModel`/`SetTheme`. gui-gated: the TUI drives this via `Mode::Onboard`.
+    SetupKomaFree,
 
     // ─── GUI turn/session controls (Explore sidepanel + composer + picker) ────────
     /// Interrupt the foreground session's in-flight turn (the GUI stop button) — the
