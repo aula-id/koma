@@ -280,7 +280,14 @@ fn legacy_fallback(settings: &Settings, role: ModelRole) -> Option<Resolved> {
             // FAIL-CLOSED: only the legacy classifier model rescues it; an empty
             // field yields `None`, which the harness caller degrades to a human
             // prompt (TAC) / advisory toast (PC) rather than silently allowing.
-            if settings.classifier_model.is_empty() {
+            // Also fail-closed when `settings.api_key` is empty: this legacy path
+            // always builds an OpenAiCompatible route (never KomaFree), so an
+            // empty key means a keyless koma-free ("/free") user with no legacy
+            // classifier connection configured — sending that route would POST
+            // `Authorization: Bearer ` (empty) and 401 on every classify call.
+            // Treat "classifier model set but no key to call it with" the same as
+            // "not actually configured" rather than firing a doomed request.
+            if settings.classifier_model.is_empty() || settings.api_key.is_empty() {
                 None
             } else {
                 Some(Resolved {

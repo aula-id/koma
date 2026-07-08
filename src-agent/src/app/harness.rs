@@ -295,6 +295,19 @@ async fn classify(
     if !route.is_routable() {
         return unavailable("safeguard provider not wired (Anthropic)".to_string());
     }
+    // Defense in depth (fail-CLOSED): a route can be routable yet still carry no
+    // usable auth — e.g. the legacy-fallback Safeguard route with an empty
+    // `settings.api_key` (keyless koma-free users). `Resolved::is_usable` already
+    // treats `ApiType::KomaFree` as usable-when-keyless, so an explicitly
+    // configured koma-free Safeguard connection is NOT rejected here — only a
+    // genuinely keyless non-KomaFree route is. Treat that the same as an
+    // unresolved route rather than POSTing a doomed empty-bearer request.
+    if !route.is_usable() {
+        return unavailable(
+            "classifier not configured (safeguard route has no usable credentials) — set one in /settings"
+                .to_string(),
+        );
+    }
     // Resolve the Main route now so we can fall back to it when the Safeguard call
     // fails. Done unconditionally (cheap — no I/O) before the first attempt so the
     // owned route is available in both branches of the match below.
