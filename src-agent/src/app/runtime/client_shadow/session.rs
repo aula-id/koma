@@ -1,7 +1,9 @@
 //! Session-level shadow reconstruction: `SessionRuntime`, `Session`, and `SubAgent`.
 
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use crate::app::bgbash::{BashJob, BashJobShared};
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState,
@@ -11,10 +13,10 @@ use crate::app::mode::{
 use crate::app::state::{SessionRuntime, ToastKind};
 use crate::app::subagent::{PendingSubagent, SubAgent, SubAgentStatus};
 use crate::ipc::proto::{
-    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, EffortSnapshot, KeyInputSnapshot,
-    LoadingSnapshot, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot, RewindSnapshot,
-    SessionHubSnapshot, SessionSnapshot, SettingsSnapshot, SubAgentSnapshot, TextEditorSnapshot,
-    ToolPickerSnapshot, WarmStatusWire,
+    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashJobSnapshot, EffortSnapshot,
+    KeyInputSnapshot, LoadingSnapshot, ModelModalSnapshot, PathPickerSnapshot, PickerSnapshot,
+    RewindSnapshot, SessionHubSnapshot, SessionSnapshot, SettingsSnapshot, SubAgentSnapshot,
+    TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::conversation::Conversation;
 use crate::model::session::Session;
@@ -96,10 +98,38 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     // Reconstruct the running/finished sub-agents (plain data + an inert handle/rx)
     // so the `$` panel list AND the full-screen viewer render off real shadow data.
     rt.subagents = s.subagents.iter().map(shadow_subagent).collect();
+    // Reconstruct the background-bash jobs as INERT `BashJob`s (no worker thread) so the
+    // GUI sidepanel's `bash[]` renders — its only reader (`render::serialize_and_push`)
+    // reads id/command/`snapshot_status()`, all baked in here from the projection.
+    rt.bash_jobs = s.bash_jobs.iter().map(shadow_bash_job).collect();
     // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate
     // in `handle_chat`) can read them from the shadow without a daemon round-trip.
     rt.pending_steer = s.pending_steer.clone();
     rt
+}
+
+/// Rebuild a render-only, INERT [`BashJob`] from its projection.
+///
+/// A live [`BashJob`] owns an `Arc<`[`BashJobShared`]`>` whose mutexes are mutated by a
+/// spawned worker thread that CANNOT cross the wire; the client never runs a job, so this
+/// mints a job with NO worker — the shared state is pre-set from the projection (status
+/// baked into its `Mutex`, empty output, no pid/ended/tee). The GUI sidepanel's only
+/// reader takes `id`, `command`, and `snapshot_status()`, so the baked status renders
+/// correctly (running / done / killed / error). Mirrors how [`shadow_subagent`] mints
+/// inert sub-agents.
+pub(crate) fn shadow_bash_job(v: &BashJobSnapshot) -> BashJob {
+    BashJob {
+        id: v.id,
+        command: v.command.clone(),
+        started_at: Instant::now(),
+        shared: Arc::new(BashJobShared {
+            output: Mutex::new(String::new()),
+            status: Mutex::new(v.status.clone()),
+            pid: Mutex::new(None),
+            ended_at: Mutex::new(None),
+            tee_path: Mutex::new(None),
+        }),
+    }
 }
 
 /// Rebuild a render-only [`SubAgent`] from its projection.

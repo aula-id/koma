@@ -46,6 +46,31 @@ pub struct SessionSnapshot {
     /// composer. Empty = no panel.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_steer: Vec<String>,
+    /// The session's background-bash jobs (list + RAW status only — no output/elapsed).
+    /// Carried so the native-React GUI's Explore sidepanel `bash[]` shows jobs — INCLUDING
+    /// finished / failed ones — which it never did before (the shadow's `bash_jobs` had no
+    /// wire source and stayed empty). The client shadow rebuilds an INERT
+    /// [`crate::app::bgbash::BashJob`] from each. `#[serde(default, skip_serializing_if)]`
+    /// keeps the no-jobs case + version-skewed peers wire-free. The TUI client ignores it
+    /// (its `/bash` panel sources the separate `BashSnapshot`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bash_jobs: Vec<BashJobSnapshot>,
+}
+
+/// A serde-safe projection of ONE background bash job for the native-React GUI's
+/// per-session sidepanel.
+///
+/// Unlike [`BashJobView`] (the pre-rendered `/bash` full-screen panel row, which carries
+/// elapsed time + an output tail), this carries only identity + the RAW
+/// [`crate::app::bgbash::BashJobStatus`] so the client shadow can rebuild an inert
+/// [`crate::app::bgbash::BashJob`] whose `snapshot_status()` matches the daemon exactly
+/// (running / done / killed / error, incl. failed-at-spawn jobs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct BashJobSnapshot {
+    pub id: usize,
+    pub command: String,
+    pub status: crate::app::bgbash::BashJobStatus,
 }
 
 /// A plain-data projection of one SubAgent.
