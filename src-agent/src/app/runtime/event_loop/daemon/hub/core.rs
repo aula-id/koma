@@ -198,8 +198,9 @@ impl DaemonHub {
     /// Drain any landed [`ListModelsReply`]s and reply to each requesting client with a
     /// seq'd [`DaemonEvent::ModelList`]. Called once per tick by the daemon loop. Uses
     /// `send_to` so the per-client monotonic seq stays gap-free (a background GET task
-    /// can't advance it itself). A reply whose client has since detached/vanished — or is
-    /// not yet attached — is silently dropped (the picker is gone). The hub owns a
+    /// can't advance it itself). A reply whose client has since vanished is silently
+    /// dropped (the picker is gone); an un-attached but still-connected client (the
+    /// Connector / Onboarding forms in the swapper) still receives it. The hub owns a
     /// `list_models_tx` clone, so `Disconnected` never fires; handle it as "stop draining"
     /// for robustness anyway.
     pub(in crate::app::runtime::event_loop::daemon) fn drain_list_models(&mut self) {
@@ -207,16 +208,19 @@ impl DaemonHub {
         // clone) Disconnected — either way, stop draining. So `while let Ok(..)` is
         // exactly the drain-until-empty loop.
         while let Ok(reply) = self.list_models_rx.try_recv() {
+            // Deliver to the requesting client whether or not it is attached to a
+            // session — the Connector and first-run Onboarding forms request the
+            // model catalogue while UN-attached (swapper / empty state), so gating
+            // on `attached` here black-holed the reply and left the picker empty.
+            // Only a vanished client (position None) is dropped.
             if let Some(i) = self.clients.iter().position(|c| c.id == reply.client_id) {
-                if self.clients[i].attached {
-                    self.send_to(
-                        i,
-                        crate::ipc::proto::DaemonEvent::ModelList {
-                            provider: reply.provider,
-                            models: reply.models,
-                        },
-                    );
-                }
+                self.send_to(
+                    i,
+                    crate::ipc::proto::DaemonEvent::ModelList {
+                        provider: reply.provider,
+                        models: reply.models,
+                    },
+                );
             }
         }
     }
@@ -225,20 +229,22 @@ impl DaemonHub {
     /// seq'd [`DaemonEvent::ModelRoutes`]. Called once per tick by the daemon loop — the
     /// exact `drain_list_models` mirror for the ModelForm route picker (a background GET
     /// task can't advance the per-client seq, so the reply is turned into a `send_to`
-    /// frame here). A reply whose client has since detached/vanished is silently dropped.
+    /// frame here). Delivered whether or not the client is session-attached (the form is
+    /// used un-attached); only a vanished client is silently dropped.
     pub(in crate::app::runtime::event_loop::daemon) fn drain_list_routes(&mut self) {
         while let Ok(reply) = self.list_routes_rx.try_recv() {
+            // Same as drain_list_models: the route picker is used un-attached in the
+            // Connector / Onboarding forms, so deliver regardless of session
+            // attachment; only a vanished client is dropped.
             if let Some(i) = self.clients.iter().position(|c| c.id == reply.client_id) {
-                if self.clients[i].attached {
-                    self.send_to(
-                        i,
-                        crate::ipc::proto::DaemonEvent::ModelRoutes {
-                            provider: reply.provider,
-                            model_id: reply.model_id,
-                            routes: reply.routes,
-                        },
-                    );
-                }
+                self.send_to(
+                    i,
+                    crate::ipc::proto::DaemonEvent::ModelRoutes {
+                        provider: reply.provider,
+                        model_id: reply.model_id,
+                        routes: reply.routes,
+                    },
+                );
             }
         }
     }
