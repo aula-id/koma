@@ -42,6 +42,8 @@ export function Composer() {
   const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
   const composerRefill = useKoma((s) => s.ui.composerRefill)
   const consumeComposerRefill = useKoma((s) => s.consumeComposerRefill)
+  const pendingRewindIndex = useKoma((s) => s.ui.pendingRewindIndex)
+  const clearRewind = useKoma((s) => s.clearRewind)
   const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
   const [dragOver, setDragOver] = useState(false)
@@ -88,6 +90,14 @@ export function Composer() {
     // While working, a submit is QUEUED daemon-side as a steer (not a new turn);
     // block it at the cap so we don't fire a request the daemon will just drop.
     if (atSteerCap) return
+    // Staged rewind (edit pencil): fire RewindTo FIRST so the daemon aborts the
+    // in-flight turn + truncates messages.json to before the edited message, THEN
+    // Submit carries the edited text as the fresh turn. The single ordered IPC
+    // channel guarantees RewindTo (abort + truncate) runs before Submit starts.
+    if (pendingRewindIndex !== null) {
+      req({ r: 'RewindTo', index: pendingRewindIndex })
+      clearRewind()
+    }
     req({ r: 'Submit', text })
     setInput('')
     // Swap the mascot to a new random cat on every send.
@@ -102,6 +112,16 @@ export function Composer() {
       e.preventDefault()
       submit()
     }
+  }
+
+  // Draft change: clearing the composer to empty CANCELS a staged rewind (edit
+  // pencil) — the user backed out, so the next send must NOT truncate. Only a
+  // user edit fires onChange; programmatic refills (rewind/omnisearch) go through
+  // setInput directly, so staging a rewind never self-cancels here.
+  const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value
+    setInput(val)
+    if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
   }
 
   const attachFiles = async (files: FileList | File[]) => {
@@ -217,7 +237,7 @@ export function Composer() {
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={onChange}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           placeholder="Message koma…"

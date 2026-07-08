@@ -308,6 +308,12 @@ type UiSlice = {
   // whole draft with the rewound message's text for editing + resend. Composer
   // consumes it via useEffect and clears it with consumeComposerRefill.
   composerRefill: string | null
+  // Staged rewind (edit pencil): the DISPLAY index of the user message being
+  // edited, remembered so the NEXT send fires `RewindTo(index)` before `Submit`
+  // (rewind-on-send). `null` when no rewind is staged. Set by `stageRewind` (edit
+  // click), cleared by `clearRewind` (send commits it, or the composer is emptied
+  // to cancel). Clicking edit does NOT truncate — the chat stays visible until send.
+  pendingRewindIndex: number | null
   // Monotonic tick bumped on every send. ChatView watches it to FORCE a
   // jump-to-bottom (re-engaging the scroll-stick regardless of scroll position)
   // when the user submits while scrolled up. Not a boolean so repeat sends at
@@ -361,6 +367,11 @@ type KomaState = {
   refillComposer: (text: string) => void
   // Composer-side ack: clears the refill one-shot after consuming it.
   consumeComposerRefill: () => void
+  // Stage a rewind-on-send: remember the DISPLAY index of the message being edited
+  // (the edit pencil). The Composer fires RewindTo(index) then Submit on send.
+  stageRewind: (index: number) => void
+  // Clear a staged rewind (send committed it, or the user emptied the composer).
+  clearRewind: () => void
   // Bump scrollTick to force ChatView to jump to the bottom (on send).
   requestScrollBottom: () => void
   // Optimistically raise the session-swap overlay with the target's display
@@ -407,6 +418,7 @@ const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
   composerRefill: null,
+  pendingRewindIndex: null,
   scrollTick: 0,
   switchingTo: null,
   toast: null,
@@ -634,6 +646,8 @@ export const useKoma = create<KomaState>((set) => ({
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
   refillComposer: (text) => set((s) => ({ ui: { ...s.ui, composerRefill: text } })),
   consumeComposerRefill: () => set((s) => ({ ui: { ...s.ui, composerRefill: null } })),
+  stageRewind: (index) => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: index } })),
+  clearRewind: () => set((s) => ({ ui: { ...s.ui, pendingRewindIndex: null } })),
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
   startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
