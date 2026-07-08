@@ -833,7 +833,12 @@ pub(super) enum HostTransition {
     ToSwapper,
     /// Attach to this session UUID (a hub `SelectSession`/`NewSession`, or a daemon
     /// `NewSession` hand-off). A minted uuid for a new session; an existing id otherwise.
-    Attach(String),
+    /// `workdir` is the folder a GUI `[+ new session]` native picker chose (the new
+    /// session's working dir); `None` for every other attach inherits the host's cwd.
+    Attach {
+        id: String,
+        workdir: Option<std::path::PathBuf>,
+    },
 }
 
 /// The HEADLESS twin of [`render_loop`]: fold the daemon's frames into the shadow and
@@ -932,12 +937,14 @@ pub(super) fn push_loop(
                 // state machine to detach + attach the chosen (or freshly minted) session.
                 Ok(super::HostCtl::Select(id)) => {
                     push_switching(push, &id);
-                    return HostTransition::Attach(id);
+                    return HostTransition::Attach { id, workdir: None };
                 }
-                Ok(super::HostCtl::New) => {
+                // `[+ new session]` while attached: the GUI picker already confirmed a
+                // folder (a cancel sends no `New`), so carry it into the fresh session.
+                Ok(super::HostCtl::New(workdir)) => {
                     let new_id = uuid::Uuid::new_v4().to_string();
                     push_switching(push, &new_id);
-                    return HostTransition::Attach(new_id);
+                    return HostTransition::Attach { id: new_id, workdir };
                 }
                 // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
                 // this simply drops to the hub AFTER the current/queued attach resolves —
@@ -1032,7 +1039,8 @@ pub(super) fn push_loop(
             // Same swap-START loader signal as a hub `New` — this is a daemon-driven attach
             // gap, equally frozen until the new session's first Snapshot.
             push_switching(push, &new_id);
-            return HostTransition::Attach(new_id);
+            // Daemon-driven hand-off carries no picked folder — inherit the host cwd.
+            return HostTransition::Attach { id: new_id, workdir: None };
         }
         // `/select` transcript dump needs a terminal the host does not own — ignore it.
 

@@ -123,7 +123,7 @@ fn attach_session(
 ) -> Result<Connection> {
     // Make sure a daemon owns this session before we connect. No-op when it is already
     // live (the bind-as-oracle probe inside short-circuits); spawns + waits otherwise.
-    super::manage::ensure_daemon_running(session_id, false)
+    super::manage::ensure_daemon_running(session_id, false, None)
         .map_err(|e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"))?;
 
     let sock_path = store::daemon_sock_path(session_id)?;
@@ -206,8 +206,10 @@ pub(super) enum HostCtl {
     Ready,
     /// Attach to this existing session UUID (a hub `SelectSession` pick).
     Select(String),
-    /// Mint a fresh session UUID + attach (the hub `[+ new session]` row).
-    New,
+    /// Mint a fresh session UUID + attach (the hub `[+ new session]` row). Carries the
+    /// folder the GUI's native picker chose as the new session's working dir; `None`
+    /// (e.g. a non-GUI/empty-state new) falls back to the host's cwd (base path).
+    New(Option<std::path::PathBuf>),
     /// Re-run cross-daemon discovery + push a FRESH `Hub` envelope. Fired when the
     /// React ResumePalette overlay opens (and may re-fire while it stays open).
     /// Handled in BOTH host states: inline in `host_swapper` (nothing renders there,
@@ -229,8 +231,14 @@ pub(super) enum HostCtl {
 enum HostStep {
     /// Show the detached session swapper (the hub) and wait for a pick.
     Swapper,
-    /// Attach to this session UUID and fold its frames into pushes.
-    Attach(String),
+    /// Attach to this session UUID and fold its frames into pushes. `workdir` is the
+    /// folder a GUI `[+ new session]` native-picker chose (the new session's working
+    /// dir); `None` for every other attach (existing pick, `--session` boot, daemon
+    /// `/new` hand-off) inherits the host's cwd.
+    Attach {
+        id: String,
+        workdir: Option<std::path::PathBuf>,
+    },
     /// Leave the host-relay entirely (the window is gone).
     Done,
 }
@@ -244,8 +252,9 @@ enum HostStep {
 fn attach_session_headless(
     handle: &tokio::runtime::Handle,
     session_id: &str,
+    workdir: Option<&std::path::Path>,
 ) -> Result<Connection> {
-    super::manage::ensure_daemon_running(session_id, false).map_err(|e| {
+    super::manage::ensure_daemon_running(session_id, false, workdir).map_err(|e| {
         anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}")
     })?;
 
@@ -322,7 +331,7 @@ pub(super) fn run_host_relay(
 
     // Startup: attach directly to `--session`, else open cold into the swapper.
     let mut step = match opts.session.clone() {
-        Some(id) => HostStep::Attach(id),
+        Some(id) => HostStep::Attach { id, workdir: None },
         None => HostStep::Swapper,
     };
 
@@ -335,7 +344,7 @@ pub(super) fn run_host_relay(
                 &mut push_state,
                 current_session_id.as_deref(),
             ),
-            HostStep::Attach(id) => host_attached(
+            HostStep::Attach { id, workdir } => host_attached(
                 &handle,
                 &push,
                 &ctl_rx,
@@ -344,6 +353,7 @@ pub(super) fn run_host_relay(
                 &mut push_state,
                 &mut current_session_id,
                 id,
+                workdir,
             ),
         };
     }
@@ -408,12 +418,15 @@ fn host_swapper(
             // this push is the last thing the webview hears until the new Snapshot lands).
             Ok(HostCtl::Select(id)) => {
                 render::push_switching(push, &id);
-                return HostStep::Attach(id);
+                return HostStep::Attach { id, workdir: None };
             }
-            Ok(HostCtl::New) => {
+            // `[+ new session]`: the GUI picker already ran (this only fires after a folder
+            // was confirmed — a cancel sends nothing), so mint a fresh session and attach
+            // it AT the chosen `workdir`. `None` (empty-state / non-GUI) keeps the host cwd.
+            Ok(HostCtl::New(workdir)) => {
                 let new_id = uuid::Uuid::new_v4().to_string();
                 render::push_switching(push, &new_id);
-                return HostStep::Attach(new_id);
+                return HostStep::Attach { id: new_id, workdir };
             }
             // The ipc side hung up (window gone) — leave the host.
             Err(_) => return HostStep::Done,
@@ -435,8 +448,9 @@ fn host_attached(
     push_state: &mut render::PushState,
     current: &mut Option<String>,
     id: String,
+    workdir: Option<std::path::PathBuf>,
 ) -> HostStep {
-    let mut conn = match attach_session_headless(handle, &id) {
+    let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[gui] host-relay could not attach session {id}: {e:#}");
@@ -483,7 +497,9 @@ fn host_attached(
     teardown_connection(handle, conn);
 
     match transition {
-        render::HostTransition::Attach(new_id) => HostStep::Attach(new_id),
+        // Carry any GUI-picker workdir (a hub `New` while attached) into the next attach;
+        // a daemon `/new` hand-off / a `Select` carries `None` (inherit the host cwd).
+        render::HostTransition::Attach { id, workdir } => HostStep::Attach { id, workdir },
         render::HostTransition::ToSwapper => HostStep::Swapper,
         render::HostTransition::Exit => HostStep::Done,
     }
