@@ -36,7 +36,7 @@ Sessions are per-directory, resumable, and independently configured.
                   └─────────┘
 ```
 
-On-disk state lives entirely in `~/.simple-coder/` and is never mutated by the
+On-disk state lives entirely in `~/.koma/` and is never mutated by the
 short-send rail; display and storage are always the full conversation (dual rail).
 
 ---
@@ -411,25 +411,32 @@ SaveSettings / SaveEffort → Chat
 ## 13. On-Disk Layout
 
 ```
-~/.simple-coder/
+~/.koma/
 ├── config.json                  ← global: theme (dark/light), accent colour
-└── sessions/
-    └── <id>/                    ← UUID on creation; slug after /rename
-        ├── settings.json        ← api_key, model, provider, name, effort,
-        │                           workdir[], compaction, awareness_*, classifier_*,
-        │                           allowed_folders[], short_send_enabled, sliding_cache
-        ├── messages.json        ← Vec<ChatMessage> (full transcript; reasoning #[serde(skip)])
-        ├── messages.sqlite      ← append-only archive (messages + blobs + summary tables)
-        ├── session.lock         ← PID of owning process; stale on dead PID
-        └── memory/
-            └── MEMORY.md        ← optional; loaded into system prompt at startup
+├── session.sqlite               ← session registry (UUID → metadata)
+├── usage.sqlite                 ← cost ledger across all sessions
+├── sessions/
+│   └── <pwd_hash>/              ← bucket per working directory
+│       ├── settings.json        ← shared model catalogue (per-dir settings)
+│       ├── memory/              ← shared project memory (MEMORY.md)
+│       ├── media/               ← downloaded files (web_download tool)
+│       └── <uuid>/              ← one directory per session
+│           ├── settings.json    ← api_key, model, provider, name, effort,
+│           │                      workdir[], compaction, awareness_*, classifier_*,
+│           │                      allowed_folders[], short_send_enabled, sliding_cache
+│           ├── messages.json      ← Vec<ChatMessage> (full transcript; reasoning #[serde(skip)])
+│           ├── messages.sqlite    ← append-only archive (messages + blobs + summary tables)
+│           └── images/          ← pasted/screenshot attachments
+├── run/
+│   ├── <session_id>.sock        ← session-daemon socket
+│   └── <session_id>.pid         ← advisory PID file
+└── mcp.sock                     ← global MCP daemon socket (singleton)
 ```
 
 `config.json` is read/written by `model/app_config.rs::AppConfig`. It holds only
 global visual preferences. All per-session config lives in `settings.json`.
 
-`session.lock` uses `/proc/<pid>` existence for crash-safe liveness detection. A
-stale lock (dead PID) is cleared opportunistically on the next `list_sessions` call.
+`session.lock` holds the owning process PID; liveness is probed via portable `kill(pid, 0)` (not `/proc`), so it works on both Linux and macOS.
 
 `workdir` in `settings.json` is a `Vec<String>` (backward-compatible: a legacy
 plain-string value is deserialized as a one-element vec). The first non-empty
@@ -477,7 +484,7 @@ multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
 |---|---|---|
 | DTOs | `src-agent/src/dto/chat.rs` | `ChatMessage`, `Role`, `ToolCall`, `CACHE_SPLIT_MARK` |
 | DTOs | `src-agent/src/dto/openrouter.rs` | Wire types: `ChatRequest`, `WireMessage`, `to_wire`, `StreamChunk`, `Delta`, `ModelInfo`, `Usage` |
-| Model | `src-agent/src/model/app_config.rs` | `AppConfig` (global theme/accent, `~/.simple-coder/config.json`) |
+| Model | `src-agent/src/model/app_config.rs` | `AppConfig` (global theme/accent, `~/.koma/config.json`) |
 | Model | `src-agent/src/model/conversation.rs` | `Conversation` (in-memory message list, compaction apply) |
 | Model | `src-agent/src/model/session.rs` | `Session` (load/save, `rebuild_system`, `workdir()`/`workdirs()`) |
 | Model | `src-agent/src/model/settings.rs` | `Settings` (per-session config, `settings.json`) |
@@ -566,6 +573,6 @@ cargo run -p agent -- --resume
 
 The binary is the `agent` crate. No environment variables are required; all
 configuration is entered interactively and stored per-session in
-`~/.simple-coder/sessions/<id>/settings.json`.
+`~/.koma/sessions/<pwd_hash>/<uuid>/settings.json`.
 
 License: Apache-2.0.

@@ -309,3 +309,23 @@ html, body, #root {
   max-width: 1024px;
   height: 100%;
 }
+
+/* Thin scrollbar globally — hidden until hovered, then 3px dim thumb. */
+::-webkit-scrollbar {
+  width: 3px;
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+/* Show thumb when the scrollable element (or any ancestor up to the hovered
+   scroll container) is hovered.  The double selector covers both the element
+   itself and nested scrollables inside it. */
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--color-koma-dim);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-koma-dim) transparent;
+}

@@ -43,7 +43,7 @@ export function UsageFooter() {
   const planLabel = planTodos.length > 0 ? `PLAN ${planDone}/${planTodos.length}` : 'PLAN'
 
   return (
-    <div className="flex h-5 flex-none items-center gap-2 border-t border-koma-border bg-koma-panel px-2 font-mono text-[11px] text-koma-dim">
+    <div className="flex h-5 flex-none items-center gap-2 rounded-tl-[10px] rounded-tr-[10px] border-t border-koma-border bg-koma-panel px-2 font-mono text-[11px] text-koma-dim">
       {/* Mode badge — clickable ONLY in Plan mode: opens the Explore sidebar
           panel and expands its PLAN section (see `focusPlanSection`). */}
       {isPlan ? (
