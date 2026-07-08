@@ -243,6 +243,16 @@ enum GuiReq {
     /// Fetch the live model-id catalogue for a provider (Connector model picker). The
     /// daemon replies out-of-band; the host re-pushes it as a `ModelList` envelope.
     ListModels { provider: String },
+    /// Fetch the live PROVIDER-ROUTE list for one model (Connector ModelForm route picker),
+    /// keyed by `provider` uuid + `modelId` (`author/slug`). The daemon fetches the model's
+    /// OpenRouter endpoints (non-OpenRouter → empty) and replies out-of-band; the host
+    /// re-pushes it as a `RouteList` envelope. Refetched by React whenever the form's
+    /// provider or model-id changes.
+    ListRoutes {
+        provider: String,
+        #[serde(rename = "modelId")]
+        model_id: String,
+    },
     /// Set the active theme (onboarding theme step + the future Settings gear). `name` is
     /// a `view::theme::PALETTES` key. Forwarded as [`ClientRequest::SetTheme`] when
     /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly
@@ -669,6 +679,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::ListModels { provider });
+                            }
+                        }
+                    }
+                    // Route picker: forward to the attached daemon, which fetches the model's
+                    // OpenRouter endpoints and replies out-of-band (host re-pushes RouteList).
+                    GuiReq::ListRoutes { provider, model_id } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::ListRoutes { provider, model_id });
                             }
                         }
                     }
