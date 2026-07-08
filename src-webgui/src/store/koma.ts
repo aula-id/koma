@@ -113,6 +113,10 @@ export type PushEnvelope =
       subagents: SubAgentEntry[]
       bash: BashJobEntry[]
       attachments: AttachmentEntry[]
+      // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from
+      // the host's process-global agent_mode. Optional-tolerant: a host build
+      // that doesn't project it yet leaves the store's current mode untouched.
+      mode?: string
     }
   // Swap-START signal pushed the instant a Select/New is acted on host-side,
   // BEFORE teardown, so the loader rises deterministically across the
@@ -183,6 +187,10 @@ type SessionSlice = {
   bash: BashJobEntry[]
   attachments: AttachmentEntry[]
   searchResults: SearchResultEntry[]
+  // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from the
+  // host's process-global agent_mode via the Snapshot envelope. Drives the
+  // composer mode selector. Defaults to "auto".
+  mode: string
 }
 
 type HubSlice = {
@@ -278,6 +286,7 @@ const initialSession: SessionSlice = {
   bash: [],
   attachments: [],
   searchResults: [],
+  mode: 'auto',
 }
 
 const initialHub: HubSlice = {
@@ -383,6 +392,9 @@ export const useKoma = create<KomaState>((set) => ({
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting attachments[] on the Snapshot envelope yet.
               attachments: env.attachments ?? [],
+              // Adopt the projected agent mode when present; keep the current
+              // one otherwise (host build not projecting it yet).
+              mode: env.mode ?? s.session.mode,
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
