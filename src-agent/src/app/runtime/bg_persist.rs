@@ -132,6 +132,8 @@ pub(crate) fn restore_bg_records(
             }
             _ => SubAgentStatus::Killed,
         };
+        // Computed before `status` moves into the `SubAgent` literal below.
+        let is_terminal = !matches!(status, SubAgentStatus::Running);
         // Inert abort handle + never-drained receiver (mirrors
         // `client_shadow::session::shadow_subagent`): a task that completes at once,
         // whose handle is never used to abort, and a fresh channel nothing writes to.
@@ -152,7 +154,17 @@ pub(crate) fn restore_bg_records(
             live_text: String::new(),
             tool_call_id: None,
             detached: false,
-            nudged: false,
+            // Pre-latch terminal records so the /task-path completion-nudge scan
+            // (`drain_subagents`, gated on `!sa.nudged`) can never re-enter them
+            // and re-fold "[sub-agent #N ...] finished:" into chat every tick — a
+            // defense-in-depth backstop even if a future match arm forgets its own
+            // latch. The status match above always yields a terminal variant
+            // (Done/Killed/Error; a still-"running" record is coerced to Killed,
+            // since there is no live task to reattach), so this is currently
+            // always `true`; written as a derived check rather than a literal so a
+            // future non-terminal restore path fails safe (`nudged: false`, i.e.
+            // still eligible for a nudge) instead of silently swallowing one.
+            nudged: is_terminal,
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,
