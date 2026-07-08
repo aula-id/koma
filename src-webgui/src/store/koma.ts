@@ -71,6 +71,10 @@ export type HubHistoryEntry = {
 }
 
 export type SubAgentEntry = {
+  // Host-projected subagent id — the kill target for GuiReq KillSubagent.
+  // Optional-tolerant: a host build that hasn't started projecting the id yet
+  // simply omits it, and the row renders without a kill button.
+  id?: string
   name: string
   status: 'running' | 'done' | 'killed' | 'error'
   summary: string
@@ -118,7 +122,20 @@ export type PushEnvelope =
   | { k: 'StreamMsg'; session: string; text: string }
   | { k: 'Reasoning'; session: string; text: string }
   | { k: 'Status'; session: string; working: boolean; toast: string | null }
-  | { k: 'Hub'; state: string; cooking: HubCookingEntry[]; history: HubHistoryEntry[] }
+  // The Hub push may now carry the config palette (theme) so the empty/swapper
+  // state — which never emits a Snapshot — still respects config.json's theme
+  // instead of falling back to the dark default. Optional-tolerant.
+  | {
+      k: 'Hub'
+      state: string
+      cooking: HubCookingEntry[]
+      history: HubHistoryEntry[]
+      palette?: PaletteColors
+    }
+  // Standalone palette push (theme-only, no session payload). Lets the host
+  // repaint the theme in states with no Snapshot (e.g. the swapper/empty
+  // state) — same consumption path as the Snapshot palette.
+  | { k: 'Palette'; palette: PaletteColors }
   | { k: 'SearchResults'; query: string; items: SearchResultEntry[] }
   // Authoritative config projection (mcp/providers/models) — global, not
   // per-session. REPLACES the whole config slice, pushed on config change and
@@ -290,24 +307,33 @@ export const useKoma = create<KomaState>((set) => ({
   push: (env) => {
     switch (env.k) {
       case 'Snapshot':
-        set((s) => ({
-          session: {
-            ...s.session,
-            id: env.session,
-            state: env.state,
-            messages: env.messages,
-            title: env.title,
-            subagents: env.subagents,
-            bash: env.bash,
-            // Defensive fallback: tolerates a host build that hasn't started
-            // projecting attachments[] on the Snapshot envelope yet.
-            attachments: env.attachments ?? [],
-          },
-          palette: env.palette,
-          // Any Snapshot is authoritative proof the swap (if one was in
-          // flight) has landed — clear the loader.
-          ui: { ...s.ui, switchingTo: null },
-        }))
+        set((s) => {
+          // A Snapshot whose session id differs from the current one is a
+          // session SWITCH. The in-flight stream/reasoning carried over via
+          // `...s.session` belongs to the OLD session — drop it so the old
+          // half-rendered reply doesn't bleed into the new view until the
+          // next send clears it.
+          const switched = env.session !== s.session.id
+          return {
+            session: {
+              ...s.session,
+              id: env.session,
+              state: env.state,
+              messages: env.messages,
+              title: env.title,
+              subagents: env.subagents,
+              bash: env.bash,
+              // Defensive fallback: tolerates a host build that hasn't started
+              // projecting attachments[] on the Snapshot envelope yet.
+              attachments: env.attachments ?? [],
+              ...(switched ? { stream: '', reasoning: '' } : {}),
+            },
+            palette: env.palette,
+            // Any Snapshot is authoritative proof the swap (if one was in
+            // flight) has landed — clear the loader.
+            ui: { ...s.ui, switchingTo: null },
+          }
+        })
         applyPaletteVars(env.palette)
         break
       case 'Switching':
@@ -334,8 +360,13 @@ export const useKoma = create<KomaState>((set) => ({
         set((s) => ({ session: { ...s.session, working: env.working } }))
         break
       case 'Hub':
+        // Empty/swapper theme: if the Hub push carries the config palette,
+        // adopt it (store + CSS vars) so the empty state respects config.json's
+        // theme instead of the dark default. No-op when the host omits it.
+        if (env.palette) applyPaletteVars(env.palette)
         set((s) => ({
           hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
+          ...(env.palette ? { palette: env.palette } : {}),
           // Deterministic failure-recovery clear: host_swapper pushes a fresh
           // Hub on EVERY path back to the swapper, including the
           // attach-failure/degrade path (which never emits a Snapshot). A
@@ -356,6 +387,10 @@ export const useKoma = create<KomaState>((set) => ({
         break
       case 'ModelList':
         set(() => ({ modelList: env.models }))
+        break
+      case 'Palette':
+        applyPaletteVars(env.palette)
+        set(() => ({ palette: env.palette }))
         break
     }
   },
