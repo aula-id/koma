@@ -29,6 +29,16 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
+# Preemptive image downscaling at send time (see `data_url_for` in
+# dto/openrouter/request.rs): oversized attachments are decoded, resized, and
+# re-encoded before they hit the upstream chat API (previously no cap existed,
+# so an oversized original could 400 upstream). NORMAL (not gui-gated) dep —
+# the chat/attachment path is core, not GUI-only. `default-features = false`
+# + an explicit codec list keeps compile impact down: only the formats
+# attachments actually arrive as (png/jpeg/webp/gif/bmp) are compiled in — no
+# `rayon` (a single per-send image resize isn't worth the parallelism dep) and
+# no avif/tiff/exr/qoi/ico/dds/hdr/pnm/ff (unused, each pulls its own extra deps).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
 libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
