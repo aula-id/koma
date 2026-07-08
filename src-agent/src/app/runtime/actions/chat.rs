@@ -274,7 +274,7 @@ pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
     // sub-agents, commit the partial buffer to the foreground session) lives in
     // `SessionRuntime::interrupt()` so the session hub's Ctrl+X can reuse it on
     // ANY session; here it runs on the foreground.
-    if state.rest.fg().waiting {
+    if state.rest.fg().is_ui_busy() {
         let fg = state.rest.fg_mut();
         fg.interrupt();
         // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
