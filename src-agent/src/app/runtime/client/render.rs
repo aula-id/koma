@@ -759,6 +759,12 @@ enum PushEnvelope {
         /// fingerprint) so the composer mode selector shows + reflects the live mode; a
         /// `SetMode` round-trip flips this on the next snapshot.
         mode: String,
+        /// Foreground session's QUEUED mid-turn steer previews (koma's `pending_steer`).
+        /// Authoritative full array — React REPLACES on each Snapshot; the composer
+        /// renders it as the "Queued N/5" preview list while a turn is in flight.
+        /// Folded into the fingerprint so queuing/consuming a steer re-emits the Snapshot.
+        #[serde(rename = "pendingSteer")]
+        pending_steer: Vec<String>,
     },
     /// Swap-START signal: the host is about to tear down the current attach and connect
     /// a different (or freshly minted) session. `to` is the target session id/uuid — the
@@ -1450,6 +1456,10 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .collect();
 
+    // Queued mid-turn steer previews (koma's `pending_steer`, decoded into the shadow):
+    // the composer renders these as the "Queued N/5" list while a turn is in flight.
+    let pending_steer: Vec<String> = fg.pending_steer.clone();
+
     // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
     let fp = {
         use std::hash::{Hash, Hasher};
@@ -1517,6 +1527,12 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             a.name.hash(&mut h);
             a.kind.hash(&mut h);
         }
+        // Fold the queued steer previews in so queuing/consuming a steer (which changes
+        // nothing else in the transcript while a turn is in flight) re-emits the Snapshot.
+        pending_steer.len().hash(&mut h);
+        for s in &pending_steer {
+            s.hash(&mut h);
+        }
         h.finish()
     };
     if last.snapshot_fp != Some(fp) {
@@ -1532,6 +1548,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             file_changes,
             attachments,
             mode,
+            pending_steer,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);

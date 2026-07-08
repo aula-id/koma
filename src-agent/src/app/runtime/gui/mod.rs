@@ -266,6 +266,12 @@ enum GuiReq {
     /// The composer STOP button (shown while the turn is working): interrupt the running
     /// turn. Forwarded as [`ClientRequest::Interrupt`] (koma's Esc-interrupt equivalent).
     Interrupt,
+    /// The chat hover-edit PENCIL on a user bubble: rewind the conversation TO that
+    /// message by its `index` into `SessionSnapshot.messages` (Conversation::messages()).
+    /// Forwarded as [`ClientRequest::RewindTo`], which runs koma's `RewindToMessage`
+    /// action (abort in-flight turn + truncate live/sqlite + refill the composer); a
+    /// non-user / out-of-range index is a clean daemon-side no-op.
+    RewindTo { index: usize },
     /// The Explore sidepanel agent-row KILL button: kill sub-agent `id`. Forwarded as
     /// [`ClientRequest::KillSubagent`].
     KillSubagent { id: usize },
@@ -701,6 +707,14 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::Interrupt);
+                            }
+                        }
+                    }
+                    // Chat hover-edit pencil: rewind the conversation to a user message.
+                    GuiReq::RewindTo { index } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::RewindTo { index });
                             }
                         }
                     }
