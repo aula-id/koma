@@ -164,6 +164,14 @@ pub enum ClientRequest {
     /// Read-only + async: the daemon spawns the network GET and replies out-of-band with
     /// a [`DaemonEvent::ModelList`] on a later tick (mirrors the `FileSearch` one-shot).
     ListModels { provider: String },
+    /// Set the active theme (the GUI onboarding theme step + the future Settings gear).
+    /// `name` is a [`crate::view::theme::PALETTES`] registry key (an unknown name falls
+    /// back to the dark palette at render time). The daemon writes `AppConfig.palette`
+    /// (the live theme key), persists via `AppConfig::save`, and the resulting palette
+    /// change forces a full snapshot so the GUI host re-derives + re-pushes its `Config`
+    /// palette live. gui-gated: the TUI picks the theme in `Mode::Settings`. `theme`/
+    /// `accent` are the deprecated legacy fields and are left untouched.
+    SetTheme { name: String },
 
     // ─── GUI turn/session controls (Explore sidepanel + composer + picker) ────────
     /// Interrupt the foreground session's in-flight turn (the GUI stop button) — the

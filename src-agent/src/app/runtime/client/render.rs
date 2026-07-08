@@ -783,6 +783,19 @@ enum PushEnvelope {
         /// else the matching local-override option. `None` is serialised as JSON `null`.
         #[serde(rename = "sessionMainUuid")]
         session_main_uuid: Option<String>,
+        /// The available theme registry names (`view::theme::PALETTES` keys), for the GUI
+        /// onboarding theme step + the future Settings gear picker. Static + identical in
+        /// both host states, but rides `Config` so the picker always has the list without a
+        /// dedicated envelope. React renders one option per name; a pick round-trips as
+        /// `SetTheme { name }`.
+        themes: Vec<&'static str>,
+        /// FIRST-RUN flag (wave-3+4 A/B): `true` when no usable Main route is configured
+        /// (no providers, or no global/local Main-role model bound to a known provider) —
+        /// i.e. an empty/first-run `~/.koma/config.json`. React shows the full-screen
+        /// onboarding flow (theme → connection) instead of the normal start screen when
+        /// this is set; it clears the instant a provider + Main model land.
+        #[serde(rename = "needsOnboarding")]
+        needs_onboarding: bool,
     },
     /// One-shot live model-id catalogue for `provider` (uuid), answering a
     /// `ListModels` — the Connector ModelForm REPLACES its model-id picker options with
@@ -986,6 +999,14 @@ pub(super) fn push_loop(
                             let _ = tx.send(hub);
                         });
                     }
+                }
+                // A config mutation raced in while attached (the ipc handler normally
+                // routes these straight to the daemon via `live_req` when a session is
+                // attached; this only lands here if the attach state flipped between the
+                // check and the send). Forward the carried request to the daemon — it owns
+                // the authoritative config and re-pushes a fresh `Config` on the change.
+                Ok(super::HostCtl::ConfigMutate(req)) => {
+                    let _ = req_tx.send(req);
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
@@ -1723,12 +1744,36 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         })
         .collect();
 
+    // FIRST-RUN: no usable Main route = a global OR local model that (a) holds the Main
+    // role AND (b) is bound to a provider that actually exists. An empty config (no
+    // providers, or a Main model whose provider was deleted) → onboarding. This is the
+    // projection-level proxy for the daemon's `resolve_role(Main).is_usable()` gate (which
+    // needs a `Settings` this config-only projection doesn't carry).
+    let has_usable_main = cfg
+        .models
+        .iter()
+        .chain(cfg.session_models.iter())
+        .any(|m| {
+            m.effective_roles()
+                .contains(&crate::model::app_config::ModelRole::Main)
+                && cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
+        });
+    let needs_onboarding = !has_usable_main;
+
+    // Available theme registry keys for the onboarding theme step + Settings picker.
+    let themes: Vec<&'static str> = crate::view::theme::PALETTES
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+
     let env = PushEnvelope::Config {
         providers,
         models,
         mcp,
         palette: cfg.palette.clone(),
         session_main_uuid,
+        themes,
+        needs_onboarding,
     };
     if let Ok(json) = serde_json::to_string(&env) {
         if last.config_json.as_deref() != Some(json.as_str()) {

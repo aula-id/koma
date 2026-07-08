@@ -243,6 +243,12 @@ enum GuiReq {
     /// Fetch the live model-id catalogue for a provider (Connector model picker). The
     /// daemon replies out-of-band; the host re-pushes it as a `ModelList` envelope.
     ListModels { provider: String },
+    /// Set the active theme (onboarding theme step + the future Settings gear). `name` is
+    /// a `view::theme::PALETTES` key. Forwarded as [`ClientRequest::SetTheme`] when
+    /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly
+    /// to `~/.koma/config.json` on the swapper thread when PRE-SESSION (onboarding runs
+    /// before any session exists) via [`HostCtl::ConfigMutate`].
+    SetTheme { name: String },
 
     // ─── GUI turn/session controls (stop button + kill buttons + model picker) ────
     // Same forward-to-attached-daemon pattern as `Submit`: lock `ipc_req` + send the
@@ -305,6 +311,29 @@ fn forward_paste(
             let _ = tx.send(crate::ipc::proto::ClientRequest::Paste { text: path });
         }
     }
+}
+
+/// Route a CONFIG-mutating `ClientRequest` to the daemon when a session is ATTACHED, else
+/// to the swapper thread for PRE-SESSION apply.
+///
+/// The Connector/theme setters live in BOTH host states: while attached they forward to
+/// the daemon (which owns the authoritative `AppConfig` + re-pushes `Config`); during
+/// onboarding/empty-state (the swapper, before any session exists) there is no `live_req`
+/// sender, so the request is handed to the client-thread as a [`HostCtl::ConfigMutate`],
+/// which applies the config-global subset straight to `~/.koma/config.json` and re-pushes.
+/// This is what lets the onboarding theme + provider + model steps work with NO session.
+fn forward_config_req(
+    live_req: &std::sync::Mutex<Option<std::sync::mpsc::Sender<crate::ipc::proto::ClientRequest>>>,
+    ctl: &std::sync::mpsc::Sender<super::client::HostCtl>,
+    req: crate::ipc::proto::ClientRequest,
+) {
+    if let Ok(g) = live_req.lock() {
+        if let Some(tx) = g.as_ref() {
+            let _ = tx.send(req);
+            return;
+        }
+    }
+    let _ = ctl.send(super::client::HostCtl::ConfigMutate(req));
 }
 
 /// Map a `koma.js` resize-handle direction string to tao's [`tao::window::ResizeDirection`].
@@ -537,6 +566,8 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     }
                     // GUI config setters: forward each to the attached daemon, which owns
                     // `AppConfig`, persists the change, and re-pushes a fresh `Config`.
+                    // Config setters route to the daemon when attached, else to the swapper
+                    // thread for PRE-SESSION (onboarding) apply — see `forward_config_req`.
                     GuiReq::SetMcpServer {
                         uuid,
                         name,
@@ -547,34 +578,34 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         env,
                         url,
                     } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::SetMcpServer {
-                                    uuid,
-                                    name,
-                                    enabled,
-                                    transport,
-                                    command,
-                                    args,
-                                    env,
-                                    url,
-                                });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::SetMcpServer {
+                                uuid,
+                                name,
+                                enabled,
+                                transport,
+                                command,
+                                args,
+                                env,
+                                url,
+                            },
+                        );
                     }
                     GuiReq::DeleteMcpServer { uuid } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::DeleteMcpServer { uuid });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::DeleteMcpServer { uuid },
+                        );
                     }
                     GuiReq::EnableMcpServer { uuid, enabled } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::EnableMcpServer { uuid, enabled });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::EnableMcpServer { uuid, enabled },
+                        );
                     }
                     GuiReq::SetProvider {
                         uuid,
@@ -582,23 +613,23 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         endpoint,
                         api_key,
                     } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::SetProvider {
-                                    uuid,
-                                    name,
-                                    endpoint,
-                                    api_key,
-                                });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::SetProvider {
+                                uuid,
+                                name,
+                                endpoint,
+                                api_key,
+                            },
+                        );
                     }
                     GuiReq::DeleteProvider { uuid } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::DeleteProvider { uuid });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::DeleteProvider { uuid },
+                        );
                     }
                     GuiReq::SetModel {
                         uuid,
@@ -609,26 +640,30 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         roles,
                         scope,
                     } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::SetModel {
-                                    uuid,
-                                    name,
-                                    model_id,
-                                    provider_uuid,
-                                    route,
-                                    roles,
-                                    scope,
-                                });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::SetModel {
+                                uuid,
+                                name,
+                                model_id,
+                                provider_uuid,
+                                route,
+                                roles,
+                                scope,
+                            },
+                        );
                     }
                     GuiReq::DeleteModel { uuid, scope } => {
-                        if let Ok(g) = ipc_req.lock() {
-                            if let Some(tx) = g.as_ref() {
-                                let _ = tx.send(ClientRequest::DeleteModel { uuid, scope });
-                            }
-                        }
+                        forward_config_req(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::DeleteModel { uuid, scope },
+                        );
+                    }
+                    // Theme picker (onboarding step 1 + Settings gear): same dual routing.
+                    GuiReq::SetTheme { name } => {
+                        forward_config_req(&ipc_req, &ipc_ctl, ClientRequest::SetTheme { name });
                     }
                     GuiReq::ListModels { provider } => {
                         if let Ok(g) = ipc_req.lock() {
