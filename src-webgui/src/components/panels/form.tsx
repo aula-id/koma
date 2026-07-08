@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type InputHTMLAttributes, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type RefObject,
+} from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown } from 'lucide-react'
 
 // Reusable inline-form primitives for the sidebar CRUD panels. Themed on koma-*.
@@ -112,10 +120,36 @@ export function Chips<T extends string>({
   )
 }
 
+// Track a trigger element's viewport rect while a menu is open, so the menu can
+// be rendered in a body portal (fixed positioning) that no `overflow` ancestor
+// can clip. Recomputes on scroll (capture: catches inner scroll containers) and
+// resize; clears when closed.
+function useAnchorRect<T extends HTMLElement>(open: boolean, ref: RefObject<T | null>) {
+  const [rect, setRect] = useState<DOMRect | null>(null)
+  useEffect(() => {
+    if (!open) {
+      setRect(null)
+      return
+    }
+    const update = () => {
+      if (ref.current) setRect(ref.current.getBoundingClientRect())
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open, ref])
+  return rect
+}
+
 // Dropdown select: button trigger + floating menu (a real "select" control, not
 // a permanently-expanded radio pile). Options commit via onMouseDown+
 // preventDefault (not onClick) so focus never races between the trigger/menu —
-// the classic combobox fix. Closes + blurs on pick, Esc, or outside click.
+// the classic combobox fix. The menu renders in a body portal at z-[80] so no
+// scroll/overflow ancestor clips it. Closes + blurs on pick, Esc, or outside click.
 export function Select<T extends string>({
   value,
   options,
@@ -129,11 +163,15 @@ export function Select<T extends string>({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const rect = useAnchorRect(open, ref)
 
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -166,32 +204,46 @@ export function Select<T extends string>({
         </span>
         <ChevronDown size={13} className="flex-none opacity-60" />
       </button>
-      {open && options.length > 0 && (
-        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-10 max-h-40 overflow-y-auto rounded border border-koma-border bg-koma-panel py-1 shadow-xl">
-          {options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                pick(o.value)
-              }}
-              className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
-                o.value === value
-                  ? 'bg-koma-hover text-koma-fg'
-                  : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
-              }`}
-            >
-              {o.value === value ? (
-                <Check size={12} className="flex-none" />
-              ) : (
-                <span className="w-3 flex-none" />
-              )}
-              <span className="truncate">{o.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        rect &&
+        options.length > 0 &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{
+              position: 'fixed',
+              top: rect.bottom + 4,
+              left: rect.left,
+              width: rect.width,
+              zIndex: 80,
+            }}
+            className="max-h-40 overflow-y-auto rounded border border-koma-border bg-koma-panel py-1 shadow-xl"
+          >
+            {options.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  pick(o.value)
+                }}
+                className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
+                  o.value === value
+                    ? 'bg-koma-hover text-koma-fg'
+                    : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
+                }`}
+              >
+                {o.value === value ? (
+                  <Check size={12} className="flex-none" />
+                ) : (
+                  <span className="w-3 flex-none" />
+                )}
+                <span className="truncate">{o.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -200,7 +252,8 @@ export function Select<T extends string>({
 // `options`; picking one commits it via onMouseDown+preventDefault (same
 // focus-race fix as Select); typing something with no matches still commits as
 // raw text — the text input's value IS the committed value, no separate
-// confirm step. Closes + blurs on pick, Esc, or outside click.
+// confirm step. Menu renders in a body portal at z-[80] so overflow ancestors
+// can't clip it. Closes + blurs on pick, Esc, or outside click.
 export function Combobox({
   value,
   onChange,
@@ -214,6 +267,8 @@ export function Combobox({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const rect = useAnchorRect(open, ref)
   const filtered = value.trim()
     ? options.filter((o) => o.toLowerCase().includes(value.trim().toLowerCase()))
     : options
@@ -221,7 +276,9 @@ export function Combobox({
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
+      setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -251,29 +308,42 @@ export function Combobox({
           setOpen(true)
         }}
       />
-      {open && (
-        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-10 max-h-40 overflow-y-auto rounded border border-koma-border bg-koma-panel py-1 shadow-xl">
-          {filtered.length > 0 ? (
-            filtered.map((o) => (
-              <button
-                key={o}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  pick(o)
-                }}
-                className="flex w-full items-center px-2 py-1 text-left text-[12px] text-koma-fg opacity-75 transition-colors hover:bg-koma-hover hover:opacity-100"
-              >
-                <span className="truncate">{o}</span>
-              </button>
-            ))
-          ) : value.trim() ? (
-            <div className="px-2 py-1 text-[11px] text-koma-fg opacity-45">Use “{value.trim()}”</div>
-          ) : (
-            <div className="px-2 py-1 text-[11px] text-koma-fg opacity-35">No matches</div>
-          )}
-        </div>
-      )}
+      {open &&
+        rect &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{
+              position: 'fixed',
+              top: rect.bottom + 4,
+              left: rect.left,
+              width: rect.width,
+              zIndex: 80,
+            }}
+            className="max-h-40 overflow-y-auto rounded border border-koma-border bg-koma-panel py-1 shadow-xl"
+          >
+            {filtered.length > 0 ? (
+              filtered.map((o) => (
+                <button
+                  key={o}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    pick(o)
+                  }}
+                  className="flex w-full items-center px-2 py-1 text-left text-[12px] text-koma-fg opacity-75 transition-colors hover:bg-koma-hover hover:opacity-100"
+                >
+                  <span className="truncate">{o}</span>
+                </button>
+              ))
+            ) : value.trim() ? (
+              <div className="px-2 py-1 text-[11px] text-koma-fg opacity-45">Use “{value.trim()}”</div>
+            ) : (
+              <div className="px-2 py-1 text-[11px] text-koma-fg opacity-35">No matches</div>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
