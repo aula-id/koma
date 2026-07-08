@@ -63,7 +63,36 @@ pub(super) fn handle_free(state: &mut AppState) -> Result<()> {
         return Ok(());
     }
 
-    // Toggle ON:
+    // Toggle ON: pin this session's Main onto the keyless koma-free tier.
+    if let Err(e) = set_session_koma_free(state) {
+        state.rest.fg_mut().status = format!("error: {e}");
+        return Ok(());
+    }
+    state.rest.fg_mut().set_toast_info("koma free".to_string());
+    Ok(())
+}
+
+/// Pin the FOREGROUND session's Main role onto the keyless koma-free tier
+/// (`ApiType::KomaFree` / [`KOMA_FREE_MODEL`]) — the reusable core of `/free`'s
+/// toggle-ON path, shared with the GUI model quick-picker's synthetic "advertised
+/// free" row (`SetSessionMain { model_uuid: Some(KOMA_FREE_SENTINEL) }`).
+///
+/// Idempotent: if the session is ALREADY on a koma-free Main override this is a no-op.
+/// Otherwise it (find-or-)creates the koma-free [`ProviderConn`] (persisting
+/// `config` only when newly provisioned), drops any OTHER local Main override, and
+/// pushes a fresh koma-free Main [`ModelEntry`] — writing ONLY `settings.session_models`
+/// (never `config.models`), so the global Main assignment is untouched. A no-op when
+/// there is no foreground session to hold the override.
+pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
+    // No session → nowhere to pin a local override.
+    let Some(sess) = state.rest.fg().session.as_ref() else {
+        return Ok(());
+    };
+    // Already on koma-free Main → idempotent no-op.
+    if koma_free_main_idx(&state.rest.config, &sess.settings).is_some() {
+        return Ok(());
+    }
+
     // The koma-free `X-Koma` header must never be empty. `install_id` is
     // serde-default + Default-minted, but mint one defensively if it somehow
     // got cleared, then persist it below.
@@ -98,9 +127,7 @@ pub(super) fn handle_free(state: &mut AppState) -> Result<()> {
         }
     };
     if provisioned {
-        if let Err(e) = state.rest.config.save() {
-            state.rest.fg_mut().status = format!("config save failed: {e}");
-        }
+        state.rest.config.save()?;
     }
 
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
@@ -118,11 +145,7 @@ pub(super) fn handle_free(state: &mut AppState) -> Result<()> {
             roles: vec![ModelRole::Main],
             role: None,
         });
-        if let Err(e) = sess.save() {
-            state.rest.fg_mut().status = format!("error: {e}");
-            return Ok(());
-        }
+        sess.save()?;
     }
-    state.rest.fg_mut().set_toast_info("koma free".to_string());
     Ok(())
 }

@@ -16,7 +16,10 @@ mod cd;
 // `/compact` uses, with `preserve_n = 0`.
 pub(crate) mod compact;
 mod effort;
-mod free;
+// `pub(crate)` so the GUI model quick-picker's synthetic "advertised free" row can
+// reuse `set_session_koma_free` — the SAME find-or-create-and-pin core `/free` runs —
+// from the daemon `SetSessionMain` handler.
+pub(crate) mod free;
 // `pub(crate)` so the shared `internet_feedback` helper is reachable from the
 // Ctrl+E handler (controller) and the settings-save action, which flip the same
 // mode and must show the identical status line.
