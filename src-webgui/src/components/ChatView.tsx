@@ -24,7 +24,6 @@ import {
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { MessageBody } from './MessageBody'
 import { Composer } from './Composer'
-import { WaitingIndicator } from './WaitingIndicator'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
@@ -460,9 +459,6 @@ export function ChatView() {
             streaming
           />
         )}
-        {/* Working, but nothing streamed yet: a playful random Lottie fills the
-            empty gap (NOT a chat message — hidden the instant tokens arrive). */}
-        {working && !showLive && <WaitingIndicator />}
       </div>
       <Composer />
     </div>
