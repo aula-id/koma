@@ -29,6 +29,14 @@ export function ConnectorListView({
 }: Props) {
   const [open, setOpen] = useState({ providers: true, oauth: true, models: true })
 
+  // The synthetic koma-free tier is DROPDOWN-ONLY: exclude the auto-provisioned
+  // keyless provider (`isKomaFree`) and the free-flagged synthetic model
+  // (`m.free`) from the Connector lists so they don't leak as an editable
+  // provider / a phantom 2nd "main" model. Only real config providers/models
+  // and session_models show here.
+  const realProviders = providers.filter((p) => !p.isKomaFree)
+  const realModels = models.filter((m) => !m.free)
+
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
       <AccordionSection
@@ -37,8 +45,8 @@ export function ConnectorListView({
         onToggle={() => setOpen((s) => ({ ...s, providers: !s.providers }))}
         action={<AddBtn label="Add provider" onClick={onAddProvider} />}
       >
-        {providers.length === 0 && <Empty>No providers</Empty>}
-        {providers.map((p) => (
+        {realProviders.length === 0 && <Empty>No providers</Empty>}
+        {realProviders.map((p) => (
           <Row
             key={p.id}
             title={p.name || '(unnamed)'}
@@ -82,8 +90,8 @@ export function ConnectorListView({
         onToggle={() => setOpen((s) => ({ ...s, models: !s.models }))}
         action={<AddBtn label="Add model" onClick={onAddModel} />}
       >
-        {models.length === 0 && <Empty>No models</Empty>}
-        {models.map((m) => (
+        {realModels.length === 0 && <Empty>No models</Empty>}
+        {realModels.map((m) => (
           <Row
             key={m.id}
             leading={<ScopePill scope={m.scope} />}

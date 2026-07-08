@@ -25,7 +25,12 @@ export type McpServer = {
 // plaintext API key to the webview (devtools are enabled; it'd be DOM/console
 // readable). ProviderForm's key input always starts empty on edit; saving with
 // it blank keeps the existing stored key (see `upsert_provider` daemon-side).
-export type Provider = { id: string; name: string; endpoint: string; hasKey: boolean }
+// `isKomaFree` flags the auto-provisioned keyless koma-free provider
+// (`ApiType::KomaFree`, render.rs `PushProvider`). It's not a user-editable
+// provider — the Connector PROVIDERS list hides it (the free tier is
+// dropdown-only). Optional-tolerant: absent on a host build that doesn't
+// project the flag yet (and on every real provider).
+export type Provider = { id: string; name: string; endpoint: string; hasKey: boolean; isKomaFree?: boolean }
 
 export type OAuthProv = 'OpenAI' | 'Kilo Code' | 'Anthropic'
 export type OAuthConn = { id: string; provider: OAuthProv; account: string }
