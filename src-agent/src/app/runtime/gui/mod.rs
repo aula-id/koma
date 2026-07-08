@@ -253,6 +253,14 @@ enum GuiReq {
         #[serde(rename = "modelId")]
         model_id: String,
     },
+    /// Explore "FILE CHANGED" panel: fetch a host-computed diff (original @ `git show
+    /// HEAD:<path>` vs the current on-disk contents) for `path` — a `fileChanges`
+    /// record's path — to open a Monaco diff tab. Serviced ENTIRELY host-side (the host
+    /// process has direct filesystem + git access, so no daemon round-trip is needed or
+    /// wanted): routed UNCONDITIONALLY to the host-relay thread via `HostCtl::FileDiff`,
+    /// unlike `ListModels`/`ListRoutes`'s attached-daemon-preferring dual routing, so it
+    /// works identically whether a session is attached or not.
+    FileDiff { path: String },
     /// Set the active theme (onboarding theme step + the future Settings gear). `name` is
     /// a `view::theme::PALETTES` key. Forwarded as [`ClientRequest::SetTheme`] when
     /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly
@@ -771,6 +779,12 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                             },
                             HostCtl::ListRoutes { provider, model_id },
                         );
+                    }
+                    // Explore FILE CHANGED panel: host-side diff fetch (git HEAD vs
+                    // on-disk). ALWAYS routed to the host-relay thread — never the
+                    // daemon — regardless of attach state (see `HostCtl::FileDiff`).
+                    GuiReq::FileDiff { path } => {
+                        let _ = ipc_ctl.send(HostCtl::FileDiff { path });
                     }
                     // Stop button: interrupt the running turn on the attached daemon.
                     GuiReq::Interrupt => {

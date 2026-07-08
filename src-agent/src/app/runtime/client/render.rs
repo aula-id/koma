@@ -922,6 +922,23 @@ enum PushEnvelope {
         model_id: String,
         routes: Vec<PushRoute>,
     },
+    /// One-shot host-computed FILE DIFF answering a `FileDiff` request from the Explore
+    /// "FILE CHANGED" panel (opening a Monaco diff tab): `original` is `git show
+    /// HEAD:<path>` (empty for a new/untracked file — a valid all-added diff);
+    /// `modified` is the current on-disk contents (empty when the file was deleted).
+    /// `error` is set (both strings then empty) when the diff couldn't be computed at
+    /// all (no git repository, or either side over the size cap); `binary` is set
+    /// (both strings then empty, no `error`) when either side isn't valid UTF-8 text.
+    /// Computed ENTIRELY host-side (see `compute_file_diff` — never forwarded to the
+    /// daemon), so this is pushed the SAME way regardless of attach state, and — like
+    /// `ModelList`/`RouteList` — is ALWAYS a reply so the diff tab never hangs.
+    FileDiff {
+        path: String,
+        original: String,
+        modified: String,
+        error: Option<String>,
+        binary: bool,
+    },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -968,6 +985,21 @@ pub(super) fn push_route_list(
                 uptime_last_30m: r.uptime_last_30m,
             })
             .collect(),
+    };
+    emit(push, &env);
+}
+
+/// Emit a one-shot `FileDiff` envelope for the GUI Explore panel's Monaco diff tab,
+/// carrying a host-computed [`super::FileDiffResult`] verbatim. Shared by the
+/// UN-ATTACHED swapper fallback and the attached `push_loop`'s off-thread worker,
+/// since a `FileDiff` is serviced entirely host-side regardless of attach state.
+pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResult) {
+    let env = PushEnvelope::FileDiff {
+        path: result.path,
+        original: result.original,
+        modified: result.modified,
+        error: result.error,
+        binary: result.binary,
     };
     emit(push, &env);
 }
@@ -1100,6 +1132,15 @@ pub(super) fn push_loop(
     let mut refresh_inflight = false;
     let current_owned: Option<String> = current_session.map(str::to_string);
 
+    // --- FILE CHANGED diff fetch (FileDiff) ---
+    // `compute_file_diff` shells out to git + reads the file, both blocking, so — same
+    // reasoning as `RefreshHub` above — it runs on a one-shot worker thread rather than
+    // inline on this 16ms fold loop; the loop drains completed results non-blocking and
+    // pushes each as a `FileDiff` envelope. Unlike the hub refresh there is no "latest
+    // wins" coalescing: each request is for a (possibly different) path, so every
+    // completed result is pushed, not just the newest.
+    let (file_diff_tx, file_diff_rx) = std::sync::mpsc::channel::<super::FileDiffResult>();
+
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
     // this early, so the throwaways here are never acted on.
@@ -1188,6 +1229,17 @@ pub(super) fn push_loop(
                 }
                 Ok(super::HostCtl::ListRoutes { provider, model_id }) => {
                     let _ = req_tx.send(ClientRequest::ListRoutes { provider, model_id });
+                }
+                // FILE CHANGED diff fetch: NEVER touches the daemon (host-side only,
+                // regardless of attach state) — spawn the blocking git+fs work off this
+                // thread; the result is drained + pushed below at (b-quat).
+                Ok(super::HostCtl::FileDiff { path }) => {
+                    let tx = file_diff_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let result = super::compute_file_diff(&path, cur.as_deref());
+                        let _ = tx.send(result);
+                    });
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
@@ -1315,6 +1367,13 @@ pub(super) fn push_loop(
             if let Some(hub) = latest_hub {
                 push_hub(&hub, push, last);
             }
+        }
+
+        // --- (b-quat) FILE CHANGED diff fetch: push any completed off-thread diffs ---
+        // Drain ALL completed results (not just the newest — see the channel's doc
+        // comment above) and push each as its own one-shot `FileDiff` envelope.
+        while let Ok(result) = file_diff_rx.try_recv() {
+            push_file_diff(push, result);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---
