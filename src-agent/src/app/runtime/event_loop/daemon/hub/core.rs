@@ -163,6 +163,15 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// which turns each landed reply into a seq'd `ModelRoutes` frame to the requesting
     /// client.
     pub(super) list_routes_rx: Receiver<ListRoutesReply>,
+    /// Set by [`ClientRequest::Interrupt`] (the GUI stop button / TUI Esc-equivalent
+    /// unconditional cut): forces [`stream_deltas`](Self::stream_deltas) to send EVERY
+    /// attached client a full `Snapshot` on its very next pass, bypassing the per-client
+    /// differ entirely. An interrupt must be a guaranteed correctness escape hatch — the
+    /// user's stop request must never leave a client's shadow stuck (e.g. a desynced
+    /// `streaming` buffer) — so the resync doesn't rely on the differ recognizing the
+    /// state change; it's an unconditional belt-and-suspenders reset. Consumed (reset to
+    /// `false`) at the top of `stream_deltas`.
+    pub(super) force_resync: bool,
 }
 
 impl DaemonHub {
@@ -190,6 +199,7 @@ impl DaemonHub {
                 list_models_rx,
                 list_routes_tx,
                 list_routes_rx,
+                force_resync: false,
             },
             msg_tx,
         )

@@ -263,15 +263,30 @@ impl ModelEntry {
     /// path that empty-route already went through — collapse both to `None` so
     /// nothing ever persists an `only: ["auto"]` provider pin (which upstream
     /// 404s: "No allowed providers are available for the selected model").
+    ///
+    /// Also self-heals a route poisoned with an OpenRouter endpoint's display
+    /// LABEL instead of its provider name: OpenRouter's `/endpoints` `name`
+    /// field is formatted `"Provider | model-variant"` (e.g.
+    /// `"Xiaomi | xiaomi/mimo-v2.5-20260422"`), and a provider name itself never
+    /// contains `" | "` — so when the separator is present, only the trimmed
+    /// prefix is kept as the canonical pin. `helpers::provider_routing_for`
+    /// (openrouter service) calls back into this same function so the
+    /// live-request pin and the persisted config can never drift apart.
     pub fn normalize_route(route: Option<String>) -> Option<String> {
-        route.and_then(|r| {
-            let trimmed = r.trim();
-            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
+        let trimmed = route?;
+        let trimmed = trimmed.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+            return None;
+        }
+        let stripped = match trimmed.split_once(" | ") {
+            Some((prefix, _)) => prefix.trim(),
+            None => trimmed,
+        };
+        if stripped.is_empty() || stripped.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            Some(stripped.to_string())
+        }
     }
 }
 

@@ -110,6 +110,12 @@ impl DaemonHub {
             return;
         }
 
+        // `ClientRequest::Interrupt` sets this to force EVERY attached client to a
+        // full `Snapshot` this pass, bypassing the differ — an unconditional stop
+        // must be a guaranteed resync even if a client's shadow drifted in a way the
+        // differ doesn't (yet) recognize. One-shot: consumed here.
+        let force = std::mem::take(&mut self.force_resync);
+
         for i in 0..self.clients.len() {
             if !self.clients[i].attached {
                 continue;
@@ -150,9 +156,10 @@ impl DaemonHub {
                 diff(prev, &next)
             };
 
-            if result.needs_full {
-                // Structural change: resend this client a full Snapshot + advance
-                // its baseline. `next` is shared across the loop, so clone per send.
+            if force || result.needs_full {
+                // Structural change (or a forced Interrupt resync): resend this
+                // client a full Snapshot + advance its baseline. `next` is shared
+                // across the loop, so clone per send.
                 self.send_to(i, DaemonEvent::Snapshot(Box::new(next.clone())));
                 self.clients[i].last_snapshot = Some(next.clone());
             } else if !result.deltas.is_empty() {

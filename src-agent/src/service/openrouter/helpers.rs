@@ -217,21 +217,25 @@ pub(super) fn apply_tool_call_delta(acc: &mut Vec<ToolCall>, d: &ToolCallDelta) 
 /// Returns `None` for an empty slug (OpenRouter default routing) and
 /// `Some(ProviderRouting)` with `allow_fallbacks: false` otherwise, strictly
 /// pinning the request to that single provider. Free helper so every request
-/// path (streaming, `complete`, `complete_with`) shares one routing rule. The
-/// literal sentinel `"auto"` (any case, surrounding whitespace ignored) is
-/// treated identically to an empty slug — a self-heal for any already-persisted
-/// GUI-authored config that stored the literal string instead of `None`.
+/// path (streaming, `complete`, `complete_with`) shares one routing rule.
+///
+/// Delegates the actual normalization to
+/// [`crate::model::app_config::ModelEntry::normalize_route`] so both the
+/// live-request pin and the persisted config self-heal identically: the
+/// literal sentinel `"auto"` (any case, surrounding whitespace ignored) maps
+/// to `None`, and a route already poisoned with an OpenRouter endpoint's
+/// display LABEL (`"Provider | model-variant"`, e.g.
+/// `"Xiaomi | xiaomi/mimo-v2.5-20260422"`) is healed down to just the
+/// provider-name prefix — provider names never contain `" | "`.
 pub(super) fn provider_routing_for(
     provider: &str,
 ) -> Option<crate::dto::openrouter::ProviderRouting> {
-    if provider.is_empty() || provider.trim().eq_ignore_ascii_case("auto") {
-        None
-    } else {
-        Some(crate::dto::openrouter::ProviderRouting {
-            only: vec![provider.to_string()],
-            allow_fallbacks: false,
-        })
-    }
+    let pinned =
+        crate::model::app_config::ModelEntry::normalize_route(Some(provider.to_string()))?;
+    Some(crate::dto::openrouter::ProviderRouting {
+        only: vec![pinned],
+        allow_fallbacks: false,
+    })
 }
 
 /// True when `endpoint` speaks OpenRouter's `reasoning` dialect — i.e. accepts

@@ -1718,7 +1718,13 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
     // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
     // The toast TEXT and its `ToastKind` severity both ride here; a safeguard/harness
     // block surfaces as an Error toast (set_toast), an informational notice as Info.
-    let working = fg.waiting || fg.streaming.is_some();
+    // `waiting` mirrors the daemon's `is_ui_busy()` (SessionSnapshot.working, which
+    // already folds in streaming); do not OR in shadow-derived `fg.streaming.is_some()`
+    // here — that re-derivation is what let a stale `Some("")` shadow buffer (a
+    // zero-token stream error) desync the Status envelope and leave the stop
+    // button / cooking indicator stuck forever. The differ now forces a resync on
+    // any streaming Option flip, so `waiting` alone is authoritative.
+    let working = fg.waiting;
     let toast = fg.toast.as_ref().map(|(t, _, _)| t.clone());
     let toast_kind = fg.toast.as_ref().map(|(_, _, k)| match k {
         crate::app::state::ToastKind::Error => "error",

@@ -13,10 +13,14 @@ const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'planner', label: 'planner' },
 ]
 
-// The stored route id for an endpoint — the pinned upstream provider string the
-// daemon persists on the model (SetModel.route). Prefer an explicit endpoint id,
-// fall back to the provider name.
-const routeId = (r: RouteEntry) => r.name ?? r.providerName
+// The stored route id for an endpoint — the pinned upstream PROVIDER NAME the
+// daemon persists on the model (SetModel.route), e.g. "Xiaomi". OpenRouter's
+// endpoint `name` is a display LABEL formatted "Provider | model-variant"
+// (e.g. "Xiaomi | xiaomi/mimo-v2.5-20260422") — persisting that whole label as
+// the pin makes OpenRouter 404 ("No allowed providers are available for the
+// selected model"). Prefer `providerName`; fall back to `name` only as a last
+// resort when the host omits it.
+const routeId = (r: RouteEntry) => r.providerName ?? r.name
 
 // OpenRouter pricing is USD-PER-TOKEN (e.g. "0.0000006"); render it as the more
 // familiar USD-per-MILLION-tokens. Returns undefined for missing/non-numeric.

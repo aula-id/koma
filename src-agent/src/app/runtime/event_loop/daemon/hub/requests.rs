@@ -795,8 +795,16 @@ impl DaemonHub {
             // GUI stop button: interrupt the foreground session's in-flight turn via the
             // SAME `Action::Interrupt` the TUI's Esc runs (abort the stream, commit the
             // partial with `[interrupted]`, halt the agentic loop + kill running sub-agents).
+            // Unconditional cut: stop must always cut, busy or not (mirrors the TUI Esc's
+            // right to interrupt unconditionally) — `handle_interrupt` itself no longer
+            // gates on `is_ui_busy()`. Set `force_resync` so the NEXT `stream_deltas` pass
+            // (later this same tick) resends every attached client a full `Snapshot`
+            // regardless of what the differ concludes — a guaranteed resync for a client
+            // whose shadow drifted (e.g. the fixed `Some("")` stuck-streaming case), not
+            // dependent on the differ recognizing the change.
             ClientRequest::Interrupt => {
                 let result = apply_action(Action::Interrupt, state, client, handle);
+                self.force_resync = true;
                 self.ack_or_error(idx, result);
             }
 

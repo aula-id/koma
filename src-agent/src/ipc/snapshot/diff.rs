@@ -366,10 +366,22 @@ enum AppendDiff {
 /// Classify `prev` -> `next` for an APPEND-ONLY buffer (the streaming content /
 /// reasoning buffers only ever grow within a turn, then reset between turns).
 ///
-/// `None` and `Some("")` are treated alike (both "no buffer"): a stream that goes
-/// `None` -> `Some("")` -> `Some("hi")` yields `Same` then `Appended("hi")`, and a
-/// commit that drops `Some("...")` -> `None` yields `Reset` so the shadow re-syncs.
+/// A `None`/`Some` FLIP (either direction) always yields `Reset`, even when the
+/// `Some` side is `""` — `Some("")` and `None` compare equal as strings, but they
+/// are NOT the same client-visible state: `None` means "no buffer" while `Some("")`
+/// means "a buffer exists (possibly an in-flight stream that errored before any
+/// token)". Collapsing that flip to `Same` (comparing via `unwrap_or("")`) would
+/// silently drop the transition — e.g. a zero-token stream error takes the buffer
+/// `Some("") -> None` and, treated as `Same`, the client shadow keeps stale
+/// `Some("")` forever (the stop button / cooking indicator never clears). The
+/// symmetric `None -> Some("")` (a stream begins but no structural change
+/// accompanies it) would likewise never show the cooking state. So any flip in
+/// `is_some()` forces a resync; only once both sides agree on Some/None do we fall
+/// through to the ordinary append-only comparison.
 fn append_suffix(prev: Option<&str>, next: Option<&str>) -> AppendDiff {
+    if prev.is_some() != next.is_some() {
+        return AppendDiff::Reset;
+    }
     let p = prev.unwrap_or("");
     let n = next.unwrap_or("");
     if p == n {
