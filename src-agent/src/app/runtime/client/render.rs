@@ -636,6 +636,18 @@ struct PushPalette {
     panel: String,
 }
 
+/// One named palette in the [`PushEnvelope::Config`] `palettes` catalogue — the GUI
+/// Settings tab's Appearance grid renders a movie-strip card per entry. `name` is the
+/// `view::theme::PALETTES` registry key (round-trips as `SetTheme { name }`); `colors` is
+/// the palette's role colours as `#rrggbb` strings in the FIXED order
+/// `[bg, fg, dim, accent, panel, sel_bg, sel_fg, success, warn, error, info]`, resolved
+/// through the SAME `color_hex` conversion [`PushPalette`] uses.
+#[derive(serde::Serialize)]
+struct PushPaletteInfo {
+    name: String,
+    colors: Vec<String>,
+}
+
 /// A COOKING-pane row in a [`PushEnvelope::Hub`]. The synthetic `[+ new session]`
 /// row carries only `kind`/`id`/`name`; a real session row fills the rest (the
 /// session-only fields are `Option` + skip-if-none so the two shapes match the
@@ -910,6 +922,19 @@ enum PushEnvelope {
         /// dedicated envelope. React renders one option per name; a pick round-trips as
         /// `SetTheme { name }`.
         themes: Vec<&'static str>,
+        /// The ACTIVE palette (theme) registry key (`config.palette`), so the GUI can
+        /// highlight the current card in the Settings Appearance grid + the onboarding
+        /// theme picker. Re-pushed on every theme change (Config rides the palette diff), so
+        /// the highlight tracks live. Serialised as `theme` to match the React store's
+        /// `ConfigSlice.theme`.
+        theme: String,
+        /// The FULL palette catalogue with resolved colours (one [`PushPaletteInfo`] per
+        /// `themes` entry, same order), for the GUI Settings tab's Appearance grid — each a
+        /// name + its 11 role colours as `#rrggbb`. Kept ALONGSIDE `themes` (names only) so
+        /// the onboarding theme step stays backward-compatible; the Settings grid consumes
+        /// this richer list. Static (theme registry is compile-time), but rides `Config` so
+        /// the picker always has it. A pick round-trips as `SetTheme { name }`.
+        palettes: Vec<PushPaletteInfo>,
         /// FIRST-RUN flag (wave-3+4 A/B): `true` when no usable Main route is configured
         /// (no providers, or no global/local Main-role model bound to a known provider) —
         /// i.e. an empty/first-run `~/.koma/config.json`. React shows the full-screen
@@ -956,6 +981,22 @@ enum PushEnvelope {
         modified: String,
         error: Option<String>,
         binary: bool,
+    },
+    /// One-shot reply to a `GetSettings` (and the re-push after a `SetSessionPrefs`),
+    /// carrying the foreground session's GUI-editable prefs + the active palette for the
+    /// GUI Settings tab's Session section. Pushed out-of-band (not fingerprinted) whenever
+    /// the daemon answers a `GetSettings` — or, un-attached, straight from the swapper's
+    /// global-config fallback. `internetMode` is `"simple"`/`"full"`. ALWAYS a reply so the
+    /// tab's loading state can never hang.
+    #[serde(rename_all = "camelCase")]
+    SettingsValues {
+        name: String,
+        workdir: Vec<String>,
+        short_send: bool,
+        sliding_cache: bool,
+        bash_saving: bool,
+        internet_mode: String,
+        palette: String,
     },
 }
 
@@ -1020,6 +1061,35 @@ pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResul
         binary: result.binary,
     };
     emit(push, &env);
+}
+
+/// Emit a one-shot `SettingsValues` envelope for the GUI Settings tab. Shared by the
+/// attached `push_loop` intercept (which unpacks the daemon's `DaemonEvent::SettingsValues`
+/// reply) and the UN-ATTACHED swapper fallback ([`super::host_swapper`]), so a detached
+/// `GetSettings` lands the SAME envelope the attached path produces.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn push_settings_values(
+    push: &dyn Fn(String),
+    name: String,
+    workdir: Vec<String>,
+    short_send: bool,
+    sliding_cache: bool,
+    bash_saving: bool,
+    internet_mode: String,
+    palette: String,
+) {
+    emit(
+        push,
+        &PushEnvelope::SettingsValues {
+            name,
+            workdir,
+            short_send,
+            sliding_cache,
+            bash_saving,
+            internet_mode,
+            palette,
+        },
+    );
 }
 
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
@@ -1248,6 +1318,13 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::ListRoutes { provider, model_id }) => {
                     let _ = req_tx.send(ClientRequest::ListRoutes { provider, model_id });
                 }
+                // GUI Settings fetch raced in while attached (the ipc handler routes it to
+                // the daemon via `live_req` when attached; it only lands here if the attach
+                // state flipped between the detached-check and the send). Forward the daemon
+                // request — the daemon replies with `SettingsValues`, re-pushed above.
+                Ok(super::HostCtl::GetSettings) => {
+                    let _ = req_tx.send(ClientRequest::GetSettings);
+                }
                 // FILE CHANGED diff fetch: NEVER touches the daemon (host-side only,
                 // regardless of attach state) — spawn the blocking git+fs work off this
                 // thread; the result is drained + pushed below at (b-quat).
@@ -1319,6 +1396,33 @@ pub(super) fn push_loop(
                                     uptime_last_30m: r.uptime_last_30m,
                                 })
                                 .collect(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
+                    }
+                    // GUI Settings-tab reply (GetSettings / post-SetSessionPrefs re-push):
+                    // re-push it as a `SettingsValues` envelope BEFORE folding (a non-visual
+                    // fold no-op, keeping the seq gap-free), same as the ModelList/RouteList
+                    // intercepts above.
+                    if let DaemonEvent::SettingsValues {
+                        name,
+                        workdir,
+                        short_send,
+                        sliding_cache,
+                        bash_saving,
+                        internet_mode,
+                        palette,
+                    } = &frame.event
+                    {
+                        let env = PushEnvelope::SettingsValues {
+                            name: name.clone(),
+                            workdir: workdir.clone(),
+                            short_send: *short_send,
+                            sliding_cache: *sliding_cache,
+                            bash_saving: *bash_saving,
+                            internet_mode: internet_mode.clone(),
+                            palette: palette.clone(),
                         };
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);
@@ -1977,6 +2081,12 @@ pub(super) struct ConfigProjection {
     /// Active palette (theme) roles, carried on the Config push so the empty/swapper
     /// state — which gets no `Snapshot` — still repaints to `config.json`'s theme.
     palette: PushPalette,
+    /// The active palette (theme) registry KEY (`config.palette` — e.g. `"vscode"`), so the
+    /// GUI can highlight the active card in the Settings Appearance grid + the onboarding
+    /// theme picker. Distinct from `palette` (the resolved colours); this is the name a
+    /// `SetTheme` round-trips. Rides `Config` (re-pushed on every theme change) so the
+    /// active highlight tracks live with no client-side state.
+    palette_name: String,
 }
 
 impl ConfigProjection {
@@ -1988,6 +2098,7 @@ impl ConfigProjection {
             session_models: g.session_models.clone(),
             mcp_servers: g.mcp_servers.clone(),
             palette: palette_from_global(g),
+            palette_name: g.palette.clone(),
         }
     }
 
@@ -2004,6 +2115,7 @@ impl ConfigProjection {
             session_models: Vec::new(),
             mcp_servers: cfg.mcp_servers.clone(),
             palette: push_palette_from_config(cfg),
+            palette_name: cfg.palette.clone(),
         }
     }
 }
@@ -2176,6 +2288,33 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         .map(|(name, _)| *name)
         .collect();
 
+    // Full palette catalogue WITH resolved colours for the Settings Appearance grid: call
+    // each registry constructor and flatten its 11 role colours to `#rrggbb` in the fixed
+    // order the GUI paints its movie-strip cards from — reusing the SAME `color_hex`
+    // conversion + fallbacks `push_palette_from_config` uses for the chat palette.
+    let palettes: Vec<PushPaletteInfo> = crate::view::theme::PALETTES
+        .iter()
+        .map(|(name, build)| {
+            let p = build();
+            PushPaletteInfo {
+                name: (*name).to_string(),
+                colors: vec![
+                    color_hex(p.bg, "#000000"),
+                    color_hex(p.fg, "#c8d3f5"),
+                    color_hex(p.dim, "#adadad"),
+                    color_hex(p.accent, "#39ff14"),
+                    color_hex(p.panel, "#2b2f38"),
+                    color_hex(p.sel_bg, "#39ff14"),
+                    color_hex(p.sel_fg, "#000000"),
+                    color_hex(p.success, "#00c853"),
+                    color_hex(p.warn, "#ffb43c"),
+                    color_hex(p.error, "#ff3c3c"),
+                    color_hex(p.info, "#50c8ff"),
+                ],
+            }
+        })
+        .collect();
+
     let env = PushEnvelope::Config {
         providers,
         models,
@@ -2183,6 +2322,8 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         palette: cfg.palette.clone(),
         session_main_uuid,
         themes,
+        palettes,
+        theme: cfg.palette_name.clone(),
         needs_onboarding,
     };
     if let Ok(json) = serde_json::to_string(&env) {

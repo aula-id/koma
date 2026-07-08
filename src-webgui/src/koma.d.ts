@@ -124,6 +124,23 @@ declare global {
     // diff tab. `path` is exactly as the fileChanges record carries it. Reply
     // lands as the FileDiff push envelope (guaranteed for every request).
     | { r: 'FileDiff'; path: string }
+    // Fetch the Settings tab's Session-section values (name / workdir / toggles /
+    // internet mode) + the active palette. Sent when the tab opens or re-activates.
+    // Reply lands as the SettingsValues push envelope (guaranteed for every request,
+    // even detached — the host answers from global config with defaults).
+    | { r: 'GetSettings' }
+    // Commit a PARTIAL settings update from the Settings tab's Session section. Only
+    // the present fields are sent; the host applies each through the same per-field
+    // logic the TUI settings save uses, persists, and re-pushes SettingsValues. Name
+    // changes go via `Rename`, palette changes via `SetTheme` (not here).
+    | {
+        r: 'SetPrefs'
+        shortSend?: boolean
+        slidingCache?: boolean
+        bashSaving?: boolean
+        internetMode?: string
+        workdir?: string[]
+      }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

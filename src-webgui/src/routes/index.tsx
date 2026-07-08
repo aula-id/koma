@@ -51,6 +51,7 @@ function RootLayout() {
   const closeOmniSearch = useKoma((s) => s.closeOmniSearch)
   const cancelSwitching = useKoma((s) => s.cancelSwitching)
   const req = useKoma((s) => s.req)
+  const openSettingsTab = useKoma((s) => s.openSettingsTab)
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
   // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
@@ -136,7 +137,12 @@ function RootLayout() {
         overlayOpen={overlay !== 'none'}
       />
       <div className="absolute inset-x-0 top-8 bottom-0 flex overflow-hidden">
-        <ActivityBar activeView={activeView} sidebarOpen={sidebarOpen} onSelect={selectView} />
+        <ActivityBar
+          activeView={activeView}
+          sidebarOpen={sidebarOpen}
+          onSelect={selectView}
+          onSettings={openSettingsTab}
+        />
         {sidebarOpen && (
           <>
             <Sidebar width={sidebarWidth} view={activeView} />
@@ -176,6 +182,9 @@ function RootLayout() {
 // diff tab is opened (a tiny spinner covers the one-time chunk fetch).
 const DiffTab = lazy(() => import('../components/DiffTab'))
 
+// Settings page — lazy so its chunk only loads when the gear is first clicked.
+const SettingsTab = lazy(() => import('../components/SettingsTab'))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -210,6 +219,12 @@ function TabbedMain() {
                 <DiffTab tab={t} />
               </Suspense>
             </div>
+          ) : t.kind === 'settings' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <SettingsTab />
+              </Suspense>
+            </div>
           ) : null,
         )}
       </div>
@@ -231,9 +246,14 @@ function TabbedMain() {
 function IndexPage() {
   const sessionId = useKoma((s) => s.session.id)
   const needsOnboarding = useNeedsOnboarding()
+  // Settings opens as a tab that works even with NO attached session (the host
+  // answers GetSettings from global config while detached), so honour it over the
+  // StartScreen gate. Every other no-session case still shows the StartScreen;
+  // closing Settings reverts activeTabId to 'chat', dropping back to StartScreen.
+  const settingsActive = useKoma((s) => s.ui.activeTabId === 'settings')
 
   if (needsOnboarding) return <Onboarding />
-  if (sessionId === null) return <StartScreen />
+  if (sessionId === null && !settingsActive) return <StartScreen />
   return <TabbedMain />
 }
 

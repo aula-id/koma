@@ -250,14 +250,11 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //    helper so the Full-needs-install line matches the `/internet`
         //    and Ctrl+E paths exactly).  Only fires when the mode actually
         //    changed; it resets to "ready" on the next action.
-        if old_internet.is_some_and(|old| old != internet_mode) {
-            let (status, toast) =
-                crate::app::runtime::commands::internet::internet_feedback(internet_mode);
-            state.rest.fg_mut().status = status;
-            if let Some(t) = toast {
-                state.rest.fg_mut().set_toast_info(t);
-            }
-        }
+        crate::app::runtime::commands::internet::flash_internet_feedback(
+            state,
+            old_internet,
+            internet_mode,
+        );
     }
     *state.mode_mut() = Mode::Chat;
     Ok(())

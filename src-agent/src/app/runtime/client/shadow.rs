@@ -112,12 +112,16 @@ pub(super) fn apply_frame(
         // and the TUI client never sends `ListModels`, so it folds as a no-op here.
         // `ModelRoutes` follows `ModelList` exactly (GUI host re-pushes a `RouteList`
         // envelope; the TUI never sends `ListRoutes`), so it too folds as a no-op.
+        // `SettingsValues` is likewise a GUI-only reply (the host intercepts it in
+        // `push_loop` to re-push a `SettingsValues` envelope; the TUI never sends
+        // `GetSettings`), so it also folds as a non-visual no-op here.
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
         | DaemonEvent::FileSearchResults { .. }
         | DaemonEvent::ModelList { .. }
-        | DaemonEvent::ModelRoutes { .. } => false,
+        | DaemonEvent::ModelRoutes { .. }
+        | DaemonEvent::SettingsValues { .. } => false,
     }
 }
 

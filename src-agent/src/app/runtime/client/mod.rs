@@ -255,6 +255,13 @@ pub(super) enum HostCtl {
     /// access and the daemon would have to do the exact same local work anyway. Serviced
     /// off-thread (git + fs are blocking) in both host states; see [`compute_file_diff`].
     FileDiff { path: String },
+    /// UN-ATTACHED GUI Settings-tab fetch (a [`ClientRequest::GetSettings`] serviced by the
+    /// swapper, where the ipc `live_req` daemon path is `None`). There is no foreground
+    /// session pre-attach, so the swapper answers from the GLOBAL config: the active
+    /// `palette` plus [`crate::model::settings::Settings`] DEFAULTS for the toggles, and an
+    /// EMPTY `name`/`workdir`. ALWAYS pushes a `SettingsValues` reply (like the attached
+    /// path) so the Settings tab's loading state can never hang.
+    GetSettings,
 }
 
 /// The result of a host-side [`compute_file_diff`], pushed to the GUI as a `FileDiff`
@@ -881,6 +888,24 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     let result = compute_file_diff(&path, cur.as_deref());
                     render::push_file_diff(&push2, result);
                 });
+            }
+            // GUI Settings tab opened while detached (StartScreen / swapper): there is no
+            // foreground session, so answer from the GLOBAL config — the active palette +
+            // `Settings` DEFAULTS (empty name/workdir). ALWAYS a reply so the tab's loading
+            // state clears. Cheap, synchronous (a config load), so it runs inline.
+            Ok(HostCtl::GetSettings) => {
+                let cfg = crate::model::app_config::AppConfig::load();
+                let d = crate::model::settings::Settings::default();
+                render::push_settings_values(
+                    push,
+                    String::new(),
+                    Vec::new(),
+                    d.short_send_enabled,
+                    d.sliding_cache,
+                    d.bash_saving,
+                    d.internet_mode.as_str().to_string(),
+                    cfg.palette,
+                );
             }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
             // swap-START loader signal first (this thread will BLOCK in the attach next, so

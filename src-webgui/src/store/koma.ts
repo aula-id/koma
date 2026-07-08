@@ -52,6 +52,29 @@ export type PaletteColors = {
   panel: string
 }
 
+// One named palette in the host's theme registry, WITH resolved colours (host
+// `PushPaletteInfo`) — drives the Settings tab's Appearance grid. `colors` is the
+// 11 role colours as `#rrggbb` in the FIXED order [bg, fg, dim, accent, panel,
+// sel_bg, sel_fg, success, warn, error, info]. A pick round-trips as SetTheme.
+export type PaletteInfo = {
+  name: string
+  colors: string[]
+}
+
+// The Settings tab's Session-section values (host `SettingsValues` reply). `name`/
+// `workdir` are session-scoped; the toggles + `internetMode` are per-session prefs;
+// `palette` is the active global theme (mirrors config.theme). Null until the first
+// GetSettings reply lands.
+export type SettingsValues = {
+  name: string
+  workdir: string[]
+  shortSend: boolean
+  slidingCache: boolean
+  bashSaving: boolean
+  internetMode: string
+  palette: string
+}
+
 export type HubCookingEntry = {
   kind: 'new' | 'session'
   id: string | null
@@ -175,6 +198,9 @@ export type DiffPayload = {
 // in additively without disturbing existing consumers.
 export type Tab =
   | { id: 'chat'; kind: 'chat' }
+  // The singleton Settings page (VSCode-style), opened from the ActivityBar gear.
+  // Deduped by the fixed id 'settings'; closeable like a diff tab.
+  | { id: 'settings'; kind: 'settings' }
   | {
       // Stable id `diff:${path}`, so find-by-path (open/dedupe) is trivial.
       id: string
@@ -291,6 +317,11 @@ export type PushEnvelope =
       // registry). The onboarding picker lists these; falls back to a bundled
       // KNOWN_THEMES list when the host omits them.
       themes?: string[]
+      // Full palette catalogue WITH resolved colours (host `PushPaletteInfo`),
+      // for the Settings tab's Appearance grid. Optional-tolerant: absent on a
+      // host build that doesn't project it yet (the grid then falls back to the
+      // names-only `themes` list rendered as label chips).
+      palettes?: PaletteInfo[]
     }
   // Reply to GuiReq ListModels — live per-provider model-id catalogue. Field
   // is `models` to match the daemon's PushEnvelope::ModelList { provider, models }.
@@ -311,6 +342,19 @@ export type PushEnvelope =
       modified: string
       error: string | null
       binary: boolean
+    }
+  // Reply to GuiReq GetSettings (and the re-push after SetPrefs) — the Settings
+  // tab's Session-section values + active palette. Guaranteed for every request
+  // (even detached: the host answers from global config with defaults).
+  | {
+      k: 'SettingsValues'
+      name: string
+      workdir: string[]
+      shortSend: boolean
+      slidingCache: boolean
+      bashSaving: boolean
+      internetMode: string
+      palette: string
     }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
@@ -385,6 +429,9 @@ type ConfigSlice = {
   // Active theme name + advertised theme registry (see Config envelope).
   theme: string
   themes: string[]
+  // Full palette catalogue with resolved colours (Settings Appearance grid).
+  // Empty until the first Config push that carries it.
+  palettes: PaletteInfo[]
 }
 
 // Local-only UI state (never pushed by the host, never sent upstream) — the
@@ -463,6 +510,10 @@ type KomaState = {
   // ListRoutes reply — carries the provider+modelId it was fetched for so the
   // consumer can ignore a stale reply. `null` until the first reply lands.
   routeList: { provider: string; modelId: string; routes: RouteEntry[] } | null
+  // The Settings tab's Session-section values from the latest GetSettings /
+  // SetPrefs re-push. `null` until the first reply lands (the tab shows a
+  // loading row); REPLACED wholesale on each reply.
+  settingsValues: SettingsValues | null
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -498,6 +549,10 @@ type KomaState = {
   // the id no longer matches the current toast (a newer toast already replaced
   // it — its own timer owns the dismissal).
   dismissToast: (id: number) => void
+  // Open (or focus) the singleton Settings tab (id 'settings'): find-or-create,
+  // activate it, and fire GetSettings so its values refresh. Mirrors openDiffTab's
+  // dedupe + activate shape.
+  openSettingsTab: () => void
   // Open (or focus) a Monaco diff tab for a File-changed `path`: find-by-path or
   // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
   // an already-open file refreshes it (same loading + re-request path).
@@ -588,6 +643,7 @@ const initialConfig: ConfigSlice = {
   firstRun: undefined,
   theme: 'dark',
   themes: [...KNOWN_THEMES],
+  palettes: [],
 }
 
 const initialModelList: ModelListEntry[] = []
@@ -639,6 +695,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   config: initialConfig,
   modelList: initialModelList,
   routeList: initialRouteList,
+  settingsValues: null,
 
   push: (env) => {
     switch (env.k) {
@@ -786,6 +843,9 @@ export const useKoma = create<KomaState>((set, get) => ({
             firstRun: env.firstRun,
             theme: env.theme ?? s.config.theme,
             themes: env.themes && env.themes.length > 0 ? env.themes : s.config.themes,
+            // Adopt the resolved palette catalogue when present; keep the current
+            // one otherwise (host build not projecting it yet).
+            palettes: env.palettes && env.palettes.length > 0 ? env.palettes : s.config.palettes,
           },
           ...(env.palette ? { palette: env.palette } : {}),
         }))
@@ -824,6 +884,19 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
+      case 'SettingsValues':
+        set(() => ({
+          settingsValues: {
+            name: env.name,
+            workdir: env.workdir,
+            shortSend: env.shortSend,
+            slidingCache: env.slidingCache,
+            bashSaving: env.bashSaving,
+            internetMode: env.internetMode,
+            palette: env.palette,
+          },
+        }))
+        break
     }
   },
 
@@ -848,6 +921,16 @@ export const useKoma = create<KomaState>((set, get) => ({
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
   dismissToast: (id) =>
     set((s) => (s.ui.toast?.id === id ? { ui: { ...s.ui, toast: null } } : s)),
+  openSettingsTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'settings')
+      const tabs: Tab[] = exists
+        ? s.ui.tabs
+        : [...s.ui.tabs, { id: 'settings', kind: 'settings' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'settings' } }
+    })
+    get().req({ r: 'GetSettings' })
+  },
   openDiffTab: (path) => {
     const id = `diff:${path}`
     set((s) => {
@@ -891,6 +974,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       },
     }))
     if (isDiff && tab.kind === 'diff') get().req({ r: 'FileDiff', path: tab.path })
+    // Re-focusing the Settings tab re-requests its values so they're fresh (the
+    // name/workdir may have changed via other paths, e.g. the RenameOverlay).
+    if (tab.kind === 'settings') get().req({ r: 'GetSettings' })
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
 }))
