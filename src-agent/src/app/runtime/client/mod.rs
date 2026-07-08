@@ -248,6 +248,184 @@ pub(super) enum HostCtl {
     /// routes for a non-OpenRouter provider (the endpoints API is OpenRouter-specific) or any
     /// fetch error — again ALWAYS a reply so the form falls back to "Auto" instead of hanging.
     ListRoutes { provider: String, model_id: String },
+    /// Host-side FILE DIFF fetch for the Explore "FILE CHANGED" panel's Monaco diff tab
+    /// (`path` is a `fileChanges` record's path). Unlike [`ListModels`]/[`ListRoutes`],
+    /// this NEVER prefers the attached daemon — the ipc handler routes it here
+    /// unconditionally, because the host process already has direct filesystem + git
+    /// access and the daemon would have to do the exact same local work anyway. Serviced
+    /// off-thread (git + fs are blocking) in both host states; see [`compute_file_diff`].
+    FileDiff { path: String },
+}
+
+/// The result of a host-side [`compute_file_diff`], pushed to the GUI as a `FileDiff`
+/// envelope (`render::push_file_diff`). `error` set means the diff could not be
+/// computed at all (both strings then empty); `binary` set means either side isn't
+/// valid UTF-8 text (both strings then empty, no `error`).
+pub(super) struct FileDiffResult {
+    pub path: String,
+    pub original: String,
+    pub modified: String,
+    pub error: Option<String>,
+    pub binary: bool,
+}
+
+/// Cap on either side of a diff (~2MiB) — past this we bail with `error: "file too
+/// large to diff"` rather than shipping a multi-megabyte string into Monaco.
+const FILE_DIFF_SIZE_CAP: usize = 2 * 1024 * 1024;
+
+/// Heuristic binary-content test, mirroring the harness's own sniff: a NUL byte in the
+/// first 8KiB, or the bytes failing UTF-8 decode.
+fn looks_binary(bytes: &[u8]) -> bool {
+    let probe = &bytes[..bytes.len().min(8192)];
+    probe.contains(&0) || std::str::from_utf8(bytes).is_err()
+}
+
+/// Resolve a `fileChanges` record's path to an absolute path.
+///
+/// `tool::fs::record_change` stores the SHORTEST workspace-relative rendering across
+/// every configured workspace root when the file is under one, falling back to the
+/// absolute path otherwise — so `path` here is EITHER already absolute (used as-is) OR
+/// relative to one of the session's configured workdirs (ambiguous which one, since
+/// the dedup key doesn't carry that). For the relative case this reads the session's
+/// on-disk `settings.json` (via the sqlite registry, then `Session::load` +
+/// `Session::workdirs()` — no daemon involved) and tries each configured root in
+/// order, picking the first whose join either exists on disk or whose parent
+/// directory exists (a plausible location for a file that was since deleted);
+/// falling back to the first (primary) root if none match, or the bare relative path
+/// if the session can't be resolved at all (e.g. `current_session` is `None`).
+fn resolve_diff_path(path: &str, current_session: Option<&str>) -> std::path::PathBuf {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    let roots = current_session
+        .and_then(session_workdirs_for)
+        .unwrap_or_default();
+    for root in &roots {
+        let candidate = root.join(p);
+        if candidate.exists() || candidate.parent().is_some_and(|d| d.exists()) {
+            return candidate;
+        }
+    }
+    match roots.first() {
+        Some(root) => root.join(p),
+        None => p.to_path_buf(),
+    }
+}
+
+/// Look up a session's configured workdir roots straight off disk (sqlite registry for
+/// the `pwd_hash` bucket, then that session's `settings.json` for the actual list) —
+/// no daemon connection required. `None` if the session can't be found on disk at all.
+fn session_workdirs_for(uuid: &str) -> Option<Vec<std::path::PathBuf>> {
+    let row = crate::model::session_registry::get(uuid).ok().flatten()?;
+    let dir = crate::model::store::session_dir(&row.pwd_hash, uuid).ok()?;
+    let session = crate::model::session::Session::load(&dir).ok()?;
+    Some(session.workdirs())
+}
+
+/// Compute a host-side FILE DIFF for `path` (a `fileChanges` record's path), answering
+/// a [`HostCtl::FileDiff`]. Runs entirely off the daemon: resolves `path` to an
+/// absolute location ([`resolve_diff_path`]), reads its CURRENT on-disk contents, and
+/// shells out to `git show HEAD:<repo-relative-path>` (cwd = the file's own repo,
+/// discovered via `git rev-parse --show-toplevel`) for the ORIGINAL side. ALWAYS
+/// returns a result — every failure path sets `error` (or `binary`) rather than
+/// panicking or dropping the request — mirroring the ListModels/ListRoutes
+/// always-reply rule so the GUI diff tab can never hang waiting on a spinner.
+///
+/// - A read failure on the current file (deleted, or otherwise unreadable) is NOT an
+///   error: `modified` is just empty (a valid diff — all-removed).
+/// - No git repository at `path`'s location at all → `error` set, `original` empty.
+/// - `path` untracked / not present at `HEAD` (`git show` exits non-zero) → `original`
+///   empty (a valid diff — all-added), no `error`.
+/// - Either side failing UTF-8 or containing a NUL in its first 8KiB → `binary: true`,
+///   both strings empty.
+/// - Either side exceeding [`FILE_DIFF_SIZE_CAP`] → `error: "file too large to diff"`,
+///   both strings empty.
+fn compute_file_diff(path: &str, current_session: Option<&str>) -> FileDiffResult {
+    let empty = |error: Option<String>, binary: bool| FileDiffResult {
+        path: path.to_string(),
+        original: String::new(),
+        modified: String::new(),
+        error,
+        binary,
+    };
+
+    let abs = resolve_diff_path(path, current_session);
+
+    // --- modified: current on-disk contents ---
+    let modified_bytes = match std::fs::read(&abs) {
+        // Deleted (or otherwise unreadable) — treat as an empty modified side, not an
+        // error: the diff still renders (all-removed vs. HEAD).
+        Err(_) => Vec::new(),
+        Ok(bytes) if bytes.len() > FILE_DIFF_SIZE_CAP => {
+            return empty(Some("file too large to diff".to_string()), false);
+        }
+        Ok(bytes) => bytes,
+    };
+    if looks_binary(&modified_bytes) {
+        return empty(None, true);
+    }
+    let modified = String::from_utf8_lossy(&modified_bytes).into_owned();
+
+    // --- original: `git show HEAD:<repo-relative-path>`, cwd = the file's own repo ---
+    let dir = abs.parent().unwrap_or(&abs);
+    let toplevel = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output();
+    let repo_root = match toplevel {
+        Ok(out) if out.status.success() => {
+            std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+        }
+        _ => {
+            return FileDiffResult {
+                path: path.to_string(),
+                original: String::new(),
+                modified,
+                error: Some("not in a git repository".to_string()),
+                binary: false,
+            };
+        }
+    };
+    let Ok(rel) = abs.strip_prefix(&repo_root) else {
+        return FileDiffResult {
+            path: path.to_string(),
+            original: String::new(),
+            modified,
+            error: Some("not in a git repository".to_string()),
+            binary: false,
+        };
+    };
+    let show = std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{}", rel.to_string_lossy())])
+        .current_dir(&repo_root)
+        .output();
+    match show {
+        Ok(out) if out.status.success() => {
+            if out.stdout.len() > FILE_DIFF_SIZE_CAP {
+                return empty(Some("file too large to diff".to_string()), false);
+            }
+            if looks_binary(&out.stdout) {
+                return empty(None, true);
+            }
+            FileDiffResult {
+                path: path.to_string(),
+                original: String::from_utf8_lossy(&out.stdout).into_owned(),
+                modified,
+                error: None,
+                binary: false,
+            }
+        }
+        // Non-zero exit: `path` is untracked / didn't exist at HEAD — a valid diff
+        // (all-added), not an error.
+        _ => FileDiffResult {
+            path: path.to_string(),
+            original: String::new(),
+            modified,
+            error: None,
+            binary: false,
+        },
+    }
 }
 
 /// The host-relay run-loop's next step, mirroring [`ClientState`] for the headless
@@ -691,6 +869,17 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 handle.spawn(async move {
                     let routes = fetch_routes_for_provider(&provider, &model_id).await;
                     render::push_route_list(&push2, provider, model_id, routes);
+                });
+            }
+            // Explore FILE CHANGED panel: host-side diff fetch (git + fs are blocking,
+            // so this runs on a plain OS thread rather than the async runtime). Never
+            // touches the daemon in either host state — see `compute_file_diff`.
+            Ok(HostCtl::FileDiff { path }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    let result = compute_file_diff(&path, cur.as_deref());
+                    render::push_file_diff(&push2, result);
                 });
             }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
