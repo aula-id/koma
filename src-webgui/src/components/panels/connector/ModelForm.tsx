@@ -50,7 +50,7 @@ function RouteRow({
       onClick={onClick}
       aria-checked={selected}
       role="radio"
-      className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] transition-colors ${
+      className={`flex w-full items-center gap-2 overflow-hidden rounded px-2 py-1 text-left text-[12px] transition-colors ${
         selected
           ? 'bg-koma-accent/15 text-koma-fg opacity-100'
           : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
@@ -62,11 +62,13 @@ function RouteRow({
       ) : (
         <Circle size={13} className="flex-none opacity-40" />
       )}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {/* Provider NAME takes priority: full, no truncation. The price/uptime is a
+          compact dim suffix that gives up space (ellipsis) when the row is cramped. */}
+      <span className="flex-none whitespace-nowrap">{label}</span>
       {(priceIn || uptime !== undefined) && (
-        <span className="flex-none pl-2 text-[10px] text-koma-fg opacity-50">
+        <span className="min-w-0 flex-1 truncate pl-2 text-right text-[10px] text-koma-fg opacity-50">
           {priceIn && priceOut ? `$${priceIn}/$${priceOut}` : ''}
-          {uptime !== undefined ? `  ${uptime}%` : ''}
+          {uptime !== undefined ? `  ${Math.round(uptime)}%` : ''}
         </span>
       )}
     </button>
@@ -153,7 +155,7 @@ export function ModelForm({
             <div className="flex flex-col gap-0.5 rounded border border-koma-border p-1">
               {/* "Auto" is always the default row — let OpenRouter route. */}
               <RouteRow
-                label="Auto (OpenRouter routes)"
+                label="Auto"
                 selected={selectedRoute === 'auto'}
                 onClick={() => patch({ route: 'auto' })}
               />
