@@ -113,10 +113,11 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             status: c.status.clone(),
         })
         .collect();
-    // Rebuild the Plan-mode todo checklist from its projection (rails already
-    // excluded upstream) so the GUI Explore "PLAN" section renders off real
-    // shadow data. Priority/locked are inert on the client (never rendered), so
-    // they're filled with harmless defaults.
+    // Rebuild the Plan-mode todo checklist from its projection so the GUI
+    // Explore "PLAN" section renders off real shadow data. `locked` now rides
+    // the wire (see `ipc::snapshot::projection::core`) and is threaded through
+    // here; priority is still inert on the client (never rendered), so it's
+    // filled with a harmless default.
     rt.plan_todos = s
         .plan_todos
         .iter()
@@ -124,7 +125,7 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             content: t.content.clone(),
             status: t.status.clone(),
             priority: crate::app::mode::todo::TodoPriority::Medium,
-            locked: false,
+            locked: t.locked,
         })
         .collect();
     // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate

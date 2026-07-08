@@ -1,5 +1,5 @@
 import { Activity, FoldVertical } from 'lucide-react'
-import { useKoma } from '../store/koma'
+import { useKoma, visiblePlanTodos } from '../store/koma'
 
 // Human-compact token count: >=10_000 collapses to "12.4k" (one decimal,
 // trailing ".0" trimmed); below that the raw integer is shown. Local helper —
@@ -37,10 +37,12 @@ export function UsageFooter() {
     subagents.some((a) => a.status === 'running') || bash.some((b) => b.status === 'running')
 
   const isPlan = mode === 'plan'
-  const planDone = planTodos.filter((t) => t.status === 'completed').length
-  // "PLAN 3/7" once a checklist exists; plain "PLAN" before the model has
-  // written one yet (mode flips to plan before the first todowrite lands).
-  const planLabel = planTodos.length > 0 ? `PLAN ${planDone}/${planTodos.length}` : 'PLAN'
+  const visiblePlan = visiblePlanTodos(planTodos)
+  const planDone = visiblePlan.filter((t) => t.status === 'completed').length
+  // "PLAN 3/7" once a checklist exists (locked rails excluded from the count);
+  // plain "PLAN" before the model has written one yet (mode flips to plan
+  // before the first todowrite lands).
+  const planLabel = visiblePlan.length > 0 ? `PLAN ${planDone}/${visiblePlan.length}` : 'PLAN'
 
   return (
     <div className="flex h-5 flex-none items-center gap-2 rounded-tl-[10px] rounded-tr-[10px] border-t border-koma-border bg-koma-panel px-2 font-mono text-[11px] text-koma-dim">

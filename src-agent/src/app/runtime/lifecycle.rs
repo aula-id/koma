@@ -350,12 +350,23 @@ fn install_daemon_session(
     // daemon, so a record that was still "running" at close comes back settled-stale,
     // never running. All best-effort (empty when the session has no such records).
     runtime.file_changes = crate::model::msglog::read_file_changes(&sess_path);
-    // Rehydrate the Plan-mode todo checklist (empty when no `plan_todos.md` exists,
-    // i.e. this session isn't mid-plan) — mirrors `file_changes`'s load-time refresh
-    // so a reattached/resumed session's GUI Explore "PLAN" section is correct from
-    // the very first snapshot, not just after the next todowrite/plan_ready.
-    runtime.plan_todos =
-        crate::app::mode::todo::load_todos_from(&sess_path.join("plan_todos.md"));
+    // Rehydrate the session's CURRENT todo checklist — mirrors `file_changes`'s
+    // load-time refresh so a reattached/resumed session's GUI Explore "PLAN"
+    // section is correct from the very first snapshot, not just after the next
+    // todowrite/plan_ready. Mode-aware: `plan_todos.md` while in Plan mode, else
+    // the per-directory `memory/TODO.md` (the regular working list `todowrite`
+    // writes to outside Plan mode) — same selection `/todo` itself uses, so the
+    // GUI shows execution-phase todos too, not just mid-plan ones.
+    runtime.plan_todos = runtime
+        .session
+        .as_ref()
+        .map(|s| {
+            crate::app::mode::todo::load_current_todos(
+                s,
+                state.rest.agent_mode == crate::app::state::AgentMode::Plan,
+            )
+        })
+        .unwrap_or_default();
     super::bg_persist::restore_bg_records(&mut runtime, &sess_path, handle);
 
     // Install as the SINGLE foreground session (replace the slot; never append).

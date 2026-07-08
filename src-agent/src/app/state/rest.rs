@@ -510,14 +510,21 @@ impl AppStateRest {
                     let _ = todo::save_todos_to(&path, &rails);
                     plan_todos_after = Some(rails);
                 } else if leaving_plan {
-                    // Symmetric with the entry seed: leaving Plan for any non-plan
-                    // mode (plan approved, `/mode`, Shift+Tab) drops the plan
-                    // checklist so it never lingers into the next planning session or
-                    // bleeds into the working `/todo` list. Best-effort remove — a
-                    // missing file (NotFound) is fine. Deny STAYS in Plan, so this
-                    // never fires on "chat more".
+                    // Leaving Plan for any non-plan mode (plan approved, `/mode`,
+                    // Shift+Tab) drops the plan-specific `plan_todos.md` artifact so
+                    // it never lingers into the next planning session. Best-effort
+                    // remove — a missing file (NotFound) is fine. Deny STAYS in
+                    // Plan, so this never fires on "chat more".
                     let _ = std::fs::remove_file(sess.plan_todos_path());
-                    plan_todos_after = Some(Vec::new());
+                    // The mirror itself does NOT clear to empty here: it mirrors
+                    // the session's CURRENT todo list, not Plan-mode membership.
+                    // Leaving Plan means the per-directory `memory/TODO.md` (the
+                    // regular working list) is now the source of truth — read
+                    // it immediately so an approved plan that carries into
+                    // execution keeps showing its checklist instead of the GUI
+                    // Explore "PLAN" section going blank until the model's next
+                    // `todowrite`. Empty when that file doesn't exist yet.
+                    plan_todos_after = Some(crate::app::mode::todo::load_current_todos(sess, false));
                 }
                 sess.rebuild_system();
                 let _ = sess.save();

@@ -147,16 +147,18 @@ pub fn session_snapshot(
             })
             .collect(),
         // Plan-mode todo checklist so the GUI Explore "PLAN" section renders it.
-        // Drop the two locked workflow rails here — they're internal bookkeeping,
-        // not user-facing plan content (mirrors the `plan_ready` digest's own
-        // `!it.locked` filter) — so the wire carries exactly the model's steps.
+        // The two locked workflow rails ride the wire too (flagged, not dropped)
+        // so the GUI shows TUI-parity rails right after `plan_enter`, before the
+        // model's first `todowrite` lands; the GUI dims them + excludes them from
+        // its done/total count. NOTE: this is independent of the `plan_ready`
+        // digest's own `!it.locked` filter elsewhere — that one stays untouched.
         plan_todos: rt
             .plan_todos
             .iter()
-            .filter(|it| !it.locked)
             .map(|it| crate::ipc::proto::PlanTodoSnapshot {
                 content: it.content.clone(),
                 status: it.status.clone(),
+                locked: it.locked,
             })
             .collect(),
     }

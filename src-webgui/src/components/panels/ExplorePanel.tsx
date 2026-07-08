@@ -11,11 +11,12 @@ import {
   Circle,
   CircleDot,
   CheckCircle2,
+  Lock,
   type LucideIcon,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
-import { useKoma } from '../../store/koma'
+import { useKoma, visiblePlanTodos } from '../../store/koma'
 
 // File-change status -> single-letter git-style badge + tone. added = new (good),
 // modified = touched (accent), deleted = removed (error/red).
@@ -124,26 +125,30 @@ export function ExplorePanel() {
     setOpen((s) => ({ ...s, plan: true }))
   }, [focusPlanTick])
 
-  const planDone = planTodos.filter((t) => t.status === 'completed').length
+  const visiblePlan = visiblePlanTodos(planTodos)
+  const planDone = visiblePlan.filter((t) => t.status === 'completed').length
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <AccordionSection
-        title={planTodos.length === 0 ? 'Plan' : `Plan · ${planDone}/${planTodos.length}`}
+        title={visiblePlan.length === 0 ? 'Plan' : `Plan · ${planDone}/${visiblePlan.length}`}
         open={open.plan}
         onToggle={() => setOpen((s) => ({ ...s, plan: !s.plan }))}
       >
         {planTodos.length === 0 ? (
-          <Empty>No plan in progress</Empty>
+          <Empty>No todos yet</Empty>
         ) : (
           planTodos.map((t, i) => {
-            const Icon = PLAN_ICON[t.status] ?? Circle
+            // Locked workflow rails render dim with a lock glyph instead of the
+            // status circle, and never strike through regardless of status —
+            // they're internal bookkeeping, not a completed user-facing step.
+            const Icon = t.locked ? Lock : (PLAN_ICON[t.status] ?? Circle)
+            const tone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45')
+            const textTone = t.locked ? 'text-koma-dim opacity-45' : (PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg')
             return (
               <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
-                <Icon size={13} className={`flex-none ${PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45'}`} />
-                <span className={`min-w-0 flex-1 truncate text-[12px] ${PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg'}`}>
-                  {t.content}
-                </span>
+                <Icon size={12} className={`flex-none ${tone}`} />
+                <span className={`min-w-0 flex-1 truncate text-[12px] ${textTone}`}>{t.content}</span>
               </div>
             )
           })
