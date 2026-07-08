@@ -181,7 +181,21 @@ export type PushEnvelope =
   // + generic host toasts). `kind` is the severity token ("error"/"info") the
   // host now carries alongside the text so the GUI can colour error vs info —
   // optional-tolerant: a host build that doesn't project it yet defaults to info.
-  | { k: 'Status'; session: string; working: boolean; toast: string | null; toastKind?: string }
+  // The five usage fields (tokensIn/tokensCached/tokensOut/cost/mode) drive the
+  // chat column's UsageFooter statusline; optional-tolerant for an older host
+  // build that doesn't project them yet (default 0 / 'auto' in the reducer).
+  | {
+      k: 'Status'
+      session: string
+      working: boolean
+      toast: string | null
+      toastKind?: string
+      tokensIn?: number
+      tokensCached?: number
+      tokensOut?: number
+      cost?: number
+      mode?: 'auto' | 'normal' | 'plan' | 'yolo'
+    }
   | {
       k: 'Hub'
       state: string
@@ -263,6 +277,13 @@ type SessionSlice = {
   // pending_tool_calls[tool_idx]); null when not awaiting. Distinguishes a plan
   // decision (`name === 'plan_ready'`) from a tool approval.
   pendingCall: PendingCall | null
+  // Usage counters + running cost projected on every Status push (host
+  // token-accounting). Drive the UsageFooter statusline. Default to 0 when the
+  // host hasn't projected them yet.
+  tokensIn: number
+  tokensCached: number
+  tokensOut: number
+  cost: number
 }
 
 type HubSlice = {
@@ -406,6 +427,10 @@ const initialSession: SessionSlice = {
   awaitingApproval: false,
   approvalReason: null,
   pendingCall: null,
+  tokensIn: 0,
+  tokensCached: 0,
+  tokensOut: 0,
+  cost: 0,
 }
 
 const initialHub: HubSlice = {
@@ -571,7 +596,19 @@ export const useKoma = create<KomaState>((set) => ({
           const raise = !!env.toast && env.toast !== s.ui.toast?.text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           return {
-            session: { ...s.session, working: env.working },
+            session: {
+              ...s.session,
+              working: env.working,
+              // Usage counters + mode ride the Status envelope too (not just
+              // Snapshot), so the footer updates live mid-turn. Optional-
+              // tolerant: an older host build omits these — keep the current
+              // value rather than resetting to 0/'auto' on every tick.
+              tokensIn: env.tokensIn ?? s.session.tokensIn,
+              tokensCached: env.tokensCached ?? s.session.tokensCached,
+              tokensOut: env.tokensOut ?? s.session.tokensOut,
+              cost: env.cost ?? s.session.cost,
+              mode: env.mode ?? s.session.mode,
+            },
             ui: raise
               ? {
                   ...s.ui,
