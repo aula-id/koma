@@ -113,6 +113,20 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             status: c.status.clone(),
         })
         .collect();
+    // Rebuild the Plan-mode todo checklist from its projection (rails already
+    // excluded upstream) so the GUI Explore "PLAN" section renders off real
+    // shadow data. Priority/locked are inert on the client (never rendered), so
+    // they're filled with harmless defaults.
+    rt.plan_todos = s
+        .plan_todos
+        .iter()
+        .map(|t| crate::app::mode::todo::TodoItem {
+            content: t.content.clone(),
+            status: t.status.clone(),
+            priority: crate::app::mode::todo::TodoPriority::Medium,
+            locked: false,
+        })
+        .collect();
     // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate
     // in `handle_chat`) can read them from the shadow without a daemon round-trip.
     rt.pending_steer = s.pending_steer.clone();

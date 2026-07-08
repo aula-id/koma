@@ -473,6 +473,11 @@ impl AppStateRest {
             self.plan_return_mode = None;
         }
         self.agent_mode = new_mode;
+        // Captured inside the `sess` borrow below and applied to `self.fg_mut()`
+        // afterward (can't touch `self` again while `sess` — itself borrowed FROM
+        // `self.fg_mut()` — is still alive), so the GUI Explore "PLAN" section's
+        // in-memory mirror stays in lockstep with the rail seed/clear on disk.
+        let mut plan_todos_after: Option<Vec<crate::app::mode::todo::TodoItem>> = None;
         if entering_plan || leaving_plan {
             if let Some(sess) = self.fg_mut().session.as_mut() {
                 sess.plan_mode_hint = entering_plan;
@@ -503,6 +508,7 @@ impl AppStateRest {
                         },
                     ];
                     let _ = todo::save_todos_to(&path, &rails);
+                    plan_todos_after = Some(rails);
                 } else if leaving_plan {
                     // Symmetric with the entry seed: leaving Plan for any non-plan
                     // mode (plan approved, `/mode`, Shift+Tab) drops the plan
@@ -511,9 +517,13 @@ impl AppStateRest {
                     // missing file (NotFound) is fine. Deny STAYS in Plan, so this
                     // never fires on "chat more".
                     let _ = std::fs::remove_file(sess.plan_todos_path());
+                    plan_todos_after = Some(Vec::new());
                 }
                 sess.rebuild_system();
                 let _ = sess.save();
+            }
+            if let Some(todos) = plan_todos_after {
+                self.fg_mut().plan_todos = todos;
             }
         }
     }

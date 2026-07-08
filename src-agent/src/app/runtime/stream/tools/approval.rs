@@ -459,6 +459,10 @@ pub(crate) fn process_tools(
                         }
                     }
                     let _ = todo::save_todos_to(&tpath, &items);
+                    // Refresh the in-memory mirror so the GUI Explore "PLAN" section
+                    // reflects the rails' Completed flip the instant the plan parks
+                    // (the projection filters the locked rails back out on the wire).
+                    state.rest.sessions[sess_idx].plan_todos = items;
                     if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
                         sess.conversation.set_tool_call_args(&call.id, new_args_str);
                         let _ = sess.save();
@@ -555,7 +559,14 @@ pub(crate) fn process_tools(
                         priority: TodoPriority::Low,
                         locked: true,
                     });
-                    match todo::save_todos_to(&path, &merged) {
+                    let saved = todo::save_todos_to(&path, &merged);
+                    if saved.is_ok() {
+                        // Refresh the in-memory mirror so the GUI Explore "PLAN"
+                        // section reflects this todowrite immediately (the
+                        // projection filters the locked rails back out on the wire).
+                        state.rest.sessions[sess_idx].plan_todos = merged;
+                    }
+                    match saved {
                         Ok(()) => format!("Updated plan: {n} step(s) + 2 rails"),
                         Err(e) => format!("error: could not write plan todos: {e}"),
                     }

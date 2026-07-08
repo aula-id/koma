@@ -63,6 +63,26 @@ pub struct SessionSnapshot {
     /// keeps the no-changes case + version-skewed peers wire-free. The TUI ignores it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_changes: Vec<FileChangeSnapshot>,
+    /// The session's user-facing Plan-mode todo checklist (Plan mode only; empty
+    /// outside it or when no plan is in progress). The two locked workflow rails
+    /// are EXCLUDED here (filtered at the projection boundary — see
+    /// `ipc::snapshot::projection::core`), so this is exactly the model's plan
+    /// steps. Projected so the native-React GUI's Explore "PLAN" section renders
+    /// live; the TUI ignores it (its `/todo` overlay reads `plan_todos.md`
+    /// directly). `#[serde(default, skip_serializing_if)]` keeps the no-plan case
+    /// + version-skewed peers wire-free.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_todos: Vec<PlanTodoSnapshot>,
+}
+
+/// A serde-safe projection of ONE Plan-mode todo entry for the GUI Explore "PLAN"
+/// section: the step text + its status. Locked workflow rails are already
+/// excluded before this is built (see `SessionSnapshot::plan_todos`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct PlanTodoSnapshot {
+    pub content: String,
+    pub status: crate::app::mode::todo::TodoStatus,
 }
 
 /// A serde-safe projection of ONE cumulative file-change entry for the GUI Explore

@@ -146,6 +146,19 @@ pub fn session_snapshot(
                 status: c.status.clone(),
             })
             .collect(),
+        // Plan-mode todo checklist so the GUI Explore "PLAN" section renders it.
+        // Drop the two locked workflow rails here — they're internal bookkeeping,
+        // not user-facing plan content (mirrors the `plan_ready` digest's own
+        // `!it.locked` filter) — so the wire carries exactly the model's steps.
+        plan_todos: rt
+            .plan_todos
+            .iter()
+            .filter(|it| !it.locked)
+            .map(|it| crate::ipc::proto::PlanTodoSnapshot {
+                content: it.content.clone(),
+                status: it.status.clone(),
+            })
+            .collect(),
     }
 }
 
