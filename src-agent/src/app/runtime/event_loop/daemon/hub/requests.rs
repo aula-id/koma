@@ -11,6 +11,7 @@ use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::actions::apply_action;
+use crate::app::runtime::commands::compact::handle_compact;
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -997,6 +998,17 @@ impl DaemonHub {
                     }
                 }
                 self.send_to(idx, DaemonEvent::Ack);
+            }
+
+            // GUI status-footer Compact action: summarise + trim the foreground
+            // session's history via the SAME `handle_compact` entry point the TUI's
+            // `/compact` command calls (`preserve_n_override: None` — use the
+            // session's configured `compaction.preserve_n`). Busy / no-session is a
+            // no-op reported via the session's `status` line, exactly like `/compact`;
+            // any real error surfaces as `DaemonEvent::Error`.
+            ClientRequest::Compact => {
+                let result = handle_compact(state, client, handle, None);
+                self.ack_or_error(idx, result);
             }
 
             // Read-only / already-handled variants never reach here (handle_request

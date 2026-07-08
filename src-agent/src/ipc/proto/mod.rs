@@ -236,6 +236,14 @@ pub enum ClientRequest {
     /// projected `GlobalSnapshot.input` / `InputChanged` delta — NOT auto-sent, the
     /// user edits + presses Enter). gui-gated: the TUI drives rewind via double-Esc.
     RewindTo { index: usize },
+    /// Compact the foreground session's conversation (the GUI status-footer Compact
+    /// action) — the non-key equivalent of the TUI's `/compact`. Reuses
+    /// [`crate::app::runtime::commands::compact::handle_compact`] daemon-side with
+    /// `preserve_n_override: None` (the session's configured `compaction.preserve_n`),
+    /// the SAME entry point `/compact` calls. A no-op (busy / no session) is reported
+    /// back via the session's `status` line, exactly like `/compact`. gui-gated: the
+    /// TUI drives compaction via the `/compact` slash command.
+    Compact,
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
