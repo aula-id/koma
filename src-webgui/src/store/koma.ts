@@ -87,6 +87,15 @@ export type BashJobEntry = {
   status: 'running' | 'done' | 'killed' | 'error'
 }
 
+// One cumulative file-change row for the Explore "File changed" panel — the
+// (workspace-relative when possible) path this session's write/edit/delete
+// touched + its latest status. Persisted daemon-side (survives compaction +
+// close/reopen), REPLACED wholesale on each Snapshot.
+export type FileChangeEntry = {
+  path: string
+  status: 'added' | 'modified' | 'deleted'
+}
+
 // Mirrors the Rust host's `PushAttachment` (render.rs, `rename_all = "camelCase"`):
 // `markerN` (the daemon's `[Image #N]` marker number) round-trips back in
 // `RemoveAttachment`; `name` is the on-disk basename; `kind` is the mime-derived
@@ -112,6 +121,9 @@ export type PushEnvelope =
       palette: PaletteColors
       subagents: SubAgentEntry[]
       bash: BashJobEntry[]
+      // Cumulative file-change log (#24). Optional-tolerant: a host build that
+      // doesn't project it yet omits it, and the panel shows "No changes".
+      fileChanges?: FileChangeEntry[]
       attachments: AttachmentEntry[]
       // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from
       // the host's process-global agent_mode. Optional-tolerant: a host build
@@ -185,6 +197,7 @@ type SessionSlice = {
   reasoning: string
   subagents: SubAgentEntry[]
   bash: BashJobEntry[]
+  fileChanges: FileChangeEntry[]
   attachments: AttachmentEntry[]
   searchResults: SearchResultEntry[]
   // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from the
@@ -284,6 +297,7 @@ const initialSession: SessionSlice = {
   reasoning: '',
   subagents: [],
   bash: [],
+  fileChanges: [],
   attachments: [],
   searchResults: [],
   mode: 'auto',
@@ -389,6 +403,9 @@ export const useKoma = create<KomaState>((set) => ({
               title: env.title,
               subagents: env.subagents,
               bash: env.bash,
+              // Defensive fallback: tolerates a host build that hasn't started
+              // projecting fileChanges[] on the Snapshot envelope yet.
+              fileChanges: env.fileChanges ?? [],
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting attachments[] on the Snapshot envelope yet.
               attachments: env.attachments ?? [],
