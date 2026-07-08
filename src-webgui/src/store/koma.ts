@@ -168,7 +168,7 @@ export type PushEnvelope =
   // the provider+modelId it was fetched for so ModelForm can discard a stale
   // reply that no longer matches its current selection. Empty `routes` = a
   // non-OpenRouter provider (UI shows only the synthetic "Auto" row).
-  | { k: 'ModelRoutes'; provider: string; modelId: string; routes: RouteEntry[] }
+  | { k: 'RouteList'; provider: string; modelId: string; routes: RouteEntry[] }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -470,7 +470,7 @@ export const useKoma = create<KomaState>((set) => ({
       case 'ModelList':
         set(() => ({ modelList: env.models }))
         break
-      case 'ModelRoutes':
+      case 'RouteList':
         set(() => ({
           routeList: { provider: env.provider, modelId: env.modelId, routes: env.routes },
         }))
