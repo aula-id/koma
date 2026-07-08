@@ -99,6 +99,8 @@ mod roundtrip_tests {
             // serialize -> deserialize (an empty string would alias the default).
             resolved_model_id: "anthropic/claude-sonnet-4-5".to_string(),
             pending_steer: Vec::new(),
+            bash_jobs: vec![],
+            file_changes: vec![],
         }
     }
 
