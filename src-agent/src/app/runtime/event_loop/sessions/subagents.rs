@@ -18,6 +18,12 @@ pub(super) fn drain_subagents(
     use crate::app::subagent::{AgentEvent, SubAgentStatus};
 
     let mut dirty = false;
+    // Set whenever a sub-agent's lifecycle STATUS transitions to terminal this tick
+    // (disconnect→Killed / Done / Error), so the persisted records (#25) are
+    // re-written exactly once — reflecting the final status, not a stale "running".
+    // Not tied to `dirty` (which also flips on pure token/transcript growth that
+    // would trigger a needless DB write every streaming tick).
+    let mut status_changed = false;
 
     // Char-safe truncation helper (avoids panicking on multibyte boundaries).
     fn trunc(s: &str, max: usize) -> String {
@@ -62,6 +68,7 @@ pub(super) fn drain_subagents(
             if matches!(sa.status, SubAgentStatus::Running) {
                 sa.status = SubAgentStatus::Killed;
                 dirty = true;
+                status_changed = true;
             }
         }
 
@@ -127,10 +134,12 @@ pub(super) fn drain_subagents(
                     AgentEvent::Done(s) => {
                         sa.transcript.push(format!("done: {}", trunc(&s, 200)));
                         sa.status = SubAgentStatus::Done(s);
+                        status_changed = true;
                     }
                     AgentEvent::Error(e) => {
                         sa.transcript.push(format!("error: {e}"));
                         sa.status = SubAgentStatus::Error(e);
+                        status_changed = true;
                     }
                     AgentEvent::UsageReport { model_id, tokens_in, tokens_out, cost } => {
                         // Overwrite with the final report's values; the loop
@@ -333,6 +342,12 @@ pub(super) fn drain_subagents(
     if !state.rest.sessions[idx].pending_subagents.is_empty() {
         try_start_pending(state, idx, client, handle);
         dirty = true;
+    }
+
+    // Re-persist the sub-agent records once if any reached a terminal state this
+    // tick, so a restored session shows the final status not a stale "running" (#25).
+    if status_changed {
+        crate::app::runtime::bg_persist::persist_subagents(&state.rest.sessions[idx]);
     }
 
     dirty

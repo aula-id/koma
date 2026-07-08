@@ -33,6 +33,7 @@ impl Tool for Delete {
         }
         std::fs::remove_file(&path).with_context(|| format!("deleting file '{rel}'"))?;
         super::super::dircache::reindex(ctx.workspaces.clone(), ctx.dir_cache.clone());
+        super::record_change(ctx, &path, "deleted");
         Ok(format!("Deleted {rel}."))
     }
 }

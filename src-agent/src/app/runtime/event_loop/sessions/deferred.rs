@@ -119,6 +119,7 @@ pub(super) fn drain_deferred_and_resume(
                 finished.push(id);
             }
         }
+        let had_finished = !finished.is_empty();
         for id in finished {
             // Snapshot the final status into a short label for the toast. An id
             // with no matching job (cleared session) just falls through silently.
@@ -143,6 +144,11 @@ pub(super) fn drain_deferred_and_resume(
                 state.rest.sessions[idx].pending_bash_nudges.push((id, label));
                 dirty = true;
             }
+        }
+        // A job just reached a terminal state — re-persist the set so the restored
+        // record reflects the final status, not the stale "running" (#25).
+        if had_finished {
+            crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[idx]);
         }
     }
 

@@ -769,6 +769,8 @@ pub(crate) fn process_tools(
                     let done_tx = state.rest.sessions[sess_idx].bash_done_tx.clone();
                     let job = crate::app::bgbash::spawn_bash_job(id, command, cwd, done_tx);
                     state.rest.sessions[sess_idx].bash_jobs.push(job);
+                    // Persist the new job record so it survives close/reopen (#25).
+                    crate::app::runtime::bg_persist::persist_bash_jobs(&state.rest.sessions[sess_idx]);
                     format!(
                         "started background job bash-{id} (running). Poll with \
                          bash_output{{\"job_id\":\"bash-{id}\"}}, stop with \
