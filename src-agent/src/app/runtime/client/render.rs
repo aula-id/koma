@@ -829,6 +829,25 @@ enum PushEnvelope {
         toast: Option<String>,
         #[serde(rename = "toastKind")]
         toast_kind: Option<&'static str>,
+        /// Foreground session's cumulative token/cost counters (mirrors the daemon's
+        /// `SessionRuntime` totals — see `client_shadow/session.rs`'s rehydration),
+        /// for the GUI status footer. `tokensIn` is the CURRENT context size (not a
+        /// running sum — mirrors `SessionRuntime::tokens_in`'s own semantics);
+        /// `tokensOut`/`tokensCached`/`cost` accumulate across the session.
+        #[serde(rename = "tokensIn")]
+        tokens_in: u64,
+        #[serde(rename = "tokensCached")]
+        tokens_cached: u64,
+        #[serde(rename = "tokensOut")]
+        tokens_out: u64,
+        cost: f64,
+        /// The EFFECTIVE agent mode label (`"auto"`/`"normal"`/`"plan"`/`"yolo"`) —
+        /// identical source to the Snapshot's `mode` (`shadow.rest.agent_mode`), so
+        /// e.g. a model-driven `plan_enter` while the selector reads "auto" still
+        /// reports `"plan"` here the instant the round-trip lands (Status re-emits
+        /// independently of the Snapshot fingerprint). Rides the status footer so it
+        /// updates even on ticks where the transcript itself doesn't change.
+        mode: String,
     },
     /// The detached session swapper: the `[+ new session]` row + live cooking rows +
     /// on-disk history. `state` is always `"swapper"`.
@@ -963,8 +982,21 @@ pub(super) struct PushState {
     stream: Option<String>,
     /// Last reasoning buffer pushed (empty once cleared).
     reasoning: String,
-    /// Last `(working, toast, toast_kind)` pushed.
-    status: Option<(bool, Option<String>, Option<&'static str>)>,
+    /// Last `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost,
+    /// mode)` pushed — the full `Status` envelope payload, so a counter tick, a
+    /// mode flip, or a working/toast change each independently re-emit `Status`.
+    /// `cost` is `f64`; plain `!=` (`PartialEq`, not `Eq`) is fine here — this tuple
+    /// is only ever compared, never hashed or used as a map key.
+    status: Option<(
+        bool,
+        Option<String>,
+        Option<&'static str>,
+        u64,
+        u64,
+        u64,
+        f64,
+        String,
+    )>,
     /// Last serialised `Hub` JSON (the swapper is diffed as a whole).
     hub_json: Option<String>,
     /// Last serialised `Config` JSON (the global config catalogue, diffed as a whole so
@@ -1665,7 +1697,10 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             bash,
             file_changes,
             attachments,
-            mode,
+            // Cloned (not moved): `mode` is re-read below for the `Status` envelope,
+            // which is emitted unconditionally every call, unlike this `Snapshot`
+            // block which only runs when the fingerprint changed.
+            mode: mode.clone(),
             pending_steer,
             awaiting_approval,
             approval_reason,
@@ -1730,7 +1765,23 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         crate::app::state::ToastKind::Error => "error",
         crate::app::state::ToastKind::Info => "info",
     });
-    let status = (working, toast, toast_kind);
+    // Usage counters: mirror the daemon's `SessionRuntime` totals (rehydrated onto the
+    // shadow verbatim in `client_shadow/session.rs`), folded into the dedupe tuple so a
+    // counter tick alone (no transcript/toast change) still re-emits `Status`.
+    let tokens_in = fg.tokens_in;
+    let tokens_cached = fg.tokens_cached;
+    let tokens_out = fg.tokens_out;
+    let cost = fg.cost;
+    let status = (
+        working,
+        toast,
+        toast_kind,
+        tokens_in,
+        tokens_cached,
+        tokens_out,
+        cost,
+        mode.clone(),
+    );
     if last.status.as_ref() != Some(&status) {
         last.status = Some(status.clone());
         emit(push, &PushEnvelope::Status {
@@ -1738,6 +1789,11 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             working: status.0,
             toast: status.1,
             toast_kind: status.2,
+            tokens_in: status.3,
+            tokens_cached: status.4,
+            tokens_out: status.5,
+            cost: status.6,
+            mode: status.7,
         });
     }
 }

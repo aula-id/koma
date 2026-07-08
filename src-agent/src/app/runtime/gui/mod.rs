@@ -306,6 +306,11 @@ enum GuiReq {
     /// Forwarded as [`ClientRequest::ApproveTool`] — `approve:true` runs the call,
     /// `false` bounces it back to the model (koma's y/n equivalent).
     ApproveTool { approve: bool },
+    /// The status-footer Compact action: summarise + trim the foreground session's
+    /// history. Forwarded as [`ClientRequest::Compact`] (koma's `/compact` equivalent).
+    /// Compacting without an attached session is meaningless, so the un-attached case
+    /// is a silent no-op (same pattern as `Interrupt`/`RewindTo`).
+    Compact,
     /// The plan-approval card's controls (paused `plan_ready` digest). `decision` is one
     /// of `"approve"`, `"compact"` (approve + compact history to the plan), or `"deny"`
     /// (keep discussing). Forwarded verbatim as [`ClientRequest::PlanDecision`], koma's
@@ -772,6 +777,16 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::Interrupt);
+                            }
+                        }
+                    }
+                    // Status-footer Compact action: summarise + trim the foreground
+                    // session's history on the attached daemon. No session attached →
+                    // silent no-op (compacting nothing is meaningless).
+                    GuiReq::Compact => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::Compact);
                             }
                         }
                     }
