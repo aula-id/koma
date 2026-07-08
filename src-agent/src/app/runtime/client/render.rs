@@ -579,6 +579,9 @@ struct PushAttachment {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PushSubAgent {
+    /// Stable per-session sub-agent id — the handle the GUI kill button round-trips as
+    /// [`crate::app::runtime::gui`]'s `KillSubagent { id }`.
+    id: usize,
     name: String,
     status: &'static str,
     summary: String,
@@ -761,6 +764,18 @@ enum PushEnvelope {
         providers: Vec<PushProvider>,
         models: Vec<PushModel>,
         mcp: Vec<PushMcpServer>,
+        /// The active palette (theme), so the EMPTY/swapper state — which never receives a
+        /// `Snapshot` (the only other palette carrier) — can repaint to `config.json`'s
+        /// theme instead of the hardcoded dark default. Rides Config because Config is
+        /// pushed in BOTH host states (swapper via `push_swapper_config`, attached via
+        /// `push_config`), so the theme is always available.
+        palette: PushPalette,
+        /// The uuid of the foreground session's LOCAL Main-role model override, or `null`
+        /// when there is none (the session inherits the global Main). The model
+        /// quick-picker uses this as its current selection: `null` = the `(inherit)` row,
+        /// else the matching local-override option. `None` is serialised as JSON `null`.
+        #[serde(rename = "sessionMainUuid")]
+        session_main_uuid: Option<String>,
     },
     /// One-shot live model-id catalogue for `provider` (uuid), answering a
     /// `ListModels` — the Connector ModelForm REPLACES its model-id picker options with
@@ -1131,14 +1146,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
     // Palette from the shadow config (a themed daemon repaints the chat live).
     // The same TUI roles `view::draw` uses, so every non-default theme's chat
     // colours are correct — not just bg/fg. Fallbacks mirror the dark palette.
-    let pal = crate::view::theme::palette(&shadow.rest.config);
-    let palette = PushPalette {
-        bg: color_hex(pal.bg, "#000000"),
-        fg: color_hex(pal.fg, "#c8d3f5"),
-        accent: color_hex(pal.accent, "#39ff14"),
-        dim: color_hex(pal.dim, "#adadad"),
-        panel: color_hex(pal.panel, "#2b2f38"),
-    };
+    let palette = push_palette_from_config(&shadow.rest.config);
 
     // Committed transcript: skip System/Tool (chrome the chat view never shows as a
     // bubble), carry role + content + display-only reasoning for user/assistant, plus
@@ -1276,6 +1284,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         .subagents
         .iter()
         .map(|sa| PushSubAgent {
+            id: sa.id,
             name: sa.agent_name.clone(),
             status: match &sa.status {
                 crate::app::subagent::SubAgentStatus::Running => "running",
@@ -1361,6 +1370,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         // Fold sub-agents in so a status/list change re-emits the Snapshot.
         subagents.len().hash(&mut h);
         for sa in &subagents {
+            sa.id.hash(&mut h);
             sa.name.hash(&mut h);
             sa.status.hash(&mut h);
             sa.summary.hash(&mut h);
@@ -1527,6 +1537,9 @@ pub(super) struct ConfigProjection {
     models: Vec<crate::model::app_config::ModelEntry>,
     session_models: Vec<crate::model::app_config::ModelEntry>,
     mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
+    /// Active palette (theme) roles, carried on the Config push so the empty/swapper
+    /// state — which gets no `Snapshot` — still repaints to `config.json`'s theme.
+    palette: PushPalette,
 }
 
 impl ConfigProjection {
@@ -1537,6 +1550,7 @@ impl ConfigProjection {
             models: g.config_models.clone(),
             session_models: g.session_models.clone(),
             mcp_servers: g.mcp_servers.clone(),
+            palette: palette_from_global(g),
         }
     }
 
@@ -1552,8 +1566,37 @@ impl ConfigProjection {
             models: cfg.models.clone(),
             session_models: Vec::new(),
             mcp_servers: cfg.mcp_servers.clone(),
+            palette: push_palette_from_config(cfg),
         }
     }
+}
+
+/// Build a [`PushPalette`] (the React chat/chrome palette roles) from an
+/// [`crate::model::app_config::AppConfig`], resolving the TUI [`crate::view::theme::Palette`]
+/// so a non-default theme's colours (bg/fg/accent/dim/panel) are all correct. Fallbacks
+/// mirror the dark palette. Shared by the Snapshot palette + the swapper Config palette.
+fn push_palette_from_config(cfg: &crate::model::app_config::AppConfig) -> PushPalette {
+    let pal = crate::view::theme::palette(cfg);
+    PushPalette {
+        bg: color_hex(pal.bg, "#000000"),
+        fg: color_hex(pal.fg, "#c8d3f5"),
+        accent: color_hex(pal.accent, "#39ff14"),
+        dim: color_hex(pal.dim, "#adadad"),
+        panel: color_hex(pal.panel, "#2b2f38"),
+    }
+}
+
+/// Rebuild a [`PushPalette`] from a [`crate::ipc::proto::GlobalSnapshot`] (the ATTACHED
+/// path's Config source). The renderer's palette selection lives entirely in the
+/// `palette`-registry NAME (theme/accent are deprecated and unread — see `AppConfig`), so a
+/// minimal [`crate::model::app_config::AppConfig`] carrying just that name resolves to the
+/// exact same [`crate::view::theme::Palette`] the attached Snapshot pushes.
+fn palette_from_global(g: &crate::ipc::proto::GlobalSnapshot) -> PushPalette {
+    let cfg = crate::model::app_config::AppConfig {
+        palette: g.palette.clone(),
+        ..Default::default()
+    };
+    push_palette_from_config(&cfg)
 }
 
 /// Map a persisted [`crate::model::app_config::ModelRole`] to its lowercase wire token
@@ -1607,6 +1650,17 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
     let mut models: Vec<PushModel> = cfg.models.iter().map(|m| push_model(m, "global")).collect();
     models.extend(cfg.session_models.iter().map(|m| push_model(m, "local")));
 
+    // The current session Main override (the quick-picker's selected value): the local
+    // entry that holds the Main role, if any (else `null` = inherit the global Main).
+    let session_main_uuid = cfg
+        .session_models
+        .iter()
+        .find(|m| {
+            m.effective_roles()
+                .contains(&crate::model::app_config::ModelRole::Main)
+        })
+        .map(|m| m.uuid.clone());
+
     let mcp: Vec<PushMcpServer> = cfg
         .mcp_servers
         .iter()
@@ -1631,7 +1685,13 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         })
         .collect();
 
-    let env = PushEnvelope::Config { providers, models, mcp };
+    let env = PushEnvelope::Config {
+        providers,
+        models,
+        mcp,
+        palette: cfg.palette.clone(),
+        session_main_uuid,
+    };
     if let Ok(json) = serde_json::to_string(&env) {
         if last.config_json.as_deref() != Some(json.as_str()) {
             last.config_json = Some(json.clone());
