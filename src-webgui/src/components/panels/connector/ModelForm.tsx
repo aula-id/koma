@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Circle, CircleDot } from 'lucide-react'
 import { Field, TextInput, Segmented, Chips, Select, Combobox } from '../form'
 import { FormActions } from '../helpers'
 import { useKoma } from '../../../store/koma'
@@ -42,11 +43,21 @@ function RouteRow({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-[12px] transition-colors ${
-        selected ? 'bg-koma-hover text-koma-fg' : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
+      aria-checked={selected}
+      role="radio"
+      className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] transition-colors ${
+        selected
+          ? 'bg-koma-accent/15 text-koma-fg opacity-100'
+          : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
       }`}
     >
-      <span className="truncate">{label}</span>
+      {/* Radio indicator: filled accent dot when selected, hollow ring otherwise. */}
+      {selected ? (
+        <CircleDot size={13} className="flex-none text-koma-accent" />
+      ) : (
+        <Circle size={13} className="flex-none opacity-40" />
+      )}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       {(priceIn || uptime !== undefined) && (
         <span className="flex-none pl-2 text-[10px] text-koma-fg opacity-50">
           {priceIn && priceOut ? `$${priceIn}/$${priceOut}` : ''}
