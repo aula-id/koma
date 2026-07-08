@@ -240,7 +240,7 @@ over sec_remote (stateful socket).\n",
         // downgrade it to `None`. `shape` already treats `None` as "skip the fold +
         // snippet-router" gracefully (existing summary still applies) — no summary /
         // no recall, never a crash.
-        let aware = crate::app::resolve::resolve_role(
+        let aware = crate::app::resolve::resolve_role_dispatch(
             &state.rest.config,
             &sess.settings,
             crate::model::app_config::ModelRole::Awareness,
