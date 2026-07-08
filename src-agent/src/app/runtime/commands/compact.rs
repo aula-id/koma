@@ -69,7 +69,7 @@ pub(crate) fn handle_compact(
     // moved-into-task value carries no borrow of `state.rest`. Compactor
     // always resolves (Main legacy fallback), but guard defensively.
     let route = state.rest.fg().session.as_ref().and_then(|s| {
-        crate::app::resolve::resolve_role(
+        crate::app::resolve::resolve_role_dispatch(
             &state.rest.config,
             &s.settings,
             crate::model::app_config::ModelRole::Compactor,

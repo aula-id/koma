@@ -87,7 +87,7 @@ pub(super) fn handle_submit(
         // Resolve the SAME route the send will use so the capability guard checks the
         // model that actually receives the image.
         let main = state.rest.fg().session.as_ref().and_then(|sess| {
-            crate::app::resolve::resolve_role(
+            crate::app::resolve::resolve_role_dispatch(
                 &state.rest.config,
                 &sess.settings,
                 crate::model::app_config::ModelRole::Main,

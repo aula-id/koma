@@ -39,12 +39,27 @@
 //! resolves in step 2) ALWAYS wins — explicit assignment is the only way to give
 //! Awareness its own model. When nothing is assigned, Awareness inherits Main so the
 //! call works on any provider the user has actually configured, not just OpenRouter.
+//!
+//! ## Dispatch-time koma-free last resort ([`resolve_role_dispatch`])
+//!
+//! [`resolve_role`] alone never bricks Main/Compactor/Awareness structurally (the
+//! legacy fallback always returns `Some`), but that `Some` can still be UNUSABLE —
+//! an empty `api_key` — when "(inherit)" bottoms out with no user model actually
+//! holding the Main role anywhere (`config.models` / `session_models`) and the old
+//! per-field legacy settings were never populated either. Sending that route would
+//! silently 401/fail. [`resolve_role_dispatch`] is the dispatch-time wrapper around
+//! [`resolve_role`] that catches exactly this case for Main and its two cascading
+//! roles (Compactor, Awareness) and substitutes the keyless koma-free tier instead
+//! of failing. It is intentionally a SEPARATE function from `resolve_role` — every
+//! "is Main configured?" gate keeps calling `resolve_role` + [`Resolved::is_usable`]
+//! directly and is unaffected; see that function's doc comment for the full list.
 
 use crate::app::state::AgentMode;
 use crate::config::DEFAULT_BASE_URL;
 use crate::model::agent_def::AgentDef;
-use crate::model::app_config::{ApiType, AppConfig, ModelEntry, ModelRole, OAuthProvider};
+use crate::model::app_config::{new_uuid, ApiType, AppConfig, ModelEntry, ModelRole, OAuthProvider};
 use crate::model::settings::Settings;
+use crate::service::koma_free::{KOMA_FREE_ENDPOINT, KOMA_FREE_MODEL};
 use crate::service::openrouter::Conn;
 
 /// One fully-resolved route for a runtime role: everything a client call needs to
@@ -328,6 +343,78 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
     legacy_fallback(settings, role)
 }
 
+/// Build the keyless koma-free [`Resolved`] directly (no [`ModelEntry`] /
+/// [`crate::model::app_config::ProviderConn`] involved), mirroring the
+/// `ApiType::KomaFree` special-case in [`from_entry`]: `KOMA_FREE_ENDPOINT` +
+/// `KOMA_FREE_MODEL`, an empty `api_key` (auth rides the `X-Koma`/`X-Session`
+/// headers), no upstream route pin. `effort` follows the same rule
+/// `from_entry` uses — `settings.effort` for `role == Main` (the only role that
+/// exposes it), empty for every other role — so a Main turn that falls back to
+/// koma-free doesn't silently lose the user's configured reasoning effort
+/// versus an explicitly-configured koma-free Main entry.
+///
+/// `install_id` is normally `config.install_id` as-is. This function NEVER
+/// mutates or persists `config` (it only borrows it) — so on the rare install
+/// where `install_id` is still empty (the user has never touched `/free` or the
+/// koma-free onboarding path, both of which mint+save one), an empty `X-Koma`
+/// header would go out on the wire. Rather than persist a value from a pure
+/// resolve-time read path, mint an EPHEMERAL uuid for this `Resolved` only; it
+/// is not written back to `config`, so a later real `/free` toggle or koma-free
+/// onboarding still mints (and this time persists) the real one.
+fn koma_free_dispatch_route(config: &AppConfig, settings: &Settings, role: ModelRole) -> Resolved {
+    let install_id = if config.install_id.is_empty() {
+        new_uuid()
+    } else {
+        config.install_id.clone()
+    };
+    let effort = if role == ModelRole::Main {
+        settings.effort.clone()
+    } else {
+        String::new()
+    };
+    Resolved {
+        model_id: KOMA_FREE_MODEL.to_string(),
+        endpoint: KOMA_FREE_ENDPOINT.to_string(),
+        api_key: String::new(),
+        api_type: ApiType::KomaFree,
+        route: None,
+        effort,
+        account_id: String::new(),
+        oauth_uuid: String::new(),
+        install_id,
+    }
+}
+
+/// [`resolve_role`], but with a LAST-RESORT koma-free fallback for the Main role
+/// and every role that CASCADES to Main (`Compactor`, `Awareness` — see the
+/// `resolve_role` fallback table above): when the resolved route is missing or
+/// [`Resolved::is_usable`] says it carries no usable auth, dispatch against the
+/// keyless koma-free tier instead of sending a doomed empty-key request. Planner
+/// and Safeguard are untouched — Planner already degrades to Main at the call
+/// site ([`resolve_turn_model`]) when unresolved, and Safeguard is deliberately
+/// fail-closed (a classifier must never silently downgrade to a free tier).
+///
+/// DISPATCH-TIME ONLY. Do NOT call this from a "is anything configured yet?"
+/// GATE — every such gate (the first-run chooser in
+/// `runtime::lifecycle::build_startup`/`install_daemon_session`, the
+/// client-build gate right next to it, and the no-creds banners in
+/// `runtime::actions::onboard`/`session::{attach,cancel,picker}`/
+/// `commands::new_session`) calls [`resolve_role`] directly and MUST keep
+/// observing "not usable" so onboarding still fires for a genuinely
+/// unconfigured install — this function would make that check always pass and
+/// silently swallow the gate. Reserve it for the seam where a network request
+/// is actually about to be built (the Main turn, the Awareness fold/summary
+/// call, `/compact`'s Compactor call, and their Main-route retry fallbacks).
+pub fn resolve_role_dispatch(config: &AppConfig, settings: &Settings, role: ModelRole) -> Option<Resolved> {
+    let resolved = resolve_role(config, settings, role);
+    if matches!(role, ModelRole::Main | ModelRole::Compactor | ModelRole::Awareness)
+        && resolved.as_ref().is_none_or(|r| !r.is_usable())
+    {
+        return Some(koma_free_dispatch_route(config, settings, role));
+    }
+    resolved
+}
+
 /// True when `a` and `b` name the exact same route: same model id, same
 /// provider endpoint, and the same OpenRouter upstream pin. Deliberately does
 /// NOT compare `api_key`/`api_type`/`effort` — those can never differ for two
@@ -358,9 +445,18 @@ fn same_route(a: &Resolved, b: &Resolved) -> bool {
 ///   never off a separately-resolved Main.
 ///
 /// Returns `None` only when Main itself can't resolve (in practice never,
-/// since Main has a legacy soft-fallback).
+/// since Main has a legacy soft-fallback, and now also the koma-free
+/// last-resort in [`resolve_role_dispatch`]).
+///
+/// Main is resolved via [`resolve_role_dispatch`], NOT [`resolve_role`] — this
+/// is the actual per-turn DISPATCH chokepoint (the route this function returns
+/// is what `stream::run` sends the request on), so an unusable Main (no user
+/// model holds the role, or its provider is dangling) falls back to koma-free
+/// here rather than shipping an empty-key request. This does not affect any
+/// "is Main configured?" gate: those call [`resolve_role`] directly (see
+/// [`resolve_role_dispatch`]'s doc comment).
 pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMode) -> Option<Resolved> {
-    let main = resolve_role(config, settings, ModelRole::Main)?;
+    let main = resolve_role_dispatch(config, settings, ModelRole::Main)?;
     if mode != AgentMode::Plan {
         return Some(main);
     }
