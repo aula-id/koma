@@ -118,8 +118,9 @@ function TerseResult({ output }: { output: string }) {
 }
 
 // ---- One tool call + its inline result (transcript.rs `render_tool_lines`).
-// Status glyph resolves live: in-flight `⚙` (Cog, spinning) in dim →
-// completed `✓` (Check) in accent. Result is glued directly under its own call.
+// Status glyph resolves live: in-flight `⚙` (Cog, still — the sidepanel
+// already conveys "running") in dim → completed `✓` (Check) in accent.
+// Result is glued directly under its own call.
 const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) {
   const done = call.status === 'done'
   const req = useKoma((s) => s.req)
@@ -147,7 +148,7 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
             {done ? (
               <Check size={12} className="flex-none text-koma-accent" />
             ) : (
-              <Cog size={12} className="flex-none animate-spin text-koma-dim" />
+              <Cog size={12} className="flex-none text-koma-dim" />
             )}
             <span>plan ready</span>
           </div>
@@ -193,7 +194,7 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
         {done ? (
           <Check size={12} className="flex-none text-koma-accent" />
         ) : (
-          <Cog size={12} className="flex-none animate-spin text-koma-dim" />
+          <Cog size={12} className="flex-none text-koma-dim" />
         )}
         <span className="truncate">{signature}</span>
       </div>
@@ -231,19 +232,21 @@ function ReasoningBlock({ text, defaultOpen }: { text: string; defaultOpen: bool
   )
 }
 
-// ---- Image attachment card (transcript.rs `render_attachment_card`): the warn-
-// coloured list under a user message that carries `[Image #N]` attachments. The
-// TUI's `images` folder-tree (├─/└─ connectors) maps to an Images-icon header +
-// one ImageIcon row per attachment, all in the warn role — koma can't guarantee
-// the model actually read the image, so it's always a warn cue.
+// ---- Image attachment card (transcript.rs `render_attachment_card`): the
+// dashed-box list under a user message that carries `[Image #N]` attachments.
+// The TUI's `images` folder-tree (├─/└─ connectors) maps to an Images-icon
+// header + one ImageIcon row per attachment. Toned like the other dashed
+// cards in this file (ToolOutputBox above): dim label, fg content — no
+// standalone warn-role color here, so it stays on-palette with everything
+// else the live theme push drives.
 function AttachmentCard({ attachments }: { attachments: AttachmentEntry[] }) {
   return (
-    <div className="mt-1.5 rounded-md border border-dashed border-koma-warn/50 px-2 py-1.5 text-[11.5px] text-koma-warn">
+    <div className="mt-1.5 rounded-md border border-dashed border-koma-border px-2 py-1.5 text-[11.5px] text-koma-dim">
       <div className="flex items-center gap-1">
         <Images size={12} className="flex-none" />
         <span>images</span>
       </div>
-      <div className="mt-0.5 space-y-0.5 pl-1">
+      <div className="mt-0.5 space-y-0.5 pl-1 text-koma-fg">
         {attachments.map((a) => (
           <div key={a.markerN} className="flex items-center gap-1 opacity-90">
             <ImageIcon size={11} className="flex-none" />

@@ -100,6 +100,95 @@
   display: block;
 }
 
+/* Code blocks: the TUI (src-agent/src/view/markdown/render/code.rs) draws
+   ONE flat box per fence — a single thin border with the language inline in
+   the top rule, nothing nested. Streamdown's default renders a card-in-card
+   (rounded-xl bordered outer shell containing an ALSO-bordered inner body,
+   plus a boxed copy-button pill) — flatten that down to match. Leave the
+   header/action-tray SIZE utilities (h-8, sticky, -mt-10) alone: that's the
+   load-bearing math that floats the copy button top-right; only their
+   border/background/padding chrome is stripped here. */
+.koma-md [data-streamdown="code-block"] {
+  margin: 0.5rem 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.koma-md [data-streamdown="code-block-header"] {
+  font-size: 10px;
+  color: var(--color-koma-dim);
+}
+.koma-md [data-streamdown="code-block-header"] span {
+  margin-left: 0;
+}
+/* Copy-button tray: kill its bordered pill, show only on hover/focus (the
+   TUI has no such affordance at all — this is the one GUI-only addition). */
+.koma-md [data-streamdown="code-block-actions"] {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.koma-md [data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"],
+.koma-md [data-streamdown="code-block"]:focus-within [data-streamdown="code-block-actions"] {
+  opacity: 1;
+}
+.koma-md [data-streamdown="code-block-copy-button"] {
+  color: var(--color-koma-dim);
+}
+.koma-md [data-streamdown="code-block-copy-button"]:hover {
+  color: var(--color-koma-fg);
+}
+/* The one visible box: single hairline border + a subtle panel lift off the
+   chat background (assistant bubbles sit directly on --color-koma-bg), same
+   pairing the rest of the app uses for "contained" content (StartScreen
+   cards, ResumePalette, ModelPicker, …). Compact padding, body-copy size. */
+.koma-md [data-streamdown="code-block-body"] {
+  border: 1px solid var(--color-koma-border);
+  border-radius: 4px;
+  background: var(--color-koma-panel);
+  padding: 0.5rem 0.75rem;
+  font-size: 13px;
+}
+
+/* Tables: same rule as code blocks — no card-in-card. Streamdown wraps every
+   GFM table in an outer rounded-lg bordered shell (bg-sidebar) around an
+   ALSO-bordered scroll div (bg-background). Flatten both to bare rows; keep
+   the scroll div (function, not chrome) but make it transparent/borderless.
+   Header row reads via weight (already font-semibold) + the single hairline
+   the <table>'s own `divide-y` already draws between thead/tbody — mirrors
+   the TUI (render/blocks.rs flush_table: one ├───┤ under the header, no
+   separator between body rows), so per-row dividers in tbody are dropped. */
+.koma-md [data-streamdown="table-wrapper"] {
+  margin: 0.5rem 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  gap: 0;
+}
+.koma-md [data-streamdown="table-wrapper"] > div {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.koma-md [data-streamdown="table-header"] {
+  background: transparent;
+}
+.koma-md [data-streamdown="table-body"] [data-streamdown="table-row"] {
+  border-top: none;
+}
+.koma-md [data-streamdown="table-header-cell"],
+.koma-md [data-streamdown="table-cell"] {
+  padding: 0.3rem 0.6rem;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 html, body, #root {
   margin: 0;
   height: 100%;
