@@ -444,8 +444,24 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     GuiReq::SelectSession { id } => {
                         let _ = ipc_ctl.send(HostCtl::Select(id));
                     }
+                    // `[+ new session]`: open a NATIVE folder picker off the tao event
+                    // loop (rfd's dialog is modal/blocking — running it on this thread
+                    // would stall the 16ms push loop), and only mint the session once a
+                    // folder is confirmed. React raises its switch loader optimistically on
+                    // click, so on CANCEL create nothing but kick a hub RE-PUSH so the
+                    // loader (`switchingTo`) clears instead of stranding.
                     GuiReq::NewSession => {
-                        let _ = ipc_ctl.send(HostCtl::New);
+                        let ctl = ipc_ctl.clone();
+                        std::thread::spawn(move || {
+                            match rfd::FileDialog::new().pick_folder() {
+                                Some(folder) => {
+                                    let _ = ctl.send(HostCtl::New(Some(folder)));
+                                }
+                                None => {
+                                    let _ = ctl.send(HostCtl::RefreshHub);
+                                }
+                            }
+                        });
                     }
                     // ResumePalette opened: re-discover live sessions + re-push the hub
                     // (works while attached too — see `host_swapper` / `push_loop`).

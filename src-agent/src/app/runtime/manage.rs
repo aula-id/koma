@@ -223,7 +223,7 @@ fn live_session_sockets() -> Result<Vec<(String, std::path::PathBuf)>> {
 /// `session_id` is passed through as `--daemon --session <id>`: the daemon binds the
 /// matching keyed socket (`run/<id>.sock`) and create-or-loads exactly that session, so
 /// the spawning client (which minted `id`) and the daemon agree on the session/socket.
-fn spawn_daemon(session_id: &str, resume: bool) -> Result<u32> {
+fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Result<u32> {
     // Re-launch THIS binary with `--daemon`. `current_exe` is the running koma binary,
     // so a renamed/installed binary still respawns itself correctly.
     let exe = std::env::current_exe().context("cannot resolve current executable path")?;
@@ -237,6 +237,12 @@ fn spawn_daemon(session_id: &str, resume: bool) -> Result<u32> {
         .stderr(Stdio::null());
     if resume {
         cmd.arg("--resume");
+    }
+    // When the caller picked a folder (GUI "+ New session" native picker), spawn the
+    // daemon WITH that folder as its cwd so `install_daemon_session`'s `current_dir()`
+    // buckets the new session's workspace there. `None` inherits our cwd = old behavior.
+    if let Some(dir) = workdir {
+        cmd.current_dir(dir);
     }
 
     // SAFETY: `setsid()` is async-signal-safe and the canonical way to detach a child
@@ -308,13 +314,13 @@ fn probe_or_clear(path: &Path) -> Result<bool> {
 /// <session_id>` so it owns exactly that session. For a fresh `koma` the id was just
 /// minted (so the socket never exists yet and this always spawns); the probe branch
 /// still matters for a resume that re-targets an already-live session-daemon later.
-pub fn ensure_daemon_running(session_id: &str, resume: bool) -> Result<()> {
+pub fn ensure_daemon_running(session_id: &str, resume: bool, workdir: Option<&Path>) -> Result<()> {
     let path = store::daemon_sock_path(session_id)?;
     if probe_or_clear(&path)? {
         return Ok(()); // already live — attach to the existing one
     }
     // Nothing live → spawn a detached daemon and wait until it accepts.
-    spawn_and_wait_until_alive(session_id, &path, resume)
+    spawn_and_wait_until_alive(session_id, &path, resume, workdir)
 }
 
 /// Spawn-or-attach: return a connected blocking [`UnixStream`] to a LIVE daemon,
@@ -347,7 +353,7 @@ pub fn ensure_daemon_and_connect(session_id: &str) -> Result<UnixStream> {
     }
 
     // Nothing live → spawn + wait until it accepts, then connect for the caller.
-    spawn_and_wait_until_alive(session_id, &path, false)?;
+    spawn_and_wait_until_alive(session_id, &path, false, None)?;
     UnixStream::connect(&path)
         .with_context(|| format!("connect to spawned daemon socket {}", path.display()))
 }
@@ -360,8 +366,13 @@ pub fn ensure_daemon_and_connect(session_id: &str) -> Result<UnixStream> {
 /// [`ensure_daemon_and_connect`] (restart): both need "spawn, then wait until alive";
 /// only the latter additionally returns a connected stream. The wait is the SAME
 /// connect-probe as [`daemon_alive`], so "alive" means exactly "the socket accepts".
-fn spawn_and_wait_until_alive(session_id: &str, path: &Path, resume: bool) -> Result<()> {
-    let pid = spawn_daemon(session_id, resume)?;
+fn spawn_and_wait_until_alive(
+    session_id: &str,
+    path: &Path,
+    resume: bool,
+    workdir: Option<&Path>,
+) -> Result<()> {
+    let pid = spawn_daemon(session_id, resume, workdir)?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
         match UnixStream::connect(path) {

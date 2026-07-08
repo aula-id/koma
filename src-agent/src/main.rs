@@ -246,7 +246,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut opts = opts;
     let session_id = uuid::Uuid::new_v4().to_string();
-    if let Err(e) = app::ensure_daemon_running(&session_id, false) {
+    if let Err(e) = app::ensure_daemon_running(&session_id, false, None) {
         eprintln!("error: could not start the koma daemon: {e:#} — try `koma --local`");
         std::process::exit(1);
     }

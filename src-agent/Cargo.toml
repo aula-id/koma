@@ -45,6 +45,11 @@ rmcp = { version = "1.8", default-features = false, features = ["client", "trans
 # is set to). Linux (webkit2gtk) does not need this feature to honor transparency.
 wry = { version = "0.52", optional = true, features = ["transparent"] }
 tao = { version = "0.35", optional = true }
+# Native OS file/folder dialog for the GUI "+ New session" picker. On Linux the
+# default XDG-portal backend is async/thread-safe; on macOS/Windows it's the native
+# dialog. Run off the tao event-loop thread so its modal loop never stalls the 16ms
+# push loop. Optional + only pulled by the `gui` feature so the default build stays lean.
+rfd = { version = "0.15", optional = true }
 
 # macOS-only: lets us clear WKWebView's `underPageBackgroundColor`, which wry
 # 0.52.1 never touches on macOS (it only sets the legacy `drawsBackground`
@@ -64,7 +69,7 @@ objc2-app-kit = { version = "0.3", optional = true, default-features = false, fe
 ] }
 
 [features]
-gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit"]
+gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd"]
 
 [[bin]]
 name = "koma"
