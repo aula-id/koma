@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
 } from 'react'
-import { ArrowUp, Paperclip, Search, Square, X } from 'lucide-react'
+import { ArrowUp, CornerDownRight, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { ModelPicker } from './ModelPicker'
 import { ModeSelector } from './ModeSelector'
@@ -34,10 +34,14 @@ function readFileAsBase64(file: File): Promise<string> {
 export function Composer() {
   const working = useKoma((s) => s.session.working)
   const attachments = useKoma((s) => s.session.attachments)
+  const pendingSteer = useKoma((s) => s.session.pendingSteer)
   const req = useKoma((s) => s.req)
   const openOmniSearch = useKoma((s) => s.openOmniSearch)
   const composerInsert = useKoma((s) => s.ui.composerInsert)
   const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
+  const composerRefill = useKoma((s) => s.ui.composerRefill)
+  const consumeComposerRefill = useKoma((s) => s.consumeComposerRefill)
+  const requestScrollBottom = useKoma((s) => s.requestScrollBottom)
   const [input, setInput] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -61,11 +65,30 @@ export function Composer() {
     consumeComposerInsert()
   }, [composerInsert, consumeComposerInsert])
 
+  // Consume one-shot rewind refills: REPLACE the draft with the rewound
+  // message's text (unlike composerInsert, which appends) so the user can edit
+  // and resend it. Ack immediately so it doesn't re-fire on rerender.
+  useEffect(() => {
+    if (composerRefill === null) return
+    setInput(composerRefill)
+    consumeComposerRefill()
+  }, [composerRefill, consumeComposerRefill])
+
+  // Steer cap: the daemon queues at most 5 pending mid-turn submits; the 6th is
+  // dropped host-side with a toast, so gate send at the cap.
+  const atSteerCap = pendingSteer.length >= 5
+
   const submit = () => {
     const text = input.trim()
     if (!text) return
+    // While working, a submit is QUEUED daemon-side as a steer (not a new turn);
+    // block it at the cap so we don't fire a request the daemon will just drop.
+    if (atSteerCap) return
     req({ r: 'Submit', text })
     setInput('')
+    // Force the transcript back to the bottom on send (re-engages the W4
+    // scroll-stick even if the user had scrolled up).
+    requestScrollBottom()
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -121,13 +144,37 @@ export function Composer() {
     req({ r: 'RemoveAttachment', markerN })
   }
 
-  const canSend = input.trim() !== ''
+  const canSend = input.trim() !== '' && !atSteerCap
 
   return (
     // claude.ai-style composer pinned at the bottom: a single rounded card
     // (textarea on top, an action bar below) that grows with its content. Drag
     // a file anywhere over the card to attach; the card rings on drag-over.
     <div className="px-2 pb-3 pt-1">
+      {/* Pending-steer queue: submits made while the turn is cooking are queued
+          daemon-side (cap 5) rather than starting a new turn. Show the queued
+          previews above the composer so the user knows they're stacked up. */}
+      {pendingSteer.length > 0 && (
+        <div className="mb-1.5 flex flex-col gap-1 rounded-xl border border-koma-border bg-koma-panel px-2.5 py-2">
+          <div className="flex items-center gap-1.5 text-[11px] text-koma-dim">
+            <Layers size={12} className="flex-none" />
+            <span>
+              Queued {pendingSteer.length}/5
+            </span>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {pendingSteer.map((s, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-1.5 text-[11.5px] text-koma-fg opacity-80"
+              >
+                <CornerDownRight size={11} className="flex-none text-koma-dim" />
+                <span className="truncate">{s}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div
         onDrop={onDrop}
         onDragOver={onDragOver}
@@ -200,33 +247,38 @@ export function Composer() {
           </div>
 
           <div className="flex items-center gap-2">
-            {working ? (
-              // While the turn is running the send button MORPHS into a STOP
-              // button — koma's Esc-interrupt equivalent (GuiReq Interrupt),
-              // aborting the in-flight turn on the daemon.
+            {/* STOP is a SEPARATE control from send (not a morph): while the turn
+                runs, both are shown — send stays LIVE so a submit QUEUES as a
+                steer, and stop aborts the in-flight turn (GuiReq Interrupt). */}
+            {working && (
               <button
                 onClick={() => req({ r: 'Interrupt' })}
                 aria-label="Stop"
                 title="Stop"
-                className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-koma-accent text-koma-bg transition-colors hover:opacity-90"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-koma-border text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
               >
-                <Square size={14} className="fill-current" />
-              </button>
-            ) : (
-              <button
-                onClick={submit}
-                disabled={!canSend}
-                aria-label="Send"
-                title="Send"
-                className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
-                  canSend
-                    ? 'bg-koma-accent text-koma-bg hover:opacity-90'
-                    : 'bg-koma-hover text-koma-fg opacity-40'
-                }`}
-              >
-                <ArrowUp size={16} />
+                <Square size={13} className="fill-current" />
               </button>
             )}
+            <button
+              onClick={submit}
+              disabled={!canSend}
+              aria-label={working ? 'Queue message' : 'Send'}
+              title={
+                atSteerCap
+                  ? '5 pending steers max'
+                  : working
+                    ? 'Queue while working'
+                    : 'Send'
+              }
+              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
+                canSend
+                  ? 'bg-koma-accent text-koma-bg hover:opacity-90'
+                  : 'bg-koma-hover text-koma-fg opacity-40'
+              }`}
+            >
+              <ArrowUp size={16} />
+            </button>
           </div>
         </div>
       </div>
