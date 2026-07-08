@@ -12,6 +12,12 @@ import { useKoma } from '../store/koma'
 import { ModelPicker } from './ModelPicker'
 import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
+// Build-time JSON import: src-misc/ lives outside the vite root (src-webgui/)
+// but is the Rust side's single source of truth for this word list, so it's
+// imported directly rather than copied — vite/rollup inlines it into the
+// bundle at build time (fs.allow only gates the dev-server's HTTP file
+// serving, not the module graph read via Node fs during build).
+import wanderWords from '../../../src-misc/wanderer.json'
 
 // Reads a File's bytes and resolves to a bare base64 string (no `data:` URL
 // prefix) for the AttachFile GuiReq.
@@ -52,6 +58,10 @@ export function Composer() {
   // Mascot swap-on-send: bumped once per submit, telling CatMascot to pick a
   // different random cat. Otherwise it just keeps looping the current one.
   const [mascotSwap, setMascotSwap] = useState(0)
+  // Thinking-bubble word, re-randomized every 1s while `working` is true (see
+  // effect below). Empty when idle; the bubble itself is hidden via
+  // `working` so a stale word never flashes on the next turn.
+  const [thinkingWord, setThinkingWord] = useState('')
 
   // Auto-grow the textarea with its content, up to a cap (then it scrolls).
   // Runs on every input change (incl. programmatic clears + omnisearch inserts).
@@ -61,6 +71,27 @@ export function Composer() {
     ta.style.height = 'auto'
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
   }, [input])
+
+  // Thinking-bubble: while working, pick a fresh word immediately, then
+  // re-randomize every 1000ms (avoiding an immediate repeat) until working
+  // flips false — at which point the interval is torn down and the bubble
+  // fades out via its own `working`-gated styling. Also cleaned up on unmount.
+  useEffect(() => {
+    if (!working) return
+    const pick = (current: string) => {
+      if (wanderWords.length <= 1) return wanderWords[0] ?? ''
+      let next = current
+      while (next === current) {
+        next = wanderWords[Math.floor(Math.random() * wanderWords.length)]
+      }
+      return next
+    }
+    setThinkingWord((prev) => pick(prev))
+    const id = window.setInterval(() => {
+      setThinkingWord((prev) => pick(prev))
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [working])
 
   // Consume one-shot omnisearch-pick signals: append the picked path into
   // the draft text (not an attachment — the daemon's ingest is image-only,
@@ -213,6 +244,26 @@ export function Composer() {
             top-right corner. Purely decorative — not gated on `working` — and
             swaps to a different random cat on every send (see submit above). */}
         <CatMascot swapTrigger={mascotSwap} />
+
+        {/* Thinking bubble: anchored to the LEFT of the cat (the cat sits at
+            -top-3/right-3, h-12), only while `working`. Shares the cat's
+            -top-3/h-12 box so `items-center` centers it on the cat's vertical
+            midpoint without any pixel math; `right-16` leaves an ~8px gap off
+            the cat's left edge (right-3 + w-12 = 60px) and the pill grows
+            leftward since only `right` is anchored. The parent card has no
+            overflow-hidden, so it's never clipped. Kept mounted (not
+            conditionally rendered) so opacity/translate can transition instead
+            of popping. */}
+        <div
+          className={`pointer-events-none absolute -top-3 right-16 z-10 flex h-12 items-center transition-all duration-300 ${
+            working ? 'translate-x-0 opacity-100' : 'translate-x-1 opacity-0'
+          }`}
+          aria-hidden="true"
+        >
+          <span className="whitespace-nowrap rounded-full border border-koma-border bg-koma-panel2 px-2.5 py-1 text-[11px] text-koma-dim shadow-sm">
+            {thinkingWord.toLowerCase()}…
+          </span>
+        </div>
 
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1">
