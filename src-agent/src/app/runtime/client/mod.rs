@@ -224,6 +224,16 @@ pub(super) enum HostCtl {
     /// `HostTransition::ToSwapper` and `host_swapper` pushes a fresh `Hub` (clearing the
     /// loader). In the swapper it is a harmless hub re-push.
     ToSwapper,
+    /// Apply a config-GLOBAL mutation directly to `~/.koma/config.json` while PRE-SESSION.
+    /// The empty-state/onboarding flow runs in the SWAPPER, which holds NO attached daemon
+    /// to forward a `ClientRequest` to (the ipc `live_req` slot is `None`), so the theme +
+    /// provider + model setters that onboarding drives arrive here instead. Carries the
+    /// SAME [`ClientRequest`] the attached path forwards; `host_swapper` loads the config,
+    /// applies the config-global subset (provider/model/mcp/theme), saves, and re-pushes a
+    /// fresh `Config` (repainting the theme + clearing `needsOnboarding`). Session-scoped
+    /// requests (a `SetModel { scope:"local" }`, `SetSessionMain`) are no-ops here — there
+    /// is no session to hold a local override yet.
+    ConfigMutate(ClientRequest),
 }
 
 /// The host-relay run-loop's next step, mirroring [`ClientState`] for the headless
@@ -375,6 +385,150 @@ fn push_swapper_config(push: &dyn Fn(String), push_state: &mut render::PushState
     render::push_config(Some(&projection), push, push_state);
 }
 
+/// Apply a PRE-SESSION config mutation (a [`HostCtl::ConfigMutate`]) directly to
+/// `~/.koma/config.json` and re-push a fresh `Config` envelope.
+///
+/// The swapper/onboarding state has no attached daemon, so the theme + provider + model
+/// setters onboarding drives can't ride the normal `live_req` → daemon path. Instead the
+/// host loads the on-disk config, applies the config-GLOBAL subset via [`apply_global_config_req`],
+/// persists it, and re-pushes so the Connector panels + the live theme repaint and the
+/// `needsOnboarding` flag clears the instant a provider + Main model land. `push_config`
+/// dedups on the last-pushed JSON, so an unchanged config emits nothing.
+fn apply_swapper_config_mutation(
+    req: &ClientRequest,
+    push: &dyn Fn(String),
+    push_state: &mut render::PushState,
+) {
+    let mut cfg = crate::model::app_config::AppConfig::load();
+    if apply_global_config_req(&mut cfg, req) {
+        if let Err(e) = cfg.save() {
+            eprintln!("[gui] pre-session config save failed: {e}");
+        }
+        let projection = render::ConfigProjection::from_app_config(&cfg);
+        render::push_config(Some(&projection), push, push_state);
+    }
+}
+
+/// Apply the config-GLOBAL subset of a [`ClientRequest`] to an in-memory [`AppConfig`],
+/// returning `true` if it mutated `cfg` (the caller then persists + re-pushes).
+///
+/// This mirrors — for the PRE-SESSION swapper path — exactly what the daemon's
+/// `dispatch_request` does for these variants (see
+/// `runtime::event_loop::daemon::hub::requests`), reusing the SAME config-layer setters
+/// (`upsert_provider`/`upsert_model`/`upsert_mcp_server`/…) and the SAME MCP arg/env
+/// parsers, so the on-disk result is identical whether a setter runs attached or during
+/// onboarding. Session-scoped operations (`SetModel { scope:"local" }`, `SetSessionMain`,
+/// the MCP live-reconnect) have no session/manager pre-session and are treated as no-ops
+/// / config-write-only here. Any non-config request returns `false` untouched.
+fn apply_global_config_req(
+    cfg: &mut crate::model::app_config::AppConfig,
+    req: &ClientRequest,
+) -> bool {
+    use crate::model::app_config::{McpServerEntry, McpTransport, ModelEntry, ModelRole};
+    match req {
+        ClientRequest::SetTheme { name } => {
+            cfg.palette = name.clone();
+            true
+        }
+        ClientRequest::SetProvider {
+            uuid,
+            name,
+            endpoint,
+            api_key,
+        } => {
+            cfg.upsert_provider(
+                uuid.clone(),
+                name.trim().to_string(),
+                endpoint.trim().to_string(),
+                api_key.clone(),
+            );
+            true
+        }
+        ClientRequest::DeleteProvider { uuid } => {
+            cfg.remove_provider_by_uuid(uuid);
+            true
+        }
+        ClientRequest::SetModel {
+            uuid,
+            name,
+            model_id,
+            provider_uuid,
+            route,
+            roles,
+            scope,
+        } => {
+            // Pre-session there is no foreground session to hold a LOCAL override, so a
+            // `local`-scope model can't be applied here — only the GLOBAL catalogue.
+            if scope == "local" {
+                return false;
+            }
+            let roles: Vec<ModelRole> = roles
+                .iter()
+                .filter_map(|r| match r.as_str() {
+                    "main" => Some(ModelRole::Main),
+                    "awareness" => Some(ModelRole::Awareness),
+                    "safeguard" => Some(ModelRole::Safeguard),
+                    "compactor" => Some(ModelRole::Compactor),
+                    "planner" => Some(ModelRole::Planner),
+                    _ => None,
+                })
+                .collect();
+            cfg.upsert_model(ModelEntry {
+                uuid: uuid.clone().unwrap_or_default(),
+                name: name.trim().to_string(),
+                model_id: model_id.trim().to_string(),
+                provider_uuid: provider_uuid.clone(),
+                route: route.clone().filter(|r| !r.trim().is_empty()),
+                roles,
+                role: None,
+            });
+            true
+        }
+        ClientRequest::DeleteModel { uuid, scope } => {
+            if scope == "local" {
+                return false;
+            }
+            cfg.remove_model_by_uuid(uuid);
+            true
+        }
+        ClientRequest::SetMcpServer {
+            uuid,
+            name,
+            enabled,
+            transport,
+            command,
+            args,
+            env,
+            url,
+        } => {
+            cfg.upsert_mcp_server(McpServerEntry {
+                uuid: uuid.clone().unwrap_or_default(),
+                name: name.trim().to_string(),
+                enabled: *enabled,
+                transport: if transport == "http" {
+                    McpTransport::Http
+                } else {
+                    McpTransport::Stdio
+                },
+                command: command.trim().to_string(),
+                args: crate::app::mode::mcp::parse_args(args),
+                env: crate::app::mode::mcp::parse_env(env),
+                url: url.trim().to_string(),
+            });
+            true
+        }
+        ClientRequest::DeleteMcpServer { uuid } => {
+            cfg.remove_mcp_server_by_uuid(uuid);
+            true
+        }
+        ClientRequest::EnableMcpServer { uuid, enabled } => {
+            cfg.set_mcp_enabled_by_uuid(uuid, *enabled);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
 /// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
@@ -412,6 +566,12 @@ fn host_swapper(
                 render::push_hub(&hub, push, push_state);
                 // Re-emit config too (a `Ready` reload re-mounts the panels).
                 push_swapper_config(push, push_state);
+            }
+            // Pre-session config mutation (onboarding theme/provider/model): apply it
+            // directly to `~/.koma/config.json` and re-push `Config` so the panels + theme
+            // repaint and `needsOnboarding` clears. Stay in the swapper (no attach).
+            Ok(HostCtl::ConfigMutate(req)) => {
+                apply_swapper_config_mutation(&req, push, push_state);
             }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
             // swap-START loader signal first (this thread will BLOCK in the attach next, so

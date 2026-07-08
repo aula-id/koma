@@ -687,6 +687,18 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI theme picker (onboarding step 1 + the future Settings gear): set the
+            // active palette registry key + persist. Config-global; any client may drive
+            // it. Only `config.palette` (the live theme key) is touched — the deprecated
+            // `theme`/`accent` legacy fields are left as-is. The palette change is picked
+            // up by the snapshot diff (`ipc::snapshot::diff` gates a full snapshot on
+            // `palette`), so the GUI host re-derives + re-pushes its Config palette live.
+            ClientRequest::SetTheme { name } => {
+                state.rest.config.palette = name;
+                let result = state.rest.config.save();
+                self.ack_or_error(idx, result);
+            }
+
             // GUI stop button: interrupt the foreground session's in-flight turn via the
             // SAME `Action::Interrupt` the TUI's Esc runs (abort the stream, commit the
             // partial with `[interrupted]`, halt the agentic loop + kill running sub-agents).
