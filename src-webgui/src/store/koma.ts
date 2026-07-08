@@ -96,6 +96,16 @@ export type FileChangeEntry = {
   status: 'added' | 'modified' | 'deleted'
 }
 
+// One Plan-mode todo row for the Explore "PLAN" section — mirrors the host's
+// `PlanTodoSnapshot` (render.rs `PushPlanTodo`, `rename_all = "camelCase"`).
+// The two locked workflow rails ("serve plan to user"/"save plan to file &
+// prompt approval") are already filtered out daemon-side, so this is exactly
+// the model's plan steps. Empty array = not in Plan mode, or no plan yet.
+export type PlanTodoEntry = {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
+}
+
 // Mirrors the Rust host's `PushAttachment` (render.rs, `rename_all = "camelCase"`):
 // `markerN` (the daemon's `[Image #N]` marker number) round-trips back in
 // `RemoveAttachment`; `name` is the on-disk basename; `kind` is the mime-derived
@@ -187,6 +197,10 @@ export type PushEnvelope =
       // Cumulative file-change log (#24). Optional-tolerant: a host build that
       // doesn't project it yet omits it, and the panel shows "No changes".
       fileChanges?: FileChangeEntry[]
+      // Plan-mode todo checklist (Explore "PLAN" section). Optional-tolerant:
+      // a host build that doesn't project it yet leaves the panel's PLAN
+      // section empty (as if no plan were in progress).
+      planTodos?: PlanTodoEntry[]
       attachments: AttachmentEntry[]
       // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from
       // the host's process-global agent_mode. Optional-tolerant: a host build
@@ -305,6 +319,9 @@ type SessionSlice = {
   subagents: SubAgentEntry[]
   bash: BashJobEntry[]
   fileChanges: FileChangeEntry[]
+  // Plan-mode todo checklist (Explore "PLAN" section). REPLACED wholesale on
+  // each Snapshot; empty outside Plan mode or before a plan exists.
+  planTodos: PlanTodoEntry[]
   attachments: AttachmentEntry[]
   searchResults: SearchResultEntry[]
   // Global agent mode token ("auto"/"normal"/"plan"/"yolo"), projected from the
@@ -415,6 +432,12 @@ type UiSlice = {
   tabs: Tab[]
   // The shown tab's id — 'chat' or a `diff:${path}`.
   activeTabId: string
+  // Monotonic tick bumped by `focusPlanSection` (the UsageFooter PLAN badge
+  // click): a cross-tree signal, mirrors `scrollTick`. RootLayout watches it
+  // to open the Explore sidebar/panel; ExplorePanel watches it to expand its
+  // PLAN section — both live outside the Composer/footer's subtree, so a
+  // store tick (not a prop) is how the click reaches them.
+  focusPlanTick: number
 }
 
 type KomaState = {
@@ -476,6 +499,10 @@ type KomaState = {
   // freshness (contents may have changed since it was opened) while keeping the
   // stale diff on screen so the editor doesn't flash.
   activateTab: (id: string) => void
+  // The UsageFooter PLAN badge click (Plan mode only): bump `focusPlanTick` so
+  // RootLayout opens the Explore sidebar/panel and ExplorePanel expands its
+  // PLAN section in response.
+  focusPlanSection: () => void
 }
 
 const initialSession: SessionSlice = {
@@ -489,6 +516,7 @@ const initialSession: SessionSlice = {
   subagents: [],
   bash: [],
   fileChanges: [],
+  planTodos: [],
   attachments: [],
   searchResults: [],
   mode: 'auto',
@@ -523,6 +551,7 @@ const initialUi: UiSlice = {
   toastSeq: 0,
   tabs: [makeChatTab()],
   activeTabId: 'chat',
+  focusPlanTick: 0,
 }
 
 // Bundled fallback theme (palette) registry — mirrors the host's theme.rs
@@ -623,6 +652,9 @@ export const useKoma = create<KomaState>((set, get) => ({
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting fileChanges[] on the Snapshot envelope yet.
               fileChanges: env.fileChanges ?? [],
+              // Defensive fallback: tolerates a host build that hasn't started
+              // projecting planTodos[] on the Snapshot envelope yet.
+              planTodos: env.planTodos ?? [],
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting attachments[] on the Snapshot envelope yet.
               attachments: env.attachments ?? [],
@@ -849,4 +881,5 @@ export const useKoma = create<KomaState>((set, get) => ({
     }))
     if (isDiff && tab.kind === 'diff') get().req({ r: 'FileDiff', path: tab.path })
   },
+  focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
 }))

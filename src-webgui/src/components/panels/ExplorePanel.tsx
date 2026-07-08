@@ -1,5 +1,18 @@
-import { useState } from 'react'
-import { Bot, Terminal, Loader2, Check, CircleX, CircleSlash, X, FileText, type LucideIcon } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import {
+  Bot,
+  Terminal,
+  Loader2,
+  Check,
+  CircleX,
+  CircleSlash,
+  X,
+  FileText,
+  Circle,
+  CircleDot,
+  CheckCircle2,
+  type LucideIcon,
+} from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
@@ -45,6 +58,31 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+// Plan-todo status -> glyph + tone. pending = neutral outline, in_progress =
+// accented (the live step), completed = dim + line-through (done items sink
+// visually), cancelled = dim neutral (settled, no signal) — mirrors the
+// Agents/Bash STATUS_ICON/TONE idiom above.
+const PLAN_ICON: Record<string, LucideIcon> = {
+  pending: Circle,
+  in_progress: CircleDot,
+  completed: CheckCircle2,
+  cancelled: CircleSlash,
+}
+
+const PLAN_ICON_TONE: Record<string, string> = {
+  pending: 'text-koma-fg opacity-45',
+  in_progress: 'text-koma-accent',
+  completed: 'text-koma-dim opacity-60',
+  cancelled: 'text-koma-dim opacity-45',
+}
+
+const PLAN_TEXT_TONE: Record<string, string> = {
+  pending: 'text-koma-fg',
+  in_progress: 'text-koma-accent',
+  completed: 'text-koma-dim opacity-60 line-through',
+  cancelled: 'text-koma-dim opacity-45 line-through',
+}
+
 // Kill button for a running Agent/Bash row — mirrors the TUI's Ctrl+X kill.
 // Only rendered while the job is running; emits the id-targeted kill GuiReq.
 function KillBtn({ onClick }: { onClick: () => void }) {
@@ -61,15 +99,56 @@ function KillBtn({ onClick }: { onClick: () => void }) {
 }
 
 export function ExplorePanel() {
-  const [open, setOpen] = useState({ files: true, bash: true, agents: true })
+  const [open, setOpen] = useState({ plan: true, files: true, bash: true, agents: true })
   const subagents = useKoma((s) => s.session.subagents)
   const bash = useKoma((s) => s.session.bash)
   const files = useKoma((s) => s.session.fileChanges)
+  const planTodos = useKoma((s) => s.session.planTodos)
+  const mode = useKoma((s) => s.session.mode)
+  const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
   const req = useKoma((s) => s.req)
   const openDiffTab = useKoma((s) => s.openDiffTab)
 
+  // Auto-expand PLAN the instant the session mode flips to 'plan' (also fires
+  // on mount if the GUI (re)loads mid-plan). Never auto-collapses on leaving
+  // Plan — the section's open/closed state otherwise persists exactly like
+  // the other sections (user-driven only).
+  useEffect(() => {
+    if (mode === 'plan') setOpen((s) => ({ ...s, plan: true }))
+  }, [mode])
+
+  // Cross-tree signal from the UsageFooter PLAN badge click: expand PLAN
+  // (RootLayout's own effect on the same tick opens the sidebar/Explore view).
+  useEffect(() => {
+    if (focusPlanTick === 0) return
+    setOpen((s) => ({ ...s, plan: true }))
+  }, [focusPlanTick])
+
+  const planDone = planTodos.filter((t) => t.status === 'completed').length
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <AccordionSection
+        title={planTodos.length === 0 ? 'Plan' : `Plan · ${planDone}/${planTodos.length}`}
+        open={open.plan}
+        onToggle={() => setOpen((s) => ({ ...s, plan: !s.plan }))}
+      >
+        {planTodos.length === 0 ? (
+          <Empty>No plan in progress</Empty>
+        ) : (
+          planTodos.map((t, i) => {
+            const Icon = PLAN_ICON[t.status] ?? Circle
+            return (
+              <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
+                <Icon size={13} className={`flex-none ${PLAN_ICON_TONE[t.status] ?? 'text-koma-fg opacity-45'}`} />
+                <span className={`min-w-0 flex-1 truncate text-[12px] ${PLAN_TEXT_TONE[t.status] ?? 'text-koma-fg'}`}>
+                  {t.content}
+                </span>
+              </div>
+            )
+          })
+        )}
+      </AccordionSection>
       <AccordionSection
         title={files.length === 0 ? 'File changed' : `File changed · ${files.length}`}
         open={open.files}

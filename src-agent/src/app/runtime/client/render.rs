@@ -609,6 +609,18 @@ struct PushFileChange {
     status: String,
 }
 
+/// One Plan-mode todo row in a [`PushEnvelope::Snapshot`], for the Explore "PLAN"
+/// section. Locked workflow rails are already excluded (filtered daemon-side at
+/// the snapshot projection boundary, before the shadow ever sees them), so this
+/// is exactly the model's plan steps. `status` is the wire label
+/// (`"pending"`/`"in_progress"`/`"completed"`/`"cancelled"`, `TodoStatus::label`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushPlanTodo {
+    content: String,
+    status: &'static str,
+}
+
 /// The palette roles the React chat paints with (resolved from the shadow's TUI
 /// [`crate::view::theme::Palette`], so a themed daemon repaints the chat live).
 /// `bg`/`fg` drive the window chrome; `accent`/`dim`/`panel` are the same three
@@ -772,6 +784,11 @@ enum PushEnvelope {
         /// array — React REPLACES on each Snapshot. Empty when nothing was touched.
         #[serde(rename = "fileChanges")]
         file_changes: Vec<PushFileChange>,
+        /// Foreground session's Plan-mode todo checklist (Explore "PLAN" section).
+        /// Authoritative full array — React REPLACES on each Snapshot; empty when
+        /// not in Plan mode or no plan is in progress (the section hides/dims).
+        #[serde(rename = "planTodos")]
+        plan_todos: Vec<PushPlanTodo>,
         /// Foreground session's STAGED composer attachments (chips). Authoritative full
         /// array — React REPLACES on each Snapshot; empty once the message is sent.
         attachments: Vec<PushAttachment>,
@@ -1620,6 +1637,18 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .collect();
 
+    // Plan-mode todo checklist (Explore "PLAN" section): the foreground session's
+    // mirror of `plan_todos.md`, with the locked rails already excluded upstream
+    // (the daemon's snapshot projection). Empty = no plan in progress right now.
+    let plan_todos: Vec<PushPlanTodo> = fg
+        .plan_todos
+        .iter()
+        .map(|t| PushPlanTodo {
+            content: t.content.clone(),
+            status: t.status.label(),
+        })
+        .collect();
+
     // Staged composer attachments: the foreground session's `pending_attachments` (not
     // yet sent). `marker_n` ties each chip to its `[Image #N]` marker; `kind` is derived
     // from the sniffed mime (all attachments are images today, but keep it general).
@@ -1720,6 +1749,13 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             c.path.hash(&mut h);
             c.status.hash(&mut h);
         }
+        // Fold the plan-todo checklist in so a todowrite/plan_ready/mode-flip
+        // update re-emits the Snapshot.
+        plan_todos.len().hash(&mut h);
+        for t in &plan_todos {
+            t.content.hash(&mut h);
+            t.status.hash(&mut h);
+        }
         // Fold staged attachments in so a stage/drop re-emits the Snapshot (chips).
         attachments.len().hash(&mut h);
         for a in &attachments {
@@ -1755,6 +1791,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             subagents,
             bash,
             file_changes,
+            plan_todos,
             attachments,
             // Cloned (not moved): `mode` is re-read below for the `Status` envelope,
             // which is emitted unconditionally every call, unlike this `Snapshot`

@@ -51,6 +51,15 @@ function RootLayout() {
   const cancelSwitching = useKoma((s) => s.cancelSwitching)
   const req = useKoma((s) => s.req)
   const needsOnboarding = useNeedsOnboarding()
+  // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
+  // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
+  // open. ExplorePanel's own effect on the same tick expands its PLAN section.
+  const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
+  useEffect(() => {
+    if (focusPlanTick === 0) return
+    setActiveView('explore')
+    setSidebarOpen(true)
+  }, [focusPlanTick])
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
   // can feed the koma store, then announce readiness so it sends the first

@@ -27,6 +27,8 @@ export function UsageFooter() {
   const tokensCached = useKoma((s) => s.session.tokensCached)
   const tokensOut = useKoma((s) => s.session.tokensOut)
   const cost = useKoma((s) => s.session.cost)
+  const planTodos = useKoma((s) => s.session.planTodos)
+  const focusPlanSection = useKoma((s) => s.focusPlanSection)
   const req = useKoma((s) => s.req)
 
   // Awareness pulse: anything currently running in the Explore BASH/AGENTS
@@ -35,12 +37,23 @@ export function UsageFooter() {
     subagents.some((a) => a.status === 'running') || bash.some((b) => b.status === 'running')
 
   const isPlan = mode === 'plan'
+  const planDone = planTodos.filter((t) => t.status === 'completed').length
+  // "PLAN 3/7" once a checklist exists; plain "PLAN" before the model has
+  // written one yet (mode flips to plan before the first todowrite lands).
+  const planLabel = planTodos.length > 0 ? `PLAN ${planDone}/${planTodos.length}` : 'PLAN'
 
   return (
     <div className="flex h-5 flex-none items-center gap-2 border-t border-koma-border bg-koma-panel px-2 font-mono text-[11px] text-koma-dim">
-      {/* Mode badge */}
+      {/* Mode badge — clickable ONLY in Plan mode: opens the Explore sidebar
+          panel and expands its PLAN section (see `focusPlanSection`). */}
       {isPlan ? (
-        <span className="rounded bg-koma-accent/15 px-1 text-koma-accent">PLAN</span>
+        <button
+          onClick={focusPlanSection}
+          title="Show plan"
+          className="rounded bg-koma-accent/15 px-1 text-koma-accent transition hover:bg-koma-accent/25"
+        >
+          {planLabel}
+        </button>
       ) : (
         <span className="lowercase opacity-80">{mode}</span>
       )}

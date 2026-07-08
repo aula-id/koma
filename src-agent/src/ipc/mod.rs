@@ -101,6 +101,10 @@ mod roundtrip_tests {
             pending_steer: Vec::new(),
             bash_jobs: vec![],
             file_changes: vec![],
+            plan_todos: vec![PlanTodoSnapshot {
+                content: "wire the PLAN section".to_string(),
+                status: crate::app::mode::todo::TodoStatus::InProgress,
+            }],
         }
     }
 
