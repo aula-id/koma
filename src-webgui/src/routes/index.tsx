@@ -1,6 +1,8 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
-import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Loader2 } from 'lucide-react'
 import { ChatView } from '../components/ChatView'
+import { TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
 import { Onboarding } from '../components/Onboarding'
 import { Titlebar, getPlatform } from '../components/Titlebar'
@@ -160,6 +162,49 @@ function RootLayout() {
   )
 }
 
+// Monaco DiffEditor is HEAVY — lazy so its chunk never loads until the first
+// diff tab is opened (a tiny spinner covers the one-time chunk fetch).
+const DiffTab = lazy(() => import('../components/DiffTab'))
+
+function DiffFallback() {
+  return (
+    <div className="flex h-full w-full items-center justify-center text-koma-dim">
+      <Loader2 size={18} className="animate-spin opacity-70" />
+    </div>
+  )
+}
+
+// Tabbed main column: a VSCode-style TabBar over stacked tab contents. The chat
+// stays MOUNTED at all times (hidden, not unmounted, when a diff tab is active)
+// so its scroll/stream/state survive tab switches; diff tabs mount when opened
+// and stay mounted while open for fast switching, unmounting only on close. The
+// TabBar spans the full main column; the chat keeps its centered reading column,
+// while diff editors use the full width.
+function TabbedMain() {
+  const tabs = useKoma((s) => s.ui.tabs)
+  const activeTabId = useKoma((s) => s.ui.activeTabId)
+  const chatActive = activeTabId === 'chat'
+  return (
+    <div className="flex h-full w-full min-w-0 flex-col">
+      <TabBar />
+      <div className="relative min-h-0 flex-1">
+        <div className={`absolute inset-0 flex items-stretch justify-center ${chatActive ? '' : 'hidden'}`}>
+          <ChatView />
+        </div>
+        {tabs.map((t) =>
+          t.kind === 'diff' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <DiffTab tab={t} />
+              </Suspense>
+            </div>
+          ) : null,
+        )}
+      </div>
+    </div>
+  )
+}
+
 // Three-way gate: ONBOARDING (first-run) > START SCREEN (no session) > CHAT
 // (attached). The swapper/empty state pushes only Hub + Config (never a
 // Snapshot), so `session.id === null` means no attached session; `config` is
@@ -176,7 +221,7 @@ function IndexPage() {
 
   if (needsOnboarding) return <Onboarding />
   if (sessionId === null) return <StartScreen />
-  return <ChatView />
+  return <TabbedMain />
 }
 
 function SettingsPage() {

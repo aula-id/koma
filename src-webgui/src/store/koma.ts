@@ -136,6 +136,44 @@ export type ToastEntry = {
   kind: 'error' | 'info'
 }
 
+// The host's FileDiff reply payload for a `kind:'diff'` editor tab — the
+// original/modified contents of a File-changed path plus its status flags.
+// `error` non-null → render the message instead of an editor; `binary` → a
+// "binary file" notice; a NEW file → `original === ''` (all-added); a DELETED
+// file → `modified === ''` (all-removed).
+export type DiffPayload = {
+  original: string
+  modified: string
+  error: string | null
+  binary: boolean
+}
+
+// One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
+// uncloseable chat tab; diff tabs are opened from the Explorer's File-changed
+// rows. The `kind` discriminant is deliberately left open — a future
+// `{ kind: 'session' }` variant (multi-session tabs, deferred but planned) slots
+// in additively without disturbing existing consumers.
+export type Tab =
+  | { id: 'chat'; kind: 'chat' }
+  | {
+      // Stable id `diff:${path}`, so find-by-path (open/dedupe) is trivial.
+      id: string
+      kind: 'diff'
+      // The path exactly as the fileChanges record carries it — the key for the
+      // FileDiff req + reply.
+      path: string
+      // Basename of `path`. TabBar adds a dim parent-dir suffix at render time
+      // when two open tabs share a basename (collision depends on the live tab
+      // set, so it's resolved there, not baked into the stored title).
+      title: string
+      // Filled by the FileDiff reply; undefined until the first reply lands.
+      diff?: DiffPayload
+      // True while a FileDiff req is in flight (initial open OR a re-request on
+      // re-activate). A stale `diff` keeps rendering while loading so re-focus
+      // never flashes to a spinner.
+      loading: boolean
+    }
+
 export type PushEnvelope =
   | {
       k: 'Snapshot'
@@ -238,6 +276,18 @@ export type PushEnvelope =
   // reply that no longer matches its current selection. Empty `routes` = a
   // non-OpenRouter provider (UI shows only the synthetic "Auto" row).
   | { k: 'RouteList'; provider: string; modelId: string; routes: RouteEntry[] }
+  // Reply to GuiReq FileDiff — the original/modified contents of a File-changed
+  // path, for a Monaco diff tab. Echoes the `path` it was fetched for (the tab
+  // key). A reply is guaranteed for every request; the reducer ignores a reply
+  // whose tab was closed meanwhile.
+  | {
+      k: 'FileDiff'
+      path: string
+      original: string
+      modified: string
+      error: string | null
+      binary: boolean
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -357,6 +407,14 @@ type UiSlice = {
   // Monotonic counter minting `ToastEntry.id` — guarantees each distinct toast
   // gets a fresh id (and thus a fresh dismiss timer) even after a null gap.
   toastSeq: number
+  // VSCode-style editor tabs over the main content column. tabs[0] is always
+  // the permanent chat tab; diff tabs append as File-changed rows are opened.
+  // Local-only UI state — never pushed by the host. Reset to just the chat tab
+  // on a genuine session switch (a diff tab is file-change context for the OLD
+  // session).
+  tabs: Tab[]
+  // The shown tab's id — 'chat' or a `diff:${path}`.
+  activeTabId: string
 }
 
 type KomaState = {
@@ -407,6 +465,17 @@ type KomaState = {
   // the id no longer matches the current toast (a newer toast already replaced
   // it — its own timer owns the dismissal).
   dismissToast: (id: number) => void
+  // Open (or focus) a Monaco diff tab for a File-changed `path`: find-by-path or
+  // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
+  // an already-open file refreshes it (same loading + re-request path).
+  openDiffTab: (path: string) => void
+  // Close a diff tab (never 'chat'). If it was the active tab, activate the
+  // adjacent (left) tab — tabs[0] is always the chat tab, so a fallback exists.
+  closeTab: (id: string) => void
+  // Activate a tab. Re-focusing a diff tab RE-REQUESTS its FileDiff for
+  // freshness (contents may have changed since it was opened) while keeping the
+  // stale diff on screen so the editor doesn't flash.
+  activateTab: (id: string) => void
 }
 
 const initialSession: SessionSlice = {
@@ -439,6 +508,10 @@ const initialHub: HubSlice = {
   history: [],
 }
 
+// The permanent chat tab (id 'chat'), always tabs[0] and never closeable. A
+// factory (not a shared const) so every reset gets a fresh array/object.
+const makeChatTab = (): Tab => ({ id: 'chat', kind: 'chat' })
+
 const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
@@ -448,6 +521,8 @@ const initialUi: UiSlice = {
   switchingTo: null,
   toast: null,
   toastSeq: 0,
+  tabs: [makeChatTab()],
+  activeTabId: 'chat',
 }
 
 // Bundled fallback theme (palette) registry — mirrors the host's theme.rs
@@ -510,7 +585,14 @@ function applyPaletteVars(palette: PaletteColors) {
   setVar('--koma-panel', palette?.panel)
 }
 
-export const useKoma = create<KomaState>((set) => ({
+// Basename of a path — a diff tab's title (TabBar disambiguates colliding
+// basenames with a dim parent-dir suffix at render time).
+function tabBaseName(path: string): string {
+  const parts = path.split('/')
+  return parts[parts.length - 1] || path
+}
+
+export const useKoma = create<KomaState>((set, get) => ({
   session: initialSession,
   hub: initialHub,
   palette: initialPalette,
@@ -559,8 +641,15 @@ export const useKoma = create<KomaState>((set) => ({
             },
             palette: env.palette,
             // Any Snapshot is authoritative proof the swap (if one was in
-            // flight) has landed — clear the loader.
-            ui: { ...s.ui, switchingTo: null },
+            // flight) has landed — clear the loader. A genuine session SWITCH
+            // additionally resets the editor tabs back to just the chat tab: a
+            // diff tab is file-change context for the OLD session, so it must
+            // not bleed across.
+            ui: {
+              ...s.ui,
+              switchingTo: null,
+              ...(switched ? { tabs: [makeChatTab()], activeTabId: 'chat' } : {}),
+            },
           }
         })
         applyPaletteVars(env.palette)
@@ -666,6 +755,32 @@ export const useKoma = create<KomaState>((set) => ({
           routeList: { provider: env.provider, modelId: env.modelId, routes: env.routes },
         }))
         break
+      case 'FileDiff':
+        set((s) => {
+          const id = `diff:${env.path}`
+          // Ignore a reply for a tab closed while the req was in flight.
+          if (!s.ui.tabs.some((t) => t.id === id)) return s
+          return {
+            ui: {
+              ...s.ui,
+              tabs: s.ui.tabs.map((t) =>
+                t.id === id && t.kind === 'diff'
+                  ? {
+                      ...t,
+                      loading: false,
+                      diff: {
+                        original: env.original,
+                        modified: env.modified,
+                        error: env.error,
+                        binary: env.binary,
+                      },
+                    }
+                  : t,
+              ),
+            },
+          }
+        })
+        break
     }
   },
 
@@ -690,4 +805,48 @@ export const useKoma = create<KomaState>((set) => ({
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
   dismissToast: (id) =>
     set((s) => (s.ui.toast?.id === id ? { ui: { ...s.ui, toast: null } } : s)),
+  openDiffTab: (path) => {
+    const id = `diff:${path}`
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const tabs: Tab[] = exists
+        ? s.ui.tabs.map((t) =>
+            t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
+          )
+        : [...s.ui.tabs, { id, kind: 'diff', path, title: tabBaseName(path), loading: true }]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
+    get().req({ r: 'FileDiff', path })
+  },
+  closeTab: (id) =>
+    set((s) => {
+      if (id === 'chat') return s
+      const idx = s.ui.tabs.findIndex((t) => t.id === id)
+      if (idx < 0) return s
+      const tabs = s.ui.tabs.filter((t) => t.id !== id)
+      // If the closed tab was active, fall back to the left neighbour. idx-1 is
+      // always valid (tabs[0] is the chat tab), so this never underflows.
+      const activeTabId =
+        s.ui.activeTabId === id ? s.ui.tabs[idx - 1]?.id ?? 'chat' : s.ui.activeTabId
+      return { ui: { ...s.ui, tabs, activeTabId } }
+    }),
+  activateTab: (id) => {
+    const tab = get().ui.tabs.find((t) => t.id === id)
+    if (!tab) return
+    const isDiff = tab != null && tab.kind === 'diff'
+    set((s) => ({
+      ui: {
+        ...s.ui,
+        activeTabId: id,
+        // Mark a re-focused diff tab loading for the re-request below, but keep
+        // its existing `diff` so the editor doesn't flash to a spinner.
+        tabs: isDiff
+          ? s.ui.tabs.map((t) =>
+              t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t,
+            )
+          : s.ui.tabs,
+      },
+    }))
+    if (isDiff && tab.kind === 'diff') get().req({ r: 'FileDiff', path: tab.path })
+  },
 }))

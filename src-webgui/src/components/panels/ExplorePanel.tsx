@@ -66,6 +66,7 @@ export function ExplorePanel() {
   const bash = useKoma((s) => s.session.bash)
   const files = useKoma((s) => s.session.fileChanges)
   const req = useKoma((s) => s.req)
+  const openDiffTab = useKoma((s) => s.openDiffTab)
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -83,7 +84,8 @@ export function ExplorePanel() {
               <div
                 key={f.path}
                 title={`${f.status}: ${f.path}`}
-                className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover"
+                onClick={() => openDiffTab(f.path)}
+                className="group flex min-h-[30px] cursor-pointer items-center gap-2.5 px-3 py-1 hover:bg-koma-hover"
               >
                 <FileText size={13} className="flex-none text-koma-fg opacity-45" />
                 <span className={`min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg ${f.status === 'deleted' ? 'line-through opacity-60' : ''}`}>
