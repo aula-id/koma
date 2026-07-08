@@ -73,8 +73,9 @@ export type HubHistoryEntry = {
 export type SubAgentEntry = {
   // Host-projected subagent id — the kill target for GuiReq KillSubagent.
   // Optional-tolerant: a host build that hasn't started projecting the id yet
-  // simply omits it, and the row renders without a kill button.
-  id?: string
+  // simply omits it, and the row renders without a kill button. Wire value is
+  // a JSON number (render.rs `PushSubAgent.id: usize`), not a string.
+  id?: number
   name: string
   status: 'running' | 'done' | 'killed' | 'error'
   summary: string
@@ -122,25 +123,27 @@ export type PushEnvelope =
   | { k: 'StreamMsg'; session: string; text: string }
   | { k: 'Reasoning'; session: string; text: string }
   | { k: 'Status'; session: string; working: boolean; toast: string | null }
-  // The Hub push may now carry the config palette (theme) so the empty/swapper
-  // state — which never emits a Snapshot — still respects config.json's theme
-  // instead of falling back to the dark default. Optional-tolerant.
   | {
       k: 'Hub'
       state: string
       cooking: HubCookingEntry[]
       history: HubHistoryEntry[]
-      palette?: PaletteColors
     }
-  // Standalone palette push (theme-only, no session payload). Lets the host
-  // repaint the theme in states with no Snapshot (e.g. the swapper/empty
-  // state) — same consumption path as the Snapshot palette.
-  | { k: 'Palette'; palette: PaletteColors }
   | { k: 'SearchResults'; query: string; items: SearchResultEntry[] }
   // Authoritative config projection (mcp/providers/models) — global, not
   // per-session. REPLACES the whole config slice, pushed on config change and
-  // on (re)attach.
-  | { k: 'Config'; mcp: McpServer[]; providers: Provider[]; models: Model[] }
+  // on (re)attach. Also carries the active palette (theme) — Config is pushed
+  // in BOTH the empty/swapper state and the attached state (render.rs
+  // `PushEnvelope::Config.palette`), so it's the one push the empty/swapper
+  // state — which never emits a Snapshot — can rely on to repaint to
+  // config.json's theme instead of falling back to the dark default.
+  | {
+      k: 'Config'
+      mcp: McpServer[]
+      providers: Provider[]
+      models: Model[]
+      palette?: PaletteColors
+    }
   // Reply to GuiReq ListModels — live per-provider model-id catalogue. Field
   // is `models` to match the daemon's PushEnvelope::ModelList { provider, models }.
   | { k: 'ModelList'; provider: string; models: ModelListEntry[] }
@@ -360,13 +363,8 @@ export const useKoma = create<KomaState>((set) => ({
         set((s) => ({ session: { ...s.session, working: env.working } }))
         break
       case 'Hub':
-        // Empty/swapper theme: if the Hub push carries the config palette,
-        // adopt it (store + CSS vars) so the empty state respects config.json's
-        // theme instead of the dark default. No-op when the host omits it.
-        if (env.palette) applyPaletteVars(env.palette)
         set((s) => ({
           hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
-          ...(env.palette ? { palette: env.palette } : {}),
           // Deterministic failure-recovery clear: host_swapper pushes a fresh
           // Hub on EVERY path back to the swapper, including the
           // attach-failure/degrade path (which never emits a Snapshot). A
@@ -383,14 +381,18 @@ export const useKoma = create<KomaState>((set) => ({
         set((s) => ({ session: { ...s.session, searchResults: env.items } }))
         break
       case 'Config':
-        set(() => ({ config: { mcp: env.mcp, providers: env.providers, models: env.models } }))
+        // Empty/swapper theme: Config is pushed in BOTH the empty/swapper
+        // state and the attached state, so it's the reliable carrier for the
+        // active palette — adopt it (store + CSS vars) whenever present, same
+        // consumption path as the Snapshot palette. No-op when omitted.
+        if (env.palette) applyPaletteVars(env.palette)
+        set((s) => ({
+          config: { mcp: env.mcp, providers: env.providers, models: env.models },
+          ...(env.palette ? { palette: env.palette } : {}),
+        }))
         break
       case 'ModelList':
         set(() => ({ modelList: env.models }))
-        break
-      case 'Palette':
-        applyPaletteVars(env.palette)
-        set(() => ({ palette: env.palette }))
         break
     }
   },
