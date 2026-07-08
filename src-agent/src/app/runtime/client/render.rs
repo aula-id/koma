@@ -674,6 +674,13 @@ struct PushModel {
     route: String,
     roles: Vec<&'static str>,
     scope: &'static str,
+    /// The SYNTHETIC "advertised free" flag (wave-3+4 free-pin): `true` ONLY for the
+    /// keyless koma-free row the host prepends to the quick-picker list (its `id` is the
+    /// opaque `KOMA_FREE_SENTINEL`, not a real config uuid); `false` for every real
+    /// global/local model. React sorts a `free` row to the TOP of the picker and badges
+    /// it; picking it round-trips the sentinel id back as `SetSessionMain`, which the
+    /// daemon routes through the `/free` find-or-create flow.
+    free: bool,
 }
 
 /// One MCP-server row in a [`PushEnvelope::Config`] (the McpPanel Server model). `id` is
@@ -1624,6 +1631,34 @@ fn push_model(m: &crate::model::app_config::ModelEntry, scope: &'static str) -> 
         route: m.route.clone().unwrap_or_default(),
         roles: m.effective_roles().into_iter().map(role_token).collect(),
         scope,
+        free: false,
+    }
+}
+
+/// Build the SYNTHETIC "advertised free" [`PushModel`] the host prepends to the model
+/// quick-picker (wave-3+4 free-pin): the keyless koma-free tier as a special top row.
+///
+/// Its `id` is the opaque [`crate::service::koma_free::KOMA_FREE_SENTINEL`] (NOT a real
+/// `ModelEntry` uuid) so a pick round-trips as `SetSessionMain { model_uuid:
+/// Some(sentinel) }` and routes through the `/free` find-or-create flow. `provider` is
+/// bound to an EXISTING koma-free `ProviderConn` uuid when one is already provisioned (so
+/// React's `modelId`+`provider` active-match lights the checkmark after a free pick),
+/// else empty (it is minted lazily on first selection). `scope:"global"` + `free:true`.
+fn koma_free_synthetic_model(providers: &[crate::model::app_config::ProviderConn]) -> PushModel {
+    let provider = providers
+        .iter()
+        .find(|p| p.api_type == crate::model::app_config::ApiType::KomaFree)
+        .map(|p| p.uuid.clone())
+        .unwrap_or_default();
+    PushModel {
+        id: crate::service::koma_free::KOMA_FREE_SENTINEL.to_string(),
+        name: "koma free".to_string(),
+        model_id: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        provider,
+        route: String::new(),
+        roles: vec!["main"],
+        scope: "global",
+        free: true,
     }
 }
 
@@ -1646,8 +1681,11 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         })
         .collect();
 
-    // Global scope first, then the foreground session's local overrides, each tagged.
-    let mut models: Vec<PushModel> = cfg.models.iter().map(|m| push_model(m, "global")).collect();
+    // The synthetic "advertised free" row is pinned FIRST (React re-sorts `free` to the
+    // top regardless, but ordering it here keeps the raw list honest); then the global
+    // scope, then the foreground session's local overrides, each tagged.
+    let mut models: Vec<PushModel> = vec![koma_free_synthetic_model(&cfg.providers)];
+    models.extend(cfg.models.iter().map(|m| push_model(m, "global")));
     models.extend(cfg.session_models.iter().map(|m| push_model(m, "local")));
 
     // The current session Main override (the quick-picker's selected value): the local

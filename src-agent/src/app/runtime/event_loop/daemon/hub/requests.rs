@@ -736,6 +736,19 @@ impl DaemonHub {
             // `session_models` first, so the change takes effect next turn.
             ClientRequest::SetSessionMain { model_uuid } => {
                 use crate::model::app_config::{new_uuid, ModelEntry, ModelRole};
+                // Free-pin (wave-3+4 D): the SYNTHETIC "advertised free" row carries the
+                // dedicated `KOMA_FREE_SENTINEL` id (never a real `config.models` uuid), so
+                // route it through the SAME `/free` find-or-create-and-pin flow the slash
+                // command uses instead of the global-clone path below. Handled first so the
+                // sentinel can never fall into the "unknown uuid" no-op.
+                if model_uuid.as_deref()
+                    == Some(crate::service::koma_free::KOMA_FREE_SENTINEL)
+                {
+                    let result =
+                        crate::app::runtime::commands::free::set_session_koma_free(state);
+                    self.ack_or_error(idx, result);
+                    return;
+                }
                 // Resolve + CLONE the chosen global entry first (owned) so the later
                 // `fg_mut()` mutable borrow doesn't overlap the config read.
                 let chosen = model_uuid.as_ref().and_then(|u| {
