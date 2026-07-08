@@ -142,7 +142,18 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
             model_id: KOMA_FREE_MODEL.to_string(),
             provider_uuid,
             route: None,
-            roles: vec![ModelRole::Main],
+            // Permissive posture (owner override): koma-free powers EVERY runtime
+            // role, not just Main — Awareness/Safeguard/Compactor/Planner all
+            // resolve to it too via the session-first scan in `resolve_role`, so a
+            // keyless `/free` user gets the safety classifier and every other
+            // secondary role instead of silently going unconfigured for them.
+            roles: vec![
+                ModelRole::Main,
+                ModelRole::Awareness,
+                ModelRole::Safeguard,
+                ModelRole::Compactor,
+                ModelRole::Planner,
+            ],
             role: None,
         });
         sess.save()?;

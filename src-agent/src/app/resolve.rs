@@ -49,10 +49,12 @@
 //! per-field legacy settings were never populated either. Sending that route would
 //! silently 401/fail. [`resolve_role_dispatch`] is the dispatch-time wrapper around
 //! [`resolve_role`] that catches exactly this case for Main and its two cascading
-//! roles (Compactor, Awareness) and substitutes the keyless koma-free tier instead
-//! of failing. It is intentionally a SEPARATE function from `resolve_role` — every
-//! "is Main configured?" gate keeps calling `resolve_role` + [`Resolved::is_usable`]
-//! directly and is unaffected; see that function's doc comment for the full list.
+//! roles (Compactor, Awareness), PLUS Safeguard (a permissive-posture override —
+//! see that function's doc comment), and substitutes the keyless koma-free tier
+//! instead of failing / fail-closing. It is intentionally a SEPARATE function from
+//! `resolve_role` — every "is Main configured?" / "is Safeguard configured?" gate
+//! keeps calling `resolve_role` + [`Resolved::is_usable`] directly and is
+//! unaffected; see that function's doc comment for the full list.
 
 use crate::app::state::AgentMode;
 use crate::config::DEFAULT_BASE_URL;
@@ -392,14 +394,31 @@ fn koma_free_dispatch_route(config: &AppConfig, settings: &Settings, role: Model
     }
 }
 
-/// [`resolve_role`], but with a LAST-RESORT koma-free fallback for the Main role
-/// and every role that CASCADES to Main (`Compactor`, `Awareness` — see the
-/// `resolve_role` fallback table above): when the resolved route is missing or
+/// [`resolve_role`], but with a LAST-RESORT koma-free fallback for Main and every
+/// role that CASCADES to Main (`Compactor`, `Awareness` — see the `resolve_role`
+/// fallback table above), PLUS `Safeguard`: when the resolved route is missing or
 /// [`Resolved::is_usable`] says it carries no usable auth, dispatch against the
-/// keyless koma-free tier instead of sending a doomed empty-key request. Planner
-/// and Safeguard are untouched — Planner already degrades to Main at the call
-/// site ([`resolve_turn_model`]) when unresolved, and Safeguard is deliberately
-/// fail-closed (a classifier must never silently downgrade to a free tier).
+/// keyless koma-free tier instead of sending a doomed empty-key request (Main /
+/// Compactor / Awareness) or silently degrading every risky tool call to a human
+/// prompt (Safeguard).
+///
+/// PERMISSIVE POSTURE (owner override): koma-free now powers every runtime role,
+/// Safeguard included. The original invariant here was "never downgrade the
+/// classifier to a free tier" — deliberately fail-closed, on the theory that an
+/// unverified free-tier model auto-allowing risky tool calls was worse than
+/// falling back to a human prompt. That trade-off flips once keyless koma-free is
+/// the default onboarding path: a keyless user with no classifier configured hit
+/// `resolve_role(Safeguard) == None` on EVERY risky tool call, which the harness
+/// (`harness::classify`) degrades to a human approval prompt in BOTH agent modes —
+/// silently defeating Auto mode's entire pitch (no prompts) for every free-tier
+/// user. Routing Safeguard through koma-free instead keeps Auto mode usable for
+/// keyless users; the harness's unavailable→human-prompt path REMAINS the
+/// backstop for genuine failures (the koma-free call itself errors, times out, or
+/// returns something unparseable), so a broken classifier still degrades safely —
+/// only the "not configured at all" case is upgraded from fail-closed to
+/// free-tier. Planner is still untouched — it already degrades to Main at the
+/// call site ([`resolve_turn_model`]) when unresolved, so it never needs its own
+/// fallback here.
 ///
 /// DISPATCH-TIME ONLY. Do NOT call this from a "is anything configured yet?"
 /// GATE — every such gate (the first-run chooser in
@@ -409,13 +428,16 @@ fn koma_free_dispatch_route(config: &AppConfig, settings: &Settings, role: Model
 /// `commands::new_session`) calls [`resolve_role`] directly and MUST keep
 /// observing "not usable" so onboarding still fires for a genuinely
 /// unconfigured install — this function would make that check always pass and
-/// silently swallow the gate. Reserve it for the seam where a network request
-/// is actually about to be built (the Main turn, the Awareness fold/summary
-/// call, `/compact`'s Compactor call, and their Main-route retry fallbacks).
+/// silently swallow the gate. Reserve it for the seam where a network request is
+/// actually about to be built (the Main turn, the Awareness fold/summary call,
+/// `/compact`'s Compactor call, their Main-route retry fallbacks, and the
+/// Safeguard classifier call).
 pub fn resolve_role_dispatch(config: &AppConfig, settings: &Settings, role: ModelRole) -> Option<Resolved> {
     let resolved = resolve_role(config, settings, role);
-    if matches!(role, ModelRole::Main | ModelRole::Compactor | ModelRole::Awareness)
-        && resolved.as_ref().is_none_or(|r| !r.is_usable())
+    if matches!(
+        role,
+        ModelRole::Main | ModelRole::Compactor | ModelRole::Awareness | ModelRole::Safeguard
+    ) && resolved.as_ref().is_none_or(|r| !r.is_usable())
     {
         return Some(koma_free_dispatch_route(config, settings, role));
     }

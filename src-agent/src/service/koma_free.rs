@@ -29,14 +29,19 @@ pub const KOMA_FREE_MODEL: &str = "koma/apple";
 /// handler routes through the `/free` find-or-create flow instead of a global clone.
 pub const KOMA_FREE_SENTINEL: &str = "koma-free";
 
-/// Mint (or reuse) the keyless koma-free provider + a Main-role koma-free model in `cfg`.
+/// Mint (or reuse) the keyless koma-free provider + an ALL-roles koma-free model
+/// (Main, Awareness, Safeguard, Compactor, Planner — permissive posture, owner
+/// override: koma-free powers every runtime role) in `cfg`.
 ///
 /// The CONFIG-mutation core shared by the TUI first-run chooser
 /// ([`crate::app::runtime::actions::onboard`]'s `handle_setup_koma_free`) and the GUI
-/// `SetupKomaFree` request, so both mint byte-identical entries. Idempotent: reuses an
-/// existing [`ApiType::KomaFree`] provider (and its Main model) instead of duplicating,
-/// and ensures a non-empty `install_id` (the `X-Koma` header must never be blank). Does
-/// NOT persist — the caller saves `cfg` (and, on the GUI path, re-pushes its `Config`).
+/// `SetupKomaFree` request, so both mint byte-identical entries. Idempotent AND
+/// self-healing: reuses an existing [`ApiType::KomaFree`] provider (and its model
+/// entry) instead of duplicating, UPGRADING the model entry's role set to the full
+/// union if it was previously minted with a narrower one (e.g. an older build's
+/// Main-only entry), and ensures a non-empty `install_id` (the `X-Koma` header must
+/// never be blank). Does NOT persist — the caller saves `cfg` (and, on the GUI
+/// path, re-pushes its `Config`).
 pub fn ensure_koma_free_config(cfg: &mut AppConfig) {
     // The koma-free `X-Koma` header must never be empty; mint an install id if missing.
     if cfg.install_id.is_empty() {
@@ -67,19 +72,43 @@ pub fn ensure_koma_free_config(cfg: &mut AppConfig) {
         }
     };
 
-    // Ensure a Main-role koma-free model entry exists (reuse if this provider already has
-    // one). Pin the canonical koma-free model id.
-    let has_main_model = cfg.models.iter().any(|m| {
-        m.provider_uuid == provider_uuid && m.effective_roles().contains(&ModelRole::Main)
-    });
-    if !has_main_model {
+    // Ensure a koma-free model entry exists holding EVERY runtime role (Main,
+    // Awareness, Safeguard, Compactor, Planner) — permissive posture (owner
+    // override): koma-free powers every role, not just Main, so a keyless install
+    // gets the safety classifier and every other secondary role instead of
+    // silently going unconfigured for them. Pin the canonical koma-free model id.
+    //
+    // Idempotent AND self-healing: reuse an existing koma-free model entry for
+    // this provider if one exists, UPGRADING its role set to the full union
+    // rather than only minting fresh with the full set. Older builds left a
+    // koma-free entry with `roles: [Main]` only — without this upgrade, a
+    // pre-existing install would keep a stale Main-only entry forever (this
+    // function only mints when NO entry exists at all). `effective_roles()`
+    // folds in the legacy single-role field too, so a pre-multi-role entry keeps
+    // whatever it already held.
+    let all_roles = [
+        ModelRole::Main,
+        ModelRole::Awareness,
+        ModelRole::Safeguard,
+        ModelRole::Compactor,
+        ModelRole::Planner,
+    ];
+    if let Some(existing) = cfg.models.iter_mut().find(|m| m.provider_uuid == provider_uuid) {
+        let mut roles = existing.effective_roles();
+        for role in all_roles {
+            if !roles.contains(&role) {
+                roles.push(role);
+            }
+        }
+        existing.roles = roles;
+    } else {
         cfg.models.push(ModelEntry {
             uuid: new_uuid(),
             name: "koma free".to_string(),
             model_id: KOMA_FREE_MODEL.to_string(),
             provider_uuid,
             route: None,
-            roles: vec![ModelRole::Main],
+            roles: all_roles.to_vec(),
             role: None,
         });
     }
