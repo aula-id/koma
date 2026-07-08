@@ -247,6 +247,30 @@ pub(super) fn is_openrouter(endpoint: &str) -> bool {
     endpoint.to_lowercase().contains("openrouter")
 }
 
+/// True when `conn` should receive `reasoning: {exclude: true}` in a oneshot
+/// request body (classifier / fold / blob-picker) — i.e. [`is_openrouter`]'s
+/// endpoint-substring check, OR `conn.api_type == ApiType::KomaFree`.
+///
+/// koma.run is an OpenRouter-style proxy (`koma/apple` is a reasoning model
+/// behind it) that ACCEPTS the OpenRouter-only `reasoning.exclude` field —
+/// verified live against real requests — even though its endpoint URL
+/// (`service::koma_free::KOMA_FREE_ENDPOINT`) doesn't contain "openrouter" and so
+/// fails the plain [`is_openrouter`] substring check. Without this, a koma-free
+/// classifier/fold/blob-picker call never asked the model to hide its reasoning,
+/// and `koma/apple` burns a large, unpredictable chunk of `max_tokens` on
+/// reasoning before ever writing the verdict JSON.
+///
+/// Deliberately NOT folded into [`is_openrouter`] itself, and deliberately NOT
+/// threaded into [`reasoning_config`]: that function's `"off"/"none"` branch
+/// sends `reasoning: {enabled: false}`, and `enabled: false` is a KNOWN LANDMINE
+/// that 400s on some upstreams — sending it to koma.run has not been verified and
+/// must not be risked. This predicate is scoped to the three `exclude: true`
+/// call sites in `oneshot.rs` (`classify_with`, `summarize_fold`, `pick_blobs`),
+/// never to the `enabled: false` path.
+pub(super) fn accepts_reasoning_exclude(conn: &Conn<'_>) -> bool {
+    is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree
+}
+
 /// Map a stored effort token to the request `reasoning` object.
 ///
 /// - `""` / `"default"` → `None`: omit `reasoning` entirely so the model uses
