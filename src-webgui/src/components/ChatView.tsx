@@ -13,6 +13,7 @@ import {
   Globe,
   Image as ImageIcon,
   Images,
+  Pencil,
   Plug,
   Search,
   Shield,
@@ -21,6 +22,7 @@ import {
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { MessageBody } from './MessageBody'
 import { Composer } from './Composer'
+import { WaitingIndicator } from './WaitingIndicator'
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -258,15 +260,36 @@ function AttachmentCard({ attachments }: { attachments: AttachmentEntry[] }) {
 // panel-tinted band; runs edge-to-edge. When the message carries image
 // attachments, the warn card hangs below it (mirrors the TUI: content first,
 // then the card).
-function UserMessage({ content, attachments }: { content: string; attachments?: AttachmentEntry[] }) {
+function UserMessage({
+  content,
+  attachments,
+  onEdit,
+}: {
+  content: string
+  attachments?: AttachmentEntry[]
+  // Hover-edit → rewind: drops everything after this message and refills the
+  // composer with its text (mirrors the TUI's double-Esc MessageRewind). Absent
+  // → no pencil (e.g. the live view, where the index isn't a committed message).
+  onEdit?: () => void
+}) {
   return (
-    <div>
+    <div className="group relative">
       <div className="flex overflow-hidden bg-koma-band">
         <div className="w-[3px] flex-none bg-koma-accent" />
         <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
           {content}
         </div>
       </div>
+      {onEdit && (
+        <button
+          onClick={onEdit}
+          aria-label="Edit & rewind to here"
+          title="Edit & rewind to here"
+          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-md bg-koma-panel text-koma-fg opacity-0 shadow-sm transition-opacity hover:!opacity-100 hover:bg-koma-hover group-hover:opacity-70"
+        >
+          <Pencil size={12} />
+        </button>
+      )}
       {attachments && attachments.length > 0 && <AttachmentCard attachments={attachments} />}
     </div>
   )
@@ -348,11 +371,21 @@ const AssistantMessage = memo(function AssistantMessage({
 // Dispatch a committed message to its role framing. A user message may carry a
 // special `kind` (host-detected + sentinel-stripped): shell / bash-nudge render
 // distinctly, everything else is the normal accent band (+ attachment card).
-function Message({ m }: { m: ChatMessage }) {
+function Message({ m, index }: { m: ChatMessage; index: number }) {
+  const req = useKoma((s) => s.req)
+  const refillComposer = useKoma((s) => s.refillComposer)
   if (m.role === 'user') {
     if (m.kind === 'shell') return <ShellMessage content={m.content} />
     if (m.kind === 'bashNudge') return <BashNudgeMessage content={m.content} />
-    return <UserMessage content={m.content} attachments={m.attachments} />
+    // Rewind TO this message: the daemon drops everything after `index` and
+    // aborts any in-flight turn; we optimistically drop the text back into the
+    // composer for editing + resend (the host also refills its own input, but
+    // the GUI composer is local-state, so we mirror it here).
+    const onEdit = () => {
+      req({ r: 'RewindTo', index })
+      refillComposer(m.content)
+    }
+    return <UserMessage content={m.content} attachments={m.attachments} onEdit={onEdit} />
   }
   return (
     <AssistantMessage
@@ -397,6 +430,16 @@ export function ChatView() {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, stream, reasoning, showLive])
 
+  // Scroll-on-send: the composer bumps `scrollTick` on every submit. FORCE
+  // re-engage the bottom-stick (even if the user had scrolled up to read back)
+  // and snap down now, so a send while scrolled up never lands off-screen.
+  const scrollTick = useKoma((s) => s.ui.scrollTick)
+  useLayoutEffect(() => {
+    stickRef.current = true
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [scrollTick])
+
   return (
     <div className="term-shell flex flex-col">
       <div
@@ -405,7 +448,7 @@ export function ChatView() {
         className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
       >
         {messages.map((m, i) => (
-          <Message key={i} m={m} />
+          <Message key={i} m={m} index={i} />
         ))}
         {showLive && (
           <AssistantMessage
@@ -415,6 +458,9 @@ export function ChatView() {
             streaming
           />
         )}
+        {/* Working, but nothing streamed yet: a playful random Lottie fills the
+            empty gap (NOT a chat message — hidden the instant tokens arrive). */}
+        {working && !showLive && <WaitingIndicator />}
       </div>
       <Composer />
     </div>
