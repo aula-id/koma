@@ -274,17 +274,29 @@ pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
     // sub-agents, commit the partial buffer to the foreground session) lives in
     // `SessionRuntime::interrupt()` so the session hub's Ctrl+X can reuse it on
     // ANY session; here it runs on the foreground.
-    if state.rest.fg().is_ui_busy() {
-        let fg = state.rest.fg_mut();
-        fg.interrupt();
-        // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
-        // in-flight compaction animation / deferred apply so an interrupt mid-compact
-        // doesn't leave the spinner stuck forever.
-        fg.compact_anim_start = None;
-        fg.compact_apply_at = None;
-        fg.compact_pending = None;
+    //
+    // Unconditional cut: the user has the right to interrupt at any time, busy or
+    // not — like the TUI's Esc (which is pre-gated CLIENT-side on
+    // `waiting || compacting` in `controller/input/chat.rs`, so this daemon-side path
+    // being unconditional doesn't change TUI behavior; it matters for the GUI stop
+    // button and any other caller that reaches this handler without that gate).
+    // Calling `interrupt()` on an already-idle session is a harmless no-op: it aborts
+    // a `None` current_task, clears already-empty queues, and `take_stream()` yields
+    // `None` so nothing is committed (see `SessionRuntime::interrupt`).
+    let was_busy = state.rest.fg().is_ui_busy();
+    let fg = state.rest.fg_mut();
+    fg.interrupt();
+    // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
+    // in-flight compaction animation / deferred apply so an interrupt mid-compact
+    // doesn't leave the spinner stuck forever.
+    fg.compact_anim_start = None;
+    fg.compact_apply_at = None;
+    fg.compact_pending = None;
+    // Only report "interrupted" if there was actually something to cut — an idle
+    // session's no-op stop gets no misleading status change.
+    if was_busy {
+        state.rest.fg_mut().status = "interrupted".into();
     }
-    state.rest.fg_mut().status = "interrupted".into();
     Ok(())
 }
 
