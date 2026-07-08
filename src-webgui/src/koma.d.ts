@@ -65,6 +65,20 @@ declare global {
     // Live model-id catalogue fetch for a given provider (by uuid); reply lands
     // as the ModelList push envelope.
     | { r: 'ListModels'; provider: string }
+    // Interrupt the running turn (the composer STOP button) — koma's
+    // Esc-interrupt equivalent. No id: the daemon resolves the foreground
+    // session (mirrors Submit's implicit-session pattern).
+    | { r: 'Interrupt' }
+    // Kill a single running subagent by its host-projected id (Explore panel
+    // Agents row kill button).
+    | { r: 'KillSubagent'; id: string }
+    // Kill a single running bg-bash job by its id (Explore panel Bash row
+    // kill button).
+    | { r: 'KillBash'; id: string }
+    // Pin a chosen GLOBAL model as the session-local `main` override (the
+    // quick-picker). `modelUuid` is the global model's uuid; `null` removes the
+    // override and reverts to the Connector global main ("(inherit)").
+    | { r: 'SetSessionMain'; modelUuid: string | null }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

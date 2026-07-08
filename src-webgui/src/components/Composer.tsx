@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
 } from 'react'
-import { ArrowUp, Loader2, Paperclip, Search, X } from 'lucide-react'
+import { ArrowUp, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
 // Reads a File's bytes and resolves to a bare base64 string (no `data:` URL
@@ -194,22 +194,33 @@ export function Composer() {
           </div>
 
           <div className="flex items-center gap-2">
-            {working && (
-              <Loader2 size={16} className="flex-none animate-spin text-koma-fg opacity-60" />
+            {working ? (
+              // While the turn is running the send button MORPHS into a STOP
+              // button — koma's Esc-interrupt equivalent (GuiReq Interrupt),
+              // aborting the in-flight turn on the daemon.
+              <button
+                onClick={() => req({ r: 'Interrupt' })}
+                aria-label="Stop"
+                title="Stop"
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-koma-accent text-koma-bg transition-colors hover:opacity-90"
+              >
+                <Square size={14} className="fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={submit}
+                disabled={!canSend}
+                aria-label="Send"
+                title="Send"
+                className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
+                  canSend
+                    ? 'bg-koma-accent text-koma-bg hover:opacity-90'
+                    : 'bg-koma-hover text-koma-fg opacity-40'
+                }`}
+              >
+                <ArrowUp size={16} />
+              </button>
             )}
-            <button
-              onClick={submit}
-              disabled={!canSend}
-              aria-label="Send"
-              title="Send"
-              className={`flex h-8 w-8 flex-none items-center justify-center rounded-full transition-colors ${
-                canSend
-                  ? 'bg-koma-accent text-koma-bg hover:opacity-90'
-                  : 'bg-koma-hover text-koma-fg opacity-40'
-              }`}
-            >
-              <ArrowUp size={16} />
-            </button>
           </div>
         </div>
       </div>
