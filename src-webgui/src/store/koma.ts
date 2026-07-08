@@ -111,6 +111,18 @@ export type SearchResultEntry = {
   label: string
 }
 
+// One transient toast — the host's per-session `SessionRuntime.toast`
+// (state/runtime.rs `set_toast`/`set_toast_info`) projected via the Status
+// envelope. `id` is a client-minted monotonic tick so a repeat/re-fired toast
+// re-triggers the auto-dismiss timer + re-mounts the card even when the text is
+// unchanged; `kind` drives severity colouring (error vs info). Safeguard blocks
+// (harness flagged / classifier unavailable) arrive here.
+export type ToastEntry = {
+  id: number
+  text: string
+  kind: 'error' | 'info'
+}
+
 export type PushEnvelope =
   | {
       k: 'Snapshot'
@@ -143,7 +155,11 @@ export type PushEnvelope =
   | { k: 'Switching'; to: string }
   | { k: 'StreamMsg'; session: string; text: string }
   | { k: 'Reasoning'; session: string; text: string }
-  | { k: 'Status'; session: string; working: boolean; toast: string | null }
+  // `toast` is the transient message text (safeguard/harness/classifier notices
+  // + generic host toasts). `kind` is the severity token ("error"/"info") the
+  // host now carries alongside the text so the GUI can colour error vs info —
+  // optional-tolerant: a host build that doesn't project it yet defaults to info.
+  | { k: 'Status'; session: string; working: boolean; toast: string | null; kind?: string }
   | {
       k: 'Hub'
       state: string
@@ -272,6 +288,15 @@ type UiSlice = {
   // authoritative Snapshot is the only reliable clear point. `null` = no
   // swap in flight.
   switchingTo: string | null
+  // Active transient toast (host safeguard/harness/generic notice), or null when
+  // none is showing. Set from the Status envelope's `toast`/`kind`; cleared by
+  // ToastContainer's auto-dismiss (or a newer toast replacing it). Deduped by
+  // text so a host that re-pushes the same live toast on every Status tick
+  // doesn't keep resetting the timer.
+  toast: ToastEntry | null
+  // Monotonic counter minting `ToastEntry.id` — guarantees each distinct toast
+  // gets a fresh id (and thus a fresh dismiss timer) even after a null gap.
+  toastSeq: number
 }
 
 type KomaState = {
@@ -313,6 +338,10 @@ type KomaState = {
   // loader — the eventual Snapshot for the target session still lands and is
   // applied normally.
   cancelSwitching: () => void
+  // Dismiss the active toast (auto-dismiss timer, or a manual close). No-op if
+  // the id no longer matches the current toast (a newer toast already replaced
+  // it — its own timer owns the dismissal).
+  dismissToast: (id: number) => void
 }
 
 const initialSession: SessionSlice = {
@@ -344,6 +373,8 @@ const initialUi: UiSlice = {
   composerRefill: null,
   scrollTick: 0,
   switchingTo: null,
+  toast: null,
+  toastSeq: 0,
 }
 
 // Bundled fallback theme (palette) registry — mirrors the host's theme.rs
@@ -477,7 +508,26 @@ export const useKoma = create<KomaState>((set) => ({
         set((s) => ({ session: { ...s.session, reasoning: env.text } }))
         break
       case 'Status':
-        set((s) => ({ session: { ...s.session, working: env.working } }))
+        set((s) => {
+          // Only raise a NEW toast when the text actually changed from the one
+          // already showing — the host re-pushes the same live toast on every
+          // Status tick (it has a host-side TTL), so deduping by text keeps the
+          // dismiss timer from being reset on each tick. A cleared toast
+          // (env.toast null) never wipes an active card; the auto-dismiss owns
+          // that so a working=false status can't cut a toast short.
+          const raise = !!env.toast && env.toast !== s.ui.toast?.text
+          const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+          return {
+            session: { ...s.session, working: env.working },
+            ui: raise
+              ? {
+                  ...s.ui,
+                  toastSeq: seq,
+                  toast: { id: seq, text: env.toast as string, kind: env.kind === 'error' ? 'error' : 'info' },
+                }
+              : s.ui,
+          }
+        })
         break
       case 'Hub':
         set((s) => ({
@@ -546,4 +596,6 @@ export const useKoma = create<KomaState>((set) => ({
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
   startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
+  dismissToast: (id) =>
+    set((s) => (s.ui.toast?.id === id ? { ui: { ...s.ui, toast: null } } : s)),
 }))

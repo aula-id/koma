@@ -11,6 +11,7 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
+import { ToastContainer } from '../components/ToastContainer'
 import { useKoma } from '../store/koma'
 
 const SIDEBAR_MIN = 150
@@ -117,6 +118,7 @@ function RootLayout() {
           setOverlay('resume')
         }}
       />
+      <ToastContainer />
       <ResizeHandles />
     </div>
   )
