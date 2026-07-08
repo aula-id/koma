@@ -111,6 +111,19 @@ export type SearchResultEntry = {
   label: string
 }
 
+// The tool call the session is currently PARKED on awaiting a decision (host
+// `pending_tool_calls[tool_idx]` while `awaiting_approval` is set — approval.rs).
+// `name`/`args` are the raw tool name + stringified-JSON arguments; `signature`
+// is the host's pre-formatted display line when it supplies one. When
+// `name == "plan_ready"` this is a PLAN decision (rendered inline in the chat as
+// the plan digest + approve/compact/deny controls), otherwise it's a risky/
+// classifier-flagged TOOL approval (rendered as the modal approval card).
+export type PendingCall = {
+  name: string
+  args: string
+  signature?: string
+}
+
 // One transient toast — the host's per-session `SessionRuntime.toast`
 // (state/runtime.rs `set_toast`/`set_toast_info`) projected via the Status
 // envelope. `id` is a client-minted monotonic tick so a repeat/re-fired toast
@@ -146,6 +159,15 @@ export type PushEnvelope =
       // Truncated one-line previews. Optional-tolerant: a host build that doesn't
       // project it yet leaves the store's queue empty.
       pendingSteer?: string[]
+      // Approval/plan-decision gate (host `awaiting_approval` — approval.rs).
+      // True when the turn is PARKED waiting on a y/a/n decision. The paused
+      // call rides along in `pendingCall` (name/args); `approvalReason` is the
+      // classifier's `verdict.reason` for a risky pause (null for a plan_ready
+      // pause or a non-classifier park). Optional-tolerant: a host build that
+      // doesn't project these yet leaves the gate closed.
+      awaitingApproval?: boolean
+      approvalReason?: string | null
+      pendingCall?: PendingCall | null
     }
   // Swap-START signal pushed the instant a Select/New is acted on host-side,
   // BEFORE teardown, so the loader rises deterministically across the
@@ -230,6 +252,17 @@ type SessionSlice = {
   // than starting a new turn. Drives the composer's pending-steer indicator +
   // the send cap. REPLACED wholesale on each Snapshot.
   pendingSteer: string[]
+  // Approval gate (host `awaiting_approval`): true while the turn is parked on a
+  // y/a/n decision. Drives the ApprovalOverlay modal (risky/classifier pause) +
+  // the inline plan controls (plan_ready pause). REPLACED on each Snapshot.
+  awaitingApproval: boolean
+  // The classifier's reason for a risky pause (null for a plan_ready / non-
+  // classifier park). Shown as the "why" in the approval card.
+  approvalReason: string | null
+  // The tool call the session is parked on (name/args of
+  // pending_tool_calls[tool_idx]); null when not awaiting. Distinguishes a plan
+  // decision (`name === 'plan_ready'`) from a tool approval.
+  pendingCall: PendingCall | null
 }
 
 type HubSlice = {
@@ -359,6 +392,9 @@ const initialSession: SessionSlice = {
   searchResults: [],
   mode: 'auto',
   pendingSteer: [],
+  awaitingApproval: false,
+  approvalReason: null,
+  pendingCall: null,
 }
 
 const initialHub: HubSlice = {
@@ -477,6 +513,11 @@ export const useKoma = create<KomaState>((set) => ({
               // Adopt the projected pending-steer queue; defensive fallback for a
               // host build that doesn't project it yet (empty queue).
               pendingSteer: env.pendingSteer ?? [],
+              // Adopt the projected approval gate; defensive fallbacks for a host
+              // build that doesn't project it yet (gate closed, no pending call).
+              awaitingApproval: env.awaitingApproval ?? false,
+              approvalReason: env.approvalReason ?? null,
+              pendingCall: env.pendingCall ?? null,
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
