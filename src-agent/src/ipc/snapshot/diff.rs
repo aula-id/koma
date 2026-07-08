@@ -198,6 +198,11 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
             // change. See `subagents_differ_for_client`.
             || subagents_differ_for_client(&p.subagents, &n.subagents, viewer_open)
             || p.pending_subagents != n.pending_subagents
+            // Background-bash set: id/command/STATUS changes (a job spawned, finished,
+            // failed, or was killed) have no incremental delta, so resync. The projection
+            // carries no output/elapsed, so a still-running job's per-line output churn
+            // does NOT fire this — it stays as quiet as a hidden sub-agent.
+            || p.bash_jobs != n.bash_jobs
             // A model change (settings override or global catalogue edit) has no
             // incremental delta; resync so the header updates immediately.
             || p.resolved_model_id != n.resolved_model_id

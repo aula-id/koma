@@ -122,6 +122,19 @@ pub fn session_snapshot(
                 }
             })
             .collect(),
+        // Background-bash jobs (identity + raw status; no output) so the GUI sidepanel's
+        // `bash[]` shows them. Reads the LIVE registry the jobs actually land in — the
+        // same `bash_jobs` vec `bash_output`/`bash_kill` mutate — so finished/failed jobs
+        // (which are retained, never removed) are included.
+        bash_jobs: rt
+            .bash_jobs
+            .iter()
+            .map(|j| crate::ipc::proto::BashJobSnapshot {
+                id: j.id,
+                command: j.command.clone(),
+                status: j.snapshot_status(),
+            })
+            .collect(),
     }
 }
 
