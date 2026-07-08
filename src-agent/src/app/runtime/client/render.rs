@@ -1514,7 +1514,7 @@ pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushS
 /// re-emitted on a `Ready` reload without waiting for the next snapshot. Mirrors the
 /// four `GlobalSnapshot` config fields: `models` is the GLOBAL scope, `session_models`
 /// the foreground session's LOCAL override scope.
-struct ConfigProjection {
+pub(super) struct ConfigProjection {
     providers: Vec<crate::model::app_config::ProviderConn>,
     models: Vec<crate::model::app_config::ModelEntry>,
     session_models: Vec<crate::model::app_config::ModelEntry>,
@@ -1529,6 +1529,21 @@ impl ConfigProjection {
             models: g.config_models.clone(),
             session_models: g.session_models.clone(),
             mcp_servers: g.mcp_servers.clone(),
+        }
+    }
+
+    /// Snapshot the config slice directly off an in-memory [`AppConfig`].
+    ///
+    /// Used by the GUI SWAPPER (`host_swapper`), which holds no daemon snapshot to
+    /// source config from — it reads the loaded global config directly so the Connector
+    /// shows the real providers/models/mcp on FIRST open. `session_models` (the per-
+    /// session LOCAL override scope) is empty here: the swapper has no foreground session.
+    pub(super) fn from_app_config(cfg: &crate::model::app_config::AppConfig) -> Self {
+        Self {
+            providers: cfg.providers.clone(),
+            models: cfg.models.clone(),
+            session_models: Vec::new(),
+            mcp_servers: cfg.mcp_servers.clone(),
         }
     }
 }
@@ -1565,7 +1580,7 @@ fn push_model(m: &crate::model::app_config::ModelEntry, scope: &'static str) -> 
 /// last call. Called every frame from [`push_loop`]; `last.config_json` dedups so an
 /// unchanged catalogue is silent, and a `Ready` reset re-emits the full current config.
 /// A `None` projection (no snapshot seen yet) is a no-op.
-fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String), last: &mut PushState) {
+pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String), last: &mut PushState) {
     let Some(cfg) = cfg else { return };
     use crate::model::app_config::McpTransport;
 

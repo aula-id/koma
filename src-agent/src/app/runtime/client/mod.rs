@@ -353,6 +353,18 @@ pub(super) fn run_host_relay(
     drop(rt);
 }
 
+/// Read the loaded GLOBAL config off disk and push a `Config` envelope so the GUI's
+/// Connector + MCP panels show the real providers/models/mcp while the host is in the
+/// SWAPPER (bug #3/#4). The swapper holds no daemon connection/snapshot, so the attached
+/// `push_loop`'s snapshot-sourced Config push never runs there; without this the panels
+/// cold-open EMPTY even though `~/.koma/config.json` has providers/models. `push_config`
+/// dedups on `push_state.config_json`, so callers `reset()` first to force a re-emit.
+fn push_swapper_config(push: &dyn Fn(String), push_state: &mut render::PushState) {
+    let cfg = crate::model::app_config::AppConfig::load();
+    let projection = render::ConfigProjection::from_app_config(&cfg);
+    render::push_config(Some(&projection), push, push_state);
+}
+
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
 /// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
@@ -370,6 +382,12 @@ fn host_swapper(
     let hub = build_local_hub(current);
     push_state.reset();
     render::push_hub(&hub, push, push_state);
+    // The swapper holds no daemon snapshot, so the attached `push_loop`'s Config push
+    // never runs here — the Connector/MCP panels would cold-open EMPTY. Read the loaded
+    // global config directly and push a `Config` envelope so FIRST open shows the real
+    // providers/models/mcp (bug #3/#4). `reset()` above cleared `config_json`, so this
+    // (re)emits every swapper entry.
+    push_swapper_config(push, push_state);
 
     loop {
         match ctl_rx.recv() {
@@ -382,6 +400,8 @@ fn host_swapper(
                 let hub = build_local_hub(current);
                 push_state.reset();
                 render::push_hub(&hub, push, push_state);
+                // Re-emit config too (a `Ready` reload re-mounts the panels).
+                push_swapper_config(push, push_state);
             }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
             // swap-START loader signal first (this thread will BLOCK in the attach next, so
