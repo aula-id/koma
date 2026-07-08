@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Circle, CircleDot, Loader2 } from 'lucide-react'
-import { Field, TextInput, Segmented, Chips, Select, Combobox } from '../form'
+import { Field, TextInput, Chips, Select, Combobox } from '../form'
 import { FormActions } from '../helpers'
 import { useKoma } from '../../../store/koma'
 import type { Role, Model, RouteEntry } from '../../../types/config'
@@ -191,13 +191,13 @@ export function ModelForm({
           <Chips value={d.roles} options={ROLE_OPTIONS} onToggle={toggleRole} />
         </Field>
         <Field label="Scope">
-          <Segmented
+          <Select
             value={d.scope}
-            onChange={(v) => patch({ scope: v })}
             options={[
               { value: 'global', label: 'Global' },
               { value: 'local', label: 'Local' },
             ]}
+            onChange={(v) => patch({ scope: v })}
           />
         </Field>
       </div>
