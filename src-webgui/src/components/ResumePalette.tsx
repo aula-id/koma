@@ -80,7 +80,10 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const matches = (id: string, name: string) =>
     q === '' || name.toLowerCase().includes(q) || id.toLowerCase().includes(q)
   const filteredCooking = cookingSessions.filter((c) => matches(c.id ?? '', c.name))
-  const filteredHistory = history.filter((h) => matches(h.id, h.name))
+  // Cap the recent list at 10 rows. Sliced AFTER the filter so search still
+  // spans all history; host already sorts by lastActive, so this is the 10
+  // most-recent matches.
+  const filteredHistory = history.filter((h) => matches(h.id, h.name)).slice(0, 10)
 
   return (
     <div className="absolute inset-0 z-50" onMouseDown={onClose}>
