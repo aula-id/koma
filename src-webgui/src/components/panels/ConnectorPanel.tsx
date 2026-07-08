@@ -71,9 +71,12 @@ export function ConnectorPanel() {
   // model.provider, which crosses the wire as `providerUuid` and is resolved by
   // the daemon via `p.uuid == provider` (SetModel + ListModels). So the value
   // MUST be the provider uuid, not its name. OAuth conns stay label-valued
-  // (local stub — no daemon uuid to resolve against).
+  // (local stub — no daemon uuid to resolve against). The synthetic koma-free
+  // provider is dropdown-only (see ConnectorListView) — exclude it here too so
+  // it can't be hand-picked for a new/edited model (that gateway serves a
+  // single fixed model, not an arbitrary modelId).
   const providerOptions = [
-    ...providers.map((p) => ({ value: p.id, label: p.name })),
+    ...providers.filter((p) => !p.isKomaFree).map((p) => ({ value: p.id, label: p.name })),
     ...conns.map((c) => ({ value: `${c.provider} (oauth)`, label: `${c.provider} (oauth)` })),
   ]
 
