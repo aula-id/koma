@@ -89,16 +89,19 @@ export function ExplorePanel() {
         {subagents.length === 0 ? (
           <Empty>No agents</Empty>
         ) : (
-          subagents.map((a, i) => (
-            <div key={a.id ?? `${a.name}-${i}`} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
-              <Bot size={13} className="flex-none text-koma-fg opacity-45" />
-              <span className="min-w-0 flex-1 truncate text-[13px] text-koma-fg">{a.name}</span>
-              <StatusBadge status={a.status} />
-              {a.status === 'running' && a.id && (
-                <KillBtn onClick={() => req({ r: 'KillSubagent', id: Number(a.id) })} />
-              )}
-            </div>
-          ))
+          subagents.map((a, i) => {
+            const id = a.id
+            return (
+              <div key={id ?? `${a.name}-${i}`} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
+                <Bot size={13} className="flex-none text-koma-fg opacity-45" />
+                <span className="min-w-0 flex-1 truncate text-[13px] text-koma-fg">{a.name}</span>
+                <StatusBadge status={a.status} />
+                {a.status === 'running' && id != null && (
+                  <KillBtn onClick={() => req({ r: 'KillSubagent', id })} />
+                )}
+              </div>
+            )
+          })
         )}
       </AccordionSection>
     </div>
