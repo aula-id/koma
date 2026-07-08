@@ -69,6 +69,19 @@
 /* inline code only — never recolor highlighted code-block tokens (pre code) */
 .koma-md :not(pre) > code { color: var(--color-koma-accent); }
 .koma-md h1, .koma-md h2 { color: var(--color-koma-accent); }
+/* Streamdown's own heading components (h1..h6) ship escalating Tailwind
+   `text-3xl`…`text-sm` classes (see node_modules/streamdown/dist — MarkdownH1
+   through MarkdownH6). We want hierarchy conveyed by weight only (all
+   headings already render `font-semibold`, real bold face, no faux-bold),
+   so pin every heading's font-size (and the line-height each `text-*`
+   utility bundles alongside it) back to the body copy's own values. Margins
+   (`mt-6 mb-2`, identical across h1..h6) are untouched, so heading spacing
+   stays as-is. */
+.koma-md h1, .koma-md h2, .koma-md h3,
+.koma-md h4, .koma-md h5, .koma-md h6 {
+  font-size: inherit;
+  line-height: inherit;
+}
 .koma-md a { color: var(--color-koma-accent); text-decoration: underline; }
 .koma-md blockquote {
   border-left: 2px solid var(--color-koma-dim);
