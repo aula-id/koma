@@ -30,7 +30,7 @@ export function ConnectorListView({
   const [open, setOpen] = useState({ providers: true, oauth: true, models: true })
 
   return (
-    <div className="absolute inset-0 overflow-auto bg-koma-panel">
+    <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
       <AccordionSection
         title="Providers"
         open={open.providers}
@@ -86,7 +86,7 @@ export function ConnectorListView({
         {models.map((m) => (
           <Row
             key={m.id}
-            leading={<span title={m.scope} className="w-3 flex-none text-center text-[11px] text-koma-fg opacity-60">{m.scope === 'global' ? '★' : ''}</span>}
+            leading={<span title={m.scope} className="flex-none font-mono text-[10px] text-koma-fg opacity-55">{m.scope === 'global' ? '[glob]' : '[local]'}</span>}
             title={m.name || '(unnamed)'}
             subtitle={`${m.modelId || '—'}${m.provider ? ' · ' + m.provider : ''}`}
             right={m.roles.length ? <span className="text-[10px] text-koma-fg opacity-55">{m.roles[0]}{m.roles.length > 1 ? ` +${m.roles.length - 1}` : ''}</span> : undefined}
