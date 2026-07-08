@@ -324,6 +324,33 @@ enum GuiReq {
     /// (keep discussing). Forwarded verbatim as [`ClientRequest::PlanDecision`], koma's
     /// y/a/n plan-resume equivalent.
     PlanDecision { decision: String },
+
+    // ─── GUI Settings tab (vscode-style page) ────────────────────────────────────
+    /// The Settings tab opened / re-activated: fetch the foreground session's GUI-editable
+    /// prefs + the active palette. Dual-routed like `ListModels` via [`forward_or_host`] —
+    /// the attached daemon answers with `SettingsValues`, or (un-attached, StartScreen /
+    /// swapper) the host answers from the global config — so the tab populates in BOTH host
+    /// states and its loading state never hangs.
+    GetSettings,
+    /// The Settings tab's Session section committed a partial update. Only the present
+    /// (`Some`) fields are sent; forwarded to the attached daemon as
+    /// [`ClientRequest::SetSessionPrefs`] (attached-only, like `Interrupt` — a settings edit
+    /// with no live session is a silent no-op). The daemon applies each field through the
+    /// SAME per-field logic the TUI settings save uses, persists, and re-pushes
+    /// `SettingsValues`. `internetMode` is `"simple"`/`"full"`. (Name changes reuse `Rename`;
+    /// palette changes reuse `SetTheme` — no new plumbing.)
+    SetPrefs {
+        #[serde(default, rename = "shortSend")]
+        short_send: Option<bool>,
+        #[serde(default, rename = "slidingCache")]
+        sliding_cache: Option<bool>,
+        #[serde(default, rename = "bashSaving")]
+        bash_saving: Option<bool>,
+        #[serde(default, rename = "internetMode")]
+        internet_mode: Option<String>,
+        #[serde(default)]
+        workdir: Option<Vec<String>>,
+    },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -895,6 +922,39 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::PlanDecision { decision });
+                            }
+                        }
+                    }
+                    // Settings tab open/refresh: dual-routed like the model/route pickers —
+                    // the attached daemon (or the un-attached swapper) answers with a
+                    // `SettingsValues` reply the host re-pushes, so the tab populates in both
+                    // host states.
+                    GuiReq::GetSettings => {
+                        forward_or_host(
+                            &ipc_req,
+                            &ipc_ctl,
+                            ClientRequest::GetSettings,
+                            HostCtl::GetSettings,
+                        );
+                    }
+                    // Settings tab Session-section commit: forward the partial update to the
+                    // attached daemon (attached-only, like Interrupt — no session ⇒ no-op).
+                    GuiReq::SetPrefs {
+                        short_send,
+                        sliding_cache,
+                        bash_saving,
+                        internet_mode,
+                        workdir,
+                    } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetSessionPrefs {
+                                    short_send,
+                                    sliding_cache,
+                                    bash_saving,
+                                    internet_mode,
+                                    workdir,
+                                });
                             }
                         }
                     }

@@ -460,6 +460,14 @@ impl DaemonHub {
                     ),
                 );
             }
+
+            // GUI Settings tab: read the foreground session's GUI-editable prefs + the
+            // global palette and reply with a one-shot `SettingsValues`. Strictly READ-ONLY
+            // (no attach / snapshot / foreground move) and ALWAYS replies, even with no
+            // session (best-effort defaults) — mirrors the FileSearch/ListModels one-shot.
+            ClientRequest::GetSettings => {
+                self.send_settings_values(idx, state);
+            }
             req => {
                 self.handle_controller_mutation(idx, req, state, client, handle);
             }
@@ -780,6 +788,104 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI Settings tab (Session section): partial-update the foreground session's
+            // GUI-editable prefs. Only the `Some` fields are applied, EACH through the SAME
+            // per-field apply logic the TUI settings save uses
+            // (`actions::settings::handle_save_settings`):
+            //   - short-send / sliding-cache / bash-saving: plain field sets (:185-191) — no
+            //     client rebuild needed (each flag is read per-send / per-spawn).
+            //   - internet_mode: capture-old + set + the SHARED `flash_internet_feedback`
+            //     (status line + optional install toast, only on an actual change) — the exact
+            //     helper the settings save calls (:194 + feedback path).
+            //   - workdir: normalized (trim + drop empties + cwd fallback, :84-101) then a
+            //     dir-cache reindex (:221-227).
+            // The C2 LOAD bracket already pointed `fg()` at this client's session. After
+            // applying, `rebuild_system` refreshes the mode-gated roster + `sess.save()`
+            // persists (mirrors :198/:216), then a fresh `SettingsValues` is re-pushed so the
+            // GUI reflects reality, and the request is acked.
+            ClientRequest::SetSessionPrefs {
+                short_send,
+                sliding_cache,
+                bash_saving,
+                internet_mode,
+                workdir,
+            } => {
+                use crate::model::settings::InternetMode;
+                // Capture the old internet mode BEFORE the set, for the shared change-gated
+                // feedback below (mirrors handle_save_settings' `old_internet`).
+                let old_internet = state
+                    .rest
+                    .fg()
+                    .session
+                    .as_ref()
+                    .map(|s| s.settings.internet_mode);
+                let internet_target = internet_mode.as_deref().and_then(InternetMode::from_token);
+                // Normalize the workdir draft exactly like actions/settings.rs:84-101.
+                let workdir_vec = workdir.map(|dirs| {
+                    let mut v: Vec<String> = dirs
+                        .into_iter()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if v.is_empty() {
+                        v = std::env::current_dir()
+                            .map(|p| vec![p.display().to_string()])
+                            .unwrap_or_default();
+                    }
+                    v
+                });
+                // Only a workdir change needs a dir-cache reindex (a full workspace
+                // re-walk) — so gate it below rather than firing it on every toggle.
+                let did_workdir = workdir_vec.is_some();
+                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    if let Some(v) = short_send {
+                        sess.settings.short_send_enabled = v;
+                    }
+                    if let Some(v) = sliding_cache {
+                        sess.settings.sliding_cache = v;
+                    }
+                    if let Some(v) = bash_saving {
+                        sess.settings.bash_saving = v;
+                    }
+                    if let Some(m) = internet_target {
+                        sess.settings.internet_mode = m;
+                    }
+                    if let Some(v) = workdir_vec {
+                        sess.settings.workdir = v;
+                    }
+                    // Refresh the mode-gated system-prompt roster, then persist — mirrors
+                    // handle_save_settings (:198 rebuild + :216 save). A save error just
+                    // leaves the on-disk file stale; the `SettingsValues` re-push below still
+                    // reflects the in-memory state, and this GUI path has no Ack/Error channel
+                    // to surface it to (the store ignores those frames).
+                    sess.rebuild_system();
+                    let _ = sess.save();
+                }
+                // internet feedback (status + optional install toast) only on an actual
+                // change — the SAME shared helper the TUI settings save uses.
+                if let Some(m) = internet_target {
+                    crate::app::runtime::commands::internet::flash_internet_feedback(
+                        state,
+                        old_internet,
+                        m,
+                    );
+                }
+                // Reindex the dir cache against the changed workdirs (actions/settings.rs:
+                // 221-227), but ONLY when workdir was actually part of this update — a
+                // toggle/internet change never touches the workspace roots.
+                if did_workdir {
+                    let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());
+                    let dir_cache = state.rest.fg().dir_cache.clone();
+                    if let Some(r) = roots {
+                        crate::tool::dircache::reindex(r, dir_cache);
+                    }
+                }
+                // The `SettingsValues` re-push IS the reply (one-shot framing, like
+                // ListModels / ListRoutes / GetSettings) — the store has no Ack/Error case,
+                // so an extra Ack frame would only burn a per-client seq slot.
+                self.send_settings_values(idx, state);
+            }
+
             // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
             // Main-role koma-free model in the GLOBAL config (the non-key equivalent of the
             // TUI's `Action::SetupKomaFree`), then persist. Only the CONFIG mutation is
@@ -1024,7 +1130,8 @@ impl DaemonHub {
             | ClientRequest::RemoveAttachment { .. }
             | ClientRequest::FileSearch { .. }
             | ClientRequest::ListModels { .. }
-            | ClientRequest::ListRoutes { .. } => {
+            | ClientRequest::ListRoutes { .. }
+            | ClientRequest::GetSettings => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }
@@ -1037,6 +1144,35 @@ impl DaemonHub {
             Ok(()) => self.send_to(idx, DaemonEvent::Ack),
             Err(e) => self.send_to(idx, DaemonEvent::Error(format!("{e:#}"))),
         }
+    }
+
+    /// Send client `idx` a [`DaemonEvent::SettingsValues`] built from the foreground
+    /// session's GUI-editable prefs + the global config palette — the reply to a
+    /// [`ClientRequest::GetSettings`] and the re-push after a
+    /// [`ClientRequest::SetSessionPrefs`]. The C2 LOAD bracket in `handle_request` already
+    /// pointed `fg()` at THIS client's foreground, so this reads exactly the session the
+    /// GUI Settings tab is editing. ALWAYS sends — when there is no foreground session it
+    /// falls back to `Settings::default()` (empty name/workdir, default toggles) so the tab
+    /// never hangs. `send_to` delivers regardless of attach state (like `ModelList`).
+    fn send_settings_values(&mut self, idx: usize, state: &AppState) {
+        let default = crate::model::settings::Settings::default();
+        let session = state.rest.fg().session.as_ref();
+        let s = session.map(|sess| &sess.settings).unwrap_or(&default);
+        let event = DaemonEvent::SettingsValues {
+            // The RESOLVED display name (`Session.name`, which falls back to the session
+            // id/UUID when the `settings.name` draft is blank — session.rs:74), so the GUI
+            // Name input matches the tab bar / hub list and the skip-if-unchanged check is
+            // meaningful. `settings.name` alone is the raw draft — empty until an explicit
+            // rename. Empty only when there is truly no foreground session.
+            name: session.map(|sess| sess.name.clone()).unwrap_or_default(),
+            workdir: s.workdir.clone(),
+            short_send: s.short_send_enabled,
+            sliding_cache: s.sliding_cache,
+            bash_saving: s.bash_saving,
+            internet_mode: s.internet_mode.as_str().to_string(),
+            palette: state.rest.config.palette.clone(),
+        };
+        self.send_to(idx, event);
     }
 }
 

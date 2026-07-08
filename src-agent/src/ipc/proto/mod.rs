@@ -244,6 +244,29 @@ pub enum ClientRequest {
     /// back via the session's `status` line, exactly like `/compact`. gui-gated: the
     /// TUI drives compaction via the `/compact` slash command.
     Compact,
+    /// Fetch the foreground session's GUI-editable prefs (name / workdir / short-send /
+    /// sliding-cache / bash-saving / internet-mode) + the global palette, for the GUI
+    /// Settings tab. Read-only: the daemon replies with a one-shot
+    /// [`DaemonEvent::SettingsValues`] WITHOUT attaching or mutating any state (best-effort
+    /// defaults when there is no foreground session, so the tab never hangs). gui-gated: the
+    /// TUI drives settings through `Mode::Settings`.
+    GetSettings,
+    /// Partial-update the foreground session's GUI-editable prefs (the GUI Settings tab's
+    /// Session section). Only the `Some` fields are applied, EACH through the SAME per-field
+    /// apply logic the TUI settings save uses (`actions::settings::handle_save_settings`):
+    /// short-send / sliding-cache / bash-saving are plain field sets, `internet_mode`
+    /// (`"simple"`/`"full"`) goes through the shared internet-feedback path, and `workdir` is
+    /// normalized (trim + drop empties + cwd fallback) with a dir-cache reindex. The daemon
+    /// then persists the session settings and re-pushes a fresh [`DaemonEvent::SettingsValues`]
+    /// so the UI reflects reality. gui-gated: the TUI drives these via `Mode::Settings` /
+    /// `/internet`.
+    SetSessionPrefs {
+        short_send: Option<bool>,
+        sliding_cache: Option<bool>,
+        bash_saving: Option<bool>,
+        internet_mode: Option<String>,
+        workdir: Option<Vec<String>>,
+    },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -317,6 +340,23 @@ pub enum DaemonEvent {
         provider: String,
         model_id: String,
         routes: Vec<ModelEndpointWire>,
+    },
+    /// One-shot reply to a [`ClientRequest::GetSettings`] (and a re-push after a
+    /// [`ClientRequest::SetSessionPrefs`]): the foreground session's GUI-editable prefs +
+    /// the global config palette, for the GUI Settings tab. Delivered whether or not the
+    /// requesting client is session-attached (like [`ModelList`], via the hub's per-client
+    /// seq'd `send_to`), and ALWAYS sent — best-effort defaults (`name`/`workdir` empty)
+    /// when there is no foreground session — so the Settings tab never hangs. `internet_mode`
+    /// is the `"simple"`/`"full"` wire token; `palette` is the active theme registry key. The
+    /// GUI host re-pushes it as a `SettingsValues` envelope; the TUI shadow ignores it.
+    SettingsValues {
+        name: String,
+        workdir: Vec<String>,
+        short_send: bool,
+        sliding_cache: bool,
+        bash_saving: bool,
+        internet_mode: String,
+        palette: String,
     },
 }
 
