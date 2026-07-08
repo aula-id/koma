@@ -25,6 +25,7 @@ import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } fr
 import { MessageBody } from './MessageBody'
 import { Composer } from './Composer'
 import { WaitingIndicator } from './WaitingIndicator'
+import { fallbackSignature, truncateChars } from '../lib/toolSignature'
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -52,43 +53,6 @@ function toolBoxMeta(name: string): { label: string; Icon: IconType } | null {
   if (name.startsWith('mcp__')) return { label: 'mcp', Icon: Plug }
   if (name.startsWith('sec_')) return { label: 'sec', Icon: Shield }
   return null
-}
-
-// Char-aware truncate with an ellipsis (mirrors transcript.rs `truncate_chars`).
-function truncateChars(s: string, max: number): string {
-  const chars = Array.from(s)
-  return chars.length <= max ? s : `${chars.slice(0, max - 1).join('')}…`
-}
-
-// Salient-arg keys per tool (light port of transcript.rs `tool_signature_inner`)
-// — used only when the host doesn't supply a pre-formatted `signature`.
-const SALIENT_ARG: Record<string, string> = {
-  bash: 'command',
-  read: 'path',
-  write: 'path',
-  edit: 'path',
-  grep: 'pattern',
-  glob: 'pattern',
-  dir_list: 'path',
-  task: 'agent',
-  recall: 'slug',
-}
-
-// Fallback display signature `name(arg)` when the host hasn't projected one.
-function fallbackSignature(name: string, args: string): string {
-  let inner = ''
-  try {
-    const parsed = JSON.parse(args)
-    if (parsed && typeof parsed === 'object') {
-      const key = SALIENT_ARG[name]
-      const val = key != null && parsed[key] != null ? parsed[key] : Object.values(parsed)[0]
-      inner = val == null ? '' : String(val)
-    }
-  } catch {
-    inner = args
-  }
-  inner = inner.replace(/\s+/g, ' ').trim()
-  return `${name}(${truncateChars(inner, 60)})`
 }
 
 // plan_ready digest: the composed checklist + plan Markdown the daemon rewrites

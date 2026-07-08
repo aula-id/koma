@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { Check, ShieldAlert, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { fallbackSignature } from '../lib/toolSignature'
 
 // Pretty-print the raw stringified-JSON tool args for the approval card. Falls
 // back to the raw string on any parse miss (a non-JSON arg blob).
@@ -31,7 +32,7 @@ export function ApprovalOverlay() {
   if (!awaiting || !pending || pending.name === 'plan_ready') return null
 
   const answer = (approve: boolean) => req({ r: 'ApproveTool', approve })
-  const signature = pending.signature || pending.name
+  const signature = pending.signature || fallbackSignature(pending.name, pending.args)
   const args = formatArgs(pending.args)
 
   return (
