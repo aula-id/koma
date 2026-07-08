@@ -598,6 +598,17 @@ struct PushBashJob {
     status: &'static str,
 }
 
+/// One cumulative file-change row in a [`PushEnvelope::Snapshot`] (#24): the
+/// (workspace-relative when possible) `path` this session's `write`/`edit`/`delete`
+/// touched, and its latest `status` (`"added"`/`"modified"`/`"deleted"`, dedup by
+/// path). Persisted daemon-side so it survives compaction + close/reopen.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushFileChange {
+    path: String,
+    status: String,
+}
+
 /// The palette roles the React chat paints with (resolved from the shadow's TUI
 /// [`crate::view::theme::Palette`], so a themed daemon repaints the chat live).
 /// `bg`/`fg` drive the window chrome; `accent`/`dim`/`panel` are the same three
@@ -736,6 +747,10 @@ enum PushEnvelope {
         /// Foreground session's background-bash jobs (list + status). Authoritative
         /// full array — React REPLACES on each Snapshot, never accumulates.
         bash: Vec<PushBashJob>,
+        /// Foreground session's cumulative file-change log (#24). Authoritative full
+        /// array — React REPLACES on each Snapshot. Empty when nothing was touched.
+        #[serde(rename = "fileChanges")]
+        file_changes: Vec<PushFileChange>,
         /// Foreground session's STAGED composer attachments (chips). Authoritative full
         /// array — React REPLACES on each Snapshot; empty once the message is sent.
         attachments: Vec<PushAttachment>,
@@ -1406,6 +1421,18 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         })
         .collect();
 
+    // Cumulative file-change log (#24): the foreground session's `write`/`edit`/`delete`
+    // record, projected 1:1 (path + status) so React's Explore "File changed" panel
+    // renders it. The shadow carries it from the daemon's persisted per-session store.
+    let file_changes: Vec<PushFileChange> = fg
+        .file_changes
+        .iter()
+        .map(|c| PushFileChange {
+            path: c.path.clone(),
+            status: c.status.clone(),
+        })
+        .collect();
+
     // Staged composer attachments: the foreground session's `pending_attachments` (not
     // yet sent). `marker_n` ties each chip to its `[Image #N]` marker; `kind` is derived
     // from the sniffed mime (all attachments are images today, but keep it general).
@@ -1477,6 +1504,12 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             b.cmd.hash(&mut h);
             b.status.hash(&mut h);
         }
+        // Fold the file-change log in so a new/updated entry re-emits the Snapshot.
+        file_changes.len().hash(&mut h);
+        for c in &file_changes {
+            c.path.hash(&mut h);
+            c.status.hash(&mut h);
+        }
         // Fold staged attachments in so a stage/drop re-emits the Snapshot (chips).
         attachments.len().hash(&mut h);
         for a in &attachments {
@@ -1496,6 +1529,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             palette,
             subagents,
             bash,
+            file_changes,
             attachments,
             mode,
         };
