@@ -1,4 +1,4 @@
-import { Files, Blocks, Plug, Settings } from 'lucide-react'
+import { Files, Blocks, Plug, ChartColumn, Settings } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 
@@ -16,6 +16,7 @@ const ITEMS: { view: SidebarView; icon: LucideIcon; label: string }[] = [
   { view: 'explore', icon: Files, label: 'Explore' },
   { view: 'mcp', icon: Blocks, label: 'MCP' },
   { view: 'connector', icon: Plug, label: 'Connector' },
+  { view: 'usage', icon: ChartColumn, label: 'Usage' },
 ]
 
 // Thin icon strip. Selecting a view switches the sidebar panel; the active

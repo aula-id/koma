@@ -262,6 +262,13 @@ pub(super) enum HostCtl {
     /// EMPTY `name`/`workdir`. ALWAYS pushes a `SettingsValues` reply (like the attached
     /// path) so the Settings tab's loading state can never hang.
     GetSettings,
+    /// Activity-bar "Usage" panel fetch: compute a LAST-7-DAYS preview straight off the
+    /// global `~/.koma/usage.sqlite` ledger. Like [`FileDiff`](Self::FileDiff) this NEVER
+    /// touches the daemon in either host state — the ledger is a process-local file the
+    /// host already has direct access to — so it is routed here unconditionally by the
+    /// ipc handler. Serviced off-thread (sqlite I/O is blocking) in both host states; see
+    /// [`compute_usage_preview`].
+    UsagePreview,
 }
 
 /// The result of a host-side [`compute_file_diff`], pushed to the GUI as a `FileDiff`
@@ -432,6 +439,73 @@ fn compute_file_diff(path: &str, current_session: Option<&str>) -> FileDiffResul
             error: None,
             binary: false,
         },
+    }
+}
+
+/// The result of a host-side [`compute_usage_preview`], pushed to the GUI as a
+/// `UsagePreview` envelope (`render::push_usage_preview`). `days` is EXACTLY 7 entries
+/// (oldest first, today last), zero-filled for any day with no ledger rows; `top_models`
+/// is capped at 3, ordered by cost descending.
+pub(super) struct UsagePreviewResult {
+    pub cost: f64,
+    pub tokens_in: i64,
+    pub tokens_cached: i64,
+    pub tokens_out: i64,
+    pub calls: i64,
+    pub days: Vec<(i64, f64)>,
+    pub top_models: Vec<crate::model::usage::ModelCostRange>,
+}
+
+/// Compute a host-side LAST-7-DAYS usage preview for the GUI Usage panel, answering a
+/// [`HostCtl::UsagePreview`]. Reads the global `~/.koma/usage.sqlite` ledger directly —
+/// no daemon involved, works attached or not (mirrors [`compute_file_diff`]). Every
+/// underlying query (`range_totals`/`spend_buckets`/`top_models_in_range`) is already
+/// non-fatal (zeroed/empty on a missing or locked DB), so this never fails either — the
+/// caller ALWAYS gets a result to push, even on a clean install with no ledger yet.
+///
+/// The query cutoff is the SAME floored anchor the 7-bar chart is built from (today's
+/// LOCAL midnight minus 6 days) — not a bare `now - 7*86400` — so the header totals and
+/// the top-models list describe EXACTLY the window the bars render, with no up-to-24h
+/// sliver of extra data hiding outside every bar.
+fn compute_usage_preview() -> UsagePreviewResult {
+    use crate::model::usage::{self, BucketSize};
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let tz = usage::local_utc_offset_secs();
+
+    // Floor to LOCAL midnight first — same day-boundary math as
+    // `view::usage::heatmap`'s week chart — then anchor the query window on it, so
+    // `since` is the exact start of the oldest bar rather than a rolling 168h cutoff.
+    let local_now = now + tz;
+    let today = local_now - local_now % 86400 - tz;
+    let since = today - 6 * 86400;
+
+    let totals = usage::range_totals(since);
+    let buckets = usage::spend_buckets(since, BucketSize::Day, 0, tz);
+    let top_models = usage::top_models_in_range(since, 3);
+
+    // Normalize to exactly 7 daily buckets (oldest -> newest, today last), zero-filled
+    // for any day the ledger has no rows for.
+    let bucket_map: std::collections::HashMap<i64, f64> =
+        buckets.into_iter().map(|b| (b.bucket_epoch, b.cost)).collect();
+    let days = (0..7)
+        .map(|i| {
+            let epoch = today - (6 - i) * 86400;
+            (epoch, bucket_map.get(&epoch).copied().unwrap_or(0.0))
+        })
+        .collect();
+
+    UsagePreviewResult {
+        cost: totals.cost,
+        tokens_in: totals.tokens_in,
+        tokens_cached: totals.tokens_cached,
+        tokens_out: totals.tokens_out,
+        calls: totals.calls,
+        days,
+        top_models,
     }
 }
 
@@ -887,6 +961,17 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 std::thread::spawn(move || {
                     let result = compute_file_diff(&path, cur.as_deref());
                     render::push_file_diff(&push2, result);
+                });
+            }
+            // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
+            // a global file the host reads directly, so this never touches a daemon in
+            // either state — see `compute_usage_preview`. Sqlite I/O is blocking, so it
+            // runs on a plain OS thread like `FileDiff` above.
+            Ok(HostCtl::UsagePreview) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    let result = compute_usage_preview();
+                    render::push_usage_preview(&push2, result);
                 });
             }
             // GUI Settings tab opened while detached (StartScreen / swapper): there is no

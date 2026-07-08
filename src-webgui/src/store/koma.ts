@@ -75,6 +75,34 @@ export type SettingsValues = {
   palette: string
 }
 
+// One day's cost in a UsagePreview's 7-entry daily series (host `PushUsageDay`).
+// `epoch` is the LOCAL-midnight unix-seconds boundary for that day.
+export type UsageDayEntry = {
+  epoch: number
+  cost: number
+}
+
+// One model row in a UsagePreview's top-3 list (host `PushUsageModel`).
+export type UsageModelEntry = {
+  modelId: string
+  cost: number
+  calls: number
+}
+
+// The activity-bar Usage panel's LAST-7-DAYS preview (host `UsagePreview` reply),
+// straight off the global `~/.koma/usage.sqlite` ledger — host-only, never touches
+// the daemon (mirrors FileDiff). `days` is always exactly 7 entries, oldest first.
+// Null until the first reply lands (re-requested every time the panel is shown).
+export type UsagePreview = {
+  cost: number
+  tokensIn: number
+  tokensCached: number
+  tokensOut: number
+  calls: number
+  days: UsageDayEntry[]
+  topModels: UsageModelEntry[]
+}
+
 export type HubCookingEntry = {
   kind: 'new' | 'session'
   id: string | null
@@ -343,6 +371,19 @@ export type PushEnvelope =
       error: string | null
       binary: boolean
     }
+  // Reply to GuiReq UsagePreview — a LAST-7-DAYS usage preview computed straight
+  // off the global usage ledger (host-only, never touches the daemon). ALWAYS a
+  // reply so the Usage panel's loading state can never hang.
+  | {
+      k: 'UsagePreview'
+      cost: number
+      tokensIn: number
+      tokensCached: number
+      tokensOut: number
+      calls: number
+      days: UsageDayEntry[]
+      topModels: UsageModelEntry[]
+    }
   // Reply to GuiReq GetSettings (and the re-push after SetPrefs) — the Settings
   // tab's Session-section values + active palette. Guaranteed for every request
   // (even detached: the host answers from global config with defaults).
@@ -514,6 +555,10 @@ type KomaState = {
   // SetPrefs re-push. `null` until the first reply lands (the tab shows a
   // loading row); REPLACED wholesale on each reply.
   settingsValues: SettingsValues | null
+  // The activity-bar Usage panel's latest LAST-7-DAYS preview. `null` until the
+  // first reply lands (the panel shows a loading row); REPLACED wholesale on
+  // each reply. The panel re-requests it every time it's shown.
+  usagePreview: UsagePreview | null
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -696,6 +741,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   modelList: initialModelList,
   routeList: initialRouteList,
   settingsValues: null,
+  usagePreview: null,
 
   push: (env) => {
     switch (env.k) {
@@ -894,6 +940,19 @@ export const useKoma = create<KomaState>((set, get) => ({
             bashSaving: env.bashSaving,
             internetMode: env.internetMode,
             palette: env.palette,
+          },
+        }))
+        break
+      case 'UsagePreview':
+        set(() => ({
+          usagePreview: {
+            cost: env.cost,
+            tokensIn: env.tokensIn,
+            tokensCached: env.tokensCached,
+            tokensOut: env.tokensOut,
+            calls: env.calls,
+            days: env.days,
+            topModels: env.topModels,
           },
         }))
         break
