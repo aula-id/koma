@@ -11,6 +11,7 @@ import { ArrowUp, CornerDownRight, Layers, Paperclip, Search, Square, X } from '
 import { useKoma } from '../store/koma'
 import { ModelPicker } from './ModelPicker'
 import { ModeSelector } from './ModeSelector'
+import { CatMascot } from './CatMascot'
 
 // Reads a File's bytes and resolves to a bare base64 string (no `data:` URL
 // prefix) for the AttachFile GuiReq.
@@ -46,6 +47,9 @@ export function Composer() {
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Mascot swap-on-send: bumped once per submit, telling CatMascot to pick a
+  // different random cat. Otherwise it just keeps looping the current one.
+  const [mascotSwap, setMascotSwap] = useState(0)
 
   // Auto-grow the textarea with its content, up to a cap (then it scrolls).
   // Runs on every input change (incl. programmatic clears + omnisearch inserts).
@@ -86,6 +90,8 @@ export function Composer() {
     if (atSteerCap) return
     req({ r: 'Submit', text })
     setInput('')
+    // Swap the mascot to a new random cat on every send.
+    setMascotSwap((t) => t + 1)
     // Force the transcript back to the bottom on send (re-engages the W4
     // scroll-stick even if the user had scrolled up).
     requestScrollBottom()
@@ -179,10 +185,15 @@ export function Composer() {
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        className={`flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors ${
+        className={`relative flex flex-col gap-2 rounded-2xl border bg-koma-panel px-3 py-2.5 shadow-sm transition-colors ${
           dragOver ? 'border-koma-accent bg-koma-hover' : 'border-koma-border'
         }`}
       >
+        {/* Persistent mascot: a small always-looping cat perched on the card's
+            top-right corner. Purely decorative — not gated on `working` — and
+            swaps to a different random cat on every send (see submit above). */}
+        <CatMascot swapTrigger={mascotSwap} />
+
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {attachments.map((a) => (
