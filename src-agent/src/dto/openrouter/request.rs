@@ -309,14 +309,24 @@ fn attachment_parts(
 /// or `None` when the file can't be read. `rel_path` (`images/NN-name.ext`) is
 /// resolved against the session dir — the bytes are NEVER taken from the message.
 ///
+/// This heals attachments that were ingested with a wrong stored `mime` (e.g.
+/// from an older koma build, or any path that didn't run the magic-byte sniff):
+/// the bytes are re-sniffed here at send time via `infer::get`, and its verdict
+/// wins over `att.mime` whenever it identifies a concrete image type. `att.mime`
+/// is only used when `infer` has no opinion on the bytes.
+///
 /// `pub(crate)` so the Codex Responses transport (`service::openrouter::codex`)
 /// reuses the exact same data-URL derivation for its `input_image` parts.
 pub(crate) fn data_url_for(session_dir: &Path, att: &crate::dto::chat::Attachment) -> Option<String> {
     use base64::Engine;
     let path = session_dir.join(&att.rel_path);
     let bytes = std::fs::read(&path).ok()?;
+    let mime = infer::get(&bytes)
+        .filter(|kind| kind.mime_type().starts_with("image/"))
+        .map(|kind| kind.mime_type().to_string())
+        .unwrap_or_else(|| att.mime.clone());
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Some(format!("data:{};base64,{}", att.mime, b64))
+    Some(format!("data:{};base64,{}", mime, b64))
 }
 
 /// Build the System message's wire content parts, splitting the stable cached head
