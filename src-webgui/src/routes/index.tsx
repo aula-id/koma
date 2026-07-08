@@ -14,6 +14,7 @@ import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { ToastContainer } from '../components/ToastContainer'
+import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
 
 const SIDEBAR_MIN = 150
@@ -183,12 +184,14 @@ function DiffFallback() {
   )
 }
 
-// Tabbed main column: a VSCode-style TabBar over stacked tab contents. The chat
-// stays MOUNTED at all times (hidden, not unmounted, when a diff tab is active)
-// so its scroll/stream/state survive tab switches; diff tabs mount when opened
-// and stay mounted while open for fast switching, unmounting only on close. The
-// TabBar spans the full main column; the chat keeps its centered reading column,
-// while diff editors use the full width.
+// Tabbed main column: a VSCode-style TabBar over stacked tab contents, with the
+// usage/statusline footer pinned along the bottom — full width, spanning from
+// the sidebar edge to the window edge, visible across every tab (chat + diff).
+// The chat stays MOUNTED at all times (hidden, not unmounted, when a diff tab
+// is active) so its scroll/stream/state survive tab switches; diff tabs mount
+// when opened and stay mounted while open for fast switching, unmounting only
+// on close. The TabBar spans the full main column; the chat keeps its centered
+// reading column, while diff editors use the full width.
 function TabbedMain() {
   const tabs = useKoma((s) => s.ui.tabs)
   const activeTabId = useKoma((s) => s.ui.activeTabId)
@@ -210,6 +213,7 @@ function TabbedMain() {
           ) : null,
         )}
       </div>
+      <UsageFooter />
     </div>
   )
 }
