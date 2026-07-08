@@ -3,14 +3,19 @@ import { Check, ChevronDown } from 'lucide-react'
 
 // Reusable inline-form primitives for the sidebar CRUD panels. Themed on koma-*.
 
+// NB: a plain <div>, NOT a <label>. A <label> forwards any click on its
+// padding/whitespace/caption to its first labelable descendant — for the Roles
+// field that's the first chip button (`main`), so clicking the empty section
+// space wrongly toggled `main`. A <div> has no such implicit activation, so
+// empty-space clicks are inert and each chip toggles only itself.
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="flex flex-col gap-1 px-3 py-1.5">
+    <div className="flex flex-col gap-1 px-3 py-1.5">
       <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-50">
         {label}
       </span>
       {children}
-    </label>
+    </div>
   )
 }
 
