@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
 import {
+  Archive,
   Brain,
   Check,
   ChevronDown,
@@ -13,6 +14,7 @@ import {
   Globe,
   Image as ImageIcon,
   Images,
+  MessageSquare,
   Pencil,
   Plug,
   Search,
@@ -156,6 +158,14 @@ function TerseResult({ output }: { output: string }) {
 // completed `✓` (Check) in accent. Result is glued directly under its own call.
 const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) {
   const done = call.status === 'done'
+  const req = useKoma((s) => s.req)
+  // The session is PARKED on a plan decision when the approval gate is set AND
+  // the paused call is `plan_ready`. Only the currently-parked plan_ready row is
+  // still pending (`!done`); historical plan_ready rows in scrollback already
+  // got answered → they have a result → done. So gate the controls on both, so
+  // they show on exactly the one row awaiting a decision.
+  const awaitingApproval = useKoma((s) => s.session.awaitingApproval)
+  const pendingIsPlan = useKoma((s) => s.session.pendingCall?.name === 'plan_ready')
 
   // plan_ready: a "plan ready" header + the FULL Markdown digest (the rewritten
   // `highlights` arg) rendered behind the dim quote rail — mirrors the TUI's
@@ -164,6 +174,9 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
   if (call.name === 'plan_ready') {
     const digest = planDigest(call.args)
     if (digest != null) {
+      const showControls = !done && awaitingApproval && pendingIsPlan
+      const decide = (decision: 'approve' | 'compact' | 'deny') =>
+        req({ r: 'PlanDecision', decision })
       return (
         <div>
           <div className="flex items-center gap-1.5 text-[12.5px] text-koma-dim">
@@ -177,6 +190,31 @@ const ToolCallRow = memo(function ToolCallRow({ call }: { call: ToolCallView }) 
           <div className="mt-1 border-l-2 border-koma-dim pl-3">
             <MessageBody text={digest} />
           </div>
+          {showControls && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 pl-3">
+              <button
+                onClick={() => decide('approve')}
+                className="flex items-center gap-1.5 rounded-md border border-koma-accent bg-koma-accent/15 px-2.5 py-1 text-[12px] text-koma-accent transition-colors hover:bg-koma-accent/25"
+              >
+                <Check size={13} className="flex-none" />
+                Approve
+              </button>
+              <button
+                onClick={() => decide('compact')}
+                className="flex items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 py-1 text-[12px] text-koma-fg opacity-85 transition-colors hover:bg-koma-hover hover:opacity-100"
+              >
+                <Archive size={13} className="flex-none" />
+                Approve &amp; compact
+              </button>
+              <button
+                onClick={() => decide('deny')}
+                className="flex items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 py-1 text-[12px] text-koma-fg opacity-85 transition-colors hover:bg-koma-hover hover:opacity-100"
+              >
+                <MessageSquare size={13} className="flex-none" />
+                Chat more
+              </button>
+            </div>
+          )}
         </div>
       )
     }
