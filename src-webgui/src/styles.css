@@ -66,6 +66,16 @@
   padding-left: 0.75rem;
   font-style: normal;
 }
+/* Streamdown renders each Shiki source line as a <span>; it only adds the
+   `block` display class in its line-number mode. With MessageBody's
+   lineNumbers={false} the per-line spans stay inline and, since Shiki also
+   strips the trailing "\n" text from each line, every non-empty line runs
+   together into one collapsed row. Force the per-line wrapper spans (direct
+   children of the highlighted <code>) block-level so multi-line code renders
+   correctly without re-enabling the line-number gutter. */
+.koma-md [data-streamdown="code-block-body"] pre code > span {
+  display: block;
+}
 
 html, body, #root { margin: 0; height: 100%; background: transparent; overflow: hidden; }
 
