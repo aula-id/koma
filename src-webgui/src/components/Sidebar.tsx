@@ -1,8 +1,9 @@
 import { ExplorePanel } from './panels/ExplorePanel'
 import { McpPanel } from './panels/McpPanel'
 import { ConnectorPanel } from './panels/ConnectorPanel'
+import { UsagePanel } from './panels/UsagePanel'
 
-export type SidebarView = 'explore' | 'mcp' | 'connector'
+export type SidebarView = 'explore' | 'mcp' | 'connector' | 'usage'
 
 type SidebarProps = {
   width: number
@@ -13,6 +14,7 @@ const TITLES: Record<SidebarView, string> = {
   explore: 'Explorer',
   mcp: 'MCP Servers',
   connector: 'Connector',
+  usage: 'Usage',
 }
 
 // Sidebar shell: header + the active view's panel. Width from RootLayout state.
@@ -29,6 +31,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'explore' && <ExplorePanel />}
         {view === 'mcp' && <McpPanel />}
         {view === 'connector' && <ConnectorPanel />}
+        {view === 'usage' && <UsagePanel />}
       </div>
     </div>
   )

@@ -261,6 +261,14 @@ enum GuiReq {
     /// unlike `ListModels`/`ListRoutes`'s attached-daemon-preferring dual routing, so it
     /// works identically whether a session is attached or not.
     FileDiff { path: String },
+    /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
+    /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
+    /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a
+    /// process-local file the host can read directly, so this is routed UNCONDITIONALLY
+    /// to the host-relay thread via `HostCtl::UsagePreview` regardless of attach state —
+    /// no daemon round-trip. Re-sent by React every time the panel becomes active so the
+    /// numbers stay fresh.
+    UsagePreview,
     /// Set the active theme (onboarding theme step + the future Settings gear). `name` is
     /// a `view::theme::PALETTES` key. Forwarded as [`ClientRequest::SetTheme`] when
     /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly
@@ -850,6 +858,12 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     // daemon — regardless of attach state (see `HostCtl::FileDiff`).
                     GuiReq::FileDiff { path } => {
                         let _ = ipc_ctl.send(HostCtl::FileDiff { path });
+                    }
+                    // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
+                    // ALWAYS routed to the host-relay thread — never the daemon —
+                    // regardless of attach state (see `HostCtl::UsagePreview`).
+                    GuiReq::UsagePreview => {
+                        let _ = ipc_ctl.send(HostCtl::UsagePreview);
                     }
                     // Stop button: interrupt the running turn on the attached daemon.
                     GuiReq::Interrupt => {

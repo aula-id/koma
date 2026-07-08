@@ -774,6 +774,24 @@ struct PushPendingCall {
     args: String,
 }
 
+/// One day's cost in a [`PushEnvelope::UsagePreview`]'s 7-entry daily series. `epoch` is
+/// the LOCAL-midnight unix-seconds boundary for that day (see `compute_usage_preview`).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushUsageDay {
+    epoch: i64,
+    cost: f64,
+}
+
+/// One model row in a [`PushEnvelope::UsagePreview`]'s top-3 list.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushUsageModel {
+    model_id: String,
+    cost: f64,
+    calls: u64,
+}
+
 /// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
 /// field name matches the contract verbatim (camelCase where the contract uses it).
 #[derive(serde::Serialize)]
@@ -982,6 +1000,23 @@ enum PushEnvelope {
         error: Option<String>,
         binary: bool,
     },
+    /// One-shot host-computed LAST-7-DAYS usage preview answering a `UsagePreview`
+    /// request from the activity-bar Usage panel: aggregate totals, a 7-entry daily cost
+    /// series (oldest first, today last — zero-filled for days with no ledger rows), and
+    /// the top 3 models by spend in the window. Computed ENTIRELY host-side straight off
+    /// the global `~/.koma/usage.sqlite` ledger (see `compute_usage_preview` — never
+    /// forwarded to the daemon), so this is pushed the SAME way regardless of attach
+    /// state, and — like `FileDiff` — is ALWAYS a reply so the panel never hangs loading.
+    #[serde(rename_all = "camelCase")]
+    UsagePreview {
+        cost: f64,
+        tokens_in: u64,
+        tokens_cached: u64,
+        tokens_out: u64,
+        calls: u64,
+        days: Vec<PushUsageDay>,
+        top_models: Vec<PushUsageModel>,
+    },
     /// One-shot reply to a `GetSettings` (and the re-push after a `SetSessionPrefs`),
     /// carrying the foreground session's GUI-editable prefs + the active palette for the
     /// GUI Settings tab's Session section. Pushed out-of-band (not fingerprinted) whenever
@@ -1059,6 +1094,35 @@ pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResul
         modified: result.modified,
         error: result.error,
         binary: result.binary,
+    };
+    emit(push, &env);
+}
+
+/// Emit a one-shot `UsagePreview` envelope for the GUI activity-bar Usage panel, carrying
+/// a host-computed [`super::UsagePreviewResult`]. Shared by the UN-ATTACHED swapper
+/// fallback and the attached `push_loop`'s off-thread worker, since a `UsagePreview` is
+/// serviced entirely host-side (the global ledger) regardless of attach state.
+pub(super) fn push_usage_preview(push: &dyn Fn(String), result: super::UsagePreviewResult) {
+    let env = PushEnvelope::UsagePreview {
+        cost: result.cost,
+        tokens_in: result.tokens_in.max(0) as u64,
+        tokens_cached: result.tokens_cached.max(0) as u64,
+        tokens_out: result.tokens_out.max(0) as u64,
+        calls: result.calls.max(0) as u64,
+        days: result
+            .days
+            .into_iter()
+            .map(|(epoch, cost)| PushUsageDay { epoch, cost })
+            .collect(),
+        top_models: result
+            .top_models
+            .into_iter()
+            .map(|m| PushUsageModel {
+                model_id: m.model_id,
+                cost: m.total_cost,
+                calls: m.call_count.max(0) as u64,
+            })
+            .collect(),
     };
     emit(push, &env);
 }
@@ -1229,6 +1293,13 @@ pub(super) fn push_loop(
     // completed result is pushed, not just the newest.
     let (file_diff_tx, file_diff_rx) = std::sync::mpsc::channel::<super::FileDiffResult>();
 
+    // --- USAGE PANEL preview fetch (UsagePreview) ---
+    // `compute_usage_preview` hits sqlite, blocking, so — same reasoning as `FileDiff`
+    // above — it runs on a one-shot worker thread; the loop drains completed results
+    // non-blocking and pushes each as a `UsagePreview` envelope.
+    let (usage_preview_tx, usage_preview_rx) =
+        std::sync::mpsc::channel::<super::UsagePreviewResult>();
+
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
     // this early, so the throwaways here are never acted on.
@@ -1333,6 +1404,16 @@ pub(super) fn push_loop(
                     let cur = current_owned.clone();
                     std::thread::spawn(move || {
                         let result = super::compute_file_diff(&path, cur.as_deref());
+                        let _ = tx.send(result);
+                    });
+                }
+                // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
+                // read only, regardless of attach state) — spawn the blocking sqlite work
+                // off this thread; the result is drained + pushed below at (b-quin).
+                Ok(super::HostCtl::UsagePreview) => {
+                    let tx = usage_preview_tx.clone();
+                    std::thread::spawn(move || {
+                        let result = super::compute_usage_preview();
                         let _ = tx.send(result);
                     });
                 }
@@ -1496,6 +1577,11 @@ pub(super) fn push_loop(
         // comment above) and push each as its own one-shot `FileDiff` envelope.
         while let Ok(result) = file_diff_rx.try_recv() {
             push_file_diff(push, result);
+        }
+
+        // --- (b-quin) USAGE PANEL: push any completed off-thread preview fetch ---
+        while let Ok(result) = usage_preview_rx.try_recv() {
+            push_usage_preview(push, result);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

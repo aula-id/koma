@@ -124,6 +124,12 @@ declare global {
     // diff tab. `path` is exactly as the fileChanges record carries it. Reply
     // lands as the FileDiff push envelope (guaranteed for every request).
     | { r: 'FileDiff'; path: string }
+    // Fetch the activity-bar Usage panel's LAST-7-DAYS preview: aggregate
+    // totals, a 7-entry daily cost series, and the top 3 models by spend.
+    // Reply lands as the UsagePreview push envelope (guaranteed for every
+    // request, even detached — the host reads the global ledger directly).
+    // Sent whenever the panel is (re)shown so the numbers stay fresh.
+    | { r: 'UsagePreview' }
     // Fetch the Settings tab's Session-section values (name / workdir / toggles /
     // internet mode) + the active palette. Sent when the tab opens or re-activates.
     // Reply lands as the SettingsValues push envelope (guaranteed for every request,
