@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Search, Sparkles } from 'lucide-react'
+import { Bot, Check, ChevronDown, Search, Sparkles } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { Model } from '../types/config'
 
@@ -79,10 +79,11 @@ export function ModelPicker() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         title="Session model"
-        className="flex max-w-[240px] items-center gap-1 rounded-md px-2 py-1 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+        className="flex h-8 max-w-[160px] flex-none items-center gap-1 rounded-lg px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
       >
-        <span className="truncate">{triggerLabel}</span>
-        <ChevronDown size={13} className="flex-none opacity-60" />
+        <Bot size={15} className="flex-none" />
+        <span className="min-w-0 truncate">{triggerLabel}</span>
+        <ChevronDown size={12} className="flex-none opacity-60" />
       </button>
       {open && (
         // Opens UPWARD — the picker sits just above the composer at the bottom
