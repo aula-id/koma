@@ -96,6 +96,10 @@ html, body, #root {
      drives Tailwind's preflight, but pin the family on the roots too so any
      stray unstyled node still inherits KomaMono. */
   font-family: 'KomaMono', ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  /* Bold/medium now ship as REAL faces (@font-face 500/700 below); forbid the
+     browser from faking any missing weight/style — no synthetic (smeary
+     double-strike) bold or oblique. Inherits to every descendant. */
+  font-synthesis: none;
 }
 
 /* Custom window chrome (frameless titlebar + resize handles). The Rust host
@@ -176,6 +180,13 @@ html, body, #root {
   font-family: 'KomaMono';
   src: url('/fonts/jetbrains-mono-400.woff2') format('woff2');
   font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'KomaMono';
+  src: url('/fonts/jetbrains-mono-500.woff2') format('woff2');
+  font-weight: 500;
   font-style: normal;
   font-display: swap;
 }
