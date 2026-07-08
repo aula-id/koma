@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
 import { StartScreen } from '../components/StartScreen'
+import { Onboarding } from '../components/Onboarding'
 import { Titlebar, getPlatform } from '../components/Titlebar'
 import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
@@ -121,12 +122,27 @@ function RootLayout() {
   )
 }
 
-// Pre-session vs attached gate. When no session is attached (the swapper/empty
-// state — no Snapshot ever arrives, only Hub + Config), render the VSCode-style
-// START SCREEN instead of the chat; a live session id means an attached session
-// → ChatView. (Onboarding gate is layered in ahead of this in a later wave.)
+// Three-way gate: ONBOARDING (first-run) > START SCREEN (no session) > CHAT
+// (attached). The swapper/empty state pushes only Hub + Config (never a
+// Snapshot), so `session.id === null` means no attached session; `config` is
+// authoritative for the first-run decision.
+//   - Onboarding: the host's first-run flag when present, else inferred from an
+//     unconfigured config (no provider, or no Main-role model). Gated on
+//     `loaded` so it never flashes against the empty initial slice before the
+//     first Config push.
+//   - Start screen: no session attached but config is usable.
+//   - Chat: a live session id.
 function IndexPage() {
   const sessionId = useKoma((s) => s.session.id)
+  const loaded = useKoma((s) => s.config.loaded)
+  const firstRun = useKoma((s) => s.config.firstRun)
+  const providers = useKoma((s) => s.config.providers)
+  const models = useKoma((s) => s.config.models)
+
+  const configured = providers.length > 0 && models.some((m) => m.roles.includes('main'))
+  const needsOnboarding = loaded && sessionId === null && (firstRun ?? !configured)
+
+  if (needsOnboarding) return <Onboarding />
   if (sessionId === null) return <StartScreen />
   return <ChatView />
 }
