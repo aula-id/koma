@@ -261,7 +261,7 @@ function AttachmentCard({ attachments }: { attachments: AttachmentEntry[] }) {
 function UserMessage({ content, attachments }: { content: string; attachments?: AttachmentEntry[] }) {
   return (
     <div>
-      <div className="flex overflow-hidden rounded-md bg-koma-band">
+      <div className="flex overflow-hidden bg-koma-band">
         <div className="w-[3px] flex-none bg-koma-accent" />
         <div className="min-w-0 flex-1 whitespace-pre-wrap px-3 py-2 text-[13px] text-koma-accent">
           {content}
