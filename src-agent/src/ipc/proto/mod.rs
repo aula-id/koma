@@ -164,6 +164,31 @@ pub enum ClientRequest {
     /// Read-only + async: the daemon spawns the network GET and replies out-of-band with
     /// a [`DaemonEvent::ModelList`] on a later tick (mirrors the `FileSearch` one-shot).
     ListModels { provider: String },
+
+    // ─── GUI turn/session controls (Explore sidepanel + composer + picker) ────────
+    /// Interrupt the foreground session's in-flight turn (the GUI stop button) — the
+    /// non-key equivalent of the TUI's Esc-interrupt. Reuses [`Action::Interrupt`]
+    /// daemon-side (abort the stream, commit the partial with `[interrupted]`, halt the
+    /// agentic loop + kill running sub-agents). gui-gated: the TUI forwards Esc as a
+    /// `SendKey` instead.
+    Interrupt,
+    /// Kill a single sub-agent of the foreground session by its stable id (the GUI
+    /// agent-row kill button). Mirrors the model-callable `task_kill` primitive: abort
+    /// the tokio task + flip a still-Running status to Killed (a terminal status is left
+    /// untouched). gui-gated.
+    KillSubagent { id: usize },
+    /// Kill a single background-bash job of the foreground session by its numeric id (the
+    /// GUI bash-row kill button). Reuses [`Action::BashKillJob`] daemon-side (SIGTERM +
+    /// flip status→Killed). The GUI addresses the job as `bash-<id>`; only the numeric
+    /// `id` crosses here. gui-gated.
+    BashKill { id: usize },
+    /// Set (or clear) the foreground session's LOCAL Main-role model override (the GUI
+    /// model quick-picker). `model_uuid` is `Some(uuid)` of a GLOBAL `config.models`
+    /// entry to CLONE into a session-local Main [`crate::model::app_config::ModelEntry`]
+    /// (reusing an existing matching local override instead of duplicating), or `None` to
+    /// REMOVE the override (inherit the global Main). Persists to the per-session
+    /// `session_models`; the global catalogue is never touched. gui-gated.
+    SetSessionMain { model_uuid: Option<String> },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────

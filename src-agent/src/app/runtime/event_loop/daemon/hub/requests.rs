@@ -687,6 +687,102 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI stop button: interrupt the foreground session's in-flight turn via the
+            // SAME `Action::Interrupt` the TUI's Esc runs (abort the stream, commit the
+            // partial with `[interrupted]`, halt the agentic loop + kill running sub-agents).
+            ClientRequest::Interrupt => {
+                let result = apply_action(Action::Interrupt, state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI bash-row kill: terminate the foreground session's bg-bash job by id via
+            // the SAME `Action::BashKillJob` the `/bash` panel's Ctrl+X runs (SIGTERM +
+            // flip status→Killed). A no-op when the id is already gone.
+            ClientRequest::BashKill { id } => {
+                let result = apply_action(Action::BashKillJob(id), state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI agent-row kill: kill ONE sub-agent of the foreground session by id,
+            // mirroring the model-callable `task_kill` primitive — abort the tokio task +
+            // flip a still-Running status to Killed (a terminal status is left untouched).
+            // No pre-existing Action kills a sub-agent BY ID (the TUI's Ctrl+X targets by
+            // selection index), so this resolves + mutates inline. A no-op when the id is
+            // absent.
+            ClientRequest::KillSubagent { id } => {
+                use crate::app::subagent::SubAgentStatus;
+                if let Some(sa) = state
+                    .rest
+                    .fg_mut()
+                    .subagents
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                {
+                    sa.abort.abort();
+                    if matches!(sa.status, SubAgentStatus::Running) {
+                        sa.status = SubAgentStatus::Killed;
+                    }
+                }
+                self.send_to(idx, DaemonEvent::Ack);
+            }
+
+            // GUI model quick-picker: set (or clear) the foreground session's LOCAL Main
+            // override. `Some(uuid)` CLONES the matching GLOBAL `config.models` entry into a
+            // session-local Main `ModelEntry` (reusing an existing matching local override
+            // rather than duplicating); `None` REMOVES the override (inherit the global
+            // Main). Only `session_models` is touched — the global catalogue is untouched, so
+            // the global Main resurfaces the instant the override is dropped. Mirrors the
+            // `/free` clone-or-reuse path (`commands::free`). `resolve_role` scans
+            // `session_models` first, so the change takes effect next turn.
+            ClientRequest::SetSessionMain { model_uuid } => {
+                use crate::model::app_config::{new_uuid, ModelEntry, ModelRole};
+                // Resolve + CLONE the chosen global entry first (owned) so the later
+                // `fg_mut()` mutable borrow doesn't overlap the config read.
+                let chosen = model_uuid.as_ref().and_then(|u| {
+                    state.rest.config.models.iter().find(|m| &m.uuid == u).cloned()
+                });
+                let result = if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    if model_uuid.is_none() {
+                        // Inherit: drop any local Main override; the global Main resurfaces.
+                        sess.settings
+                            .session_models
+                            .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
+                        sess.save()
+                    } else if let Some(chosen) = chosen {
+                        // Reuse: a local Main override already pointing at this exact model
+                        // (same model_id + provider) is already the session main — no-op.
+                        let already = sess.settings.session_models.iter().any(|e| {
+                            e.effective_roles().contains(&ModelRole::Main)
+                                && e.model_id == chosen.model_id
+                                && e.provider_uuid == chosen.provider_uuid
+                        });
+                        if !already {
+                            // Drop any OTHER local Main override (one local Main per scope),
+                            // then push the cloned global entry as the new local Main.
+                            sess.settings
+                                .session_models
+                                .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
+                            sess.settings.session_models.push(ModelEntry {
+                                uuid: new_uuid(),
+                                name: chosen.name.clone(),
+                                model_id: chosen.model_id.clone(),
+                                provider_uuid: chosen.provider_uuid.clone(),
+                                route: chosen.route.clone(),
+                                roles: vec![ModelRole::Main],
+                                role: None,
+                            });
+                        }
+                        sess.save()
+                    } else {
+                        // Unknown uuid (not in the global catalogue) — leave overrides as-is.
+                        Ok(())
+                    }
+                } else {
+                    Ok(()) // no foreground session to hold a local override
+                };
+                self.ack_or_error(idx, result);
+            }
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.

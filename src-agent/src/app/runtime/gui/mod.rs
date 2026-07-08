@@ -243,6 +243,26 @@ enum GuiReq {
     /// Fetch the live model-id catalogue for a provider (Connector model picker). The
     /// daemon replies out-of-band; the host re-pushes it as a `ModelList` envelope.
     ListModels { provider: String },
+
+    // ─── GUI turn/session controls (stop button + kill buttons + model picker) ────
+    // Same forward-to-attached-daemon pattern as `Submit`: lock `ipc_req` + send the
+    // matching gui-gated [`ClientRequest`]. All no-ops when no session is attached.
+    /// The composer STOP button (shown while the turn is working): interrupt the running
+    /// turn. Forwarded as [`ClientRequest::Interrupt`] (koma's Esc-interrupt equivalent).
+    Interrupt,
+    /// The Explore sidepanel agent-row KILL button: kill sub-agent `id`. Forwarded as
+    /// [`ClientRequest::KillSubagent`].
+    KillSubagent { id: usize },
+    /// The Explore sidepanel bash-row KILL button: kill bg-bash job `id` (the numeric part
+    /// of the row's `bash-<id>`). Forwarded as [`ClientRequest::BashKill`].
+    KillBash { id: usize },
+    /// The model quick-picker: set the session-local Main override to the GLOBAL model
+    /// `modelUuid`, or clear it (inherit) when `modelUuid` is absent/null. Forwarded as
+    /// [`ClientRequest::SetSessionMain`].
+    SetSessionMain {
+        #[serde(rename = "modelUuid", default)]
+        model_uuid: Option<String>,
+    },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -614,6 +634,38 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::ListModels { provider });
+                            }
+                        }
+                    }
+                    // Stop button: interrupt the running turn on the attached daemon.
+                    GuiReq::Interrupt => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::Interrupt);
+                            }
+                        }
+                    }
+                    // Kill one sub-agent by id (Explore agent-row kill button).
+                    GuiReq::KillSubagent { id } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::KillSubagent { id });
+                            }
+                        }
+                    }
+                    // Kill one bg-bash job by id (Explore bash-row kill button).
+                    GuiReq::KillBash { id } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::BashKill { id });
+                            }
+                        }
+                    }
+                    // Model quick-picker: set/clear the session-local Main override.
+                    GuiReq::SetSessionMain { model_uuid } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetSessionMain { model_uuid });
                             }
                         }
                     }
