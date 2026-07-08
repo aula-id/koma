@@ -102,6 +102,16 @@ declare global {
     // The host persists config.palette + live-repaints via the next Config push
     // (palette role set). Used by the onboarding theme picker.
     | { r: 'SetTheme'; name: string }
+    // Answer a parked TOOL approval (risky/classifier-flagged pause). `approve`
+    // = the TUI's y/Y (true) vs n/N/Esc (false). No id: the daemon resolves the
+    // foreground session and applies Action::ApproveTool/DenyTool to the paused
+    // `pending_tool_calls[tool_idx]`. Mirrors the daemon's ClientRequest::ApproveTool.
+    | { r: 'ApproveTool'; approve: boolean }
+    // Answer a parked PLAN decision (the `plan_ready` pause). `decision` is one
+    // of "approve" (ApprovePlan) / "compact" (ApprovePlanCompact) / "deny"
+    // (DenyPlan, "chat more"). No id: foreground session. Mirrors the daemon's
+    // ClientRequest::PlanDecision.
+    | { r: 'PlanDecision'; decision: 'approve' | 'compact' | 'deny' }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
