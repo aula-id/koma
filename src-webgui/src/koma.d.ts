@@ -67,7 +67,7 @@ declare global {
     | { r: 'ListModels'; provider: string }
     // Live per-model ROUTE (OpenRouter upstream-endpoint) fetch: real provider
     // names + price/uptime for the chosen provider+model_id. Reply lands as the
-    // ModelRoutes push envelope. Non-OpenRouter providers reply with an empty
+    // RouteList push envelope. Non-OpenRouter providers reply with an empty
     // routes list (the UI then shows only the synthetic "Auto" row).
     | { r: 'ListRoutes'; provider: string; modelId: string }
     // Set the global agent mode (koma's Auto/Normal/Plan/Yolo). No id — the

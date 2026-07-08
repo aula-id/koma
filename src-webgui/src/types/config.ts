@@ -53,7 +53,7 @@ export type ModelListEntry = string
 
 // Live per-model ROUTE (OpenRouter upstream endpoint) entry — real provider
 // names + per-token pricing + recent uptime for the chosen model. Replaces
-// ModelForm's DEMO_ROUTES. Fed by GuiReq ListRoutes -> PushEnvelope ModelRoutes.
+// ModelForm's DEMO_ROUTES. Fed by GuiReq ListRoutes -> PushEnvelope RouteList.
 // Mirrors the host's ModelEndpointSnapshot (render.rs `rename_all = "camelCase"`):
 // `pricePrompt`/`priceCompletion` are USD-per-token strings ("0" = free),
 // `uptimeLast30m` is a 0-100 percentage. All value fields optional-tolerant.
