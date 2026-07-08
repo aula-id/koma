@@ -10,6 +10,7 @@ import {
 import { ArrowUp, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { ModelPicker } from './ModelPicker'
+import { ModeSelector } from './ModeSelector'
 
 // Reads a File's bytes and resolves to a bare base64 string (no `data:` URL
 // prefix) for the AttachFile GuiReq.
@@ -194,6 +195,8 @@ export function Composer() {
             </button>
             {/* Session model quick-picker — compact, drops UP above the composer. */}
             <ModelPicker />
+            {/* Agent mode (Auto/Plan/Normal) — compact, drops UP above the composer. */}
+            <ModeSelector />
           </div>
 
           <div className="flex items-center gap-2">
