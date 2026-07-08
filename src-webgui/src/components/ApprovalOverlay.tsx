@@ -36,19 +36,19 @@ export function ApprovalOverlay() {
   const args = formatArgs(pending.args)
 
   return (
-    <div className="absolute inset-0 z-[60] flex items-center justify-center bg-koma-bg/80 backdrop-blur-sm">
+    <div className="px-2 pb-1">
       <motion.div
         initial={{ opacity: 0, scale: 0.97, y: 6 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="mx-4 flex max-h-[70vh] w-[520px] max-w-full flex-col overflow-hidden rounded-lg border border-koma-warn/50 bg-koma-panel shadow-2xl"
+        className="flex max-h-[40vh] w-full flex-col overflow-hidden rounded-xl border border-koma-warn/50 bg-koma-panel shadow-lg"
       >
         <div className="flex items-center gap-2 border-b border-koma-border px-4 py-2.5 text-koma-warn">
           <ShieldAlert size={16} className="flex-none" />
           <span className="text-[13px] font-semibold">Approval required</span>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+        <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
           <div className="text-[11px] uppercase tracking-wider text-koma-fg opacity-45">Tool</div>
           <div className="mt-0.5 break-words font-mono text-[13px] text-koma-fg">{signature}</div>
 
@@ -60,7 +60,7 @@ export function ApprovalOverlay() {
           )}
 
           <div className="mt-3 text-[11px] uppercase tracking-wider text-koma-fg opacity-45">Arguments</div>
-          <pre className="mt-1 max-h-[28vh] overflow-auto rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-snug text-koma-dim">
+          <pre className="mt-1 overflow-auto rounded border border-koma-border bg-koma-bg px-2 py-1.5 font-mono text-[11.5px] leading-snug text-koma-dim">
             {args}
           </pre>
         </div>
