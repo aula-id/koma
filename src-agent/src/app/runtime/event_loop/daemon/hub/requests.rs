@@ -786,6 +786,19 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI hover-edit pencil on a USER chat bubble: rewind the foreground
+            // session to JUST BEFORE the message at `index` — the non-key equivalent
+            // of the TUI's double-Esc `Mode::MessageRewind` + Enter. Reuses the exact
+            // `Action::RewindToMessage` core: abort any in-flight turn, truncate the
+            // live conversation + sqlite archive to before `index`, and refill the
+            // composer with that message's text (projected back via
+            // `GlobalSnapshot.input` / the `InputChanged` delta — NOT auto-sent). The
+            // core guards a non-user / out-of-range `index` as a clean no-op.
+            ClientRequest::RewindTo { index } => {
+                let result = apply_action(Action::RewindToMessage(index), state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
             // GUI composer mode selector: set the GLOBAL agent mode via the SAME
             // `set_agent_mode` choke-point Shift+Tab / `/mode` use (so Plan enter/leave +
             // the plan-boundary system-prompt swap stay correct — never assign `agent_mode`

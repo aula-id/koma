@@ -214,6 +214,18 @@ pub enum ClientRequest {
     /// REMOVE the override (inherit the global Main). Persists to the per-session
     /// `session_models`; the global catalogue is never touched. gui-gated.
     SetSessionMain { model_uuid: Option<String> },
+    /// Rewind the foreground session's conversation to JUST BEFORE the message at
+    /// `index` (the GUI's hover-edit pencil on a USER chat bubble) — the non-key
+    /// equivalent of the TUI's double-Esc `Mode::MessageRewind` + Enter path.
+    /// `index` is the vec position into `SessionSnapshot.messages`
+    /// (`Conversation::messages()`); it must address a User-role turn (the core
+    /// guards a non-user / out-of-range index as a clean no-op). Reuses
+    /// [`Action::RewindToMessage`] daemon-side: abort any in-flight turn, truncate
+    /// the live conversation + the sqlite archive to before `index`, and REFILL the
+    /// composer with that message's text (surfaced to the client via the
+    /// projected `GlobalSnapshot.input` / `InputChanged` delta — NOT auto-sent, the
+    /// user edits + presses Enter). gui-gated: the TUI drives rewind via double-Esc.
+    RewindTo { index: usize },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
