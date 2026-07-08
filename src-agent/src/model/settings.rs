@@ -227,10 +227,10 @@ pub struct Settings {
     /// `awareness_inherit` is false. Empty means OpenRouter default routing.
     #[serde(default = "default_awareness_provider")]
     pub awareness_provider: String,
-    /// Master switch for the safety harness ("Pass B"). When false (the
-    /// default), the agentic loop behaves EXACTLY as it did before the harness
-    /// existed: no workspace check, no prompt/tool-call classification, no
-    /// secondary-model calls. Opt-in only.
+    /// Master switch for the safety harness ("Pass B"). Defaults to true (see
+    /// `default_classifier_enabled`). When false, the agentic loop behaves
+    /// EXACTLY as it did before the harness existed: no workspace check, no
+    /// prompt/tool-call classification, no secondary-model calls.
     #[serde(default = "default_classifier_enabled")]
     pub classifier_enabled: bool,
     /// Model used for the safety classifier (prompt + tool-call verdicts).
