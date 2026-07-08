@@ -786,6 +786,28 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI composer mode selector: set the GLOBAL agent mode via the SAME
+            // `set_agent_mode` choke-point Shift+Tab / `/mode` use (so Plan enter/leave +
+            // the plan-boundary system-prompt swap stay correct — never assign `agent_mode`
+            // directly). `"yolo"` is gated on `yolo_armed` exactly like `/mode yolo`; an
+            // unknown token is a no-op. The mode change re-projects into the snapshot, so
+            // every attached client (incl. this GUI) reflects it live.
+            ClientRequest::SetMode { mode } => {
+                use crate::app::state::AgentMode;
+                let target = match mode.as_str() {
+                    "auto" => Some(AgentMode::Auto),
+                    "normal" => Some(AgentMode::Normal),
+                    "plan" => Some(AgentMode::Plan),
+                    // Layer-2 gate: an ARMED YOLO only; unarmed → leave the mode untouched.
+                    "yolo" if state.rest.yolo_armed => Some(AgentMode::Yolo),
+                    _ => None,
+                };
+                if let Some(m) = target {
+                    state.rest.set_agent_mode(m);
+                }
+                self.send_to(idx, DaemonEvent::Ack);
+            }
+
             // GUI bash-row kill: terminate the foreground session's bg-bash job by id via
             // the SAME `Action::BashKillJob` the `/bash` panel's Ctrl+X runs (SIGTERM +
             // flip status→Killed). A no-op when the id is already gone.

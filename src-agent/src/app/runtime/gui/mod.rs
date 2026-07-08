@@ -279,6 +279,11 @@ enum GuiReq {
         #[serde(rename = "modelUuid", default)]
         model_uuid: Option<String>,
     },
+    /// The composer mode selector: set the GLOBAL agent mode to `mode`
+    /// (`"auto"`/`"normal"`/`"plan"`/`"yolo"`). Forwarded as [`ClientRequest::SetMode`],
+    /// which routes through the daemon's `set_agent_mode` choke-point; the resulting
+    /// snapshot re-projection reflects the new mode back to every attached client.
+    SetMode { mode: String },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -720,6 +725,14 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::SetSessionMain { model_uuid });
+                            }
+                        }
+                    }
+                    // Composer mode selector: set the global agent mode on the daemon.
+                    GuiReq::SetMode { mode } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetMode { mode });
                             }
                         }
                     }
