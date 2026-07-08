@@ -668,6 +668,12 @@ struct PushProvider {
     name: String,
     endpoint: String,
     has_key: bool,
+    /// `true` for the auto-provisioned keyless koma-free [`ApiType::KomaFree`] connection
+    /// (minted by onboarding / the `/free` toggle, never user-created). React HIDES or
+    /// read-only-LOCKS this row in the Connector ProviderForm — it has no editable key /
+    /// endpoint (the endpoint + dual-header auth are forced daemon-side) so surfacing it as
+    /// an editable provider is a leak. `false` for every real, user-managed provider.
+    is_koma_free: bool,
 }
 
 /// One model row in a [`PushEnvelope::Config`] (the Connector panel's ModelForm model).
@@ -1892,6 +1898,7 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
             name: p.name.clone(),
             endpoint: p.endpoint.clone(),
             has_key: !p.api_key.is_empty(),
+            is_koma_free: p.api_type == crate::model::app_config::ApiType::KomaFree,
         })
         .collect();
 
