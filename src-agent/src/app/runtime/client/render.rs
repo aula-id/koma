@@ -610,15 +610,16 @@ struct PushFileChange {
 }
 
 /// One Plan-mode todo row in a [`PushEnvelope::Snapshot`], for the Explore "PLAN"
-/// section. Locked workflow rails are already excluded (filtered daemon-side at
-/// the snapshot projection boundary, before the shadow ever sees them), so this
-/// is exactly the model's plan steps. `status` is the wire label
-/// (`"pending"`/`"in_progress"`/`"completed"`/`"cancelled"`, `TodoStatus::label`).
+/// section. The two locked workflow rails ride this too now (flagged via
+/// `locked`, not dropped), so the section shows TUI-parity rails right after
+/// `plan_enter`. `status` is the wire label (`"pending"`/`"in_progress"`/
+/// `"completed"`/`"cancelled"`, `TodoStatus::label`).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PushPlanTodo {
     content: String,
     status: &'static str,
+    locked: bool,
 }
 
 /// The palette roles the React chat paints with (resolved from the shadow's TUI
@@ -1638,14 +1639,16 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         .collect();
 
     // Plan-mode todo checklist (Explore "PLAN" section): the foreground session's
-    // mirror of `plan_todos.md`, with the locked rails already excluded upstream
-    // (the daemon's snapshot projection). Empty = no plan in progress right now.
+    // mirror of `plan_todos.md`, including the two locked workflow rails (flagged,
+    // not dropped — see the daemon's snapshot projection). Empty = no plan in
+    // progress right now.
     let plan_todos: Vec<PushPlanTodo> = fg
         .plan_todos
         .iter()
         .map(|t| PushPlanTodo {
             content: t.content.clone(),
             status: t.status.label(),
+            locked: t.locked,
         })
         .collect();
 
@@ -1755,6 +1758,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         for t in &plan_todos {
             t.content.hash(&mut h);
             t.status.hash(&mut h);
+            t.locked.hash(&mut h);
         }
         // Fold staged attachments in so a stage/drop re-emits the Snapshot (chips).
         attachments.len().hash(&mut h);

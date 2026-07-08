@@ -99,11 +99,21 @@ export type FileChangeEntry = {
 // One Plan-mode todo row for the Explore "PLAN" section — mirrors the host's
 // `PlanTodoSnapshot` (render.rs `PushPlanTodo`, `rename_all = "camelCase"`).
 // The two locked workflow rails ("serve plan to user"/"save plan to file &
-// prompt approval") are already filtered out daemon-side, so this is exactly
-// the model's plan steps. Empty array = not in Plan mode, or no plan yet.
+// prompt approval") ride this too now, flagged via `locked` (TUI parity: the
+// rails show right after `plan_enter`, before the model's first `todowrite`).
+// Empty array = not in Plan mode, or no plan yet.
 export type PlanTodoEntry = {
   content: string
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
+  locked: boolean
+}
+
+// Plan-todo rows that count toward the visible checklist — the locked
+// workflow rails are internal bookkeeping and excluded from any done/total
+// count (both the Explore PLAN section header and the UsageFooter badge
+// share this so they can never disagree).
+export function visiblePlanTodos(todos: PlanTodoEntry[]): PlanTodoEntry[] {
+  return todos.filter((t) => !t.locked)
 }
 
 // Mirrors the Rust host's `PushAttachment` (render.rs, `rename_all = "camelCase"`):
@@ -653,8 +663,9 @@ export const useKoma = create<KomaState>((set, get) => ({
               // projecting fileChanges[] on the Snapshot envelope yet.
               fileChanges: env.fileChanges ?? [],
               // Defensive fallback: tolerates a host build that hasn't started
-              // projecting planTodos[] on the Snapshot envelope yet.
-              planTodos: env.planTodos ?? [],
+              // projecting planTodos[] on the Snapshot envelope yet, and a host
+              // build that projects rows without the newer `locked` flag.
+              planTodos: (env.planTodos ?? []).map((t) => ({ ...t, locked: t.locked ?? false })),
               // Defensive fallback: tolerates a host build that hasn't started
               // projecting attachments[] on the Snapshot envelope yet.
               attachments: env.attachments ?? [],

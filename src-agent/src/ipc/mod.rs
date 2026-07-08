@@ -101,10 +101,20 @@ mod roundtrip_tests {
             pending_steer: Vec::new(),
             bash_jobs: vec![],
             file_changes: vec![],
-            plan_todos: vec![PlanTodoSnapshot {
-                content: "wire the PLAN section".to_string(),
-                status: crate::app::mode::todo::TodoStatus::InProgress,
-            }],
+            plan_todos: vec![
+                PlanTodoSnapshot {
+                    content: "wire the PLAN section".to_string(),
+                    status: crate::app::mode::todo::TodoStatus::InProgress,
+                    locked: false,
+                },
+                // Exercise the locked-rail path too so the round-trip proves the
+                // new field survives serialize -> deserialize non-default.
+                PlanTodoSnapshot {
+                    content: "serve plan to user".to_string(),
+                    status: crate::app::mode::todo::TodoStatus::Pending,
+                    locked: true,
+                },
+            ],
         }
     }
 

@@ -153,6 +153,25 @@ pub(super) fn finish_tool_round(
         state.rest.sessions[sess_idx].file_changes = crate::model::msglog::read_file_changes(&dir);
     }
 
+    // Refresh the session's todo mirror (#PLAN section) from whichever backing
+    // file is CURRENTLY the source of truth: `plan_todos.md` while in Plan mode
+    // (already kept live by the `todowrite`/`plan_ready` interceptions in
+    // `approval.rs`, so this is a cheap no-op re-read there), else the
+    // per-directory `memory/TODO.md` the generic (non-intercepted) `todowrite`
+    // tool writes to in every OTHER mode. Read every round (cheap, mirrors the
+    // `file_changes` refresh just above) so an execution-phase `todowrite` —
+    // which isn't intercepted and never touches `rt.plan_todos` at its call
+    // site — is reflected the instant this round finishes, in Auto/Normal/Yolo
+    // just as much as Plan.
+    let in_plan = state.rest.agent_mode == crate::app::state::AgentMode::Plan;
+    if let Some(todos) = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|sess| crate::app::mode::todo::load_current_todos(sess, in_plan))
+    {
+        state.rest.sessions[sess_idx].plan_todos = todos;
+    }
+
     // Inject any queued mid-turn steers as ONE coalesced user message before the
     // next hop, so the model sees the tool results + the user's steer together and
     // continues with its reasoning intact. Drained here = "sent in one window".
