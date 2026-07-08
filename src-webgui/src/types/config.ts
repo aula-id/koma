@@ -50,3 +50,19 @@ export type Model = {
 // Live per-provider model-id catalogue entry (replaces ModelForm's
 // DEMO_MODEL_IDS). Fed by GuiReq ListModels -> PushEnvelope ModelList.
 export type ModelListEntry = string
+
+// Live per-model ROUTE (OpenRouter upstream endpoint) entry — real provider
+// names + per-token pricing + recent uptime for the chosen model. Replaces
+// ModelForm's DEMO_ROUTES. Fed by GuiReq ListRoutes -> PushEnvelope ModelRoutes.
+// Mirrors the host's ModelEndpointSnapshot (render.rs `rename_all = "camelCase"`):
+// `pricePrompt`/`priceCompletion` are USD-per-token strings ("0" = free),
+// `uptimeLast30m` is a 0-100 percentage. All value fields optional-tolerant.
+export type RouteEntry = {
+  // The upstream endpoint/route id the daemon stores on the model (`SetModel.route`).
+  // Falls back to `providerName` when the host omits an explicit id.
+  name?: string
+  providerName: string
+  pricePrompt?: string
+  priceCompletion?: string
+  uptimeLast30m?: number
+}
