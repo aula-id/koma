@@ -59,4 +59,4 @@ More at **[koma.run](https://koma.run)**.
 
 ---
 
-*Curious how it works under the hood? See [`ARCHITECTURE.md`](ARCHITECTURE.md).*
+*Curious how it works under the hood? See [`ARCHITECTURE.md`](docs/ARCHITECTURE.md).*

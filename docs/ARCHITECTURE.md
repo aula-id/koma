@@ -576,3 +576,7 @@ configuration is entered interactively and stored per-session in
 `~/.koma/sessions/<pwd_hash>/<uuid>/settings.json`.
 
 License: Apache-2.0.
+
+---
+
+For the web GUI architecture, see [`ARCH_DESIGN_WEBGUI.md`](ARCH_DESIGN_WEBGUI.md).
