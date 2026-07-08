@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Search, Plus } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
@@ -30,6 +30,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const history = useKoma((s) => s.hub.history)
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -61,7 +62,10 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   }
 
   const newSession = () => {
-    startSwitching('new session')
+    // No optimistic startSwitching here: the host now opens a native folder
+    // picker first (NewSession req), and only pushes switching/attaches once
+    // a folder is actually confirmed. Starting the full-screen loader here
+    // would strand it if the user cancels the dialog.
     req({ r: 'NewSession' })
     onClose()
   }
@@ -70,6 +74,13 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   // bridge contract) — the header button below already covers that
   // affordance, so only render the live session rows here.
   const cookingSessions = cooking.filter((c) => c.kind === 'session')
+
+  // Case-insensitive substring filter over name + id, applied to both lists.
+  const q = query.trim().toLowerCase()
+  const matches = (id: string, name: string) =>
+    q === '' || name.toLowerCase().includes(q) || id.toLowerCase().includes(q)
+  const filteredCooking = cookingSessions.filter((c) => matches(c.id ?? '', c.name))
+  const filteredHistory = history.filter((h) => matches(h.id, h.name))
 
   return (
     <div className="absolute inset-0 z-50" onMouseDown={onClose}>
@@ -86,6 +97,8 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
             <Search size={13} className="flex-none text-koma-fg opacity-50" />
             <input
               autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
               placeholder="Search sessions to resume…"
               className="w-full bg-transparent text-[12px] text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
             />
@@ -108,10 +121,10 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                 New session
               </button>
             </div>
-            {cookingSessions.length === 0 ? (
-              <Empty>No live sessions</Empty>
+            {filteredCooking.length === 0 ? (
+              <Empty>{q === '' ? 'No live sessions' : 'No matches'}</Empty>
             ) : (
-              cookingSessions.map((c) => (
+              filteredCooking.map((c) => (
                 <button
                   key={c.id}
                   onClick={() => c.id && selectSession(c.id, c.name)}
@@ -135,10 +148,10 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               ))
             )}
             <Label>History</Label>
-            {history.length === 0 ? (
-              <Empty>No past sessions</Empty>
+            {filteredHistory.length === 0 ? (
+              <Empty>{q === '' ? 'No past sessions' : 'No matches'}</Empty>
             ) : (
-              history.map((h) => (
+              filteredHistory.map((h) => (
                 <button
                   key={h.id}
                   onClick={() => selectSession(h.id, h.name)}
