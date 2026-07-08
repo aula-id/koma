@@ -41,6 +41,10 @@ export type Model = {
   route: string
   roles: Role[]
   scope: Scope
+  // Host-projected flag for the advertised koma-free keyless tier — pinned to
+  // the TOP of the session-main quick-picker. Optional-tolerant: absent on a
+  // host build that doesn't advertise a free model.
+  free?: boolean
 }
 
 // Live per-provider model-id catalogue entry (replaces ModelForm's

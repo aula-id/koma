@@ -21,6 +21,7 @@ import {
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { MessageBody } from './MessageBody'
 import { Composer } from './Composer'
+import { ModelPicker } from './ModelPicker'
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
 // (src-agent/src/view/chat/*), with every box-drawing/unicode glyph swapped
@@ -415,6 +416,10 @@ export function ChatView() {
             streaming
           />
         )}
+      </div>
+      {/* Session model quick-picker — sits just above the composer. */}
+      <div className="flex flex-none items-center px-2 pt-1">
+        <ModelPicker />
       </div>
       <Composer />
     </div>
