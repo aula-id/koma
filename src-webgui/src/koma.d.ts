@@ -80,6 +80,10 @@ declare global {
     // quick-picker). `modelUuid` is the global model's uuid; `null` removes the
     // override and reverts to the Connector global main ("(inherit)").
     | { r: 'SetSessionMain'; modelUuid: string | null }
+    // Set the active theme (palette) by its registry name (theme.rs PALETTES).
+    // The host persists config.palette + live-repaints via the next Config push
+    // (palette role set). Used by the onboarding theme picker.
+    | { r: 'SetTheme'; name: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

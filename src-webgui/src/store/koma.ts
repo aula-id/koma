@@ -143,6 +143,19 @@ export type PushEnvelope =
       providers: Provider[]
       models: Model[]
       palette?: PaletteColors
+      // Onboarding gate: the host's authoritative first-run flag (Rust
+      // `Mode::Onboard` — no usable Main route). Optional-tolerant: a host
+      // build that doesn't project it yet leaves it undefined, and the UI
+      // derives first-run from an empty/unconfigured config instead.
+      firstRun?: boolean
+      // Active theme (palette) name — the currently-selected key in the host's
+      // named-palette registry (theme.rs). Drives the onboarding theme picker's
+      // active row. Optional-tolerant.
+      theme?: string
+      // Available theme (palette) names the host advertises (theme.rs
+      // registry). The onboarding picker lists these; falls back to a bundled
+      // KNOWN_THEMES list when the host omits them.
+      themes?: string[]
     }
   // Reply to GuiReq ListModels — live per-provider model-id catalogue. Field
   // is `models` to match the daemon's PushEnvelope::ModelList { provider, models }.
@@ -180,6 +193,15 @@ type ConfigSlice = {
   mcp: McpServer[]
   providers: Provider[]
   models: Model[]
+  // True once the first authoritative Config push has landed. The pre-session
+  // gate (start screen vs onboarding) waits on this so it never flashes
+  // onboarding against the empty initial slice before the host reports config.
+  loaded: boolean
+  // Host's first-run flag (see Config envelope). Undefined until pushed.
+  firstRun?: boolean
+  // Active theme name + advertised theme registry (see Config envelope).
+  theme: string
+  themes: string[]
 }
 
 // Local-only UI state (never pushed by the host, never sent upstream) — the
@@ -261,10 +283,30 @@ const initialUi: UiSlice = {
   switchingTo: null,
 }
 
+// Bundled fallback theme (palette) registry — mirrors the host's theme.rs
+// PALETTES names 1:1. Used as the onboarding picker's list when the host build
+// doesn't advertise a `themes` array on the Config push yet.
+export const KNOWN_THEMES = [
+  'dark',
+  'light',
+  'forest',
+  'autumn',
+  'warm',
+  'cold symphony',
+  'winter',
+  'monokai',
+  'vscode',
+  'github dark',
+] as const
+
 const initialConfig: ConfigSlice = {
   mcp: [],
   providers: [],
   models: [],
+  loaded: false,
+  firstRun: undefined,
+  theme: 'dark',
+  themes: [...KNOWN_THEMES],
 }
 
 const initialModelList: ModelListEntry[] = []
@@ -387,7 +429,17 @@ export const useKoma = create<KomaState>((set) => ({
         // consumption path as the Snapshot palette. No-op when omitted.
         if (env.palette) applyPaletteVars(env.palette)
         set((s) => ({
-          config: { mcp: env.mcp, providers: env.providers, models: env.models },
+          config: {
+            mcp: env.mcp,
+            providers: env.providers,
+            models: env.models,
+            loaded: true,
+            // Preserve the derived-default when the host omits these (keeps the
+            // theme picker populated + the gate on the config-inference path).
+            firstRun: env.firstRun,
+            theme: env.theme ?? s.config.theme,
+            themes: env.themes && env.themes.length > 0 ? env.themes : s.config.themes,
+          },
           ...(env.palette ? { palette: env.palette } : {}),
         }))
         break

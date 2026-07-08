@@ -1,6 +1,7 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChatView } from '../components/ChatView'
+import { StartScreen } from '../components/StartScreen'
 import { Titlebar, getPlatform } from '../components/Titlebar'
 import { ResizeHandles } from '../components/ResizeHandles'
 import { ActivityBar } from '../components/ActivityBar'
@@ -120,7 +121,13 @@ function RootLayout() {
   )
 }
 
+// Pre-session vs attached gate. When no session is attached (the swapper/empty
+// state — no Snapshot ever arrives, only Hub + Config), render the VSCode-style
+// START SCREEN instead of the chat; a live session id means an attached session
+// → ChatView. (Onboarding gate is layered in ahead of this in a later wave.)
 function IndexPage() {
+  const sessionId = useKoma((s) => s.session.id)
+  if (sessionId === null) return <StartScreen />
   return <ChatView />
 }
 
