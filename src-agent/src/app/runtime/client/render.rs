@@ -728,6 +728,21 @@ struct PushRoute {
     uptime_last_30m: Option<f64>,
 }
 
+/// The paused tool call surfaced to the GUI approval overlay when the foreground session
+/// is `awaitingApproval` (wave-7). Two shapes ride the SAME gate, distinguished by `name`:
+///   - `name == "plan_ready"` — a Plan-mode plan digest is parked; the digest itself is
+///     already in the transcript as THIS call's rewritten `highlights` args, so React shows
+///     the approve / approve&compact / deny controls and answers with `GuiReq::PlanDecision`.
+///   - any other `name` — a risky/classifier-flagged tool call is parked; React renders the
+///     two-button approve/deny card showing `name` + `args` (+ the reason line), answering
+///     with `GuiReq::ApproveTool`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PushPendingCall {
+    name: String,
+    args: String,
+}
+
 /// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
 /// field name matches the contract verbatim (camelCase where the contract uses it).
 #[derive(serde::Serialize)]
@@ -765,6 +780,22 @@ enum PushEnvelope {
         /// Folded into the fingerprint so queuing/consuming a steer re-emits the Snapshot.
         #[serde(rename = "pendingSteer")]
         pending_steer: Vec<String>,
+        /// Foreground session's tool-approval GATE (wave-7): `true` when a risky/classifier
+        /// call OR a `plan_ready` plan digest has PARKED and the daemon is blocked waiting on
+        /// a decision the GUI must surface. React raises the approval overlay when set; a
+        /// `GuiReq::ApproveTool` (tool card) or `GuiReq::PlanDecision` (plan card) answers it.
+        /// Folded into the fingerprint so a park/resume re-emits the Snapshot on its own.
+        #[serde(rename = "awaitingApproval")]
+        awaiting_approval: bool,
+        /// The classifier's "why" for a paused risky call — `None` for a `plan_ready` pause
+        /// or a non-classifier gate. Shown as the reason line on the approval card.
+        #[serde(rename = "approvalReason")]
+        approval_reason: Option<String>,
+        /// The actual paused call (name + args); `Some` only while `awaitingApproval`. React
+        /// branches on `pendingCall.name == "plan_ready"` (plan controls) vs any other name
+        /// (tool approve/deny card).
+        #[serde(rename = "pendingCall")]
+        pending_call: Option<PushPendingCall>,
     },
     /// Swap-START signal: the host is about to tear down the current attach and connect
     /// a different (or freshly minted) session. `to` is the target session id/uuid — the
@@ -1460,6 +1491,25 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
     // the composer renders these as the "Queued N/5" list while a turn is in flight.
     let pending_steer: Vec<String> = fg.pending_steer.clone();
 
+    // Tool-approval GATE (wave-7): the foreground session parks with `awaiting_approval`
+    // set when a risky/classifier call OR a `plan_ready` plan digest is waiting on a
+    // decision. Project the flag + the classifier reason + the paused call (name/args) so
+    // the GUI can raise the approval overlay; React branches plan-vs-tool on the name. The
+    // paused call is `pending_tool_calls[tool_idx]` — the exact call the resume handler
+    // answers — so it's only meaningful (and only read) while parked.
+    let awaiting_approval = fg.awaiting_approval;
+    let approval_reason = fg.approval_reason.clone();
+    let pending_call = if awaiting_approval {
+        fg.pending_tool_calls
+            .get(fg.tool_idx)
+            .map(|c| PushPendingCall {
+                name: c.function.name.clone(),
+                args: c.function.arguments.clone(),
+            })
+    } else {
+        None
+    };
+
     // --- Snapshot (structural): fingerprint session + transcript + title + palette ---
     let fp = {
         use std::hash::{Hash, Hasher};
@@ -1533,6 +1583,15 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         for s in &pending_steer {
             s.hash(&mut h);
         }
+        // Fold the approval gate in so a park/resume (the awaiting flip, or the paused call
+        // / classifier reason changing) re-emits the Snapshot even when the transcript is
+        // otherwise idle — the daemon is blocked and NOTHING else ticks until it's answered.
+        awaiting_approval.hash(&mut h);
+        approval_reason.hash(&mut h);
+        if let Some(pc) = &pending_call {
+            pc.name.hash(&mut h);
+            pc.args.hash(&mut h);
+        }
         h.finish()
     };
     if last.snapshot_fp != Some(fp) {
@@ -1549,6 +1608,9 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             attachments,
             mode,
             pending_steer,
+            awaiting_approval,
+            approval_reason,
+            pending_call,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);

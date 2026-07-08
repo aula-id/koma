@@ -290,6 +290,20 @@ enum GuiReq {
     /// which routes through the daemon's `set_agent_mode` choke-point; the resulting
     /// snapshot re-projection reflects the new mode back to every attached client.
     SetMode { mode: String },
+
+    // ─── GUI approval gate (wave-7 approval overlay) ─────────────────────────────
+    // The GUI renders the paused-call overlay off `Snapshot.awaitingApproval` +
+    // `pendingCall`; these answer it, reusing the daemon's EXISTING approval/plan resume
+    // logic (no reimplementation). Same forward-to-attached-daemon pattern as `Submit`.
+    /// The tool-approval card's Approve/Deny buttons (paused risky/classifier call).
+    /// Forwarded as [`ClientRequest::ApproveTool`] — `approve:true` runs the call,
+    /// `false` bounces it back to the model (koma's y/n equivalent).
+    ApproveTool { approve: bool },
+    /// The plan-approval card's controls (paused `plan_ready` digest). `decision` is one
+    /// of `"approve"`, `"compact"` (approve + compact history to the plan), or `"deny"`
+    /// (keep discussing). Forwarded verbatim as [`ClientRequest::PlanDecision`], koma's
+    /// y/a/n plan-resume equivalent.
+    PlanDecision { decision: String },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -747,6 +761,22 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::SetMode { mode });
+                            }
+                        }
+                    }
+                    // Approval overlay: approve/deny a paused risky/classifier tool call.
+                    GuiReq::ApproveTool { approve } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::ApproveTool { approve });
+                            }
+                        }
+                    }
+                    // Approval overlay: approve / approve&compact / deny a paused plan.
+                    GuiReq::PlanDecision { decision } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::PlanDecision { decision });
                             }
                         }
                     }
