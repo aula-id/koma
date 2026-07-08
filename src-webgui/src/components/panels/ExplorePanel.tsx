@@ -74,7 +74,9 @@ export function ExplorePanel() {
               <Terminal size={13} className="flex-none text-koma-fg opacity-45" />
               <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{b.cmd}</span>
               <StatusBadge status={b.status} />
-              {b.status === 'running' && <KillBtn onClick={() => req({ r: 'KillBash', id: b.id })} />}
+              {b.status === 'running' && (
+                <KillBtn onClick={() => req({ r: 'KillBash', id: Number(String(b.id).replace(/^bash-/, '')) })} />
+              )}
             </div>
           ))
         )}
@@ -93,7 +95,7 @@ export function ExplorePanel() {
               <span className="min-w-0 flex-1 truncate text-[13px] text-koma-fg">{a.name}</span>
               <StatusBadge status={a.status} />
               {a.status === 'running' && a.id && (
-                <KillBtn onClick={() => req({ r: 'KillSubagent', id: a.id as string })} />
+                <KillBtn onClick={() => req({ r: 'KillSubagent', id: Number(a.id) })} />
               )}
             </div>
           ))

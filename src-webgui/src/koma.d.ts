@@ -70,11 +70,12 @@ declare global {
     // session (mirrors Submit's implicit-session pattern).
     | { r: 'Interrupt' }
     // Kill a single running subagent by its host-projected id (Explore panel
-    // Agents row kill button).
-    | { r: 'KillSubagent'; id: string }
-    // Kill a single running bg-bash job by its id (Explore panel Bash row
-    // kill button).
-    | { r: 'KillBash'; id: string }
+    // Agents row kill button). Numeric to match the daemon's `usize`.
+    | { r: 'KillSubagent'; id: number }
+    // Kill a single running bg-bash job by its numeric id (Explore panel Bash
+    // row kill button). The row id is `bash-<n>`; the numeric part matches the
+    // daemon's `usize`.
+    | { r: 'KillBash'; id: number }
     // Pin a chosen GLOBAL model as the session-local `main` override (the
     // quick-picker). `modelUuid` is the global model's uuid; `null` removes the
     // override and reverts to the Connector global main ("(inherit)").
