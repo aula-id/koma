@@ -55,6 +55,24 @@ pub struct SessionSnapshot {
     /// (its `/bash` panel sources the separate `BashSnapshot`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bash_jobs: Vec<BashJobSnapshot>,
+    /// The session's CUMULATIVE file-change log (#24): every workspace file the
+    /// `write`/`edit`/`delete` tools touched this session, with its latest status
+    /// (added/modified/deleted, dedup by path). Persisted per-session (survives
+    /// `/compact` + close/reopen) and projected here so the native-React GUI's
+    /// Explore "File changed" panel renders it. `#[serde(default, skip_serializing_if)]`
+    /// keeps the no-changes case + version-skewed peers wire-free. The TUI ignores it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_changes: Vec<FileChangeSnapshot>,
+}
+
+/// A serde-safe projection of ONE cumulative file-change entry for the GUI Explore
+/// "File changed" panel: the (workspace-relative when possible) path + its latest
+/// status string (`"added"` / `"modified"` / `"deleted"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct FileChangeSnapshot {
+    pub path: String,
+    pub status: String,
 }
 
 /// A serde-safe projection of ONE background bash job for the native-React GUI's

@@ -102,6 +102,17 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
     // GUI sidepanel's `bash[]` renders — its only reader (`render::serialize_and_push`)
     // reads id/command/`snapshot_status()`, all baked in here from the projection.
     rt.bash_jobs = s.bash_jobs.iter().map(shadow_bash_job).collect();
+    // Rebuild the cumulative file-change log (#24) from its projection so the GUI
+    // Explore "File changed" panel renders off real shadow data (the host projects
+    // it from its persisted per-session store; the client owns no store).
+    rt.file_changes = s
+        .file_changes
+        .iter()
+        .map(|c| crate::model::msglog::FileChange {
+            path: c.path.clone(),
+            status: c.status.clone(),
+        })
+        .collect();
     // Mirror the projected steer previews so the pending panel (and the Ctrl+X gate
     // in `handle_chat`) can read them from the shadow without a daemon round-trip.
     rt.pending_steer = s.pending_steer.clone();

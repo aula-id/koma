@@ -343,6 +343,15 @@ fn install_daemon_session(
     let sess_path = sess.path.clone();
     runtime.session = Some(sess);
 
+    // Wave-5 restore: rehydrate this session's persisted per-session records so
+    // the GUI Explore sidepanel survives close/reopen. The cumulative file-change
+    // log (#24) is read straight into the in-memory mirror; the bg-bash + sub-agent
+    // records (#25) are restored INERT — the live workers died with the previous
+    // daemon, so a record that was still "running" at close comes back settled-stale,
+    // never running. All best-effort (empty when the session has no such records).
+    runtime.file_changes = crate::model::msglog::read_file_changes(&sess_path);
+    super::bg_persist::restore_bg_records(&mut runtime, &sess_path, handle);
+
     // Install as the SINGLE foreground session (replace the slot; never append).
     state.rest.sessions = vec![runtime];
     state.rest.foreground = 0;

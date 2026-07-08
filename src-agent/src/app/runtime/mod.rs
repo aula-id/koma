@@ -32,6 +32,8 @@ mod lifecycle;
 mod mcp_daemon;
 mod signals;
 mod session_mgmt;
+// Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
+pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]
 pub mod gui;
 

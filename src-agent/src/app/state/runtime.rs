@@ -336,6 +336,15 @@ pub struct SessionRuntime {
     /// Monotonic counter: the id assigned to the NEXT spawned sub-agent.
     #[allow(dead_code)]
     pub next_subagent_id: usize,
+    /// CUMULATIVE file-change log for THIS session (#24): every workspace file the
+    /// `write` / `edit` / `delete` tools touched, with its latest status
+    /// (added/modified/deleted, dedup by path). The fs tools record each op
+    /// event-driven into the per-session `messages.sqlite` (durable + survives
+    /// `/compact`); this in-memory mirror is refreshed from that store at
+    /// `finish_tool_round` + on session load, and projected into the GUI Explore
+    /// "File changed" panel. Read-only for the TUI (it has no such panel). Never
+    /// a git-status snapshot — it is what this session itself changed.
+    pub file_changes: Vec<crate::model::msglog::FileChange>,
     /// LIVE working-directory override for this session, set by the `cd` tool /
     /// the user `/cd` command (Phase 8). `None` means "use the session's
     /// configured workdir" (`Session::workdir()` — the first `settings.workdir`
@@ -513,6 +522,7 @@ impl SessionRuntime {
             pending_subagent_calls: Vec::new(),
             awaiting_subagents: false,
             next_subagent_id: 0,
+            file_changes: Vec::new(),
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             awareness_summary: None,

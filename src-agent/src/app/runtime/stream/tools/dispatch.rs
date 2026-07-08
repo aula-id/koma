@@ -144,6 +144,15 @@ pub(super) fn finish_tool_round(
         }
     }
 
+    // Refresh the cumulative file-change log (#24) from the per-session store: the
+    // `write`/`edit`/`delete` tools recorded their ops event-driven during this
+    // round, so re-read the mirror once here (cheap, once per round) — the GUI
+    // Explore "File changed" panel projects `rt.file_changes`, so it now reflects
+    // what this round touched. Skipped when the session has no on-disk dir.
+    if let Some(dir) = state.rest.sessions[sess_idx].session.as_ref().map(|s| s.path.clone()) {
+        state.rest.sessions[sess_idx].file_changes = crate::model::msglog::read_file_changes(&dir);
+    }
+
     // Inject any queued mid-turn steers as ONE coalesced user message before the
     // next hop, so the model sees the tool results + the user's steer together and
     // continues with its reasoning intact. Drained here = "sent in one window".

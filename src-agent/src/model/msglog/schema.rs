@@ -80,6 +80,27 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             covers_up_to INTEGER NOT NULL,
             sent_start   INTEGER NOT NULL,
             updated_at   INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS file_changes (
+            path       TEXT PRIMARY KEY,
+            status     TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS bash_jobs (
+            id         INTEGER PRIMARY KEY,
+            command    TEXT NOT NULL,
+            status     TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS subagents (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL,
+            label      TEXT NOT NULL,
+            status     TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
         );",
     )?;
     // Migrate older DBs (created before the usage columns existed). Errors here

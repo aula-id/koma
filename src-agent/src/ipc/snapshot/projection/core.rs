@@ -135,6 +135,17 @@ pub fn session_snapshot(
                 status: j.snapshot_status(),
             })
             .collect(),
+        // Cumulative file-change log (#24) so the GUI Explore "File changed" panel
+        // renders it. Sourced from the in-memory mirror (refreshed at finish_tool_round
+        // + on load from the per-session store).
+        file_changes: rt
+            .file_changes
+            .iter()
+            .map(|c| crate::ipc::proto::FileChangeSnapshot {
+                path: c.path.clone(),
+                status: c.status.clone(),
+            })
+            .collect(),
     }
 }
 

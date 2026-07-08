@@ -317,6 +317,10 @@ fn spawn_task_with_id(
         state.rest.agent_mode,
     )?;
     state.rest.sessions[sess_idx].subagents.push(sub);
+    // Persist the new sub-agent record so it survives close/reopen (#25). Covers
+    // every spawn path (model `task`, `/task`, and queued→running promotion via
+    // `try_start_pending`, all of which route through here).
+    crate::app::runtime::bg_persist::persist_subagents(&state.rest.sessions[sess_idx]);
     Some(id)
 }
 
