@@ -459,6 +459,44 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
         .context("failed to build GUI window")?;
     let proxy = event_loop.create_proxy();
 
+    // --- 1b. macOS: minimal native menu bar (Cmd+V/C/X/A fix) -------------------
+    // WKWebView dispatches editing commands (paste/copy/cut/select-all) through
+    // the app's NSMenu Edit-menu items via the responder chain; with no menu bar
+    // at all (frameless window, `with_decorations(false)`), those shortcuts have
+    // nothing to route through and never reach the webview. `muda`'s
+    // `PredefinedMenuItem::{cut,copy,paste,select_all,undo,redo}` bind the
+    // standard AppKit selectors, so installing just an App + Edit submenu is
+    // enough — no custom accelerator handling needed on our end. Mirrors muda's
+    // own tao example (github.com/tauri-apps/muda examples/tao.rs): build the
+    // `Menu` + submenus after the window exists, then `init_for_nsapp()` (main
+    // thread only — `run_gui` never leaves the main thread before this point).
+    #[cfg(target_os = "macos")]
+    {
+        use muda::{Menu, PredefinedMenuItem, Submenu};
+
+        let menu_bar = Menu::new();
+
+        // App submenu must be the menu bar's first submenu on macOS; a bare
+        // Quit item is enough (`Cmd+Q` otherwise has nowhere to route either).
+        let app_menu = Submenu::new("koma", true);
+        let _ = menu_bar.append(&app_menu);
+        let _ = app_menu.append(&PredefinedMenuItem::quit(None));
+
+        let edit_menu = Submenu::new("Edit", true);
+        let _ = menu_bar.append(&edit_menu);
+        let _ = edit_menu.append_items(&[
+            &PredefinedMenuItem::undo(None),
+            &PredefinedMenuItem::redo(None),
+            &PredefinedMenuItem::separator(),
+            &PredefinedMenuItem::cut(None),
+            &PredefinedMenuItem::copy(None),
+            &PredefinedMenuItem::paste(None),
+            &PredefinedMenuItem::select_all(None),
+        ]);
+
+        menu_bar.init_for_nsapp();
+    }
+
     // --- 2. Host-relay wiring --------------------------------------------------
     // The GUI host IS the daemon client, but this main thread is owned by tao/GTK
     // (`event_loop.run` diverges — no tokio here). So the daemon connection + the

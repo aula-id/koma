@@ -68,8 +68,22 @@ objc2-app-kit = { version = "0.3", optional = true, default-features = false, fe
     "NSColor",
 ] }
 
+# macOS-only native menu bar. On macOS, WKWebView's editing commands
+# (paste/copy/cut/select-all) are dispatched via the app's NSMenu Edit-menu
+# items through the responder chain. `koma gui` (gui/mod.rs) builds a
+# frameless tao window with NO menu bar, so Cmd+V/C/X/A never reach the
+# webview. `muda`'s `PredefinedMenuItem` variants (Cut/Copy/Paste/SelectAll/
+# Undo/Redo) bind the standard AppKit selectors, so installing a minimal
+# App+Edit menu fixes this with no custom key handling. Target-gated (like
+# `objc2-app-kit` above) so it never touches non-macOS builds, and
+# `default-features = false` to skip muda's `gtk`/`libxdo` defaults (those
+# back its Linux/BSD menu backend, irrelevant here and each an extra system
+# dependency we don't want anywhere near this crate's build). Optional +
+# only pulled in by the `gui` feature so the default build stays lean.
+muda = { version = "0.19", optional = true, default-features = false }
+
 [features]
-gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd"]
+gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 
 [[bin]]
 name = "koma"
