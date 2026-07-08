@@ -11,7 +11,6 @@ import { ResumePalette } from '../components/ResumePalette'
 import { RenameOverlay } from '../components/RenameOverlay'
 import { OmniSearchPalette } from '../components/OmniSearchPalette'
 import { SwitchingOverlay } from '../components/SwitchingOverlay'
-import { ApprovalOverlay } from '../components/ApprovalOverlay'
 import { ToastContainer } from '../components/ToastContainer'
 import { useKoma } from '../store/koma'
 
@@ -119,7 +118,6 @@ function RootLayout() {
           setOverlay('resume')
         }}
       />
-      <ApprovalOverlay />
       <ToastContainer />
       <ResizeHandles />
     </div>

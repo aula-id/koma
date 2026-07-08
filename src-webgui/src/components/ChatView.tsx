@@ -24,6 +24,7 @@ import {
 import { useKoma, type AttachmentEntry, type ChatMessage, type ToolCallView } from '../store/koma'
 import { MessageBody } from './MessageBody'
 import { Composer } from './Composer'
+import { ApprovalOverlay } from './ApprovalOverlay'
 import { fallbackSignature, truncateChars } from '../lib/toolSignature'
 
 // Native chat view — a 1:1 clone of the TUI `view::chat` render grammar
@@ -460,6 +461,7 @@ export function ChatView() {
           />
         )}
       </div>
+      <ApprovalOverlay />
       <Composer />
     </div>
   )
