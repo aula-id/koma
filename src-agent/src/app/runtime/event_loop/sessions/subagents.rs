@@ -170,7 +170,12 @@ pub(super) fn drain_subagents(
         // when the sub-agent reaches any terminal state. At most one of chat_fold /
         // defer / nudge is Some (blocking-task-tool, /task, and detached are mutually
         // exclusive). sub_usage is Some whenever the status is terminal and usage > 0.
-        let (chat_fold, defer, nudge, sub_usage) = {
+        // `mark_nudged` is true whenever this tick consumed a one-shot arm gated on
+        // `!sa.nudged` (the detached nudge arm, or either /task-path terminal arm
+        // below) — applied to `sa.nudged` right after the match closes, so that same
+        // arm's guard blocks it on every later tick (terminated records are kept as
+        // history, never pruned, so without this they would re-fire forever).
+        let (chat_fold, defer, nudge, sub_usage, mark_nudged) = {
             let sa = &state.rest.sessions[idx].subagents[i];
             // Capture usage once; only carry it if there is something to record.
             let usage_tuple = if sa.usage_tokens_out > 0 || sa.usage_cost > 0.0 {
@@ -202,13 +207,13 @@ pub(super) fn drain_subagents(
                     // wake-nudge user turn so the model receives the complete result
                     // without needing to poll task_output.
                     Some(outcome) if !sa.nudged => {
-                        (None, None, Some((sa.id, sa.agent_name.clone(), outcome)), usage_tuple)
+                        (None, None, Some((sa.id, sa.agent_name.clone(), outcome)), usage_tuple, true)
                     }
                     // Terminal but already nudged: nothing to do (usage already
                     // recorded on the first terminal tick).
-                    Some(_) => (None, None, None, None),
+                    Some(_) => (None, None, None, None, false),
                     // Still running: nothing this tick.
-                    None => (None, None, None, None),
+                    None => (None, None, None, None, false),
                 }
             } else {
                 match (&sa.tool_call_id, &sa.status) {
@@ -228,13 +233,20 @@ pub(super) fn drain_subagents(
                         };
                         // Only carry usage on a terminal transition (result is Some).
                         let carry_usage = if result.is_some() { usage_tuple } else { None };
-                        (None, result.map(|r| (call_id.clone(), r)), None, carry_usage)
+                        // Not gated on `sa.nudged` — this path's one-shot delivery is
+                        // already latched by removing `call_id` from
+                        // `pending_subagent_calls` after the loop, so it never fires
+                        // twice regardless of `nudged`.
+                        (None, result.map(|r| (call_id.clone(), r)), None, carry_usage, false)
                     }
                     // /task command path (tool_call_id == None): on Done, build the
                     // FULL, untruncated report note (injected as an assistant turn
-                    // below). Done is terminal and the agent is pruned this tick, so
-                    // it fires once.
-                    (None, SubAgentStatus::Done(result)) => (
+                    // below). Restored/live records are NOT pruned once terminal (the
+                    // list only ever grows, see below), so this arm would otherwise
+                    // re-fire on every tick forever. Gated on `!sa.nudged` and latches
+                    // via `mark_nudged` (applied to `sa.nudged` right after the match)
+                    // so it fires exactly once, mirroring the detached arm above.
+                    (None, SubAgentStatus::Done(result)) if !sa.nudged => (
                         Some(format!(
                             "[sub-agent #{} {}] finished: {result}",
                             sa.id, sa.agent_name
@@ -242,14 +254,19 @@ pub(super) fn drain_subagents(
                         None,
                         None,
                         usage_tuple,
+                        true,
                     ),
                     // /task command path: Killed or Error — no chat-fold note (the
                     // turn is dead), but still carry accumulated usage so cost is
                     // not silently lost.
-                    (None, SubAgentStatus::Killed | SubAgentStatus::Error(_)) => {
-                        (None, None, None, usage_tuple)
+                    // Latched the same as the Done arm above: without `!sa.nudged`,
+                    // a terminated-but-kept record would re-add its usage every tick.
+                    (None, SubAgentStatus::Killed | SubAgentStatus::Error(_))
+                        if !sa.nudged =>
+                    {
+                        (None, None, None, usage_tuple, true)
                     }
-                    _ => (None, None, None, None),
+                    _ => (None, None, None, None, false),
                 }
             }
         };
@@ -258,6 +275,14 @@ pub(super) fn drain_subagents(
         // session next goes idle (see `deferred.rs`), mirroring bg-bash.
         if let Some(entry) = nudge {
             state.rest.sessions[idx].pending_subagent_nudges.push(entry);
+            state.rest.sessions[idx].subagents[i].nudged = true;
+            dirty = true;
+        }
+        // Latch the /task-path terminal arms (Done chat-fold, Killed/Error
+        // usage-only) the same way the detached arm just latched above: once
+        // consumed, `nudged` flips to true so their `!sa.nudged` guard skips
+        // them on every later tick.
+        if mark_nudged {
             state.rest.sessions[idx].subagents[i].nudged = true;
             dirty = true;
         }
