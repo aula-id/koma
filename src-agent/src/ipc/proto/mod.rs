@@ -199,6 +199,14 @@ pub enum ClientRequest {
     /// flip status→Killed). The GUI addresses the job as `bash-<id>`; only the numeric
     /// `id` crosses here. gui-gated.
     BashKill { id: usize },
+    /// Set the GLOBAL agent mode (the GUI composer mode selector) to `mode`, one of
+    /// `"auto"`/`"normal"`/`"plan"`/`"yolo"`. Routed daemon-side through the SAME
+    /// `AppStateRest::set_agent_mode` choke-point the TUI's Shift+Tab / `/mode` funnel
+    /// through (so Plan-enter/leave + the plan-boundary system-prompt swap stay correct);
+    /// `"yolo"` is honoured ONLY while `yolo_armed` (else a no-op), exactly like `/mode`.
+    /// An unknown token is a no-op. The mode change re-projects into the snapshot, so the
+    /// GUI reflects it live. gui-gated: the TUI drives the mode via Shift+Tab / `/mode`.
+    SetMode { mode: String },
     /// Set (or clear) the foreground session's LOCAL Main-role model override (the GUI
     /// model quick-picker). `model_uuid` is `Some(uuid)` of a GLOBAL `config.models`
     /// entry to CLONE into a session-local Main [`crate::model::app_config::ModelEntry`]

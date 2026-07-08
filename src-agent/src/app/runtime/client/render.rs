@@ -739,6 +739,11 @@ enum PushEnvelope {
         /// Foreground session's STAGED composer attachments (chips). Authoritative full
         /// array — React REPLACES on each Snapshot; empty once the message is sent.
         attachments: Vec<PushAttachment>,
+        /// The current GLOBAL agent mode label (`"auto"`/`"normal"`/`"plan"`/`"yolo"`),
+        /// decoded from the snapshot into the shadow. Rides the Snapshot (folded into its
+        /// fingerprint) so the composer mode selector shows + reflects the live mode; a
+        /// `SetMode` round-trip flips this on the next snapshot.
+        mode: String,
     },
     /// Swap-START signal: the host is about to tear down the current attach and connect
     /// a different (or freshly minted) session. `to` is the target session id/uuid — the
@@ -1213,6 +1218,10 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
     let fg = shadow.rest.fg();
     let session = fg.id.clone();
 
+    // Current global agent mode label (decoded into the shadow from the snapshot), for the
+    // composer mode selector. Rides the Snapshot below so a `SetMode` reflects live.
+    let mode = shadow.rest.agent_mode.label().to_string();
+
     // Title: the session's display name, falling back to its id, then a constant.
     let title = fg
         .session
@@ -1420,6 +1429,9 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         let mut h = std::collections::hash_map::DefaultHasher::new();
         session.hash(&mut h);
         title.hash(&mut h);
+        // Fold the agent mode in so a pure mode switch (no transcript change) re-emits the
+        // Snapshot — the composer selector updates the instant `SetMode` lands.
+        mode.hash(&mut h);
         palette.bg.hash(&mut h);
         palette.fg.hash(&mut h);
         // Fold the fuller palette roles in so a theme swap that keeps bg/fg but
@@ -1485,6 +1497,7 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             subagents,
             bash,
             attachments,
+            mode,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
