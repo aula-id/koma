@@ -79,6 +79,14 @@ declare global {
     // Esc-interrupt equivalent. No id: the daemon resolves the foreground
     // session (mirrors Submit's implicit-session pattern).
     | { r: 'Interrupt' }
+    // Rewind the conversation TO a user message by its index into
+    // SessionSnapshot.messages (Conversation::messages()) — drops everything
+    // after it, mirroring the TUI's double-Esc MessageRewind. No id: the daemon
+    // resolves the foreground session. The daemon runs the existing
+    // RewindToMessage action (abort in-flight turn + truncate live/sqlite +
+    // refill the composer input); a non-user / out-of-range index is a clean
+    // no-op host-side. The GUI mirrors the refill locally via refillComposer.
+    | { r: 'RewindTo'; index: number }
     // Kill a single running subagent by its host-projected id (Explore panel
     // Agents row kill button). Numeric to match the daemon's `usize`.
     | { r: 'KillSubagent'; id: number }

@@ -129,6 +129,11 @@ export type PushEnvelope =
       // the host's process-global agent_mode. Optional-tolerant: a host build
       // that doesn't project it yet leaves the store's current mode untouched.
       mode?: string
+      // Queued mid-turn steer previews (host `SessionSnapshot.pending_steer`):
+      // messages submitted while the turn is cooking, capped at 5 daemon-side.
+      // Truncated one-line previews. Optional-tolerant: a host build that doesn't
+      // project it yet leaves the store's queue empty.
+      pendingSteer?: string[]
     }
   // Swap-START signal pushed the instant a Select/New is acted on host-side,
   // BEFORE teardown, so the loader rises deterministically across the
@@ -204,6 +209,11 @@ type SessionSlice = {
   // host's process-global agent_mode via the Snapshot envelope. Drives the
   // composer mode selector. Defaults to "auto".
   mode: string
+  // Queued mid-turn steer previews (host `SessionSnapshot.pending_steer`) —
+  // submits made while the turn is cooking are queued daemon-side (cap 5) rather
+  // than starting a new turn. Drives the composer's pending-steer indicator +
+  // the send cap. REPLACED wholesale on each Snapshot.
+  pendingSteer: string[]
 }
 
 type HubSlice = {
@@ -243,6 +253,17 @@ type UiSlice = {
   // than routed through AttachPath. Composer consumes this via useEffect and
   // clears it with consumeComposerInsert so it doesn't re-fire on rerender.
   composerInsert: string | null
+  // One-shot signal: text to REPLACE the Composer's draft with, queued by a
+  // rewind (the hover-edit pencil on a user bubble). Distinct from
+  // `composerInsert` (which APPENDS an omnisearch path) — rewind refills the
+  // whole draft with the rewound message's text for editing + resend. Composer
+  // consumes it via useEffect and clears it with consumeComposerRefill.
+  composerRefill: string | null
+  // Monotonic tick bumped on every send. ChatView watches it to FORCE a
+  // jump-to-bottom (re-engaging the scroll-stick regardless of scroll position)
+  // when the user submits while scrolled up. Not a boolean so repeat sends at
+  // the same scroll position still fire the effect.
+  scrollTick: number
   // Full-screen session-swap overlay: set optimistically the moment
   // SelectSession/NewSession is emitted from ResumePalette, holding the
   // target session's display name. There is no host-pushed "swap started"
@@ -277,6 +298,13 @@ type KomaState = {
   insertToComposer: (path: string) => void
   // Composer-side ack: clears the one-shot signal after consuming it.
   consumeComposerInsert: () => void
+  // Queue text to REPLACE the Composer draft (rewind refill). Called right after
+  // a RewindTo request so the rewound message drops back into the composer.
+  refillComposer: (text: string) => void
+  // Composer-side ack: clears the refill one-shot after consuming it.
+  consumeComposerRefill: () => void
+  // Bump scrollTick to force ChatView to jump to the bottom (on send).
+  requestScrollBottom: () => void
   // Optimistically raise the session-swap overlay with the target's display
   // name. Called right before the SelectSession/NewSession request is sent.
   startSwitching: (name: string) => void
@@ -301,6 +329,7 @@ const initialSession: SessionSlice = {
   attachments: [],
   searchResults: [],
   mode: 'auto',
+  pendingSteer: [],
 }
 
 const initialHub: HubSlice = {
@@ -312,6 +341,8 @@ const initialHub: HubSlice = {
 const initialUi: UiSlice = {
   omnisearchOpen: false,
   composerInsert: null,
+  composerRefill: null,
+  scrollTick: 0,
   switchingTo: null,
 }
 
@@ -412,6 +443,9 @@ export const useKoma = create<KomaState>((set) => ({
               // Adopt the projected agent mode when present; keep the current
               // one otherwise (host build not projecting it yet).
               mode: env.mode ?? s.session.mode,
+              // Adopt the projected pending-steer queue; defensive fallback for a
+              // host build that doesn't project it yet (empty queue).
+              pendingSteer: env.pendingSteer ?? [],
               ...(switched ? { stream: '', reasoning: '' } : {}),
             },
             palette: env.palette,
@@ -507,6 +541,9 @@ export const useKoma = create<KomaState>((set) => ({
   closeOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: false } })),
   insertToComposer: (path) => set((s) => ({ ui: { ...s.ui, composerInsert: path } })),
   consumeComposerInsert: () => set((s) => ({ ui: { ...s.ui, composerInsert: null } })),
+  refillComposer: (text) => set((s) => ({ ui: { ...s.ui, composerRefill: text } })),
+  consumeComposerRefill: () => set((s) => ({ ui: { ...s.ui, composerRefill: null } })),
+  requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
   startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
 }))
