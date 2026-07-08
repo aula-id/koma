@@ -12,11 +12,12 @@ function fmtTokens(n: number): string {
   return `${Math.round(n)}`
 }
 
-// ~20px statusline pinned under the composer (TUI statusline grammar, ported
-// 1:1 into the chat column footer): mode badge + a live-run pulse on the left,
-// the usage readout + compact button on the right. Mounted as the LAST child
-// of ChatView's flex-col — never on the Start Screen / onboarding, since those
-// screens render instead of ChatView entirely (routes/index.tsx gates it on
+// ~20px statusline pinned along the bottom of the whole main area (TUI
+// statusline grammar, ported 1:1): mode badge + a live-run pulse on the left,
+// the usage readout + compact button on the right. Mounted as the LAST row of
+// TabbedMain's flex-col — spans sidebar-edge to window-edge and stays visible
+// across chat + diff tabs. Never on the Start Screen / onboarding, since those
+// screens render instead of TabbedMain entirely (routes/index.tsx gates it on
 // an attached session).
 export function UsageFooter() {
   const mode = useKoma((s) => s.session.mode)
@@ -45,7 +46,7 @@ export function UsageFooter() {
   const planLabel = visiblePlan.length > 0 ? `PLAN ${planDone}/${visiblePlan.length}` : 'PLAN'
 
   return (
-    <div className="flex h-5 flex-none items-center gap-2 rounded-tl-[10px] rounded-tr-[10px] border-t border-koma-border bg-koma-panel px-2 font-mono text-[11px] text-koma-dim">
+    <div className="flex h-5 w-full flex-none items-center gap-2 border-t border-koma-border bg-koma-panel px-3 font-mono text-[11px] text-koma-dim">
       {/* Mode badge — clickable ONLY in Plan mode: opens the Explore sidebar
           panel and expands its PLAN section (see `focusPlanSection`). */}
       {isPlan ? (

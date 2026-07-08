@@ -1,6 +1,7 @@
 import type { MouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Terminal, PenLine } from 'lucide-react'
+import { Terminal, PenLine, FoldVertical } from 'lucide-react'
+import { useKoma } from '../store/koma'
 
 export type Platform = 'macos' | 'linux' | 'windows'
 
@@ -35,6 +36,9 @@ type TitlebarProps = {
 // capture clicks. Button contents use layout="position" so the shared-layout
 // morph repositions them without scale-stretching the icon/text.
 export function Titlebar({ onSearch, onRename, overlayOpen }: TitlebarProps) {
+  const req = useKoma((s) => s.req)
+  const working = useKoma((s) => s.session.working)
+
   function handleMouseDown(e: MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return
     const target = e.target as HTMLElement
@@ -80,6 +84,20 @@ export function Titlebar({ onSearch, onRename, overlayOpen }: TitlebarProps) {
               <span>rename</span>
             </motion.span>
           </motion.button>
+          <button
+            onClick={() => req({ r: 'Compact' })}
+            disabled={working}
+            title="Compact context"
+            aria-label="Compact context"
+            className={`pointer-events-auto absolute left-[calc(50%_+_270px)] top-[5px] flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] transition-colors ${
+              working
+                ? 'text-koma-dim opacity-40'
+                : 'text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100'
+            }`}
+          >
+            <FoldVertical size={13} className="flex-none" />
+            <span>compact</span>
+          </button>
         </div>
       )}
       <div id="winctl">
