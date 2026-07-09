@@ -2501,12 +2501,44 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         })
         .collect();
 
-    // The synthetic "advertised free" row is pinned FIRST (React re-sorts `free` to the
-    // top regardless, but ordering it here keeps the raw list honest); then the global
-    // scope, then the foreground session's local overrides, each tagged.
-    let mut models: Vec<PushModel> = vec![koma_free_synthetic_model(&cfg.providers)];
-    models.extend(cfg.models.iter().map(|m| push_model(m, "global")));
-    models.extend(cfg.session_models.iter().map(|m| push_model(m, "local")));
+    // Resolve the (at most one) koma-free-backed provider so real minted entries
+    // (global via `ensure_koma_free_config`, or local via `/free`) can be told apart
+    // from an ordinary model that merely happens to share the "koma free" display name.
+    let koma_free_provider_uuid: Option<&str> = cfg
+        .providers
+        .iter()
+        .find(|p| p.api_type == crate::model::app_config::ApiType::KomaFree)
+        .map(|p| p.uuid.as_str());
+    let is_koma_free_backed = |m: &crate::model::app_config::ModelEntry| {
+        koma_free_provider_uuid.is_some_and(|uuid| m.provider_uuid == uuid)
+    };
+    let has_real_koma_free_entry = cfg.models.iter().any(is_koma_free_backed)
+        || cfg.session_models.iter().any(is_koma_free_backed);
+
+    // Invariant: the synthetic "advertised free" row is a placeholder for the
+    // not-yet-minted state ONLY — once a real koma-free-backed entry exists (global or
+    // local), it supersedes the synthetic row instead of duplicating it; that real entry
+    // gets `free:true` so the FREE badge moves onto it. (React re-sorts `free` to the top
+    // regardless, but ordering the synthetic row first here keeps the raw list honest.)
+    let mut models: Vec<PushModel> = if has_real_koma_free_entry {
+        Vec::new()
+    } else {
+        vec![koma_free_synthetic_model(&cfg.providers)]
+    };
+    models.extend(cfg.models.iter().map(|m| {
+        let mut pm = push_model(m, "global");
+        if is_koma_free_backed(m) {
+            pm.free = true;
+        }
+        pm
+    }));
+    models.extend(cfg.session_models.iter().map(|m| {
+        let mut pm = push_model(m, "local");
+        if is_koma_free_backed(m) {
+            pm.free = true;
+        }
+        pm
+    }));
 
     // The current session Main override (the quick-picker's selected value): the local
     // entry that holds the Main role, if any (else `null` = inherit the global Main).
