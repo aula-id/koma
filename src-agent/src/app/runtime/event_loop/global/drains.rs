@@ -1,36 +1,9 @@
-//! Shared GLOBAL-state servicing for the event loop.
-//!
-//! [`service_global`] runs every non-session, non-terminal global drain ONCE per
-//! tick and reports whether anything changed (so the caller can flag a redraw).
-//! It is called by BOTH the interactive [`super::run_loop`] (TUI client) and the
-//! headless `daemon_loop` (see [`super::super::event_loop::daemon`]) so the two
-//! NEVER diverge on global-state handling.
-//!
-//! What lives here (all render-agnostic — pure state mutation + task spawning,
-//! safe to run with no terminal):
-//!   - the per-model provider-endpoints drain (`endpoints_rx`),
-//!   - the startup-warming drain (`warm_rx`: catalogue + awareness),
-//!   - the debounced on-demand model-catalogue fetch,
-//!   - the clipboard-image fetch drain (`clipboard_rx`),
-//!   - the loading-splash state machine (`Mode::Loading`),
-//!   - the deferred `/compact` apply,
-//!   - the missing-workspace-root warning,
-//!   - the comet-shimmer `work_since` reconcile + the "keep redrawing while a
-//!     compaction / shimmer / sub-agent / Plan-mode header shimmer is live"
-//!     force-dirty,
-//!   - the toast auto-dismiss tick.
-//!
-//! What deliberately STAYS in [`super::run_loop`] (terminal-coupled, NOT here):
-//!   - the `/select` copy-mode hand-off (`enter_select` / `exit_select` issue
-//!     crossterm `execute!`s and read a raw key) — a foreground-terminal concern;
-//!   - `terminal.draw(...)`, the crossterm input poll/read, and the adaptive
-//!     INPUT-poll `timeout` (the daemon uses its own sleep cadence instead);
-//!   - the `should_quit` loop-break.
-//!
-//! None of the drains here assume a foreground modal: the loading splash mutates
-//! only `state.mode`/`state.rest` (no terminal calls) and the advisory harness
-//! toast is raised PER-SESSION inside `service_all_sessions`, not here — so every
-//! drain in this function is safe to run headless.
+//! Per-block GLOBAL drains extracted from [`super::service_global`] for file
+//! size — each function is exactly one of the independent channel-drain /
+//! state-machine blocks the driver used to inline, in the SAME order, with the
+//! same locals threaded as parameters. `pub(super)` so they cross the
+//! `global::drains` -> `global` module boundary without leaking further; no
+//! behaviour change.
 
 use std::sync::Arc;
 
@@ -40,29 +13,17 @@ use crate::app::state::AppState;
 use crate::service::oauth::OAuthEvent;
 use crate::service::{openrouter::OpenRouterClient, StreamEvent, WarmEvent};
 
-use super::drains::apply_compaction_result;
+use super::super::drains::apply_compaction_result;
 
-/// Service every GLOBAL (non-session) concern once. Returns `true` if anything
-/// changed (an event folded, a state machine advanced, a toast expired, or a
-/// live animation needs another frame) so the caller can mark its frame dirty.
-///
-/// Render-agnostic and foreground-independent: it never touches the terminal,
-/// input, or the `/select` copy mode. Called identically by the interactive
-/// loop and the headless daemon loop so global handling can't drift between them.
-pub(super) fn service_global(
-    state: &mut AppState,
-    client: &mut Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-) -> bool {
+/// Drain the per-model provider-endpoints channel. Fully independent of
+/// streaming and the harness channel: the background fetch sends exactly one
+/// EndpointsLoaded / EndpointsError, folded into the open model modal — but
+/// ONLY when its `model_id` still matches the modal's `endpoints_for` (the
+/// stale-guard, so a rapid re-selection can't show a previous model's
+/// providers). Take() the receiver so the match can mutate the mode; put it
+/// back unless the fetch resolved (or the channel closed).
+pub(super) fn drain_endpoints(state: &mut AppState) -> bool {
     let mut dirty = false;
-
-    // Drain the per-model provider-endpoints channel. Fully independent of
-    // streaming and the harness channel: the background fetch sends exactly one
-    // EndpointsLoaded / EndpointsError, folded into the open model modal — but
-    // ONLY when its `model_id` still matches the modal's `endpoints_for` (the
-    // stale-guard, so a rapid re-selection can't show a previous model's
-    // providers). Take() the receiver so the match can mutate the mode; put it
-    // back unless the fetch resolved (or the channel closed).
     if let Some(mut erx) = state.rest.endpoints_rx.take() {
         let mut keep = true;
         while let Ok(ev) = erx.try_recv() {
@@ -97,14 +58,18 @@ pub(super) fn service_global(
             state.rest.endpoints_rx = Some(erx);
         }
     }
+    dirty
+}
 
-    // Drain the background version-check channel. Each session spawn fires a
-    // non-blocking `spawn_check` thread that, on success, sends one `VersionInfo`;
-    // a failed/unreachable check sends nothing (graceful degrade). Fold the LATEST
-    // received result into `latest_version` for the UI to read. Take() the receiver
-    // to mutate `rest`, then ALWAYS put it back: the matching sender lives in
-    // `version_tx` for the app's lifetime, so the channel never closes — there is no
-    // `Disconnected` terminal state to drop the receiver on. Non-blocking (try_recv).
+/// Drain the background version-check channel. Each session spawn fires a
+/// non-blocking `spawn_check` thread that, on success, sends one `VersionInfo`;
+/// a failed/unreachable check sends nothing (graceful degrade). Fold the LATEST
+/// received result into `latest_version` for the UI to read. Take() the receiver
+/// to mutate `rest`, then ALWAYS put it back: the matching sender lives in
+/// `version_tx` for the app's lifetime, so the channel never closes — there is no
+/// `Disconnected` terminal state to drop the receiver on. Non-blocking (try_recv).
+pub(super) fn drain_version(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if let Some(mut vrx) = state.rest.version_rx.take() {
         while let Ok(info) = vrx.try_recv() {
             state.rest.latest_version = Some(info);
@@ -112,15 +77,19 @@ pub(super) fn service_global(
         }
         state.rest.version_rx = Some(vrx);
     }
+    dirty
+}
 
-    // Drain the NON-BLOCKING security health probe (mirrors the `version_rx` drain). A
-    // `SecDaemonManager::health_async` fetch sends exactly one result: Ok(entries) on a
-    // successful probe, Ok(Err(msg)) when the daemon reported/timed-out an error. Fold a
-    // success into the OPEN `/security` panel's `install_health` and clear the spinner;
-    // toast an error. Take() the receiver so the arms can mutate `state.mode`; put it back
-    // only while still Empty (a delivered result OR a closed channel ends the probe). On
-    // any terminal outcome the spinner flag is cleared so a panel that is open stops
-    // animating. Non-blocking (try_recv).
+/// Drain the NON-BLOCKING security health probe (mirrors the `version_rx` drain). A
+/// `SecDaemonManager::health_async` fetch sends exactly one result: Ok(entries) on a
+/// successful probe, Ok(Err(msg)) when the daemon reported/timed-out an error. Fold a
+/// success into the OPEN `/security` panel's `install_health` and clear the spinner;
+/// toast an error. Take() the receiver so the arms can mutate `state.mode`; put it back
+/// only while still Empty (a delivered result OR a closed channel ends the probe). On
+/// any terminal outcome the spinner flag is cleared so a panel that is open stops
+/// animating. Non-blocking (try_recv).
+pub(super) fn drain_sec_health(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if let Some(mut hrx) = state.rest.sec_health_rx.take() {
         match hrx.try_recv() {
             Ok(Ok(health)) => {
@@ -157,15 +126,19 @@ pub(super) fn service_global(
             }
         }
     }
+    dirty
+}
 
-    // Drain the `/settings` OAuth submenu's connect-flow channel (mirrors
-    // `sec_health_rx`): a spawned Codex/Kilo Code flow sends `CodexUrl`/`KiloCode`
-    // once it has something to show, then exactly one terminal event (`Success` or
-    // `Failed`). Non-terminal events swap `oauth_flow` to the matching wait screen
-    // and put the receiver back; a terminal event applies the result and ends the
-    // flow (task handle cleared). De-globalized (C3): fold into whichever
-    // session(s) actually have the OAuth submenu open, not the (stale outside a
-    // client bracket) foreground.
+/// Drain the `/settings` OAuth submenu's connect-flow channel (mirrors
+/// `sec_health_rx`): a spawned Codex/Kilo Code flow sends `CodexUrl`/`KiloCode`
+/// once it has something to show, then exactly one terminal event (`Success` or
+/// `Failed`). Non-terminal events swap `oauth_flow` to the matching wait screen
+/// and put the receiver back; a terminal event applies the result and ends the
+/// flow (task handle cleared). De-globalized (C3): fold into whichever
+/// session(s) actually have the OAuth submenu open, not the (stale outside a
+/// client bracket) foreground.
+pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle) -> bool {
+    let mut dirty = false;
     if let Some(mut orx) = state.rest.oauth_rx.take() {
         match orx.try_recv() {
             Ok(OAuthEvent::CodexUrl { url }) => {
@@ -275,16 +248,20 @@ pub(super) fn service_global(
             }
         }
     }
+    dirty
+}
 
-    // Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),
-    // mirroring the `sec_health_rx` drain just above. Distinct from `warm_rx`:
-    // that channel is REPLACED per warm, so a recompute in flight when a new warm
-    // starts would be stranded — this pair is created once and kept for the app's
-    // lifetime. Route each `(session_id, summary)` by id (same C4 pattern as
-    // `WarmEvent::WarmAwareness` below) since `service_global` runs outside any
-    // client bracket and the foreground cursor is stale scratch here. Loop (not a
-    // single `try_recv`) so a burst of recomputes (e.g. several quick `cd`s)
-    // doesn't lag a tick behind. Non-blocking (try_recv).
+/// Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),
+/// mirroring the `sec_health_rx` drain just above. Distinct from `warm_rx`:
+/// that channel is REPLACED per warm, so a recompute in flight when a new warm
+/// starts would be stranded — this pair is created once and kept for the app's
+/// lifetime. Route each `(session_id, summary)` by id (same C4 pattern as
+/// `WarmEvent::WarmAwareness` below) since `service_global` runs outside any
+/// client bracket and the foreground cursor is stale scratch here. Loop (not a
+/// single `try_recv`) so a burst of recomputes (e.g. several quick `cd`s)
+/// doesn't lag a tick behind. Non-blocking (try_recv).
+pub(super) fn drain_awareness(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if let Some(mut arx) = state.rest.awareness_rx.take() {
         let mut keep = true;
         loop {
@@ -314,15 +291,19 @@ pub(super) fn service_global(
             state.rest.awareness_tx = None;
         }
     }
+    dirty
+}
 
-    // Drain the startup-warming channel. Fully independent of streaming: the
-    // background catalogue + awareness tasks each send one [`WarmEvent`]. ALWAYS
-    // fold the result into `state.rest.*` (the cache / summary) regardless of the
-    // current mode — a result that lands AFTER an Esc-to-chat must still populate
-    // them — and update the live `LoadingState` step marker only while still in
-    // `Mode::Loading`. Take() the receiver so the arms can mutate the mode + rest;
-    // put it back unless the channel has closed (both warm tasks finished and
-    // dropped their senders → `Disconnected`).
+/// Drain the startup-warming channel. Fully independent of streaming: the
+/// background catalogue + awareness tasks each send one [`WarmEvent`]. ALWAYS
+/// fold the result into `state.rest.*` (the cache / summary) regardless of the
+/// current mode — a result that lands AFTER an Esc-to-chat must still populate
+/// them — and update the live `LoadingState` step marker only while still in
+/// `Mode::Loading`. Take() the receiver so the arms can mutate the mode + rest;
+/// put it back unless the channel has closed (both warm tasks finished and
+/// dropped their senders → `Disconnected`).
+pub(super) fn drain_warm(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if let Some(mut wrx) = state.rest.warm_rx.take() {
         let mut keep = true;
         loop {
@@ -402,15 +383,23 @@ pub(super) fn service_global(
             state.rest.warm_rx = Some(wrx);
         }
     }
+    dirty
+}
 
-    // Fire a DEBOUNCED, on-demand model-catalogue fetch. The model omnisearch
-    // arms `catalogue_pending` (via `request_catalogue`) on each keystroke /
-    // provider change, pushing `due` ~300ms forward so a typing burst collapses
-    // into one request. Fire here — where `handle` + `client` are in scope — once
-    // `due` passes and nothing is already in flight. Reuse the shared `warm_rx`
-    // channel (no new channel): the drain above folds the result into the
-    // per-endpoint cache. On failure the drain records a `models_cache_failed`
-    // marker (no rapid re-fetch); the next user-driven re-trigger retries.
+/// Fire a DEBOUNCED, on-demand model-catalogue fetch. The model omnisearch
+/// arms `catalogue_pending` (via `request_catalogue`) on each keystroke /
+/// provider change, pushing `due` ~300ms forward so a typing burst collapses
+/// into one request. Fire here — where `handle` + `client` are in scope — once
+/// `due` passes and nothing is already in flight. Reuse the shared `warm_rx`
+/// channel (no new channel): [`drain_warm`] folds the result into the
+/// per-endpoint cache. On failure the drain records a `models_cache_failed`
+/// marker (no rapid re-fetch); the next user-driven re-trigger retries.
+pub(super) fn fetch_catalogue_debounced(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> bool {
+    let mut dirty = false;
     if let Some(pending) = state.rest.catalogue_pending.as_ref() {
         if state.rest.catalogue_fetching.is_none() && std::time::Instant::now() >= pending.due {
             // Take the pending request and mark its endpoint in-flight.
@@ -435,7 +424,7 @@ pub(super) fn service_global(
             // (no rapid re-fetch).
             let c = match client.as_ref() {
                 Some(c) => Arc::clone(c),
-                None => super::super::build_client(),
+                None => crate::app::runtime::build_client(),
             };
             handle.spawn(async move {
                 let conn = crate::service::openrouter::Conn {
@@ -460,11 +449,15 @@ pub(super) fn service_global(
             dirty = true;
         }
     }
+    dirty
+}
 
-    // Drain the clipboard-image fetch result (Ctrl+V). The background thread sends
-    // Ok(bytes) (PNG data) or Err(reason) (tool absent / no image). On Ok: ingest
-    // into the session images dir + insert marker. On Err: toast. One send per
-    // Ctrl+V; clear the receiver once drained.
+/// Drain the clipboard-image fetch result (Ctrl+V). The background thread sends
+/// Ok(bytes) (PNG data) or Err(reason) (tool absent / no image). On Ok: ingest
+/// into the session images dir + insert marker. On Err: toast. One send per
+/// Ctrl+V; clear the receiver once drained.
+pub(super) fn drain_clipboard(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if let Some(rx) = state.rest.clipboard_rx.as_ref() {
         match rx.try_recv() {
             Ok(Ok(bytes)) => {
@@ -501,15 +494,19 @@ pub(super) fn service_global(
             }
         }
     }
+    dirty
+}
 
-    // Loading splash: workspace step, transition, and animation. De-globalized (C3):
-    // mode is per-session and `service_global` runs OUTSIDE any client bracket, so drive
-    // EACH session that is in `Mode::Loading` off ITS OWN state — its own `dir_cache` for
-    // the workspace step, its own splash for the spinner, and flip ITS OWN mode to Chat
-    // when ITS warm completes — rather than the (stale) foreground. Loading is normally a
-    // single startup session, so this is index-correct with identical single-window
-    // behaviour. Index-based so each session's `mode` and `dir_cache` (disjoint fields)
-    // can be touched without a foreground borrow.
+/// Loading splash: workspace step, transition, and animation. De-globalized (C3):
+/// mode is per-session and `service_global` runs OUTSIDE any client bracket, so drive
+/// EACH session that is in `Mode::Loading` off ITS OWN state — its own `dir_cache` for
+/// the workspace step, its own splash for the spinner, and flip ITS OWN mode to Chat
+/// when ITS warm completes — rather than the (stale) foreground. Loading is normally a
+/// single startup session, so this is index-correct with identical single-window
+/// behaviour. Index-based so each session's `mode` and `dir_cache` (disjoint fields)
+/// can be touched without a foreground borrow.
+pub(super) fn advance_loading_splash(state: &mut AppState) -> bool {
+    let mut dirty = false;
     for i in 0..state.rest.sessions.len() {
         // Compute the workspace-settled flag from THIS session's own dir_cache up front
         // (immutable read), so the `&mut mode` below doesn't overlap it.
@@ -543,15 +540,23 @@ pub(super) fn service_global(
             dirty = true;
         }
     }
+    dirty
+}
 
-    // Deferred compaction apply (per-session, C4). A fast compaction stashes its
-    // result and an `apply_at` instant on ITS OWN session so the animation holds for a
-    // short minimum (cosmetic). `service_global` runs OUTSIDE a client bracket, so the
-    // transient foreground cursor is stale scratch here — iterate sessions by INDEX and
-    // apply to each whose OWN `compact_apply_at` is now due, never to `fg()`. The
-    // due-index is captured first (immutable scan) so the `apply_compaction_result`
-    // call below borrows `state` mutably without overlapping. At most one session is
-    // typically mid-defer, but the loop is correct for any number.
+/// Deferred compaction apply (per-session, C4). A fast compaction stashes its
+/// result and an `apply_at` instant on ITS OWN session so the animation holds for a
+/// short minimum (cosmetic). `service_global` runs OUTSIDE a client bracket, so the
+/// transient foreground cursor is stale scratch here — iterate sessions by INDEX and
+/// apply to each whose OWN `compact_apply_at` is now due, never to `fg()`. The
+/// due-index is captured first (immutable scan) so the `apply_compaction_result`
+/// call below borrows `state` mutably without overlapping. At most one session is
+/// typically mid-defer, but the loop is correct for any number.
+pub(super) fn apply_deferred_compact(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> bool {
+    let mut dirty = false;
     let now = std::time::Instant::now();
     let due_idxs: Vec<usize> = state
         .rest
@@ -571,12 +576,16 @@ pub(super) fn service_global(
         }
         dirty = true;
     }
+    dirty
+}
 
-    // When a background reindex has SETTLED (not indexing), warn once about any
-    // workspace root missing on disk. Keyed on the missing set CHANGING vs what we
-    // last warned, so it fires exactly once per change and does not depend on
-    // catching the brief indexing=true window (an all-missing reindex can finish
-    // before the loop ever observes it).
+/// When a background reindex has SETTLED (not indexing), warn once about any
+/// workspace root missing on disk. Keyed on the missing set CHANGING vs what we
+/// last warned, so it fires exactly once per change and does not depend on
+/// catching the brief indexing=true window (an all-missing reindex can finish
+/// before the loop ever observes it).
+pub(super) fn warn_missing_workspace_roots(state: &mut AppState) -> bool {
+    let mut dirty = false;
     let (indexing_now, missing_now) = match state.rest.fg().dir_cache.read() {
         Ok(c) => (c.indexing, c.missing_roots.clone()),
         Err(_) => (true, state.rest.warned_missing_roots.clone()),
@@ -593,39 +602,54 @@ pub(super) fn service_global(
         }
         state.rest.warned_missing_roots = missing_now;
     }
+    dirty
+}
 
-    // Status-line "comet" activity clock. Shimmer is active whenever the app is in
-    // a WORKING wait that isn't paused on a y/n approval. Reconcile `work_since`
-    // against that on the rising/falling edge here (the single place that sees the
-    // settled `waiting`/`awaiting_approval` for the tick), rather than threading
-    // set/clear through every scattered mutation site:
-    //  - rising edge (active && None)   → stamp `now` so the elapsed counter and
-    //    the travelling head start from this moment.
-    //  - falling edge (!active && Some) → clear it; idle / approval renders the
-    //    status statically with no comet and no timer.
+/// Status-line "comet" activity clock. Shimmer is active whenever the app is in
+/// a WORKING wait that isn't paused on a y/n approval. Reconcile `work_since`
+/// against that on the rising/falling edge here (the single place that sees the
+/// settled `waiting`/`awaiting_approval` for the tick), rather than threading
+/// set/clear through every scattered mutation site:
+///  - rising edge (active && None)   → stamp `now` so the elapsed counter and
+///    the travelling head start from this moment.
+///  - falling edge (!active && Some) → clear it; idle / approval renders the
+///    status statically with no comet and no timer.
+///
+/// Returns `shimmer_active` (never sets `dirty` itself — this reconcile never
+/// changed the frame's dirty status even in the pre-split monolith) so the
+/// caller can thread it into [`force_dirty_while_live`] without recomputing it.
+pub(super) fn reconcile_shimmer(state: &mut AppState) -> bool {
     let shimmer_active = state.rest.fg().waiting && !state.rest.fg().awaiting_approval;
     match (shimmer_active, state.rest.work_since.is_some()) {
         (true, false) => state.rest.work_since = Some(std::time::Instant::now()),
         (false, true) => state.rest.work_since = None,
         _ => {}
     }
+    shimmer_active
+}
 
-    // ADVANCE the security health-probe spinner while a probe is in flight. Mirrors the
-    // loading-splash frame advance: bump the frame counter each tick on the OPEN panel so
-    // the braille frames actually cycle, paired with the force-dirty below so the loop
-    // redraws even though no events arrive during the cold IPC round-trip. De-globalized
-    // (C3): bump it on whichever session(s) have `/security` open, not the stale foreground.
+/// ADVANCE the security health-probe spinner while a probe is in flight. Mirrors the
+/// loading-splash frame advance: bump the frame counter each tick on the OPEN panel so
+/// the braille frames actually cycle, paired with the force-dirty check so the loop
+/// redraws even though no events arrive during the cold IPC round-trip. De-globalized
+/// (C3): bump it on whichever session(s) have `/security` open, not the stale foreground.
+pub(super) fn advance_security_spinner(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if state.rest.sec_health_rx.is_some() {
         for s in security_states(state) {
             s.health_frame = s.health_frame.wrapping_add(1);
             dirty = true;
         }
     }
+    dirty
+}
 
-    // ADVANCE the OAuth submenu's connect-flow spinner while a Codex/Kilo Code
-    // flow is waiting. Mirrors the security health-probe advance above: only the
-    // WAIT screens carry a `frame` counter (the picker/paste/failed screens don't
-    // animate), so bump it only for sessions currently showing one of those two.
+/// ADVANCE the OAuth submenu's connect-flow spinner while a Codex/Kilo Code
+/// flow is waiting. Mirrors the security health-probe advance above: only the
+/// WAIT screens carry a `frame` counter (the picker/paste/failed screens don't
+/// animate), so bump it only for sessions currently showing one of those two.
+pub(super) fn advance_oauth_spinner(state: &mut AppState) -> bool {
+    let mut dirty = false;
     if state.rest.oauth_rx.is_some() {
         for flow in oauth_flow_states(state) {
             match flow {
@@ -637,52 +661,57 @@ pub(super) fn service_global(
             }
         }
     }
+    dirty
+}
 
-    // While a compaction animation is in flight, mark every tick dirty so the
-    // spinner/elapsed/bar actually advance (rendering is otherwise only
-    // event-driven). The same applies while the comet shimmer is active: it must
-    // keep travelling even when NO stream events arrive (first-token latency, tool
-    // exec, the summarizer fold), so force a redraw each tick then too. Similarly,
-    // while any sub-agent is running (background `/task` agents that don't set
-    // `waiting`), force redraws so the in-chat spinner animates. And while a security
-    // health probe is pending, force redraws so its "checking dependencies…" spinner
-    // keeps cycling until the result lands. And while the agent is in Plan mode, force
-    // redraws so the "planning" header shimmer (view/chat/header.rs) keeps sweeping
-    // even on an otherwise fully idle UI — it is wall-clock driven (no stored counter)
-    // so it only needs a periodic repaint, not a tighter poll cadence: the existing
-    // 100ms idle poll timeout (see `run_loop`) is already finer than the shimmer's
-    // 90ms step, so this force-dirty alone is enough — it does NOT join the fast-poll
-    // predicate below.
-    // Compaction anim is per-session now (C4): force a redraw while ANY session has a
-    // live compaction clock, so a background session's spinner still advances (the
-    // rendered foreground may not be the compacting one, but the per-tick redraw is
-    // global anyway and the foreground's own anim drives its own spinner).
+/// While a compaction animation is in flight, mark every tick dirty so the
+/// spinner/elapsed/bar actually advance (rendering is otherwise only
+/// event-driven). The same applies while the comet shimmer is active: it must
+/// keep travelling even when NO stream events arrive (first-token latency, tool
+/// exec, the summarizer fold), so force a redraw each tick then too. Similarly,
+/// while any sub-agent is running (background `/task` agents that don't set
+/// `waiting`), force redraws so the in-chat spinner animates. And while a security
+/// health probe is pending, force redraws so its "checking dependencies…" spinner
+/// keeps cycling until the result lands. And while the agent is in Plan mode, force
+/// redraws so the "planning" header shimmer (view/chat/header.rs) keeps sweeping
+/// even on an otherwise fully idle UI — it is wall-clock driven (no stored counter)
+/// so it only needs a periodic repaint, not a tighter poll cadence: the existing
+/// 100ms idle poll timeout (see `run_loop`) is already finer than the shimmer's
+/// 90ms step, so this force-dirty alone is enough — it does NOT join the fast-poll
+/// predicate below.
+/// Compaction anim is per-session now (C4): force a redraw while ANY session has a
+/// live compaction clock, so a background session's spinner still advances (the
+/// rendered foreground may not be the compacting one, but the per-tick redraw is
+/// global anyway and the foreground's own anim drives its own spinner).
+///
+/// `shimmer_active` is threaded in from [`reconcile_shimmer`] (computed once per
+/// tick, reused here rather than recomputed).
+pub(super) fn force_dirty_while_live(state: &AppState, shimmer_active: bool) -> bool {
     let any_compacting = state
         .rest
         .sessions
         .iter()
         .any(|rt| rt.compact_anim_start.is_some());
-    if any_compacting
+    any_compacting
         || shimmer_active
-        || has_running_subagents(state)
+        || super::has_running_subagents(state)
         || state.rest.sec_health_rx.is_some()
         || state.rest.oauth_rx.is_some()
         || state.rest.agent_mode == crate::app::state::AgentMode::Plan
-    {
-        dirty = true;
-    }
+}
 
-    // Auto-dismiss expired toasts. Toast is per-session now (C6), and this runs
-    // OUTSIDE any client bracket, so sweep EVERY session's toast — a background
-    // session's toast must expire on its own clock even while no client views it
-    // (otherwise it would linger until that session is foregrounded). Each
-    // session's `tick_toast` clears its own expired toast and reports it.
+/// Auto-dismiss expired toasts. Toast is per-session now (C6), and this runs
+/// OUTSIDE any client bracket, so sweep EVERY session's toast — a background
+/// session's toast must expire on its own clock even while no client views it
+/// (otherwise it would linger until that session is foregrounded). Each
+/// session's `tick_toast` clears its own expired toast and reports it.
+pub(super) fn tick_toasts(state: &mut AppState) -> bool {
+    let mut dirty = false;
     for rt in state.rest.sessions.iter_mut() {
         if rt.tick_toast() {
             dirty = true;
         }
     }
-
     dirty
 }
 
@@ -771,19 +800,4 @@ fn apply_to_settings_modal_for(
             }
         }
     }
-}
-
-/// Whether any sub-agent on the FOREGROUND session is currently `Running`.
-///
-/// Shared so both the interactive and daemon loops agree on the "keep animating /
-/// poll fast" signal without duplicating the predicate. (The interactive loop also
-/// uses this to pick its input-poll cadence; the daemon loop uses it for its sleep
-/// cadence.)
-pub(super) fn has_running_subagents(state: &AppState) -> bool {
-    state
-        .rest
-        .fg()
-        .subagents
-        .iter()
-        .any(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached)
 }
