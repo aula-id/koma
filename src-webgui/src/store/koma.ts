@@ -199,12 +199,15 @@ export type PendingCall = {
 // (state/runtime.rs `set_toast`/`set_toast_info`) projected via the Status
 // envelope. `id` is a client-minted monotonic tick so a repeat/re-fired toast
 // re-triggers the auto-dismiss timer + re-mounts the card even when the text is
-// unchanged; `kind` drives severity colouring (error vs info). Safeguard blocks
-// (harness flagged / classifier unavailable) arrive here.
+// unchanged; `kind` drives which lucide icon + palette role tints it (the
+// container itself is always the neutral themed surface — see ToastContainer).
+// The wire (render.rs) currently only ever emits "error"/"info"; "warn"/
+// "success" are accepted here so the client is ready without a Rust change.
+// Safeguard blocks (harness flagged / classifier unavailable) arrive here.
 export type ToastEntry = {
   id: number
   text: string
-  kind: 'error' | 'info'
+  kind: 'error' | 'warn' | 'success' | 'info'
 }
 
 // The host's FileDiff reply payload for a `kind:'diff'` editor tab — the
@@ -374,9 +377,13 @@ export type PushEnvelope =
   // Reply to GuiReq UsagePreview — a LAST-7-DAYS usage preview computed straight
   // off the global usage ledger (host-only, never touches the daemon). ALWAYS a
   // reply so the Usage panel's loading state can never hang. `scope` echoes the
-  // request's "all"/"session" token so a reply that no longer matches the
-  // CURRENTLY selected scope (a rapid toggle racing an in-flight request) is
-  // dropped rather than rendered.
+  // request's "all"/"session" token, and `sessionId` echoes the session uuid
+  // ACTUALLY queried (null for an "all" scope) — together they let the reducer drop
+  // a reply that no longer matches what's currently selected/attached: a rapid
+  // all/session toggle racing an in-flight request (scope mismatch), OR the
+  // foreground session switching mid-flight while "session" scope stayed selected
+  // (session id mismatch — otherwise session A's numbers would render under B's
+  // attach).
   | {
       k: 'UsagePreview'
       cost: number
@@ -387,6 +394,7 @@ export type PushEnvelope =
       days: UsageDayEntry[]
       topModels: UsageModelEntry[]
       scope: string
+      sessionId: string | null
     }
   // Reply to GuiReq GetSettings (and the re-push after SetPrefs) — the Settings
   // tab's Session-section values + active palette. Guaranteed for every request
@@ -863,7 +871,17 @@ export const useKoma = create<KomaState>((set, get) => ({
               ? {
                   ...s.ui,
                   toastSeq: seq,
-                  toast: { id: seq, text: env.toast as string, kind: env.toastKind === 'error' ? 'error' : 'info' },
+                  toast: {
+                    id: seq,
+                    text: env.toast as string,
+                    // Pass a recognised severity straight through (future-proofs
+                    // "warn"/"success" if the host ever emits them); anything else
+                    // (today: everything but "error") falls back to "info".
+                    kind:
+                      env.toastKind === 'error' || env.toastKind === 'warn' || env.toastKind === 'success'
+                        ? env.toastKind
+                        : 'info',
+                  },
                 }
               : s.ui,
           }
@@ -965,6 +983,12 @@ export const useKoma = create<KomaState>((set, get) => ({
           // `usagePreview` as-is (likely null, showing the loading row) until
           // the reply matching the CURRENT scope lands.
           if (env.scope !== s.ui.usageScope) return s
+          // Drop a "session"-scope reply whose echoed session id no longer
+          // matches the CURRENTLY attached session — the foreground session
+          // switched while this request was in flight (scope stayed
+          // "session" throughout), so this reply describes the OLD session
+          // and must not render under the new attach.
+          if (env.scope === 'session' && env.sessionId !== s.session.id) return s
           return {
             usagePreview: {
               cost: env.cost,
