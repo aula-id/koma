@@ -73,6 +73,24 @@ export type SettingsValues = {
   bashSaving: boolean
   internetMode: string
   palette: string
+  // The foreground session's stored `/effort` value ("" = model default), for
+  // the composer EffortPicker's trigger-pill label.
+  effort: string
+}
+
+// The composer EffortPicker's latest GetEffortOptions reply (host
+// `DaemonEvent::EffortOptions`, mirrors the TUI `/effort` menu derivation).
+// `state` is "loading" (a catalogue fetch was just armed or is already in
+// flight — `options` empty), "unsupported" (the model has no reasoning
+// control, or there's no active session — `options` empty), or "ready"
+// (`options`/`selected` populated). `note` carries the human-readable
+// reason/hint in every state. `null` until the first reply lands (the picker
+// shows a loading row); REPLACED wholesale on each reply.
+export type EffortOptions = {
+  options: string[]
+  selected: number
+  note: string
+  state: 'loading' | 'unsupported' | 'ready'
 }
 
 // One day's cost in a UsagePreview's 7-entry daily series (host `PushUsageDay`).
@@ -443,7 +461,12 @@ export type PushEnvelope =
       bashSaving: boolean
       internetMode: string
       palette: string
+      effort: string
     }
+  // Reply to GuiReq GetEffortOptions — the composer EffortPicker's derived
+  // `/effort` menu for the foreground session's current model. ALWAYS a reply
+  // (loading/unsupported/ready) so the picker never hangs.
+  | { k: 'EffortOptions'; options: string[]; selected: number; note: string; state: 'loading' | 'unsupported' | 'ready' }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -609,6 +632,12 @@ type KomaState = {
   // SetPrefs re-push. `null` until the first reply lands (the tab shows a
   // loading row); REPLACED wholesale on each reply.
   settingsValues: SettingsValues | null
+  // The composer EffortPicker's latest GetEffortOptions reply. `null` until the
+  // first reply lands (the picker shows a loading row); REPLACED wholesale on
+  // each reply — the picker clears this to `null` itself right before firing a
+  // fresh GetEffortOptions (the open-time re-request), so a stale menu never
+  // lingers under a different state.
+  effortOptions: EffortOptions | null
   // The activity-bar Usage panel's latest LAST-7-DAYS preview. `null` until the
   // first reply lands (the panel shows a loading row); REPLACED wholesale on
   // each reply. The panel re-requests it every time it's shown.
@@ -810,6 +839,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   modelList: initialModelList,
   routeList: initialRouteList,
   settingsValues: null,
+  effortOptions: null,
   usagePreview: null,
 
   push: (env) => {
@@ -873,6 +903,12 @@ export const useKoma = create<KomaState>((set, get) => ({
         // session's sub-agent/bash target (the new session's daemon starts with none
         // anyway). Fired AFTER the set so it reads the reset tab state.
         if (switched) get().syncStreamView()
+        // A genuine switch also invalidates `settingsValues` — it's the OLD
+        // session's name/workdir/toggles/effort, never refreshed by the Snapshot
+        // envelope itself. Re-fetch so the (always-visible) EffortPicker trigger
+        // pill and the Settings tab (if open) rehydrate for the NEW session
+        // instead of showing the old one's values until Settings is reopened.
+        if (switched) get().req({ r: 'GetSettings' })
         break
       }
       case 'Switching':
@@ -1026,6 +1062,17 @@ export const useKoma = create<KomaState>((set, get) => ({
             bashSaving: env.bashSaving,
             internetMode: env.internetMode,
             palette: env.palette,
+            effort: env.effort ?? '',
+          },
+        }))
+        break
+      case 'EffortOptions':
+        set(() => ({
+          effortOptions: {
+            options: env.options,
+            selected: env.selected,
+            note: env.note,
+            state: env.state,
           },
         }))
         break

@@ -304,6 +304,28 @@ pub enum ClientRequest {
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
     },
+
+    /// GUI composer EFFORT picker opened: derive the `/effort` menu for the
+    /// foreground session's current (Main-role) model, reusing
+    /// [`crate::app::runtime::commands::effort::effort_menu`] — the SAME
+    /// derivation the TUI's `/effort` command uses, including its cold-cache
+    /// fetch-arm side effect. ALWAYS replies with a one-shot
+    /// [`DaemonEvent::EffortOptions`] (never a bare `Ack`/`Error`) so the picker
+    /// never hangs: a cold/mismatched cache replies `state: "loading"` with
+    /// empty `options` (the GUI can re-poll), a model with no reasoning control
+    /// replies `state: "unsupported"`, and a derived menu replies
+    /// `state: "ready"` with `options`/`selected`/`note` populated. gui-gated:
+    /// the TUI drives the picker via `Mode::Effort` directly.
+    GetEffortOptions,
+    /// GUI composer EFFORT picker pick: persist the chosen effort level via the
+    /// SAME [`crate::app::runtime::actions::Action::SaveEffort`] the TUI picker's
+    /// confirm keystroke runs (`"default"` → empty = model default; no client
+    /// rebuild, effort is resolved per-call). The reply is a fresh
+    /// [`DaemonEvent::SettingsValues`] push (mirrors [`SetSessionPrefs`]'s
+    /// reply-via-re-push framing) so the GUI's effort-picker label updates off
+    /// the SAME settings channel it already listens to. gui-gated: the TUI
+    /// drives this via `Mode::Effort`'s confirm handler.
+    SetEffort { effort: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -394,6 +416,29 @@ pub enum DaemonEvent {
         bash_saving: bool,
         internet_mode: String,
         palette: String,
+        /// The foreground session's stored `/effort` value (`""` = model
+        /// default), for the GUI composer's effort-picker label. Mirrors the
+        /// TUI's `sess.settings.effort` field verbatim.
+        effort: String,
+    },
+    /// One-shot reply to a [`ClientRequest::GetEffortOptions`]: the derived
+    /// `/effort` menu for the foreground session's current model, from
+    /// [`crate::app::runtime::commands::effort::effort_menu`]. `state` is
+    /// `"loading"` (no options yet — a catalogue fetch was just armed or is
+    /// already in flight; `options` empty, `selected` 0), `"unsupported"`
+    /// (the model has no reasoning control, or there's no active
+    /// session/client; `options` empty, `selected` 0), or `"ready"`
+    /// (`options`/`selected` populated exactly like `Mode::Effort`'s
+    /// `EffortPickerState`). `note` carries the human-readable reason/hint in
+    /// every state (the TUI's status-line text for `"loading"`/`"unsupported"`,
+    /// the picker's capability note for `"ready"`). ALWAYS sent — delivered
+    /// whether or not the requesting client is session-attached, like
+    /// [`DaemonEvent::SettingsValues`] — so the GUI picker never hangs.
+    EffortOptions {
+        options: Vec<String>,
+        selected: usize,
+        note: String,
+        state: String,
     },
 }
 

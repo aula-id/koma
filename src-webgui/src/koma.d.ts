@@ -167,6 +167,17 @@ declare global {
         internetMode?: string
         workdir?: string[]
       }
+    // Composer EFFORT pill opened: fetch the derived `/effort` menu (TUI
+    // parity) for the foreground session's current model. Attached-only (like
+    // Interrupt/SetPrefs — no session ⇒ no-op, the picker just stays in its
+    // loading state). Reply lands as the EffortOptions push envelope
+    // (guaranteed for every request once attached: loading/unsupported/ready).
+    | { r: 'GetEffortOptions' }
+    // EFFORT picker row pick: persist the chosen effort level ("default" =
+    // model default). Attached-only, like SetPrefs. Reply lands as a fresh
+    // SettingsValues push (the picker's trigger-pill label updates off that
+    // same channel — no dedicated ack).
+    | { r: 'SetEffort'; effort: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

@@ -10,6 +10,7 @@ import {
 import { ArrowUp, CornerDownRight, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { ModelPicker } from './ModelPicker'
+import { EffortPicker } from './EffortPicker'
 import { ModeSelector } from './ModeSelector'
 import { CatMascot } from './CatMascot'
 // Build-time JSON import: src-misc/ lives outside the vite root (src-webgui/)
@@ -330,6 +331,8 @@ export function Composer() {
             </button>
             {/* Session model quick-picker — compact, drops UP above the composer. */}
             <ModelPicker />
+            {/* Reasoning effort (TUI /effort parity) — compact, drops UP above the composer. */}
+            <EffortPicker />
             {/* Agent mode (Auto/Plan/Normal) — compact, drops UP above the composer. */}
             <ModeSelector />
           </div>

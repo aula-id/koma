@@ -403,6 +403,21 @@ enum GuiReq {
         #[serde(default)]
         workdir: Option<Vec<String>>,
     },
+
+    // ─── GUI composer EFFORT picker (TUI `/effort` parity) ───────────────────────
+    /// The composer's EFFORT pill opened: fetch the derived `/effort` menu for the
+    /// foreground session's current model. Forwarded as
+    /// [`ClientRequest::GetEffortOptions`], attached-only (like `Interrupt` — the
+    /// menu is per-session/per-model, so there's nothing to derive un-attached; a
+    /// no-op there just means the request is never sent, and the picker shows its
+    /// loading state until an attach lands). The daemon ALWAYS replies with an
+    /// `EffortOptions` frame the host re-pushes as an `EffortOptions` envelope.
+    GetEffortOptions,
+    /// The EFFORT picker's row pick: persist the chosen effort level. Forwarded as
+    /// [`ClientRequest::SetEffort`], attached-only like `SetPrefs`. The daemon
+    /// re-pushes a fresh `SettingsValues` as the reply, updating the picker's
+    /// trigger-pill label.
+    SetEffort { effort: String },
 }
 
 /// Write `bytes` to a host-writable scratch file, returning its absolute path.
@@ -1068,6 +1083,24 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                                     internet_mode,
                                     workdir,
                                 });
+                            }
+                        }
+                    }
+                    // Composer EFFORT pill opened: fetch the derived menu for the current
+                    // model (attached-only — un-attached leaves the picker in its loading
+                    // state, same as `Interrupt`).
+                    GuiReq::GetEffortOptions => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::GetEffortOptions);
+                            }
+                        }
+                    }
+                    // EFFORT picker row pick: persist the chosen effort level.
+                    GuiReq::SetEffort { effort } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetEffort { effort });
                             }
                         }
                     }

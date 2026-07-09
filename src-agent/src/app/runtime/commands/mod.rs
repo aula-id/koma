@@ -15,7 +15,11 @@ mod cd;
 // `handle_compact` once the post-approval turn settles — the same entry point
 // `/compact` uses, with `preserve_n = 0`.
 pub(crate) mod compact;
-mod effort;
+// `pub(crate)` so the GUI `GetEffortOptions`/`SetEffort` daemon-request handlers
+// (event_loop::daemon::hub::requests) can reuse `effort_menu` — the SAME
+// per-model menu derivation (incl. the cold-cache fetch-arm side effect) the
+// TUI's `/effort` uses, so both surfaces agree byte-for-byte.
+pub(crate) mod effort;
 // `pub(crate)` so the GUI model quick-picker's synthetic "advertised free" row can
 // reuse `set_session_koma_free` — the SAME find-or-create-and-pin core `/free` runs —
 // from the daemon `SetSessionMain` handler.

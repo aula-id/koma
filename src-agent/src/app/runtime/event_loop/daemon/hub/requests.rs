@@ -473,6 +473,43 @@ impl DaemonHub {
                 self.send_settings_values(idx, state);
             }
 
+            // GUI composer EFFORT picker opened: derive the `/effort` menu for the
+            // foreground session's current model via the SAME `effort_menu` helper
+            // the TUI's `/effort` uses (incl. its cold-cache fetch-arm side effect),
+            // and ALWAYS reply with a one-shot `EffortOptions` — never a bare
+            // Ack/Error — so the picker never hangs on Loading/Unsupported. Mirrors
+            // `GetSettings`: strictly a reply, no attach/snapshot/foreground move,
+            // delivered whether or not this client is session-attached.
+            ClientRequest::GetEffortOptions => {
+                use crate::app::runtime::commands::effort::EffortMenu;
+                let event = match crate::app::runtime::commands::effort::effort_menu(state, client)
+                {
+                    EffortMenu::Loading(note) => DaemonEvent::EffortOptions {
+                        options: Vec::new(),
+                        selected: 0,
+                        note,
+                        state: "loading".to_string(),
+                    },
+                    EffortMenu::Unsupported(note) => DaemonEvent::EffortOptions {
+                        options: Vec::new(),
+                        selected: 0,
+                        note,
+                        state: "unsupported".to_string(),
+                    },
+                    EffortMenu::Ready {
+                        options,
+                        selected,
+                        note,
+                    } => DaemonEvent::EffortOptions {
+                        options,
+                        selected,
+                        note,
+                        state: "ready".to_string(),
+                    },
+                };
+                self.send_to(idx, event);
+            }
+
             // GUI Explore stream tab: set THIS client's read-only stream view (which
             // sub-agent / bash job it is live-streaming, PINNED to `session`). Pure
             // per-client state — it touches no session, so it sits here rather than in the
@@ -916,6 +953,28 @@ impl DaemonHub {
                 self.send_settings_values(idx, state);
             }
 
+            // GUI composer EFFORT picker pick: persist the chosen effort level with the
+            // SAME field-level sanitization `handle_save_effort` applies ("default" ->
+            // empty = model default) — but mutate the session field DIRECTLY rather than
+            // going through `Action::SaveEffort`, because that action ALSO does
+            // `*state.mode_mut() = Mode::Chat` at the end. `Mode` is per-SESSION, so
+            // routing through it would silently kick any OTHER client viewing this
+            // session (TUI in Settings/Agents/an approval, or its own `/effort` picker)
+            // back to Chat — exactly the bug `SetModel`/`SetSessionPrefs` avoid by
+            // replicating field effects directly instead of calling a mode-mutating
+            // action. No client rebuild needed: effort is resolved per-call. The C2 LOAD
+            // bracket already pointed `fg()` at this client's session. Reply framing
+            // mirrors `SetSessionPrefs`: a fresh `SettingsValues` re-push IS the reply
+            // (the effort-picker label rides the same settings channel), not a bare Ack.
+            ClientRequest::SetEffort { effort } => {
+                let effort = if effort == "default" { String::new() } else { effort };
+                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    sess.settings.effort = effort;
+                    let _ = sess.save();
+                }
+                self.send_settings_values(idx, state);
+            }
+
             // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
             // Main-role koma-free model in the GLOBAL config (the non-key equivalent of the
             // TUI's `Action::SetupKomaFree`), then persist. Only the CONFIG mutation is
@@ -1180,6 +1239,7 @@ impl DaemonHub {
             | ClientRequest::ListModels { .. }
             | ClientRequest::ListRoutes { .. }
             | ClientRequest::GetSettings
+            | ClientRequest::GetEffortOptions
             | ClientRequest::SetStreamView { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
@@ -1220,6 +1280,7 @@ impl DaemonHub {
             bash_saving: s.bash_saving,
             internet_mode: s.internet_mode.as_str().to_string(),
             palette: state.rest.config.palette.clone(),
+            effort: s.effort.clone(),
         };
         self.send_to(idx, event);
     }
