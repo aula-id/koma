@@ -24,6 +24,7 @@ use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_file_diff, compute_usage_preview};
+use super::project::{push_config, push_hub, ConfigProjection};
 use super::push_proto::{
     push_file_diff, push_model_list, push_route_list, push_settings_values, push_switching,
     push_usage_preview,
@@ -254,8 +255,8 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 /// dedups on `push_state.config_json`, so callers `reset()` first to force a re-emit.
 fn push_swapper_config(push: &dyn Fn(String), push_state: &mut render::PushState) {
     let cfg = crate::model::app_config::AppConfig::load();
-    let projection = render::ConfigProjection::from_app_config(&cfg);
-    render::push_config(Some(&projection), push, push_state);
+    let projection = ConfigProjection::from_app_config(&cfg);
+    push_config(Some(&projection), push, push_state);
 }
 
 /// Apply a PRE-SESSION config mutation (a [`HostCtl::ConfigMutate`]) directly to
@@ -277,8 +278,8 @@ fn apply_swapper_config_mutation(
         if let Err(e) = cfg.save() {
             eprintln!("[gui] pre-session config save failed: {e}");
         }
-        let projection = render::ConfigProjection::from_app_config(&cfg);
-        render::push_config(Some(&projection), push, push_state);
+        let projection = ConfigProjection::from_app_config(&cfg);
+        push_config(Some(&projection), push, push_state);
     }
 }
 
@@ -501,7 +502,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
     let hub = build_local_hub(current);
     push_state.reset();
-    render::push_hub(&hub, push, push_state);
+    push_hub(&hub, push, push_state);
     // The swapper holds no daemon snapshot, so the attached `push_loop`'s Config push
     // never runs here — the Connector/MCP panels would cold-open EMPTY. Read the loaded
     // global config directly and push a `Config` envelope so FIRST open shows the real
@@ -519,7 +520,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
                 let hub = build_local_hub(current);
                 push_state.reset();
-                render::push_hub(&hub, push, push_state);
+                push_hub(&hub, push, push_state);
                 // Re-emit config too (a `Ready` reload re-mounts the panels).
                 push_swapper_config(push, push_state);
             }
