@@ -1004,6 +1004,24 @@ impl DaemonHub {
                 self.ack_or_error(idx, result);
             }
 
+            // GUI Ctrl+R composer parity: resend the last user turn via the SAME
+            // `Action::Resend` the TUI's Ctrl+R runs (pop trailing assistant
+            // messages + re-stream). `handle_resend` has its own busy/no-session/
+            // nothing-to-resend guards and reports a no-op via the status line.
+            ClientRequest::Resend => {
+                let result = apply_action(Action::Resend, state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI composer queued-list clear button: cancel every pending mid-turn
+            // steer via the SAME `Action::CancelSteers` the TUI's Ctrl+X-with-
+            // pending-steers runs (clears `pending_steer` + a status line); a
+            // no-op when the queue is already empty.
+            ClientRequest::CancelSteers => {
+                let result = apply_action(Action::CancelSteers, state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
             // GUI hover-edit pencil on a USER chat bubble: rewind the foreground
             // session to JUST BEFORE the message at `index` — the non-key equivalent
             // of the TUI's double-Esc `Mode::MessageRewind` + Enter. Reuses the exact

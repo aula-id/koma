@@ -199,6 +199,19 @@ pub enum ClientRequest {
     /// agentic loop + kill running sub-agents). gui-gated: the TUI forwards Esc as a
     /// `SendKey` instead.
     Interrupt,
+    /// Resend the foreground session's last user turn (composer Ctrl+R parity) —
+    /// the non-key equivalent of the TUI's Ctrl+R. Reuses `Action::Resend`
+    /// daemon-side: pops trailing assistant messages and re-streams the last
+    /// user turn from scratch. A no-op (busy / no session / nothing to resend)
+    /// surfaces via the session's `status` line, exactly like the TUI's Ctrl+R.
+    /// gui-gated: the TUI drives this via `SendKey` (Ctrl+R).
+    Resend,
+    /// Clear every queued mid-turn steer message (the composer's queued-list
+    /// clear button) — the non-key equivalent of the TUI's Ctrl+X-with-pending-
+    /// steers. Reuses `Action::CancelSteers` daemon-side (clears
+    /// `pending_steer` + a status line). A no-op when the queue is already
+    /// empty. gui-gated: the TUI drives this via `SendKey` (Ctrl+X).
+    CancelSteers,
     /// Kill a single sub-agent of the foreground session by its stable id (the GUI
     /// agent-row kill button). Mirrors the model-callable `task_kill` primitive: abort
     /// the tokio task + flip a still-Running status to Killed (a terminal status is left

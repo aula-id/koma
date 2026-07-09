@@ -45,6 +45,7 @@ export function Composer() {
   const pendingSteer = useKoma((s) => s.session.pendingSteer)
   const req = useKoma((s) => s.req)
   const openOmniSearch = useKoma((s) => s.openOmniSearch)
+  const omnisearchOpen = useKoma((s) => s.ui.omnisearchOpen)
   const composerInsert = useKoma((s) => s.ui.composerInsert)
   const consumeComposerInsert = useKoma((s) => s.consumeComposerInsert)
   const composerRefill = useKoma((s) => s.ui.composerRefill)
@@ -66,11 +67,18 @@ export function Composer() {
 
   // Auto-grow the textarea with its content, up to a cap (then it scrolls).
   // Runs on every input change (incl. programmatic clears + omnisearch inserts).
+  // Also parks the caret at the END of the text when a history recall just
+  // replaced it (caretToEndRef, set by recallHistory below) — a plain typed
+  // change never needs this, the browser already tracks the caret for that.
   useEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
     ta.style.height = 'auto'
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+    if (caretToEndRef.current) {
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+      caretToEndRef.current = false
+    }
   }, [input])
 
   // Thinking-bubble: while working, pick a fresh word immediately, then
@@ -116,12 +124,39 @@ export function Composer() {
   // dropped host-side with a toast, so gate send at the cap.
   const atSteerCap = pendingSteer.length >= 5
 
+  // Up/Down composer history recall (client-side only, no daemon round-trip —
+  // mirrors the TUI's hist_idx + input_stash, state/runtime.rs:887-906).
+  // histIdxRef is -1 when not currently recalling; stashRef holds the
+  // in-progress draft, restored once the user walks back past the newest
+  // recalled entry. Both reset on any user edit (onChange) or send (submit).
+  const histIdxRef = useRef(-1)
+  const stashRef = useRef('')
+  // Flags the [input] auto-grow effect above to also park the caret at the end
+  // of the text a recall just injected (a plain typed change never needs this).
+  const caretToEndRef = useRef(false)
+
+  const resetHistory = () => {
+    histIdxRef.current = -1
+    stashRef.current = ''
+  }
+
+  // Read straight off the store (no subscription — this only runs on an
+  // Up/Down keypress, not every render) for user-authored, plain messages:
+  // role==='user', no `kind` (excludes 'shell'/'bashNudge' — recalling a
+  // "$ cmd\noutput" blob into the composer is garbage, a deliberate deviation
+  // from the TUI which has no such rows), non-empty content. Oldest-first.
+  const recallCandidates = () =>
+    useKoma
+      .getState()
+      .session.messages.filter((m) => m.role === 'user' && !m.kind && m.content.trim() !== '')
+
   const submit = () => {
     const text = input.trim()
     if (!text) return
     // While working, a submit is QUEUED daemon-side as a steer (not a new turn);
     // block it at the cap so we don't fire a request the daemon will just drop.
     if (atSteerCap) return
+    resetHistory()
     // Staged rewind (edit pencil): fire RewindTo FIRST so the daemon aborts the
     // in-flight turn + truncates messages.json to before the edited message, THEN
     // Submit carries the edited text as the fresh turn. The single ordered IPC
@@ -129,6 +164,24 @@ export function Composer() {
     if (pendingRewindIndex !== null) {
       req({ r: 'RewindTo', index: pendingRewindIndex })
       clearRewind()
+    }
+    // `!<cmd>` composer shell shortcut (TUI parity, controller/input/chat.rs:
+    // 418-442): route to a no-model-round-trip shell run instead of a chat
+    // submit — but ONLY while idle and with no staged image attachment (an
+    // attachment makes no sense on a shell line; fall through to a normal
+    // Submit instead, same as an empty `!cmd`). Deliberate deviation from the
+    // TUI: it no-ops a `!` line while busy, but here we let it fall through to
+    // a normal Submit so it queues as a steer like any other composer send,
+    // rather than silently dropping the keystroke.
+    if (!working && attachments.length === 0 && text.startsWith('!')) {
+      const cmd = text.slice(1).trim()
+      if (cmd) {
+        req({ r: 'Shell', cmd })
+        setInput('')
+        setMascotSwap((t) => t + 1)
+        requestScrollBottom()
+        return
+      }
     }
     req({ r: 'Submit', text })
     setInput('')
@@ -143,17 +196,57 @@ export function Composer() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit()
+      return
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // Omnisearch owns Up/Down for its own result-list navigation while open.
+      if (omnisearchOpen) return
+      const ta = e.currentTarget
+      const firstLine = !ta.value.slice(0, ta.selectionStart ?? 0).includes('\n')
+      const lastLine = !ta.value.slice(ta.selectionEnd ?? ta.value.length).includes('\n')
+      if (e.key === 'ArrowUp' && firstLine) {
+        const history = recallCandidates()
+        if (histIdxRef.current === -1) {
+          if (history.length === 0) return
+          stashRef.current = input
+          histIdxRef.current = history.length - 1
+        } else if (histIdxRef.current > 0) {
+          histIdxRef.current -= 1
+        } else {
+          return // already at the oldest entry — nothing further to recall
+        }
+        e.preventDefault()
+        caretToEndRef.current = true
+        setInput(history[histIdxRef.current].content)
+      } else if (e.key === 'ArrowDown' && lastLine) {
+        if (histIdxRef.current === -1) return // nothing recalled yet
+        const history = recallCandidates()
+        if (histIdxRef.current < history.length - 1) {
+          histIdxRef.current += 1
+          e.preventDefault()
+          caretToEndRef.current = true
+          setInput(history[histIdxRef.current].content)
+        } else {
+          // Walked past the newest recalled entry — restore the stashed draft.
+          histIdxRef.current = -1
+          e.preventDefault()
+          caretToEndRef.current = true
+          setInput(stashRef.current)
+        }
+      }
     }
   }
 
   // Draft change: clearing the composer to empty CANCELS a staged rewind (edit
   // pencil) — the user backed out, so the next send must NOT truncate. Only a
-  // user edit fires onChange; programmatic refills (rewind/omnisearch) go through
-  // setInput directly, so staging a rewind never self-cancels here.
+  // user edit fires onChange; programmatic refills (rewind/omnisearch/history
+  // recall) go through setInput directly, so staging a rewind never
+  // self-cancels here. A user edit also resets any in-progress history walk.
   const onChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value
     setInput(val)
     if (val.trim() === '' && pendingRewindIndex !== null) clearRewind()
+    resetHistory()
   }
 
   const attachFiles = async (files: FileList | File[]) => {
@@ -219,6 +312,14 @@ export function Composer() {
             <span>
               Queued {pendingSteer.length}/5
             </span>
+            <button
+              onClick={() => req({ r: 'CancelSteers' })}
+              aria-label="Clear queued messages"
+              title="Clear queued messages"
+              className="ml-auto flex-none opacity-60 transition-opacity hover:text-koma-fg hover:opacity-100"
+            >
+              <X size={12} />
+            </button>
           </div>
           <div className="flex flex-col gap-0.5">
             {pendingSteer.map((s, i) => (
