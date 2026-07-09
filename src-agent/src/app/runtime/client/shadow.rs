@@ -114,14 +114,18 @@ pub(super) fn apply_frame(
         // envelope; the TUI never sends `ListRoutes`), so it too folds as a no-op.
         // `SettingsValues` is likewise a GUI-only reply (the host intercepts it in
         // `push_loop` to re-push a `SettingsValues` envelope; the TUI never sends
-        // `GetSettings`), so it also folds as a non-visual no-op here.
+        // `GetSettings`), so it also folds as a non-visual no-op here. `EffortOptions`
+        // follows the exact same story for the GUI composer's effort picker (the host
+        // re-pushes an `EffortOptions` envelope; the TUI opens `Mode::Effort` directly
+        // and never sends `GetEffortOptions`).
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
         | DaemonEvent::FileSearchResults { .. }
         | DaemonEvent::ModelList { .. }
         | DaemonEvent::ModelRoutes { .. }
-        | DaemonEvent::SettingsValues { .. } => false,
+        | DaemonEvent::SettingsValues { .. }
+        | DaemonEvent::EffortOptions { .. } => false,
     }
 }
 

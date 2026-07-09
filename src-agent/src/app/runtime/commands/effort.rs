@@ -55,25 +55,51 @@ pub(super) fn preselect_effort(options: &[String], effort: &str) -> usize {
     options.iter().position(|o| o == want).unwrap_or(0)
 }
 
-/// Handle the `/effort` command: open the effort picker for the current model.
+/// Outcome of deriving the `/effort` menu for the current model, shared by the
+/// TUI `/effort` command and the GUI's `GetEffortOptions` daemon request — both
+/// need the IDENTICAL per-model derivation (incl. the cold-cache fetch-arm side
+/// effect below), just with different presentations of the result:
+/// - TUI: `Loading`/`Unsupported` become a status-line message; `Ready` opens
+///   `Mode::Effort`.
+/// - GUI: all three become a `DaemonEvent::EffortOptions` reply (`state`
+///   `"loading"`/`"unsupported"`/`"ready"`) so the picker never hangs.
+pub(crate) enum EffortMenu {
+    /// No usable (cached, Main-endpoint-matching) catalogue yet — a fetch has
+    /// just been armed (or was already in flight). `String` is the status
+    /// message to show while waiting (mirrors the TUI's prior inline text).
+    Loading(String),
+    /// The model has no reasoning control at all (or there's no active
+    /// session/client to derive one from). `String` explains why; the caller
+    /// shows it and does NOT open a menu.
+    Unsupported(String),
+    /// A menu is ready to show.
+    Ready {
+        options: Vec<String>,
+        selected: usize,
+        note: String,
+    },
+}
+
+/// Derive the `/effort` menu for the current model (or report why one isn't
+/// available yet). Needs an active session + client (the menu is per-model and
+/// the catalogue fetch uses the client's endpoint).
 ///
-/// Needs an active session + client (the menu is per-model and the
-/// catalogue fetch uses the client). Opening a picker overlay is always safe
-/// mid-stream (read-only view; the turn keeps streaming), so there is no busy
-/// guard here. The effort value is only written when the user CONFIRMS a
-/// selection inside the picker, which is a separate handler.
-pub(super) fn handle_effort(
+/// Side effect: when the Main route resolves, this ARMS a debounced catalogue
+/// fetch for its endpoint (if one isn't already pending/in-flight) so a
+/// SUBSEQUENT call has capabilities — this fires for BOTH callers (TUI open,
+/// GUI `GetEffortOptions`), which is exactly what lets a GUI-triggered cold
+/// fetch warm the cache for a following TUI/GUI open.
+pub(crate) fn effort_menu(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
-) -> Result<()> {
+) -> EffortMenu {
     // `_c` only gates "is there a usable client?"; the catalogue is now
     // fetched on demand by the debounced tick, not here.
     let (Some(_c), Some(settings)) = (
         client.as_ref(),
         state.rest.fg().session.as_ref().map(|s| s.settings.clone()),
     ) else {
-        state.rest.fg_mut().status = "no active session".into();
-        return Ok(());
+        return EffortMenu::Unsupported("no active session".to_string());
     };
     let model = settings.model.clone();
     // Resolve the MAIN role (the effort menu is per the chat model, served
@@ -136,13 +162,12 @@ pub(super) fn handle_effort(
             }
             None => {
                 // No reasoning control: don't open the menu, just say so.
-                state.rest.fg_mut().status = "model has no thinking control".into();
-                return Ok(());
+                return EffortMenu::Unsupported("model has no thinking control".to_string());
             }
         }
     } else {
         // Cache not available or doesn't match Main endpoint.
-        // Show a status instead of a generic menu.
+        // Report loading instead of a generic menu.
         let status = if main.is_some() {
             if prev_fetch_failed {
                 "couldn't fetch capabilities — retrying..."
@@ -152,8 +177,7 @@ pub(super) fn handle_effort(
         } else {
             "model capabilities unavailable"
         };
-        state.rest.fg_mut().status = status.into();
-        return Ok(());
+        return EffortMenu::Loading(status.to_string());
     };
 
     let stored = state
@@ -164,10 +188,40 @@ pub(super) fn handle_effort(
         .map(|s| s.settings.effort.clone())
         .unwrap_or_default();
     let selected = preselect_effort(&options, &stored);
-    *state.mode_mut() = Mode::Effort(Box::new(EffortPickerState {
+    EffortMenu::Ready {
         options,
         selected,
         note,
-    }));
+    }
+}
+
+/// Handle the `/effort` command: open the effort picker for the current model.
+///
+/// Opening a picker overlay is always safe mid-stream (read-only view; the
+/// turn keeps streaming), so there is no busy guard here. The effort value is
+/// only written when the user CONFIRMS a selection inside the picker, which is
+/// a separate handler. Unchanged behavior from before the `effort_menu`
+/// extraction: `Loading`/`Unsupported` set the SAME status-line text the
+/// inline logic used to, and `Ready` opens the SAME `Mode::Effort`.
+pub(super) fn handle_effort(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+) -> Result<()> {
+    match effort_menu(state, client) {
+        EffortMenu::Loading(msg) | EffortMenu::Unsupported(msg) => {
+            state.rest.fg_mut().status = msg;
+        }
+        EffortMenu::Ready {
+            options,
+            selected,
+            note,
+        } => {
+            *state.mode_mut() = Mode::Effort(Box::new(EffortPickerState {
+                options,
+                selected,
+                note,
+            }));
+        }
+    }
     Ok(())
 }

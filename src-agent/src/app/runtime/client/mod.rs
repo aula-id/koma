@@ -1093,6 +1093,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     d.bash_saving,
                     d.internet_mode.as_str().to_string(),
                     cfg.palette,
+                    String::new(),
                 );
             }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the

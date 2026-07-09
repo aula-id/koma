@@ -1082,6 +1082,24 @@ enum PushEnvelope {
         bash_saving: bool,
         internet_mode: String,
         palette: String,
+        /// The foreground session's stored `/effort` value (`""` = model
+        /// default), for the composer's effort-picker trigger-pill label.
+        effort: String,
+    },
+    /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
+    /// foreground session's current model. `state` is `"loading"` (a catalogue
+    /// fetch was just armed or is already in flight — `options` empty),
+    /// `"unsupported"` (the model has no reasoning control, or there's no active
+    /// session — `options` empty), or `"ready"` (`options`/`selected` populated).
+    /// `note` carries the human-readable reason/hint in every state. Pushed
+    /// out-of-band (not fingerprinted) whenever the daemon answers a
+    /// `GetEffortOptions` — ALWAYS a reply so the picker never hangs.
+    #[serde(rename_all = "camelCase")]
+    EffortOptions {
+        options: Vec<String>,
+        selected: usize,
+        note: String,
+        state: String,
     },
 }
 
@@ -1201,6 +1219,7 @@ pub(super) fn push_settings_values(
     bash_saving: bool,
     internet_mode: String,
     palette: String,
+    effort: String,
 ) {
     emit(
         push,
@@ -1212,6 +1231,7 @@ pub(super) fn push_settings_values(
             bash_saving,
             internet_mode,
             palette,
+            effort,
         },
     );
 }
@@ -1562,6 +1582,7 @@ pub(super) fn push_loop(
                         bash_saving,
                         internet_mode,
                         palette,
+                        effort,
                     } = &frame.event
                     {
                         let env = PushEnvelope::SettingsValues {
@@ -1572,6 +1593,27 @@ pub(super) fn push_loop(
                             bash_saving: *bash_saving,
                             internet_mode: internet_mode.clone(),
                             palette: palette.clone(),
+                            effort: effort.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
+                    }
+                    // Composer EFFORT-picker reply (GetEffortOptions): re-push it as an
+                    // `EffortOptions` envelope BEFORE folding (a non-visual fold no-op,
+                    // keeping the seq gap-free), same as the SettingsValues intercept above.
+                    if let DaemonEvent::EffortOptions {
+                        options,
+                        selected,
+                        note,
+                        state,
+                    } = &frame.event
+                    {
+                        let env = PushEnvelope::EffortOptions {
+                            options: options.clone(),
+                            selected: *selected,
+                            note: note.clone(),
+                            state: state.clone(),
                         };
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);
