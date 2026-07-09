@@ -30,7 +30,7 @@ use super::push_proto::{
     push_usage_preview,
 };
 use super::swapper::build_local_hub;
-use super::{render, HostCtl, StreamView};
+use super::{push_loop, render, HostCtl, StreamView};
 
 /// The host-relay run-loop's next step, mirroring [`super::ClientState`] for the headless
 /// GUI host: show the swapper, attach a session, or leave.
@@ -140,7 +140,7 @@ pub(in crate::app::runtime) fn run_host_relay(
     };
     let handle = rt.handle().clone();
 
-    let mut push_state = render::PushState::new();
+    let mut push_state = push_loop::PushState::new();
     // The session the host is (or was) attached to, so the swapper flags the row it
     // came from as `is_foreground` and a `ToSwapper` fallback remembers it.
     let mut current_session_id: Option<String> = None;
@@ -253,7 +253,7 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 /// `push_loop`'s snapshot-sourced Config push never runs there; without this the panels
 /// cold-open EMPTY even though `~/.koma/config.json` has providers/models. `push_config`
 /// dedups on `push_state.config_json`, so callers `reset()` first to force a re-emit.
-fn push_swapper_config(push: &dyn Fn(String), push_state: &mut render::PushState) {
+fn push_swapper_config(push: &dyn Fn(String), push_state: &mut push_loop::PushState) {
     let cfg = crate::model::app_config::AppConfig::load();
     let projection = ConfigProjection::from_app_config(&cfg);
     push_config(Some(&projection), push, push_state);
@@ -271,7 +271,7 @@ fn push_swapper_config(push: &dyn Fn(String), push_state: &mut render::PushState
 fn apply_swapper_config_mutation(
     req: &ClientRequest,
     push: &dyn Fn(String),
-    push_state: &mut render::PushState,
+    push_state: &mut push_loop::PushState,
 ) {
     let mut cfg = crate::model::app_config::AppConfig::load();
     if apply_global_config_req(&mut cfg, req) {
@@ -496,7 +496,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     push: &P,
     ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
-    push_state: &mut render::PushState,
+    push_state: &mut push_loop::PushState,
     current: Option<&str>,
 ) -> HostStep {
     // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
@@ -638,8 +638,8 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
 }
 
 /// The ATTACHED arm: attach `id` (build-skew safe), publish its request sender for the
-/// ipc `Submit`, fold its frames into pushes via [`render::push_loop`], then tear the
-/// connection down and translate the loop's [`render::HostTransition`] into the next
+/// ipc `Submit`, fold its frames into pushes via [`push_loop::push_loop`], then tear the
+/// connection down and translate the loop's [`push_loop::HostTransition`] into the next
 /// [`HostStep`]. A failed attach degrades to the swapper rather than crashing.
 #[allow(clippy::too_many_arguments)]
 fn host_attached(
@@ -650,7 +650,7 @@ fn host_attached(
     live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     live_view: &std::sync::Arc<std::sync::Mutex<StreamView>>,
-    push_state: &mut render::PushState,
+    push_state: &mut push_loop::PushState,
     current: &mut Option<String>,
     id: String,
     workdir: Option<std::path::PathBuf>,
@@ -678,7 +678,7 @@ fn host_attached(
     // so the guard drops before `teardown_connection`'s `block_on`.
     let transition = {
         let _rt_ctx = handle.enter();
-        render::push_loop(
+        push_loop::push_loop(
             push,
             &conn.frame_rx,
             &conn.req_tx,
@@ -712,8 +712,8 @@ fn host_attached(
     match transition {
         // Carry any GUI-picker workdir (a hub `New` while attached) into the next attach;
         // a daemon `/new` hand-off / a `Select` carries `None` (inherit the host cwd).
-        render::HostTransition::Attach { id, workdir } => HostStep::Attach { id, workdir },
-        render::HostTransition::ToSwapper => HostStep::Swapper,
-        render::HostTransition::Exit => HostStep::Done,
+        push_loop::HostTransition::Attach { id, workdir } => HostStep::Attach { id, workdir },
+        push_loop::HostTransition::ToSwapper => HostStep::Swapper,
+        push_loop::HostTransition::Exit => HostStep::Done,
     }
 }

@@ -13,8 +13,8 @@
 //! in this file, so keeping it here needs zero extra visibility bump — the minimal-
 //! bump call the split instructions asked for. `emit` stays in `render.rs` (shared
 //! with `push_proto.rs`'s own helpers), referenced here as `super::render::emit`.
-//! `PushState` also stays in `render.rs` at this point in the split (it moves to
-//! `push_loop.rs` in the next commit), referenced here as `super::render::PushState`.
+//! `PushState` lives in `push_loop.rs` (split out later in this same round),
+//! referenced here as `super::push_loop::PushState`.
 
 use crate::app::mode::{SessionHub, SessionKind};
 use crate::app::state::AppState;
@@ -25,7 +25,7 @@ use super::push_proto::{
     PushMcpServer, PushModel, PushMsg, PushPalette, PushPaletteInfo, PushPendingCall,
     PushPlanTodo, PushProvider, PushSubAgent, PushToolCall,
 };
-use super::render::PushState;
+use super::push_loop::PushState;
 
 /// Resolve a ratatui [`Color`] to a `#rrggbb` string, mirroring the fallbacks the
 /// GUI host uses elsewhere (near-black bg, near-white fg for non-Rgb palettes).
