@@ -240,6 +240,10 @@ const SettingsTab = lazy(() => import('../components/SettingsTab'))
 // Help page — lazy so its chunk only loads when the (?) button is first clicked.
 const HelpTab = lazy(() => import('../components/HelpTab'))
 
+// Per-agent editor — lazy so its chunk only loads when the Agents panel's
+// first row (or "+ Add agent") is clicked.
+const AgentTab = lazy(() => import('../components/AgentTab'))
+
 // Read-only stream tab (sub-agent transcript / bash output) — lazy so its chunk only
 // loads when the first stream tab is opened from the Explorer.
 const StreamTab = lazy(() => import('../components/StreamTab'))
@@ -288,6 +292,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <HelpTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'agent' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <AgentTab tab={t} />
               </Suspense>
             </div>
           ) : t.kind === 'subagent' || t.kind === 'bash' ? (

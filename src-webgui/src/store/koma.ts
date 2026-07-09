@@ -290,6 +290,56 @@ export type DiffPayload = {
   origin: 'git' | 'baseline'
 }
 
+// One agent dashboard entry (host `AgentEntry`, ALWAYS re-pushed wholesale in
+// the `AgentsValues` envelope — never accumulated). NOTE the wire's nested
+// structs are snake_case (unlike the envelope's own camelCase field names —
+// see the `AgentsValues` push comment), so the reducer maps `model_uuid` ->
+// `modelUuid` etc.; this is the store-normalized, camelCase shape components
+// consume. `source` distinguishes a built-in agent (ships with koma, no
+// delete) from a global override (shared across sessions) or a session-local
+// one. `modelUuid`/`model` are both null when the agent inherits the
+// session's main model — always true for builtins (they never carry a model
+// override). `tools` can legitimately be an empty array (falls back to the
+// default read-only tool set at USE time daemon-side; an empty array here is
+// NOT "no tools allowed").
+export type AgentEntry = {
+  name: string
+  description: string
+  conditions: string
+  source: 'session' | 'global' | 'builtin'
+  modelUuid: string | null
+  // Host-resolved display name for `modelUuid` (informational only — the
+  // Agents panel/tab re-resolve `modelUuid` against `catalogueModels`/
+  // `catalogueProviders` themselves for the "name @ provider" label, per the
+  // locked design, rather than trusting this field's exact format).
+  model: string | null
+  tools: string[]
+  prompt: string
+}
+
+// One entry in the Agents dashboard's model catalogue (host
+// `CatalogueModelSnapshot`, snake_case on the wire — see `AgentsValues`).
+export type CatalogueModelEntry = { uuid: string; name: string; modelId: string; providerUuid: string }
+
+// One entry in the Agents dashboard's provider catalogue (host
+// `CatalogueProviderSnapshot`, snake_case on the wire).
+export type CatalogueProviderEntry = { uuid: string; name: string; endpoint: string }
+
+// Resolve a `modelUuid` to its "name @ provider" display label for the Agents
+// panel row / AgentTab's dim model line — `null` or an unresolvable uuid (a
+// stale/deleted model) both fall back to "(inherit main)".
+export function resolveModelLabel(
+  modelUuid: string | null,
+  catalogueModels: CatalogueModelEntry[],
+  catalogueProviders: CatalogueProviderEntry[],
+): string {
+  if (!modelUuid) return '(inherit main)'
+  const m = catalogueModels.find((x) => x.uuid === modelUuid)
+  if (!m) return '(inherit main)'
+  const p = catalogueProviders.find((x) => x.uuid === m.providerUuid)
+  return p ? `${m.name} @ ${p.name}` : m.name
+}
+
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
 // uncloseable chat tab; diff tabs are opened from the Explorer's File-changed
 // rows. The `kind` discriminant is deliberately left open — a future
@@ -332,6 +382,19 @@ export type Tab =
   // `bash:${jobId}`; content read live from `session.bash` by `jobId`. `title` is the
   // (truncated) command.
   | { id: string; kind: 'bash'; jobId: number; title: string }
+  // Per-agent editor tab (Agents sidebar panel). `agentId` is the agent's
+  // NAME for an edit, `null` for a create — NOT the settings/help singleton
+  // pattern: open-or-focus is keyed PER agentId (two different agents' editors
+  // can be open side-by-side; re-clicking the same agent's row just focuses
+  // its existing tab), matched by `agentId`, NOT by `id`. `id` is a client-
+  // minted, STABLE identifier independent of `agentId` — deliberately, so a
+  // successful create/rename (which mutates `agentId` via `renameAgentTab`)
+  // never changes this tab's React `key` (`key={t.id}` in TabbedMain) and
+  // never forces a remount that would wipe in-progress edits held in the
+  // component's local state right as Save fires. Closeable like a diff tab;
+  // closing an unsaved tab discards silently (no local draft is ever
+  // persisted to the store).
+  | { id: string; kind: 'agent'; agentId: string | null }
 
 export type PushEnvelope =
   | {
@@ -505,6 +568,31 @@ export type PushEnvelope =
   // so the splash can keep showing (and finish its phase lines) even after
   // the attach itself has landed and `ui.switchingTo` has already cleared.
   | { k: 'Loading'; active: boolean; workspace: LoadPhase; awareness: LoadPhase }
+  // Reply to GuiReq GetAgents (and the re-push after every SetAgent/
+  // DeleteAgent) — the Agents dashboard's full agent list + model/provider
+  // catalogues. ALWAYS a reply, even un-attached (host answers from built-in +
+  // global config only). MIXED CASING, verified against the Rust wire: the
+  // envelope's OWN three fields are camelCase (`agents`/`catalogueModels`/
+  // `catalogueProviders`), but each nested entry struct has NO rename_all of
+  // its own and serializes plain snake_case (`model_uuid`, `model_id`,
+  // `provider_uuid`) — NOT a typo, the push case normalizes these into the
+  // camelCase `AgentEntry`/`CatalogueModelEntry`/`CatalogueProviderEntry`
+  // shapes above.
+  | {
+      k: 'AgentsValues'
+      agents: {
+        name: string
+        description: string
+        conditions: string
+        source: string
+        model_uuid: string | null
+        model: string | null
+        tools: string[]
+        prompt: string
+      }[]
+      catalogueModels: { uuid: string; name: string; model_id: string; provider_uuid: string }[]
+      catalogueProviders: { uuid: string; name: string; endpoint: string }[]
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -695,6 +783,14 @@ type KomaState = {
   // fresh Hub push confirms the kill/delete landed, so no explicit "done"
   // signal is needed.
   dyingSessions: DyingMark[]
+  // The Agents dashboard's full agent list (built-in + global + session,
+  // merged daemon-side) from the latest AgentsValues push. REPLACED wholesale
+  // on each push — empty until the first GetAgents reply lands.
+  agents: AgentEntry[]
+  // The Agents dashboard's model/provider catalogues, from the same push —
+  // feeds the AgentTab model picker and the panel row's resolved model label.
+  catalogueModels: CatalogueModelEntry[]
+  catalogueProviders: CatalogueProviderEntry[]
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -737,6 +833,18 @@ type KomaState = {
   // Open (or focus) the singleton Help tab (id 'help'): find-or-create, activate
   // it. No wire request — the Help tab is static content, unlike Settings.
   openHelpTab: () => void
+  // Open (or focus) a per-agent editor tab: find-or-create keyed by agentId
+  // (the agent's name, or `null` for a create — see the Tab union's 'agent'
+  // member), activate it. Unlike Settings/Help this is NOT a singleton — a
+  // different agentId opens a DIFFERENT tab (diff-tab-style dedupe).
+  openAgentTab: (agentId: string | null) => void
+  // Rebind an already-open agent tab's identity after a successful
+  // create/rename (fired optimistically right after the SetAgent req, since
+  // the wire gives no dedicated ack — just a fresh AgentsValues push). Updates
+  // both the tab's `id` (so a later click on that agent's now-renamed row in
+  // AgentsPanel still finds THIS tab instead of opening a duplicate) and its
+  // `agentId`. No-op if `oldAgentId === newAgentId` (a save with no rename).
+  renameAgentTab: (oldAgentId: string | null, newAgentId: string) => void
   // Open (or focus) a Monaco diff tab for a File-changed `path`: find-by-path or
   // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
   // an already-open file refreshes it (same loading + re-request path).
@@ -905,6 +1013,14 @@ function tabBaseName(path: string): string {
   return parts[parts.length - 1] || path
 }
 
+// Mints a stable, client-local id for a new agent editor tab — independent of
+// agentId (see the Tab union's 'agent' member comment for why).
+let agentTabSeq = 0
+function mintAgentTabId(): string {
+  agentTabSeq += 1
+  return `agent-${agentTabSeq}`
+}
+
 export const useKoma = create<KomaState>((set, get) => ({
   session: initialSession,
   hub: initialHub,
@@ -917,6 +1033,9 @@ export const useKoma = create<KomaState>((set, get) => ({
   effortOptions: null,
   usagePreview: null,
   dyingSessions: [],
+  agents: [],
+  catalogueModels: [],
+  catalogueProviders: [],
 
   push: (env) => {
     switch (env.k) {
@@ -1183,6 +1302,57 @@ export const useKoma = create<KomaState>((set, get) => ({
           },
         }))
         break
+      case 'AgentsValues': {
+        // Normalize the wire's snake_case nested structs into the store's
+        // camelCase shapes (see the AgentEntry/CatalogueModelEntry/
+        // CatalogueProviderEntry comments — the envelope's OWN fields are
+        // already camelCase, only the per-item fields need mapping).
+        const agents: AgentEntry[] = env.agents.map((a) => ({
+          name: a.name,
+          description: a.description,
+          conditions: a.conditions,
+          source: a.source === 'global' || a.source === 'builtin' ? a.source : 'session',
+          modelUuid: a.model_uuid,
+          model: a.model,
+          tools: a.tools,
+          prompt: a.prompt,
+        }))
+        const catalogueModels: CatalogueModelEntry[] = env.catalogueModels.map((m) => ({
+          uuid: m.uuid,
+          name: m.name,
+          modelId: m.model_id,
+          providerUuid: m.provider_uuid,
+        }))
+        const catalogueProviders: CatalogueProviderEntry[] = env.catalogueProviders.map((p) => ({
+          uuid: p.uuid,
+          name: p.name,
+          endpoint: p.endpoint,
+        }))
+        set((s) => {
+          const liveNames = new Set(agents.map((a) => a.name))
+          // A deleted agent's editor tab has nothing left to show — close it
+          // automatically, derived from its absence in this fresh list (no
+          // explicit "delete succeeded" ack exists on the wire). An
+          // in-progress CREATE tab (agentId === null) is never touched here —
+          // it isn't "in" the list yet by definition.
+          let tabs = s.ui.tabs
+          let activeTabId = s.ui.activeTabId
+          const staleIds = new Set(
+            tabs
+              .filter((t) => t.kind === 'agent' && t.agentId !== null && !liveNames.has(t.agentId))
+              .map((t) => t.id),
+          )
+          if (staleIds.size > 0) {
+            tabs = tabs.filter((t) => !staleIds.has(t.id))
+            // Multiple tabs could go stale from one push — land on chat
+            // rather than compute per-removal left-neighbours (closeTab's
+            // approach only makes sense for a single removal).
+            if (staleIds.has(activeTabId)) activeTabId = 'chat'
+          }
+          return { agents, catalogueModels, catalogueProviders, ui: { ...s.ui, tabs, activeTabId } }
+        })
+        break
+      }
       case 'UsagePreview':
         set((s) => {
           // Drop a reply for a scope the user has since switched away from (a
@@ -1249,6 +1419,32 @@ export const useKoma = create<KomaState>((set, get) => ({
       const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: 'help', kind: 'help' }]
       return { ui: { ...s.ui, tabs, activeTabId: 'help' } }
     })
+  },
+  openAgentTab: (agentId) => {
+    set((s) => {
+      // Dedupe by agentId (NOT id — see the Tab union comment): re-clicking
+      // the same agent's row, or "+ Add agent" while a blank create tab is
+      // already open, focuses that existing tab instead of opening another.
+      const existingTab = s.ui.tabs.find((t) => t.kind === 'agent' && t.agentId === agentId)
+      if (existingTab) return { ui: { ...s.ui, activeTabId: existingTab.id } }
+      const id = mintAgentTabId()
+      const tabs: Tab[] = [...s.ui.tabs, { id, kind: 'agent', agentId }]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
+  },
+  renameAgentTab: (oldAgentId, newAgentId) => {
+    if (oldAgentId === newAgentId) return
+    // Only `agentId` changes — `id` (and thus the tab's React key/identity
+    // and activeTabId) stays exactly as it was, so the open AgentTab instance
+    // is never remounted by this rebind.
+    set((s) => ({
+      ui: {
+        ...s.ui,
+        tabs: s.ui.tabs.map((t) =>
+          t.kind === 'agent' && t.agentId === oldAgentId ? { ...t, agentId: newAgentId } : t,
+        ),
+      },
+    }))
   },
   openDiffTab: (path) => {
     const id = `diff:${path}`
