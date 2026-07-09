@@ -1,17 +1,10 @@
 use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 
-use crate::app::mode::Mode;
 use crate::app::state::AppState;
-use crate::controller::command::Command;
-use crate::controller::input::{handle_key, handle_paste, Action};
-use crate::dto::chat::Role;
-use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus, StateSnapshot};
+use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus};
 use crate::ipc::snapshot::build_snapshot;
 use crate::service::openrouter::OpenRouterClient;
-
-use crate::app::runtime::actions::apply_action;
-use crate::app::runtime::commands::compact::handle_compact;
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -571,16 +564,14 @@ impl DaemonHub {
             // Submit composed text to the foreground session — identical to the local
             // Enter-on-composer path (`Action::Submit` carries the text directly).
             ClientRequest::SubmitInput { text } => {
-                let result = apply_action(Action::Submit(text), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.submit_input(idx, state, client, handle, text);
             }
 
             // Run a `!` shell command in the foreground session's cwd, no model
             // round-trip — the same `Action::Shell` the local composer's leading-`!`
             // detection emits, so the shell-entry-append logic is never forked.
             ClientRequest::Shell { cmd } => {
-                let result = apply_action(Action::Shell(cmd), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.shell(idx, state, client, handle, cmd);
             }
 
             // Forward a key to the foreground session through the EXACT local input
@@ -588,9 +579,7 @@ impl DaemonHub {
             // Action -> apply_action. So the daemon reuses the same per-mode key
             // handling (chat / pickers / forms) as the local TUI.
             ClientRequest::SendKey(key) => {
-                let action = handle_key(state, key.to_key_event());
-                let result = apply_action(action, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.send_key(idx, state, client, handle, key);
             }
 
             // Forward a bracketed PASTE through the EXACT local paste pipeline:
@@ -605,32 +594,19 @@ impl DaemonHub {
             // mutates `state` directly and is infallible, so this always Acks (mirrors
             // the local loop, which just calls it then redraws — no `apply_action`).
             ClientRequest::Paste { text } => {
-                handle_paste(state, &text);
-                self.send_to(idx, DaemonEvent::Ack);
+                self.paste(idx, state, text);
             }
 
             // Answer the foreground session's pending tool-approval prompt via the
             // local approve/deny handlers.
             ClientRequest::ApproveTool { approve } => {
-                let action = if approve {
-                    Action::ApproveTool
-                } else {
-                    Action::DenyTool
-                };
-                let result = apply_action(action, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.approve_tool(idx, state, client, handle, approve);
             }
 
             // Answer a paused `plan_ready` approval via the local plan handlers.
             // An unrecognised decision maps to `DenyPlan` (fail-safe: keep planning).
             ClientRequest::PlanDecision { decision } => {
-                let action = match decision.as_str() {
-                    "approve" => Action::ApprovePlan,
-                    "compact" => Action::ApprovePlanCompact,
-                    _ => Action::DenyPlan,
-                };
-                let result = apply_action(action, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.plan_decision(idx, state, client, handle, decision);
             }
 
             // Spawn a fresh parallel session via the local `/new` command. The
@@ -817,9 +793,7 @@ impl DaemonHub {
             // whose shadow drifted (e.g. the fixed `Some("")` stuck-streaming case), not
             // dependent on the differ recognizing the change.
             ClientRequest::Interrupt => {
-                let result = apply_action(Action::Interrupt, state, client, handle);
-                self.force_resync = true;
-                self.ack_or_error(idx, result);
+                self.interrupt(idx, state, client, handle);
             }
 
             // GUI Ctrl+R composer parity: resend the last user turn via the SAME
@@ -827,8 +801,7 @@ impl DaemonHub {
             // messages + re-stream). `handle_resend` has its own busy/no-session/
             // nothing-to-resend guards and reports a no-op via the status line.
             ClientRequest::Resend => {
-                let result = apply_action(Action::Resend, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.resend(idx, state, client, handle);
             }
 
             // GUI composer queued-list clear button: cancel every pending mid-turn
@@ -836,8 +809,7 @@ impl DaemonHub {
             // pending-steers runs (clears `pending_steer` + a status line); a
             // no-op when the queue is already empty.
             ClientRequest::CancelSteers => {
-                let result = apply_action(Action::CancelSteers, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.cancel_steers(idx, state, client, handle);
             }
 
             // GUI hover-edit pencil on a USER chat bubble: rewind the foreground
@@ -849,30 +821,7 @@ impl DaemonHub {
             // `GlobalSnapshot.input` / the `InputChanged` delta — NOT auto-sent). The
             // core guards a non-user / out-of-range `index` as a clean no-op.
             ClientRequest::RewindTo { index } => {
-                // `index` is the GUI's DISPLAY index — the position in the pushed
-                // `messages` array, which FILTERS OUT System + Tool rows (render.rs's
-                // projection). `Action::RewindToMessage` indexes the RAW
-                // `Conversation::messages()` vec (System at [0], Tool interspersed), so
-                // the display index must be remapped to its vec position — skipping the
-                // SAME System + Tool rows — or it lands on a non-user row and no-ops
-                // (no truncation). Resolve the vec index off the foreground conversation.
-                let vec_index = state.rest.fg().session.as_ref().and_then(|s| {
-                    s.conversation
-                        .messages()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, m)| !matches!(m.role, Role::System | Role::Tool))
-                        .nth(index)
-                        .map(|(vi, _)| vi)
-                });
-                if let Some(vi) = vec_index {
-                    let result =
-                        apply_action(Action::RewindToMessage(vi), state, client, handle);
-                    self.ack_or_error(idx, result);
-                } else {
-                    // Out-of-range / no session — nothing to rewind to; ack cleanly.
-                    self.send_to(idx, DaemonEvent::Ack);
-                }
+                self.rewind_to(idx, state, client, handle, index);
             }
 
             // GUI composer mode selector: set the GLOBAL agent mode via the SAME
@@ -882,27 +831,14 @@ impl DaemonHub {
             // unknown token is a no-op. The mode change re-projects into the snapshot, so
             // every attached client (incl. this GUI) reflects it live.
             ClientRequest::SetMode { mode } => {
-                use crate::app::state::AgentMode;
-                let target = match mode.as_str() {
-                    "auto" => Some(AgentMode::Auto),
-                    "normal" => Some(AgentMode::Normal),
-                    "plan" => Some(AgentMode::Plan),
-                    // Layer-2 gate: an ARMED YOLO only; unarmed → leave the mode untouched.
-                    "yolo" if state.rest.yolo_armed => Some(AgentMode::Yolo),
-                    _ => None,
-                };
-                if let Some(m) = target {
-                    state.rest.set_agent_mode(m);
-                }
-                self.send_to(idx, DaemonEvent::Ack);
+                self.set_mode(idx, state, mode);
             }
 
             // GUI bash-row kill: terminate the foreground session's bg-bash job by id via
             // the SAME `Action::BashKillJob` the `/bash` panel's Ctrl+X runs (SIGTERM +
             // flip status→Killed). A no-op when the id is already gone.
             ClientRequest::BashKill { id } => {
-                let result = apply_action(Action::BashKillJob(id), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.bash_kill(idx, state, client, handle, id);
             }
 
             // GUI agent-row kill: kill ONE sub-agent of the foreground session by id,
@@ -912,20 +848,7 @@ impl DaemonHub {
             // selection index), so this resolves + mutates inline. A no-op when the id is
             // absent.
             ClientRequest::KillSubagent { id } => {
-                use crate::app::subagent::SubAgentStatus;
-                if let Some(sa) = state
-                    .rest
-                    .fg_mut()
-                    .subagents
-                    .iter_mut()
-                    .find(|s| s.id == id)
-                {
-                    sa.abort.abort();
-                    if matches!(sa.status, SubAgentStatus::Running) {
-                        sa.status = SubAgentStatus::Killed;
-                    }
-                }
-                self.send_to(idx, DaemonEvent::Ack);
+                self.kill_subagent(idx, state, id);
             }
 
             // GUI agent-row background button: flip ONE running sub-agent to detached via
@@ -933,17 +856,14 @@ impl DaemonHub {
             // `handle_background_subagent` re-checks eligibility itself (Running, not
             // already detached, has a `tool_call_id`) — a stale/ineligible id is a no-op.
             ClientRequest::BackgroundSubagent { id } => {
-                let result =
-                    apply_action(Action::BackgroundSubagent(id), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.background_subagent(idx, state, client, handle, id);
             }
 
             // GUI global Ctrl+B: background EVERY eligible sub-agent via the SAME
             // `Action::BackgroundAllSubagents` the TUI's composer Ctrl+B runs.
             // `handle_background_all_subagents` is a no-op when nothing is eligible.
             ClientRequest::BackgroundAllSubagents => {
-                let result = apply_action(Action::BackgroundAllSubagents, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.background_all_subagents(idx, state, client, handle);
             }
 
             // GUI model quick-picker: set (or clear) the foreground session's LOCAL Main
@@ -981,12 +901,7 @@ impl DaemonHub {
             // width the client renders. Only meaningful when the daemon is in the
             // agents full-screen editor; a no-op Ack otherwise.
             ClientRequest::EditorWrapW(n) => {
-                if let Mode::Agents(ref a) = state.mode() {
-                    if let Some((_, ref ed)) = a.editor {
-                        ed.wrap_w.set(n);
-                    }
-                }
-                self.send_to(idx, DaemonEvent::Ack);
+                self.editor_wrap_w(idx, state, n);
             }
 
             // GUI status-footer Compact action: summarise + trim the foreground
@@ -996,8 +911,7 @@ impl DaemonHub {
             // no-op reported via the session's `status` line, exactly like `/compact`;
             // any real error surfaces as `DaemonEvent::Error`.
             ClientRequest::Compact => {
-                let result = handle_compact(state, client, handle, None);
-                self.ack_or_error(idx, result);
+                self.compact(idx, state, client, handle);
             }
 
             // Read-only / already-handled variants never reach here (handle_request
