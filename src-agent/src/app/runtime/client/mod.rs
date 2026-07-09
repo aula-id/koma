@@ -27,6 +27,7 @@ mod shadow;
 mod input;
 mod bridge;
 mod swapper;
+mod swapper_keys;
 
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
