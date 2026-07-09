@@ -318,22 +318,17 @@ svg.animate-spin {
   height: 100%;
 }
 
-/* Thin scrollbar globally — hidden until hovered, then 3px dim thumb. */
-::-webkit-scrollbar {
-  width: 3px;
-  background: transparent;
+/* Legacy ::-webkit-scrollbar styling instead of scrollbar-width:thin — the
+   standard property keeps WebKitGTK's overlay/async-scroll compositing path,
+   which rasterizes text in scrollable layers noticeably BOLDER (scroll layer
+   promotion). The pseudo-element path forces classic non-composited
+   scrollbars and consistent text rendering. */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-koma-dim, #888);
+  border-radius: 4px;
+  opacity: 0.5;
 }
-::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 3px;
-}
-/* Show thumb when the scrollable element (or any ancestor up to the hovered
-   scroll container) is hovered.  The double selector covers both the element
-   itself and nested scrollables inside it. */
-*:hover::-webkit-scrollbar-thumb {
-  background: var(--color-koma-dim);
-}
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-koma-dim) transparent;
-}
+*::-webkit-scrollbar-thumb:hover { background: var(--color-koma-fg, #aaa); }
+*::-webkit-scrollbar-corner { background: transparent; }
