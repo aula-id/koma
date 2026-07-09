@@ -1,4 +1,4 @@
-import { Files, Blocks, Plug, ChartColumn, Settings } from 'lucide-react'
+import { Files, Blocks, Plug, ChartColumn, CircleHelp, Settings } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 
@@ -7,6 +7,7 @@ type ActivityBarProps = {
   sidebarOpen: boolean
   onSelect: (view: SidebarView) => void
   onSettings?: () => void
+  onHelp?: () => void
 }
 
 const iconBtn =
@@ -20,8 +21,10 @@ const ITEMS: { view: SidebarView; icon: LucideIcon; label: string }[] = [
 ]
 
 // Thin icon strip. Selecting a view switches the sidebar panel; the active
-// view shows the left indicator bar. Settings is pinned to the bottom (inert).
-export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings }: ActivityBarProps) {
+// view shows the left indicator bar. Help + Settings are pinned to the bottom
+// (both inert re: active-state — neither is a `SidebarView`), Help directly
+// above Settings.
+export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onHelp }: ActivityBarProps) {
   return (
     <div className="flex w-12 flex-none flex-col items-center gap-0.5 border-r border-koma-border bg-koma-panel2 pt-1.5">
       {ITEMS.map(({ view, icon: Icon, label }) => {
@@ -39,9 +42,12 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings }: A
           </button>
         )
       })}
+      <button onClick={onHelp} className={`${iconBtn} mt-auto`} title="Help" aria-label="Help">
+        <CircleHelp size={22} strokeWidth={1.6} />
+      </button>
       <button
         onClick={onSettings}
-        className={`${iconBtn} mt-auto mb-1.5`}
+        className={`${iconBtn} mb-1.5`}
         title="Settings"
         aria-label="Settings"
       >
