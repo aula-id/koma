@@ -30,6 +30,9 @@ impl Tool for Write {
         // Probe existence BEFORE the write so the file-change log can distinguish
         // "added" (new file) from "modified" (overwrite) — write is create-or-overwrite.
         let existed = path.exists();
+        // Baseline pre-image BEFORE the overwrite ("virtual git", first-touch-wins) —
+        // a missing file records the empty-baseline create marker.
+        super::capture_baseline(ctx, &path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating parent directories for '{rel}'"))?;

@@ -1030,12 +1030,16 @@ enum PushEnvelope {
     /// Computed ENTIRELY host-side (see `compute_file_diff` — never forwarded to the
     /// daemon), so this is pushed the SAME way regardless of attach state, and — like
     /// `ModelList`/`RouteList` — is ALWAYS a reply so the diff tab never hangs.
+    /// `origin` says where the ORIGINAL side came from: `"git"` (`git show HEAD:`) or
+    /// `"baseline"` (the session's "virtual git" first-touch pre-image — non-git
+    /// directories); the GUI shows a dim "session baseline" badge for the latter.
     FileDiff {
         path: String,
         original: String,
         modified: String,
         error: Option<String>,
         binary: bool,
+        origin: String,
     },
     /// One-shot host-computed LAST-7-DAYS usage preview answering a `UsagePreview`
     /// request from the activity-bar Usage panel: aggregate totals, a 7-entry daily cost
@@ -1140,6 +1144,7 @@ pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResul
         modified: result.modified,
         error: result.error,
         binary: result.binary,
+        origin: result.origin.to_string(),
     };
     emit(push, &env);
 }

@@ -272,6 +272,13 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
+      {/* Non-git dirs diff against the session's first-touch pre-image ("virtual
+          git") — badge the origin so nobody mistakes it for a git diff. */}
+      {diff.origin === 'baseline' && (
+        <div className="pointer-events-none absolute bottom-2 right-4 rounded border border-koma-border bg-koma-panel/90 px-1.5 py-0.5 font-mono text-[10px] text-koma-dim">
+          session baseline
+        </div>
+      )}
       {tab.loading && (
         <div className="pointer-events-none absolute right-2 top-2 text-koma-dim">
           <Loader2 size={14} className="animate-spin opacity-70" />

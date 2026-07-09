@@ -31,6 +31,8 @@ impl Tool for Delete {
         if !path.exists() {
             bail!("{}", not_found_help(ctx, &path, rel));
         }
+        // Baseline pre-image BEFORE the delete ("virtual git", first-touch-wins).
+        super::capture_baseline(ctx, &path);
         std::fs::remove_file(&path).with_context(|| format!("deleting file '{rel}'"))?;
         super::super::dircache::reindex(ctx.workspaces.clone(), ctx.dir_cache.clone());
         super::record_change(ctx, &path, "deleted");
