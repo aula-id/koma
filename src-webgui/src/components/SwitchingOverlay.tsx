@@ -1,8 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Check, Loader2, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { LoadPhase } from '../store/koma'
+
+// TUI-parity braille spinner frames (koma's terminal cooking indicator) + its
+// cycle interval, reused here for the 'running' phase glyph.
+const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const BRAILLE_INTERVAL_MS = 80
+
+// Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
+// overlay covers the titlebar region too and needs the same win-drag/maximize
+// IPC post.
+function post(msg: unknown) {
+  try {
+    window.ipc?.postMessage(JSON.stringify(msg))
+  } catch {
+    /* ipc unavailable */
+  }
+}
 
 type SwitchingOverlayProps = {
   onCancel: () => void
@@ -32,14 +48,18 @@ function useErrorTint(): string {
   }, [palettes, theme])
 }
 
-// One phase row's status glyph: running = filled accent dot with the same
-// pulse treatment as the live-session dots elsewhere (StartScreen/ResumePalette);
-// pending = dim hollow dot; done = dim check; skipped = dim dash; failed = an
-// error-role-tinted x.
-function PhaseGlyph({ phase, errorTint }: { phase: LoadPhase; errorTint: string }) {
+// One phase row's status glyph: running = TUI-parity braille spinner frame
+// (accent-tinted, monospace so it doesn't wobble across frames — the app is
+// already set in the KomaMono monospace face globally); pending = dim hollow
+// dot; done = dim check; skipped = dim dash; failed = an error-role-tinted x.
+function PhaseGlyph({ phase, frame, errorTint }: { phase: LoadPhase; frame: string; errorTint: string }) {
   switch (phase) {
     case 'running':
-      return <span className="h-2 w-2 flex-none animate-pulse rounded-full bg-koma-accent" />
+      return (
+        <span className="flex h-[13px] w-[13px] flex-none items-center justify-center text-[13px] leading-none text-koma-accent">
+          {frame}
+        </span>
+      )
     case 'done':
       return <Check size={13} className="flex-none text-koma-fg opacity-50" />
     case 'skipped':
@@ -52,10 +72,20 @@ function PhaseGlyph({ phase, errorTint }: { phase: LoadPhase; errorTint: string 
   }
 }
 
-function PhaseRow({ label, phase, errorTint }: { label: string; phase: LoadPhase; errorTint: string }) {
+function PhaseRow({
+  label,
+  phase,
+  frame,
+  errorTint,
+}: {
+  label: string
+  phase: LoadPhase
+  frame: string
+  errorTint: string
+}) {
   return (
     <div className="flex items-center gap-2 text-[12px] text-koma-fg opacity-80">
-      <PhaseGlyph phase={phase} errorTint={errorTint} />
+      <PhaseGlyph phase={phase} frame={frame} errorTint={errorTint} />
       <span>{label}</span>
     </div>
   )
@@ -69,12 +99,25 @@ function PhaseRow({ label, phase, errorTint }: { label: string; phase: LoadPhase
 // so the phase labels are monospace with no extra classes needed.
 function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awareness: LoadPhase }) {
   const errorTint = useErrorTint()
+  // ONE shared braille frame index for the whole splash (both phase rows
+  // stay in sync, matching the TUI's single cooking spinner) — mounted only
+  // while this component is (i.e. only while ui.loading?.active), so the
+  // interval never runs otherwise.
+  const [frameIdx, setFrameIdx] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setFrameIdx((i) => (i + 1) % BRAILLE_FRAMES.length)
+    }, BRAILLE_INTERVAL_MS)
+    return () => window.clearInterval(id)
+  }, [])
+  const frame = BRAILLE_FRAMES[frameIdx]
+
   return (
     <div className="flex flex-col items-center gap-4">
       <span className="text-[22px] font-bold text-koma-fg">koma</span>
       <div className="flex flex-col gap-1.5">
-        <PhaseRow label="indexing workspace" phase={workspace} errorTint={errorTint} />
-        <PhaseRow label="reading project docs" phase={awareness} errorTint={errorTint} />
+        <PhaseRow label="indexing workspace" phase={workspace} frame={frame} errorTint={errorTint} />
+        <PhaseRow label="reading project docs" phase={awareness} frame={frame} errorTint={errorTint} />
       </div>
     </div>
   )
@@ -126,8 +169,28 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
 
   if (!to && !loading?.active) return null
 
+  // The overlay is full-screen, including the titlebar region — without this
+  // it'd swallow every mousedown there and the frameless window couldn't be
+  // dragged/maximized while switching/loading. Mirrors Titlebar.tsx's own
+  // handleMouseDown (drag/double-click-maximize); `post` is duplicated here
+  // (3 lines) since Titlebar's is a private, unexported helper. Clicks on an
+  // actual button (e.g. Cancel) are excluded so they keep working.
+  function handleMouseDown(e: MouseEvent<HTMLDivElement>) {
+    if (e.button !== 0) return
+    const target = e.target as HTMLElement
+    if (target.closest('button')) return
+    if (e.detail === 2) {
+      post({ t: 'win', a: 'max' })
+      return
+    }
+    post({ t: 'win', a: 'drag' })
+  }
+
   return (
-    <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-koma-bg/90 backdrop-blur-sm">
+    <div
+      className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-4 bg-koma-bg/90 backdrop-blur-sm"
+      onMouseDown={handleMouseDown}
+    >
       <motion.div
         initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
