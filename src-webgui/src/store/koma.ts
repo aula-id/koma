@@ -139,6 +139,25 @@ export type HubHistoryEntry = {
   currentDir: boolean
 }
 
+// A "dying" mark on a session id — set right after firing KillSession
+// ('kill', from a COOKING row) or DeleteSession ('delete', from a HISTORY
+// row). Kind-scoped (not just the bare id) because a killed session MIGRATES
+// from cooking to history on the next Hub push: the same id then briefly
+// exists in history too, and an id-only mark would keep disabling that
+// migrated-in history row forever (the prune never sees it drop out of
+// BOTH lists). A 'kill' mark only ever describes a cooking-row; a 'delete'
+// mark only ever describes a history-row.
+export type DyingMark = { id: string; kind: 'kill' | 'delete' }
+
+// Whether `id`'s ROW-KIND (`'session'` = cooking row, `'history'` = history
+// row) currently carries a matching dying mark. Kind-scoped per `DyingMark` —
+// a leftover 'kill' mark from the just-killed session never disables the row
+// it migrated INTO (history), and vice versa.
+export function isDying(dyingSessions: DyingMark[], id: string, rowKind: 'session' | 'history'): boolean {
+  const markKind = rowKind === 'session' ? 'kill' : 'delete'
+  return dyingSessions.some((d) => d.id === id && d.kind === markKind)
+}
+
 export type SubAgentEntry = {
   // Host-projected subagent id — the kill target for GuiReq KillSubagent.
   // Optional-tolerant: a host build that hasn't started projecting the id yet
@@ -644,10 +663,12 @@ type KomaState = {
   usagePreview: UsagePreview | null
   // Session ids with a KillSession/DeleteSession req in flight (ResumePalette
   // / StartScreen row kill/delete confirm) — renders that row non-interactive
-  // + spinning instead of its trailing action. Pruned automatically the
-  // moment a fresh Hub push no longer lists the id (host confirms the
-  // kill/delete landed), so no explicit "done" signal is needed.
-  dyingSessions: string[]
+  // + spinning instead of its trailing action. Kind-scoped (see `DyingMark`)
+  // so a kill mark migrating cooking->history on the next Hub push can't
+  // leak onto the row it migrated into. Pruned automatically the moment a
+  // fresh Hub push confirms the kill/delete landed, so no explicit "done"
+  // signal is needed.
+  dyingSessions: DyingMark[]
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -716,10 +737,11 @@ type KomaState = {
   // The Sidebar Usage-panel header's all/session segmented control: switch
   // scope. UsagePanel re-requests on the resulting change.
   setUsageScope: (scope: 'all' | 'session') => void
-  // Mark a session id "dying" right after firing its KillSession/DeleteSession
-  // req (ResumePalette/StartScreen confirm). Idempotent — arming twice (or a
-  // race) never duplicates the id.
-  markDying: (id: string) => void
+  // Mark a session id "dying" right after firing its KillSession ('kill') or
+  // DeleteSession ('delete') req (ResumePalette/StartScreen confirm).
+  // Idempotent — marking the same id+kind twice (or a race) never duplicates
+  // the entry.
+  markDying: (id: string, kind: 'kill' | 'delete') => void
   // Kill-the-ATTACHED-session fast path: KillSession on the foreground session
   // sends the host straight to the swapper WITHOUT ever emitting a Snapshot
   // (only Hub pushes follow), so `session.id` would otherwise stay stale
@@ -1001,16 +1023,23 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'Hub':
         set((s) => {
-          // Prune "dying" ids the moment a fresh Hub push no longer lists
-          // them — the host confirms the kill/delete actually landed. A row
-          // still present (e.g. a slow kill) stays dying/spinning.
-          const liveIds = new Set<string>([
-            ...env.cooking.map((c) => c.id).filter((id): id is string => !!id),
-            ...env.history.map((h) => h.id),
-          ])
+          // Prune "dying" marks the moment a fresh Hub push confirms the
+          // matching disposition landed. Kind-scoped: a killed session stays
+          // on disk and MIGRATES from cooking to history on this very push —
+          // so a 'kill' mark clears when the id drops out of COOKING
+          // (regardless of it now appearing in history), and a 'delete' mark
+          // clears when the id drops out of HISTORY. An id-agnostic
+          // "absent from both lists" rule would keep a migrated-in history
+          // row stuck spinning forever (the real bug this fixes).
+          const cookingIds = new Set<string>(
+            env.cooking.map((c) => c.id).filter((id): id is string => !!id),
+          )
+          const historyIds = new Set<string>(env.history.map((h) => h.id))
           return {
             hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
-            dyingSessions: s.dyingSessions.filter((id) => liveIds.has(id)),
+            dyingSessions: s.dyingSessions.filter((d) =>
+              d.kind === 'kill' ? cookingIds.has(d.id) : historyIds.has(d.id),
+            ),
             // Deterministic failure-recovery clear: host_swapper pushes a fresh
             // Hub on EVERY path back to the swapper, including the
             // attach-failure/degrade path (which never emits a Snapshot). A
@@ -1251,8 +1280,12 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
-  markDying: (id) =>
-    set((s) => (s.dyingSessions.includes(id) ? s : { dyingSessions: [...s.dyingSessions, id] })),
+  markDying: (id, kind) =>
+    set((s) =>
+      s.dyingSessions.some((d) => d.id === id && d.kind === kind)
+        ? s
+        : { dyingSessions: [...s.dyingSessions, { id, kind }] },
+    ),
   detachSession: () => {
     set((s) => ({
       // Fresh object (not spread from the old session) — nothing about the

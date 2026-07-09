@@ -3,8 +3,8 @@ import { motion } from 'framer-motion'
 import { Search, Plus } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
 import { NewSessionMenu } from './NewSessionMenu'
-import { SessionRowActions, type ArmedRow } from './SessionRowActions'
-import { useKoma } from '../store/koma'
+import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
+import { useKoma, isDying } from '../store/koma'
 
 type ResumePaletteProps = {
   onClose: () => void
@@ -145,12 +145,13 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               <Empty>{q === '' ? 'No live sessions' : 'No matches'}</Empty>
             ) : (
               filteredCooking.map((c) => {
-                const dying = !!c.id && dyingSessions.includes(c.id)
+                const dying = !!c.id && isDying(dyingSessions, c.id, 'session')
+                const rowArmed = !!c.id && armed?.id === c.id && armed.kind === 'session'
                 return (
                   <div
                     key={c.id}
                     role="button"
-                    tabIndex={dying ? -1 : 0}
+                    tabIndex={dying || rowArmed ? -1 : 0}
                     onClick={() => {
                       if (dying) return
                       if (armed && armed.id === c.id && armed.kind === 'session') return
@@ -161,35 +162,41 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       if (e.key === ' ') e.preventDefault()
                       if (!dying && !armed && c.id) selectSession(c.id, c.name)
                     }}
-                    className={`group flex w-full cursor-pointer items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover ${
-                      dying ? 'pointer-events-none opacity-60' : ''
-                    }`}
+                    className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors ${
+                      rowArmed ? '' : 'px-3 py-1.5 hover:bg-koma-hover'
+                    } ${dying ? 'pointer-events-none opacity-60' : ''}`}
                   >
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      {c.working && (
-                        <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
-                      )}
-                      <span className="truncate">{c.name}</span>
-                      {c.foreground && (
-                        <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide opacity-50">
-                          current
+                    {rowArmed && c.id ? (
+                      <SessionRowConfirmStrip
+                        id={c.id}
+                        kind="session"
+                        foreground={c.foreground}
+                        onCancel={() => setArmed(null)}
+                        className="px-3 py-1.5"
+                      />
+                    ) : (
+                      <>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          {c.working && (
+                            <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
+                          )}
+                          <span className="truncate">{c.name}</span>
+                          {c.foreground && (
+                            <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide opacity-50">
+                              current
+                            </span>
+                          )}
                         </span>
-                      )}
-                    </span>
-                    <span className="ml-2 flex flex-none items-center gap-2">
-                      {c.dirLabel && (
-                        <span className="truncate text-[11px] opacity-40">{c.dirLabel}</span>
-                      )}
-                      {c.id && (
-                        <SessionRowActions
-                          id={c.id}
-                          kind="session"
-                          foreground={c.foreground}
-                          armed={armed}
-                          onArm={setArmed}
-                        />
-                      )}
-                    </span>
+                        <span className="ml-2 flex flex-none items-center gap-2">
+                          {c.dirLabel && (
+                            <span className="truncate text-[11px] opacity-40">{c.dirLabel}</span>
+                          )}
+                          {c.id && (
+                            <SessionRowActions id={c.id} kind="session" armed={armed} onArm={setArmed} />
+                          )}
+                        </span>
+                      </>
+                    )}
                   </div>
                 )
               })
@@ -199,12 +206,13 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               <Empty>{q === '' ? 'No past sessions' : 'No matches'}</Empty>
             ) : (
               filteredHistory.map((h) => {
-                const dying = dyingSessions.includes(h.id)
+                const dying = isDying(dyingSessions, h.id, 'history')
+                const rowArmed = armed?.id === h.id && armed.kind === 'history'
                 return (
                   <div
                     key={h.id}
                     role="button"
-                    tabIndex={dying ? -1 : 0}
+                    tabIndex={dying || rowArmed ? -1 : 0}
                     onClick={() => {
                       if (dying) return
                       if (armed && armed.id === h.id && armed.kind === 'history') return
@@ -215,15 +223,26 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       if (e.key === ' ') e.preventDefault()
                       if (!dying && !armed) selectSession(h.id, h.name)
                     }}
-                    className={`group flex w-full cursor-pointer items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover ${
-                      dying ? 'pointer-events-none opacity-60' : ''
-                    }`}
+                    className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors ${
+                      rowArmed ? '' : 'px-3 py-1.5 hover:bg-koma-hover'
+                    } ${dying ? 'pointer-events-none opacity-60' : ''}`}
                   >
-                    <span className="truncate">{h.name}</span>
-                    <span className="ml-2 flex flex-none items-center gap-2">
-                      {h.dirLabel && <span className="truncate text-[11px] opacity-40">{h.dirLabel}</span>}
-                      <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
-                    </span>
+                    {rowArmed ? (
+                      <SessionRowConfirmStrip
+                        id={h.id}
+                        kind="history"
+                        onCancel={() => setArmed(null)}
+                        className="px-3 py-1.5"
+                      />
+                    ) : (
+                      <>
+                        <span className="truncate">{h.name}</span>
+                        <span className="ml-2 flex flex-none items-center gap-2">
+                          {h.dirLabel && <span className="truncate text-[11px] opacity-40">{h.dirLabel}</span>}
+                          <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
+                        </span>
+                      </>
+                    )}
                   </div>
                 )
               })
