@@ -126,6 +126,44 @@ export function TabBar() {
           )
         }
 
+        // Agent editor tab: closeable like a diff tab, with a Bot icon + the
+        // agent's current name (or "new agent" while agentId is still null,
+        // i.e. an unsaved create). Label tracks `agentId` live, so a rename
+        // mid-edit (before OR after Save rebinds it — see renameAgentTab)
+        // always shows the current name, never a stale one.
+        if (t.kind === 'agent') {
+          return (
+            <div
+              key={t.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => activateTab(t.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+              }}
+              title={t.agentId ?? 'new agent'}
+              className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
+            >
+              {accent}
+              <Bot size={13} className="flex-none opacity-80" />
+              <span className="truncate">{t.agentId ?? 'new agent'}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  closeTab(t.id)
+                }}
+                aria-label="Close tab"
+                title="Close"
+                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                }`}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )
+        }
+
         // Stream tabs (read-only sub-agent transcript / bash output): closeable like a
         // diff tab, with a Bot / Terminal icon + the title (agent name / truncated cmd).
         if (t.kind === 'subagent' || t.kind === 'bash') {

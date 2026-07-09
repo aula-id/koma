@@ -207,6 +207,37 @@ declare global {
     // SettingsValues push (the picker's trigger-pill label updates off that
     // same channel — no dedicated ack).
     | { r: 'SetEffort'; effort: string }
+    // Agents dashboard: fetch the current agent list + model/provider
+    // catalogues. Reply lands as the AgentsValues push envelope — ALWAYS,
+    // even un-attached (the host answers with built-in + global agents only,
+    // straight off global config). Sent once when the Agents sidebar panel
+    // mounts; every SetAgent/DeleteAgent reply also re-pushes AgentsValues,
+    // so no polling or re-request is needed after a mutation.
+    | { r: 'GetAgents' }
+    // Agent create/edit. `originalName` null = CREATE (uses `scope` verbatim);
+    // non-null = EDIT, keyed by the agent's pre-edit name (equal to `name` for
+    // a non-rename edit, different for a rename) — the daemon derives the
+    // actual write tier from the target agent's own current source on an edit
+    // (a builtin edit auto-becomes a session override) and only falls back to
+    // `scope` if that named agent no longer exists, so `scope` must still be
+    // sent (required field) but is otherwise disregarded on edit. Matches the
+    // daemon's GuiReq::SetAgent (mirrors AgentDef's own field set).
+    | {
+        r: 'SetAgent'
+        originalName: string | null
+        scope: 'global' | 'session'
+        name: string
+        description: string
+        conditions: string
+        modelUuid: string | null
+        tools: string[]
+        prompt: string
+      }
+    // Delete an agent. Unlike SetAgent's edit path, `scope` here is used
+    // VERBATIM as the tier to delete from — "session" needs a live session
+    // dir (errors otherwise), anything else deletes from global. Builtins are
+    // delete-rejected daemon-side. Reply lands as a fresh AgentsValues push.
+    | { r: 'DeleteAgent'; scope: 'global' | 'session'; name: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

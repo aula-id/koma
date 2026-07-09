@@ -1,11 +1,12 @@
 import { ExplorePanel } from './panels/ExplorePanel'
 import { McpPanel } from './panels/McpPanel'
 import { ConnectorPanel } from './panels/ConnectorPanel'
+import { AgentsPanel } from './panels/AgentsPanel'
 import { UsagePanel } from './panels/UsagePanel'
 import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
 
-export type SidebarView = 'explore' | 'mcp' | 'connector' | 'usage'
+export type SidebarView = 'explore' | 'mcp' | 'connector' | 'agents' | 'usage'
 
 type SidebarProps = {
   width: number
@@ -16,6 +17,7 @@ const TITLES: Record<SidebarView, string> = {
   explore: 'Explorer',
   mcp: 'MCP Servers',
   connector: 'Connector',
+  agents: 'Agents',
   usage: 'Usage',
 }
 
@@ -52,6 +54,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'explore' && <ExplorePanel />}
         {view === 'mcp' && <McpPanel />}
         {view === 'connector' && <ConnectorPanel />}
+        {view === 'agents' && <AgentsPanel />}
         {view === 'usage' && <UsagePanel />}
       </div>
     </div>
