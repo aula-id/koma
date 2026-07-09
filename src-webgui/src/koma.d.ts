@@ -5,8 +5,26 @@ declare global {
     | { r: 'Ready' }
     | { r: 'Submit'; text: string }
     | { r: 'SelectSession'; id: string }
-    | { r: 'NewSession' }
+    // `kill: true` disposes of the CURRENTLY-attached session (if any) by
+    // killing its daemon before opening the native folder picker for the new
+    // one — mirrors KillSession's kill semantics (daemon stops, session moves
+    // to History). Omitted/false (the default, unchanged) keeps the current
+    // session cooking in the background.
+    | { r: 'NewSession'; kill?: boolean }
     | { r: 'RefreshHub' }
+    // Kill a session — works for a background cooking session AND the
+    // currently-attached one. The daemon shuts down but the session stays on
+    // disk (moves to History) — contrast DeleteSession. If `id` is the
+    // attached session, the host quits that daemon and transitions the
+    // webview back to the hub/start state via its existing push flow; a
+    // follow-up Hub push arrives automatically once the daemon is confirmed
+    // dead.
+    | { r: 'KillSession'; id: string }
+    // Delete a HISTORY session from disk permanently (gone forever — unlike
+    // KillSession, which just stops the daemon and keeps the session in
+    // History). The host resolves the path and guards live sessions; a Hub
+    // push follows.
+    | { r: 'DeleteSession'; id: string }
     // Cancel an in-flight session switch (the loader's Cancel button). Best
     // effort: the attach can't be interrupted, so the host queues it and drops
     // to the swapper once the target lands (matches Rust GuiReq::CancelSwitch).

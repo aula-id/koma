@@ -642,6 +642,12 @@ type KomaState = {
   // first reply lands (the panel shows a loading row); REPLACED wholesale on
   // each reply. The panel re-requests it every time it's shown.
   usagePreview: UsagePreview | null
+  // Session ids with a KillSession/DeleteSession req in flight (ResumePalette
+  // / StartScreen row kill/delete confirm) — renders that row non-interactive
+  // + spinning instead of its trailing action. Pruned automatically the
+  // moment a fresh Hub push no longer lists the id (host confirms the
+  // kill/delete landed), so no explicit "done" signal is needed.
+  dyingSessions: string[]
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -710,6 +716,23 @@ type KomaState = {
   // The Sidebar Usage-panel header's all/session segmented control: switch
   // scope. UsagePanel re-requests on the resulting change.
   setUsageScope: (scope: 'all' | 'session') => void
+  // Mark a session id "dying" right after firing its KillSession/DeleteSession
+  // req (ResumePalette/StartScreen confirm). Idempotent — arming twice (or a
+  // race) never duplicates the id.
+  markDying: (id: string) => void
+  // Kill-the-ATTACHED-session fast path: KillSession on the foreground session
+  // sends the host straight to the swapper WITHOUT ever emitting a Snapshot
+  // (only Hub pushes follow), so `session.id` would otherwise stay stale
+  // forever and IndexPage would keep rendering the dead chat. Call this right
+  // after firing that KillSession req to reset the session slice to
+  // `initialSession` locally (hub/dyingSessions untouched — the follow-up Hub
+  // push still needs to land to move the row into History) and clear any
+  // per-session UI state that would otherwise render stale (tabs back to just
+  // chat, active tab back to 'chat', any stuck switching overlay), mirroring
+  // the Snapshot handler's `switched` branch. IndexPage's `sessionId === null`
+  // gate then falls back to StartScreen immediately instead of waiting on a
+  // push that isn't coming.
+  detachSession: () => void
 }
 
 const initialSession: SessionSlice = {
@@ -841,6 +864,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   settingsValues: null,
   effortOptions: null,
   usagePreview: null,
+  dyingSessions: [],
 
   push: (env) => {
     switch (env.k) {
@@ -976,19 +1000,29 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'Hub':
-        set((s) => ({
-          hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
-          // Deterministic failure-recovery clear: host_swapper pushes a fresh
-          // Hub on EVERY path back to the swapper, including the
-          // attach-failure/degrade path (which never emits a Snapshot). A
-          // valid in-flight swap can't produce a spurious Hub here either —
-          // ResumePalette (the only source of RefreshHub) is unmounted by
-          // startSwitching's caller before the request is sent, so its
-          // RefreshHub polling interval is already torn down. Net: any Hub
-          // that arrives while switchingTo is set means the swap bounced
-          // back to the hub, so clear the loader unconditionally.
-          ui: { ...s.ui, switchingTo: null },
-        }))
+        set((s) => {
+          // Prune "dying" ids the moment a fresh Hub push no longer lists
+          // them — the host confirms the kill/delete actually landed. A row
+          // still present (e.g. a slow kill) stays dying/spinning.
+          const liveIds = new Set<string>([
+            ...env.cooking.map((c) => c.id).filter((id): id is string => !!id),
+            ...env.history.map((h) => h.id),
+          ])
+          return {
+            hub: { ...s.hub, state: env.state, cooking: env.cooking, history: env.history },
+            dyingSessions: s.dyingSessions.filter((id) => liveIds.has(id)),
+            // Deterministic failure-recovery clear: host_swapper pushes a fresh
+            // Hub on EVERY path back to the swapper, including the
+            // attach-failure/degrade path (which never emits a Snapshot). A
+            // valid in-flight swap can't produce a spurious Hub here either —
+            // ResumePalette (the only source of RefreshHub) is unmounted by
+            // startSwitching's caller before the request is sent, so its
+            // RefreshHub polling interval is already torn down. Net: any Hub
+            // that arrives while switchingTo is set means the swap bounced
+            // back to the hub, so clear the loader unconditionally.
+            ui: { ...s.ui, switchingTo: null },
+          }
+        })
         break
       case 'SearchResults':
         set((s) => ({ session: { ...s.session, searchResults: env.items } }))
@@ -1217,4 +1251,27 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
+  markDying: (id) =>
+    set((s) => (s.dyingSessions.includes(id) ? s : { dyingSessions: [...s.dyingSessions, id] })),
+  detachSession: () => {
+    set((s) => ({
+      // Fresh object (not spread from the old session) — nothing about the
+      // just-killed session is worth preserving, mirrors initialSession's
+      // shape exactly.
+      session: { ...initialSession },
+      ui: {
+        ...s.ui,
+        tabs: [makeChatTab()],
+        activeTabId: 'chat',
+        // Defensive: clear a stuck switching overlay too, in case one was
+        // mid-flight (only Snapshot/Hub normally clear it, neither of which
+        // is guaranteed to arrive promptly on a self-kill).
+        switchingTo: null,
+      },
+    }))
+    // Tabs just reset to chat-only → no stream tab is active; tell the host
+    // to stop streaming whatever the dead session's stream tab was targeting
+    // (mirrors the Snapshot handler's `switched` branch).
+    get().syncStreamView()
+  },
 }))

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Clock, FolderPlus, Info, Sparkles, Zap } from 'lucide-react'
+import { NewSessionMenu } from './NewSessionMenu'
+import { SessionRowActions, type ArmedRow } from './SessionRowActions'
 import { useKoma } from '../store/koma'
 
 // Measures the component's own width with a ResizeObserver (a container query in
@@ -50,8 +52,12 @@ export function StartScreen() {
   const cooking = useKoma((s) => s.hub.cooking)
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
+  const dyingSessions = useKoma((s) => s.dyingSessions)
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const wide = width >= 760
+  // The single armed row (kill/delete confirm pill) across BOTH lists — arming
+  // a different row disarms whichever was armed before.
+  const [armed, setArmed] = useState<ArmedRow>(null)
 
   // The host only discovers live sessions on demand — nudge a fresh Hub on
   // mount and on a short interval so recent/live rows stay current (same cadence
@@ -61,6 +67,17 @@ export function StartScreen() {
     const id = window.setInterval(() => req({ r: 'RefreshHub' }), 2000)
     return () => window.clearInterval(id)
   }, [req])
+
+  // Escape cancels an armed row (there's no overlay to close here, unlike
+  // ResumePalette).
+  useEffect(() => {
+    if (!armed) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setArmed(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [armed])
 
   // Live (cooking) sessions first, then past history — the same source rows the
   // ResumePalette lists, minus the synthetic `kind: 'new'` placeholder.
@@ -90,19 +107,22 @@ export function StartScreen() {
         </div>
       </div>
 
-      <button
-        onClick={newSession}
-        className="group flex items-center gap-3 rounded-xl border border-koma-border bg-koma-panel px-4 py-3 text-left transition-colors hover:border-koma-accent/60 hover:bg-koma-hover"
-      >
-        <span className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-koma-accent/15 text-koma-accent">
-          <FolderPlus size={18} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-semibold text-koma-fg">New session</span>
-          <span className="block text-[11px] text-koma-fg opacity-45">Pick a folder to work in</span>
-        </span>
-        <ArrowRight size={16} className="flex-none text-koma-fg opacity-30 transition group-hover:translate-x-0.5 group-hover:opacity-70" />
-      </button>
+      <div className="group flex items-center rounded-xl border border-koma-border bg-koma-panel transition-colors hover:border-koma-accent/60 hover:bg-koma-hover">
+        <button
+          onClick={newSession}
+          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
+        >
+          <span className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-koma-accent/15 text-koma-accent">
+            <FolderPlus size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-semibold text-koma-fg">New session</span>
+            <span className="block text-[11px] text-koma-fg opacity-45">Pick a folder to work in</span>
+          </span>
+          <ArrowRight size={16} className="flex-none text-koma-fg opacity-30 transition group-hover:translate-x-0.5 group-hover:opacity-70" />
+        </button>
+        <NewSessionMenu className="pr-3" />
+      </div>
 
       <Card>
         <SectionLabel icon={Clock}>Recent</SectionLabel>
@@ -110,38 +130,84 @@ export function StartScreen() {
           <div className="px-1 py-2 text-[12px] text-koma-fg opacity-35">No sessions yet — start a new one.</div>
         ) : (
           <div className="-mx-1 max-h-[40vh] overflow-y-auto">
-            {liveSessions.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => c.id && openSession(c.id, c.name)}
-                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-koma-hover"
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
-                  <span className="truncate text-[12.5px] text-koma-fg">{c.name}</span>
-                  {c.foreground && (
-                    <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide text-koma-fg opacity-50">
-                      current
-                    </span>
-                  )}
-                </span>
-                {c.dirLabel && (
-                  <span className="ml-2 flex-none truncate text-[11px] text-koma-fg opacity-40">{c.dirLabel}</span>
-                )}
-              </button>
-            ))}
-            {history.map((h) => (
-              <button
-                key={h.id}
-                onClick={() => openSession(h.id, h.name)}
-                className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-koma-hover"
-              >
-                <span className="truncate text-[12.5px] text-koma-fg">{h.name}</span>
-                {h.dirLabel && (
-                  <span className="ml-2 flex-none truncate text-[11px] text-koma-fg opacity-40">{h.dirLabel}</span>
-                )}
-              </button>
-            ))}
+            {liveSessions.map((c) => {
+              const dying = !!c.id && dyingSessions.includes(c.id)
+              return (
+                <div
+                  key={c.id}
+                  role="button"
+                  tabIndex={dying ? -1 : 0}
+                  onClick={() => {
+                    if (dying) return
+                    if (armed && armed.id === c.id && armed.kind === 'session') return
+                    c.id && openSession(c.id, c.name)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    if (e.key === ' ') e.preventDefault()
+                    if (!dying && !armed && c.id) openSession(c.id, c.name)
+                  }}
+                  className={`group flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-koma-hover ${
+                    dying ? 'pointer-events-none opacity-60' : ''
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
+                    <span className="truncate text-[12.5px] text-koma-fg">{c.name}</span>
+                    {c.foreground && (
+                      <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide text-koma-fg opacity-50">
+                        current
+                      </span>
+                    )}
+                  </span>
+                  <span className="ml-2 flex flex-none items-center gap-2">
+                    {c.dirLabel && (
+                      <span className="truncate text-[11px] text-koma-fg opacity-40">{c.dirLabel}</span>
+                    )}
+                    {c.id && (
+                      <SessionRowActions
+                        id={c.id}
+                        kind="session"
+                        foreground={c.foreground}
+                        armed={armed}
+                        onArm={setArmed}
+                      />
+                    )}
+                  </span>
+                </div>
+              )
+            })}
+            {history.map((h) => {
+              const dying = dyingSessions.includes(h.id)
+              return (
+                <div
+                  key={h.id}
+                  role="button"
+                  tabIndex={dying ? -1 : 0}
+                  onClick={() => {
+                    if (dying) return
+                    if (armed && armed.id === h.id && armed.kind === 'history') return
+                    openSession(h.id, h.name)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    if (e.key === ' ') e.preventDefault()
+                    if (!dying && !armed) openSession(h.id, h.name)
+                  }}
+                  className={`group flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-koma-hover ${
+                    dying ? 'pointer-events-none opacity-60' : ''
+                  }`}
+                >
+                  <span className="truncate text-[12.5px] text-koma-fg">{h.name}</span>
+                  <span className="ml-2 flex flex-none items-center gap-2">
+                    {h.dirLabel && (
+                      <span className="truncate text-[11px] text-koma-fg opacity-40">{h.dirLabel}</span>
+                    )}
+                    <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
+                  </span>
+                </div>
+              )
+            })}
           </div>
         )}
       </Card>
