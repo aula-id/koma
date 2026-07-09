@@ -19,6 +19,7 @@
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
+//! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
 //! | `push_proto`| GUI push-envelope DTOs (`PushEnvelope` + the one-shot `push_*` fns) |
 //! | `push_rows` | The `Push*` row/DTO structs `PushEnvelope`'s variants carry       |
 //! | `project`   | GUI snapshot serialization (`serialize_and_push`, `push_hub`, `warm_status_label`) |
@@ -37,6 +38,7 @@ mod swapper;
 mod swapper_keys;
 mod diff;
 mod host;
+mod host_config;
 mod push_proto;
 mod push_rows;
 mod project;
