@@ -19,7 +19,8 @@
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
-//! | `push_proto`| GUI push-envelope DTOs (`Push*` structs, `PushEnvelope`)         |
+//! | `push_proto`| GUI push-envelope DTOs (`PushEnvelope` + the one-shot `push_*` fns) |
+//! | `push_rows` | The `Push*` row/DTO structs `PushEnvelope`'s variants carry       |
 //! | `project`   | GUI snapshot serialization (`serialize_and_push`, `push_hub`, `warm_status_label`) |
 //! | `project_config` | GUI config projection (`ConfigProjection`, `push_config`)          |
 //! | `push_loop` | The headless attached fold loop (`push_loop`, `PushState`, `HostTransition`) |
@@ -37,6 +38,7 @@ mod swapper_keys;
 mod diff;
 mod host;
 mod push_proto;
+mod push_rows;
 mod project;
 mod project_config;
 mod push_loop;
