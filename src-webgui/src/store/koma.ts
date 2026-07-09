@@ -373,7 +373,10 @@ export type PushEnvelope =
     }
   // Reply to GuiReq UsagePreview — a LAST-7-DAYS usage preview computed straight
   // off the global usage ledger (host-only, never touches the daemon). ALWAYS a
-  // reply so the Usage panel's loading state can never hang.
+  // reply so the Usage panel's loading state can never hang. `scope` echoes the
+  // request's "all"/"session" token so a reply that no longer matches the
+  // CURRENTLY selected scope (a rapid toggle racing an in-flight request) is
+  // dropped rather than rendered.
   | {
       k: 'UsagePreview'
       cost: number
@@ -383,6 +386,7 @@ export type PushEnvelope =
       calls: number
       days: UsageDayEntry[]
       topModels: UsageModelEntry[]
+      scope: string
     }
   // Reply to GuiReq GetSettings (and the re-push after SetPrefs) — the Settings
   // tab's Session-section values + active palette. Guaranteed for every request
@@ -536,6 +540,13 @@ type UiSlice = {
   // PLAN section — both live outside the Composer/footer's subtree, so a
   // store tick (not a prop) is how the click reaches them.
   focusPlanTick: number
+  // Usage panel scope toggle ("all" = global last-7-days [default], "session" =
+  // the same window filtered to the CURRENT session's ledger rows only). The
+  // Sidebar header's all/session control is HIDDEN whenever there's no current
+  // session (the welcome/start screen) and this is forced back to "all" the
+  // instant a session goes away while "session" was selected (see UsagePanel's
+  // session-loss effect + `setUsageScope`).
+  usageScope: 'all' | 'session'
 }
 
 type KomaState = {
@@ -613,6 +624,9 @@ type KomaState = {
   // RootLayout opens the Explore sidebar/panel and ExplorePanel expands its
   // PLAN section in response.
   focusPlanSection: () => void
+  // The Sidebar Usage-panel header's all/session segmented control: switch
+  // scope. UsagePanel re-requests on the resulting change.
+  setUsageScope: (scope: 'all' | 'session') => void
 }
 
 const initialSession: SessionSlice = {
@@ -662,6 +676,7 @@ const initialUi: UiSlice = {
   tabs: [makeChatTab()],
   activeTabId: 'chat',
   focusPlanTick: 0,
+  usageScope: 'all',
 }
 
 // Bundled fallback theme (palette) registry — mirrors the host's theme.rs
@@ -944,17 +959,24 @@ export const useKoma = create<KomaState>((set, get) => ({
         }))
         break
       case 'UsagePreview':
-        set(() => ({
-          usagePreview: {
-            cost: env.cost,
-            tokensIn: env.tokensIn,
-            tokensCached: env.tokensCached,
-            tokensOut: env.tokensOut,
-            calls: env.calls,
-            days: env.days,
-            topModels: env.topModels,
-          },
-        }))
+        set((s) => {
+          // Drop a reply for a scope the user has since switched away from (a
+          // rapid all/session toggle racing an in-flight request) — leave
+          // `usagePreview` as-is (likely null, showing the loading row) until
+          // the reply matching the CURRENT scope lands.
+          if (env.scope !== s.ui.usageScope) return s
+          return {
+            usagePreview: {
+              cost: env.cost,
+              tokensIn: env.tokensIn,
+              tokensCached: env.tokensCached,
+              tokensOut: env.tokensOut,
+              calls: env.calls,
+              days: env.days,
+              topModels: env.topModels,
+            },
+          }
+        })
         break
     }
   },
@@ -1038,4 +1060,5 @@ export const useKoma = create<KomaState>((set, get) => ({
     if (tab.kind === 'settings') get().req({ r: 'GetSettings' })
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
+  setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
 }))

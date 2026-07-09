@@ -267,8 +267,16 @@ pub(super) enum HostCtl {
     /// touches the daemon in either host state — the ledger is a process-local file the
     /// host already has direct access to — so it is routed here unconditionally by the
     /// ipc handler. Serviced off-thread (sqlite I/O is blocking) in both host states; see
-    /// [`compute_usage_preview`].
-    UsagePreview,
+    /// [`compute_usage_preview`]. `session` is `Some(uuid)` for the "session" scope
+    /// toggle (filters every query to that session's ledger rows) or `None` for the
+    /// default "all" (global) scope. `scope` is the literal `"all"`/`"session"` token,
+    /// carried through unchanged so the reply can echo it back — the React panel drops a
+    /// reply whose scope no longer matches the currently-selected one (a rapid toggle
+    /// racing an in-flight request).
+    UsagePreview {
+        session: Option<String>,
+        scope: String,
+    },
 }
 
 /// The result of a host-side [`compute_file_diff`], pushed to the GUI as a `FileDiff`
@@ -459,15 +467,19 @@ pub(super) struct UsagePreviewResult {
 /// Compute a host-side LAST-7-DAYS usage preview for the GUI Usage panel, answering a
 /// [`HostCtl::UsagePreview`]. Reads the global `~/.koma/usage.sqlite` ledger directly —
 /// no daemon involved, works attached or not (mirrors [`compute_file_diff`]). Every
-/// underlying query (`range_totals`/`spend_buckets`/`top_models_in_range`) is already
-/// non-fatal (zeroed/empty on a missing or locked DB), so this never fails either — the
-/// caller ALWAYS gets a result to push, even on a clean install with no ledger yet.
+/// underlying query (`range_totals_scoped`/`spend_buckets_scoped`/
+/// `top_models_in_range_scoped`) is already non-fatal (zeroed/empty on a missing or
+/// locked DB), so this never fails either — the caller ALWAYS gets a result to push,
+/// even on a clean install with no ledger yet.
 ///
-/// The query cutoff is the SAME floored anchor the 7-bar chart is built from (today's
-/// LOCAL midnight minus 6 days) — not a bare `now - 7*86400` — so the header totals and
-/// the top-models list describe EXACTLY the window the bars render, with no up-to-24h
-/// sliver of extra data hiding outside every bar.
-fn compute_usage_preview() -> UsagePreviewResult {
+/// `session` is `Some(uuid)` for the Usage panel's "session" scope toggle — every query
+/// is then filtered to that session's rows ONLY — or `None` for the default "all"
+/// (global) scope. Either way the query cutoff is the SAME floored anchor the 7-bar
+/// chart is built from (today's LOCAL midnight minus 6 days) — not a bare
+/// `now - 7*86400` — so the header totals and the top-models list describe EXACTLY the
+/// window the bars render, with no up-to-24h sliver of extra data hiding outside every
+/// bar. This window-consistency invariant holds in BOTH scopes.
+fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult {
     use crate::model::usage::{self, BucketSize};
 
     let now = std::time::SystemTime::now()
@@ -483,9 +495,9 @@ fn compute_usage_preview() -> UsagePreviewResult {
     let today = local_now - local_now % 86400 - tz;
     let since = today - 6 * 86400;
 
-    let totals = usage::range_totals(since);
-    let buckets = usage::spend_buckets(since, BucketSize::Day, 0, tz);
-    let top_models = usage::top_models_in_range(since, 3);
+    let totals = usage::range_totals_scoped(since, session);
+    let buckets = usage::spend_buckets_scoped(since, BucketSize::Day, 0, tz, session);
+    let top_models = usage::top_models_in_range_scoped(since, 3, session);
 
     // Normalize to exactly 7 daily buckets (oldest -> newest, today last), zero-filled
     // for any day the ledger has no rows for.
@@ -966,12 +978,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
             // a global file the host reads directly, so this never touches a daemon in
             // either state — see `compute_usage_preview`. Sqlite I/O is blocking, so it
-            // runs on a plain OS thread like `FileDiff` above.
-            Ok(HostCtl::UsagePreview) => {
+            // runs on a plain OS thread like `FileDiff` above. `scope` rides along
+            // unchanged so the reply echoes it (the React panel drops a stale-scope
+            // reply). A "session" scope with no session attached (there is none — this
+            // is the swapper) simply queries with `session: None` passed through by the
+            // ipc handler, which only sets `Some(uuid)` when a session IS attached.
+            Ok(HostCtl::UsagePreview { session, scope }) => {
                 let push2 = P::clone(push);
                 std::thread::spawn(move || {
-                    let result = compute_usage_preview();
-                    render::push_usage_preview(&push2, result);
+                    let result = compute_usage_preview(session.as_deref());
+                    render::push_usage_preview(&push2, result, scope);
                 });
             }
             // GUI Settings tab opened while detached (StartScreen / swapper): there is no

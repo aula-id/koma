@@ -14,8 +14,9 @@ mod types;
 // Re-export the entire public surface so every external path is unchanged.
 pub use ledger::{record_usage, usage_db_path};
 pub use queries::{
-    daily_costs, range_totals, role_split, session_hourly, session_models, session_totals,
-    spend_buckets, top_models, top_models_in_range, weekly_costs,
+    daily_costs, range_totals, range_totals_scoped, role_split, session_hourly, session_models,
+    session_totals, spend_buckets, spend_buckets_scoped, top_models, top_models_in_range,
+    top_models_in_range_scoped, weekly_costs,
 };
 pub use types::{
     BucketSize, DailyCost, ModelCost, ModelCostRange, RangeTotals, RoleSplit, SpendBucket,

@@ -266,9 +266,21 @@ enum GuiReq {
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a
     /// process-local file the host can read directly, so this is routed UNCONDITIONALLY
     /// to the host-relay thread via `HostCtl::UsagePreview` regardless of attach state —
-    /// no daemon round-trip. Re-sent by React every time the panel becomes active so the
-    /// numbers stay fresh.
-    UsagePreview,
+    /// no daemon round-trip. Re-sent by React every time the panel becomes active, and
+    /// again whenever the header's all/session scope toggle flips.
+    ///
+    /// `scope` is `"all"` (default, global last-7-days) or `"session"` (same window,
+    /// filtered to `sessionId`'s ledger rows only); both default (via `#[serde(default)]`)
+    /// so the pre-scope no-field wire form still deserializes. `sessionId` is the
+    /// foreground session's uuid — required for a `"session"` scope to mean anything,
+    /// ignored otherwise. The ipc handler resolves these into the `HostCtl::UsagePreview`
+    /// it forwards.
+    UsagePreview {
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default, rename = "sessionId")]
+        session_id: Option<String>,
+    },
     /// Set the active theme (onboarding theme step + the future Settings gear). `name` is
     /// a `view::theme::PALETTES` key. Forwarded as [`ClientRequest::SetTheme`] when
     /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly
@@ -861,9 +873,15 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     }
                     // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
                     // ALWAYS routed to the host-relay thread — never the daemon —
-                    // regardless of attach state (see `HostCtl::UsagePreview`).
-                    GuiReq::UsagePreview => {
-                        let _ = ipc_ctl.send(HostCtl::UsagePreview);
+                    // regardless of attach state (see `HostCtl::UsagePreview`). Resolve the
+                    // "session" scope to an actual uuid only when one was supplied — a
+                    // "session" scope with no session (the welcome/start-screen state) has
+                    // nothing to filter by, so it silently degrades to "all" rather than
+                    // querying with a meaningless filter.
+                    GuiReq::UsagePreview { scope, session_id } => {
+                        let scope = scope.unwrap_or_else(|| "all".to_string());
+                        let session = if scope == "session" { session_id } else { None };
+                        let _ = ipc_ctl.send(HostCtl::UsagePreview { session, scope });
                     }
                     // Stop button: interrupt the running turn on the attached daemon.
                     GuiReq::Interrupt => {
