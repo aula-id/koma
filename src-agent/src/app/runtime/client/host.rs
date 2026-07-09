@@ -27,8 +27,8 @@ use super::diff::{compute_file_diff, compute_usage_preview};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_file_diff, push_model_list, push_route_list, push_settings_values, push_switching,
-    push_usage_preview,
+    push_agents_values, push_file_diff, push_model_list, push_route_list, push_settings_values,
+    push_switching, push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -321,6 +321,63 @@ async fn fetch_routes_for_provider(
         .unwrap_or_default()
 }
 
+/// Build the UN-ATTACHED GUI /agents reply (a [`HostCtl::GetAgents`] serviced by the
+/// swapper / start-screen): the built-in + global agent roster (`load_registry(None)` — no
+/// session overlay) plus the GLOBAL model / provider catalogue off the loaded config.
+/// Mirrors the daemon's attached `send_agents_values` builder but with NO session (no
+/// `session_models`, no session agents), so the dashboard populates identically on the
+/// start screen. ALWAYS returns a value (empty vecs at worst), so the caller always pushes
+/// a reply and the loading state clears. `pub(super)` so the sibling `host_config` swapper
+/// mutation path can reuse it to re-push after an un-attached agent create / delete.
+pub(super) fn build_host_agents_values() -> (
+    Vec<crate::ipc::proto::AgentEntry>,
+    Vec<crate::ipc::proto::CatalogueModelSnapshot>,
+    Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
+) {
+    use crate::model::agent_def::{load_registry, AgentSource};
+    let registry = load_registry(None);
+    let agents = registry
+        .list(false)
+        .into_iter()
+        .map(|ag| crate::ipc::proto::AgentEntry {
+            name: ag.name.clone(),
+            description: ag.description.clone(),
+            conditions: ag.conditions.clone(),
+            source: match ag.source {
+                AgentSource::Session => "session",
+                AgentSource::Global => "global",
+                AgentSource::Builtin => "builtin",
+            }
+            .to_string(),
+            model_uuid: ag.model_uuid.clone(),
+            model: ag.model.clone(),
+            tools: ag.tools.clone(),
+            prompt: ag.prompt.clone(),
+        })
+        .collect();
+    let cfg = crate::model::app_config::AppConfig::load();
+    let catalogue_models = cfg
+        .models
+        .iter()
+        .map(|e| crate::ipc::proto::CatalogueModelSnapshot {
+            uuid: e.uuid.clone(),
+            name: e.name.clone(),
+            model_id: e.model_id.clone(),
+            provider_uuid: e.provider_uuid.clone(),
+        })
+        .collect();
+    let catalogue_providers = cfg
+        .providers
+        .iter()
+        .map(|p| crate::ipc::proto::CatalogueProviderSnapshot {
+            uuid: p.uuid.clone(),
+            name: p.name.clone(),
+            endpoint: p.endpoint.clone(),
+        })
+        .collect();
+    (agents, catalogue_models, catalogue_providers)
+}
+
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
 /// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
@@ -436,6 +493,14 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     cfg.palette,
                     String::new(),
                 );
+            }
+            // GUI /agents dashboard opened while detached (StartScreen / swapper): there is
+            // no foreground session, so answer from `load_registry(None)` (built-in + global
+            // only) + the GLOBAL config catalogue. ALWAYS a reply so the dashboard's loading
+            // state clears. Cheap, synchronous (a registry + config load), so it runs inline.
+            Ok(HostCtl::GetAgents) => {
+                let (agents, catalogue_models, catalogue_providers) = build_host_agents_values();
+                push_agents_values(push, agents, catalogue_models, catalogue_providers);
             }
             // A hub row's KILL button. In the swapper there is no ATTACHED session, so this
             // is always a background/live-row kill: escalate the kill OFF this thread (it

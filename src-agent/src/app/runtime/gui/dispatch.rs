@@ -494,6 +494,48 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
+        // /agents dashboard open/refresh: dual-routed like GetSettings — the attached
+        // daemon (or the un-attached host) answers with an `AgentsValues` reply the host
+        // re-pushes, so the dashboard populates in both host states.
+        GuiReq::GetAgents => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::ListAgents,
+                HostCtl::GetAgents,
+            );
+        }
+        // /agents editor create/save/rename: forward like the config setters (attached →
+        // daemon; pre-session → the swapper ConfigMutate path — a no-op for agents there).
+        GuiReq::SetAgent {
+            original_name,
+            scope,
+            name,
+            description,
+            conditions,
+            model_uuid,
+            tools,
+            prompt,
+        } => {
+            forward_config_req(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::SetAgent {
+                    original_name,
+                    scope,
+                    name,
+                    description,
+                    conditions,
+                    model_uuid,
+                    tools,
+                    prompt,
+                },
+            );
+        }
+        // /agents delete: same routing.
+        GuiReq::DeleteAgent { scope, name } => {
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteAgent { scope, name });
+        }
     }
 }
 

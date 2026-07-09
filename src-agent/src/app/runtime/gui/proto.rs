@@ -386,4 +386,36 @@ pub(super) enum GuiReq {
     /// re-pushes a fresh `SettingsValues` as the reply, updating the picker's
     /// trigger-pill label.
     SetEffort { effort: String },
+
+    // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────────
+    /// The /agents dashboard opened / refreshed: fetch the merged sub-agent registry +
+    /// model / provider catalogue. Dual-routed like `GetSettings` via [`forward_or_host`] —
+    /// the attached daemon answers with `AgentsValues`, or (un-attached, StartScreen /
+    /// swapper) the host answers from `load_registry(None)` (built-in + global) + the global
+    /// config catalogue — so the dashboard populates in BOTH host states and never hangs.
+    GetAgents,
+    /// The /agents editor's create / save (an upsert). `originalName` is the pre-edit name
+    /// (`Some` + differs from `name` = rename); `scope` is `"global"` / `"session"`.
+    /// Forwarded like the config setters via [`forward_config_req`] (attached → daemon;
+    /// pre-session → the swapper `ConfigMutate` path, a no-op for agents there); the daemon
+    /// persists, rebuilds the session roster, and re-pushes `AgentsValues`. Fields are
+    /// camelCase to match the JS contract.
+    SetAgent {
+        #[serde(default, rename = "originalName")]
+        original_name: Option<String>,
+        scope: String,
+        name: String,
+        description: String,
+        #[serde(default)]
+        conditions: String,
+        #[serde(default, rename = "modelUuid")]
+        model_uuid: Option<String>,
+        #[serde(default)]
+        tools: Vec<String>,
+        #[serde(default)]
+        prompt: String,
+    },
+    /// The /agents dashboard's delete (a file-backed agent; a built-in is a daemon-side
+    /// error). `scope` is `"global"` / `"session"`. Forwarded like the config setters.
+    DeleteAgent { scope: String, name: String },
 }
