@@ -1003,6 +1003,24 @@ impl DaemonHub {
                 self.send_to(idx, DaemonEvent::Ack);
             }
 
+            // GUI agent-row background button: flip ONE running sub-agent to detached via
+            // the SAME `Action::BackgroundSubagent` the TUI's Ctrl+B-on-selection runs.
+            // `handle_background_subagent` re-checks eligibility itself (Running, not
+            // already detached, has a `tool_call_id`) — a stale/ineligible id is a no-op.
+            ClientRequest::BackgroundSubagent { id } => {
+                let result =
+                    apply_action(Action::BackgroundSubagent(id), state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
+            // GUI global Ctrl+B: background EVERY eligible sub-agent via the SAME
+            // `Action::BackgroundAllSubagents` the TUI's composer Ctrl+B runs.
+            // `handle_background_all_subagents` is a no-op when nothing is eligible.
+            ClientRequest::BackgroundAllSubagents => {
+                let result = apply_action(Action::BackgroundAllSubagents, state, client, handle);
+                self.ack_or_error(idx, result);
+            }
+
             // GUI model quick-picker: set (or clear) the foreground session's LOCAL Main
             // override. `Some(uuid)` CLONES the matching GLOBAL `config.models` entry into a
             // session-local Main `ModelEntry` (reusing an existing matching local override

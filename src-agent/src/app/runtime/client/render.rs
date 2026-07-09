@@ -585,6 +585,16 @@ struct PushSubAgent {
     name: String,
     status: &'static str,
     summary: String,
+    /// Whether this sub-agent is already backgrounded (detached). A detached agent's
+    /// background button is hidden (it's already backgrounded); React shows a subtle
+    /// "bg" hint instead.
+    detached: bool,
+    /// Whether this sub-agent is currently PARKING the main turn — i.e. it still has a
+    /// live `tool_call_id` (the model's delegating tool call hasn't been answered yet).
+    /// Only a `running && !detached && blocking` agent is eligible for the
+    /// background button / Ctrl+B (mirrors the TUI's `Action::BackgroundSubagent`
+    /// eligibility gate). Never the raw tool_call_id — just the boolean.
+    blocking: bool,
 }
 
 /// One background-bash job row in a [`PushEnvelope::Snapshot`] (list + status only).
@@ -1820,6 +1830,8 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
                 crate::app::subagent::SubAgentStatus::Error(_) => "error",
             },
             summary: sa.label.clone(),
+            detached: sa.detached,
+            blocking: sa.tool_call_id.is_some(),
         })
         .collect();
 
@@ -1953,6 +1965,10 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             sa.name.hash(&mut h);
             sa.status.hash(&mut h);
             sa.summary.hash(&mut h);
+            // Fold eligibility in so a detach/undetach or blocking flip re-emits the
+            // Snapshot (the background button / bg hint updates live).
+            sa.detached.hash(&mut h);
+            sa.blocking.hash(&mut h);
         }
         // Fold bash jobs in so a status/list change re-emits the Snapshot.
         bash.len().hash(&mut h);

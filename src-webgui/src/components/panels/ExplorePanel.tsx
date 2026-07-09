@@ -12,6 +12,7 @@ import {
   CircleDot,
   CheckCircle2,
   Lock,
+  ArrowDownToLine,
   type LucideIcon,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
@@ -95,6 +96,23 @@ function KillBtn({ onClick }: { onClick: () => void }) {
       className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition group-hover:opacity-60 hover:!text-koma-error hover:!opacity-100"
     >
       <X size={13} strokeWidth={2} />
+    </button>
+  )
+}
+
+// Background button for a running-and-blocking Agent row — mirrors the TUI's
+// Ctrl+B-on-selection. Only rendered while the agent is running, not already
+// detached, and still parking the main turn (`blocking`); flips it to detached
+// without killing it (the agent keeps running, chat unblocks).
+function BackgroundBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label="Background"
+      title="Background (agent keeps running, chat unblocks)"
+      className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition group-hover:opacity-60 hover:!text-koma-accent hover:!opacity-100"
+    >
+      <ArrowDownToLine size={13} strokeWidth={2} />
     </button>
   )
 }
@@ -215,7 +233,15 @@ export function ExplorePanel() {
               <div key={id ?? `${a.name}-${i}`} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
                 <Bot size={13} className="flex-none text-koma-fg opacity-45" />
                 <span className="min-w-0 flex-1 truncate text-[13px] text-koma-fg">{a.name}</span>
+                {a.status === 'running' && a.detached && (
+                  <span className="flex-none text-[10px] font-medium uppercase tracking-wide text-koma-dim opacity-60" title="Running in the background">
+                    bg
+                  </span>
+                )}
                 <StatusBadge status={a.status} />
+                {a.status === 'running' && !a.detached && a.blocking && id != null && (
+                  <BackgroundBtn onClick={() => req({ r: 'BackgroundSubagent', id })} />
+                )}
                 {a.status === 'running' && id != null && (
                   <KillBtn onClick={() => req({ r: 'KillSubagent', id })} />
                 )}
