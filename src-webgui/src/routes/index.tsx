@@ -212,6 +212,10 @@ const DiffTab = lazy(() => import('../components/DiffTab'))
 // Settings page — lazy so its chunk only loads when the gear is first clicked.
 const SettingsTab = lazy(() => import('../components/SettingsTab'))
 
+// Read-only stream tab (sub-agent transcript / bash output) — lazy so its chunk only
+// loads when the first stream tab is opened from the Explorer.
+const StreamTab = lazy(() => import('../components/StreamTab'))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -250,6 +254,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <SettingsTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'subagent' || t.kind === 'bash' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <StreamTab tab={t} />
               </Suspense>
             </div>
           ) : null,

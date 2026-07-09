@@ -90,6 +90,10 @@ impl DaemonHub {
                     // Per-client mode cache: empty until this client's first stream tick
                     // builds it (the daemon-freeze fix, held per-client now).
                     mode_snapshot_cache: None,
+                    // No stream tab open until this client sends a `SetStreamView`.
+                    stream_subagent: None,
+                    stream_bash: None,
+                    stream_session: None,
                 });
             }
             HubInbound::Request { client_id, req } => {
@@ -467,6 +471,32 @@ impl DaemonHub {
             // session (best-effort defaults) — mirrors the FileSearch/ListModels one-shot.
             ClientRequest::GetSettings => {
                 self.send_settings_values(idx, state);
+            }
+
+            // GUI Explore stream tab: set THIS client's read-only stream view (which
+            // sub-agent / bash job it is live-streaming, PINNED to `session`). Pure
+            // per-client state — it touches no session, so it sits here rather than in the
+            // mutation funnel. `session`, `subagent`, and `bash` are set ATOMICALLY so the
+            // pinned session id can never lag the numeric ids it disambiguates (agent/job
+            // ids are per-session counters; see `ClientRequest::SetStreamView`). A view
+            // CHANGE flips the HUB-WIDE `force_resync` flag — the SAME one `Interrupt` uses
+            // — so [`stream_deltas`] sends a full `Snapshot` to EVERY attached client on its
+            // very next pass (not just this one); that guarantees the fresh transcript /
+            // output tail lands immediately for an IDLE/finished agent or restored job (which
+            // produce no churn to piggyback on), and a full snapshot is always valid for the
+            // other clients. Unchanged view = no resync (a repeated activate is cheap). `Ack`
+            // completes the request.
+            ClientRequest::SetStreamView { subagent, bash, session } => {
+                let changed = self.clients[idx].stream_subagent != subagent
+                    || self.clients[idx].stream_bash != bash
+                    || self.clients[idx].stream_session != session;
+                self.clients[idx].stream_subagent = subagent;
+                self.clients[idx].stream_bash = bash;
+                self.clients[idx].stream_session = session;
+                if changed {
+                    self.force_resync = true;
+                }
+                self.send_to(idx, DaemonEvent::Ack);
             }
             req => {
                 self.handle_controller_mutation(idx, req, state, client, handle);
@@ -1149,7 +1179,8 @@ impl DaemonHub {
             | ClientRequest::FileSearch { .. }
             | ClientRequest::ListModels { .. }
             | ClientRequest::ListRoutes { .. }
-            | ClientRequest::GetSettings => {
+            | ClientRequest::GetSettings
+            | ClientRequest::SetStreamView { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }

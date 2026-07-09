@@ -133,6 +133,10 @@ pub fn session_snapshot(
                 id: j.id,
                 command: j.command.clone(),
                 status: j.snapshot_status(),
+                // Default: no output tail. Populated per-client ONLY for the job a client
+                // is streaming into a stream tab, in the hub's `stream_deltas` post-pass —
+                // never here (this projection is shared by attach/resync + every client).
+                output_tail: None,
             })
             .collect(),
         // Cumulative file-change log (#24) so the GUI Explore "File changed" panel

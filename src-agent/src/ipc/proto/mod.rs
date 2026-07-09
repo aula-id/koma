@@ -220,6 +220,32 @@ pub enum ClientRequest {
     /// flip status→Killed). The GUI addresses the job as `bash-<id>`; only the numeric
     /// `id` crosses here. gui-gated.
     BashKill { id: usize },
+    /// Set THIS client's read-only STREAM VIEW — which sub-agent / bash job the GUI is
+    /// live-streaming into an Explore stream tab (the non-key equivalent of the TUI's
+    /// full-screen sub-agent viewer, generalised to bash). `subagent`/`bash` are the
+    /// numeric ids of the currently-viewed sub-agent / bash job; BOTH `None` clears the
+    /// view (no stream tab active). Exactly one is ever `Some` in practice (the active
+    /// tab), but the shape allows either independently. Stored per-client on the hub
+    /// (`stream_subagent`/`stream_bash`); it drives TWO per-client streaming behaviours:
+    /// (1) a VIEWED detached sub-agent's per-step content churn is no longer suppressed
+    /// (see `ipc::snapshot::diff`), so its transcript streams live; (2) the viewed bash
+    /// job's captured OUTPUT TAIL is projected into that client's snapshot (larger tail
+    /// than the `/bash` panel). Fire-and-forget per-client state (no always-reply needed);
+    /// a view CHANGE forces a one-shot full resync so the fresh content lands immediately.
+    /// gui-gated: the TUI drives its sub-agent viewer via the `$` panel + Enter, never this.
+    ///
+    /// `session` PINS the view to one session by its stable UUID. Sub-agent + bash job ids
+    /// are PER-SESSION counters (each `SessionRuntime` starts `next_subagent_id` at 0,
+    /// `next_bash_job_id` at 1), so a bare numeric id is ambiguous across a daemon's
+    /// sessions — both consumers gate on `session` so viewing agent/job N in one session
+    /// never touches the same-numbered agent/job in another. `#[serde(default)]` keeps an
+    /// intermediate peer that omits it decoding cleanly (→ `None`, i.e. unpinned).
+    SetStreamView {
+        subagent: Option<usize>,
+        bash: Option<usize>,
+        #[serde(default)]
+        session: Option<String>,
+    },
     /// Set the GLOBAL agent mode (the GUI composer mode selector) to `mode`, one of
     /// `"auto"`/`"normal"`/`"plan"`/`"yolo"`. Routed daemon-side through the SAME
     /// `AppStateRest::set_agent_mode` choke-point the TUI's Shift+Tab / `/mode` funnel

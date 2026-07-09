@@ -114,6 +114,18 @@ pub struct BashJobSnapshot {
     pub id: usize,
     pub command: String,
     pub status: crate::app::bgbash::BashJobStatus,
+    /// Captured OUTPUT TAIL — populated ONLY for the job a client is currently
+    /// streaming into an Explore stream tab (`ClientRequest::SetStreamView`), during
+    /// THAT client's per-client snapshot build (see the hub's `stream_deltas`), so the
+    /// live `Arc<Mutex<String>>` output can cross the wire for the viewed job alone.
+    /// `None` for every non-viewed job (the common case), keeping the wire lean + the
+    /// per-session diff quiet for un-viewed jobs. A change to a VIEWED job's tail forces
+    /// a full resync for that client only (it rides `SessionSnapshot.bash_jobs`'s
+    /// structural diff). `#[serde(default, skip_serializing_if)]` keeps the None case +
+    /// version-skewed peers wire-free; the client shadow rebuilds the inert job's output
+    /// buffer from it (`client_shadow::shadow_bash_job`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tail: Option<String>,
 }
 
 /// A plain-data projection of one SubAgent.

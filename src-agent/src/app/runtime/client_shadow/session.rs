@@ -139,17 +139,19 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
 /// A live [`BashJob`] owns an `Arc<`[`BashJobShared`]`>` whose mutexes are mutated by a
 /// spawned worker thread that CANNOT cross the wire; the client never runs a job, so this
 /// mints a job with NO worker — the shared state is pre-set from the projection (status
-/// baked into its `Mutex`, empty output, no pid/ended/tee). The GUI sidepanel's only
-/// reader takes `id`, `command`, and `snapshot_status()`, so the baked status renders
-/// correctly (running / done / killed / error). Mirrors how [`shadow_subagent`] mints
-/// inert sub-agents.
+/// baked into its `Mutex`, no pid/ended/tee). The sidepanel reader takes `id`, `command`,
+/// and `snapshot_status()`; the stream-tab fold additionally reads `output_snapshot()`,
+/// so the projection's `output_tail` (populated ONLY for the job THIS client is streaming,
+/// `None` otherwise) is baked into the output `Mutex` — the viewed job carries its live
+/// tail, every other job stays empty. Mirrors how [`shadow_subagent`] mints inert sub-agents.
 pub(crate) fn shadow_bash_job(v: &BashJobSnapshot) -> BashJob {
     BashJob {
         id: v.id,
         command: v.command.clone(),
         started_at: Instant::now(),
         shared: Arc::new(BashJobShared {
-            output: Mutex::new(String::new()),
+            // Baked from the projection: the viewed job's captured output tail, else empty.
+            output: Mutex::new(v.output_tail.clone().unwrap_or_default()),
             status: Mutex::new(v.status.clone()),
             pid: Mutex::new(None),
             ended_at: Mutex::new(None),
