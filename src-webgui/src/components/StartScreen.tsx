@@ -162,23 +162,33 @@ export function StartScreen() {
                     />
                   ) : (
                     <>
-                      <span className="flex min-w-0 items-center gap-2">
+                      {/* Content cell — flex-1 min-w-0 so ALL text/status/folder
+                          chips truncate INSIDE this cell, never spilling into
+                          the fixed trailing action column next to it. */}
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
                         <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
-                        <span className="truncate text-[12.5px] text-koma-fg">{c.name}</span>
+                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{c.name}</span>
                         {c.foreground && (
                           <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide text-koma-fg opacity-50">
                             current
                           </span>
                         )}
-                      </span>
-                      <span className="ml-2 flex flex-none items-center gap-2">
                         {c.dirLabel && (
-                          <span className="truncate text-[11px] text-koma-fg opacity-40">{c.dirLabel}</span>
+                          <span className="max-w-[40%] flex-none truncate text-[11px] text-koma-fg opacity-40">
+                            {c.dirLabel}
+                          </span>
                         )}
+                      </div>
+                      {/* Trailing action cell — fixed ~28px, always reserved
+                          (opacity-toggled inside, never conditionally
+                          rendered) so text width never jumps on hover, and
+                          the destructive button's hit area is strictly this
+                          column, never the content cell's text. */}
+                      <div className="flex w-7 flex-none items-center justify-center">
                         {c.id && (
                           <SessionRowActions id={c.id} kind="session" armed={armed} onArm={setArmed} />
                         )}
-                      </span>
+                      </div>
                     </>
                   )}
                 </div>
@@ -215,13 +225,17 @@ export function StartScreen() {
                     />
                   ) : (
                     <>
-                      <span className="truncate text-[12.5px] text-koma-fg">{h.name}</span>
-                      <span className="ml-2 flex flex-none items-center gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{h.name}</span>
                         {h.dirLabel && (
-                          <span className="truncate text-[11px] text-koma-fg opacity-40">{h.dirLabel}</span>
+                          <span className="max-w-[40%] flex-none truncate text-[11px] text-koma-fg opacity-40">
+                            {h.dirLabel}
+                          </span>
                         )}
+                      </div>
+                      <div className="flex w-7 flex-none items-center justify-center">
                         <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
-                      </span>
+                      </div>
                     </>
                   )}
                 </div>
