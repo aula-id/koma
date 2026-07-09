@@ -308,6 +308,12 @@ pub(super) struct FileDiffResult {
     pub modified: String,
     pub error: Option<String>,
     pub binary: bool,
+    /// Where the ORIGINAL side came from: `"git"` (`git show HEAD:`) or `"baseline"`
+    /// (the session's "virtual git" first-touch pre-image, used when the file isn't
+    /// in a git repository). The GUI shows a dim badge for the baseline case.
+    /// NOT meaningful on `binary: true` / `error` replies — the binary short-circuit
+    /// fires before any diff source is probed, so those carry the `"git"` default.
+    pub origin: &'static str,
 }
 
 /// Cap on either side of a diff (~2MiB) — past this we bail with `error: "file too
@@ -358,10 +364,63 @@ fn resolve_diff_path(path: &str, current_session: Option<&str>) -> std::path::Pa
 /// the `pwd_hash` bucket, then that session's `settings.json` for the actual list) —
 /// no daemon connection required. `None` if the session can't be found on disk at all.
 fn session_workdirs_for(uuid: &str) -> Option<Vec<std::path::PathBuf>> {
-    let row = crate::model::session_registry::get(uuid).ok().flatten()?;
-    let dir = crate::model::store::session_dir(&row.pwd_hash, uuid).ok()?;
+    let dir = session_dir_for(uuid)?;
     let session = crate::model::session::Session::load(&dir).ok()?;
     Some(session.workdirs())
+}
+
+/// Resolve a session's on-disk directory (where `messages.sqlite` and its side tables
+/// live) straight off the sqlite registry — no daemon connection required. `None` if
+/// the session can't be found on disk at all.
+fn session_dir_for(uuid: &str) -> Option<std::path::PathBuf> {
+    let row = crate::model::session_registry::get(uuid).ok().flatten()?;
+    crate::model::store::session_dir(&row.pwd_hash, uuid).ok()
+}
+
+/// "Virtual git" fallback for [`compute_file_diff`] when `path` isn't inside a git
+/// repository: diff the session's first-touch BASELINE pre-image (captured by the
+/// `write`/`edit`/`delete` tools into the per-session `messages.sqlite`
+/// `file_baselines` table) against the current on-disk contents. `path` is the
+/// `fileChanges` record's key, which is byte-identical to the key the baseline was
+/// stored under (both come from `tool::fs::display_key`), so the lookup is direct.
+/// `None` when the session is unknown or no baseline row exists — the caller then
+/// reports that neither diff source is available.
+fn baseline_diff(path: &str, current_session: Option<&str>, modified: String) -> Option<FileDiffResult> {
+    let session_dir = current_session.and_then(session_dir_for)?;
+    let baseline = crate::model::msglog::read_file_baseline(&session_dir, path)?;
+    let empty = |error: Option<String>, binary: bool| FileDiffResult {
+        path: path.to_string(),
+        original: String::new(),
+        modified: String::new(),
+        error,
+        binary,
+        origin: "baseline",
+    };
+    Some(match baseline.kind.as_str() {
+        // Created by koma this session — a valid all-added diff against nothing.
+        "empty" => FileDiffResult {
+            path: path.to_string(),
+            original: String::new(),
+            modified,
+            error: None,
+            binary: false,
+            origin: "baseline",
+        },
+        "binary" => empty(None, true),
+        "toolarge" => empty(Some("file too large to diff".to_string()), false),
+        // "text" (and any unknown kind with content, defensively).
+        _ => match baseline.content {
+            Some(bytes) => FileDiffResult {
+                path: path.to_string(),
+                original: String::from_utf8_lossy(&bytes).into_owned(),
+                modified,
+                error: None,
+                binary: false,
+                origin: "baseline",
+            },
+            None => empty(Some("baseline unavailable for this file".to_string()), false),
+        },
+    })
 }
 
 /// Compute a host-side FILE DIFF for `path` (a `fileChanges` record's path), answering
@@ -375,7 +434,10 @@ fn session_workdirs_for(uuid: &str) -> Option<Vec<std::path::PathBuf>> {
 ///
 /// - A read failure on the current file (deleted, or otherwise unreadable) is NOT an
 ///   error: `modified` is just empty (a valid diff — all-removed).
-/// - No git repository at `path`'s location at all → `error` set, `original` empty.
+/// - No git repository at `path`'s location → falls back to the session's "virtual
+///   git" BASELINE ([`baseline_diff`]: the first-touch pre-image the fs tools capture
+///   into `messages.sqlite`), `origin: "baseline"`; only when THAT also misses does it
+///   report `error: "no git repository and no session baseline for this file"`.
 /// - `path` untracked / not present at `HEAD` (`git show` exits non-zero) → `original`
 ///   empty (a valid diff — all-added), no `error`.
 /// - Either side failing UTF-8 or containing a NUL in its first 8KiB → `binary: true`,
@@ -389,6 +451,18 @@ fn compute_file_diff(path: &str, current_session: Option<&str>) -> FileDiffResul
         modified: String::new(),
         error,
         binary,
+        origin: "git",
+    };
+    // Not in a git repo → try the session's "virtual git" baseline before giving up.
+    let no_git = |modified: String| {
+        baseline_diff(path, current_session, modified.clone()).unwrap_or(FileDiffResult {
+            path: path.to_string(),
+            original: String::new(),
+            modified,
+            error: Some("no git repository and no session baseline for this file".to_string()),
+            binary: false,
+            origin: "git",
+        })
     };
 
     let abs = resolve_diff_path(path, current_session);
@@ -419,23 +493,11 @@ fn compute_file_diff(path: &str, current_session: Option<&str>) -> FileDiffResul
             std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
         }
         _ => {
-            return FileDiffResult {
-                path: path.to_string(),
-                original: String::new(),
-                modified,
-                error: Some("not in a git repository".to_string()),
-                binary: false,
-            };
+            return no_git(modified);
         }
     };
     let Ok(rel) = abs.strip_prefix(&repo_root) else {
-        return FileDiffResult {
-            path: path.to_string(),
-            original: String::new(),
-            modified,
-            error: Some("not in a git repository".to_string()),
-            binary: false,
-        };
+        return no_git(modified);
     };
     let show = std::process::Command::new("git")
         .args(["show", &format!("HEAD:{}", rel.to_string_lossy())])
@@ -455,6 +517,7 @@ fn compute_file_diff(path: &str, current_session: Option<&str>) -> FileDiffResul
                 modified,
                 error: None,
                 binary: false,
+                origin: "git",
             }
         }
         // Non-zero exit: `path` is untracked / didn't exist at HEAD — a valid diff
@@ -465,6 +528,7 @@ fn compute_file_diff(path: &str, current_session: Option<&str>) -> FileDiffResul
             modified,
             error: None,
             binary: false,
+            origin: "git",
         },
     }
 }

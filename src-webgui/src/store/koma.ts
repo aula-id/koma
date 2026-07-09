@@ -241,6 +241,10 @@ export type DiffPayload = {
   modified: string
   error: string | null
   binary: boolean
+  // Where the original side came from: 'git' (git show HEAD:) or 'baseline' (the
+  // session's "virtual git" first-touch pre-image — non-git directories). DiffTab
+  // shows a dim "session baseline" badge for the latter.
+  origin: 'git' | 'baseline'
 }
 
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
@@ -403,6 +407,7 @@ export type PushEnvelope =
       modified: string
       error: string | null
       binary: boolean
+      origin?: 'git' | 'baseline'
     }
   // Reply to GuiReq UsagePreview — a LAST-7-DAYS usage preview computed straight
   // off the global usage ledger (host-only, never touches the daemon). ALWAYS a
@@ -1002,6 +1007,7 @@ export const useKoma = create<KomaState>((set, get) => ({
                         modified: env.modified,
                         error: env.error,
                         binary: env.binary,
+                        origin: env.origin ?? 'git',
                       },
                     }
                   : t,

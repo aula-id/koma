@@ -57,6 +57,54 @@ pub struct SubAgentRecord {
     pub status: String,
 }
 
+/// One persisted file BASELINE: the file's pre-image as it was the FIRST time this
+/// session's `write`/`edit`/`delete` tools touched it ("virtual git" — lets the GUI
+/// diff tab show session changes in a non-git directory). `kind` says what `content`
+/// holds: `"text"` (the original bytes), `"empty"` (file did not exist — created by
+/// koma this session), `"binary"` / `"toolarge"` (pre-image not stored, marker only).
+#[derive(Debug, Clone)]
+pub struct FileBaseline {
+    pub kind: String,
+    pub content: Option<Vec<u8>>,
+}
+
+/// Store a file's baseline pre-image, FIRST TOUCH WINS: `INSERT OR IGNORE` keyed by
+/// `path`, so re-touching the same file never overwrites the session's original
+/// snapshot (diffs stay cumulative-since-session-start). Best-effort like every
+/// side-table write — a DB hiccup must never fail the fs tool that's about to run.
+pub fn record_file_baseline(
+    session_dir: &Path,
+    path: &str,
+    kind: &str,
+    content: Option<&[u8]>,
+) -> Result<()> {
+    let conn = open(session_dir)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO file_baselines (path, kind, content, captured_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![path, kind, content, now_secs()],
+    )?;
+    Ok(())
+}
+
+/// Read one file's baseline pre-image, `None` when the session never captured one
+/// (file untouched by koma, or a pre-feature session). Best-effort — an unreadable
+/// DB reads as "no baseline".
+pub fn read_file_baseline(session_dir: &Path, path: &str) -> Option<FileBaseline> {
+    let conn = open(session_dir).ok()?;
+    conn.query_row(
+        "SELECT kind, content FROM file_baselines WHERE path = ?1",
+        rusqlite::params![path],
+        |r| {
+            Ok(FileBaseline {
+                kind: r.get(0)?,
+                content: r.get(1)?,
+            })
+        },
+    )
+    .ok()
+}
+
 /// Upsert one file-change entry (latest status wins). Best-effort.
 ///
 /// Called event-driven from the `write` / `edit` / `delete` tools the instant

@@ -101,6 +101,13 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             label      TEXT NOT NULL,
             status     TEXT NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS file_baselines (
+            path        TEXT PRIMARY KEY,
+            kind        TEXT NOT NULL,
+            content     BLOB,
+            captured_at INTEGER NOT NULL
         );",
     )?;
     // Migrate older DBs (created before the usage columns existed). Errors here
