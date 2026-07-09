@@ -33,8 +33,8 @@ export function Sidebar({ width, view }: SidebarProps) {
       style={{ width, flexBasis: width }}
       className="flex min-w-0 flex-none flex-col overflow-hidden border-r border-koma-border bg-koma-panel"
     >
-      <div className="flex h-[35px] flex-none items-center justify-between gap-2 px-5 text-[11px] uppercase tracking-wider text-koma-fg opacity-60 whitespace-nowrap">
-        <span>{TITLES[view]}</span>
+      <div className="flex h-[35px] flex-none items-center justify-between gap-2 px-5 text-[11px] uppercase tracking-wider text-koma-fg whitespace-nowrap">
+        <span className="opacity-60">{TITLES[view]}</span>
         {view === 'usage' && hasSession && (
           <div className="normal-case tracking-normal">
             <Segmented

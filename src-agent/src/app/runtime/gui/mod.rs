@@ -272,9 +272,10 @@ enum GuiReq {
     /// `scope` is `"all"` (default, global last-7-days) or `"session"` (same window,
     /// filtered to `sessionId`'s ledger rows only); both default (via `#[serde(default)]`)
     /// so the pre-scope no-field wire form still deserializes. `sessionId` is the
-    /// foreground session's uuid — required for a `"session"` scope to mean anything,
-    /// ignored otherwise. The ipc handler resolves these into the `HostCtl::UsagePreview`
-    /// it forwards.
+    /// foreground session's uuid — required for a `"session"` scope to mean anything. A
+    /// `"session"` scope with no `sessionId` (the welcome/start-screen state) is FORCED to
+    /// `"all"` by the ipc handler before it queries — the echoed reply's `scope` always
+    /// describes what was actually queried, never a mismatched label.
     UsagePreview {
         #[serde(default)]
         scope: Option<String>,
@@ -873,13 +874,19 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     }
                     // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
                     // ALWAYS routed to the host-relay thread — never the daemon —
-                    // regardless of attach state (see `HostCtl::UsagePreview`). Resolve the
-                    // "session" scope to an actual uuid only when one was supplied — a
-                    // "session" scope with no session (the welcome/start-screen state) has
-                    // nothing to filter by, so it silently degrades to "all" rather than
-                    // querying with a meaningless filter.
+                    // regardless of attach state (see `HostCtl::UsagePreview`). A "session"
+                    // scope with no session (the welcome/start-screen state) has nothing to
+                    // filter by, so it is FORCED to "all" here — BEFORE deciding `session` —
+                    // so the scope actually sent to the ledger query and the scope echoed
+                    // back in the reply always agree (a reply must never claim "session"
+                    // while carrying all-data).
                     GuiReq::UsagePreview { scope, session_id } => {
                         let scope = scope.unwrap_or_else(|| "all".to_string());
+                        let scope = if scope == "session" && session_id.is_none() {
+                            "all".to_string()
+                        } else {
+                            scope
+                        };
                         let session = if scope == "session" { session_id } else { None };
                         let _ = ipc_ctl.send(HostCtl::UsagePreview { session, scope });
                     }

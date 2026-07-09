@@ -1007,9 +1007,13 @@ enum PushEnvelope {
     /// the global `~/.koma/usage.sqlite` ledger (see `compute_usage_preview` — never
     /// forwarded to the daemon), so this is pushed the SAME way regardless of attach
     /// state, and — like `FileDiff` — is ALWAYS a reply so the panel never hangs loading.
-    /// `scope` echoes the request's `"all"`/`"session"` token so React can drop a reply
-    /// that no longer matches the currently-selected scope (a rapid toggle racing an
-    /// in-flight request).
+    /// `scope` echoes the request's `"all"`/`"session"` token, and `session_id`
+    /// (serialised `sessionId`) echoes the session uuid ACTUALLY queried (`None` for an
+    /// "all" scope) — together they let React drop a reply that no longer matches
+    /// what's currently selected/attached: a rapid all/session toggle racing an
+    /// in-flight request (scope mismatch), OR the foreground session switching mid-flight
+    /// while "session" scope stayed selected (session id mismatch) — the latter is what
+    /// would otherwise render session A's numbers under session B's attach.
     #[serde(rename_all = "camelCase")]
     UsagePreview {
         cost: f64,
@@ -1020,6 +1024,7 @@ enum PushEnvelope {
         days: Vec<PushUsageDay>,
         top_models: Vec<PushUsageModel>,
         scope: String,
+        session_id: Option<String>,
     },
     /// One-shot reply to a `GetSettings` (and the re-push after a `SetSessionPrefs`),
     /// carrying the foreground session's GUI-editable prefs + the active palette for the
@@ -1103,14 +1108,16 @@ pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResul
 }
 
 /// Emit a one-shot `UsagePreview` envelope for the GUI activity-bar Usage panel, carrying
-/// a host-computed [`super::UsagePreviewResult`] plus the `scope` ("all"/"session") the
-/// request was made under, echoed back verbatim. Shared by the UN-ATTACHED swapper
-/// fallback and the attached `push_loop`'s off-thread worker, since a `UsagePreview` is
-/// serviced entirely host-side (the global ledger) regardless of attach state.
+/// a host-computed [`super::UsagePreviewResult`] plus the `scope` ("all"/"session") AND
+/// `session_id` (the session uuid actually queried, `None` for "all") the request was
+/// made under, both echoed back verbatim. Shared by the UN-ATTACHED swapper fallback and
+/// the attached `push_loop`'s off-thread worker, since a `UsagePreview` is serviced
+/// entirely host-side (the global ledger) regardless of attach state.
 pub(super) fn push_usage_preview(
     push: &dyn Fn(String),
     result: super::UsagePreviewResult,
     scope: String,
+    session_id: Option<String>,
 ) {
     let env = PushEnvelope::UsagePreview {
         cost: result.cost,
@@ -1133,6 +1140,7 @@ pub(super) fn push_usage_preview(
             })
             .collect(),
         scope,
+        session_id,
     };
     emit(push, &env);
 }
@@ -1307,11 +1315,14 @@ pub(super) fn push_loop(
     // `compute_usage_preview` hits sqlite, blocking, so — same reasoning as `FileDiff`
     // above — it runs on a one-shot worker thread; the loop drains completed results
     // non-blocking and pushes each as a `UsagePreview` envelope. The `String` riding
-    // alongside is the request's `scope` ("all"/"session"), echoed back unchanged so a
-    // stale-scope reply (a rapid toggle racing an in-flight request) can be dropped
-    // React-side.
+    // alongside is the request's `scope` ("all"/"session"); the `Option<String>` is the
+    // `session` uuid that was ACTUALLY queried (only `Some` for a real "session" scope).
+    // Both are echoed back unchanged so React can drop a reply whose scope OR session id
+    // no longer matches what's currently selected/attached — a rapid toggle, OR a
+    // foreground session switch, racing an in-flight request must never render the
+    // wrong session's numbers.
     let (usage_preview_tx, usage_preview_rx) =
-        std::sync::mpsc::channel::<(super::UsagePreviewResult, String)>();
+        std::sync::mpsc::channel::<(super::UsagePreviewResult, String, Option<String>)>();
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -1423,12 +1434,12 @@ pub(super) fn push_loop(
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
                 // off this thread; the result is drained + pushed below at (b-quin).
-                // `scope` rides along so the reply can echo it.
+                // `scope` AND `session` both ride along so the reply can echo them.
                 Ok(super::HostCtl::UsagePreview { session, scope }) => {
                     let tx = usage_preview_tx.clone();
                     std::thread::spawn(move || {
                         let result = super::compute_usage_preview(session.as_deref());
-                        let _ = tx.send((result, scope));
+                        let _ = tx.send((result, scope, session));
                     });
                 }
                 Err(TryRecvError::Empty) => break,
@@ -1594,8 +1605,8 @@ pub(super) fn push_loop(
         }
 
         // --- (b-quin) USAGE PANEL: push any completed off-thread preview fetch ---
-        while let Ok((result, scope)) = usage_preview_rx.try_recv() {
-            push_usage_preview(push, result, scope);
+        while let Ok((result, scope, session_id)) = usage_preview_rx.try_recv() {
+            push_usage_preview(push, result, scope, session_id);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

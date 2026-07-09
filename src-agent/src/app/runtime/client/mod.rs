@@ -269,10 +269,14 @@ pub(super) enum HostCtl {
     /// ipc handler. Serviced off-thread (sqlite I/O is blocking) in both host states; see
     /// [`compute_usage_preview`]. `session` is `Some(uuid)` for the "session" scope
     /// toggle (filters every query to that session's ledger rows) or `None` for the
-    /// default "all" (global) scope. `scope` is the literal `"all"`/`"session"` token,
-    /// carried through unchanged so the reply can echo it back — the React panel drops a
-    /// reply whose scope no longer matches the currently-selected one (a rapid toggle
-    /// racing an in-flight request).
+    /// default "all" (global) scope — the ipc handler forces this to `None`/"all" itself
+    /// when "session" was requested with no session to filter by. `scope` is the literal
+    /// `"all"`/`"session"` token. BOTH are carried through unchanged so the reply can
+    /// echo them back — the React panel drops a reply whose scope no longer matches the
+    /// currently-selected one (a rapid toggle racing an in-flight request), OR whose
+    /// echoed session id no longer matches the currently-attached session (the
+    /// foreground session switched while a "session"-scope request was in flight, which
+    /// would otherwise render the OLD session's numbers under the new attach).
     UsagePreview {
         session: Option<String>,
         scope: String,
@@ -978,16 +982,18 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
             // a global file the host reads directly, so this never touches a daemon in
             // either state — see `compute_usage_preview`. Sqlite I/O is blocking, so it
-            // runs on a plain OS thread like `FileDiff` above. `scope` rides along
-            // unchanged so the reply echoes it (the React panel drops a stale-scope
-            // reply). A "session" scope with no session attached (there is none — this
-            // is the swapper) simply queries with `session: None` passed through by the
-            // ipc handler, which only sets `Some(uuid)` when a session IS attached.
+            // runs on a plain OS thread like `FileDiff` above. `scope` AND `session` both
+            // ride along unchanged so the reply echoes them (the React panel drops a
+            // reply whose scope OR session id no longer matches what's currently
+            // selected/attached — a stale cross-session reply must never render). A
+            // "session" scope with no session attached (there is none — this is the
+            // swapper) simply queries with `session: None` passed through by the ipc
+            // handler, which only sets `Some(uuid)` when a session IS attached.
             Ok(HostCtl::UsagePreview { session, scope }) => {
                 let push2 = P::clone(push);
                 std::thread::spawn(move || {
                     let result = compute_usage_preview(session.as_deref());
-                    render::push_usage_preview(&push2, result, scope);
+                    render::push_usage_preview(&push2, result, scope, session);
                 });
             }
             // GUI Settings tab opened while detached (StartScreen / swapper): there is no
