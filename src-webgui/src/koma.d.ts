@@ -128,8 +128,11 @@ declare global {
     // totals, a 7-entry daily cost series, and the top 3 models by spend.
     // Reply lands as the UsagePreview push envelope (guaranteed for every
     // request, even detached — the host reads the global ledger directly).
-    // Sent whenever the panel is (re)shown so the numbers stay fresh.
-    | { r: 'UsagePreview' }
+    // Sent whenever the panel is (re)shown, and whenever the header's
+    // all/session scope toggle flips. `scope` defaults to "all" (global) when
+    // omitted; "session" filters to `sessionId`'s ledger rows only — required
+    // for a "session" scope to mean anything, ignored otherwise.
+    | { r: 'UsagePreview'; scope?: 'all' | 'session'; sessionId?: string }
     // Fetch the Settings tab's Session-section values (name / workdir / toggles /
     // internet mode) + the active palette. Sent when the tab opens or re-activates.
     // Reply lands as the SettingsValues push envelope (guaranteed for every request,
