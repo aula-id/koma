@@ -12,6 +12,7 @@
 mod core;
 mod requests;
 mod requests_config;
+mod requests_read;
 mod requests_session;
 mod requests_turn;
 mod streaming;
