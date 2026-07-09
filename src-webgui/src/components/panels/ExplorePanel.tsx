@@ -173,7 +173,7 @@ export function ExplorePanel() {
             return (
               <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
                 <Icon size={12} className={`flex-none ${tone}`} />
-                <span className={`min-w-0 flex-1 truncate text-[12px] font-normal ${textTone}`}>{t.content}</span>
+                <span className={`min-w-0 flex-1 truncate font-mono text-[12px] font-normal ${textTone}`}>{t.content}</span>
               </div>
             )
           })
