@@ -6,6 +6,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { ArrowUp, CornerDownRight, Layers, Paperclip, Search, Square, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -35,6 +36,120 @@ function readFileAsBase64(file: File): Promise<string> {
   })
 }
 
+// --- Inline file-ref chips ---------------------------------------------------
+// TUI parity: picking a file in OmniSearchPalette inserts a `@<label>` token
+// (see OmniSearchPalette.tsx) — the same wire text the TUI composer produces
+// and sends verbatim to the model. This composer paints those tokens as
+// inline pills (Google-Docs-style) via a transparent-text textarea layered
+// over a mirrored overlay.
+//
+// Chips are tracked as SUBSTRING RANGES, not whitespace-delimited tokens — a
+// real filename label can itself contain a space ("My Notes.md" -> the
+// inserted text is `@My Notes.md `, which whitespace-splits into TWO runs,
+// "@My" and "Notes.md"). Splitting on whitespace would silently break both
+// the pill and the atomic delete for any such label, so instead:
+//  1. Scan for exact, non-overlapping occurrences of every token this session
+//     inserted (pickedTokensRef, longest tokens matched first so a token that
+//     happens to be a prefix/substring of another can't shadow-steal it).
+//  2. Layer in `@[<n>]<path>` multi-root-sentinel matches (a SEPARATE,
+//     non-anchored regex pass over the raw text, not a whitespace-token
+//     test) for any range not already claimed by (1) — this is what keeps a
+//     multi-root chip recognizable after a reload/history-recall even though
+//     pickedTokensRef itself doesn't survive either (accepted asymmetry: a
+//     single-root label with no `[N]` prefix has no shape to fall back on,
+//     so it loses its chip after a reload).
+// The resulting ranges drive both the overlay renderer and the atomic-delete
+// keydown handler below — one source of truth for "what's a chip".
+
+// All non-overlapping chip ranges in `text`, sorted by start offset.
+function findChipRanges(text: string, pickedTokens: Set<string>): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  const isClaimed = (s: number, e: number) => ranges.some(([rs, re]) => s < re && e > rs)
+
+  // Pass 1: exact picked-token substrings, longest first.
+  const tokens = Array.from(pickedTokens)
+    .filter((t) => t.length > 0)
+    .sort((a, b) => b.length - a.length)
+  for (const token of tokens) {
+    let from = 0
+    while (from <= text.length - token.length) {
+      const idx = text.indexOf(token, from)
+      if (idx === -1) break
+      const end = idx + token.length
+      if (!isClaimed(idx, end)) ranges.push([idx, end])
+      from = idx + 1
+    }
+  }
+
+  // Pass 2: multi-root sentinel shape, anywhere it isn't already claimed.
+  const sentinelRe = /@\[\d+\]\S+/g
+  let m: RegExpExecArray | null
+  while ((m = sentinelRe.exec(text))) {
+    const idx = m.index
+    const end = idx + m[0].length
+    if (!isClaimed(idx, end)) ranges.push([idx, end])
+  }
+
+  ranges.sort((a, b) => a[0] - b[0])
+  return ranges
+}
+
+// Backspace: fires for the range the caret sits AFTER or INSIDE
+// (start < pos <= end) — there has to be actual chip text immediately to the
+// caret's left, not just a chip that happens to start right at the caret.
+function chipRangeForBackspace(
+  ranges: Array<[number, number]>,
+  pos: number,
+): [number, number] | null {
+  return ranges.find(([s, e]) => pos > s && pos <= e) ?? null
+}
+
+// Delete: fires for the range the caret sits BEFORE or INSIDE
+// (start <= pos < end).
+function chipRangeForDelete(
+  ranges: Array<[number, number]>,
+  pos: number,
+): [number, number] | null {
+  return ranges.find(([s, e]) => pos >= s && pos < e) ?? null
+}
+
+// Overlay renderer: walks the chip ranges in order, emitting the untouched
+// in-between text verbatim and wrapping each range's slice in a tinted pill
+// span. The plain-text pieces + pill contents concatenate back to EXACTLY
+// `text` — this must stay character-identical (same glyphs, same wrapping),
+// since it paints directly behind the transparent textarea and has to line
+// up with the real caret/selection pixel-for-pixel.
+function renderComposerOverlay(text: string, pickedTokens: Set<string>): ReactNode {
+  if (text === '') return null
+  const ranges = findChipRanges(text, pickedTokens)
+  if (ranges.length === 0) return text
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  ranges.forEach(([start, end], i) => {
+    if (start > cursor) nodes.push(text.slice(cursor, start))
+    const part = text.slice(start, end)
+    // Dim the `@` (and multi-root `[N]`) prefix inside the pill; the rest of
+    // the label reads at normal (tinted) text color. Purely cosmetic — `part`
+    // itself (unsplit) is what was matched/compared above.
+    const m = part.match(/^(@(?:\[\d+\])?)([\s\S]*)$/)
+    nodes.push(
+      <span key={i} className="rounded-[4px] bg-koma-accent/15 px-[2px] -mx-[2px] text-koma-fg">
+        {m ? (
+          <>
+            <span className="opacity-50">{m[1]}</span>
+            {m[2]}
+          </>
+        ) : (
+          part
+        )}
+      </span>,
+    )
+    cursor = end
+  })
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  return nodes
+}
+
 // Composer: message textarea + send, plus attach affordances (file-picker
 // button, drag-drop onto the composer, clipboard-image paste) and the
 // attached-file chip row. Split out of ChatView so the message-rendering
@@ -57,6 +172,14 @@ export function Composer() {
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  // Tokens this session has inserted via the omnisearch picker (bare, e.g.
+  // "@downloads/file.pdf" or "@[1]downloads/file.pdf" — never with the
+  // trailing space) — read by the overlay renderer + atomic chip-delete below
+  // to decide which whitespace-delimited draft tokens are chip-eligible.
+  // Add-only: stale entries that no longer appear in the text are harmless,
+  // this is only ever membership-tested, never iterated positionally.
+  const pickedTokensRef = useRef<Set<string>>(new Set())
   // Mascot swap-on-send: bumped once per submit, telling CatMascot to pick a
   // different random cat. Otherwise it just keeps looping the current one.
   const [mascotSwap, setMascotSwap] = useState(0)
@@ -75,11 +198,31 @@ export function Composer() {
     if (!ta) return
     ta.style.height = 'auto'
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
-    if (caretToEndRef.current) {
+    if (caretTargetRef.current !== null) {
+      // Atomic chip-delete (below) requested a precise caret position — the
+      // deleted token's start — rather than "end of text".
+      ta.setSelectionRange(caretTargetRef.current, caretTargetRef.current)
+      caretTargetRef.current = null
+    } else if (caretToEndRef.current) {
       ta.setSelectionRange(ta.value.length, ta.value.length)
       caretToEndRef.current = false
     }
+    // Height just changed (auto-grow above); keep the chip overlay's scroll
+    // glued to the textarea's own scrollTop.
+    syncOverlayScroll()
   }, [input])
+
+  // Keep the chip overlay glued to the textarea across window resizes / font
+  // reflows too — not just keystrokes (the [input] effect above) — since a
+  // resize can change the textarea's wrapped-line layout (and thus its
+  // scrollable range) without `input` itself changing. Fires once on mount as
+  // well, in case anything sizes late.
+  useEffect(() => {
+    syncOverlayScroll()
+    window.addEventListener('resize', syncOverlayScroll)
+    return () => window.removeEventListener('resize', syncOverlayScroll)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Thinking-bubble: while working, pick a fresh word immediately, then
   // re-randomize every 1000ms (avoiding an immediate repeat) until working
@@ -107,6 +250,12 @@ export function Composer() {
   // see attachFiles below), then ack so it doesn't re-fire on rerender.
   useEffect(() => {
     if (composerInsert === null) return
+    // Record the bare token (no trailing space) as chip-eligible for the
+    // overlay + atomic-delete below — covers both the `@label ` common case
+    // and the raw-path fallback (empty label), so a fallback insert still
+    // renders/deletes as a single unit even though it has no `@` prefix.
+    const token = composerInsert.trimEnd()
+    if (token) pickedTokensRef.current.add(token)
     setInput((prev) => (prev.length > 0 ? `${prev} ${composerInsert}` : composerInsert))
     consumeComposerInsert()
   }, [composerInsert, consumeComposerInsert])
@@ -134,10 +283,26 @@ export function Composer() {
   // Flags the [input] auto-grow effect above to also park the caret at the end
   // of the text a recall just injected (a plain typed change never needs this).
   const caretToEndRef = useRef(false)
+  // Set by the atomic chip-delete handler (below) to park the caret at a
+  // precise offset — the deleted token's start — after the [input] effect's
+  // setInput-triggered rerender. Parallels caretToEndRef, but for an exact
+  // position instead of "end of text"; checked first since it's the more
+  // specific request.
+  const caretTargetRef = useRef<number | null>(null)
 
   const resetHistory = () => {
     histIdxRef.current = -1
     stashRef.current = ''
+  }
+
+  // Keep the chip overlay's scroll position glued to the textarea's — has to
+  // track both user scrolling (wheel/keys inside a >200px-tall draft, once
+  // the textarea itself scrolls internally) and programmatic height changes
+  // (the autosize effect above).
+  const syncOverlayScroll = () => {
+    if (overlayRef.current && textareaRef.current) {
+      overlayRef.current.scrollTop = textareaRef.current.scrollTop
+    }
   }
 
   // Read straight off the store (no subscription — this only runs on an
@@ -197,6 +362,35 @@ export function Composer() {
       e.preventDefault()
       submit()
       return
+    }
+    // Atomic chip delete: Backspace/Delete next to (or inside) a chip-eligible
+    // `@label` range removes the WHOLE range in one keystroke instead of
+    // eating it character by character. Gated on isComposing so an IME
+    // candidate-confirm Backspace never gets hijacked. Non-collapsed
+    // selections (start !== end) fall through to native behavior untouched.
+    if ((e.key === 'Backspace' || e.key === 'Delete') && !e.nativeEvent.isComposing) {
+      const ta = e.currentTarget
+      const start = ta.selectionStart ?? 0
+      const end = ta.selectionEnd ?? 0
+      if (start === end) {
+        const text = ta.value
+        const ranges = findChipRanges(text, pickedTokensRef.current)
+        const span =
+          e.key === 'Backspace' ? chipRangeForBackspace(ranges, start) : chipRangeForDelete(ranges, start)
+        if (span) {
+          let [spanStart, spanEnd] = span
+          // Eat exactly one trailing LITERAL SPACE along with the chip (the
+          // space OmniSearchPalette always inserts after it) — NOT any
+          // whitespace char, since a chip sitting at end-of-line in a
+          // multi-line draft would otherwise eat the newline and merge the
+          // next line up.
+          if (text[spanEnd] === ' ') spanEnd += 1
+          e.preventDefault()
+          caretTargetRef.current = spanStart
+          setInput(text.slice(0, spanStart) + text.slice(spanEnd))
+          return
+        }
+      }
     }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       // Omnisearch owns Up/Down for its own result-list navigation while open.
@@ -393,16 +587,38 @@ export function Composer() {
           </div>
         )}
 
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={onChange}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          placeholder="Message koma…"
-          rows={1}
-          className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-[14px] leading-relaxed text-koma-fg outline-none placeholder:text-koma-fg placeholder:opacity-40"
-        />
+        {/* Wraps ONLY the textarea: a `relative z-0` positioning root for the
+            chip overlay (absolute inset-0 behind it) — isolated as its own
+            z-stacking context (explicit z-0 on a positioned element) so the
+            overlay/textarea's internal z-0/z-10 ordering never competes with
+            the card-level mascot/thinking-bubble (both z-10) above. */}
+        <div className="relative z-0">
+          {/* Chip overlay: mirrors the textarea's text behind it (see
+              renderComposerOverlay above), painting chip-eligible `@label`
+              tokens as tinted pills. pointer-events-none so it never steals
+              clicks/caret placement from the (visually transparent, but very
+              much alive) textarea layered on top of it. */}
+          <div
+            ref={overlayRef}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-0 w-full overflow-hidden whitespace-pre-wrap break-words text-[14px] leading-relaxed"
+          >
+            {renderComposerOverlay(input, pickedTokensRef.current)}
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={onChange}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onScroll={syncOverlayScroll}
+            placeholder="Message koma…"
+            rows={1}
+            className={`relative z-10 max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-[14px] leading-relaxed outline-none caret-koma-fg placeholder:text-koma-fg placeholder:opacity-40 ${
+              input === '' ? 'text-koma-fg' : 'text-transparent'
+            }`}
+          />
+        </div>
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">

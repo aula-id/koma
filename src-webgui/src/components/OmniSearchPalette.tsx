@@ -12,8 +12,14 @@ type OmniSearchPaletteProps = {
 // Fuzzy workspace-file search + insert overlay. Mirrors ResumePalette's
 // overlay skeleton (full-screen backdrop with click-to-close, shared
 // search-pill layoutId, Esc-to-close) but drives a live FileSearch request as
-// the user types (debounced) and inserts the selected result's path into the
-// composer draft instead of switching sessions. Picks are NOT routed through
+// the user types (debounced) and inserts a `@<label>` TOKEN into the composer
+// draft instead of switching sessions. `label` is the dircache entry text
+// (`[N]relpath` for multi-root workspaces, bare `relpath` for single-root) —
+// the SAME token shape the TUI composer inserts, so the text that ends up on
+// the wire is byte-identical between GUI and TUI (the daemon leaves non-image
+// `@` tokens untouched in the submitted text; only images get scanned into
+// attachments). Falls back to the raw absolute path (no `@`, old behavior) if
+// a row ever comes back with an empty label. Picks are NOT routed through
 // AttachPath: the daemon's attachment ingest is image-only, so a non-image
 // path attached that way silently corrupts the shared composer buffer.
 export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
@@ -38,10 +44,12 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
     return () => window.clearTimeout(t)
   }, [query, req])
 
-  // FILE pick: insert the path into the composer draft and close (attach flow).
-  const pick = (path: string) => {
+  // FILE pick: insert the `@label` token (TUI-parity wire text) into the
+  // composer draft and close (attach flow). Falls back to the raw path if
+  // this row has no label (shouldn't normally happen for a file row).
+  const pick = (path: string, label: string) => {
     if (!path) return
-    insertToComposer(path)
+    insertToComposer(label ? `@${label} ` : path)
     onClose()
   }
 
@@ -54,13 +62,17 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
     setQuery(dirPath)
   }
 
-  // FOLDER attach: insert the folder PATH into the composer draft and close —
-  // the same insert flow as a file pick (ui.composerInsert), so the model can
-  // read the directory via its own tools. Used by the per-row check button and
-  // the confirm-current-folder button beside the search input.
+  // FOLDER attach: insert the folder as a `@label` token into the composer
+  // draft and close — the same insert flow as a file pick (ui.composerInsert),
+  // so the model can read the directory via its own tools. `dirPath` here is
+  // always a dircache label already (either `r.label` from a row, or the
+  // query box's text after a drill-in set it to a label — see drill above),
+  // never the empty-string sentinel, so no fallback is needed. Used by the
+  // per-row check button and the confirm-current-folder button beside the
+  // search input.
   const attachFolder = (dirPath: string) => {
     if (!dirPath) return
-    insertToComposer(dirPath)
+    insertToComposer(`@${dirPath} `)
     onClose()
   }
 
@@ -127,7 +139,7 @@ export function OmniSearchPalette({ onClose }: OmniSearchPaletteProps) {
                     {/* Primary action: file rows ATTACH (pick), folder rows
                         DRILL IN. */}
                     <button
-                      onClick={() => (isDir ? drill(r.label) : pick(r.path))}
+                      onClick={() => (isDir ? drill(r.label) : pick(r.path, r.label))}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       {isDir ? (
