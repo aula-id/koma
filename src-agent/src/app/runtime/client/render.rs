@@ -1152,10 +1152,10 @@ pub(super) fn push_route_list(
 }
 
 /// Emit a one-shot `FileDiff` envelope for the GUI Explore panel's Monaco diff tab,
-/// carrying a host-computed [`super::FileDiffResult`] verbatim. Shared by the
+/// carrying a host-computed [`super::diff::FileDiffResult`] verbatim. Shared by the
 /// UN-ATTACHED swapper fallback and the attached `push_loop`'s off-thread worker,
 /// since a `FileDiff` is serviced entirely host-side regardless of attach state.
-pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResult) {
+pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::diff::FileDiffResult) {
     let env = PushEnvelope::FileDiff {
         path: result.path,
         original: result.original,
@@ -1168,14 +1168,14 @@ pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::FileDiffResul
 }
 
 /// Emit a one-shot `UsagePreview` envelope for the GUI activity-bar Usage panel, carrying
-/// a host-computed [`super::UsagePreviewResult`] plus the `scope` ("all"/"session") AND
+/// a host-computed [`super::diff::UsagePreviewResult`] plus the `scope` ("all"/"session") AND
 /// `session_id` (the session uuid actually queried, `None` for "all") the request was
 /// made under, both echoed back verbatim. Shared by the UN-ATTACHED swapper fallback and
 /// the attached `push_loop`'s off-thread worker, since a `UsagePreview` is serviced
 /// entirely host-side (the global ledger) regardless of attach state.
 pub(super) fn push_usage_preview(
     push: &dyn Fn(String),
-    result: super::UsagePreviewResult,
+    result: super::diff::UsagePreviewResult,
     scope: String,
     session_id: Option<String>,
 ) {
@@ -1373,7 +1373,7 @@ pub(super) fn push_loop(
     // pushes each as a `FileDiff` envelope. Unlike the hub refresh there is no "latest
     // wins" coalescing: each request is for a (possibly different) path, so every
     // completed result is pushed, not just the newest.
-    let (file_diff_tx, file_diff_rx) = std::sync::mpsc::channel::<super::FileDiffResult>();
+    let (file_diff_tx, file_diff_rx) = std::sync::mpsc::channel::<super::diff::FileDiffResult>();
 
     // --- USAGE PANEL preview fetch (UsagePreview) ---
     // `compute_usage_preview` hits sqlite, blocking, so — same reasoning as `FileDiff`
@@ -1386,7 +1386,7 @@ pub(super) fn push_loop(
     // foreground session switch, racing an in-flight request must never render the
     // wrong session's numbers.
     let (usage_preview_tx, usage_preview_rx) =
-        std::sync::mpsc::channel::<(super::UsagePreviewResult, String, Option<String>)>();
+        std::sync::mpsc::channel::<(super::diff::UsagePreviewResult, String, Option<String>)>();
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -1442,7 +1442,7 @@ pub(super) fn push_loop(
                     if kill {
                         if let Some(old) = current_owned.clone() {
                             let _ = req_tx.send(ClientRequest::QuitDaemon);
-                            super::spawn_ensure_dead(old);
+                            super::host::spawn_ensure_dead(old);
                         }
                     }
                     let new_id = uuid::Uuid::new_v4().to_string();
@@ -1460,16 +1460,16 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::KillSession(id)) => {
                     if current_owned.as_deref() == Some(id.as_str()) {
                         let _ = req_tx.send(ClientRequest::QuitDaemon);
-                        super::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                        super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
                         return HostTransition::ToSwapper;
                     }
-                    super::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                    super::host::spawn_kill_and_refresh(ctl_tx.clone(), id);
                 }
                 // Physically DELETE a history session OFF-thread (guarded host-side against
                 // deleting a live/locked session), then RefreshHub. A history row is never the
                 // attached session, so there is no live-conn interaction here.
                 Ok(super::HostCtl::DeleteSession(id)) => {
-                    super::spawn_delete_and_refresh(ctl_tx.clone(), id);
+                    super::host::spawn_delete_and_refresh(ctl_tx.clone(), id);
                 }
                 // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
                 // this simply drops to the hub AFTER the current/queued attach resolves —
@@ -1524,7 +1524,7 @@ pub(super) fn push_loop(
                     let tx = file_diff_tx.clone();
                     let cur = current_owned.clone();
                     std::thread::spawn(move || {
-                        let result = super::compute_file_diff(&path, cur.as_deref());
+                        let result = super::diff::compute_file_diff(&path, cur.as_deref());
                         let _ = tx.send(result);
                     });
                 }
@@ -1535,7 +1535,7 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::UsagePreview { session, scope }) => {
                     let tx = usage_preview_tx.clone();
                     std::thread::spawn(move || {
-                        let result = super::compute_usage_preview(session.as_deref());
+                        let result = super::diff::compute_usage_preview(session.as_deref());
                         let _ = tx.send((result, scope, session));
                     });
                 }
