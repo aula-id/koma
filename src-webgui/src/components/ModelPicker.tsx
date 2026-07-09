@@ -88,7 +88,7 @@ export function ModelPicker() {
       {open && (
         // Opens UPWARD — the picker sits just above the composer at the bottom
         // of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[260px] overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-xl">
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[260px] overflow-hidden rounded-md border border-koma-border bg-koma-panel shadow-sm">
           <div className="flex h-[26px] items-center gap-2 border-b border-koma-border px-2">
             <Search size={12} className="flex-none text-koma-fg opacity-50" />
             <input

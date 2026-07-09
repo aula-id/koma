@@ -302,6 +302,23 @@ enum GuiReq {
     /// The composer STOP button (shown while the turn is working): interrupt the running
     /// turn. Forwarded as [`ClientRequest::Interrupt`] (koma's Esc-interrupt equivalent).
     Interrupt,
+    /// The composer `!<cmd>` shell shortcut: run `cmd` in the foreground session's
+    /// cwd, no model round-trip. Forwarded verbatim as [`ClientRequest::Shell`] —
+    /// the daemon's `Action::Shell` handler appends the `$ cmd` + output entry to
+    /// the transcript. Attached-only (like `Interrupt`); the React composer only
+    /// sends this while idle (mirrors the TUI's busy guard) — while working it
+    /// falls through to a normal `Submit` instead (queues as a steer), a
+    /// deliberate deviation from the TUI (which no-ops a `!` line while busy).
+    Shell { cmd: String },
+    /// Ctrl+R composer parity: resend the last user turn (pop trailing assistant
+    /// messages + re-stream). Forwarded as [`ClientRequest::Resend`], attached-only
+    /// (like `Interrupt`) — the daemon's `handle_resend` reports a no-op (busy /
+    /// no session / nothing to resend) via the status line.
+    Resend,
+    /// The composer's queued-steer-list clear button: cancel every pending
+    /// mid-turn steer at once. Forwarded as [`ClientRequest::CancelSteers`],
+    /// attached-only, like `Interrupt`.
+    CancelSteers,
     /// The chat hover-edit PENCIL on a user bubble: rewind the conversation TO that
     /// message by its `index` into `SessionSnapshot.messages` (Conversation::messages()).
     /// Forwarded as [`ClientRequest::RewindTo`], which runs koma's `RewindToMessage`
@@ -540,6 +557,19 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
 
     use super::client::{run_host_relay, HostCtl};
     use crate::ipc::proto::ClientRequest;
+
+    // WebKitGTK rasterizes text inside GPU-composited scroll layers through a
+    // different (stem-darkened) path — any overflowing container renders its text
+    // visibly BOLDER than the rest of the app, and the cached layer tile never
+    // repaints (live-confirmed on Linux: scrollbar appears → text bolds; fixed by
+    // this env). Disabling accelerated compositing removes layer promotion
+    // entirely, so all text shares one raster path; for a chat UI the GPU loss is
+    // imperceptible and on old Mesa stacks it is the more stable path anyway.
+    // Must be set BEFORE any gtk/webkit init; respect an explicit user override.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    }
 
     // --- 1. Event loop + window (frameless, transparent) -----------------------
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -949,6 +979,30 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::Interrupt);
+                            }
+                        }
+                    }
+                    // `!<cmd>` shell shortcut: run on the attached daemon.
+                    GuiReq::Shell { cmd } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::Shell { cmd });
+                            }
+                        }
+                    }
+                    // Ctrl+R: resend the last user turn on the attached daemon.
+                    GuiReq::Resend => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::Resend);
+                            }
+                        }
+                    }
+                    // Composer queued-list clear button: cancel all pending steers.
+                    GuiReq::CancelSteers => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::CancelSteers);
                             }
                         }
                     }

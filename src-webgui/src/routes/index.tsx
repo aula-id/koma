@@ -103,6 +103,29 @@ function RootLayout() {
     return () => window.removeEventListener('keydown', onKey)
   }, [platform, req])
 
+  // Global Ctrl+R (Cmd+R on mac): resend the last user turn — mirrors the TUI's
+  // Ctrl+R (`Action::Resend`), idle-only (the daemon's own `handle_resend` guards
+  // busy too, but gating here avoids firing a request it would just bounce off
+  // a status line). `preventDefault` fires UNCONDITIONALLY on the combo (not just
+  // when we act): Ctrl+R is the browser's page-reload shortcut, and reloading the
+  // webview mid-session would nuke the whole client — that must never happen,
+  // working or not. Same Monaco-editor exemption as the Ctrl+B handler above (the
+  // diff tab's own Ctrl+R binding, if any, keeps working there).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'r' || e.altKey || e.shiftKey) return
+      const wantsMod = platform === 'macos' ? e.metaKey : e.ctrlKey
+      if (!wantsMod) return
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.('.monaco-editor')) return
+      e.preventDefault()
+      if (useKoma.getState().session.working) return
+      req({ r: 'Resend' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [platform, req])
+
   // Click the active view's icon to collapse/expand; click another to switch to
   // it (and ensure the sidebar is open).
   const selectView = (view: SidebarView) => {

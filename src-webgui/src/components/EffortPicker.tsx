@@ -86,7 +86,7 @@ export function EffortPicker() {
       </button>
       {open && (
         // Opens UPWARD — sits just above the composer at the bottom of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[200px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-xl">
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[200px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
           {menu == null || menu.state === 'loading' ? (
             <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-koma-fg opacity-50">
               <Loader2 size={12} className="flex-none animate-spin" />

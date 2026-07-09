@@ -79,6 +79,17 @@ declare global {
     // Esc-interrupt equivalent. No id: the daemon resolves the foreground
     // session (mirrors Submit's implicit-session pattern).
     | { r: 'Interrupt' }
+    // `!<cmd>` composer shell shortcut: run `cmd` in the foreground session's
+    // cwd, no model round-trip (koma's `!`-shell parity). Sent only while idle
+    // (mirrors the TUI's busy guard); while working the composer falls through
+    // to a normal `Submit` instead (queues as a steer).
+    | { r: 'Shell'; cmd: string }
+    // Ctrl+R composer parity: resend the last user turn (pop trailing
+    // assistant messages + re-stream). Sent only when idle.
+    | { r: 'Resend' }
+    // Composer queued-steer-list clear button: cancel every pending mid-turn
+    // steer at once (koma's Ctrl+X-with-pending-steers equivalent).
+    | { r: 'CancelSteers' }
     // Rewind the conversation TO a user message by its index into
     // SessionSnapshot.messages (Conversation::messages()) — drops everything
     // after it, mirroring the TUI's double-Esc MessageRewind. No id: the daemon

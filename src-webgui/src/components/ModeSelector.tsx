@@ -62,7 +62,7 @@ export function ModeSelector() {
       </button>
       {open && (
         // Opens UPWARD — sits just above the composer at the bottom of the chat.
-        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[180px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-xl">
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[180px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
           {MODES.map((m) => {
             const isActive = m.value === mode
             const RowIcon = m.Icon
