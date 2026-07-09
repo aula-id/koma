@@ -62,8 +62,6 @@
 //!   that runtime).
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -74,9 +72,17 @@ use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioC
 use rmcp::ServiceExt;
 
 use crate::dto::openrouter::{ToolDef, ToolFunctionDef};
-use crate::ipc::frame::FrameReader;
 use crate::ipc::mcp_proto::{McpRequest, McpResponse};
 use crate::model::app_config::{McpServerEntry, McpTransport};
+
+// Sync proxy-wire IO (`proxy_request`) and naming/result-flattening helpers
+// (`namespace_tools`/`sanitize_server_name`/`flatten_result`) live in the
+// sibling `proxy`/`util` modules (file size); re-imported here so every
+// existing bare call site in this file keeps compiling unchanged.
+mod proxy;
+mod util;
+use proxy::proxy_request;
+use util::{flatten_result, namespace_tools, sanitize_server_name};
 
 /// How long a single server connect (spawn + MCP initialize + first tool list)
 /// may take before it is abandoned. A hung server then contributes zero tools
@@ -820,76 +826,6 @@ impl McpManager {
     }
 }
 
-/// Send ONE [`McpRequest`] to the global MCP daemon at `sock` and block until its
-/// single [`McpResponse`] frame arrives (or the read times out).
-///
-/// The sync twin of the async accept loop's per-request cycle: a fresh blocking
-/// [`std::os::unix::net::UnixStream`] with [`PROXY_IO_TIMEOUT`] read/write timeouts,
-/// one length-prefixed JSON frame written (the SAME 4-byte-BE-len codec
-/// [`crate::ipc::frame`] defines), then one frame read back and decoded. Connect-
-/// per-call keeps it simple and robust — no long-lived connection state to manage,
-/// no shared mutable stream, and the daemon already parallelises across connections.
-///
-/// Runtime-free (plain std sockets), so it is safe to call from the synchronous tool
-/// dispatch thread whether or not a tokio runtime is in scope. Every failure
-/// (connect refused, write/read IO error, timeout, decode error) is surfaced as an
-/// `Err` the caller maps to a model-facing tool error or (for `connect_proxy`) a
-/// fallback trigger.
-fn proxy_request(sock: &std::path::Path, req: &McpRequest) -> anyhow::Result<McpResponse> {
-    use anyhow::Context;
-
-    // Connect (blocking). A refused/absent socket means the daemon isn't accepting.
-    let mut stream = StdUnixStream::connect(sock)
-        .with_context(|| format!("connect to global MCP daemon socket {}", sock.display()))?;
-    // Bound both directions so a wedged daemon can never hang the tool thread. The
-    // read timeout is the primary guard (a slow tool); the write side is naturally
-    // tiny but is bounded for symmetry.
-    stream
-        .set_read_timeout(Some(PROXY_IO_TIMEOUT))
-        .context("set MCP proxy read timeout")?;
-    stream
-        .set_write_timeout(Some(PROXY_IO_TIMEOUT))
-        .context("set MCP proxy write timeout")?;
-
-    proxy_send(&mut stream, req)?;
-    proxy_recv(&mut stream)
-}
-
-/// Write one [`McpRequest`] to `stream` as a length-prefixed JSON frame (4-byte
-/// big-endian payload length + payload — the shared [`crate::ipc::frame`] codec).
-/// The sync `McpRequest` twin of [`crate::app::runtime`]'s `send_request`.
-fn proxy_send(stream: &mut StdUnixStream, req: &McpRequest) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let payload = serde_json::to_vec(req).context("serialise McpRequest")?;
-    let prefix = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&prefix).context("write MCP frame prefix")?;
-    stream.write_all(&payload).context("write MCP frame payload")?;
-    stream.flush().context("flush MCP frame")?;
-    Ok(())
-}
-
-/// Block until ONE complete [`McpResponse`] frame arrives on `stream`, reassembling
-/// via the shared [`FrameReader`] (so a frame split across reads — or coalesced with
-/// a following one — is handled identically to the async path). The stream's read
-/// timeout bounds the wait. The sync `McpResponse` twin of [`crate::app::runtime`]'s
-/// `recv_frame`.
-fn proxy_recv(stream: &mut StdUnixStream) -> anyhow::Result<McpResponse> {
-    use anyhow::{anyhow, Context};
-    let mut reader = FrameReader::new();
-    loop {
-        // A previous read may have buffered a whole frame already.
-        if let Some(bytes) = reader.next_frame().context("MCP frame reassembly")? {
-            return serde_json::from_slice(&bytes).context("decode McpResponse");
-        }
-        let mut chunk = [0u8; 8192];
-        let n = stream.read(&mut chunk).context("read from global MCP daemon socket")?;
-        if n == 0 {
-            return Err(anyhow!("global MCP daemon closed the connection mid-frame"));
-        }
-        reader.push(&chunk[..n]);
-    }
-}
-
 /// Connect to a single server (spawn/initialize the rmcp client and list its
 /// tools), bounded by [`CONNECT_TIMEOUT`]. Returns the live service plus the
 /// discovered tools.
@@ -946,94 +882,5 @@ async fn connect_one(
             "connect timed out after {}s",
             CONNECT_TIMEOUT.as_secs()
         )),
-    }
-}
-
-/// Turn a server's raw rmcp tools into namespaced [`DiscoveredTool`]s.
-fn namespace_tools(server: &McpServerEntry, tools: &[RmcpTool]) -> Vec<DiscoveredTool> {
-    let prefix = sanitize_server_name(&server.name);
-    tools
-        .iter()
-        .map(|t| {
-            let original = t.name.to_string();
-            DiscoveredTool {
-                namespaced: format!("mcp__{prefix}__{original}"),
-                description: t
-                    .description
-                    .as_ref()
-                    .map(|d| d.to_string())
-                    .unwrap_or_default(),
-                // `input_schema` is an `Arc<JsonObject>` (serde_json::Map); wrap it
-                // back into a `Value::Object` so it rides the wire as the tool's
-                // raw JSON-Schema `parameters`, exactly like a built-in tool.
-                parameters: serde_json::Value::Object((*t.input_schema).clone()),
-                server_uuid: server.uuid.clone(),
-                original,
-            }
-        })
-        .collect()
-}
-
-/// Sanitise a server name into the `<server>` segment of a namespaced tool name:
-/// lowercase, and collapse every run of non-`[a-z0-9_]` characters to a single
-/// `_`, trimming leading/trailing `_`. An empty/garbage name degrades to
-/// `"server"` so the namespaced tool name is always well-formed.
-fn sanitize_server_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut prev_underscore = false;
-    for ch in name.chars() {
-        let c = ch.to_ascii_lowercase();
-        if c.is_ascii_alphanumeric() || c == '_' {
-            out.push(c);
-            prev_underscore = c == '_';
-        } else if !prev_underscore {
-            out.push('_');
-            prev_underscore = true;
-        }
-    }
-    let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
-        "server".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Flatten an [`rmcp::model::CallToolResult`] into a single string for the model.
-///
-/// Text content blocks are concatenated (newline-separated); non-text blocks are
-/// noted by kind so the model knows something non-textual came back. When the
-/// server flagged the result as an error, the flattened text is returned as
-/// `Err(...)` so the dispatcher renders it as a tool error.
-fn flatten_result(res: rmcp::model::CallToolResult) -> Result<String, String> {
-    use rmcp::model::RawContent;
-
-    let mut parts: Vec<String> = Vec::new();
-    for c in &res.content {
-        // `Content` derefs to `RawContent`; match the underlying variant.
-        match &c.raw {
-            RawContent::Text(t) => parts.push(t.text.clone()),
-            RawContent::Image(_) => parts.push("[image content]".to_string()),
-            RawContent::Audio(_) => parts.push("[audio content]".to_string()),
-            RawContent::Resource(_) => parts.push("[embedded resource]".to_string()),
-            RawContent::ResourceLink(_) => parts.push("[resource link]".to_string()),
-        }
-    }
-    // Fall back to structured content if there were no content blocks at all.
-    if parts.is_empty() {
-        if let Some(sc) = &res.structured_content {
-            parts.push(sc.to_string());
-        }
-    }
-    let text = parts.join("\n");
-
-    if res.is_error == Some(true) {
-        Err(if text.is_empty() {
-            "tool reported an error".to_string()
-        } else {
-            text
-        })
-    } else {
-        Ok(text)
     }
 }
