@@ -1328,6 +1328,7 @@ pub(super) fn push_loop(
     frame_rx: &Receiver<DaemonFrame>,
     req_tx: &Sender<ClientRequest>,
     prebuffered: Vec<DaemonFrame>,
+    ctl_tx: &Sender<super::HostCtl>,
     ctl_rx: &Receiver<super::HostCtl>,
     last: &mut PushState,
     current_session: Option<&str>,
@@ -1431,11 +1432,44 @@ pub(super) fn push_loop(
                     return HostTransition::Attach { id, workdir: None };
                 }
                 // `[+ new session]` while attached: the GUI picker already confirmed a
-                // folder (a cancel sends no `New`), so carry it into the fresh session.
-                Ok(super::HostCtl::New(workdir)) => {
+                // folder (a cancel sends no `New`), so carry it into the fresh session. On
+                // `kill` reap the CURRENT daemon as part of the switch — queue a graceful
+                // QuitDaemon on the live conn (flushed by the upcoming teardown, mirroring the
+                // TUI `/new kill`) and ensure its death OFF-thread so the fresh attach never
+                // waits on the old daemon's corpse. `kill: false` leaves the old daemon
+                // cooking (resumable), exactly as before.
+                Ok(super::HostCtl::New { workdir, kill }) => {
+                    if kill {
+                        if let Some(old) = current_owned.clone() {
+                            let _ = req_tx.send(ClientRequest::QuitDaemon);
+                            super::spawn_ensure_dead(old);
+                        }
+                    }
                     let new_id = uuid::Uuid::new_v4().to_string();
                     push_switching(push, &new_id);
                     return HostTransition::Attach { id: new_id, workdir };
+                }
+                // KILL the daemon `id`. Killing the CURRENTLY-ATTACHED session: queue a
+                // graceful QuitDaemon on the live conn (flushed by teardown), ensure its death
+                // OFF-thread — a harmless double-QuitDaemon that ALSO fires a follow-up
+                // RefreshHub so the swapper we're about to land in drops the row the instant
+                // it is gone (its entry push may briefly show it for <1s) — then hand back to
+                // the swapper (the same path `ToSwapper` takes). A BACKGROUND kill just
+                // escalates OFF-thread and refreshes the hub once the daemon is confirmed dead
+                // (the off-thread sweep drained at (b-bis) pushes the rebuilt hub).
+                Ok(super::HostCtl::KillSession(id)) => {
+                    if current_owned.as_deref() == Some(id.as_str()) {
+                        let _ = req_tx.send(ClientRequest::QuitDaemon);
+                        super::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                        return HostTransition::ToSwapper;
+                    }
+                    super::spawn_kill_and_refresh(ctl_tx.clone(), id);
+                }
+                // Physically DELETE a history session OFF-thread (guarded host-side against
+                // deleting a live/locked session), then RefreshHub. A history row is never the
+                // attached session, so there is no live-conn interaction here.
+                Ok(super::HostCtl::DeleteSession(id)) => {
+                    super::spawn_delete_and_refresh(ctl_tx.clone(), id);
                 }
                 // Cancel-switch (best-effort): the swap in flight can't be interrupted, so
                 // this simply drops to the hub AFTER the current/queued attach resolves —

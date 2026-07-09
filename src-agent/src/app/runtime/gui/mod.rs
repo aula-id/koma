@@ -141,7 +141,22 @@ enum GuiReq {
     Ready,
     Submit { text: String },
     SelectSession { id: String },
-    NewSession,
+    /// The hub `[+ new session]` row, or the attached chat view's "new session". `kill`
+    /// (default `false`) additionally reaps the CURRENTLY-ATTACHED session's daemon as part
+    /// of the switch (the chat view's "close this + start fresh"); the plain start-screen add
+    /// omits it. Forwarded — after the native folder picker confirms — as [`HostCtl::New`].
+    NewSession {
+        #[serde(default)]
+        kill: bool,
+    },
+    /// A hub session row's KILL button (a live COOKING row, or the attached session itself).
+    /// Forwarded as [`HostCtl::KillSession`]; the host escalates the kill off its control
+    /// loop and refreshes the hub once the daemon is confirmed dead.
+    KillSession { id: String },
+    /// A hub HISTORY row's DELETE button: physically remove that session (disk + registry).
+    /// Forwarded as [`HostCtl::DeleteSession`]; the host resolves the path from the uuid and
+    /// refuses to delete a live/locked session (defense in depth).
+    DeleteSession { id: String },
     RefreshHub,
     /// Cancel an in-progress session switch (the full-screen loader's Cancel button):
     /// best-effort bail back to the hub. Forwarded as [`HostCtl::ToSwapper`]. The swap
@@ -648,6 +663,11 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
 
     {
         let push_proxy = proxy.clone();
+        // A SELF-clone of the control-channel sender rides into the relay so its off-thread
+        // session-lifecycle workers (kill / delete) can route a follow-up `RefreshHub` back
+        // into whichever host state is active once a daemon is dead / a session deleted. The
+        // original `ctl_tx` stays behind for the ipc handler (`ipc_ctl`, below).
+        let ctl_tx = ctl_tx.clone();
         let live_req = Arc::clone(&live_req);
         let live_marks = Arc::clone(&live_marks);
         let live_view = Arc::clone(&live_view);
@@ -659,6 +679,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 move |json| {
                     let _ = push_proxy.send_event(UserEvent::Push(json));
                 },
+                ctl_tx,
                 ctl_rx,
                 live_req,
                 live_marks,
@@ -750,18 +771,32 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                     // folder is confirmed. React raises its switch loader optimistically on
                     // click, so on CANCEL create nothing but kick a hub RE-PUSH so the
                     // loader (`switchingTo`) clears instead of stranding.
-                    GuiReq::NewSession => {
+                    GuiReq::NewSession { kill } => {
                         let ctl = ipc_ctl.clone();
                         std::thread::spawn(move || {
                             match rfd::FileDialog::new().pick_folder() {
                                 Some(folder) => {
-                                    let _ = ctl.send(HostCtl::New(Some(folder)));
+                                    let _ = ctl.send(HostCtl::New {
+                                        workdir: Some(folder),
+                                        kill,
+                                    });
                                 }
                                 None => {
                                     let _ = ctl.send(HostCtl::RefreshHub);
                                 }
                             }
                         });
+                    }
+                    // A hub row's KILL button (a live session, or the attached one): the
+                    // client-thread escalates the kill off its control loop + refreshes the
+                    // hub once it's dead.
+                    GuiReq::KillSession { id } => {
+                        let _ = ipc_ctl.send(HostCtl::KillSession(id));
+                    }
+                    // A hub HISTORY row's DELETE button: the client-thread physically deletes
+                    // that session (guarded host-side against a live/locked target) + refreshes.
+                    GuiReq::DeleteSession { id } => {
+                        let _ = ipc_ctl.send(HostCtl::DeleteSession(id));
                     }
                     // ResumePalette opened: re-discover live sessions + re-push the hub
                     // (works while attached too — see `host_swapper` / `push_loop`).

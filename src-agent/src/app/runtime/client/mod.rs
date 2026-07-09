@@ -221,10 +221,29 @@ pub(super) enum HostCtl {
     Ready,
     /// Attach to this existing session UUID (a hub `SelectSession` pick).
     Select(String),
-    /// Mint a fresh session UUID + attach (the hub `[+ new session]` row). Carries the
-    /// folder the GUI's native picker chose as the new session's working dir; `None`
-    /// (e.g. a non-GUI/empty-state new) falls back to the host's cwd (base path).
-    New(Option<std::path::PathBuf>),
+    /// Mint a fresh session UUID + attach (the hub `[+ new session]` row, or the attached
+    /// chat view's "new session"). `workdir` is the folder the GUI's native picker chose as
+    /// the new session's working dir; `None` (e.g. a non-GUI/empty-state new) falls back to
+    /// the host's cwd (base path). `kill` (attached state only) reaps the CURRENT session's
+    /// daemon as part of the switch — a graceful `QuitDaemon` on the live conn flushed by the
+    /// teardown, plus an off-thread escalating ensure-death — mirroring the TUI `/new kill`;
+    /// `kill: false` leaves the old daemon cooking (resumable), exactly as before.
+    New {
+        workdir: Option<std::path::PathBuf>,
+        kill: bool,
+    },
+    /// Kill the session-daemon `id` (a hub row's KILL button, or the attached chat view's
+    /// "kill this session"). Escalating (graceful `QuitDaemon` → SIGTERM → SIGKILL) so a
+    /// wedged daemon is actually removed, run OFF the control loop (it blocks up to the grace
+    /// budget). Killing the CURRENTLY-ATTACHED session additionally queues a `QuitDaemon` on
+    /// the live conn + hands back to the swapper; a background kill just refreshes the hub
+    /// once the daemon is confirmed dead.
+    KillSession(String),
+    /// Physically DELETE the history session `id` (on-disk dir tree + registry row) — a hub
+    /// HISTORY row's delete button. History-only: the path is resolved HOST-side from the
+    /// uuid ([`store::list_all_sessions`]), and the delete is refused (a no-op refresh) if the
+    /// uuid is currently LIVE or its lock is held, never touching a running session.
+    DeleteSession(String),
     /// Re-run cross-daemon discovery + push a FRESH `Hub` envelope. Fired when the
     /// React ResumePalette overlay opens (and may re-fire while it stays open).
     /// Handled in BOTH host states: inline in `host_swapper` (nothing renders there,
@@ -671,8 +690,16 @@ fn attach_session_headless(
 /// Run the host-relay client on a background thread: own a tokio runtime and run the
 /// two-state machine (swapper / attached) that PUSHES the shadow state into the
 /// webview. The `push` sink hands a ready JSON envelope to the main tao thread;
-/// `ctl_rx` carries [`HostCtl`] intents from the ipc handler; `live_req` is the shared
-/// slot the ipc handler forwards `SubmitInput` through (updated on every (re)attach).
+/// `ctl_rx` carries [`HostCtl`] intents from the ipc handler; `ctl_tx` is a SELF-clone of
+/// that channel's sender, handed to the off-thread session-lifecycle workers (kill / delete)
+/// so they can route a follow-up [`HostCtl::RefreshHub`] back into whichever host state is
+/// active once a daemon is confirmed dead / a session deleted; `live_req` is the shared slot
+/// the ipc handler forwards `SubmitInput` through (updated on every (re)attach).
+///
+/// Holding `ctl_tx` for the relay's whole life means `ctl_rx` never observes `Disconnected`,
+/// so the loop's control channel closes only at PROCESS exit — which is exactly when the GUI
+/// tears down anyway (`tao`'s `event_loop.run` diverges into `process::exit` on window
+/// close), so the relay thread is reaped there rather than via a channel-close signal.
 ///
 /// Startup: `--session <id>` attaches straight to that session; otherwise the host
 /// opens cold into the SWAPPER (the hub) so the user picks a live session, a history
@@ -686,6 +713,7 @@ fn attach_session_headless(
 pub(super) fn run_host_relay(
     opts: crate::cli::Opts,
     push: impl Fn(String) + Clone + Send + 'static,
+    ctl_tx: std::sync::mpsc::Sender<HostCtl>,
     ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
     live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     live_marks: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
@@ -720,6 +748,7 @@ pub(super) fn run_host_relay(
             HostStep::Swapper => host_swapper(
                 &handle,
                 &push,
+                &ctl_tx,
                 &ctl_rx,
                 &mut push_state,
                 current_session_id.as_deref(),
@@ -727,6 +756,7 @@ pub(super) fn run_host_relay(
             HostStep::Attach { id, workdir } => host_attached(
                 &handle,
                 &push,
+                &ctl_tx,
                 &ctl_rx,
                 &live_req,
                 &live_marks,
@@ -742,6 +772,69 @@ pub(super) fn run_host_relay(
     // Drop the runtime LAST so the active connection's reader task is cancelled after
     // the loop exits.
     drop(rt);
+}
+
+/// Spawn an OFF-THREAD escalating kill of the session-daemon `id`, then fire a follow-up
+/// [`HostCtl::RefreshHub`] once the daemon is confirmed dead.
+///
+/// The escalating [`super::manage::kill_session_daemon`] BLOCKS up to the grace budget (it
+/// waits for death via `wait_until_dead` before each signal), so it must never run inline on
+/// the host control loop (the swapper's `recv` or the attached 16ms fold). Running it on a
+/// plain OS thread — then routing the refresh back through the SAME `ctl_tx` the ipc handler
+/// uses — lets whichever host state is active (`host_swapper`'s `RefreshHub` re-push, or
+/// `push_loop`'s off-thread sweep) rebuild the hub AFTER the row is genuinely gone, so a
+/// just-killed daemon can never linger as a COOKING row.
+fn spawn_kill_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, id: String) {
+    std::thread::spawn(move || {
+        super::manage::kill_session_daemon(&id); // blocks until dead (or the budget is spent)
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
+/// Spawn an OFF-THREAD escalating ensure-death of the session-daemon `id`, with NO follow-up
+/// refresh. Used by the `New { kill: true }` switch: the OLD daemon is reaped WHILE the host
+/// attaches a BRAND-NEW session, so the new attach must not wait on the old daemon's corpse
+/// (hence off-thread) and there is no hub to refresh (we land in the new session, not the
+/// hub). The graceful `QuitDaemon` the caller already queued on the live conn is flushed by
+/// teardown; this guarantees the old daemon actually dies even if that graceful quit wedged.
+fn spawn_ensure_dead(id: String) {
+    std::thread::spawn(move || {
+        super::manage::kill_session_daemon(&id);
+    });
+}
+
+/// Spawn an OFF-THREAD history-only DELETE of session `id` (on-disk dir tree + registry row),
+/// then fire a follow-up [`HostCtl::RefreshHub`].
+///
+/// The webview only ever sends a uuid; the path is resolved HOST-side from
+/// [`store::list_all_sessions`]. Defense in depth: the delete is SKIPPED (leaving just the
+/// refresh) when the uuid is currently LIVE ([`super::manage::list_live_sessions`]) or its
+/// on-disk lock is held (`meta.locked`) — a live session must never be deleted out from under
+/// its daemon; `store::delete_session`'s sessions-root guard is the final backstop. Off-thread
+/// because `list_live_sessions` connect-probes every socket (blocking).
+fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, id: String) {
+    std::thread::spawn(move || {
+        // Never delete a session that is currently live or whose on-disk lock is held.
+        let live: std::collections::HashSet<String> = super::manage::list_live_sessions()
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+        if !live.contains(&id) {
+            if let Ok(metas) = store::list_all_sessions() {
+                if let Some(meta) = metas.into_iter().find(|m| m.id == id && !m.locked) {
+                    // Tighten the TOCTOU gap between the live/locked snapshot above and the
+                    // physical remove: re-probe THIS session's daemon liveness (bind-as-oracle
+                    // connect) immediately before deleting and skip if a daemon came up in the
+                    // interim, so a session is never deleted out from under a live daemon.
+                    // (`store::delete_session`'s sessions-root guard stays the final backstop.)
+                    if !super::manage::daemon_alive(&id) {
+                        let _ = store::delete_session(&meta.path);
+                    }
+                }
+            }
+        }
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
 }
 
 /// Read the loaded GLOBAL config off disk and push a `Config` envelope so the GUI's
@@ -991,6 +1084,7 @@ async fn fetch_routes_for_provider(
 fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     handle: &tokio::runtime::Handle,
     push: &P,
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     push_state: &mut render::PushState,
     current: Option<&str>,
@@ -1096,6 +1190,19 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     String::new(),
                 );
             }
+            // A hub row's KILL button. In the swapper there is no ATTACHED session, so this
+            // is always a background/live-row kill: escalate the kill OFF this thread (it
+            // blocks up to the grace budget) and let the follow-up `RefreshHub` rebuild the
+            // hub once the daemon is confirmed dead — the killed row can't linger in COOKING.
+            Ok(HostCtl::KillSession(id)) => {
+                spawn_kill_and_refresh(ctl_tx.clone(), id);
+            }
+            // A hub HISTORY row's DELETE button: physically remove that session OFF this
+            // thread (it connect-probes every live socket for the live/locked guard), then
+            // `RefreshHub`. The delete is refused host-side for a live/locked session.
+            Ok(HostCtl::DeleteSession(id)) => {
+                spawn_delete_and_refresh(ctl_tx.clone(), id);
+            }
             // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
             // swap-START loader signal first (this thread will BLOCK in the attach next, so
             // this push is the last thing the webview hears until the new Snapshot lands).
@@ -1106,7 +1213,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // `[+ new session]`: the GUI picker already ran (this only fires after a folder
             // was confirmed — a cancel sends nothing), so mint a fresh session and attach
             // it AT the chosen `workdir`. `None` (empty-state / non-GUI) keeps the host cwd.
-            Ok(HostCtl::New(workdir)) => {
+            // `kill` is only meaningful from the ATTACHED chat view (there is no attached
+            // session to reap in the swapper), so it is ignored here — a start-screen new is
+            // always a plain add.
+            Ok(HostCtl::New { workdir, kill: _ }) => {
                 let new_id = uuid::Uuid::new_v4().to_string();
                 render::push_switching(push, &new_id);
                 return HostStep::Attach { id: new_id, workdir };
@@ -1125,6 +1235,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
 fn host_attached(
     handle: &tokio::runtime::Handle,
     push: &dyn Fn(String),
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
@@ -1162,6 +1273,7 @@ fn host_attached(
             &conn.frame_rx,
             &conn.req_tx,
             prebuffered,
+            ctl_tx,
             ctl_rx,
             push_state,
             current.as_deref(),
