@@ -176,25 +176,35 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       />
                     ) : (
                       <>
-                        <span className="flex min-w-0 items-center gap-1.5">
+                        {/* Content cell — flex-1 min-w-0 so ALL text/status/folder
+                            chips truncate INSIDE this cell, never spilling into
+                            the fixed trailing action column next to it. */}
+                        <div className="flex min-w-0 flex-1 items-center gap-1.5">
                           {c.working && (
                             <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
                           )}
-                          <span className="truncate">{c.name}</span>
+                          <span className="min-w-0 flex-1 truncate">{c.name}</span>
                           {c.foreground && (
                             <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide opacity-50">
                               current
                             </span>
                           )}
-                        </span>
-                        <span className="ml-2 flex flex-none items-center gap-2">
                           {c.dirLabel && (
-                            <span className="truncate text-[11px] opacity-40">{c.dirLabel}</span>
+                            <span className="max-w-[40%] flex-none truncate text-[11px] opacity-40">
+                              {c.dirLabel}
+                            </span>
                           )}
+                        </div>
+                        {/* Trailing action cell — fixed ~28px, always reserved
+                            (opacity-toggled inside, never conditionally
+                            rendered) so text width never jumps on hover, and
+                            the destructive button's hit area is strictly this
+                            column, never the content cell's text. */}
+                        <div className="flex w-7 flex-none items-center justify-center">
                           {c.id && (
                             <SessionRowActions id={c.id} kind="session" armed={armed} onArm={setArmed} />
                           )}
-                        </span>
+                        </div>
                       </>
                     )}
                   </div>
@@ -236,11 +246,17 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       />
                     ) : (
                       <>
-                        <span className="truncate">{h.name}</span>
-                        <span className="ml-2 flex flex-none items-center gap-2">
-                          {h.dirLabel && <span className="truncate text-[11px] opacity-40">{h.dirLabel}</span>}
+                        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <span className="min-w-0 flex-1 truncate">{h.name}</span>
+                          {h.dirLabel && (
+                            <span className="max-w-[40%] flex-none truncate text-[11px] opacity-40">
+                              {h.dirLabel}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex w-7 flex-none items-center justify-center">
                           <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
-                        </span>
+                        </div>
                       </>
                     )}
                   </div>

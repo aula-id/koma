@@ -16,10 +16,15 @@ type SessionRowActionsProps = {
   onArm: (row: ArmedRow) => void
 }
 
-// Trailing ghost icon on a Cooking/History row: arms the row — the parent
+// Trailing ghost icon on a Cooking/History row. Meant to be rendered INSIDE a
+// fixed-width trailing action cell (~28px, see ResumePalette/StartScreen) —
+// its own hit area fills that whole cell (h-full w-full) so the clickable
+// target is exactly the reserved column, never the row's text/content cell
+// next to it (a destructive button overlapping clickable text was a misclick
+// hazard per live feedback). Clicking arms the row — the parent
 // (ResumePalette/StartScreen) then swaps the row's ENTIRE content over to a
 // `SessionRowConfirmStrip` (a full-width confirm replaces the mini pill; too
-// small to comfortably hit per live-test feedback). Renders a spinner
+// small to comfortably hit per earlier live-test feedback). Renders a spinner
 // (non-interactive) instead while `dyingSessions` carries a kind-matching
 // mark for this id — cleared automatically the moment a fresh Hub push
 // confirms the kill/delete landed (see koma.ts's Hub push handler).
@@ -59,7 +64,7 @@ export function SessionRowActions({ id, kind, armed, onArm }: SessionRowActionsP
         onArm({ id, kind })
       }}
       aria-label={kind === 'session' ? 'Kill session' : 'Delete session'}
-      className="flex-none text-koma-fg opacity-0 transition-opacity group-hover:opacity-40 hover:!opacity-100 focus-visible:opacity-100"
+      className="flex h-full w-full flex-none items-center justify-center text-koma-fg opacity-0 transition-opacity group-hover:opacity-40 hover:!opacity-100 focus-visible:opacity-100"
     >
       <Icon size={13} className="flex-none" />
     </button>
@@ -81,9 +86,11 @@ type SessionRowConfirmStripProps = {
 }
 
 // Full-row kill/delete confirmation — REPLACES a row's entire normal content
-// (name/badges/dirLabel/ghost-icon) while that row is armed. Same error-role
-// tint the ghost icon's spinner uses, but full-width with generous button hit
-// targets instead of a small inline pill (Agung: "too small" on live test).
+// (name/badges/dirLabel/ghost-icon) while that row is armed. Strict
+// |label|yes|no| layout: label takes the flexible remaining space (truncates
+// rather than push the buttons around), yes/no are fixed, text-labeled
+// buttons (not icon-only — Agung's spec) with generous horizontal padding.
+// Same error-role tint the ghost icon's spinner uses.
 export function SessionRowConfirmStrip({ id, kind, foreground, onCancel, className = '' }: SessionRowConfirmStripProps) {
   const req = useKoma((s) => s.req)
   const markDying = useKoma((s) => s.markDying)
@@ -118,7 +125,7 @@ export function SessionRowConfirmStrip({ id, kind, foreground, onCancel, classNa
       className={`flex w-full items-center justify-between text-[12px] font-medium ${className}`}
       style={{ color: errorTint, backgroundColor: `color-mix(in srgb, ${errorTint} 16%, transparent)` }}
     >
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       <span className="flex flex-none items-center gap-1.5">
         {/* Vertical padding intentionally omitted — the strip's OWN container
             already carries the row's normal px-3/py (passed via `className`),
@@ -130,19 +137,19 @@ export function SessionRowConfirmStrip({ id, kind, foreground, onCancel, classNa
           onClick={confirm}
           autoFocus
           aria-label="Confirm"
-          className="flex flex-none items-center gap-1 rounded px-2.5 text-[12px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+          className="flex flex-none items-center gap-1 rounded px-3 text-[12px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100"
           style={{ color: errorTint }}
         >
           <Check size={13} className="flex-none" />
-          Confirm
+          yes
         </button>
         <button
           onClick={onCancel}
           aria-label="Cancel"
-          className="flex flex-none items-center gap-1 rounded px-2.5 text-[12px] text-koma-fg opacity-70 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+          className="flex flex-none items-center gap-1 rounded px-3 text-[12px] text-koma-fg opacity-70 transition-opacity hover:opacity-100 focus-visible:opacity-100"
         >
           <X size={13} className="flex-none" />
-          Cancel
+          no
         </button>
       </span>
     </div>
