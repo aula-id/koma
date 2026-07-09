@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { Check, ShieldAlert, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
@@ -82,6 +83,17 @@ export function ApprovalOverlay() {
   const pending = useKoma((s) => s.session.pendingCall)
   const reason = useKoma((s) => s.session.approvalReason)
   const req = useKoma((s) => s.req)
+  const theme = useKoma((s) => s.config.theme)
+  const palettes = useKoma((s) => s.config.palettes)
+
+  // Severity lives ONLY in the title icon's tint, derived from the active
+  // palette's `warn` role colour (same derivation as ToastContainer — index 8
+  // of the fixed 11-role `colors` array). Falls back to themed fg when the
+  // active palette isn't advertised yet.
+  const warnColor = useMemo(() => {
+    const active = palettes.find((p) => p.name === theme)
+    return active?.colors?.[8] || 'var(--koma-fg)'
+  }, [palettes, theme])
 
   // Only a non-plan pause is a modal approval; plan_ready is handled inline.
   if (!awaiting || !pending || pending.name === 'plan_ready') return null
@@ -97,10 +109,10 @@ export function ApprovalOverlay() {
         initial={{ opacity: 0, scale: 0.97, y: 6 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.16, ease: 'easeOut' }}
-        className="flex max-h-[40vh] w-full flex-col overflow-hidden rounded-xl border border-koma-warn/50 bg-koma-panel shadow-lg"
+        className="flex max-h-[40vh] w-full flex-col overflow-hidden rounded-xl border border-koma-border bg-koma-panel shadow-lg"
       >
-        <div className="flex items-center gap-2 border-b border-koma-border px-4 py-2.5 text-koma-warn">
-          <ShieldAlert size={16} className="flex-none" />
+        <div className="flex items-center gap-2 border-b border-koma-border px-4 py-2.5 text-koma-fg">
+          <ShieldAlert size={16} className="flex-none" style={{ color: warnColor }} />
           <span className="text-[13px] font-semibold">Approval required</span>
         </div>
 
@@ -111,7 +123,7 @@ export function ApprovalOverlay() {
             {hasReason && (
               <>
                 <span className="text-koma-dim opacity-40">·</span>
-                <span className="break-words text-[12px] text-koma-warn opacity-90">{reason}</span>
+                <span className="break-words text-[12px] text-koma-dim">{reason}</span>
               </>
             )}
           </div>
@@ -157,20 +169,20 @@ export function ApprovalOverlay() {
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-koma-border px-4 py-2.5">
-          <button
-            onClick={() => answer(false)}
-            className="flex items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
-          >
-            <X size={13} className="flex-none" />
-            Deny
-          </button>
+        <div className="flex items-center justify-start gap-2 border-t border-koma-border px-4 py-2.5">
           <button
             onClick={() => answer(true)}
             className="flex items-center gap-1.5 rounded-md border border-koma-accent bg-koma-accent/15 px-3 py-1.5 text-[12px] text-koma-accent transition-colors hover:bg-koma-accent/25"
           >
             <Check size={13} className="flex-none" />
             Approve
+          </button>
+          <button
+            onClick={() => answer(false)}
+            className="flex items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100"
+          >
+            <X size={13} className="flex-none" />
+            Deny
           </button>
         </div>
       </motion.div>
