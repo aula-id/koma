@@ -17,7 +17,8 @@ use crate::app::mode::{Mode, SessionHub};
 use crate::app::state::AppState;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
-use super::project::{push_config, push_hub, serialize_and_push, ConfigProjection};
+use super::project::{push_hub, serialize_and_push};
+use super::project_config::{push_config, ConfigProjection};
 use super::push_proto::{push_file_diff, push_switching, push_usage_preview, PushEnvelope, PushRoute};
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;

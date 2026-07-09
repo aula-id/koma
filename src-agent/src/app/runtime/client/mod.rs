@@ -20,7 +20,8 @@
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `push_proto`| GUI push-envelope DTOs (`Push*` structs, `PushEnvelope`)         |
-//! | `project`   | GUI config/snapshot serialization (`serialize_and_push`, `push_hub`, `push_config`) |
+//! | `project`   | GUI snapshot serialization (`serialize_and_push`, `push_hub`, `warm_status_label`) |
+//! | `project_config` | GUI config projection (`ConfigProjection`, `push_config`)          |
 //! | `push_loop` | The headless attached fold loop (`push_loop`, `PushState`, `HostTransition`) |
 
 #![allow(unused_imports)]
@@ -37,6 +38,7 @@ mod diff;
 mod host;
 mod push_proto;
 mod project;
+mod project_config;
 mod push_loop;
 
 use std::io::{stdout, Stdout};

@@ -24,7 +24,8 @@ use super::push_proto::{
     PushPalette, PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute,
     PushSubAgent, PushToolCall,
 };
-use super::project::{push_config, push_hub, serialize_and_push, ConfigProjection};
+use super::project::{push_hub, serialize_and_push};
+use super::project_config::{push_config, ConfigProjection};
 
 /// Local TTL for a toast reconstructed from a [`StateDelta::Toast`]. The daemon's
 /// toast `Instant` is daemon-local and never crosses the wire (see `ipc::snapshot`);
