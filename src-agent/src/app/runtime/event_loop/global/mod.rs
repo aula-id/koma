@@ -34,10 +34,13 @@
 //!
 //! Each independent channel-drain / state-machine block used to be inlined
 //! directly in [`service_global`]; they now live as individual functions in the
-//! sibling [`drains`] module (file size), called here in the exact same order —
+//! sibling [`drains`] (channel/network drains) and [`ui`] (redraw-facing:
+//! clipboard, loading splash, deferred compact, workspace warning, shimmer,
+//! toast tick) modules (file size), called here in the exact same order —
 //! pure code motion, no behaviour change.
 
 mod drains;
+mod ui;
 
 use std::sync::Arc;
 
@@ -65,24 +68,24 @@ pub(super) fn service_global(
     dirty |= drains::drain_awareness(state);
     dirty |= drains::drain_warm(state);
     dirty |= drains::fetch_catalogue_debounced(state, client, handle);
-    dirty |= drains::drain_clipboard(state);
-    dirty |= drains::advance_loading_splash(state);
-    dirty |= drains::apply_deferred_compact(state, client, handle);
-    dirty |= drains::warn_missing_workspace_roots(state);
+    dirty |= ui::drain_clipboard(state);
+    dirty |= ui::advance_loading_splash(state);
+    dirty |= ui::apply_deferred_compact(state, client, handle);
+    dirty |= ui::warn_missing_workspace_roots(state);
 
     // Computed once, reused by the force-dirty check below (mirrors the
     // pre-split monolith, which computed `shimmer_active` here and read it
     // again further down).
-    let shimmer_active = drains::reconcile_shimmer(state);
+    let shimmer_active = ui::reconcile_shimmer(state);
 
     dirty |= drains::advance_security_spinner(state);
     dirty |= drains::advance_oauth_spinner(state);
 
-    if drains::force_dirty_while_live(state, shimmer_active) {
+    if ui::force_dirty_while_live(state, shimmer_active) {
         dirty = true;
     }
 
-    dirty |= drains::tick_toasts(state);
+    dirty |= ui::tick_toasts(state);
 
     dirty
 }
