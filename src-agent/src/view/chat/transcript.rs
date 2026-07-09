@@ -14,6 +14,15 @@ use crate::view::theme::Palette;
 use super::helpers::{
     push_thinking_line, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
 };
+use super::blocks::{
+    render_attachment_card, render_bash_nudge_block, render_shell_block, render_user_message,
+};
+// `tool_box_label` / `format_tool_signature` now live in the sibling `tool_format`
+// module (file size); re-exported here so the existing
+// `crate::view::chat::transcript::{tool_box_label, format_tool_signature}` call
+// sites (the GUI push-projection in `app::runtime::client::render`) keep
+// resolving unchanged.
+pub(crate) use super::tool_format::{format_tool_signature, tool_box_label};
 
 /// Render the transcript area into `body_chunk`.
 ///
@@ -232,121 +241,6 @@ pub(super) fn render_transcript(
     } // cache borrow ends
 }
 
-/// Map a tool's function name to a short box LABEL, or `None` when the tool's
-/// result should NOT be boxed (terse-status tools keep the compact one-liner).
-/// MCP (`mcp__…`) and security (`sec_…`) tool families collapse to one label each.
-pub(crate) fn tool_box_label(name: &str) -> Option<&'static str> {
-    if name.starts_with("mcp__") {
-        return Some("mcp");
-    }
-    if name.starts_with("sec_") {
-        return Some("sec");
-    }
-    Some(match name {
-        "bash" => "bash",
-        "read" => "read",
-        "grep" => "grep",
-        "glob" => "glob",
-        "dir_list" => "dir",
-        "git_operator" | "git_cred" | "git_worktree" => "git",
-        "web_fetch" | "web_search" => "web",
-        "recall" => "memory",
-        _ => return None, // None → not boxed, keep the single-line rendering
-    })
-}
-
-/// Render a tool call as a clean, quote-less signature for the transcript header:
-/// `bash(ls src-agent/)`, `git_operator(log --oneline -5)`, `grep(fn main)`,
-/// `read(Cargo.toml)`. Display-only; the real JSON sent to the model is untouched.
-/// Unmapped tools (mcp__*, sec_*, future) fall back to their object values, or the
-/// raw args if parsing fails.
-pub(crate) fn format_tool_signature(name: &str, args_json: &str) -> String {
-    let v: serde_json::Value =
-        serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
-    let inner = tool_signature_inner(name, &v).unwrap_or_else(|| generic_inner(&v, args_json));
-    // Collapse newlines/runs of whitespace so the header stays one line, then cap.
-    let flat = inner.split_whitespace().collect::<Vec<_>>().join(" ");
-    let capped = truncate_chars(&flat, 60);
-    format!("{name}({capped})")
-}
-
-/// The salient argument(s) for a known tool, positional and quote-less. `None`
-/// means "not specially mapped" → caller uses the generic fallback.
-fn tool_signature_inner(name: &str, v: &serde_json::Value) -> Option<String> {
-    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
-    let arr = |k: &str| {
-        v.get(k).and_then(|x| x.as_array()).map(|a| {
-            a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(" ")
-        })
-    };
-    match name {
-        "bash" => s("command"),
-        "git_operator" => arr("args"),
-        "git_cred" => {
-            let action = s("action")?;
-            Some(match s("key") {
-                Some(k) => format!("{action} {k}"),
-                None => action,
-            })
-        }
-        "git_worktree" => {
-            let action = s("action")?;
-            let extra = s("path").or_else(|| s("name")).or_else(|| s("branch"));
-            Some(match extra {
-                Some(e) => format!("{action} {e}"),
-                None => action,
-            })
-        }
-        "read" | "write" | "edit" | "delete" | "cd" => s("path"),
-        "dir_list" => s("path").or_else(|| arr("paths")),
-        "grep" | "glob" => s("pattern"),
-        "web_fetch" | "web_download" => s("url"),
-        "web_search" => s("query"),
-        "remember" => s("slug").or_else(|| s("description")),
-        "forget" | "recall" => s("slug"),
-        "task" => {
-            let agent = s("agent")?;
-            Some(match s("prompt") {
-                Some(p) => format!("{agent}: {p}"),
-                None => agent,
-            })
-        }
-        "todowrite" => v
-            .get("todos")
-            .and_then(|x| x.as_array())
-            .map(|a| format!("{} todos", a.len())),
-        "bash_output" | "bash_kill" => s("job_id"),
-        "task_output" | "task_kill" => v.get("id").map(|x| match x {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        }),
-        _ => None,
-    }
-}
-
-/// Generic fallback for unmapped tools: the object's scalar/array values joined,
-/// or the raw args string if it isn't a JSON object / failed to parse.
-fn generic_inner(v: &serde_json::Value, raw: &str) -> String {
-    match v {
-        serde_json::Value::Object(map) => {
-            let parts: Vec<String> = map
-                .values()
-                .filter_map(|val| match val {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    serde_json::Value::Bool(b) => Some(b.to_string()),
-                    serde_json::Value::Number(n) => Some(n.to_string()),
-                    serde_json::Value::Array(a) => Some(
-                        a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(" "),
-                    ),
-                    _ => None,
-                })
-                .collect();
-            if parts.is_empty() { raw.to_string() } else { parts.join(", ") }
-        }
-        _ => raw.to_string(),
-    }
-}
-
 /// Render a completed tool call's RESULT: a rounded-dotted box for output-producing
 /// tools, else the compact dim one-liner. Empty/whitespace results and the harness
 /// plan-nudge render nothing. Narrow panes (`wrap_w < 8`) skip the box.
@@ -467,152 +361,6 @@ pub(super) fn render_message_block(
         Role::Tool => Vec::new(),
         Role::System => Vec::new(),
     }
-}
-
-/// Render a `★`-less user message as a full-width band: a solid accent rail in
-/// column 0, a 1-column band-colored gap in column 1, then the message text
-/// (accent on the gray band) starting in column 2, each visual line padded with
-/// band-colored spaces out to the full body width so the band runs edge to edge.
-/// One blank band row is emitted above and below the text (vertical padding).
-fn render_user_message(content: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
-    let band = Style::default().bg(palette.panel);
-    let rail = Style::default().fg(palette.accent).bg(palette.panel);
-    let text = Style::default().fg(palette.accent).bg(palette.panel);
-    let full_w = wrap_w + 2;
-    // Text sits after the 1-col rail AND a 1-col gap, so it wraps to `full_w - 2`.
-    let inner = full_w.saturating_sub(2).max(1);
-
-    let mut out: Vec<Line<'static>> = Vec::new();
-    // Top padding: a blank band row (rail + gap + band fill).
-    out.push(band_row(&rail, &band, full_w, Vec::new()));
-    for logical in content.split('\n') {
-        let wrapped =
-            crate::view::markdown::wrap_spans(&[Span::styled(logical.to_string(), text)], inner);
-        for visual in wrapped {
-            // wrap_spans inserts word-separator spaces with the DEFAULT style (no bg),
-            // which would punch dark holes through the band — flatten each visual line
-            // into ONE span carrying the band `text` style so spaces inherit the bg.
-            let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
-            out.push(band_row(&rail, &band, full_w, vec![Span::styled(line_text, text)]));
-        }
-    }
-    // Bottom padding.
-    out.push(band_row(&rail, &band, full_w, Vec::new()));
-    out
-}
-
-/// Assemble one band row: a solid-accent rail cell in column 0, a band-colored
-/// gap cell in column 1, then the (already `text`-styled) wrapped span run, then
-/// a band-colored right-pad out to `full_w` columns so the band reaches the full
-/// body width.
-fn band_row(
-    rail: &Style,
-    band: &Style,
-    full_w: usize,
-    text_spans: Vec<Span<'static>>,
-) -> Line<'static> {
-    let text_cols: usize = text_spans.iter().map(|s| s.content.chars().count()).sum();
-    let mut spans = vec![
-        Span::styled("▌", *rail), // col 0: half-width accent rail (left half block)
-        Span::styled(" ", *band), // col 1: band-colored gap
-    ];
-    spans.extend(text_spans); // col 2+: text on band
-    let used = 2 + text_cols;
-    if used < full_w {
-        spans.push(Span::styled(" ".repeat(full_w - used), *band));
-    }
-    Line::from(spans)
-}
-
-/// Render a `!` user-shell entry's block: a `$ <cmd>` header (accent bullet +
-/// command) over the captured output (dim, wrapped, hanging-indented).
-///
-/// `body` is the message content with the [`crate::dto::chat::SHELL_MARK`] prefix
-/// already stripped, shaped `"$ <cmd>\n<output…>"`. The first line is the command
-/// header; the remainder is the captured stdout+stderr (already ANSI-stripped and
-/// output-capped at run time). The `$ ` bullet is split off the header so the
-/// command renders right after an accent `$` glyph (no double `$`); an unexpectedly
-/// header-less body degrades gracefully (the whole first line becomes the header).
-fn render_shell_block(body: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
-    let mut lines = body.lines();
-    let header = lines.next().unwrap_or("$");
-    // Strip the leading "$ " so it can be re-emitted as the accent bullet.
-    let cmd = header.strip_prefix("$ ").unwrap_or(header);
-
-    let mut logical: Vec<Vec<Span<'static>>> = Vec::new();
-    // Header line: the command in the accent colour (the `$ ` bullet is supplied by
-    // render_block below).
-    logical.push(vec![Span::styled(
-        cmd.to_string(),
-        Style::default().fg(palette.accent),
-    )]);
-    // Output lines: dim, one logical line each (wrapped by render_block). A blank
-    // line is preserved as an empty logical line so output spacing is kept.
-    for line in lines {
-        logical.push(vec![Span::styled(
-            line.to_string(),
-            Style::default().fg(palette.dim),
-        )]);
-    }
-    render_block(logical, "$ ", palette.accent, wrap_w, true)
-}
-
-/// Render a background-bash completion nudge as a single compact line: a
-/// `palette.success` `✓` glyph followed by the dim per-job summary (line 1 of
-/// `body`). The remaining lines of `body` are model-only context and are NOT
-/// displayed. Styled like a tool-call sub-line (2-col indent + dim text), not
-/// a `★` user turn.
-fn render_bash_nudge_block(body: &str, palette: &Palette) -> Vec<Line<'static>> {
-    let summary = body.lines().next().unwrap_or("").to_string();
-    vec![Line::from(vec![
-        Span::raw("  "),
-        Span::styled("\u{2713} ", Style::default().fg(palette.success)),
-        Span::styled(summary, Style::default().fg(palette.dim)),
-    ])]
-}
-
-/// Render the warn-coloured attachment folder-tree lines for a user message
-/// that carries image attachments. Minimalist design: an "images" root line,
-/// then one tree branch per attachment (├─ for non-last, └─ for the last).
-/// Returns an empty `Vec` when there are no attachments.
-///
-/// Uses `palette.warn`, matching the approval card in overlays.rs, so it
-/// always reads as a warn cue.
-fn render_attachment_card(
-    attachments: &[crate::dto::chat::Attachment],
-    palette: &Palette,
-) -> Vec<Line<'static>> {
-    if attachments.is_empty() {
-        return Vec::new();
-    }
-    let style = Style::default().fg(palette.warn);
-    let dim = Style::default().fg(palette.warn).add_modifier(Modifier::DIM);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Root: "  images"
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled("images", style),
-    ]));
-
-    // One line per attachment, using tree connectors.
-    let last_idx = attachments.len().saturating_sub(1);
-    for (i, att) in attachments.iter().enumerate() {
-        let connector = if i == last_idx {
-            Span::styled("\u{2514}\u{2500} ", dim)  // └─
-        } else {
-            Span::styled("\u{251C}\u{2500} ", dim)  // ├─
-        };
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            connector,
-            Span::styled(
-                format!("[Image #{}] {}", att.marker_n, att.file_name()),
-                style,
-            ),
-        ]));
-    }
-    lines
 }
 
 /// The fresh per-tool-call lines for an Assistant turn that requested calls.
