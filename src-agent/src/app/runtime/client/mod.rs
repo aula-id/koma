@@ -19,6 +19,7 @@
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
+//! | `push_proto`| GUI push-envelope DTOs (`Push*` structs, `PushEnvelope`)         |
 
 #![allow(unused_imports)]
 #![allow(dead_code)]
@@ -32,6 +33,7 @@ mod swapper;
 mod swapper_keys;
 mod diff;
 mod host;
+mod push_proto;
 
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
