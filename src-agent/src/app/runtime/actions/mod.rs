@@ -15,12 +15,14 @@ use crate::controller::input::Action;
 use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
+mod background;
 mod bash;
 mod todo;
 mod chat;
 mod mcp;
 mod oauth;
 mod onboard;
+mod plan_decision;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
 // `commands` module) can route through the same `request_quit` chokepoint as the
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
@@ -116,15 +118,15 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::ApprovePlan => {
-            chat::handle_approve_plan(state, client, handle)?;
+            plan_decision::handle_approve_plan(state, client, handle)?;
         }
 
         Action::ApprovePlanCompact => {
-            chat::handle_approve_plan_compact(state, client, handle)?;
+            plan_decision::handle_approve_plan_compact(state, client, handle)?;
         }
 
         Action::DenyPlan => {
-            chat::handle_deny_plan(state, client, handle)?;
+            plan_decision::handle_deny_plan(state, client, handle)?;
         }
 
         Action::SetupKomaFree => {
@@ -336,11 +338,11 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::BackgroundSubagent(id) => {
-            chat::handle_background_subagent(id, state)?;
+            background::handle_background_subagent(id, state)?;
         }
 
         Action::BackgroundAllSubagents => {
-            chat::handle_background_all_subagents(state)?;
+            background::handle_background_all_subagents(state)?;
         }
 
         Action::OpenRewind => {
