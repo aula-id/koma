@@ -24,6 +24,10 @@ use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_file_diff, compute_usage_preview};
+use super::push_proto::{
+    push_file_diff, push_model_list, push_route_list, push_settings_values, push_switching,
+    push_usage_preview,
+};
 use super::swapper::build_local_hub;
 use super::{render, HostCtl, StreamView};
 
@@ -538,14 +542,14 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let push2 = P::clone(push);
                 handle.spawn(async move {
                     let models = fetch_models_for_provider(&provider).await;
-                    render::push_model_list(&push2, provider, models);
+                    push_model_list(&push2, provider, models);
                 });
             }
             Ok(HostCtl::ListRoutes { provider, model_id }) => {
                 let push2 = P::clone(push);
                 handle.spawn(async move {
                     let routes = fetch_routes_for_provider(&provider, &model_id).await;
-                    render::push_route_list(&push2, provider, model_id, routes);
+                    push_route_list(&push2, provider, model_id, routes);
                 });
             }
             // Explore FILE CHANGED panel: host-side diff fetch (git + fs are blocking,
@@ -556,7 +560,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let cur = current.map(str::to_string);
                 std::thread::spawn(move || {
                     let result = compute_file_diff(&path, cur.as_deref());
-                    render::push_file_diff(&push2, result);
+                    push_file_diff(&push2, result);
                 });
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
@@ -573,7 +577,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let push2 = P::clone(push);
                 std::thread::spawn(move || {
                     let result = compute_usage_preview(session.as_deref());
-                    render::push_usage_preview(&push2, result, scope, session);
+                    push_usage_preview(&push2, result, scope, session);
                 });
             }
             // GUI Settings tab opened while detached (StartScreen / swapper): there is no
@@ -583,7 +587,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GetSettings) => {
                 let cfg = crate::model::app_config::AppConfig::load();
                 let d = crate::model::settings::Settings::default();
-                render::push_settings_values(
+                push_settings_values(
                     push,
                     String::new(),
                     Vec::new(),
@@ -612,7 +616,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // swap-START loader signal first (this thread will BLOCK in the attach next, so
             // this push is the last thing the webview hears until the new Snapshot lands).
             Ok(HostCtl::Select(id)) => {
-                render::push_switching(push, &id);
+                push_switching(push, &id);
                 return HostStep::Attach { id, workdir: None };
             }
             // `[+ new session]`: the GUI picker already ran (this only fires after a folder
@@ -623,7 +627,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // always a plain add.
             Ok(HostCtl::New { workdir, kill: _ }) => {
                 let new_id = uuid::Uuid::new_v4().to_string();
-                render::push_switching(push, &new_id);
+                push_switching(push, &new_id);
                 return HostStep::Attach { id: new_id, workdir };
             }
             // The ipc side hung up (window gone) — leave the host.
