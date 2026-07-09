@@ -300,6 +300,14 @@ html, body, #root {
   font-display: swap;
 }
 
+/* Spinning icons must be block-level: inline SVGs get baseline/line-height
+   space in their box, which shifts the rotation center off the glyph and
+   makes every spinner wobble. */
+svg.animate-spin {
+  display: block;
+  transform-origin: center;
+}
+
 /* Centered, max-width column for the terminal. The absolute inner xterm
    container positions against this (position: relative). Side gutters fall
    back to #app's background. */
