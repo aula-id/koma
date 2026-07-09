@@ -163,31 +163,42 @@ export function ModelForm({
                 selected={selectedRoute === 'auto'}
                 onClick={() => patch({ route: '' })}
               />
-              {routesLoading ? (
-                <div className="flex items-center gap-2 px-2 py-1 text-[11px] text-koma-fg opacity-50">
-                  <Loader2 size={12} className="flex-none animate-spin" />
-                  Loading routes…
-                </div>
-              ) : routes && routes.length > 0 ? (
-                routes.map((r, i) => {
+              {(() => {
+                // Routes pin by provider name only, so same-name variants are one pick — collapse them.
+                const seen = new Set<string>()
+                const uniqueRoutes = routes?.filter((r) => {
                   const id = routeId(r)
-                  return (
-                    <RouteRow
-                      key={`${id}-${i}`}
-                      label={r.providerName}
-                      priceIn={perMillion(r.pricePrompt)}
-                      priceOut={perMillion(r.priceCompletion)}
-                      uptime={r.uptimeLast30m}
-                      selected={selectedRoute === id}
-                      onClick={() => patch({ route: id })}
-                    />
-                  )
-                })
-              ) : (
-                <div className="px-2 py-1 text-[11px] text-koma-fg opacity-40">
-                  No upstream routes — using Auto.
-                </div>
-              )}
+                  if (seen.has(id)) return false
+                  seen.add(id)
+                  return true
+                }) || []
+
+                return routesLoading ? (
+                  <div className="flex items-center gap-2 px-2 py-1 text-[11px] text-koma-fg opacity-50">
+                    <Loader2 size={12} className="flex-none animate-spin" />
+                    Loading routes…
+                  </div>
+                ) : uniqueRoutes.length > 0 ? (
+                  uniqueRoutes.map((r, i) => {
+                    const id = routeId(r)
+                    return (
+                      <RouteRow
+                        key={`${id}-${i}`}
+                        label={r.providerName}
+                        priceIn={perMillion(r.pricePrompt)}
+                        priceOut={perMillion(r.priceCompletion)}
+                        uptime={r.uptimeLast30m}
+                        selected={selectedRoute === id}
+                        onClick={() => patch({ route: id })}
+                      />
+                    )
+                  })
+                ) : (
+                  <div className="px-2 py-1 text-[11px] text-koma-fg opacity-40">
+                    No upstream routes — using Auto.
+                  </div>
+                )
+              })()}
             </div>
           </Field>
         )}
