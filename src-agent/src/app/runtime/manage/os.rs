@@ -14,8 +14,10 @@
 //! `kill_orphan_daemon_processes` is bumped to `pub(super)` (was private) — called
 //! from `manage::commands::cmd_kill`.
 
+#[cfg(target_os = "linux")]
 use std::time::Instant;
 
+#[cfg(target_os = "linux")]
 use super::{SIGNAL_GRACE, SPAWN_POLL_INTERVAL};
 
 /// Whether `pid` is still alive, via `kill(pid, 0)` (sends no signal, only validates
