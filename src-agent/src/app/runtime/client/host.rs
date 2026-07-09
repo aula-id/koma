@@ -24,7 +24,8 @@ use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_file_diff, compute_usage_preview};
-use super::project::{push_config, push_hub, ConfigProjection};
+use super::project::push_hub;
+use super::project_config::{push_config, ConfigProjection};
 use super::push_proto::{
     push_file_diff, push_model_list, push_route_list, push_settings_values, push_switching,
     push_usage_preview,
