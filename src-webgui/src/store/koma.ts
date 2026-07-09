@@ -138,12 +138,25 @@ export type SubAgentEntry = {
   // Only `status === 'running' && !detached && blocking` is eligible for the
   // background button / Ctrl+B — mirrors the TUI's `Action::BackgroundSubagent` gate.
   blocking?: boolean
+  // ---- Stream-tab content (host `PushSubAgent`, `rename_all = "camelCase"`) ----
+  // Present ONLY on the sub-agent the client is streaming into an Explore stream tab
+  // (GuiReq SetStreamView); undefined for every other row. `transcript` is the
+  // display-ready line log (same source the TUI $-panel renders); `liveText` is the
+  // in-progress report tail (dim); `thinking` is the latest reasoning block. A defined
+  // `transcript` (even []) means "viewed"; undefined means "not viewed yet / loading".
+  transcript?: string[]
+  liveText?: string
+  thinking?: string
 }
 
 export type BashJobEntry = {
   id: string
   cmd: string
   status: 'running' | 'done' | 'killed' | 'error'
+  // The captured output tail (host `PushBashJob.outputTail`), present ONLY on the job the
+  // client is streaming into a stream tab; undefined for every other row. A defined value
+  // (even '') means "viewed"; undefined means "not viewed yet / loading".
+  outputTail?: string
 }
 
 // One cumulative file-change row for the Explore "File changed" panel — the
@@ -258,6 +271,15 @@ export type Tab =
       // never flashes to a spinner.
       loading: boolean
     }
+  // A read-only STREAM tab live-streaming ONE sub-agent's transcript. Stable id
+  // `sa:${agentId}` so open/dedupe is trivial. Content is NOT stored on the tab — the
+  // StreamTab reads the live entry from `session.subagents` by `agentId` (so it updates
+  // as the host pushes fresh transcript). `title` is the agent name at open time.
+  | { id: string; kind: 'subagent'; agentId: number; title: string }
+  // A read-only STREAM tab live-streaming ONE bash job's output. Stable id
+  // `bash:${jobId}`; content read live from `session.bash` by `jobId`. `title` is the
+  // (truncated) command.
+  | { id: string; kind: 'bash'; jobId: number; title: string }
 
 export type PushEnvelope =
   | {
@@ -629,6 +651,17 @@ type KomaState = {
   // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
   // an already-open file refreshes it (same loading + re-request path).
   openDiffTab: (path: string) => void
+  // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
+  // job (`kind:'bash'`) by its numeric id: find-or-create (dedup by the stable
+  // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
+  // THAT target's transcript / output tail.
+  openStreamTab: (kind: 'subagent' | 'bash', targetId: number, title: string) => void
+  // Stream-view chokepoint: derive {subagent, bash} from the CURRENTLY-ACTIVE tab (a
+  // stream tab → its target; anything else → both null) and send SetStreamView, so
+  // exactly ONE stream view is ever active (the active stream tab, else none). Called
+  // from openStreamTab / activateTab / closeTab / session-switch (the four paths that
+  // can change which tab is active).
+  syncStreamView: () => void
   // Close a diff tab (never 'chat'). If it was the active tab, activate the
   // adjacent (left) tab — tabs[0] is always the chat tab, so a fallback exists.
   closeTab: (id: string) => void
@@ -776,14 +809,14 @@ export const useKoma = create<KomaState>((set, get) => ({
 
   push: (env) => {
     switch (env.k) {
-      case 'Snapshot':
+      case 'Snapshot': {
+        // A Snapshot whose session id differs from the current one is a session
+        // SWITCH. Captured BEFORE the set so it's readable AFTER (to sync the stream
+        // view). The set reuses it to drop the OLD session's in-flight stream/
+        // reasoning (it belongs to the old session — don't let it bleed into the new
+        // view until the next send clears it) + reset the editor tabs.
+        const switched = env.session !== get().session.id
         set((s) => {
-          // A Snapshot whose session id differs from the current one is a
-          // session SWITCH. The in-flight stream/reasoning carried over via
-          // `...s.session` belongs to the OLD session — drop it so the old
-          // half-rendered reply doesn't bleed into the new view until the
-          // next send clears it.
-          const switched = env.session !== s.session.id
           return {
             session: {
               ...s.session,
@@ -830,7 +863,13 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         applyPaletteVars(env.palette)
+        // A genuine switch reset the tabs to just chat (above) → no stream tab is
+        // active. Sync the now-empty stream view so the host stops streaming the OLD
+        // session's sub-agent/bash target (the new session's daemon starts with none
+        // anyway). Fired AFTER the set so it reads the reset tab state.
+        if (switched) get().syncStreamView()
         break
+      }
       case 'Switching':
         set((s) => {
           // Prefer an optimistic label ResumePalette already raised (the
@@ -1057,9 +1096,32 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
     get().req({ r: 'FileDiff', path })
   },
-  closeTab: (id) =>
+  openStreamTab: (kind, targetId, title) => {
+    const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`
     set((s) => {
-      if (id === 'chat') return s
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const tab: Tab =
+        kind === 'subagent'
+          ? { id, kind: 'subagent', agentId: targetId, title }
+          : { id, kind: 'bash', jobId: targetId, title }
+      const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, tab]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
+    // This stream tab is now active → tell the host to stream its target's content.
+    get().syncStreamView()
+  },
+  syncStreamView: () => {
+    const { tabs, activeTabId } = get().ui
+    const tab = tabs.find((t) => t.id === activeTabId)
+    const subagent = tab && tab.kind === 'subagent' ? tab.agentId : null
+    const bash = tab && tab.kind === 'bash' ? tab.jobId : null
+    // Pin the ids to the current session — they're per-session counters daemon-side, so
+    // the daemon needs the session to disambiguate (agent 0 / bash 1 exist in every session).
+    get().req({ r: 'SetStreamView', subagent, bash, session: get().session.id })
+  },
+  closeTab: (id) => {
+    if (id === 'chat') return
+    set((s) => {
       const idx = s.ui.tabs.findIndex((t) => t.id === id)
       if (idx < 0) return s
       const tabs = s.ui.tabs.filter((t) => t.id !== id)
@@ -1068,7 +1130,12 @@ export const useKoma = create<KomaState>((set, get) => ({
       const activeTabId =
         s.ui.activeTabId === id ? s.ui.tabs[idx - 1]?.id ?? 'chat' : s.ui.activeTabId
       return { ui: { ...s.ui, tabs, activeTabId } }
-    }),
+    })
+    // The active tab may have changed (closed the active one) — re-sync the stream
+    // view so the host stops streaming a just-closed stream tab's target (or starts
+    // streaming the neighbour if focus fell onto another stream tab).
+    get().syncStreamView()
+  },
   activateTab: (id) => {
     const tab = get().ui.tabs.find((t) => t.id === id)
     if (!tab) return
@@ -1090,6 +1157,10 @@ export const useKoma = create<KomaState>((set, get) => ({
     // Re-focusing the Settings tab re-requests its values so they're fresh (the
     // name/workdir may have changed via other paths, e.g. the RenameOverlay).
     if (tab.kind === 'settings') get().req({ r: 'GetSettings' })
+    // Sync the stream view to the now-active tab: a stream tab → stream its target;
+    // any other tab (chat/diff/settings) → clear the view. The host/daemon dedupe an
+    // unchanged view, so activating a non-stream tab repeatedly is cheap.
+    get().syncStreamView()
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),

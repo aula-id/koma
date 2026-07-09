@@ -117,6 +117,28 @@ pub(super) struct HubClient {
     /// before the cache is consulted (in `stream_deltas`), so each client's discriminant is
     /// its OWN foreground-session mode — a genuinely per-client cache, not a shared value.
     pub(super) mode_snapshot_cache: Option<(Discriminant<Mode>, Instant, ModeSnapshot)>,
+    /// PER-CLIENT read-only STREAM VIEW (`ClientRequest::SetStreamView`): the id of the
+    /// sub-agent this client is live-streaming into a GUI Explore stream tab, or `None`.
+    /// Consumed in [`stream_deltas`](DaemonHub::stream_deltas)'s diff so a VIEWED detached
+    /// sub-agent's per-step content churn is no longer suppressed (its transcript streams
+    /// live), while every other client (all `None`) keeps the hidden-background suppression.
+    /// `None` until this client sends a `SetStreamView`; TUI clients never do.
+    pub(super) stream_subagent: Option<usize>,
+    /// PER-CLIENT read-only STREAM VIEW: the id of the background-bash job this client is
+    /// live-streaming into a stream tab, or `None`. When `Some`, [`stream_deltas`](
+    /// DaemonHub::stream_deltas) stamps that ONE job's captured output tail into this
+    /// client's snapshot projection (`BashJobSnapshot::output_tail`), so the job's live
+    /// output crosses the wire for the viewed job alone. `None` until a `SetStreamView`.
+    pub(super) stream_bash: Option<usize>,
+    /// PER-CLIENT stream-view SESSION ANCHOR: the stable UUID ([`crate::app::state::SessionRuntime::id`])
+    /// of the session the [`stream_subagent`](Self::stream_subagent) / [`stream_bash`](
+    /// Self::stream_bash) ids belong to. REQUIRED because those ids are per-session counters
+    /// (agent 0 / bash 1 exist in EVERY session), so both consumers gate on this: the diff
+    /// only un-suppresses `stream_subagent` for the session whose snapshot `id` matches, and
+    /// the bash post-pass only stamps `output_tail` when the resolved foreground session's id
+    /// matches. Set atomically with the two ids in the `SetStreamView` handler; `None` until
+    /// then (and whenever both ids are `None`).
+    pub(super) stream_session: Option<String>,
 }
 
 /// The sync-loop <-> per-client-task bridge + the render-state streaming engine

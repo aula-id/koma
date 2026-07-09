@@ -188,6 +188,31 @@ pub(crate) fn render_finished_output(command: &str, out: &str, exit_code: i32, s
     (text, should_tee)
 }
 
+/// Trim a job's captured output to a BOUNDED tail for a GUI stream tab: keep the LAST
+/// ~200 lines, then cap to the last ~16000 chars (char-based, so multi-byte UTF-8 is
+/// never sliced mid-codepoint). DELIBERATELY larger than the `/bash` panel's own
+/// `tail_output` (~40 lines / ~4000 chars) — a stream tab is a scrollable dedicated
+/// view, not a compact panel preview — but still bounded so a chatty long-running job's
+/// per-client snapshot stays a sane size (the whole buffer is already ≤
+/// [`crate::config::MAX_TOOL_OUTPUT_CHARS`] anyway). Used ONLY by the hub's per-client
+/// stream-view projection (`stream_deltas`), never the shared snapshot path.
+pub fn stream_output_tail(full: &str) -> String {
+    const MAX_LINES: usize = 200;
+    const MAX_CHARS: usize = 16_000;
+
+    // Last ~MAX_LINES lines (preserving their order).
+    let lines: Vec<&str> = full.lines().collect();
+    let start = lines.len().saturating_sub(MAX_LINES);
+    let mut tail = lines[start..].join("\n");
+
+    // Then cap to the last MAX_CHARS chars so a single huge line can't blow the budget.
+    let len = tail.chars().count();
+    if len > MAX_CHARS {
+        tail = tail.chars().skip(len - MAX_CHARS).collect();
+    }
+    tail
+}
+
 /// Append `chunk` to the shared output buffer, ANSI-stripping it first and then
 /// capping the WHOLE buffer to the last [`crate::config::MAX_TOOL_OUTPUT_CHARS`]
 /// chars (so the buffer mirrors the inline tool's last-N-chars cap and can never

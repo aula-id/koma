@@ -197,6 +197,21 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
 // JS->daemon direction arrives as [`HostCtl`] control messages + a shared `live_req`
 // the ipc thread forwards `SubmitInput` through.
 
+/// The GUI's read-only STREAM VIEW: which sub-agent / bash job the webview is currently
+/// live-streaming into an Explore stream tab. Shared (`Arc<Mutex<_>>`) between the ipc
+/// thread — which WRITES it when a `SetStreamView` request arrives — and the host-relay
+/// fold ([`render::push_loop`] → [`render::serialize_and_push`]), which READS it every
+/// frame to decide whose transcript / output tail to fold into the push (mirrors the
+/// shared `live_marks`). At most one of the two is `Some` in practice (the active tab).
+/// `Copy` so the fold can snapshot it out of the lock by value each frame.
+#[derive(Clone, Copy, Default)]
+pub(in crate::app::runtime) struct StreamView {
+    /// The id of the sub-agent being streamed, or `None`.
+    pub subagent: Option<usize>,
+    /// The id of the bash job being streamed, or `None`.
+    pub bash: Option<usize>,
+}
+
 /// Control messages from the GUI ipc thread (main tao thread) to the host-relay
 /// client-thread. `SubmitInput` does NOT ride this channel — it goes straight to the
 /// live daemon via the shared `live_req` sender — so this carries only the
@@ -610,6 +625,7 @@ pub(super) fn run_host_relay(
     ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
     live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     live_marks: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: std::sync::Arc<std::sync::Mutex<StreamView>>,
 ) {
     // The client owns no sessions; it needs the config dirs only to resolve sockets.
     let _ = store::ensure_dirs();
@@ -650,6 +666,7 @@ pub(super) fn run_host_relay(
                 &ctl_rx,
                 &live_req,
                 &live_marks,
+                &live_view,
                 &mut push_state,
                 &mut current_session_id,
                 id,
@@ -1046,6 +1063,7 @@ fn host_attached(
     ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
     live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: &std::sync::Arc<std::sync::Mutex<StreamView>>,
     push_state: &mut render::PushState,
     current: &mut Option<String>,
     id: String,
@@ -1083,6 +1101,7 @@ fn host_attached(
             push_state,
             current.as_deref(),
             live_marks,
+            live_view,
         )
     };
 
@@ -1094,6 +1113,12 @@ fn host_attached(
     }
     if let Ok(mut m) = live_marks.lock() {
         m.clear();
+    }
+    // Reset the stream view so the NEXT attach starts with no stream tab open (the new
+    // daemon's fresh HubClient starts with none too) — a stale sub-agent/bash id from the
+    // session we're leaving must never bleed into the next session's fold.
+    if let Ok(mut v) = live_view.lock() {
+        *v = StreamView::default();
     }
     teardown_connection(handle, conn);
 

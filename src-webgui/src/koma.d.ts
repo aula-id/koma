@@ -101,6 +101,16 @@ declare global {
     // row kill button). The row id is `bash-<n>`; the numeric part matches the
     // daemon's `usize`.
     | { r: 'KillBash'; id: number }
+    // Set the read-only STREAM VIEW: which sub-agent / bash job the Explore stream
+    // tab is currently live-streaming (the ACTIVE stream tab, else both null = no
+    // stream tab open). The host remembers it locally (the fold folds that target's
+    // transcript / output tail into the push) AND forwards it to the daemon, which
+    // un-suppresses the viewed detached sub-agent's live churn + projects the viewed
+    // bash job's output tail. Exactly one is non-null in practice. Numeric ids to
+    // match the daemon's `usize`. `session` PINS the ids to the current session (the
+    // store's session.id) — sub-agent + bash ids are per-session counters, so the daemon
+    // gates on it to avoid cross-session collisions (agent 0 exists in every session).
+    | { r: 'SetStreamView'; subagent: number | null; bash: number | null; session: string | null }
     // Pin a chosen GLOBAL model as the session-local `main` override (the
     // quick-picker). `modelUuid` is the global model's uuid; `null` removes the
     // override and reverts to the Connector global main ("(inherit)").

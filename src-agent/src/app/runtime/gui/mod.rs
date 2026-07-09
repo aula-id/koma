@@ -323,6 +323,28 @@ enum GuiReq {
     /// The Explore sidepanel bash-row KILL button: kill bg-bash job `id` (the numeric part
     /// of the row's `bash-<id>`). Forwarded as [`ClientRequest::BashKill`].
     KillBash { id: usize },
+    /// The Explore STREAM TAB view changed: `subagent`/`bash` name which sub-agent / bash
+    /// job the webview is live-streaming (the active stream tab), or both absent = no
+    /// stream tab. The host remembers this LOCALLY (shared `live_view`, read by the fold to
+    /// decide whose transcript / output tail to push) AND forwards it as
+    /// [`ClientRequest::SetStreamView`] so the daemon un-suppresses the viewed detached
+    /// sub-agent's live churn + projects the viewed bash job's output tail. The local update
+    /// happens regardless of attach state; the daemon forward is attached-only (like
+    /// `Interrupt`) — a fresh attach's daemon starts with no view anyway.
+    ///
+    /// `session` is the UUID of the session the ids belong to (the webview sends its current
+    /// `session.id`). Forwarded verbatim so the daemon can PIN the view — sub-agent + bash
+    /// ids are per-session counters, so the daemon gates both consumers on it. The host-local
+    /// `live_view` does NOT need it: the fold reads the foreground session's own snapshot
+    /// (already session-scoped) and `live_view` is reset on every session switch.
+    SetStreamView {
+        #[serde(default)]
+        subagent: Option<usize>,
+        #[serde(default)]
+        bash: Option<usize>,
+        #[serde(default)]
+        session: Option<String>,
+    },
     /// The model quick-picker: set the session-local Main override to the GLOBAL model
     /// `modelUuid`, or clear it (inherit) when `modelUuid` is absent/null. Forwarded as
     /// [`ClientRequest::SetSessionMain`].
@@ -573,11 +595,17 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     // (which keeps only attachments whose marker survived in the sent text) would drop
     // every staged image. Empty whenever detached.
     let live_marks: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    // The webview's current Explore STREAM VIEW (which sub-agent / bash job is streaming
+    // into the active stream tab). Written by the ipc thread on a `SetStreamView`, read by
+    // the fold loop to fold that one target's transcript / output tail into the push.
+    let live_view: Arc<Mutex<super::client::StreamView>> =
+        Arc::new(Mutex::new(super::client::StreamView::default()));
 
     {
         let push_proxy = proxy.clone();
         let live_req = Arc::clone(&live_req);
         let live_marks = Arc::clone(&live_marks);
+        let live_view = Arc::clone(&live_view);
         std::thread::spawn(move || {
             run_host_relay(
                 opts,
@@ -589,6 +617,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 ctl_rx,
                 live_req,
                 live_marks,
+                live_view,
             );
         });
     }
@@ -600,6 +629,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     let ipc_ctl = ctl_tx;
     let ipc_req = Arc::clone(&live_req);
     let ipc_marks = Arc::clone(&live_marks);
+    let ipc_view = Arc::clone(&live_view);
 
     // --- 3. WebView + ipc handler ----------------------------------------------
     let wv_builder = WebViewBuilder::new()
@@ -954,6 +984,25 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::BashKill { id });
+                            }
+                        }
+                    }
+                    // Explore stream tab view changed: remember it LOCALLY (the fold reads
+                    // `live_view` to decide whose transcript / output tail to push) AND
+                    // forward it to the attached daemon so it un-suppresses the viewed
+                    // detached sub-agent's live churn + projects the viewed bash output tail.
+                    // The local update is unconditional; the daemon forward is attached-only.
+                    GuiReq::SetStreamView { subagent, bash, session } => {
+                        // Local `live_view` is session-LESS: the fold reads the foreground
+                        // session's own snapshot (already session-scoped) and `live_view` is
+                        // reset on every session switch, so it can't mis-target cross-session.
+                        if let Ok(mut v) = ipc_view.lock() {
+                            *v = super::client::StreamView { subagent, bash };
+                        }
+                        // The daemon DOES need the session pin (per-session ids); forward it.
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::SetStreamView { subagent, bash, session });
                             }
                         }
                     }

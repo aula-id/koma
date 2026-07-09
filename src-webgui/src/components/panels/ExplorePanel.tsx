@@ -90,7 +90,10 @@ const PLAN_TEXT_TONE: Record<string, string> = {
 function KillBtn({ onClick }: { onClick: () => void }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
       aria-label="Kill"
       title="Kill"
       className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition group-hover:opacity-60 hover:!text-koma-error hover:!opacity-100"
@@ -107,7 +110,10 @@ function KillBtn({ onClick }: { onClick: () => void }) {
 function BackgroundBtn({ onClick }: { onClick: () => void }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
       aria-label="Background"
       title="Background (agent keeps running, chat unblocks)"
       className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-0 transition group-hover:opacity-60 hover:!text-koma-accent hover:!opacity-100"
@@ -127,6 +133,7 @@ export function ExplorePanel() {
   const focusPlanTick = useKoma((s) => s.ui.focusPlanTick)
   const req = useKoma((s) => s.req)
   const openDiffTab = useKoma((s) => s.openDiffTab)
+  const openStreamTab = useKoma((s) => s.openStreamTab)
 
   // Auto-expand PLAN the instant the session mode flips to 'plan' (also fires
   // on mount if the GUI (re)loads mid-plan). Never auto-collapses on leaving
@@ -166,7 +173,7 @@ export function ExplorePanel() {
             return (
               <div key={i} className="flex min-h-[30px] items-center gap-2.5 px-3 py-1">
                 <Icon size={12} className={`flex-none ${tone}`} />
-                <span className={`min-w-0 flex-1 truncate text-[12px] ${textTone}`}>{t.content}</span>
+                <span className={`min-w-0 flex-1 truncate text-[12px] font-normal ${textTone}`}>{t.content}</span>
               </div>
             )
           })
@@ -207,16 +214,22 @@ export function ExplorePanel() {
         {bash.length === 0 ? (
           <Empty>No bash sessions</Empty>
         ) : (
-          [...bash].reverse().map((b) => (
-            <div key={b.id} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
-              <Terminal size={13} className="flex-none text-koma-fg opacity-45" />
-              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{b.cmd}</span>
-              <StatusBadge status={b.status} />
-              {b.status === 'running' && (
-                <KillBtn onClick={() => req({ r: 'KillBash', id: Number(String(b.id).replace(/^bash-/, '')) })} />
-              )}
-            </div>
-          ))
+          [...bash].reverse().map((b) => {
+            const jobId = Number(String(b.id).replace(/^bash-/, ''))
+            return (
+              <div
+                key={b.id}
+                onClick={() => openStreamTab('bash', jobId, b.cmd)}
+                title={`Stream output: ${b.cmd}`}
+                className="group flex min-h-[30px] cursor-pointer items-center gap-2.5 px-3 py-1 hover:bg-koma-hover"
+              >
+                <Terminal size={13} className="flex-none text-koma-fg opacity-45" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-koma-fg">{b.cmd}</span>
+                <StatusBadge status={b.status} />
+                {b.status === 'running' && <KillBtn onClick={() => req({ r: 'KillBash', id: jobId })} />}
+              </div>
+            )
+          })
         )}
       </AccordionSection>
       <AccordionSection
@@ -230,7 +243,12 @@ export function ExplorePanel() {
           [...subagents].reverse().map((a, i) => {
             const id = a.id
             return (
-              <div key={id ?? `${a.name}-${i}`} className="group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover">
+              <div
+                key={id ?? `${a.name}-${i}`}
+                onClick={id != null ? () => openStreamTab('subagent', id, a.name) : undefined}
+                title={id != null ? `Stream transcript: ${a.name}` : undefined}
+                className={`group flex min-h-[30px] items-center gap-2.5 px-3 py-1 hover:bg-koma-hover ${id != null ? 'cursor-pointer' : ''}`}
+              >
                 <Bot size={13} className="flex-none text-koma-fg opacity-45" />
                 <span className="min-w-0 flex-1 truncate text-[13px] text-koma-fg">{a.name}</span>
                 {a.status === 'running' && a.detached && (

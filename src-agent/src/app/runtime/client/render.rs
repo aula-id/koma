@@ -572,10 +572,12 @@ struct PushAttachment {
     kind: &'static str,
 }
 
-/// One sub-agent row in a [`PushEnvelope::Snapshot`] (list + status only — the live
-/// transcript/report is NOT shipped this wave). `name` is the agent definition name,
-/// `summary` is the compact one-line label (the truncated task), and `status` is the
-/// canonical lifecycle string `running`/`done`/`killed`/`error`.
+/// One sub-agent row in a [`PushEnvelope::Snapshot`]. `name` is the agent definition
+/// name, `summary` is the compact one-line label (the truncated task), and `status` is
+/// the canonical lifecycle string `running`/`done`/`killed`/`error`. The live
+/// `transcript`/`liveText`/`thinking` are folded in ONLY for the sub-agent THIS client is
+/// streaming into an Explore stream tab (`GuiReq::SetStreamView`) — every other row stays
+/// list+status only, so a non-viewed agent's per-step churn never re-emits this Snapshot.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PushSubAgent {
@@ -595,17 +597,42 @@ struct PushSubAgent {
     /// background button / Ctrl+B (mirrors the TUI's `Action::BackgroundSubagent`
     /// eligibility gate). Never the raw tool_call_id — just the boolean.
     blocking: bool,
+    /// The sub-agent's display-ready TRANSCRIPT lines (the SAME source the TUI `$`-panel
+    /// preview renders, `SubAgent::transcript`), so the stream tab matches the TUI.
+    /// `Some` ONLY for the VIEWED sub-agent; `None` for every other row (kept off the wire
+    /// + out of this Snapshot's fingerprint). `Some([])` = viewed but no lines yet (a
+    /// restored agent, or one that just started).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcript: Option<Vec<String>>,
+    /// The live in-progress report tail for the CURRENT (not-yet-committed) turn
+    /// (`SubAgent::live_text`), shown dim under the transcript. Viewed sub-agent only, and
+    /// only when non-empty; `None` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    live_text: Option<String>,
+    /// The sub-agent's latest thinking block (the most recent committed message's
+    /// reasoning), for a dim collapsible block in the stream tab. Viewed sub-agent only;
+    /// `None` when the agent produced no reasoning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
 }
 
-/// One background-bash job row in a [`PushEnvelope::Snapshot`] (list + status only).
-/// `id` is the model-facing job id (`bash-<n>`), `cmd` is the shell command, and
-/// `status` is the canonical lifecycle string `running`/`done`/`killed`/`error`.
+/// One background-bash job row in a [`PushEnvelope::Snapshot`]. `id` is the model-facing
+/// job id (`bash-<n>`), `cmd` is the shell command, and `status` is the canonical
+/// lifecycle string `running`/`done`/`killed`/`error`. `outputTail` is the captured output
+/// tail, folded in ONLY for the job THIS client is streaming into a stream tab
+/// (`GuiReq::SetStreamView`) — `None` for every other row (so an un-viewed job's per-line
+/// output never re-emits this Snapshot).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PushBashJob {
     id: String,
     cmd: String,
     status: &'static str,
+    /// Captured OUTPUT TAIL of the VIEWED job (from the shadow's inert job, baked from the
+    /// projection's `output_tail`). `None` for every non-viewed row. `Some("")` = viewed
+    /// but no output (a restored job, or one with none yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_tail: Option<String>,
 }
 
 /// One cumulative file-change row in a [`PushEnvelope::Snapshot`] (#24): the
@@ -1280,6 +1307,7 @@ pub(super) fn push_loop(
     last: &mut PushState,
     current_session: Option<&str>,
     live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: &std::sync::Arc<std::sync::Mutex<super::StreamView>>,
 ) -> HostTransition {
     use std::sync::mpsc::TryRecvError;
 
@@ -1628,7 +1656,10 @@ pub(super) fn push_loop(
         }
 
         // --- (c) serialise + push whatever changed (the draw seam) ---
-        serialize_and_push(&shadow, push, last);
+        // Snapshot the current stream view (Copy) out of the shared lock so the fold folds
+        // the viewed sub-agent's transcript / viewed bash job's output tail into the push.
+        let view = live_view.lock().map(|v| *v).unwrap_or_default();
+        serialize_and_push(&shadow, push, last, view);
         // Config catalogue (Connector + MCP panels): emit whenever it changed since the
         // last frame, or re-emit after a `Ready` reset. Independent of the per-session
         // draw so a page reload always re-pushes the current global config.
@@ -1659,7 +1690,12 @@ fn color_hex(c: ratatui::style::Color, fallback: &str) -> String {
 /// palette), a `StreamMsg` (full live buffer, or empty to clear on commit), a
 /// `Reasoning` (full live thinking, or empty to clear), and a `Status` (working +
 /// toast). `PushState` holds the last-pushed values so a quiescent frame is silent.
-pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last: &mut PushState) {
+pub(super) fn serialize_and_push(
+    shadow: &AppState,
+    push: &dyn Fn(String),
+    last: &mut PushState,
+    view: super::StreamView,
+) {
     let fg = shadow.rest.fg();
     let session = fg.id.clone();
 
@@ -1815,41 +1851,65 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
         .unwrap_or_default();
 
     // Sub-agents: the foreground session's spawned agents (running + finished), list +
-    // status only (no live transcript this wave). `name` = agent name, `summary` = the
-    // compact one-line label, `status` = canonical lifecycle string.
+    // status. `name` = agent name, `summary` = the compact one-line label, `status` =
+    // canonical lifecycle string. The live transcript/report/thinking is folded in ONLY
+    // for the sub-agent this client is streaming into a stream tab (`view.subagent`) — the
+    // shadow always carries every agent's transcript (it is projected unconditionally), so
+    // this just gates what crosses to the webview + into the fingerprint.
     let subagents: Vec<PushSubAgent> = fg
         .subagents
         .iter()
-        .map(|sa| PushSubAgent {
-            id: sa.id,
-            name: sa.agent_name.clone(),
-            status: match &sa.status {
-                crate::app::subagent::SubAgentStatus::Running => "running",
-                crate::app::subagent::SubAgentStatus::Done(_) => "done",
-                crate::app::subagent::SubAgentStatus::Killed => "killed",
-                crate::app::subagent::SubAgentStatus::Error(_) => "error",
-            },
-            summary: sa.label.clone(),
-            detached: sa.detached,
-            blocking: sa.tool_call_id.is_some(),
+        .map(|sa| {
+            let viewed = view.subagent == Some(sa.id);
+            PushSubAgent {
+                id: sa.id,
+                name: sa.agent_name.clone(),
+                status: match &sa.status {
+                    crate::app::subagent::SubAgentStatus::Running => "running",
+                    crate::app::subagent::SubAgentStatus::Done(_) => "done",
+                    crate::app::subagent::SubAgentStatus::Killed => "killed",
+                    crate::app::subagent::SubAgentStatus::Error(_) => "error",
+                },
+                summary: sa.label.clone(),
+                detached: sa.detached,
+                blocking: sa.tool_call_id.is_some(),
+                // Prefer the display-ready transcript (the SAME source the TUI `$`-panel
+                // renders) over the raw messages, so the stream tab content matches the TUI.
+                transcript: viewed.then(|| sa.transcript.clone()),
+                // Live in-progress report tail (dim under the transcript), viewed + non-empty.
+                live_text: viewed.then(|| sa.live_text.clone()).filter(|t| !t.is_empty()),
+                // Latest committed reasoning as the collapsible thinking block; viewed only.
+                thinking: if viewed {
+                    sa.messages.iter().rev().find_map(|m| m.reasoning.clone())
+                } else {
+                    None
+                },
+            }
         })
         .collect();
 
     // Background-bash jobs: the foreground session's registry (running + finished),
-    // list + status only. `id` = model-facing `bash-<n>`, `cmd` = the command,
-    // `status` = canonical lifecycle string.
+    // list + status. `id` = model-facing `bash-<n>`, `cmd` = the command, `status` =
+    // canonical lifecycle string. `outputTail` is folded in ONLY for the job this client
+    // is streaming (`view.bash`) — the shadow's inert job carries it (baked from the
+    // projection's per-client `output_tail`); every other job's `output_snapshot()` is
+    // empty, so gating on the view keeps un-viewed jobs off the wire + out of the fp.
     let bash: Vec<PushBashJob> = fg
         .bash_jobs
         .iter()
-        .map(|job| PushBashJob {
-            id: format!("bash-{}", job.id),
-            cmd: job.command.clone(),
-            status: match job.snapshot_status() {
-                crate::app::bgbash::BashJobStatus::Running => "running",
-                crate::app::bgbash::BashJobStatus::Done(_) => "done",
-                crate::app::bgbash::BashJobStatus::Killed => "killed",
-                crate::app::bgbash::BashJobStatus::Error(_) => "error",
-            },
+        .map(|job| {
+            let viewed = view.bash == Some(job.id);
+            PushBashJob {
+                id: format!("bash-{}", job.id),
+                cmd: job.command.clone(),
+                status: match job.snapshot_status() {
+                    crate::app::bgbash::BashJobStatus::Running => "running",
+                    crate::app::bgbash::BashJobStatus::Done(_) => "done",
+                    crate::app::bgbash::BashJobStatus::Killed => "killed",
+                    crate::app::bgbash::BashJobStatus::Error(_) => "error",
+                },
+                output_tail: viewed.then(|| job.output_snapshot()),
+            }
         })
         .collect();
 
@@ -1969,6 +2029,12 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             // Snapshot (the background button / bg hint updates live).
             sa.detached.hash(&mut h);
             sa.blocking.hash(&mut h);
+            // Fold the VIEWED sub-agent's live content in so its transcript/report/thinking
+            // streaming re-emits the Snapshot. Only the viewed row carries `Some`, so every
+            // other row hashes three cheap `None`s — no churn for un-viewed agents.
+            sa.transcript.hash(&mut h);
+            sa.live_text.hash(&mut h);
+            sa.thinking.hash(&mut h);
         }
         // Fold bash jobs in so a status/list change re-emits the Snapshot.
         bash.len().hash(&mut h);
@@ -1976,6 +2042,9 @@ pub(super) fn serialize_and_push(shadow: &AppState, push: &dyn Fn(String), last:
             b.id.hash(&mut h);
             b.cmd.hash(&mut h);
             b.status.hash(&mut h);
+            // Fold the VIEWED job's output tail in so its live output re-emits the Snapshot
+            // (only the viewed row carries `Some`; every other hashes a cheap `None`).
+            b.output_tail.hash(&mut h);
         }
         // Fold the file-change log in so a new/updated entry re-emits the Snapshot.
         file_changes.len().hash(&mut h);
