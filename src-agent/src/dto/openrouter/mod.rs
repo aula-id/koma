@@ -19,6 +19,7 @@
 // in-crate consumer yet, so silence the unused-import lint for the whole facade.
 #![allow(unused_imports)]
 
+mod image;
 pub mod models;
 pub mod request;
 pub mod response;
