@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Check, Loader2, Power, Trash2, X } from 'lucide-react'
-import { useKoma } from '../store/koma'
+import { useKoma, isDying } from '../store/koma'
 
 // The single armed row across ResumePalette/StartScreen — kept LOCAL to
 // whichever palette component renders the rows (not the store), per the
@@ -12,24 +12,19 @@ export type ArmedRow = { id: string; kind: 'session' | 'history' } | null
 type SessionRowActionsProps = {
   id: string
   kind: 'session' | 'history'
-  // Cooking rows only: true when this is the CURRENTLY-attached session — the
-  // confirm label reads "close?" instead of "kill?" (same KillSession req
-  // either way; only the copy differs).
-  foreground?: boolean
   armed: ArmedRow
   onArm: (row: ArmedRow) => void
 }
 
-// Trailing ghost icon button on a Cooking/History row: arm -> confirm
-// two-stage affordance for KillSession/DeleteSession. Renders a spinner
-// (non-interactive) while the store's dyingSessions set carries this row's
-// id — cleared automatically the moment a fresh Hub push confirms the
-// kill/delete landed (see koma.ts's Hub push handler).
-export function SessionRowActions({ id, kind, foreground, armed, onArm }: SessionRowActionsProps) {
-  const req = useKoma((s) => s.req)
-  const markDying = useKoma((s) => s.markDying)
-  const detachSession = useKoma((s) => s.detachSession)
-  const dying = useKoma((s) => s.dyingSessions.includes(id))
+// Trailing ghost icon on a Cooking/History row: arms the row — the parent
+// (ResumePalette/StartScreen) then swaps the row's ENTIRE content over to a
+// `SessionRowConfirmStrip` (a full-width confirm replaces the mini pill; too
+// small to comfortably hit per live-test feedback). Renders a spinner
+// (non-interactive) instead while `dyingSessions` carries a kind-matching
+// mark for this id — cleared automatically the moment a fresh Hub push
+// confirms the kill/delete landed (see koma.ts's Hub push handler).
+export function SessionRowActions({ id, kind, armed, onArm }: SessionRowActionsProps) {
+  const dying = useKoma((s) => isDying(s.dyingSessions, id, kind))
   const theme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
 
@@ -52,48 +47,9 @@ export function SessionRowActions({ id, kind, foreground, armed, onArm }: Sessio
     )
   }
 
-  const isArmed = armed?.id === id && armed.kind === kind
-
-  const confirm = () => {
-    req(kind === 'session' ? { r: 'KillSession', id } : { r: 'DeleteSession', id })
-    markDying(id)
-    onArm(null)
-    // Killing the CURRENTLY-attached session sends the host straight to the
-    // swapper without ever emitting a Snapshot (only Hub pushes follow) — reset
-    // the session slice locally so IndexPage falls back to StartScreen right
-    // away instead of freezing on the now-dead chat.
-    if (kind === 'session' && foreground) detachSession()
-  }
-
-  if (isArmed) {
-    const label = kind === 'session' ? (foreground ? 'close?' : 'kill?') : 'delete forever?'
-    return (
-      <span
-        // Stop the row's own click handler (SelectSession) from ever seeing
-        // this mousedown — the row click-through must be suppressed while armed.
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        className="flex flex-none items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
-        style={{ color: errorTint, backgroundColor: `color-mix(in srgb, ${errorTint} 16%, transparent)` }}
-      >
-        {label}
-        <button
-          onClick={() => confirm()}
-          aria-label="Confirm"
-          className="flex-none opacity-80 transition-opacity hover:opacity-100"
-        >
-          <Check size={12} className="flex-none" />
-        </button>
-        <button
-          onClick={() => onArm(null)}
-          aria-label="Cancel"
-          className="flex-none opacity-80 transition-opacity hover:opacity-100"
-        >
-          <X size={12} className="flex-none" />
-        </button>
-      </span>
-    )
-  }
+  // Already armed — the parent is rendering the full-row SessionRowConfirmStrip
+  // in place of the row's normal content instead of this trailing slot.
+  if (armed?.id === id && armed.kind === kind) return null
 
   const Icon = kind === 'session' ? Power : Trash2
   return (
@@ -107,5 +63,88 @@ export function SessionRowActions({ id, kind, foreground, armed, onArm }: Sessio
     >
       <Icon size={13} className="flex-none" />
     </button>
+  )
+}
+
+type SessionRowConfirmStripProps = {
+  id: string
+  kind: 'session' | 'history'
+  // Cooking rows only: true when this is the CURRENTLY-attached session — the
+  // label reads "close session?" instead of "kill session?" (same KillSession
+  // req either way; only the copy differs).
+  foreground?: boolean
+  onCancel: () => void
+  // Padding/rounding classes matching the row's own (so the tinted strip
+  // fills the exact same box the row's normal content would have occupied —
+  // same row height, just fully replacing what's inside it).
+  className?: string
+}
+
+// Full-row kill/delete confirmation — REPLACES a row's entire normal content
+// (name/badges/dirLabel/ghost-icon) while that row is armed. Same error-role
+// tint the ghost icon's spinner uses, but full-width with generous button hit
+// targets instead of a small inline pill (Agung: "too small" on live test).
+export function SessionRowConfirmStrip({ id, kind, foreground, onCancel, className = '' }: SessionRowConfirmStripProps) {
+  const req = useKoma((s) => s.req)
+  const markDying = useKoma((s) => s.markDying)
+  const detachSession = useKoma((s) => s.detachSession)
+  const theme = useKoma((s) => s.config.theme)
+  const palettes = useKoma((s) => s.config.palettes)
+
+  const errorTint = useMemo(() => {
+    const active = palettes.find((p) => p.name === theme)
+    return active?.colors?.[9] || 'var(--koma-fg)'
+  }, [palettes, theme])
+
+  const label = kind === 'history' ? 'delete forever?' : foreground ? 'close session?' : 'kill session?'
+
+  const confirm = () => {
+    req(kind === 'session' ? { r: 'KillSession', id } : { r: 'DeleteSession', id })
+    markDying(id, kind === 'session' ? 'kill' : 'delete')
+    // Killing the CURRENTLY-attached session sends the host straight to the
+    // swapper without ever emitting a Snapshot (only Hub pushes follow) —
+    // reset the session slice locally so IndexPage falls back to StartScreen
+    // right away instead of freezing on the now-dead chat.
+    if (kind === 'session' && foreground) detachSession()
+    onCancel()
+  }
+
+  return (
+    <div
+      // Stop the row's own click handler (SelectSession) and the palette
+      // overlay's outside-click close from ever seeing this mousedown.
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      className={`flex w-full items-center justify-between text-[12px] font-medium ${className}`}
+      style={{ color: errorTint, backgroundColor: `color-mix(in srgb, ${errorTint} 16%, transparent)` }}
+    >
+      <span className="truncate">{label}</span>
+      <span className="flex flex-none items-center gap-1.5">
+        {/* Vertical padding intentionally omitted — the strip's OWN container
+            already carries the row's normal px-3/py (passed via `className`),
+            which sets the row's height. Adding py here too would make the
+            button (and thus the whole flex row, via items-center) taller than
+            an unarmed row, causing a layout shift when a row arms. Horizontal
+            padding stays generous for the hit target. */}
+        <button
+          onClick={confirm}
+          autoFocus
+          aria-label="Confirm"
+          className="flex flex-none items-center gap-1 rounded px-2.5 text-[12px] font-semibold opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+          style={{ color: errorTint }}
+        >
+          <Check size={13} className="flex-none" />
+          Confirm
+        </button>
+        <button
+          onClick={onCancel}
+          aria-label="Cancel"
+          className="flex flex-none items-center gap-1 rounded px-2.5 text-[12px] text-koma-fg opacity-70 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+        >
+          <X size={13} className="flex-none" />
+          Cancel
+        </button>
+      </span>
+    </div>
   )
 }
