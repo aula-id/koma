@@ -220,6 +220,11 @@ impl DaemonHub {
                 self.get_settings(idx, state);
             }
 
+            // GUI /agents dashboard read: reply with a one-shot `AgentsValues`.
+            ClientRequest::ListAgents => {
+                self.list_agents(idx, state);
+            }
+
             ClientRequest::GetEffortOptions => {
                 self.get_effort_options(idx, state, client);
             }
@@ -577,6 +582,18 @@ impl DaemonHub {
                 self.set_session_main(idx, state, model_uuid);
             }
 
+            // GUI /agents editor upsert (create / save / rename): scope-resolve +
+            // built-in-protect, persist, rebuild the roster, re-push `AgentsValues`. The
+            // whole request rides in (destructured in `set_agent`) to keep this arm compact.
+            req @ ClientRequest::SetAgent { .. } => {
+                self.set_agent(idx, state, req);
+            }
+
+            // GUI /agents delete (a built-in is not deletable → error).
+            ClientRequest::DeleteAgent { scope, name } => {
+                self.delete_agent(idx, state, scope, name);
+            }
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.
@@ -628,6 +645,7 @@ impl DaemonHub {
             | ClientRequest::ListModels { .. }
             | ClientRequest::ListRoutes { .. }
             | ClientRequest::GetSettings
+            | ClientRequest::ListAgents
             | ClientRequest::GetEffortOptions
             | ClientRequest::SetStreamView { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);

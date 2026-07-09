@@ -275,6 +275,23 @@ pub(super) enum PushEnvelope {
         /// default), for the composer's effort-picker trigger-pill label.
         effort: String,
     },
+    /// One-shot reply to a `GetAgents` (and the re-push after a `SetAgent` / `DeleteAgent`):
+    /// the merged sub-agent registry + model / provider catalogue for the GUI /agents
+    /// dashboard. `agents` is the full roster (built-in + global + session), each entry a
+    /// [`crate::ipc::proto::AgentEntry`] serialised with ITS OWN snake_case fields
+    /// (`name`/`description`/`conditions`/`source`/`model_uuid`/`model`/`tools`/`prompt`);
+    /// `catalogueModels` / `catalogueProviders` are the editor's keyless catalogue
+    /// ([`crate::ipc::proto::CatalogueModelSnapshot`] — `uuid`/`name`/`model_id`/
+    /// `provider_uuid`; [`crate::ipc::proto::CatalogueProviderSnapshot`] — `uuid`/`name`/
+    /// `endpoint`). Pushed out-of-band (not fingerprinted) whenever the daemon answers a
+    /// `ListAgents` — or, un-attached, straight from the host's `load_registry(None)` +
+    /// global-config fallback. ALWAYS a reply so the dashboard's loading state can never hang.
+    #[serde(rename_all = "camelCase")]
+    AgentsValues {
+        agents: Vec<crate::ipc::proto::AgentEntry>,
+        catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot>,
+        catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
+    },
     /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
     /// foreground session's current model. `state` is `"loading"` (a catalogue
     /// fetch was just armed or is already in flight — `options` empty),
@@ -438,6 +455,26 @@ pub(super) fn push_settings_values(
             internet_mode,
             palette,
             effort,
+        },
+    );
+}
+
+/// Emit a one-shot `AgentsValues` envelope for the GUI /agents dashboard. Shared by the
+/// attached `push_loop` intercept (which unpacks the daemon's `DaemonEvent::AgentsValues`
+/// reply) and the UN-ATTACHED host fallback ([`super::host`]), so a detached `GetAgents`
+/// lands the SAME envelope the attached path produces.
+pub(super) fn push_agents_values(
+    push: &dyn Fn(String),
+    agents: Vec<crate::ipc::proto::AgentEntry>,
+    catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot>,
+    catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::AgentsValues {
+            agents,
+            catalogue_models,
+            catalogue_providers,
         },
     );
 }

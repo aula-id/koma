@@ -339,6 +339,48 @@ pub enum ClientRequest {
     /// the SAME settings channel it already listens to. gui-gated: the TUI
     /// drives this via `Mode::Effort`'s confirm handler.
     SetEffort { effort: String },
+
+    // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────
+    /// Fetch the merged sub-agent registry (built-in < global < session) + the model /
+    /// provider catalogue for the GUI /agents dashboard. Read-only: the daemon replies
+    /// with a one-shot [`DaemonEvent::AgentsValues`] WITHOUT attaching or mutating any
+    /// state, and ALWAYS (built-in + global only when there is no foreground session) so
+    /// the dashboard never hangs. gui-gated: the TUI drives the roster through
+    /// `Mode::Agents` + `SendKey`.
+    ListAgents,
+    /// Upsert one sub-agent definition (the /agents editor's create / save / rename).
+    /// `scope` is `"global"` (`~/.simple-coder/agents/`) or `"session"`
+    /// (`<session_dir>/agents/`); a `"session"` scope with no foreground session is an
+    /// error. `original_name` is the agent's name BEFORE this edit: `Some(x)` with
+    /// `x != name` is a RENAME (the old `<scope>/<x>.md` is deleted AFTER the new file
+    /// is written, so a save error never orphans the old def), `Some(x)` with `x == name`
+    /// (or `None`) is an in-place create / edit. Only the editor-carried fields cross
+    /// here; on an EDIT the daemon loads the existing def first and mutates ONLY these,
+    /// so non-editor frontmatter (steps / effort / temperature / color) survives the
+    /// round-trip, and the legacy `model` / `provider` / `provider_uuid` slots are
+    /// cleared (the editor drives `model_uuid` now). Saving over a name whose current
+    /// source is a BUILT-IN forces `"session"` scope (a session override — a built-in is
+    /// never mutated in place). The daemon persists via the data layer (which re-validates
+    /// the name → path-safe), rebuilds the foreground session's system-prompt roster, and
+    /// re-pushes a fresh [`DaemonEvent::AgentsValues`] as the reply. gui-gated.
+    SetAgent {
+        original_name: Option<String>,
+        scope: String,
+        name: String,
+        description: String,
+        conditions: String,
+        model_uuid: Option<String>,
+        tools: Vec<String>,
+        prompt: String,
+    },
+    /// Delete one file-backed sub-agent definition (`<scope>/<name>.md`) — the /agents
+    /// dashboard's delete. `scope` is `"global"` / `"session"`. A BUILT-IN agent has no
+    /// file and is NOT deletable: a delete targeting a name whose source is built-in is
+    /// rejected with an [`DaemonEvent::Error`]. Deleting a session / global override that
+    /// shadowed a built-in simply re-exposes the built-in on the next load. The daemon
+    /// rebuilds the foreground session's roster and re-pushes a fresh
+    /// [`DaemonEvent::AgentsValues`] as the reply. gui-gated.
+    DeleteAgent { scope: String, name: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -452,6 +494,24 @@ pub enum DaemonEvent {
         selected: usize,
         note: String,
         state: String,
+    },
+    /// One-shot reply to a [`ClientRequest::ListAgents`] (and the re-push after a
+    /// [`ClientRequest::SetAgent`] / [`ClientRequest::DeleteAgent`]): the merged sub-agent
+    /// registry + the model / provider catalogue for the GUI /agents dashboard. `agents`
+    /// is the FULL roster (built-in + global + session, hidden included, disabled already
+    /// dropped by the loader), each entry carrying its `source`
+    /// (`"builtin"` / `"global"` / `"session"`), chosen `model_uuid`, tool allow-list, and
+    /// system prompt. `catalogue_models` seeds the editor's model picker — the foreground
+    /// session's local `session_models` FIRST, then the global `config.models` — and
+    /// `catalogue_providers` mirrors `config.providers`. Delivered whether or not the
+    /// requesting client is session-attached (like [`SettingsValues`], via the hub's
+    /// per-client seq'd `send_to`) and ALWAYS sent (built-in + global only when there is no
+    /// foreground session) so the dashboard never hangs. The GUI host re-pushes it as an
+    /// `AgentsValues` envelope; the TUI shadow ignores it.
+    AgentsValues {
+        agents: Vec<AgentEntry>,
+        catalogue_models: Vec<CatalogueModelSnapshot>,
+        catalogue_providers: Vec<CatalogueProviderSnapshot>,
     },
 }
 

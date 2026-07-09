@@ -318,6 +318,13 @@ pub(super) enum HostCtl {
     /// EMPTY `name`/`workdir`. ALWAYS pushes a `SettingsValues` reply (like the attached
     /// path) so the Settings tab's loading state can never hang.
     GetSettings,
+    /// UN-ATTACHED GUI /agents fetch (a [`ClientRequest::ListAgents`] serviced by the
+    /// swapper / start-screen host, where the ipc `live_req` daemon path is `None`). There
+    /// is no foreground session pre-attach, so the host answers from `load_registry(None)`
+    /// (built-in + global agents only — no session overlay) + the GLOBAL config catalogue
+    /// (`AppConfig::load`). ALWAYS pushes an `AgentsValues` reply (like [`GetSettings`]) so
+    /// the dashboard's loading state can never hang.
+    GetAgents,
     /// Activity-bar "Usage" panel fetch: compute a LAST-7-DAYS preview straight off the
     /// global `~/.koma/usage.sqlite` ledger. Like [`FileDiff`](Self::FileDiff) this NEVER
     /// touches the daemon in either host state — the ledger is a process-local file the

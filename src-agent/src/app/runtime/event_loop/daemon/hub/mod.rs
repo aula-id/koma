@@ -11,6 +11,7 @@
 
 mod core;
 mod requests;
+mod requests_agents;
 mod requests_config;
 mod requests_read;
 mod requests_session;

@@ -117,7 +117,9 @@ pub(super) fn apply_frame(
         // `GetSettings`), so it also folds as a non-visual no-op here. `EffortOptions`
         // follows the exact same story for the GUI composer's effort picker (the host
         // re-pushes an `EffortOptions` envelope; the TUI opens `Mode::Effort` directly
-        // and never sends `GetEffortOptions`).
+        // and never sends `GetEffortOptions`). `AgentsValues` follows it too for the GUI
+        // /agents dashboard (the host re-pushes an `AgentsValues` envelope; the TUI drives
+        // the roster through `Mode::Agents` and never sends `ListAgents`).
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
@@ -125,7 +127,8 @@ pub(super) fn apply_frame(
         | DaemonEvent::ModelList { .. }
         | DaemonEvent::ModelRoutes { .. }
         | DaemonEvent::SettingsValues { .. }
-        | DaemonEvent::EffortOptions { .. } => false,
+        | DaemonEvent::EffortOptions { .. }
+        | DaemonEvent::AgentsValues { .. } => false,
     }
 }
 

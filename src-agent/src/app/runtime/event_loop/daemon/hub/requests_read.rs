@@ -401,4 +401,92 @@ impl DaemonHub {
         }
         self.send_to(idx, DaemonEvent::Ack);
     }
+
+    // GUI /agents dashboard: read the merged sub-agent registry + model / provider
+    // catalogue and reply with a one-shot `AgentsValues`. Strictly READ-ONLY (no attach /
+    // snapshot / foreground move) and ALWAYS replies, even with no session (built-in +
+    // global only) — mirrors the `get_settings` one-shot.
+    pub(super) fn list_agents(&mut self, idx: usize, state: &AppState) {
+        self.send_agents_values(idx, state);
+    }
+
+    /// Build + send client `idx` a [`DaemonEvent::AgentsValues`]: the merged sub-agent
+    /// registry (built-in + global + the foreground session's, hidden INCLUDED, disabled
+    /// already dropped by the loader) plus the editor's model / provider catalogue — the
+    /// reply to a [`crate::ipc::proto::ClientRequest::ListAgents`] AND the re-push after a
+    /// `SetAgent` / `DeleteAgent`. The C2 LOAD bracket in `handle_request` already pointed
+    /// `fg()` at THIS client's foreground, so the registry loads that session's `agents/`
+    /// overlay and the catalogue seeds its local `session_models` FIRST (then the global
+    /// catalogue) — the SAME order the `agents_snapshot` projection uses. ALWAYS sends —
+    /// with no foreground session it loads built-in + global only and seeds from the global
+    /// config — so the dashboard never hangs. `send_to` delivers regardless of attach state
+    /// (like `send_settings_values`).
+    pub(super) fn send_agents_values(&mut self, idx: usize, state: &AppState) {
+        use crate::model::agent_def::{load_registry, AgentSource};
+        let config = &state.rest.config;
+        let session = state.rest.fg().session.as_ref();
+
+        // Registry roster: built-in < global < session, matching the TUI browse
+        // (`list(false)` = hidden included; the loader already dropped disabled).
+        let registry = load_registry(session.map(|s| s.path.as_path()));
+        let agents = registry
+            .list(false)
+            .into_iter()
+            .map(|ag| crate::ipc::proto::AgentEntry {
+                name: ag.name.clone(),
+                description: ag.description.clone(),
+                conditions: ag.conditions.clone(),
+                source: match ag.source {
+                    AgentSource::Session => "session",
+                    AgentSource::Global => "global",
+                    AgentSource::Builtin => "builtin",
+                }
+                .to_string(),
+                model_uuid: ag.model_uuid.clone(),
+                model: ag.model.clone(),
+                tools: ag.tools.clone(),
+                prompt: ag.prompt.clone(),
+            })
+            .collect();
+
+        // Catalogue: the foreground session's LOCAL overrides FIRST, then the global
+        // catalogue — the SAME seeding order the `agents_snapshot` projection uses.
+        let mut catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot> = Vec::new();
+        if let Some(sess) = session {
+            for e in &sess.settings.session_models {
+                catalogue_models.push(crate::ipc::proto::CatalogueModelSnapshot {
+                    uuid: e.uuid.clone(),
+                    name: e.name.clone(),
+                    model_id: e.model_id.clone(),
+                    provider_uuid: e.provider_uuid.clone(),
+                });
+            }
+        }
+        for e in &config.models {
+            catalogue_models.push(crate::ipc::proto::CatalogueModelSnapshot {
+                uuid: e.uuid.clone(),
+                name: e.name.clone(),
+                model_id: e.model_id.clone(),
+                provider_uuid: e.provider_uuid.clone(),
+            });
+        }
+        let catalogue_providers = config
+            .providers
+            .iter()
+            .map(|p| crate::ipc::proto::CatalogueProviderSnapshot {
+                uuid: p.uuid.clone(),
+                name: p.name.clone(),
+                endpoint: p.endpoint.clone(),
+            })
+            .collect();
+
+        self.send_to(
+            idx,
+            DaemonEvent::AgentsValues {
+                agents,
+                catalogue_models,
+                catalogue_providers,
+            },
+        );
+    }
 }

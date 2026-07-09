@@ -313,6 +313,12 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GetSettings) => {
                     let _ = req_tx.send(ClientRequest::GetSettings);
                 }
+                // GUI /agents fetch raced in while attached (routed to the daemon via
+                // `live_req` normally; only lands here on an attach-state flip). Forward the
+                // daemon request — it replies with `AgentsValues`, re-pushed above.
+                Ok(super::HostCtl::GetAgents) => {
+                    let _ = req_tx.send(ClientRequest::ListAgents);
+                }
                 // FILE CHANGED diff fetch: NEVER touches the daemon (host-side only,
                 // regardless of attach state) — spawn the blocking git+fs work off this
                 // thread; the result is drained + pushed below at (b-quat).
@@ -424,6 +430,25 @@ pub(super) fn push_loop(
                             internet_mode: internet_mode.clone(),
                             palette: palette.clone(),
                             effort: effort.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
+                    }
+                    // GUI /agents-dashboard reply (GetAgents / post-SetAgent / -DeleteAgent
+                    // re-push): re-push it as an `AgentsValues` envelope BEFORE folding (a
+                    // non-visual fold no-op, keeping the seq gap-free), same as the
+                    // SettingsValues intercept above.
+                    if let DaemonEvent::AgentsValues {
+                        agents,
+                        catalogue_models,
+                        catalogue_providers,
+                    } = &frame.event
+                    {
+                        let env = PushEnvelope::AgentsValues {
+                            agents: agents.clone(),
+                            catalogue_models: catalogue_models.clone(),
+                            catalogue_providers: catalogue_providers.clone(),
                         };
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);
