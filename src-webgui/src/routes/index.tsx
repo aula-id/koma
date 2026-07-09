@@ -76,6 +76,33 @@ function RootLayout() {
     }
   }, [])
 
+  // Global Ctrl+B (Cmd+B on mac): background EVERY eligible running sub-agent at
+  // once — mirrors the TUI composer's Ctrl+B (`Action::BackgroundAllSubagents`).
+  // Fires from anywhere in the app, including a focused composer textarea (that
+  // matches the TUI, whose composer is exactly where Ctrl+B is bound), EXCEPT
+  // inside a Monaco diff-tab editor, where Ctrl+B/Cmd+B are the editor's own
+  // bindings. Reads eligibility fresh off the store (running && !detached &&
+  // blocking) rather than subscribing, so this effect never needs to re-run;
+  // `preventDefault` only fires when we actually act, so the combo is never
+  // swallowed for nothing (e.g. no sub-agents at all).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'b' || e.altKey || e.shiftKey) return
+      const wantsMod = platform === 'macos' ? e.metaKey : e.ctrlKey
+      if (!wantsMod) return
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.('.monaco-editor')) return
+      const eligible = useKoma
+        .getState()
+        .session.subagents.some((a) => a.status === 'running' && !a.detached && a.blocking)
+      if (!eligible) return
+      e.preventDefault()
+      req({ r: 'BackgroundAll' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [platform, req])
+
   // Click the active view's icon to collapse/expand; click another to switch to
   // it (and ensure the sidebar is open).
   const selectView = (view: SidebarView) => {

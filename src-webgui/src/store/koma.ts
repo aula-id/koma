@@ -130,6 +130,14 @@ export type SubAgentEntry = {
   name: string
   status: 'running' | 'done' | 'killed' | 'error'
   summary: string
+  // Whether this subagent is already backgrounded (detached). Optional-tolerant like
+  // `id`: a host build that hasn't started projecting it omits it, treated as `false`
+  // (foreground) so older hosts keep rendering exactly as before.
+  detached?: boolean
+  // Whether this subagent is currently parking the main turn (has a live tool_call_id).
+  // Only `status === 'running' && !detached && blocking` is eligible for the
+  // background button / Ctrl+B — mirrors the TUI's `Action::BackgroundSubagent` gate.
+  blocking?: boolean
 }
 
 export type BashJobEntry = {

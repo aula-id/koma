@@ -311,6 +311,15 @@ enum GuiReq {
     /// The Explore sidepanel agent-row KILL button: kill sub-agent `id`. Forwarded as
     /// [`ClientRequest::KillSubagent`].
     KillSubagent { id: usize },
+    /// The Explore sidepanel agent-row BACKGROUND button: background sub-agent `id`
+    /// (flip it to detached without killing it — the agent keeps running, its report
+    /// lands via a later push instead of parking the turn). Forwarded as
+    /// [`ClientRequest::BackgroundSubagent`].
+    BackgroundSubagent { id: usize },
+    /// The global Ctrl+B shortcut: background EVERY eligible running sub-agent at once
+    /// (mirrors the TUI composer's Ctrl+B). Forwarded as
+    /// [`ClientRequest::BackgroundAllSubagents`].
+    BackgroundAll,
     /// The Explore sidepanel bash-row KILL button: kill bg-bash job `id` (the numeric part
     /// of the row's `bash-<id>`). Forwarded as [`ClientRequest::BashKill`].
     KillBash { id: usize },
@@ -921,6 +930,22 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                         if let Ok(g) = ipc_req.lock() {
                             if let Some(tx) = g.as_ref() {
                                 let _ = tx.send(ClientRequest::KillSubagent { id });
+                            }
+                        }
+                    }
+                    // Background one sub-agent by id (Explore agent-row background button).
+                    GuiReq::BackgroundSubagent { id } => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::BackgroundSubagent { id });
+                            }
+                        }
+                    }
+                    // Background every eligible running sub-agent (global Ctrl+B).
+                    GuiReq::BackgroundAll => {
+                        if let Ok(g) = ipc_req.lock() {
+                            if let Some(tx) = g.as_ref() {
+                                let _ = tx.send(ClientRequest::BackgroundAllSubagents);
                             }
                         }
                     }

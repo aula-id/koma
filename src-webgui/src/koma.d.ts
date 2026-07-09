@@ -90,6 +90,13 @@ declare global {
     // Kill a single running subagent by its host-projected id (Explore panel
     // Agents row kill button). Numeric to match the daemon's `usize`.
     | { r: 'KillSubagent'; id: number }
+    // Background a single running subagent by its host-projected id (Explore panel
+    // Agents row background button) — flips it to detached without killing it, so it
+    // keeps running and unblocks the main turn. Mirrors the TUI's Ctrl+B-on-selection.
+    | { r: 'BackgroundSubagent'; id: number }
+    // Background EVERY eligible running subagent at once (global Ctrl+B shortcut) —
+    // mirrors the TUI composer's Ctrl+B.
+    | { r: 'BackgroundAll' }
     // Kill a single running bg-bash job by its numeric id (Explore panel Bash
     // row kill button). The row id is `bash-<n>`; the numeric part matches the
     // daemon's `usize`.

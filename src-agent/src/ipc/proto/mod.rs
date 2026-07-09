@@ -204,6 +204,17 @@ pub enum ClientRequest {
     /// the tokio task + flip a still-Running status to Killed (a terminal status is left
     /// untouched). gui-gated.
     KillSubagent { id: usize },
+    /// Background a single sub-agent of the foreground session by its stable id (the GUI
+    /// agent-row background button). Mirrors the TUI's Ctrl+B-on-selection. Reuses
+    /// [`Action::BackgroundSubagent`] daemon-side — the handler re-checks eligibility
+    /// itself (must be `Running`, not already detached, and have a `tool_call_id`), so an
+    /// ineligible or stale id is a clean no-op.
+    BackgroundSubagent { id: usize },
+    /// Background EVERY eligible running sub-agent of the foreground session at once (the
+    /// GUI's global Ctrl+B). Mirrors the TUI's Ctrl+B-in-composer. Reuses
+    /// [`Action::BackgroundAllSubagents`] daemon-side, which is itself a no-op when no
+    /// sub-agent is eligible. gui-gated.
+    BackgroundAllSubagents,
     /// Kill a single background-bash job of the foreground session by its numeric id (the
     /// GUI bash-row kill button). Reuses [`Action::BashKillJob`] daemon-side (SIGTERM +
     /// flip status→Killed). The GUI addresses the job as `bash-<id>`; only the numeric
