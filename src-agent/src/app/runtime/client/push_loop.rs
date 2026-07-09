@@ -53,6 +53,14 @@ pub(super) struct PushState {
     /// an unchanged config emits nothing). Cleared by [`reset`](Self::reset) on `Ready`
     /// so a page reload re-emits the full current catalogue.
     pub(super) config_json: Option<String>,
+    /// Last `(active, workspace, awareness)` pushed as a `Loading` envelope. `None`
+    /// until the foreground session first enters `Mode::Loading`. Compared as a
+    /// whole triple so ANY phase change (workspace or awareness ticking
+    /// pending/running/done/skipped/failed) re-emits, and — critically — its
+    /// `active` flag is read back by `serialize_and_push` to detect the Loading →
+    /// non-Loading transition (the last emitted frame is the only record of
+    /// whether the webview still thinks a splash is up).
+    pub(super) last_loading: Option<(bool, String, String)>,
 }
 
 impl PushState {
@@ -64,6 +72,7 @@ impl PushState {
             status: None,
             hub_json: None,
             config_json: None,
+            last_loading: None,
         }
     }
 

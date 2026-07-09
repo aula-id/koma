@@ -625,6 +625,23 @@ pub(super) enum PushEnvelope {
         note: String,
         state: String,
     },
+    /// The TUI's animated startup splash ([`crate::app::mode::Mode::Loading`]),
+    /// projected so the GUI can render its own loading overlay while a returning
+    /// session warms asynchronously (workspace reindex + project-docs awareness
+    /// summary). `workspace`/`awareness` are one of `"pending"`/`"running"`/
+    /// `"done"`/`"skipped"`/`"failed"` (mirrors [`crate::app::mode::WarmStatus`],
+    /// dropping `Done`'s carried detail string — the webview shows a generic
+    /// "ready" glyph, not the TUI's dim detail text). `active` is `true` while the
+    /// foreground session's mode is `Loading`; pushed exactly ONCE more with
+    /// `active: false` (`workspace`/`awareness` both `"done"`) the frame the mode
+    /// leaves `Loading`, then never again until the next warm cycle — see
+    /// `serialize_and_push`'s dedup comment for why the webview can rely on that
+    /// single terminal `false` frame to dismiss its overlay.
+    Loading {
+        active: bool,
+        workspace: String,
+        awareness: String,
+    },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every

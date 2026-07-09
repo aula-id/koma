@@ -16,7 +16,7 @@
 //! `PushState` lives in `push_loop.rs` (split out later in this same round),
 //! referenced here as `super::push_loop::PushState`.
 
-use crate::app::mode::{SessionHub, SessionKind};
+use crate::app::mode::{Mode, SessionHub, SessionKind, WarmStatus};
 use crate::app::state::AppState;
 use crate::dto::chat::Role;
 
@@ -550,6 +550,64 @@ pub(super) fn serialize_and_push(
             cost: status.6,
             mode: status.7,
         });
+    }
+
+    // --- Loading: the TUI startup splash, projected for the GUI's own overlay ---
+    // `Mode::Loading` is per-session (unlike the `agent_mode` label above), so this
+    // reads the SAME foreground mode `view::draw` would switch on locally. Dedup on
+    // the whole `(active, workspace, awareness)` triple (any phase tick re-emits).
+    //
+    // INVARIANT the webview relies on: once a `Loading{active:true, ...}` frame has
+    // gone out, leaving `Mode::Loading` MUST emit exactly one terminal
+    // `Loading{active:false, workspace:"done", awareness:"done"}` frame before this
+    // fn goes quiet again — that single `false` is the ONLY signal telling the
+    // webview to dismiss its overlay (there is no separate "closed" event). This is
+    // why the else-branch below gates on `last.last_loading`'s stored `active` flag
+    // (the last frame WE emitted) rather than on `shadow`'s own prior-tick mode —
+    // it is the single source of truth for "does the webview still think a splash
+    // is showing".
+    match shadow.mode() {
+        Mode::Loading(s) => {
+            let triple = (
+                true,
+                warm_status_label(&s.workspace).to_string(),
+                warm_status_label(&s.awareness).to_string(),
+            );
+            if last.last_loading.as_ref() != Some(&triple) {
+                last.last_loading = Some(triple.clone());
+                super::render::emit(push, &PushEnvelope::Loading {
+                    active: triple.0,
+                    workspace: triple.1,
+                    awareness: triple.2,
+                });
+            }
+        }
+        _ => {
+            if last.last_loading.as_ref().is_some_and(|(active, ..)| *active) {
+                let triple = (false, "done".to_string(), "done".to_string());
+                last.last_loading = Some(triple.clone());
+                super::render::emit(push, &PushEnvelope::Loading {
+                    active: triple.0,
+                    workspace: triple.1,
+                    awareness: triple.2,
+                });
+            }
+        }
+    }
+}
+
+/// Map a [`WarmStatus`] to its lowercase wire token for the `Loading` envelope
+/// (matches the React phase union `'pending'|'running'|'done'|'skipped'|'failed'`).
+/// `Done`'s carried human detail (`"ready"`, `"no docs"`, …) is intentionally
+/// DROPPED — the webview shows a generic terminal glyph, not the TUI's dim detail
+/// text, so only the outcome CLASS crosses the wire.
+fn warm_status_label(w: &WarmStatus) -> &'static str {
+    match w {
+        WarmStatus::Pending => "pending",
+        WarmStatus::Running => "running",
+        WarmStatus::Done(_) => "done",
+        WarmStatus::Skipped => "skipped",
+        WarmStatus::Failed => "failed",
     }
 }
 
