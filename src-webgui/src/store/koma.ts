@@ -300,6 +300,11 @@ export type Tab =
   // The singleton Settings page (VSCode-style), opened from the ActivityBar gear.
   // Deduped by the fixed id 'settings'; closeable like a diff tab.
   | { id: 'settings'; kind: 'settings' }
+  // The singleton Help page — a static, wire-free reference for the GUI's own
+  // features (composer/sessions/tabs/keyboard). Opened from the ActivityBar's
+  // (?) button, directly above Settings. Deduped by the fixed id 'help';
+  // closeable like a diff tab. Mirrors the Settings tab's plumbing exactly.
+  | { id: 'help'; kind: 'help' }
   | {
       // Stable id `diff:${path}`, so find-by-path (open/dedupe) is trivial.
       id: string
@@ -729,6 +734,9 @@ type KomaState = {
   // activate it, and fire GetSettings so its values refresh. Mirrors openDiffTab's
   // dedupe + activate shape.
   openSettingsTab: () => void
+  // Open (or focus) the singleton Help tab (id 'help'): find-or-create, activate
+  // it. No wire request — the Help tab is static content, unlike Settings.
+  openHelpTab: () => void
   // Open (or focus) a Monaco diff tab for a File-changed `path`: find-by-path or
   // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
   // an already-open file refreshes it (same loading + re-request path).
@@ -1234,6 +1242,13 @@ export const useKoma = create<KomaState>((set, get) => ({
       return { ui: { ...s.ui, tabs, activeTabId: 'settings' } }
     })
     get().req({ r: 'GetSettings' })
+  },
+  openHelpTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'help')
+      const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: 'help', kind: 'help' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'help' } }
+    })
   },
   openDiffTab: (path) => {
     const id = `diff:${path}`

@@ -1,4 +1,4 @@
-import { MessageSquare, FileDiff, Settings, Bot, Terminal, X } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 
 // Parent directory of a path — used to disambiguate two open tabs that share a
@@ -74,6 +74,41 @@ export function TabBar() {
               {accent}
               <Settings size={13} className="flex-none opacity-80" />
               <span className="truncate">Settings</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  closeTab(t.id)
+                }}
+                aria-label="Close tab"
+                title="Close"
+                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                }`}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )
+        }
+
+        // Help tab: closeable like a diff tab, with a help icon + fixed title.
+        // Mirrors the Settings tab block exactly.
+        if (t.kind === 'help') {
+          return (
+            <div
+              key={t.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => activateTab(t.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+              }}
+              title="Help"
+              className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
+            >
+              {accent}
+              <CircleHelp size={13} className="flex-none opacity-80" />
+              <span className="truncate">Help</span>
               <button
                 onClick={(e) => {
                   e.stopPropagation()

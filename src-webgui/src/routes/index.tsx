@@ -52,6 +52,7 @@ function RootLayout() {
   const cancelSwitching = useKoma((s) => s.cancelSwitching)
   const req = useKoma((s) => s.req)
   const openSettingsTab = useKoma((s) => s.openSettingsTab)
+  const openHelpTab = useKoma((s) => s.openHelpTab)
   const needsOnboarding = useNeedsOnboarding()
   // Cross-tree signal from the UsageFooter PLAN badge click (see koma.ts's
   // `focusPlanTick`): switch the sidebar to the Explore view and ensure it's
@@ -192,6 +193,7 @@ function RootLayout() {
           sidebarOpen={sidebarOpen}
           onSelect={selectView}
           onSettings={openSettingsTab}
+          onHelp={openHelpTab}
         />
         {sidebarOpen && (
           <>
@@ -235,6 +237,9 @@ const DiffTab = lazy(() => import('../components/DiffTab'))
 // Settings page — lazy so its chunk only loads when the gear is first clicked.
 const SettingsTab = lazy(() => import('../components/SettingsTab'))
 
+// Help page — lazy so its chunk only loads when the (?) button is first clicked.
+const HelpTab = lazy(() => import('../components/HelpTab'))
+
 // Read-only stream tab (sub-agent transcript / bash output) — lazy so its chunk only
 // loads when the first stream tab is opened from the Explorer.
 const StreamTab = lazy(() => import('../components/StreamTab'))
@@ -277,6 +282,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <SettingsTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'help' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <HelpTab />
               </Suspense>
             </div>
           ) : t.kind === 'subagent' || t.kind === 'bash' ? (
