@@ -240,6 +240,12 @@ export type SearchResultEntry = {
   label: string
 }
 
+// One phase of the TUI-parity startup splash (host `Loading` push envelope) —
+// mirrors the TUI's cold-session warm-up phase lines ("indexing workspace" /
+// "reading project docs"). 'pending' = not started yet, 'running' = in
+// progress, 'done'/'skipped'/'failed' are terminal.
+export type LoadPhase = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
+
 // The tool call the session is currently PARKED on awaiting a decision (host
 // `pending_tool_calls[tool_idx]` while `awaiting_approval` is set — approval.rs).
 // `name`/`args` are the raw tool name + stringified-JSON arguments; `signature`
@@ -486,6 +492,14 @@ export type PushEnvelope =
   // `/effort` menu for the foreground session's current model. ALWAYS a reply
   // (loading/unsupported/ready) so the picker never hangs.
   | { k: 'EffortOptions'; options: string[]; selected: number; note: string; state: 'loading' | 'unsupported' | 'ready' }
+  // TUI-parity startup splash (cold-session warm-up): the host's two
+  // background warm-up phases — indexing the workspace and reading project
+  // docs (awareness). `active` false means no warm-up in flight (or it just
+  // finished) — the reducer clears `ui.loading` to null in that case rather
+  // than storing a "false" splash. Pushed independently of Snapshot/Switching
+  // so the splash can keep showing (and finish its phase lines) even after
+  // the attach itself has landed and `ui.switchingTo` has already cleared.
+  | { k: 'Loading'; active: boolean; workspace: LoadPhase; awareness: LoadPhase }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -632,6 +646,13 @@ type UiSlice = {
   // instant a session goes away while "session" was selected (see UsagePanel's
   // session-loss effect + `setUsageScope`).
   usageScope: 'all' | 'session'
+  // TUI-parity startup splash state (host `Loading` push envelope) — drives
+  // SwitchingOverlay's cold-session warm-up splash (centered "koma" wordmark +
+  // the two phase rows). `null` = no warm-up in flight. Set by the `Loading`
+  // envelope case; defensively cleared on a genuine session switch (Snapshot's
+  // `switched` branch) and in `detachSession()` so a stale splash from the OLD
+  // session/warm-up can never leak into a new attach.
+  loading: { active: boolean; workspace: LoadPhase; awareness: LoadPhase } | null
 }
 
 type KomaState = {
@@ -805,6 +826,7 @@ const initialUi: UiSlice = {
   activeTabId: 'chat',
   focusPlanTick: 0,
   usageScope: 'all',
+  loading: null,
 }
 
 // Bundled fallback theme (palette) registry — mirrors the host's theme.rs
@@ -939,7 +961,11 @@ export const useKoma = create<KomaState>((set, get) => ({
             ui: {
               ...s.ui,
               switchingTo: null,
-              ...(switched ? { tabs: [makeChatTab()], activeTabId: 'chat' } : {}),
+              // A genuine switch also drops any stale startup splash — it
+              // described the OLD attach's warm-up, and must not bleed into
+              // the new session's view (the host will push a fresh `Loading`
+              // for the new session if it's cold too).
+              ...(switched ? { tabs: [makeChatTab()], activeTabId: 'chat', loading: null } : {}),
             },
           }
         })
@@ -1139,6 +1165,16 @@ export const useKoma = create<KomaState>((set, get) => ({
           },
         }))
         break
+      case 'Loading':
+        set((s) => ({
+          ui: {
+            ...s.ui,
+            loading: env.active
+              ? { active: env.active, workspace: env.workspace, awareness: env.awareness }
+              : null,
+          },
+        }))
+        break
       case 'UsagePreview':
         set((s) => {
           // Drop a reply for a scope the user has since switched away from (a
@@ -1300,6 +1336,9 @@ export const useKoma = create<KomaState>((set, get) => ({
         // mid-flight (only Snapshot/Hub normally clear it, neither of which
         // is guaranteed to arrive promptly on a self-kill).
         switchingTo: null,
+        // Defensive: also drop any stale startup splash — it described the
+        // now-dead session's warm-up and must not linger over StartScreen.
+        loading: null,
       },
     }))
     // Tabs just reset to chat-only → no stream tab is active; tell the host
