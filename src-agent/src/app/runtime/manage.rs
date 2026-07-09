@@ -913,48 +913,31 @@ fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-/// SILENTLY reap the SESSION-daemon owning `session_id` from a caller that owns the
-/// alternate screen (the client-side swapper's `Ctrl+X` nuke).
+/// SILENTLY kill the SESSION-daemon owning `session_id`, escalating until it is dead, and
+/// return whether it is gone afterwards. The alt-screen-safe / TTY-less kill PRIMITIVE
+/// shared by the client-side swapper's `Ctrl+X` nuke AND the GUI host-relay's session
+/// lifecycle (KillSession / New-with-kill / delete guard).
 ///
-/// This is the fire-and-forget twin of [`stop_session_daemon`], carved out for ONE
-/// reason: [`stop_session_daemon`] `println!`s its outcome, and the swapper runs inside
-/// the alt-screen TUI — printing there would smear the picker. So this stays MUTE: it
-/// opens a fresh blocking management connection (the same `run/<id>.sock` +
-/// [`connect_managed`] the admin path uses), sends a single controller-only
-/// [`ClientRequest::QuitDaemon`], and drains a couple of reply frames so the daemon sees
-/// our read side stay open until it tears down. The daemon then releases its lock, aborts
-/// its one session, unlinks its own socket, and exits — leaving the session ON DISK, so it
-/// reappears in the swapper's HISTORY pane (mirrors the `/new kill` reap in `client_run`).
+/// Both callers run in a context that must not print — the swapper owns the alternate
+/// screen (a stray `println!` smears the picker) and the GUI host owns no TTY at all — so
+/// this wraps [`stop_session_daemon`] with `quiet = true`, reusing its FULL escalation
+/// (graceful `QuitDaemon` → [`wait_until_dead`] → SIGTERM → wait → SIGKILL) rather than the
+/// old graceful-only fire-and-forget reap, which returned BEFORE the daemon died (so an
+/// immediate discovery sweep still saw the dying socket answering) and could never remove a
+/// wedged daemon at all. It BLOCKS until the daemon is dead or the escalation budget is
+/// spent (up to [`KILL_GRACE`] + two [`SIGNAL_GRACE`] windows), so a caller that can't stall
+/// (the GUI fold loop, the swapper's input loop) must run it OFF-thread.
 ///
-/// Best-effort throughout: a dead/unreachable daemon (nothing to reap) or any I/O error is
-/// swallowed — the caller re-derives the outcome from a fresh discovery sweep right after.
-/// No signal escalation here: this is a deliberate one-off keypress on a live row, and the
-/// graceful `QuitDaemon` is what the client already relies on everywhere else; the periodic
-/// stale-sweep reclaims anything that somehow lingers.
-pub(crate) fn nuke_session_daemon(session_id: &str) {
-    // Nothing accepting ⇒ nothing to reap (the row will simply drop on the next sweep).
-    if !daemon_alive(session_id) {
-        return;
-    }
-    let Ok(sock) = store::daemon_sock_path(session_id) else {
-        return;
-    };
-    // Fresh connect + QuitDaemon, fire-and-forget. A connect/send failure is fine — the
-    // daemon may have died between the liveness check and now; discovery will catch up.
-    if let Ok((mut stream, mut reader)) = connect_managed(&sock) {
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-        let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-        if send_request(&mut stream, &ClientRequest::QuitDaemon).is_ok() {
-            // Drain a few frames so the Ack is consumed and our read side stays open
-            // until the daemon finishes tearing down. Ignore errors (socket close is
-            // the expected end state).
-            for _ in 0..4 {
-                if recv_frame(&mut stream, &mut reader).is_err() {
-                    break;
-                }
-            }
-        }
-    }
+/// Returns `true` when the keyed socket no longer accepts (dead), `false` if it somehow
+/// survived every stage — letting a caller refresh its view only once death is confirmed.
+/// Best-effort throughout (it never fails the caller): a dead/unreachable daemon is an
+/// immediate `true`, and every I/O error inside `stop_session_daemon` is already swallowed.
+pub(crate) fn kill_session_daemon(session_id: &str) -> bool {
+    // Reuse the full graceful→SIGTERM→SIGKILL stop escalation, silenced (a lost log line
+    // beats a corrupted alt-screen / a TTY-less host). The `Result` is always `Ok` in
+    // practice (the stop path is best-effort); liveness is the real signal, so re-probe it.
+    let _ = stop_session_daemon(session_id, true);
+    !daemon_alive(session_id)
 }
 
 /// `koma daemon kill` — stop EVERY live session-daemon, escalating per session only if
