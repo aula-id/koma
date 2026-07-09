@@ -44,6 +44,7 @@
 //! bordered popup palette floats above the input row listing the matching
 //! commands filtered in real time. Up/Down navigate the list; Tab completes.
 
+mod blocks;
 mod header;
 // `helpers` is otherwise private to the chat view, but the GUI host reuses ONE
 // function from it (`split_thinking`, itself `pub(crate)`) to peel the legacy
@@ -54,6 +55,7 @@ mod input;
 mod overlays;
 mod status;
 mod subagents;
+mod tool_format;
 pub(crate) mod transcript;
 
 use ratatui::{
