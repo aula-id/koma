@@ -71,33 +71,44 @@ export function Titlebar({ onSearch, onRename, overlayOpen }: TitlebarProps) {
               <span className="truncate">change session</span>
             </motion.span>
           </motion.button>
-          <motion.button
-            layoutId="cmd-rename"
-            transition={CMD_SEARCH_SPRING}
-            onClick={onRename}
-            title="Rename session"
-            aria-label="Rename session"
-            className="pointer-events-auto absolute left-[calc(50%_+_178px)] top-[5px] flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+          {/* Rename + compact as ONE flex group, absolutely positioned to track
+              the pill's actual half-width (min(170px, 23vw) — the pill is
+              w-[340px] max-w-[46vw], so its half-width shrinks past ~740px
+              window width). Two independently-absolute offsets calibrated to
+              the full 340px pill used to drift off the pill's edge + collide
+              with the window controls once the pill shrank; this single
+              group hugs the pill's right edge at every size instead. */}
+          <div
+            className="pointer-events-none absolute top-[5px] left-[calc(50%+min(170px,23vw)+8px)] flex items-center gap-2"
           >
-            <motion.span layout="position" className="flex items-center gap-1.5">
-              <PenLine size={13} className="flex-none" />
-              <span>rename</span>
-            </motion.span>
-          </motion.button>
-          <button
-            onClick={() => req({ r: 'Compact' })}
-            disabled={working}
-            title="Compact context"
-            aria-label="Compact context"
-            className={`pointer-events-auto absolute left-[calc(50%_+_270px)] top-[5px] flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] transition-colors ${
-              working
-                ? 'text-koma-dim opacity-40'
-                : 'text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100'
-            }`}
-          >
-            <FoldVertical size={13} className="flex-none" />
-            <span>compact</span>
-          </button>
+            <motion.button
+              layoutId="cmd-rename"
+              transition={CMD_SEARCH_SPRING}
+              onClick={onRename}
+              title="Rename session"
+              aria-label="Rename session"
+              className="pointer-events-auto flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+            >
+              <motion.span layout="position" className="flex items-center gap-1.5">
+                <PenLine size={13} className="flex-none" />
+                <span className="max-[700px]:hidden">rename</span>
+              </motion.span>
+            </motion.button>
+            <button
+              onClick={() => req({ r: 'Compact' })}
+              disabled={working}
+              title="Compact context"
+              aria-label="Compact context"
+              className={`pointer-events-auto flex h-[22px] items-center gap-1.5 rounded-md border border-koma-border bg-koma-panel px-2.5 text-[12px] transition-colors ${
+                working
+                  ? 'text-koma-dim opacity-40'
+                  : 'text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100'
+              }`}
+            >
+              <FoldVertical size={13} className="flex-none" />
+              <span className="max-[700px]:hidden">compact</span>
+            </button>
+          </div>
         </div>
       )}
       <div id="winctl">

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Search, Plus } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
+import { NewSessionMenu } from './NewSessionMenu'
+import { SessionRowActions, type ArmedRow } from './SessionRowActions'
 import { useKoma } from '../store/koma'
 
 type ResumePaletteProps = {
@@ -30,15 +32,27 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   const history = useKoma((s) => s.hub.history)
   const req = useKoma((s) => s.req)
   const startSwitching = useKoma((s) => s.startSwitching)
+  const dyingSessions = useKoma((s) => s.dyingSessions)
   const [query, setQuery] = useState('')
+  // The single armed row (kill/delete confirm pill) across BOTH lists — arming
+  // a different row disarms whichever was armed before.
+  const [armed, setArmed] = useState<ArmedRow>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        // Escape cancels an armed row first; only closes the palette once
+        // nothing is armed.
+        if (armed) {
+          setArmed(null)
+          return
+        }
+        onClose()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, armed])
 
   // Live-session-listing fix: the host only discovers live sessions on
   // demand. Ask for a fresh Hub the moment this overlay opens, then keep
@@ -116,56 +130,103 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
                 Cooking
               </span>
-              <button
-                onClick={newSession}
-                className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
-              >
-                <Plus size={12} className="flex-none" />
-                New session
-              </button>
+              <span className="flex items-center">
+                <button
+                  onClick={newSession}
+                  className="flex items-center gap-1 text-[11px] text-koma-fg opacity-70 transition-colors hover:opacity-100"
+                >
+                  <Plus size={12} className="flex-none" />
+                  New session
+                </button>
+                <NewSessionMenu afterPick={onClose} />
+              </span>
             </div>
             {filteredCooking.length === 0 ? (
               <Empty>{q === '' ? 'No live sessions' : 'No matches'}</Empty>
             ) : (
-              filteredCooking.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => c.id && selectSession(c.id, c.name)}
-                  className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
-                >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {c.working && (
-                      <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
-                    )}
-                    <span className="truncate">{c.name}</span>
-                    {c.foreground && (
-                      <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide opacity-50">
-                        current
-                      </span>
-                    )}
-                  </span>
-                  {c.dirLabel && (
-                    <span className="ml-2 flex-none truncate text-[11px] opacity-40">{c.dirLabel}</span>
-                  )}
-                </button>
-              ))
+              filteredCooking.map((c) => {
+                const dying = !!c.id && dyingSessions.includes(c.id)
+                return (
+                  <div
+                    key={c.id}
+                    role="button"
+                    tabIndex={dying ? -1 : 0}
+                    onClick={() => {
+                      if (dying) return
+                      if (armed && armed.id === c.id && armed.kind === 'session') return
+                      c.id && selectSession(c.id, c.name)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' && e.key !== ' ') return
+                      if (e.key === ' ') e.preventDefault()
+                      if (!dying && !armed && c.id) selectSession(c.id, c.name)
+                    }}
+                    className={`group flex w-full cursor-pointer items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover ${
+                      dying ? 'pointer-events-none opacity-60' : ''
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      {c.working && (
+                        <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
+                      )}
+                      <span className="truncate">{c.name}</span>
+                      {c.foreground && (
+                        <span className="flex-none rounded border border-koma-border px-1 text-[9px] uppercase tracking-wide opacity-50">
+                          current
+                        </span>
+                      )}
+                    </span>
+                    <span className="ml-2 flex flex-none items-center gap-2">
+                      {c.dirLabel && (
+                        <span className="truncate text-[11px] opacity-40">{c.dirLabel}</span>
+                      )}
+                      {c.id && (
+                        <SessionRowActions
+                          id={c.id}
+                          kind="session"
+                          foreground={c.foreground}
+                          armed={armed}
+                          onArm={setArmed}
+                        />
+                      )}
+                    </span>
+                  </div>
+                )
+              })
             )}
             <Label>History</Label>
             {filteredHistory.length === 0 ? (
               <Empty>{q === '' ? 'No past sessions' : 'No matches'}</Empty>
             ) : (
-              filteredHistory.map((h) => (
-                <button
-                  key={h.id}
-                  onClick={() => selectSession(h.id, h.name)}
-                  className="flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover"
-                >
-                  <span className="truncate">{h.name}</span>
-                  {h.dirLabel && (
-                    <span className="ml-2 flex-none truncate text-[11px] opacity-40">{h.dirLabel}</span>
-                  )}
-                </button>
-              ))
+              filteredHistory.map((h) => {
+                const dying = dyingSessions.includes(h.id)
+                return (
+                  <div
+                    key={h.id}
+                    role="button"
+                    tabIndex={dying ? -1 : 0}
+                    onClick={() => {
+                      if (dying) return
+                      if (armed && armed.id === h.id && armed.kind === 'history') return
+                      selectSession(h.id, h.name)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' && e.key !== ' ') return
+                      if (e.key === ' ') e.preventDefault()
+                      if (!dying && !armed) selectSession(h.id, h.name)
+                    }}
+                    className={`group flex w-full cursor-pointer items-center justify-between px-3 py-1.5 text-left text-[12px] text-koma-fg transition-colors hover:bg-koma-hover ${
+                      dying ? 'pointer-events-none opacity-60' : ''
+                    }`}
+                  >
+                    <span className="truncate">{h.name}</span>
+                    <span className="ml-2 flex flex-none items-center gap-2">
+                      {h.dirLabel && <span className="truncate text-[11px] opacity-40">{h.dirLabel}</span>}
+                      <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
+                    </span>
+                  </div>
+                )
+              })
             )}
           </motion.div>
         </div>
