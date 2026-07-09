@@ -565,21 +565,7 @@ impl DaemonHub {
             // and clear that session's sticky finished-unseen marker (critique #3 —
             // foregrounding a session counts as "seen").
             ClientRequest::SwitchForeground { session_id } => {
-                match state.rest.sessions.iter().position(|s| s.id == session_id) {
-                    Some(target) => {
-                        let result = apply_action(Action::LiveSwitch(target), state, client, handle);
-                        // LiveSwitch sets `foreground = target`; clear the marker on
-                        // the now-foreground session (index unchanged by the switch).
-                        if let Some(s) = state.rest.sessions.get_mut(target) {
-                            s.finished_unseen = false;
-                        }
-                        self.ack_or_error(idx, result);
-                    }
-                    None => self.send_to(
-                        idx,
-                        DaemonEvent::Error(format!("unknown session id: {session_id}")),
-                    ),
-                }
+                self.switch_foreground(idx, state, client, handle, session_id);
             }
 
             // Submit composed text to the foreground session — identical to the local
@@ -652,8 +638,7 @@ impl DaemonHub {
             // inherits last-used creds + the launch dir); wiring them is a later
             // refinement, so they are accepted-and-ignored rather than rejected.
             ClientRequest::NewSession { .. } => {
-                let result = apply_action(Action::Slash(Command::New(crate::controller::command::NewMode::Swap)), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.new_session(idx, state, client, handle);
             }
 
             // Quit (close) a single session by stable UUID (daemon stage 10). Resolve
@@ -673,17 +658,7 @@ impl DaemonHub {
             // primitive; Phase C removes it along with the rest of the multi-session
             // machinery if nothing else picks it up.
             ClientRequest::QuitSession { session_id } => {
-                match state.rest.sessions.iter().position(|s| s.id == session_id) {
-                    Some(target) => {
-                        state.rest.sessions[target].close();
-                        self.repoint_foreground_off_closed(state);
-                        self.send_to(idx, DaemonEvent::Ack);
-                    }
-                    None => self.send_to(
-                        idx,
-                        DaemonEvent::Error(format!("unknown session id: {session_id}")),
-                    ),
-                }
+                self.quit_session(idx, state, session_id);
             }
 
             // Rename the foreground session (the GUI RenameOverlay). The C2 LOAD
@@ -695,18 +670,7 @@ impl DaemonHub {
             // the daemon never forks the rename logic. An empty/whitespace name is a
             // no-op Ack; a rename error surfaces as an `Error` frame.
             ClientRequest::RenameSession { name } => {
-                let trimmed = name.trim().to_string();
-                if trimmed.is_empty() {
-                    self.send_to(idx, DaemonEvent::Ack);
-                } else if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    let result = crate::model::store::rename_session(sess, &trimmed);
-                    self.ack_or_error(idx, result);
-                } else {
-                    self.send_to(
-                        idx,
-                        DaemonEvent::Error("no foreground session to rename".into()),
-                    );
-                }
+                self.rename_session(idx, state, name);
             }
 
             // GUI MCP CRUD (McpPanel). Build an `McpServerEntry` from the panel's form
@@ -726,37 +690,17 @@ impl DaemonHub {
                 env,
                 url,
             } => {
-                let entry = crate::model::app_config::McpServerEntry {
-                    uuid: uuid.unwrap_or_default(),
-                    name: name.trim().to_string(),
-                    enabled,
-                    transport: if transport == "http" {
-                        crate::model::app_config::McpTransport::Http
-                    } else {
-                        crate::model::app_config::McpTransport::Stdio
-                    },
-                    command: command.trim().to_string(),
-                    args: crate::app::mode::mcp::parse_args(&args),
-                    env: crate::app::mode::mcp::parse_env(&env),
-                    url: url.trim().to_string(),
-                };
-                state.rest.config.upsert_mcp_server(entry);
-                let result = crate::app::runtime::actions::save_and_reload_mcp(state);
-                self.ack_or_error(idx, result);
+                self.set_mcp_server(idx, state, uuid, name, enabled, transport, command, args, env, url);
             }
 
             // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
             ClientRequest::DeleteMcpServer { uuid } => {
-                state.rest.config.remove_mcp_server_by_uuid(&uuid);
-                let result = crate::app::runtime::actions::save_and_reload_mcp(state);
-                self.ack_or_error(idx, result);
+                self.delete_mcp_server(idx, state, uuid);
             }
 
             // GUI MCP enable toggle: set the `enabled` flag by uuid, persist + reconnect.
             ClientRequest::EnableMcpServer { uuid, enabled } => {
-                state.rest.config.set_mcp_enabled_by_uuid(&uuid, enabled);
-                let result = crate::app::runtime::actions::save_and_reload_mcp(state);
-                self.ack_or_error(idx, result);
+                self.enable_mcp_server(idx, state, uuid, enabled);
             }
 
             // GUI provider CRUD (Connector ProviderForm). Upsert by uuid via the
@@ -768,21 +712,12 @@ impl DaemonHub {
                 endpoint,
                 api_key,
             } => {
-                state.rest.config.upsert_provider(
-                    uuid,
-                    name.trim().to_string(),
-                    endpoint.trim().to_string(),
-                    api_key,
-                );
-                let result = state.rest.config.save();
-                self.ack_or_error(idx, result);
+                self.set_provider(idx, state, uuid, name, endpoint, api_key);
             }
 
             // GUI provider delete: drop by uuid + persist (models keep any dangling ref).
             ClientRequest::DeleteProvider { uuid } => {
-                state.rest.config.remove_provider_by_uuid(&uuid);
-                let result = state.rest.config.save();
-                self.ack_or_error(idx, result);
+                self.delete_provider(idx, state, uuid);
             }
 
             // GUI model CRUD (Connector ModelForm). Build a `ModelEntry` (parsing the
@@ -800,47 +735,12 @@ impl DaemonHub {
                 roles,
                 scope,
             } => {
-                let roles = roles.iter().filter_map(|r| parse_model_role(r)).collect();
-                let entry = crate::model::app_config::ModelEntry {
-                    uuid: uuid.unwrap_or_default(),
-                    name: name.trim().to_string(),
-                    model_id: model_id.trim().to_string(),
-                    provider_uuid,
-                    route: crate::model::app_config::ModelEntry::normalize_route(route),
-                    roles,
-                    role: None,
-                };
-                let result = if scope == "local" {
-                    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                        crate::model::app_config::upsert_model_entry(
-                            &mut sess.settings.session_models,
-                            entry,
-                        );
-                        sess.save()
-                    } else {
-                        Ok(()) // no foreground session to hold a local override
-                    }
-                } else {
-                    state.rest.config.upsert_model(entry);
-                    state.rest.config.save()
-                };
-                self.ack_or_error(idx, result);
+                self.set_model(idx, state, uuid, name, model_id, provider_uuid, route, roles, scope);
             }
 
             // GUI model delete: remove by uuid from the addressed scope + persist.
             ClientRequest::DeleteModel { uuid, scope } => {
-                let result = if scope == "local" {
-                    if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                        sess.settings.session_models.retain(|m| m.uuid != uuid);
-                        sess.save()
-                    } else {
-                        Ok(())
-                    }
-                } else {
-                    state.rest.config.remove_model_by_uuid(&uuid);
-                    state.rest.config.save()
-                };
-                self.ack_or_error(idx, result);
+                self.delete_model(idx, state, uuid, scope);
             }
 
             // GUI theme picker (onboarding step 1 + the future Settings gear): set the
@@ -850,9 +750,7 @@ impl DaemonHub {
             // up by the snapshot diff (`ipc::snapshot::diff` gates a full snapshot on
             // `palette`), so the GUI host re-derives + re-pushes its Config palette live.
             ClientRequest::SetTheme { name } => {
-                state.rest.config.palette = name;
-                let result = state.rest.config.save();
-                self.ack_or_error(idx, result);
+                self.set_theme(idx, state, name);
             }
 
             // GUI Settings tab (Session section): partial-update the foreground session's
@@ -877,80 +775,7 @@ impl DaemonHub {
                 internet_mode,
                 workdir,
             } => {
-                use crate::model::settings::InternetMode;
-                // Capture the old internet mode BEFORE the set, for the shared change-gated
-                // feedback below (mirrors handle_save_settings' `old_internet`).
-                let old_internet = state
-                    .rest
-                    .fg()
-                    .session
-                    .as_ref()
-                    .map(|s| s.settings.internet_mode);
-                let internet_target = internet_mode.as_deref().and_then(InternetMode::from_token);
-                // Normalize the workdir draft exactly like actions/settings.rs:84-101.
-                let workdir_vec = workdir.map(|dirs| {
-                    let mut v: Vec<String> = dirs
-                        .into_iter()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    if v.is_empty() {
-                        v = std::env::current_dir()
-                            .map(|p| vec![p.display().to_string()])
-                            .unwrap_or_default();
-                    }
-                    v
-                });
-                // Only a workdir change needs a dir-cache reindex (a full workspace
-                // re-walk) — so gate it below rather than firing it on every toggle.
-                let did_workdir = workdir_vec.is_some();
-                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    if let Some(v) = short_send {
-                        sess.settings.short_send_enabled = v;
-                    }
-                    if let Some(v) = sliding_cache {
-                        sess.settings.sliding_cache = v;
-                    }
-                    if let Some(v) = bash_saving {
-                        sess.settings.bash_saving = v;
-                    }
-                    if let Some(m) = internet_target {
-                        sess.settings.internet_mode = m;
-                    }
-                    if let Some(v) = workdir_vec {
-                        sess.settings.workdir = v;
-                    }
-                    // Refresh the mode-gated system-prompt roster, then persist — mirrors
-                    // handle_save_settings (:198 rebuild + :216 save). A save error just
-                    // leaves the on-disk file stale; the `SettingsValues` re-push below still
-                    // reflects the in-memory state, and this GUI path has no Ack/Error channel
-                    // to surface it to (the store ignores those frames).
-                    sess.rebuild_system();
-                    let _ = sess.save();
-                }
-                // internet feedback (status + optional install toast) only on an actual
-                // change — the SAME shared helper the TUI settings save uses.
-                if let Some(m) = internet_target {
-                    crate::app::runtime::commands::internet::flash_internet_feedback(
-                        state,
-                        old_internet,
-                        m,
-                    );
-                }
-                // Reindex the dir cache against the changed workdirs (actions/settings.rs:
-                // 221-227), but ONLY when workdir was actually part of this update — a
-                // toggle/internet change never touches the workspace roots.
-                if did_workdir {
-                    let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());
-                    let dir_cache = state.rest.fg().dir_cache.clone();
-                    if let Some(r) = roots {
-                        crate::tool::dircache::reindex(r, dir_cache);
-                    }
-                }
-                // The `SettingsValues` re-push IS the reply (one-shot framing, like
-                // ListModels / ListRoutes / GetSettings) — the store has no Ack/Error case,
-                // so an extra Ack frame would only burn a per-client seq slot.
-                self.send_settings_values(idx, state);
+                self.set_session_prefs(idx, state, short_send, sliding_cache, bash_saving, internet_mode, workdir);
             }
 
             // GUI composer EFFORT picker pick: persist the chosen effort level with the
@@ -967,12 +792,7 @@ impl DaemonHub {
             // mirrors `SetSessionPrefs`: a fresh `SettingsValues` re-push IS the reply
             // (the effort-picker label rides the same settings channel), not a bare Ack.
             ClientRequest::SetEffort { effort } => {
-                let effort = if effort == "default" { String::new() } else { effort };
-                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    sess.settings.effort = effort;
-                    let _ = sess.save();
-                }
-                self.send_settings_values(idx, state);
+                self.set_effort(idx, state, effort);
             }
 
             // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
@@ -983,9 +803,7 @@ impl DaemonHub {
             // this attached path). Config-global; any client may drive it. The config change
             // forces a full snapshot, so the GUI host re-pushes `Config` (clearing `firstRun`).
             ClientRequest::SetupKomaFree => {
-                crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
-                let result = state.rest.config.save();
-                self.ack_or_error(idx, result);
+                self.setup_koma_free(idx, state);
             }
 
             // GUI stop button: interrupt the foreground session's in-flight turn via the
@@ -1137,73 +955,14 @@ impl DaemonHub {
             // `/free` clone-or-reuse path (`commands::free`). `resolve_role` scans
             // `session_models` first, so the change takes effect next turn.
             ClientRequest::SetSessionMain { model_uuid } => {
-                use crate::model::app_config::{new_uuid, ModelEntry, ModelRole};
-                // Free-pin (wave-3+4 D): the SYNTHETIC "advertised free" row carries the
-                // dedicated `KOMA_FREE_SENTINEL` id (never a real `config.models` uuid), so
-                // route it through the SAME `/free` find-or-create-and-pin flow the slash
-                // command uses instead of the global-clone path below. Handled first so the
-                // sentinel can never fall into the "unknown uuid" no-op.
-                if model_uuid.as_deref()
-                    == Some(crate::service::koma_free::KOMA_FREE_SENTINEL)
-                {
-                    let result =
-                        crate::app::runtime::commands::free::set_session_koma_free(state);
-                    self.ack_or_error(idx, result);
-                    return;
-                }
-                // Resolve + CLONE the chosen global entry first (owned) so the later
-                // `fg_mut()` mutable borrow doesn't overlap the config read.
-                let chosen = model_uuid.as_ref().and_then(|u| {
-                    state.rest.config.models.iter().find(|m| &m.uuid == u).cloned()
-                });
-                let result = if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                    if model_uuid.is_none() {
-                        // Inherit: drop any local Main override; the global Main resurfaces.
-                        sess.settings
-                            .session_models
-                            .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
-                        sess.save()
-                    } else if let Some(chosen) = chosen {
-                        // Reuse: a local Main override already pointing at this exact model
-                        // (same model_id + provider) is already the session main — no-op.
-                        let already = sess.settings.session_models.iter().any(|e| {
-                            e.effective_roles().contains(&ModelRole::Main)
-                                && e.model_id == chosen.model_id
-                                && e.provider_uuid == chosen.provider_uuid
-                        });
-                        if !already {
-                            // Drop any OTHER local Main override (one local Main per scope),
-                            // then push the cloned global entry as the new local Main.
-                            sess.settings
-                                .session_models
-                                .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
-                            sess.settings.session_models.push(ModelEntry {
-                                uuid: new_uuid(),
-                                name: chosen.name.clone(),
-                                model_id: chosen.model_id.clone(),
-                                provider_uuid: chosen.provider_uuid.clone(),
-                                route: chosen.route.clone(),
-                                roles: vec![ModelRole::Main],
-                                role: None,
-                            });
-                        }
-                        sess.save()
-                    } else {
-                        // Unknown uuid (not in the global catalogue) — leave overrides as-is.
-                        Ok(())
-                    }
-                } else {
-                    Ok(()) // no foreground session to hold a local override
-                };
-                self.ack_or_error(idx, result);
+                self.set_session_main(idx, state, model_uuid);
             }
 
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.
             ClientRequest::QuitDaemon => {
-                self.shutdown = true;
-                self.send_to(idx, DaemonEvent::Ack);
+                self.quit_daemon(idx);
             }
 
             // Legacy `--resume` open-the-hub request. Daemon-per-session: the client no
@@ -1214,8 +973,7 @@ impl DaemonHub {
             // tick (it does NOT build a daemon-side hub mode). Ack on success or Error on
             // failure (e.g. spawn_pending is set mid-/new).
             ClientRequest::OpenSessionHub => {
-                let result = crate::app::runtime::commands::new_session::handle_resume(state);
-                self.ack_or_error(idx, result);
+                self.open_session_hub(idx, state);
             }
 
             // The client reports the on-screen editor wrap width so the daemon's
@@ -1266,7 +1024,7 @@ impl DaemonHub {
 
     /// Reply `Ack` on success or `Error(msg)` on a handler error — so a failing
     /// action surfaces to the client instead of aborting the daemon loop.
-    fn ack_or_error(&mut self, idx: usize, result: anyhow::Result<()>) {
+    pub(super) fn ack_or_error(&mut self, idx: usize, result: anyhow::Result<()>) {
         match result {
             Ok(()) => self.send_to(idx, DaemonEvent::Ack),
             Err(e) => self.send_to(idx, DaemonEvent::Error(format!("{e:#}"))),
@@ -1281,7 +1039,7 @@ impl DaemonHub {
     /// GUI Settings tab is editing. ALWAYS sends — when there is no foreground session it
     /// falls back to `Settings::default()` (empty name/workdir, default toggles) so the tab
     /// never hangs. `send_to` delivers regardless of attach state (like `ModelList`).
-    fn send_settings_values(&mut self, idx: usize, state: &AppState) {
+    pub(super) fn send_settings_values(&mut self, idx: usize, state: &AppState) {
         let default = crate::model::settings::Settings::default();
         let session = state.rest.fg().session.as_ref();
         let s = session.map(|sess| &sess.settings).unwrap_or(&default);
@@ -1301,21 +1059,5 @@ impl DaemonHub {
             effort: s.effort.clone(),
         };
         self.send_to(idx, event);
-    }
-}
-
-/// Map a lowercase role token (`"main"`/`"awareness"`/`"safeguard"`/`"compactor"`/
-/// `"planner"`) from the GUI `SetModel` request to its [`ModelRole`]. Unknown tokens
-/// yield `None` and are dropped (a forgiving parse — the ModelForm only emits valid
-/// tokens, but a version-skewed webview never crashes the daemon).
-fn parse_model_role(s: &str) -> Option<crate::model::app_config::ModelRole> {
-    use crate::model::app_config::ModelRole;
-    match s {
-        "main" => Some(ModelRole::Main),
-        "awareness" => Some(ModelRole::Awareness),
-        "safeguard" => Some(ModelRole::Safeguard),
-        "compactor" => Some(ModelRole::Compactor),
-        "planner" => Some(ModelRole::Planner),
-        _ => None,
     }
 }
