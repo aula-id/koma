@@ -601,7 +601,7 @@ export function Composer() {
           <div
             ref={overlayRef}
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-0 w-full overflow-hidden whitespace-pre-wrap break-words text-[14px] leading-relaxed"
+            className="pointer-events-none absolute inset-0 z-0 w-full overflow-hidden whitespace-pre-wrap break-words text-[14px] leading-relaxed text-koma-fg"
           >
             {renderComposerOverlay(input, pickedTokensRef.current)}
           </div>
