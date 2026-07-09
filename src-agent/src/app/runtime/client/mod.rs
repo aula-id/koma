@@ -21,6 +21,7 @@
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `push_proto`| GUI push-envelope DTOs (`Push*` structs, `PushEnvelope`)         |
 //! | `project`   | GUI config/snapshot serialization (`serialize_and_push`, `push_hub`, `push_config`) |
+//! | `push_loop` | The headless attached fold loop (`push_loop`, `PushState`, `HostTransition`) |
 
 #![allow(unused_imports)]
 #![allow(dead_code)]
@@ -36,6 +37,7 @@ mod diff;
 mod host;
 mod push_proto;
 mod project;
+mod push_loop;
 
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
