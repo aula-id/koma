@@ -32,7 +32,18 @@ function useNeedsOnboarding() {
   const firstRun = useKoma((s) => s.config.firstRun)
   const providers = useKoma((s) => s.config.providers)
   const models = useKoma((s) => s.config.models)
-  const configured = providers.length > 0 && models.some((m) => m.roles.includes('main'))
+  const oauthConns = useKoma((s) => s.oauth.conns)
+  // A model's provider can be a real config provider OR an OAuth connection —
+  // the daemon resolves `provider_uuid` against either catalogue (see
+  // ConnectorPanel/Onboarding's providerOptions) — so an OAuth-only setup
+  // (zero config.providers, one live connection) must count as "has a
+  // provider" too. Without this, this FALLBACK-only check (only ever
+  // consulted when the host omits its own authoritative `firstRun`) would
+  // keep onboarding stuck forever for a user whose only "provider" is an
+  // OAuth connection, even after they save a perfectly usable OAuth-backed
+  // Main model.
+  const configured =
+    (providers.length > 0 || oauthConns.length > 0) && models.some((m) => m.roles.includes('main'))
   return loaded && sessionId === null && (firstRun ?? !configured)
 }
 
