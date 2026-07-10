@@ -57,6 +57,12 @@ fn main() -> anyhow::Result<()> {
     // --resume) sees the migrated directory.
     model::store::migrate_legacy_dir();
 
+    // Seed the catalogue overlay (reasoning/pricing metadata for non-OpenRouter
+    // providers) and kick off its non-blocking background refresh. Runs here,
+    // before the CLI subcommand fork, so both `koma` (TUI/daemon) and `koma gui`
+    // (which execs a bare `koma` client) hit it exactly once at startup.
+    service::catalogue_overlay::init();
+
     let opts = cli::parse(std::env::args());
 
     // --- short-circuit: `koma daemon <verb>` management CLI (no TUI) ---
