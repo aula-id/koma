@@ -39,6 +39,13 @@ impl OpenRouterClient {
                 .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Anthropic streams-only too: `anthropic_collect` drains inline. No
+            // effort/schema (plain text summary).
+            return self
+                .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
@@ -99,6 +106,12 @@ impl OpenRouterClient {
             // Default effort (→ medium), no structured-output schema.
             return self
                 .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // No effort/schema (plain text reply).
+            return self
+                .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
         }
         let url = format!("{}/chat/completions", conn.endpoint);
@@ -196,6 +209,26 @@ impl OpenRouterClient {
                     "none",
                     messages,
                     Some(to_text_format("verdict", schema.clone())),
+                )
+                .await?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow!("empty classifier reply"));
+            }
+            return Ok(trimmed.to_string());
+        }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Forced-tool structured output: pass the RAW verdict schema (the
+            // collect driver wraps it as the `respond` tool's input_schema).
+            let raw = self
+                .anthropic_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(schema.clone()),
                 )
                 .await?;
             let trimmed = raw.trim();
@@ -339,6 +372,21 @@ impl OpenRouterClient {
                 .await?;
             return parse_summary(&raw);
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Forced-tool structured output: pass the RAW summary schema.
+            let raw = self
+                .anthropic_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(schema.clone()),
+                )
+                .await?;
+            return parse_summary(&raw);
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         // `strict: true` + `additionalProperties: false` force the model to emit
         // exactly the summary object and nothing else.
@@ -468,6 +516,26 @@ impl OpenRouterClient {
                     "none",
                     messages,
                     Some(to_text_format("blob_selection", schema.clone())),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            };
+            return Ok(parse_blob_ids(&raw));
+        }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Best-effort: any failure → empty selection (rehydrate nothing).
+            // Forced-tool structured output: pass the RAW blob-selection schema.
+            let raw = match self
+                .anthropic_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(schema.clone()),
                 )
                 .await
             {

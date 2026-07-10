@@ -74,6 +74,26 @@ impl OpenRouterClient {
                 .await;
         }
 
+        // Claude (Anthropic) speaks the native Messages API — a different wire
+        // protocol — handled by the dedicated transport. `provider` (the OpenRouter
+        // route slug) is meaningless there and ignored.
+        if conn.api_type == ApiType::AnthropicCompatible {
+            return self
+                .anthropic_stream_complete(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    effort,
+                    messages,
+                    advertise,
+                    mcp_tools,
+                    image_ctx,
+                    tx,
+                )
+                .await;
+        }
+
         // The plan-word steer is now injected into the System message upstream in
         // `start_stream_task`, BEFORE the volatile project-files/awareness tail and
         // ahead of the `CACHE_SPLIT_MARK` boundary, so it stays inside the cached
