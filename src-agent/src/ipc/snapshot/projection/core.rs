@@ -254,6 +254,13 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             .map(|s| s.settings.session_models.clone())
             .unwrap_or_default(),
         mcp_servers: state.rest.config.mcp_servers.clone(),
+        oauth_conn_uuids: state
+            .rest
+            .config
+            .oauth_conns
+            .iter()
+            .map(|c| c.uuid.clone())
+            .collect(),
         agent_viewer: state.rest.agent_viewer,
         agent_viewer_scroll: state.rest.agent_viewer_scroll,
         agent_viewer_follow: state.rest.agent_viewer_follow,

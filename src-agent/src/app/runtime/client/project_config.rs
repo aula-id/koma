@@ -40,6 +40,12 @@ pub(super) struct ConfigProjection {
     models: Vec<crate::model::app_config::ModelEntry>,
     session_models: Vec<crate::model::app_config::ModelEntry>,
     mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
+    /// OAuth-backed connection UUID catalogue (Codex/Kilo/xAI/ClaudeAI logins), mirrored
+    /// alongside `providers` so the `needs_onboarding` gate below can recognize a
+    /// Main-role model bound to an OAuth connection as usable, matching the real
+    /// `resolve_role` resolver (which checks both catalogues). UUIDs only — never the
+    /// full `OAuthConn` (which carries plaintext tokens).
+    oauth_conn_uuids: Vec<String>,
     /// Active palette (theme) roles, carried on the Config push so the empty/swapper
     /// state — which gets no `Snapshot` — still repaints to `config.json`'s theme.
     palette: PushPalette,
@@ -59,6 +65,7 @@ impl ConfigProjection {
             models: g.config_models.clone(),
             session_models: g.session_models.clone(),
             mcp_servers: g.mcp_servers.clone(),
+            oauth_conn_uuids: g.oauth_conn_uuids.clone(),
             palette: palette_from_global(g),
             palette_name: g.palette.clone(),
         }
@@ -76,6 +83,7 @@ impl ConfigProjection {
             models: cfg.models.clone(),
             session_models: Vec::new(),
             mcp_servers: cfg.mcp_servers.clone(),
+            oauth_conn_uuids: cfg.oauth_conns.iter().map(|c| c.uuid.clone()).collect(),
             palette: push_palette_from_config(cfg),
             palette_name: cfg.palette.clone(),
         }
@@ -266,10 +274,13 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         .collect();
 
     // FIRST-RUN: no usable Main route = a global OR local model that (a) holds the Main
-    // role AND (b) is bound to a provider that actually exists. An empty config (no
-    // providers, or a Main model whose provider was deleted) → onboarding. This is the
-    // projection-level proxy for the daemon's `resolve_role(Main).is_usable()` gate (which
-    // needs a `Settings` this config-only projection doesn't carry).
+    // role AND (b) is bound to a provider OR an OAuth connection that actually exists.
+    // An empty config (no providers/oauth_conns, or a Main model whose backing entry was
+    // deleted) → onboarding. This is the projection-level proxy for the daemon's
+    // `resolve_role(Main).is_usable()` gate (which needs a `Settings` this config-only
+    // projection doesn't carry) — mirroring `resolve.rs`'s `from_entry`, which falls back
+    // to `config.oauth_conns` when `config.providers` has no match (Claude/Codex/xAI
+    // login-backed Main models).
     let has_usable_main = cfg
         .models
         .iter()
@@ -277,7 +288,8 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         .any(|m| {
             m.effective_roles()
                 .contains(&crate::model::app_config::ModelRole::Main)
-                && cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
+                && (cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
+                    || cfg.oauth_conn_uuids.iter().any(|u| *u == m.provider_uuid))
         });
     let needs_onboarding = !has_usable_main;
 

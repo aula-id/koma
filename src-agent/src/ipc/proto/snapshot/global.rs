@@ -43,6 +43,16 @@ pub struct GlobalSnapshot {
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
+    /// OAuth-backed connection UUID catalogue (`AppConfig.oauth_conns` — Codex/Kilo/xAI/
+    /// ClaudeAI logins), mirrored alongside `providers` so a Main-role model bound to
+    /// an OAuth connection (rather than a `providers` entry) resolves as usable the
+    /// same way `resolve_role` does. Read by [`crate::app::runtime::client::project_config`]'s
+    /// `needs_onboarding` projection gate — without it, an OAuth-only Main model looked
+    /// unusable and the GUI bounced back to onboarding on every launch/save. UUIDs only
+    /// (never the full `OAuthConn`) — the struct carries plaintext access/refresh/id
+    /// tokens that must never hit the wire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oauth_conn_uuids: Vec<String>,
     pub agent_viewer: Option<usize>,
     pub agent_viewer_scroll: u16,
     pub agent_viewer_follow: bool,
