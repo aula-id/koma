@@ -1,4 +1,4 @@
-import { Files, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings } from 'lucide-react'
+import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 
@@ -15,6 +15,7 @@ const iconBtn =
 
 const ITEMS: { view: SidebarView; icon: LucideIcon; label: string }[] = [
   { view: 'explore', icon: Files, label: 'Explore' },
+  { view: 'git', icon: GitBranch, label: 'Source Control' },
   { view: 'mcp', icon: Blocks, label: 'MCP' },
   { view: 'connector', icon: Plug, label: 'Connector' },
   { view: 'agents', icon: Bot, label: 'Agents' },

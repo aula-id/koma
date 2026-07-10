@@ -263,6 +263,17 @@ declare global {
     // GetOAuthState/DeleteAgent — works with NO session attached. Reply lands
     // as a fresh OAuthState push (phase 'idle', conns updated).
     | { r: 'DeleteOAuthConn'; uuid: string }
+    // Source Control "GIT" panel opened / refreshed: fetch a host-computed git
+    // status (branch, ahead/behind, staged + unstaged file lists) for the
+    // foreground session's repo. Serviced ENTIRELY host-side — works
+    // regardless of attach state. Reply lands as the GitStatus push envelope
+    // (matches the Rust GuiReq::GitStatus unit variant).
+    | { r: 'GitStatus' }
+    // The GIT panel's file row clicked: fetch a host-computed git diff for
+    // `path` — `staged` selects index-vs-HEAD (true, the STAGED changes) or
+    // worktree-vs-index (false, the UNSTAGED changes) — to open a Monaco diff
+    // tab. Reply lands as the GitDiff push envelope.
+    | { r: 'GitDiff'; path: string; staged: boolean }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

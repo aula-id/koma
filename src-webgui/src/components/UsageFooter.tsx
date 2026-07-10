@@ -1,4 +1,4 @@
-import { Activity, FoldVertical } from 'lucide-react'
+import { Activity, FoldVertical, GitBranch } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
 
 // Human-compact token count: >=10_000 collapses to "12.4k" (one decimal,
@@ -31,6 +31,9 @@ export function UsageFooter() {
   const planTodos = useKoma((s) => s.session.planTodos)
   const focusPlanSection = useKoma((s) => s.focusPlanSection)
   const req = useKoma((s) => s.req)
+  const gitBranch = useKoma((s) => s.git.branch)
+  const gitDetached = useKoma((s) => s.git.detached)
+  const gitError = useKoma((s) => s.git.error)
 
   // Awareness pulse: anything currently running in the Explore BASH/AGENTS
   // sidepanel lists — same "running" state token those panels key off.
@@ -63,6 +66,17 @@ export function UsageFooter() {
 
       {/* Activity pulse — non-interactive, hidden when nothing runs */}
       {hasActivity && <Activity size={12} className="flex-none animate-pulse text-koma-accent" />}
+
+      {/* Current-branch indicator — subtle, non-interactive. Hidden entirely
+          outside a git repo (no error tolerance — a stale/unresolved branch
+          name is worse than no indicator) and on detached HEAD (no branch
+          name to show). */}
+      {!gitError && gitBranch && !gitDetached && (
+        <span className="flex flex-none items-center gap-1 opacity-70" title={`git branch: ${gitBranch}`}>
+          <GitBranch size={11} className="flex-none" />
+          <span className="max-w-[140px] truncate">{gitBranch}</span>
+        </span>
+      )}
 
       <div className="flex-1" />
 

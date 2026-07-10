@@ -317,6 +317,36 @@ export type AgentEntry = {
   prompt: string
 }
 
+// One file entry in a GitStatus's staged/unstaged list — mirrors the host's
+// `GitFileEntry` (git.rs, `rename_all = "camelCase"`). `status` is a single
+// git-porcelain status character ("M"/"A"/"D"/"R"/"C"/"U"/"?") the GIT panel
+// renders as a badge. `origPath` is non-null only for a rename/copy record
+// (shown as `origPath -> path`). A single on-disk path can legitimately
+// appear in BOTH `staged` and `unstaged` (e.g. `MM`) — not a bug.
+export type GitFileEntry = {
+  path: string
+  origPath: string | null
+  status: string
+  staged: boolean
+}
+
+// The Source Control "GIT" panel's authoritative status (host `GitStatus`
+// push, mirrors `GitStatusResult` verbatim). `error` set means the working
+// directory isn't a git repository (or `git status` failed) — every other
+// field then sits at its neutral default. Global (not per-session) in the
+// store, mirroring how the host resolves it off the foreground session's
+// workdir; refreshed via `refreshGitStatus()`.
+export type GitStatus = {
+  root: string | null
+  branch: string | null
+  detached: boolean
+  ahead: number | null
+  behind: number | null
+  staged: GitFileEntry[]
+  unstaged: GitFileEntry[]
+  error: string | null
+}
+
 // One entry in the Agents dashboard's model catalogue (host
 // `CatalogueModelSnapshot`, snake_case on the wire — see `AgentsValues`).
 export type CatalogueModelEntry = { uuid: string; name: string; modelId: string; providerUuid: string }
@@ -387,22 +417,32 @@ export type Tab =
   // closeable like a diff tab. Mirrors the Settings tab's plumbing exactly.
   | { id: 'help'; kind: 'help' }
   | {
-      // Stable id `diff:${path}`, so find-by-path (open/dedupe) is trivial.
+      // Stable id — `diff:${path}` for a File-changed diff (find-by-path is
+      // trivial), or `gitdiff:${staged ? 'staged' : 'unstaged'}:${path}` for a
+      // GIT-panel diff (a git diff needs BOTH a staged and unstaged tab for
+      // the SAME path open side by side, so `diff:${path}` alone would
+      // collide — the `staged`/`unstaged` segment disambiguates).
       id: string
       kind: 'diff'
-      // The path exactly as the fileChanges record carries it — the key for the
-      // FileDiff req + reply.
+      // The path exactly as the fileChanges record (or GitFileEntry) carries
+      // it — the key for the FileDiff/GitDiff req + reply.
       path: string
       // Basename of `path`. TabBar adds a dim parent-dir suffix at render time
       // when two open tabs share a basename (collision depends on the live tab
       // set, so it's resolved there, not baked into the stored title).
       title: string
-      // Filled by the FileDiff reply; undefined until the first reply lands.
+      // Filled by the FileDiff/GitDiff reply; undefined until the first reply
+      // lands.
       diff?: DiffPayload
-      // True while a FileDiff req is in flight (initial open OR a re-request on
-      // re-activate). A stale `diff` keeps rendering while loading so re-focus
-      // never flashes to a spinner.
+      // True while a FileDiff/GitDiff req is in flight (initial open OR a
+      // re-request on re-activate). A stale `diff` keeps rendering while
+      // loading so re-focus never flashes to a spinner.
       loading: boolean
+      // Present ONLY on a GIT-panel diff tab (opened via `openGitDiffTab`):
+      // `true` = staged (index vs HEAD), `false` = unstaged (worktree vs
+      // index). Undefined on a plain File-changed diff tab — this is what
+      // `activateTab`'s re-request routes on (GitDiff vs FileDiff).
+      staged?: boolean
     }
   // A read-only STREAM tab live-streaming ONE sub-agent's transcript. Stable id
   // `sa:${agentId}` so open/dedupe is trivial. Content is NOT stored on the tab — the
@@ -648,6 +688,35 @@ export type PushEnvelope =
       conns: { uuid: string; name: string; provider: string; email: string; plan: string; account_id: string }[]
       providers: { id: string; label: string; kind: string }[]
     }
+  // Reply to GuiReq GitStatus — host-computed branch/ahead/behind + staged/
+  // unstaged file lists for the Source Control "GIT" panel. Carries the
+  // Rust `GitStatusResult` verbatim (already camelCase) flattened onto the
+  // envelope (a `#[serde(tag = "k")]` newtype variant). ALWAYS a reply so the
+  // panel never hangs loading — `error` set means not a git repository.
+  | {
+      k: 'GitStatus'
+      root: string | null
+      branch: string | null
+      detached: boolean
+      ahead: number | null
+      behind: number | null
+      staged: GitFileEntry[]
+      unstaged: GitFileEntry[]
+      error: string | null
+    }
+  // Reply to GuiReq GitDiff — a host-computed git diff for one GIT-panel file
+  // row, for a Monaco diff tab. `staged` echoes the request (index-vs-HEAD vs
+  // worktree-vs-index) so the reducer applies it to the matching
+  // `gitdiff:${staged}:${path}` tab, never the wrong one.
+  | {
+      k: 'GitDiff'
+      path: string
+      staged: boolean
+      original: string
+      modified: string
+      error: string | null
+      binary: boolean
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -866,6 +935,11 @@ type KomaState = {
   // tools field's toggle-chip grid (one chip per available tool). REPLACED
   // wholesale on each AgentsValues push; empty until the first reply lands.
   availableTools: string[]
+  // The Source Control "GIT" panel's authoritative status (latest GitStatus
+  // push) — global, not per-session (mirrors ConfigSlice; the host resolves
+  // it off the foreground session's workdir). REPLACED wholesale on each
+  // push; starts at the neutral "no repo" default until the first reply.
+  git: GitStatus
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -924,6 +998,17 @@ type KomaState = {
   // create, mark it loading, fire the FileDiff req, and activate it. Re-opening
   // an already-open file refreshes it (same loading + re-request path).
   openDiffTab: (path: string) => void
+  // Re-fetch the Source Control "GIT" panel's status (branch/ahead-behind +
+  // staged/unstaged lists). Fired on GitPanel mount/(re)activation, and once
+  // at boot (routes/index.tsx) so the footer's branch indicator populates
+  // without ever opening the panel.
+  refreshGitStatus: () => void
+  // Open (or focus) a Monaco diff tab for a GIT-panel file row: `staged`
+  // picks index-vs-HEAD (true) or worktree-vs-index (false) — distinct tab id
+  // scheme (`gitdiff:${staged}:${path}`) from `openDiffTab`'s `diff:${path}`,
+  // since a git diff needs BOTH staged and unstaged tabs open for the SAME
+  // path without colliding. Marks loading + fires the GitDiff req.
+  openGitDiffTab: (path: string, staged: boolean) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
   // job (`kind:'bash'`) by its numeric id: find-or-create (dedup by the stable
   // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
@@ -1057,6 +1142,17 @@ const initialOAuth: OAuthSlice = {
   providers: [],
 }
 
+const initialGit: GitStatus = {
+  root: null,
+  branch: null,
+  detached: false,
+  ahead: null,
+  behind: null,
+  staged: [],
+  unstaged: [],
+  error: null,
+}
+
 const initialModelList: ModelListEntry[] = []
 
 const initialRouteList: KomaState['routeList'] = null
@@ -1123,6 +1219,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   catalogueModels: [],
   catalogueProviders: [],
   availableTools: [],
+  git: initialGit,
 
   push: (env) => {
     switch (env.k) {
@@ -1502,6 +1599,50 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
+      case 'GitStatus':
+        set(() => ({
+          git: {
+            root: env.root,
+            branch: env.branch,
+            detached: env.detached,
+            ahead: env.ahead,
+            behind: env.behind,
+            staged: env.staged,
+            unstaged: env.unstaged,
+            error: env.error,
+          },
+        }))
+        break
+      case 'GitDiff':
+        set((s) => {
+          const id = `gitdiff:${env.staged ? 'staged' : 'unstaged'}:${env.path}`
+          // Ignore a reply for a tab closed while the req was in flight.
+          if (!s.ui.tabs.some((t) => t.id === id)) return s
+          return {
+            ui: {
+              ...s.ui,
+              tabs: s.ui.tabs.map((t) =>
+                t.id === id && t.kind === 'diff'
+                  ? {
+                      ...t,
+                      loading: false,
+                      diff: {
+                        original: env.original,
+                        modified: env.modified,
+                        error: env.error,
+                        binary: env.binary,
+                        // GitDiff is always an actual git diff (never a
+                        // non-git "virtual git" baseline) — unlike FileDiff,
+                        // this reply has no `origin` field at all.
+                        origin: 'git',
+                      },
+                    }
+                  : t,
+              ),
+            },
+          }
+        })
+        break
     }
   },
 
@@ -1582,6 +1723,21 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
     get().req({ r: 'FileDiff', path })
   },
+  refreshGitStatus: () => {
+    get().req({ r: 'GitStatus' })
+  },
+  openGitDiffTab: (path, staged) => {
+    const id = `gitdiff:${staged ? 'staged' : 'unstaged'}:${path}`
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const title = `${tabBaseName(path)}${staged ? ' (staged)' : ''}`
+      const tabs: Tab[] = exists
+        ? s.ui.tabs.map((t) => (t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t))
+        : [...s.ui.tabs, { id, kind: 'diff', path, title, loading: true, staged }]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
+    get().req({ r: 'GitDiff', path, staged })
+  },
   openStreamTab: (kind, targetId, title) => {
     const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`
     set((s) => {
@@ -1639,7 +1795,17 @@ export const useKoma = create<KomaState>((set, get) => ({
           : s.ui.tabs,
       },
     }))
-    if (isDiff && tab.kind === 'diff') get().req({ r: 'FileDiff', path: tab.path })
+    // A GIT-panel diff tab (has `staged`) re-requests via GitDiff, echoing
+    // the SAME staged/unstaged side it was opened for; a plain File-changed
+    // diff tab (no `staged`) re-requests via FileDiff — the two paths are
+    // NOT interchangeable (different host handlers, different tab-id scheme).
+    if (isDiff && tab.kind === 'diff') {
+      if (tab.staged !== undefined) {
+        get().req({ r: 'GitDiff', path: tab.path, staged: tab.staged })
+      } else {
+        get().req({ r: 'FileDiff', path: tab.path })
+      }
+    }
     // Re-focusing the Settings tab re-requests its values so they're fresh (the
     // name/workdir may have changed via other paths, e.g. the RenameOverlay).
     if (tab.kind === 'settings') get().req({ r: 'GetSettings' })
