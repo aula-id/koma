@@ -95,6 +95,7 @@ pub fn onboard_provider_snapshot(op: &OnboardProviderState) -> OnboardProviderSn
             match p {
                 crate::model::app_config::OAuthProvider::Codex => "codex",
                 crate::model::app_config::OAuthProvider::Kilocode => "kilocode",
+                crate::model::app_config::OAuthProvider::Xai => "xai",
             }
             .to_string()
         }),
@@ -255,6 +256,7 @@ pub fn oauth_draft_snapshot(o: &OAuthDraft) -> OAuthDraftSnapshot {
         provider: match o.provider {
             crate::model::app_config::OAuthProvider::Codex => "codex",
             crate::model::app_config::OAuthProvider::Kilocode => "kilocode",
+            crate::model::app_config::OAuthProvider::Xai => "xai",
         }
         .to_string(),
         key: o.key.clone(),

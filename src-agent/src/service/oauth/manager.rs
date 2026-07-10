@@ -1,9 +1,12 @@
 //! Token cache + single-flight refresh: the send-time hook every OAuth-backed
 //! request goes through to get a (possibly just-refreshed) bearer token.
 //!
-//! Only Codex tokens expire and need refreshing; Kilo Code tokens in this
-//! flow carry no expiry (`expires_at == 0`), so the staleness check is a
-//! no-op for them and [`fresh_key`] just returns the cached token.
+//! Codex and xAI tokens expire and need refreshing (each against its own token
+//! endpoint — Codex's fixed URL, xAI's discovered-per-call one); Kilo Code
+//! tokens in this flow carry no expiry (`expires_at == 0`) and no refresh token,
+//! so the staleness check is a no-op for them and [`fresh_key`] just returns the
+//! cached token. Staleness windows and the refresh call both dispatch per
+//! provider (see [`refresh_window`] / [`fresh_key`]).
 //!
 //! Refreshing is single-flighted per uuid (a `tokio::sync::Mutex` stashed in
 //! `FLIGHTS`) so concurrent requests against the same connection don't race
@@ -16,8 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{Mutex, RwLock};
 
-use super::codex;
-use super::registry::{CODEX_MAX_REFRESH_AGE_SECS, CODEX_REFRESH_LEAD_SECS};
+use super::registry::{
+    CODEX_MAX_REFRESH_AGE_SECS, CODEX_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS,
+    XAI_REFRESH_LEAD_SECS,
+};
+use super::{codex, xai};
 use crate::model::app_config::{AppConfig, OAuthConn, OAuthProvider};
 
 #[derive(Clone)]
@@ -40,6 +46,9 @@ impl TokenSnap {
         let account = match conn.provider {
             OAuthProvider::Codex => conn.account_id.clone(),
             OAuthProvider::Kilocode => conn.org_id.clone(),
+            // xAI has no org/account identity — the send-time account string stays
+            // empty (so the Kilo org header never fires on an xAI request).
+            OAuthProvider::Xai => String::new(),
         };
         TokenSnap {
             access_token: conn.access_token.clone(),
@@ -100,14 +109,31 @@ async fn flight_for(uuid: &str) -> Arc<Mutex<()>> {
         .clone()
 }
 
+/// The `(refresh_lead, max_refresh_age)` staleness window for a provider whose
+/// tokens expire + refresh, or `None` for one whose tokens never expire (Kilo
+/// Code — no refresh token, `expires_at == 0`). A `max_refresh_age` of `0`
+/// DISABLES the "too old since last refresh" cap (xAI's long-lived
+/// `offline_access` refresh token).
+fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
+    match provider {
+        OAuthProvider::Codex => Some((CODEX_REFRESH_LEAD_SECS, CODEX_MAX_REFRESH_AGE_SECS)),
+        OAuthProvider::Xai => Some((XAI_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS)),
+        OAuthProvider::Kilocode => None,
+    }
+}
+
 fn is_stale(snap: &TokenSnap) -> bool {
-    if snap.provider != OAuthProvider::Codex || snap.unrecoverable {
+    if snap.unrecoverable {
         return false;
     }
+    // A provider with no refresh window (Kilo Code) never goes stale.
+    let Some((lead, max_age)) = refresh_window(snap.provider) else {
+        return false;
+    };
     let now = now_secs();
-    let near_expiry = snap.expires_at != 0 && now + CODEX_REFRESH_LEAD_SECS > snap.expires_at;
+    let near_expiry = snap.expires_at != 0 && now + lead > snap.expires_at;
     let too_old_since_refresh =
-        snap.last_refresh != 0 && now.saturating_sub(snap.last_refresh) > CODEX_MAX_REFRESH_AGE_SECS;
+        max_age != 0 && snap.last_refresh != 0 && now.saturating_sub(snap.last_refresh) > max_age;
     near_expiry || too_old_since_refresh
 }
 
@@ -179,7 +205,16 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         return (snap.access_token, snap.account);
     }
 
-    match codex::refresh(http_client(), &snap.refresh_token).await {
+    // Dispatch the refresh call per provider (both return the shared
+    // `codex::TokenResponse` shape, so the persist/update path below is
+    // provider-agnostic). Kilo never reaches here — `is_stale` returns false for
+    // it — so its arm just serves the cached token defensively.
+    let refreshed = match snap.provider {
+        OAuthProvider::Xai => xai::refresh(http_client(), &snap.refresh_token).await,
+        OAuthProvider::Codex => codex::refresh(http_client(), &snap.refresh_token).await,
+        OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
+    };
+    match refreshed {
         Ok(tokens) => {
             let refreshed_at = now_secs();
             persist_refresh(oauth_uuid, &tokens, refreshed_at);

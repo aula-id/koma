@@ -70,11 +70,12 @@ impl DaemonHub {
         self.send_oauth_state(idx, state, "idle", None, None, None, None);
     }
 
-    /// Start an OAuth login flow for `provider` (`"codex"` / `"kilocode"` / `"codex_paste"`).
+    /// Start an OAuth login flow for `provider` (`"codex"` / `"kilocode"` / `"xai"` /
+    /// `"codex_paste"`).
     ///
-    /// For the two browser/device flows: reuse the EXISTING `Action::OAuthStart` machinery
-    /// (spawns `run_codex_flow`/`run_kilo_flow`, stores `oauth_rx`/`oauth_task` — its mode
-    /// fold is a no-op in the GUI daemon session's Chat mode), THEN ARM this client as the
+    /// For the browser/device flows: reuse the EXISTING `Action::OAuthStart` machinery
+    /// (spawns `run_codex_flow`/`run_kilo_flow`/`run_xai_flow`, stores `oauth_rx`/`oauth_task`
+    /// — its mode fold is a no-op in the GUI daemon session's Chat mode), THEN ARM this client as the
     /// push target, and reply `starting`; subsequent progress streams via `drain_oauth_pushes`.
     /// Arming AFTER the action matters: `handle_oauth_start` disarms `oauth_gui_client` on
     /// every start path (a stale GUI arm can't survive a supersede), so this GUI-originated
@@ -91,11 +92,11 @@ impl DaemonHub {
     ) {
         let client_id = self.clients[idx].id;
         match provider.as_str() {
-            "codex" | "kilocode" => {
-                let p = if provider == "kilocode" {
-                    OAuthProvider::Kilocode
-                } else {
-                    OAuthProvider::Codex
+            "codex" | "kilocode" | "xai" => {
+                let p = match provider.as_str() {
+                    "kilocode" => OAuthProvider::Kilocode,
+                    "xai" => OAuthProvider::Xai,
+                    _ => OAuthProvider::Codex,
                 };
                 // Spawn the flow FIRST — `handle_oauth_start` DISARMS `oauth_gui_client`
                 // as it supersedes any prior flow (path-agnostic disarm) — THEN arm THIS

@@ -111,6 +111,7 @@ impl OAuthDraft {
                 let short = match c.provider {
                     OAuthProvider::Codex => "codex",
                     OAuthProvider::Kilocode => "kilocode",
+                    OAuthProvider::Xai => "xai",
                 };
                 let ident = if !c.email.is_empty() {
                     c.email.clone()

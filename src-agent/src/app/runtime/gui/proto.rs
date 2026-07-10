@@ -419,14 +419,14 @@ pub(super) enum GuiReq {
     /// error). `scope` is `"global"` / `"session"`. Forwarded like the config setters.
     DeleteAgent { scope: String, name: String },
 
-    // ─── GUI OAuth surface (Codex + Kilo Code login) ─────────────────────────────
+    // ─── GUI OAuth surface (Codex / Kilo Code / xAI login) ───────────────────────
     /// The OAuth screen opened / refreshed: fetch the current state (connections +
     /// available providers). Dual-routed like `GetSettings`/`GetAgents` via
     /// [`forward_or_host`] — the attached daemon answers with `OAuthState`, or (un-attached)
     /// the host answers from `~/.koma/config.json` + the provider registry — so the screen
     /// populates in BOTH host states and never hangs.
     GetOAuthState,
-    /// Start a login flow. `provider` is `"codex"` / `"kilocode"` / `"codex_paste"`.
+    /// Start a login flow. `provider` is `"codex"` / `"kilocode"` / `"xai"` / `"codex_paste"`.
     /// Forwarded as [`ClientRequest::StartOAuth`], attached-only (like `Interrupt` — the flow
     /// runs on the daemon's runtime; un-attached login is not supported this wave). The daemon
     /// streams progress back as `OAuthState` pushes the host re-pushes as `OAuthState`

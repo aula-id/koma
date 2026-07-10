@@ -81,7 +81,7 @@ pub struct OnboardProviderSnapshot {
     pub oauth_flow: OAuthFlowSnapshot,
     /// The just-created connection's uuid (set on login success).
     pub new_conn_uuid: String,
-    /// Signed-in provider wire token: `Some("codex"|"kilocode")`, `None` pre-login.
+    /// Signed-in provider wire token: `Some("codex"|"kilocode"|"xai")`, `None` pre-login.
     pub provider: Option<String>,
     /// Model omnisearch query.
     pub query: String,

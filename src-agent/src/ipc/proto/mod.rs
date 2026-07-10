@@ -382,7 +382,7 @@ pub enum ClientRequest {
     /// [`DaemonEvent::AgentsValues`] as the reply. gui-gated.
     DeleteAgent { scope: String, name: String },
 
-    // ─── GUI OAuth surface (Codex + Kilo Code login) ─────────────────────────
+    // ─── GUI OAuth surface (Codex / Kilo Code / xAI login) ───────────────────
     /// Fetch the current OAuth state (idle): the persisted connections + the available
     /// providers, phase `"idle"`. Read-only + ALWAYS-reply (a one-shot
     /// [`DaemonEvent::OAuthState`]) like [`GetSettings`]/[`ListAgents`]; delivered whether
@@ -390,7 +390,7 @@ pub enum ClientRequest {
     /// gui-gated: the TUI drives OAuth through `Mode::Settings`/`OnboardProvider`.
     GetOAuthState,
     /// Start an OAuth login flow. `provider` is `"codex"` (browser PKCE loopback),
-    /// `"kilocode"` (device code), or `"codex_paste"` (surface the paste-a-token input).
+    /// `"kilocode"` / `"xai"` (device code), or `"codex_paste"` (surface the paste-a-token input).
     /// For the two browser/device flows the daemon reuses the EXISTING
     /// `Action::OAuthStart` machinery (spawns `run_codex_flow`/`run_kilo_flow`, which drain
     /// via `drain_oauth` + persist on success) and streams progress back to THIS client as

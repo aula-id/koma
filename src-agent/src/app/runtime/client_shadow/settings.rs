@@ -197,6 +197,7 @@ pub(crate) fn shadow_api_type(t: &str) -> ApiType {
 pub(super) fn shadow_oauth_provider(t: &str) -> crate::model::app_config::OAuthProvider {
     match t {
         "kilocode" => crate::model::app_config::OAuthProvider::Kilocode,
+        "xai" => crate::model::app_config::OAuthProvider::Xai,
         _ => crate::model::app_config::OAuthProvider::Codex,
     }
 }

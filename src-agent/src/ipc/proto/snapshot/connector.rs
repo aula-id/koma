@@ -20,14 +20,14 @@ pub struct ModelEndpointWire {
 /// CRITICAL: this carries ONLY display/identity fields — `uuid`/`name`/`provider`/`email`/
 /// `plan`/`account_id`. The `access_token`/`refresh_token`/`id_token` are DELIBERATELY
 /// absent from the wire type so a secret can never be serialized to the webview even by
-/// mistake. `provider` is the wire token (`"codex"` / `"kilocode"`, from
+/// mistake. `provider` is the wire token (`"codex"` / `"kilocode"` / `"xai"`, from
 /// [`crate::model::app_config::OAuthProvider::wire_id`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct OAuthConnWire {
     pub uuid: String,
     pub name: String,
-    /// Wire provider token: `"codex"` | `"kilocode"`.
+    /// Wire provider token: `"codex"` | `"kilocode"` | `"xai"`.
     pub provider: String,
     pub email: String,
     pub plan: String,
@@ -65,7 +65,7 @@ pub struct ProviderDraftSnapshot {
 pub struct OAuthDraftSnapshot {
     pub uuid: String,
     pub label: String,
-    /// Wire token: `"codex"` | `"kilocode"`.
+    /// Wire token: `"codex"` | `"kilocode"` | `"xai"`.
     pub provider: String,
     pub key: String,
     /// Display status computed at build time: `"active"` / `"renews in Nd"` /
