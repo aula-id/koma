@@ -236,6 +236,70 @@ impl Conversation {
         }
     }
 
+    /// Strip dangling tool-call groups from a message slice so it can be sent to a
+    /// model without a "no tool output for function call" 400. Mirrors the
+    /// tool-pairing logic in [`Conversation::history`] (pass-1 valid_ids + pass-2
+    /// keep/strip/drop) — used by compaction, which slices raw messages and would
+    /// otherwise cut a tool round in half. Keeps behavior identical to history()'s
+    /// tool handling: an assistant keeps its tool_calls only if EVERY id has a
+    /// matching contiguous Role::Tool result within the slice; a partial/dangling
+    /// group is stripped (content kept if non-empty, else message dropped); a
+    /// Role::Tool result is kept only if its call is answered within the slice.
+    fn strip_dangling_tool_calls(msgs: &[ChatMessage]) -> Vec<ChatMessage> {
+        use std::collections::HashSet;
+
+        // Pass 1: collect ids of tool_calls that are fully answered within msgs.
+        let mut valid_ids: HashSet<String> = HashSet::new();
+        for (i, m) in msgs.iter().enumerate() {
+            if m.role == Role::Assistant {
+                if let Some(tcs) = &m.tool_calls {
+                    let mut responded: HashSet<&str> = HashSet::new();
+                    for later in &msgs[i + 1..] {
+                        if later.role == Role::Tool {
+                            if let Some(id) = &later.tool_call_id {
+                                responded.insert(id.as_str());
+                            }
+                        } else {
+                            break; // tool responses are contiguous right after the assistant
+                        }
+                    }
+                    if tcs.iter().all(|c| responded.contains(c.id.as_str())) {
+                        for c in tcs {
+                            valid_ids.insert(c.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: emit a valid sequence.
+        let mut out: Vec<ChatMessage> = Vec::with_capacity(msgs.len());
+        for m in msgs {
+            match m.role {
+                Role::Assistant if m.tool_calls.is_some() => {
+                    let tcs = m.tool_calls.as_ref().unwrap();
+                    if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
+                        out.push(m.clone()); // complete tool-call group → keep as-is
+                    } else if !m.content.trim().is_empty() {
+                        // dangling tool-call → drop tool_calls, keep any text content
+                        let mut m2 = m.clone();
+                        m2.tool_calls = None;
+                        out.push(m2);
+                    }
+                    // else: empty dangling assistant → drop entirely
+                }
+                Role::Tool => {
+                    // keep tool results only when their call was fully answered
+                    if m.tool_call_id.as_deref().is_some_and(|id| valid_ids.contains(id)) {
+                        out.push(m.clone());
+                    }
+                }
+                _ => out.push(m.clone()),
+            }
+        }
+        out
+    }
+
     /// Split the conversation into two parts for compaction, skipping the
     /// system message.
     ///
@@ -264,7 +328,7 @@ impl Conversation {
             return (vec![], body.to_vec());
         }
         let split_at = body.len() - preserve_n;
-        let to_summarize = body[..split_at].to_vec();
+        let to_summarize = Self::strip_dangling_tool_calls(&body[..split_at]);
         let kept_tail = body[split_at..].to_vec();
         (to_summarize, kept_tail)
     }
