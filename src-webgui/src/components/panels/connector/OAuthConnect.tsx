@@ -78,7 +78,7 @@ function Picker({
                 onClick={() => onPick(p.id)}
                 className="flex items-center justify-between rounded border border-koma-border px-3 py-2 text-[13px] text-koma-fg transition-colors hover:bg-koma-hover"
               >
-                <span>{p.label}</span>
+                <span className="text-left">{p.label}</span>
                 <span className="text-[10px] uppercase tracking-wide text-koma-fg opacity-40">
                   {p.kind === 'device' ? 'device code' : p.kind === 'paste' ? 'paste token' : 'browser'}
                 </span>
