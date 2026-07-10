@@ -355,10 +355,12 @@ over sec_remote (stateful socket).\n",
         main.as_ref(),
     ) {
         (Some(sess), Some(m)) => {
-            // Codex Responses models are image-capable and have no static
-            // catalogue to consult, so never strip on a lookup that would
-            // necessarily miss; every other route uses the tri-state check.
-            let takes = if m.api_type == crate::model::app_config::ApiType::Codex {
+            // Codex Responses + Anthropic Claude models are image-capable and have
+            // no static OpenRouter catalogue to consult, so never strip on a lookup
+            // that would necessarily miss; every other route uses the tri-state check.
+            let takes = if m.api_type == crate::model::app_config::ApiType::Codex
+                || m.api_type == crate::model::app_config::ApiType::AnthropicCompatible
+            {
                 true
             } else {
                 match state.rest.models_cache.as_deref() {

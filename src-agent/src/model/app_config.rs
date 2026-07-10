@@ -83,14 +83,19 @@ pub enum ApiType {
 impl ApiType {
     /// Whether the runtime can actually dispatch a request against this wire type.
     /// `OpenAiCompatible` and `KomaFree` speak the OpenAI chat-completions contract
-    /// (`KomaFree` is that wire with keyless dual-header auth); `Codex`
-    /// speaks the OpenAI Responses API (all have real transports). Only
-    /// `AnthropicCompatible` stays DEFERRED — native Anthropic Messages is a
-    /// distinct protocol (its own adapter, not a rider on this pass), so it is
-    /// treated as unroutable. The single source of truth shared by the
-    /// resolution-boundary gate (`Resolved::is_routable`) and the UI affordance.
+    /// (`KomaFree` is that wire with keyless dual-header auth); `Codex` speaks the
+    /// OpenAI Responses API; `AnthropicCompatible` speaks the native Anthropic
+    /// Messages API — all four have real transports (see the `codex` / `anthropic`
+    /// submodules). The single source of truth shared by the resolution-boundary
+    /// gate (`Resolved::is_routable`) and the UI affordance.
     pub fn is_routable(self) -> bool {
-        matches!(self, ApiType::OpenAiCompatible | ApiType::Codex | ApiType::KomaFree)
+        matches!(
+            self,
+            ApiType::OpenAiCompatible
+                | ApiType::AnthropicCompatible
+                | ApiType::Codex
+                | ApiType::KomaFree
+        )
     }
 }
 
