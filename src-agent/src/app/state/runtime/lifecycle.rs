@@ -210,7 +210,7 @@ impl SessionRuntime {
                         &content,
                         usage,
                     );
-                    sess.conversation.push_assistant(content, reasoning);
+                    sess.conversation.push_assistant(content, reasoning, false);
                     let _ = sess.save();
                     committed = true;
                 }

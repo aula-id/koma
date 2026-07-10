@@ -101,6 +101,17 @@ pub struct ChatMessage {
     /// wire builder can echo it back on tool-continuation requests (OpenRouter only).
     #[serde(skip)]
     pub reasoning_details: Option<Vec<ReasoningDetail>>,
+    /// True when this assistant message's `content` was PROMOTED from the
+    /// `reasoning` channel by `final_answer` (the model left `content` empty and
+    /// streamed its whole answer into reasoning — e.g. some xAI/grok reasoning
+    /// turns on the generic OpenAI path). Promoted turns are still stored and
+    /// displayed normally, but EXCLUDED from the wire history on replay
+    /// (`Conversation::history`) so raw chain-of-thought never few-shot-
+    /// conditions other models into skipping tool use. `#[serde(default)]` so
+    /// old `messages.json` files without this key deserialise to `false`;
+    /// `skip_serializing_if` keeps ordinary turns byte-identical on disk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reasoning_promoted: bool,
 }
 
 impl ChatMessage {
@@ -114,6 +125,7 @@ impl ChatMessage {
             attachments: Vec::new(),
             reasoning: None,
             reasoning_details: None,
+            reasoning_promoted: false,
         }
     }
 
@@ -128,6 +140,7 @@ impl ChatMessage {
             attachments: Vec::new(),
             reasoning: None,
             reasoning_details: None,
+            reasoning_promoted: false,
         }
     }
 
@@ -141,6 +154,7 @@ impl ChatMessage {
             attachments: Vec::new(),
             reasoning: None,
             reasoning_details: None,
+            reasoning_promoted: false,
         }
     }
 
@@ -164,6 +178,14 @@ impl ChatMessage {
     /// Attach OpenRouter reasoning_details (builder style). Empty → `None`.
     pub fn with_reasoning_details(mut self, details: Option<Vec<ReasoningDetail>>) -> Self {
         self.reasoning_details = details.filter(|d| !d.is_empty());
+        self
+    }
+
+    /// Mark this assistant message's content as promoted from reasoning
+    /// (builder style). Used at assistant-commit time so `Conversation::history`
+    /// can exclude it from the wire while storage/display keep it untouched.
+    pub fn with_reasoning_promoted(mut self, promoted: bool) -> Self {
+        self.reasoning_promoted = promoted;
         self
     }
 }

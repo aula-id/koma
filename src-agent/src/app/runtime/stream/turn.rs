@@ -15,7 +15,7 @@ pub(crate) fn push_image_unsupported_notice(rest: &mut AppStateRest) {
     let notice = "Sorry, I can't see images on this model. Switch to a vision-capable model, or send your message without the image.".to_string();
     if let Some(sess) = rest.fg_mut().session.as_mut() {
         let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &notice, None);
-        sess.conversation.push_assistant(notice, None);
+        sess.conversation.push_assistant(notice, None, false);
         let _ = sess.save();
     }
 }
@@ -78,7 +78,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
     let reasoning = rt.take_reasoning();
     let _ = rt.take_reasoning_details();
     let buf = rt.take_stream().unwrap_or_default();
-    let (content, msg_reasoning) = final_answer(buf, reasoning);
+    let (content, msg_reasoning, promoted) = final_answer(buf, reasoning);
     let mut save_err = None;
     if !content.is_empty() {
         let mut committed = false;
@@ -89,7 +89,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
                 &content,
                 usage,
             );
-            sess.conversation.push_assistant(content, msg_reasoning);
+            sess.conversation.push_assistant(content, msg_reasoning, promoted);
             if let Err(e) = sess.save() {
                 save_err = Some(e.to_string());
             }
@@ -289,11 +289,11 @@ pub(crate) fn advance_turn(
                     save_err = Some(e.to_string());
                 }
             } else {
-                let (content, msg_reasoning) =
+                let (content, msg_reasoning, promoted) =
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
                     let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
-                    sess.conversation.push_assistant(content, msg_reasoning);
+                    sess.conversation.push_assistant(content, msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
                         save_err = Some(e.to_string());
                     }
