@@ -283,14 +283,17 @@ pub(super) enum PushEnvelope {
     /// `catalogueModels` / `catalogueProviders` are the editor's keyless catalogue
     /// ([`crate::ipc::proto::CatalogueModelSnapshot`] — `uuid`/`name`/`model_id`/
     /// `provider_uuid`; [`crate::ipc::proto::CatalogueProviderSnapshot`] — `uuid`/`name`/
-    /// `endpoint`). Pushed out-of-band (not fingerprinted) whenever the daemon answers a
-    /// `ListAgents` — or, un-attached, straight from the host's `load_registry(None)` +
-    /// global-config fallback. ALWAYS a reply so the dashboard's loading state can never hang.
+    /// `endpoint`). `availableTools` is the editor tool-picker's selectable tool-name list
+    /// (a plain string array, registry order), the SAME set the TUI picker shows. Pushed
+    /// out-of-band (not fingerprinted) whenever the daemon answers a `ListAgents` — or,
+    /// un-attached, straight from the host's `load_registry(None)` + global-config fallback.
+    /// ALWAYS a reply so the dashboard's loading state can never hang.
     #[serde(rename_all = "camelCase")]
     AgentsValues {
         agents: Vec<crate::ipc::proto::AgentEntry>,
         catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot>,
         catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
+        available_tools: Vec<String>,
     },
     /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
     /// foreground session's current model. `state` is `"loading"` (a catalogue
@@ -468,6 +471,7 @@ pub(super) fn push_agents_values(
     agents: Vec<crate::ipc::proto::AgentEntry>,
     catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot>,
     catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
+    available_tools: Vec<String>,
 ) {
     super::render::emit(
         push,
@@ -475,6 +479,7 @@ pub(super) fn push_agents_values(
             agents,
             catalogue_models,
             catalogue_providers,
+            available_tools,
         },
     );
 }

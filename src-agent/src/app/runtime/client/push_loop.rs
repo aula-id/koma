@@ -443,12 +443,14 @@ pub(super) fn push_loop(
                         agents,
                         catalogue_models,
                         catalogue_providers,
+                        available_tools,
                     } = &frame.event
                     {
                         let env = PushEnvelope::AgentsValues {
                             agents: agents.clone(),
                             catalogue_models: catalogue_models.clone(),
                             catalogue_providers: catalogue_providers.clone(),
+                            available_tools: available_tools.clone(),
                         };
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);

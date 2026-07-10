@@ -3,10 +3,7 @@
 
 use crate::model::app_config::{AppConfig, ModelEntry};
 use crate::model::settings::Settings;
-use crate::tool::all_tools;
-
-/// Tool names excluded from the picker (internal / infra tools).
-const EXCLUDED_TOOLS: &[&str] = &["task", "pong", "dir_cache_update"];
+use crate::tool::agent_selectable_tools;
 
 /// State for the tool multi-select picker overlay.
 ///
@@ -30,15 +27,12 @@ pub struct ToolPickerState {
 impl ToolPickerState {
     /// Build from the current `draft_tools` comma-joined string.
     ///
-    /// All tools from `all_tools()` except `EXCLUDED_TOOLS` are listed.
-    /// An option is pre-checked if its name appears in `draft_tools` (case-
-    /// insensitive, split on comma, trimmed).
+    /// The selectable list is [`crate::tool::agent_selectable_tools`] — the shared
+    /// source of truth (every built-in tool minus the internal / infra ones), also used
+    /// by the GUI /agents dashboard, so the two never drift. An option is pre-checked if
+    /// its name appears in `draft_tools` (case-insensitive, split on comma, trimmed).
     pub(super) fn from_draft(draft_tools: &str) -> Self {
-        let options: Vec<String> = all_tools()
-            .iter()
-            .map(|t| t.name().to_string())
-            .filter(|n| !EXCLUDED_TOOLS.contains(&n.as_str()))
-            .collect();
+        let options: Vec<String> = agent_selectable_tools();
 
         let selected: Vec<String> = draft_tools
             .split(',')

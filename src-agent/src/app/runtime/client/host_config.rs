@@ -47,7 +47,13 @@ pub(super) fn apply_swapper_config_mutation(
     // spinner — even when the mutation was a session-scoped no-op (no session dir here).
     if apply_swapper_agent_mutation(req) {
         let (agents, catalogue_models, catalogue_providers) = build_host_agents_values();
-        push_agents_values(push, agents, catalogue_models, catalogue_providers);
+        push_agents_values(
+            push,
+            agents,
+            catalogue_models,
+            catalogue_providers,
+            crate::tool::agent_selectable_tools(),
+        );
         return;
     }
     let mut cfg = crate::model::app_config::AppConfig::load();

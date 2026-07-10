@@ -486,6 +486,9 @@ impl DaemonHub {
                 agents,
                 catalogue_models,
                 catalogue_providers,
+                // The editor's tool-picker options — the SAME shared source the TUI picker
+                // uses, so the two never drift.
+                available_tools: crate::tool::agent_selectable_tools(),
             },
         );
     }

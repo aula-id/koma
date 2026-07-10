@@ -500,7 +500,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // state clears. Cheap, synchronous (a registry + config load), so it runs inline.
             Ok(HostCtl::GetAgents) => {
                 let (agents, catalogue_models, catalogue_providers) = build_host_agents_values();
-                push_agents_values(push, agents, catalogue_models, catalogue_providers);
+                // The tool-picker options: the SAME shared source the daemon + TUI use, so the
+                // un-attached reply offers exactly the same set as the attached one.
+                let available_tools = crate::tool::agent_selectable_tools();
+                push_agents_values(
+                    push,
+                    agents,
+                    catalogue_models,
+                    catalogue_providers,
+                    available_tools,
+                );
             }
             // A hub row's KILL button. In the swapper there is no ATTACHED session, so this
             // is always a background/live-row kill: escalate the kill OFF this thread (it

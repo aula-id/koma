@@ -572,12 +572,15 @@ export type PushEnvelope =
   // DeleteAgent) — the Agents dashboard's full agent list + model/provider
   // catalogues. ALWAYS a reply, even un-attached (host answers from built-in +
   // global config only). MIXED CASING, verified against the Rust wire: the
-  // envelope's OWN three fields are camelCase (`agents`/`catalogueModels`/
-  // `catalogueProviders`), but each nested entry struct has NO rename_all of
-  // its own and serializes plain snake_case (`model_uuid`, `model_id`,
-  // `provider_uuid`) — NOT a typo, the push case normalizes these into the
-  // camelCase `AgentEntry`/`CatalogueModelEntry`/`CatalogueProviderEntry`
-  // shapes above.
+  // envelope's OWN fields are camelCase (`agents`/`catalogueModels`/
+  // `catalogueProviders`/`availableTools`), but each nested entry struct has
+  // NO rename_all of its own and serializes plain snake_case (`model_uuid`,
+  // `model_id`, `provider_uuid`) — NOT a typo, the push case normalizes these
+  // into the camelCase `AgentEntry`/`CatalogueModelEntry`/
+  // `CatalogueProviderEntry` shapes above. `availableTools` is optional-
+  // tolerant (defaults to [] in the reducer) for an older host build that
+  // doesn't project it yet — the AgentTab tools chip grid then just has
+  // nothing to offer beyond whatever an existing agent already carries.
   | {
       k: 'AgentsValues'
       agents: {
@@ -592,6 +595,7 @@ export type PushEnvelope =
       }[]
       catalogueModels: { uuid: string; name: string; model_id: string; provider_uuid: string }[]
       catalogueProviders: { uuid: string; name: string; endpoint: string }[]
+      availableTools?: string[]
     }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
@@ -791,6 +795,10 @@ type KomaState = {
   // feeds the AgentTab model picker and the panel row's resolved model label.
   catalogueModels: CatalogueModelEntry[]
   catalogueProviders: CatalogueProviderEntry[]
+  // The full set of tool names the daemon knows about — feeds the AgentTab
+  // tools field's toggle-chip grid (one chip per available tool). REPLACED
+  // wholesale on each AgentsValues push; empty until the first reply lands.
+  availableTools: string[]
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -1036,6 +1044,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   agents: [],
   catalogueModels: [],
   catalogueProviders: [],
+  availableTools: [],
 
   push: (env) => {
     switch (env.k) {
@@ -1328,6 +1337,7 @@ export const useKoma = create<KomaState>((set, get) => ({
           name: p.name,
           endpoint: p.endpoint,
         }))
+        const availableTools = env.availableTools ?? []
         set((s) => {
           const liveNames = new Set(agents.map((a) => a.name))
           // A deleted agent's editor tab has nothing left to show — close it
@@ -1349,7 +1359,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             // approach only makes sense for a single removal).
             if (staleIds.has(activeTabId)) activeTabId = 'chat'
           }
-          return { agents, catalogueModels, catalogueProviders, ui: { ...s.ui, tabs, activeTabId } }
+          return { agents, catalogueModels, catalogueProviders, availableTools, ui: { ...s.ui, tabs, activeTabId } }
         })
         break
       }
