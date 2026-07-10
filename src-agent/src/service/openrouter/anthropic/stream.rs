@@ -4,14 +4,14 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::dto::chat::{ChatMessage, FunctionCall, ToolCall};
+use crate::dto::chat::{ChatMessage, FunctionCall, ReasoningDetail, ToolCall};
 use crate::dto::openrouter::{ImageWireCtx, ToolDef};
 use crate::service::StreamEvent;
 
 use super::super::helpers::{clean_error, emit, sanitize_tool_acc};
 use super::super::Conn;
 use super::super::OpenRouterClient;
-use super::request::{build_messages, flatten_tools, MessagesRequest};
+use super::request::{build_messages, flatten_tools, thinking_params, MessagesRequest};
 use super::sse::{parse_event, AnthropicEvent, BlockDelta, ContentBlockStart};
 use super::{anthropic_headers, error_message, CLAUDE_MAX_OUTPUT_TOKENS};
 
@@ -46,6 +46,44 @@ fn finalize_tools(blocks: &[PartialToolUse]) -> Vec<ToolCall> {
         .collect()
 }
 
+/// A thinking / redacted_thinking block being reconstructed from the stream.
+/// `text` accumulates `thinking_delta`s (seeded from the block-start); `sig`
+/// accumulates `signature_delta`s (seeded from the block-start); `redacted_data`
+/// is `Some` for a `redacted_thinking` block. `index` ties deltas back to it.
+struct PartialThinking {
+    index: usize,
+    text: String,
+    sig: String,
+    redacted_data: Option<String>,
+}
+
+/// Convert the reconstructed thinking blocks into koma [`ReasoningDetail`]s for
+/// intra-turn REPLAY (mirrors [`finalize_tools`]). A `thinking` block carries its
+/// accumulated text + signature (`None` when unsigned — dropped at replay time in
+/// `assistant_blocks`); a `redacted_thinking` block carries its opaque `data`.
+/// Block (arrival) order is preserved — thinking must lead the replayed turn.
+fn finalize_thinking(blocks: &[PartialThinking]) -> Vec<ReasoningDetail> {
+    blocks
+        .iter()
+        .map(|b| {
+            if let Some(data) = &b.redacted_data {
+                ReasoningDetail {
+                    kind: Some("redacted_thinking".to_string()),
+                    data: Some(data.clone()),
+                    ..Default::default()
+                }
+            } else {
+                ReasoningDetail {
+                    kind: Some("thinking".to_string()),
+                    text: Some(b.text.clone()),
+                    signature: (!b.sig.is_empty()).then(|| b.sig.clone()),
+                    ..Default::default()
+                }
+            }
+        })
+        .collect()
+}
+
 impl OpenRouterClient {
     /// Streaming completion over the Anthropic Messages API.
     ///
@@ -53,9 +91,9 @@ impl OpenRouterClient {
     /// single [`StreamEvent::Error`] and returns `Ok(())`; the spawned caller
     /// discards the return value. `bearer` is passed in from the dispatch branch,
     /// which already ran `fresh_key` — this method does NOT refresh again.
-    /// `account_id` + `effort` are accepted for call-site parity with
-    /// `codex_stream_complete` but unused on this transport (Anthropic OAuth has no
-    /// account header, and thinking/effort is not requested in v1).
+    /// `account_id` is accepted for call-site parity with `codex_stream_complete`
+    /// but unused (Anthropic OAuth has no account header); `effort` now drives the
+    /// extended-thinking body params via [`thinking_params`](super::request::thinking_params).
     #[allow(clippy::too_many_arguments)]
     pub(in crate::service::openrouter) async fn anthropic_stream_complete(
         &self,
@@ -70,7 +108,7 @@ impl OpenRouterClient {
         image_ctx: Option<ImageWireCtx>,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
-        let _ = (account_id, effort); // reserved for codex-parity signature
+        let _ = account_id; // reserved for codex-parity signature
         let url = format!("{}/v1/messages?beta=true", conn.endpoint);
 
         let (system, msgs) = build_messages(messages, image_ctx.as_ref());
@@ -81,6 +119,11 @@ impl OpenRouterClient {
         } else {
             (Some(tools), Some(serde_json::json!({"type": "auto"})))
         };
+        // Extended thinking: map the resolved role's effort token to the adaptive
+        // thinking body params. The interactive path is never a forced tool_choice.
+        // `thinking_on` (a thinking param is present) also gates the beta header.
+        let (thinking, context_management, output_config) = thinking_params(effort, false);
+        let thinking_on = thinking.is_some();
         let body = MessagesRequest {
             model: model.to_string(),
             system,
@@ -88,10 +131,13 @@ impl OpenRouterClient {
             tools,
             tool_choice,
             max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            thinking,
+            context_management,
+            output_config,
             stream: true,
         };
 
-        let rb = anthropic_headers(self.http.post(&url), bearer);
+        let rb = anthropic_headers(self.http.post(&url), bearer, thinking_on);
         let resp = match rb.json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -124,6 +170,10 @@ impl OpenRouterClient {
         let mut buf: Vec<u8> = Vec::new();
         // tool_use blocks reconstructed by `index` across many SSE frames.
         let mut tool_blocks: Vec<PartialToolUse> = Vec::new();
+        // thinking / redacted_thinking blocks reconstructed by `index`; streamed
+        // live to the reasoning channel via `thinking_delta`, and finalized into
+        // ReasoningDetails for intra-turn replay at message_stop/EOF.
+        let mut thinking_blocks: Vec<PartialThinking> = Vec::new();
         // Usage accumulates across events: input (+ cache) at message_start, output
         // at message_delta; emitted together at the terminal message_stop.
         let mut prompt_tokens: u64 = 0;
@@ -177,8 +227,8 @@ impl OpenRouterClient {
                     AnthropicEvent::ContentBlockStart {
                         index,
                         content_block,
-                    } => {
-                        if let ContentBlockStart::ToolUse { id, name } = content_block {
+                    } => match content_block {
+                        ContentBlockStart::ToolUse { id, name } => {
                             tool_blocks.push(PartialToolUse {
                                 index,
                                 id,
@@ -186,8 +236,28 @@ impl OpenRouterClient {
                                 buf: String::new(),
                             });
                         }
-                        // text / thinking / other blocks: nothing to open.
-                    }
+                        // Open a thinking block; seed text/signature from the start
+                        // (usually empty — the body streams via thinking_delta).
+                        ContentBlockStart::Thinking { thinking, signature } => {
+                            thinking_blocks.push(PartialThinking {
+                                index,
+                                text: thinking,
+                                sig: signature.unwrap_or_default(),
+                                redacted_data: None,
+                            });
+                        }
+                        // Open a redacted (encrypted) thinking block.
+                        ContentBlockStart::RedactedThinking { data } => {
+                            thinking_blocks.push(PartialThinking {
+                                index,
+                                text: String::new(),
+                                sig: String::new(),
+                                redacted_data: Some(data),
+                            });
+                        }
+                        // text / other blocks: nothing to open.
+                        ContentBlockStart::Text { .. } | ContentBlockStart::Other => {}
+                    },
                     AnthropicEvent::ContentBlockDelta { index, delta } => match delta {
                         // Answer text — emitted straight through (Anthropic streams
                         // reasoning in separate thinking blocks, so no ThinkSplit).
@@ -202,7 +272,23 @@ impl OpenRouterClient {
                                 b.buf.push_str(&partial_json);
                             }
                         }
-                        // thinking_delta / signature_delta: ignored in v1.
+                        // A thinking fragment: accumulate for replay AND stream to the
+                        // reasoning (display) channel — never the answer/Token channel.
+                        BlockDelta::ThinkingDelta { thinking } => {
+                            if let Some(b) = thinking_blocks.iter_mut().find(|b| b.index == index) {
+                                b.text.push_str(&thinking);
+                            }
+                            if !thinking.is_empty() {
+                                emit(&tx, StreamEvent::Reasoning(thinking));
+                            }
+                        }
+                        // A signature fragment: accumulate only (load-bearing for
+                        // replay; never displayed).
+                        BlockDelta::SignatureDelta { signature } => {
+                            if let Some(b) = thinking_blocks.iter_mut().find(|b| b.index == index) {
+                                b.sig.push_str(&signature);
+                            }
+                        }
                         BlockDelta::Other => {}
                     },
                     AnthropicEvent::ContentBlockStop { .. } => {}
@@ -212,8 +298,9 @@ impl OpenRouterClient {
                         }
                     }
                     AnthropicEvent::MessageStop => {
-                        // Terminal emission order MATCHES codex: Usage, then any
-                        // ToolCalls, then Done (ToolCalls must land just before Done).
+                        // Terminal emission order: Usage, then the replay
+                        // ReasoningDetails, then any ToolCalls, then Done (ToolCalls
+                        // must land just before Done, MATCHING codex).
                         emit(
                             &tx,
                             StreamEvent::Usage {
@@ -224,6 +311,10 @@ impl OpenRouterClient {
                                 cost: 0.0,
                             },
                         );
+                        let details = finalize_thinking(&thinking_blocks);
+                        if !details.is_empty() {
+                            emit(&tx, StreamEvent::ReasoningDetails(details));
+                        }
                         let mut tools = finalize_tools(&tool_blocks);
                         if !tools.is_empty() {
                             sanitize_tool_acc(&mut tools);
@@ -253,8 +344,12 @@ impl OpenRouterClient {
             }
         }
         // Stream ended without an explicit `message_stop` (mirrors the codex EOF
-        // path): flush any accumulated tool calls, then Done. No Usage here — a
-        // clean run always delivers it at message_stop above.
+        // path): flush any accumulated thinking + tool calls, then Done. No Usage
+        // here — a clean run always delivers it at message_stop above.
+        let details = finalize_thinking(&thinking_blocks);
+        if !details.is_empty() {
+            emit(&tx, StreamEvent::ReasoningDetails(details));
+        }
         let mut tools = finalize_tools(&tool_blocks);
         if !tools.is_empty() {
             sanitize_tool_acc(&mut tools);

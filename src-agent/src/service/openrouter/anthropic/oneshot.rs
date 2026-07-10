@@ -8,7 +8,7 @@ use crate::dto::chat::ChatMessage;
 use super::super::helpers::clean_error;
 use super::super::Conn;
 use super::super::OpenRouterClient;
-use super::request::{build_messages, AnthropicTool, MessagesRequest};
+use super::request::{build_messages, thinking_params, AnthropicTool, MessagesRequest};
 use super::sse::{parse_event, AnthropicEvent, BlockDelta};
 use super::{anthropic_headers, error_message, CLAUDE_MAX_OUTPUT_TOKENS};
 
@@ -38,7 +38,7 @@ impl OpenRouterClient {
         messages: Vec<ChatMessage>,
         text_format: Option<serde_json::Value>,
     ) -> Result<String> {
-        let _ = (account_id, effort); // reserved for codex-parity signature
+        let _ = account_id; // reserved for codex-parity signature
         let url = format!("{}/v1/messages?beta=true", conn.endpoint);
 
         let (system, msgs) = build_messages(messages, None);
@@ -57,6 +57,11 @@ impl OpenRouterClient {
             ),
             None => (None, None),
         };
+        // The oneshot path (classifier/fold/router/compact/awareness) is
+        // deterministic internal output that NEVER thinks — the structured sub-path
+        // additionally forces a `respond` tool, under which Anthropic deletes
+        // thinking regardless. Force all three params off (and no thinking betas).
+        let (thinking, context_management, output_config) = thinking_params(effort, true);
         let body = MessagesRequest {
             model: model.to_string(),
             system,
@@ -64,10 +69,13 @@ impl OpenRouterClient {
             tools,
             tool_choice,
             max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            thinking,
+            context_management,
+            output_config,
             stream: true,
         };
 
-        let rb = anthropic_headers(self.http.post(&url), bearer);
+        let rb = anthropic_headers(self.http.post(&url), bearer, false);
         let resp = rb.json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
@@ -108,7 +116,11 @@ impl OpenRouterClient {
                         BlockDelta::InputJsonDelta { partial_json } => {
                             tool_out.push_str(&partial_json)
                         }
-                        BlockDelta::Other => {}
+                        // Oneshot never requests thinking, so a thinking/signature
+                        // delta (or any unknown delta) is irrelevant here.
+                        BlockDelta::ThinkingDelta { .. }
+                        | BlockDelta::SignatureDelta { .. }
+                        | BlockDelta::Other => {}
                     },
                     AnthropicEvent::MessageStop => {
                         return Ok(if structured { tool_out } else { text_out });
