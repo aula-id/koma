@@ -17,10 +17,19 @@ import type { Model } from '../types/config'
 // so the active global row is matched by model id + provider (not by uuid).
 export function ModelPicker() {
   const models = useKoma((s) => s.config.models)
+  const providers = useKoma((s) => s.config.providers)
+  const oauthConns = useKoma((s) => s.oauth.conns)
   const req = useKoma((s) => s.req)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+
+  // Resolve a model's `provider` (a provider_uuid) to a human label — either a
+  // real config provider (by .id) or an OAuth connection (by .uuid), since the
+  // daemon resolves provider_uuid against either catalogue (see
+  // ConnectorPanel/Onboarding's providerOptions).
+  const providerLabel = (uuid: string): string =>
+    providers.find((p) => p.id === uuid)?.name ?? oauthConns.find((c) => c.uuid === uuid)?.name ?? 'unknown provider'
 
   // Global options, advertised-free pinned first (stable sort otherwise).
   const globals = useMemo(() => {
@@ -32,13 +41,28 @@ export function ModelPicker() {
     () => models.find((m) => m.scope === 'local' && m.roles.includes('main')),
     [models],
   )
+  // A local override is a CLONE of a global model with a NEW uuid but the SAME
+  // name (set_session_main copies chosen.name daemon-side) — so matching on
+  // modelId+provider alone checks EVERY global sharing that model_id+provider
+  // (e.g. two global entries both pointing at the same OAuth-backed grok-4.5).
+  // Requiring the name too narrows it back down to the one actually picked.
+  // Two globals with identical name+modelId+provider legitimately both
+  // checking is an acceptable degenerate case — not worth over-engineering.
   const sameModel = (m: Model) =>
-    localMain != null && m.modelId === localMain.modelId && m.provider === localMain.provider
+    localMain != null &&
+    m.modelId === localMain.modelId &&
+    m.provider === localMain.provider &&
+    m.name === localMain.name
 
   const triggerLabel = localMain ? localMain.name || localMain.modelId || 'main' : '(inherit)'
+  const triggerTitle = localMain
+    ? `${localMain.modelId} · ${providerLabel(localMain.provider)}`
+    : 'Session model'
 
   const filtered = query.trim()
-    ? globals.filter((m) => `${m.name} ${m.modelId}`.toLowerCase().includes(query.trim().toLowerCase()))
+    ? globals.filter((m) =>
+        `${m.name} ${m.modelId} ${providerLabel(m.provider)}`.toLowerCase().includes(query.trim().toLowerCase()),
+      )
     : globals
 
   useEffect(() => {
@@ -78,7 +102,7 @@ export function ModelPicker() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        title="Session model"
+        title={triggerTitle}
         className="flex h-8 max-w-[160px] flex-none items-center gap-1 rounded-lg px-2 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
       >
         <Bot size={15} className="flex-none" />
@@ -125,6 +149,14 @@ export function ModelPicker() {
             ) : (
               filtered.map((m) => {
                 const active = sameModel(m)
+                // Transparency: the row's primary label can be an opaque
+                // nickname (m.name) — show the REAL model id + resolved
+                // provider as a dim subtitle so "who is this model really?" is
+                // always answerable at a glance. Skip the subtitle's own
+                // modelId repeat when there's no nickname to disambiguate
+                // (m.name empty/equal to modelId) — the primary line already
+                // shows it.
+                const hasNickname = m.name.trim() !== '' && m.name.trim() !== m.modelId
                 return (
                   <button
                     key={m.id}
@@ -133,7 +165,7 @@ export function ModelPicker() {
                       e.preventDefault()
                       pickModel(m)
                     }}
-                    className={`flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors ${
+                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] transition-colors ${
                       active
                         ? 'bg-koma-hover text-koma-fg'
                         : 'text-koma-fg opacity-75 hover:bg-koma-hover hover:opacity-100'
@@ -144,7 +176,14 @@ export function ModelPicker() {
                     ) : (
                       <span className="w-3 flex-none" />
                     )}
-                    <span className="min-w-0 flex-1 truncate">{m.name || m.modelId}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{m.name || m.modelId}</span>
+                      {hasNickname && (
+                        <span className="block truncate text-[10px] opacity-50">
+                          {m.modelId} · {providerLabel(m.provider)}
+                        </span>
+                      )}
+                    </span>
                     {m.free && (
                       <span className="flex flex-none items-center gap-0.5 rounded bg-koma-accent/15 px-1 text-[9px] uppercase tracking-wide text-koma-accent">
                         <Sparkles size={9} /> free
