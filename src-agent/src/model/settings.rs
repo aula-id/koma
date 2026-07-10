@@ -277,18 +277,26 @@ pub struct Settings {
     pub internet_mode: InternetMode,
     /// Per-session override layer for the global model catalogue: models the user
     /// saved for THIS session only (the `/settings` "Save session" path). They are
-    /// never written to the global `config.json`; they live here so they survive a
-    /// reload without leaking into other sessions. Mirrors the global
+    /// never written to the global `config.json`; they are persisted HERE, in this
+    /// session's own `settings.json`, so they survive a reload without leaking into
+    /// any other session. Mirrors the global
     /// [`crate::model::app_config::ModelEntry`] shape (each still references a
     /// provider by uuid).
     ///
-    /// `#[serde(skip)]`: this is NO LONGER persisted in the per-session
-    /// `settings.json`. In the pwd-keyed layout it lives in the shared
-    /// [`LocalConfig`] at [`crate::model::store::shared_settings_path`] (one
-    /// catalogue per working directory). The field stays in the in-memory struct
-    /// so `resolve_role`/`resolve_agent` are unchanged; `Session::load` overlays it
-    /// from the shared file and `Session::save` writes it back there.
-    #[serde(skip)]
+    /// Semantics (authoritative): `session_models` is PER-SESSION and authoritative
+    /// in-memory — the daemon owns it for the session's lifetime; every mutator
+    /// edits the in-memory copy and then `Session::save()` persists it to this
+    /// per-session file. It survives reload / restart / delegation and is never
+    /// clobbered by a sibling session opened from the same working directory.
+    /// `resolve_role` precedence is unchanged (`session_models` first, then the
+    /// global `config.models`). The cross-window catalogue lives separately in
+    /// `config.models` (`config.json`) and is untouched by this field.
+    ///
+    /// `#[serde(default)]`: empty by default so OLD `settings.json` files that
+    /// never persisted this field still load unchanged. Those pre-fix files (no
+    /// `session_models` key) are seeded ONCE from the legacy shared bucket by the
+    /// one-time migration in `Session::load`.
+    #[serde(default)]
     pub session_models: Vec<crate::model::app_config::ModelEntry>,
     /// The bare filename of the SSH identity key this session uses for
     /// git-over-SSH (e.g. `"id_ed25519"`). Stored as a filename only — never a
@@ -434,17 +442,16 @@ impl Settings {
     }
 }
 
-/// Shared per-working-directory model setup.
+/// Shared per-working-directory model setup — LEGACY, retained for migration read.
 ///
-/// In the pwd-keyed storage layout every session opened from the same working
-/// directory shares ONE `settings.json` in the bucket directory (see
-/// [`crate::model::store::shared_settings_path`]). That shared file holds only
-/// the model catalogue for the directory — the per-session behavioural knobs
-/// stay in each session's own [`Settings`]. This is the deserialised form of
-/// that shared file.
-///
-/// Wired in by `Session::load` (overlays `session_models` onto the in-memory
-/// [`Settings`]) and `Session::save` (writes this file back). The single
+/// In the ORIGINAL pwd-keyed storage layout every session opened from the same
+/// working directory shared ONE `settings.json` in the bucket directory (see
+/// [`crate::model::store::shared_settings_path`]) that held `session_models` for
+/// the whole directory. `session_models` is now persisted PER-SESSION (in each
+/// session's own [`Settings`]) instead, so this shared file is NO LONGER written.
+/// It is still READ once by the one-time migration in `Session::load`, which seeds
+/// a pre-fix session's `session_models` from this bucket so existing picks survive
+/// the upgrade. This is the deserialised form of that shared file. The single
 /// `session_models` field carries `#[serde(default)]` so a missing or partially
 /// written file loads as an empty catalogue.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -474,6 +481,11 @@ impl LocalConfig {
     }
 
     /// Serialise (pretty-printed) to `path`, creating or overwriting the file.
+    ///
+    /// DEAD as of the per-session `session_models` persistence change: the shared
+    /// bucket is no longer written (each session persists its own catalogue). Kept
+    /// for symmetry with [`Self::load`], which the one-time migration still uses.
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_vec_pretty(self)?;
         std::fs::write(path, json)?;
