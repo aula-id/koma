@@ -198,6 +198,26 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
     ]
 }
 
+/// Tool names the /agents editor's tool picker EXCLUDES from the selectable list —
+/// internal / infra tools a sub-agent should never be handed: `task` (the recursion
+/// guard), `pong` (a health no-op), and `dir_cache_update` (an internal reindex trigger).
+const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "pong", "dir_cache_update"];
+
+/// The user-selectable tool names for the /agents editor, in [`all_tools`] SOURCE ORDER
+/// (deterministic): every built-in tool name except [`AGENT_PICKER_EXCLUDED`].
+///
+/// THE SINGLE SOURCE OF TRUTH shared by the TUI tool picker
+/// ([`crate::app::mode::agents::ToolPickerState::from_draft`]) and the GUI /agents
+/// dashboard's `AgentsValues` envelope, so both offer exactly the same set — the daemon's
+/// attached reply, the host's un-attached fallback, and the TUI picker can never drift.
+pub fn agent_selectable_tools() -> Vec<String> {
+    all_tools()
+        .iter()
+        .map(|t| t.name().to_string())
+        .filter(|n| !AGENT_PICKER_EXCLUDED.contains(&n.as_str()))
+        .collect()
+}
+
 /// Tools that are NEVER advertised to the main chat model via
 /// [`main_tool_names`] — the caller pushes them onto `advertise` explicitly,
 /// mode-gated, instead (see `app::runtime::stream::run::start_stream_task`).

@@ -503,15 +503,19 @@ pub enum DaemonEvent {
     /// (`"builtin"` / `"global"` / `"session"`), chosen `model_uuid`, tool allow-list, and
     /// system prompt. `catalogue_models` seeds the editor's model picker — the foreground
     /// session's local `session_models` FIRST, then the global `config.models` — and
-    /// `catalogue_providers` mirrors `config.providers`. Delivered whether or not the
-    /// requesting client is session-attached (like [`SettingsValues`], via the hub's
-    /// per-client seq'd `send_to`) and ALWAYS sent (built-in + global only when there is no
-    /// foreground session) so the dashboard never hangs. The GUI host re-pushes it as an
-    /// `AgentsValues` envelope; the TUI shadow ignores it.
+    /// `catalogue_providers` mirrors `config.providers`. `available_tools` is the
+    /// user-selectable tool-name list for the editor's tool picker
+    /// ([`crate::tool::agent_selectable_tools`] — every built-in tool minus the internal /
+    /// infra ones, in registry order), the SAME source the TUI picker uses. Delivered
+    /// whether or not the requesting client is session-attached (like [`SettingsValues`],
+    /// via the hub's per-client seq'd `send_to`) and ALWAYS sent (built-in + global only
+    /// when there is no foreground session) so the dashboard never hangs. The GUI host
+    /// re-pushes it as an `AgentsValues` envelope; the TUI shadow ignores it.
     AgentsValues {
         agents: Vec<AgentEntry>,
         catalogue_models: Vec<CatalogueModelSnapshot>,
         catalogue_providers: Vec<CatalogueProviderSnapshot>,
+        available_tools: Vec<String>,
     },
 }
 

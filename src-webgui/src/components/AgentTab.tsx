@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Trash2, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { Tab } from '../store/koma'
-import { Field, Segmented, Select, TextInput } from './panels/form'
+import { Chips, Field, Select, TextInput } from './panels/form'
 
 type AgentTabProps = {
   tab: Extract<Tab, { kind: 'agent' }>
@@ -19,6 +19,7 @@ export default function AgentTab({ tab }: AgentTabProps) {
   const agents = useKoma((s) => s.agents)
   const catalogueModels = useKoma((s) => s.catalogueModels)
   const catalogueProviders = useKoma((s) => s.catalogueProviders)
+  const availableTools = useKoma((s) => s.availableTools)
   const renameAgentTab = useKoma((s) => s.renameAgentTab)
   const theme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
@@ -32,7 +33,7 @@ export default function AgentTab({ tab }: AgentTabProps) {
   const [description, setDescription] = useState(existing?.description ?? '')
   const [conditions, setConditions] = useState(existing?.conditions ?? '')
   const [modelUuid, setModelUuid] = useState<string | null>(existing?.modelUuid ?? null)
-  const [tools, setTools] = useState((existing?.tools ?? []).join(' '))
+  const [tools, setTools] = useState<string[]>(existing?.tools ?? [])
   const [prompt, setPrompt] = useState(existing?.prompt ?? '')
   const [scope, setScope] = useState<'global' | 'session'>('session')
   const [armedDelete, setArmedDelete] = useState(false)
@@ -69,7 +70,7 @@ export default function AgentTab({ tab }: AgentTabProps) {
     setDescription(a?.description ?? '')
     setConditions(a?.conditions ?? '')
     setModelUuid(a?.modelUuid ?? null)
-    setTools((a?.tools ?? []).join(' '))
+    setTools(a?.tools ?? [])
     setPrompt(a?.prompt ?? '')
   }, [agentId, agents])
 
@@ -96,6 +97,15 @@ export default function AgentTab({ tab }: AgentTabProps) {
     [catalogueModels, catalogueProviders],
   )
 
+  // Toggle-chip options for the Tools field: every daemon-known tool, PLUS
+  // any tool this agent's saved `tools` already carries that ISN'T in that
+  // list (a stale/custom entry) — appended so it still renders as a selected
+  // chip and saving never silently drops it.
+  const toolOptions = useMemo(() => {
+    const extra = tools.filter((t) => !availableTools.includes(t))
+    return [...availableTools, ...extra].map((t) => ({ value: t, label: t }))
+  }, [availableTools, tools])
+
   const save = () => {
     if (!description.trim()) return
     // This save commits the currently-typed state, so any "typed since" flag
@@ -103,10 +113,6 @@ export default function AgentTab({ tab }: AgentTabProps) {
     // below so the one-shot hydration effect is free to (harmlessly) settle
     // once the confirming AgentsValues push lands, matching what we just sent.
     dirty.current = false
-    const toolList = tools
-      .split(/[\s,]+/)
-      .map((t) => t.trim())
-      .filter(Boolean)
     // `scope` is a required wire field either way, but the daemon only truly
     // USES it for a CREATE — on an edit it derives the real write tier from
     // the agent's own current source (a builtin edit auto-becomes a session
@@ -127,7 +133,7 @@ export default function AgentTab({ tab }: AgentTabProps) {
       description: description.trim(),
       conditions,
       modelUuid: modelUuid || null,
-      tools: toolList,
+      tools,
       prompt,
     })
     // Optimistic rebind — no dedicated ack exists, just a fresh AgentsValues
@@ -208,24 +214,27 @@ export default function AgentTab({ tab }: AgentTabProps) {
           </Field>
 
           <Field label="Tools">
-            <TextInput
+            {/* Empty selection is valid — the daemon's own semantics treat it
+                as "default/read-only tools", not "no tools allowed" (see
+                AgentEntry's comment in koma.ts) — no validation invented here. */}
+            <Chips
               value={tools}
-              onChange={(e) => {
+              options={toolOptions}
+              onToggle={(t) => {
                 dirty.current = true
-                setTools(e.target.value)
+                setTools((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))
               }}
-              placeholder="read grep glob edit — space or comma separated"
             />
           </Field>
 
           {isCreate ? (
             <Field label="Scope">
-              <Segmented
+              <Select
                 value={scope}
                 onChange={setScope}
                 options={[
-                  { value: 'global', label: 'Global' },
                   { value: 'session', label: 'Session' },
+                  { value: 'global', label: 'Global' },
                 ]}
               />
             </Field>
