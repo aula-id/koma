@@ -370,6 +370,15 @@ pub struct UsageRequest {
     pub include: bool,
 }
 
+/// OpenAI-standard streaming usage directive. Generic OpenAI-spec servers
+/// (e.g. api.x.ai) only emit the terminal usage chunk when this is present;
+/// they ignore OpenRouter's proprietary `usage:{include:true}`. Sent only to
+/// non-OpenRouter endpoints so we don't duplicate the directive to koma.run.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
+}
+
 /// Reasoning/thinking control for the request, serialised as the top-level
 /// `"reasoning"` object.
 ///
@@ -445,6 +454,13 @@ pub struct ChatRequest {
     /// Usage accounting directive — always sent as `{"include": true}` so the
     /// response (and final streaming chunk) reports token counts + total cost.
     pub usage: UsageRequest,
+    /// OpenAI-standard streaming usage directive. `Some` only for non-OpenRouter-
+    /// dialect endpoints (e.g. api.x.ai) — generic OpenAI-spec servers ignore the
+    /// `usage` field above and only emit the terminal usage chunk when this is
+    /// present. `None` (and omitted from the wire) for OpenRouter/koma-free, which
+    /// already get cost data via `usage:{include:true}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     /// Function-calling tool definitions exposed to the model. `Some` on the
     /// streaming chat path (so the model can request tool calls); omitted via
     /// `skip_serializing_if` on the `/compact` summary call, which uses no tools.

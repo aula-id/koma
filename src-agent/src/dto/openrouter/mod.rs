@@ -37,6 +37,7 @@ pub use request::{
     ToolDef,
     ToolFunctionDef,
     UsageRequest,
+    StreamOptions,
     ImageWireCtx,
     WireMessage,
     to_wire,
