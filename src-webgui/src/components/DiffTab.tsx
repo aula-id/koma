@@ -3,6 +3,7 @@ import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
 import { Loader2 } from 'lucide-react'
 import type { Tab } from '../store/koma'
+import { luminance } from '../lib/luminance'
 
 // ---- Monaco language contributions (Monarch tokenizers ONLY) ----------------
 // editor.api ships ZERO languages. Each basic-languages `.contribution` import
@@ -101,15 +102,6 @@ function resolveVarHex(varName: string, fallback: string): string {
   } catch {
     return fallback
   }
-}
-
-function luminance(hex: string): number {
-  const h = hex.replace('#', '')
-  if (h.length < 6) return 0
-  const r = parseInt(h.slice(0, 2), 16) / 255
-  const g = parseInt(h.slice(2, 4), 16) / 255
-  const b = parseInt(h.slice(4, 6), 16) / 255
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 const KOMA_THEME = 'koma-diff'

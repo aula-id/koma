@@ -1,6 +1,8 @@
 import { memo } from 'react'
 import { Streamdown } from 'streamdown'
 import { komaCode } from './komaShiki'
+import { useKoma } from '../store/koma'
+import { luminance } from '../lib/luminance'
 
 // Streaming-safe markdown + code renderer. Wraps Streamdown (Vercel) which is
 // a react-markdown-compatible renderer purpose-built for the partial/
@@ -26,6 +28,16 @@ export const MessageBody = memo(function MessageBody({
   text: string
   streaming?: boolean
 }) {
+  // Streamdown/komaShiki tokenize at RENDER time into static colored spans —
+  // a palette flip alone (CSS var repaint) doesn't re-tokenize an
+  // already-rendered code block. Subscribing to the live koma bg here (same
+  // store slice `applyPaletteVars` keeps in sync with `--koma-bg`, see
+  // store/koma.ts) makes MessageBody re-render on a theme flip, and passing a
+  // freshly-computed `shikiTheme` array down forces Streamdown to recompute
+  // its shiki context + re-highlight (see komaShiki.ts's `getThemes` comment
+  // for why that prop change is what actually cascades into a re-tokenize).
+  const bg = useKoma((s) => s.palette.bg)
+  const codeTheme = luminance(bg) >= 0.5 ? 'github-light' : 'github-dark'
   return (
     <Streamdown
       className="koma-md"
@@ -35,7 +47,7 @@ export const MessageBody = memo(function MessageBody({
       // Trimmed Shiki highlighter (JS regex engine, no WASM; ~16 langs) +
       // copy button. See komaShiki.ts for why we don't use the stock plugin.
       plugins={{ code: komaCode }}
-      shikiTheme={['github-dark', 'github-dark']}
+      shikiTheme={[codeTheme, codeTheme]}
       // Line numbers are noise inside a chat bubble; drop them.
       lineNumbers={false}
       // Keep the code copy button; suppress the table/mermaid toolbars — the
