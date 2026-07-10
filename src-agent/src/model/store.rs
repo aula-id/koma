@@ -172,8 +172,10 @@ pub fn worktrees_dir(pwd_hash: &str) -> Result<PathBuf> {
 }
 
 /// Shared per-dir settings path: `<pwd_bucket_dir>/settings.json`. Holds the
-/// [`LocalConfig`](crate::model::settings::LocalConfig) (model setup) common to
-/// all sessions in this working directory.
+/// legacy [`LocalConfig`](crate::model::settings::LocalConfig) (per-dir model
+/// catalogue). NO LONGER WRITTEN: `session_models` is persisted per-session now;
+/// this path is only READ once by the one-time migration in `Session::load` that
+/// seeds a pre-fix session's overrides from the old shared bucket.
 pub fn shared_settings_path(pwd_hash: &str) -> Result<PathBuf> {
     Ok(pwd_bucket_dir(pwd_hash)?.join("settings.json"))
 }
