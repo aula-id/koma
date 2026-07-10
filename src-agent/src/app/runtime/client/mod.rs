@@ -325,6 +325,18 @@ pub(super) enum HostCtl {
     /// (`AppConfig::load`). ALWAYS pushes an `AgentsValues` reply (like [`GetSettings`]) so
     /// the dashboard's loading state can never hang.
     GetAgents,
+    /// UN-ATTACHED GUI OAuth-screen fetch (a [`ClientRequest::GetOAuthState`] serviced by the
+    /// swapper / start-screen host, where the ipc `live_req` daemon path is `None`). The host
+    /// answers from `~/.koma/config.json`'s `oauth_conns` (TOKENLESS wire projection) + the
+    /// data-driven provider registry. ALWAYS pushes an `OAuthState` reply (phase `"idle"`,
+    /// like [`GetAgents`]) so the OAuth screen never hangs.
+    GetOAuthState,
+    /// UN-ATTACHED GUI OAuth connection delete (a [`ClientRequest::DeleteOAuthConn`] serviced
+    /// by the swapper / start-screen host): remove the connection from `~/.koma/config.json`,
+    /// persist, evict its token-refresh cache entry, and re-push a fresh `idle` `OAuthState`.
+    /// Reachable pre-session so a connection is removable before any session exists (the login
+    /// FLOW itself stays attached-only). The `uuid` is the connection to drop.
+    DeleteOAuthConn { uuid: String },
     /// Activity-bar "Usage" panel fetch: compute a LAST-7-DAYS preview straight off the
     /// global `~/.koma/usage.sqlite` ledger. Like [`FileDiff`](Self::FileDiff) this NEVER
     /// touches the daemon in either host state — the ledger is a process-local file the

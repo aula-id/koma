@@ -34,3 +34,35 @@ pub enum OAuthEvent {
     /// The flow failed at any stage; `error` is a human-readable reason.
     Failed { error: String },
 }
+
+/// A phase transition of an in-flight GUI-INITIATED OAuth flow, queued by the OAuth
+/// global drain (`event_loop::global::drains::drain_oauth`) onto
+/// [`crate::app::state::AppStateRest::oauth_pushes`] and turned into one
+/// [`crate::ipc::proto::DaemonEvent::OAuthState`] frame — addressed to the initiating
+/// push client — by the daemon hub's `drain_oauth_pushes`.
+///
+/// This is a PARALLEL side-channel to the drain's existing per-mode `oauth_flow` fold +
+/// config persist: those run UNCHANGED (a TUI client in `Mode::Settings`/`OnboardProvider`
+/// still renders the flow off its snapshot), so TUI parity is preserved. The GUI daemon
+/// session sits in `Mode::Chat`, where the mode fold is a no-op — hence the webview needs
+/// this dedicated push instead.
+///
+/// Carries ONLY the phase's display fields — NEVER a token. The connection list + provider
+/// catalogue the wire event also needs are (re)built hub-side from the live `config` + the
+/// provider registry at send time, so no secret ever rides this struct.
+pub struct OAuthPushOut {
+    /// The hub connection id of the GUI/push client that started the flow.
+    pub client_id: u64,
+    /// Wire phase for this transition: `"waiting_url"` (Codex browser, `url` set) |
+    /// `"waiting_code"` (Kilo device, `user_code` + `verification_url` set) | `"success"` |
+    /// `"failed"` (`error` set).
+    pub phase: &'static str,
+    /// Codex authorization URL, for `"waiting_url"`.
+    pub url: Option<String>,
+    /// Kilo Code device code the user approves, for `"waiting_code"`.
+    pub user_code: Option<String>,
+    /// Kilo Code verification URL, for `"waiting_code"`.
+    pub verification_url: Option<String>,
+    /// Human-readable failure reason, for `"failed"`.
+    pub error: Option<String>,
+}

@@ -94,8 +94,9 @@ impl DaemonHub {
 
     // Polite leave: drop the client + pass the controller seat to the
     // next attached client (single-writer controller-passing, DECISIONS).
-    pub(super) fn detach(&mut self, idx: usize) {
-        self.deregister(idx);
+    // `deregister` also disarms the GUI OAuth side-channel if this was the armed client.
+    pub(super) fn detach(&mut self, idx: usize, state: &mut AppState) {
+        self.deregister(idx, state);
     }
 
     // GUI omnisearch: run the EXISTING `@`-palette fuzzy search over this client's

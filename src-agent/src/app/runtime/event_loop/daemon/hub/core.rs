@@ -375,13 +375,21 @@ impl DaemonHub {
 
     /// Deregister the client at `idx` and pass the controller seat if it held it.
     ///
-    /// Shared by `Detach` (polite leave) and `Disconnect` (socket EOF). Single-
-    /// writer (DECISIONS): if the removed client was the controller, the FIRST
-    /// remaining client is promoted so a daemon never ends up writer-less while a
-    /// client is still attached (which would silently reject every mutation). No
-    /// snapshot is re-sent on promotion — the promoted client already holds a live
-    /// shadow; it simply gains mutate rights.
-    pub(super) fn deregister(&mut self, idx: usize) {
+    /// Shared by `Detach` (polite leave) and `Disconnect` (socket EOF) — the single
+    /// choke-point BOTH leave paths funnel through, so it also disarms the GUI OAuth push
+    /// side-channel if the leaving client was the armed one (`state.rest.oauth_gui_client`).
+    /// That stops a stale id from misrouting the next flow's state (incl. the email / plan /
+    /// account_id PII on success) to a gone connection — arm/disarm stays path-agnostic. A
+    /// vanished client already no-ops in `drain_oauth_pushes`; this is the belt to that
+    /// suspenders. Single-writer (DECISIONS): if the removed client was the controller, the
+    /// FIRST remaining client is promoted so a daemon never ends up writer-less while a
+    /// client is still attached (which would silently reject every mutation). No snapshot is
+    /// re-sent on promotion — the promoted client already holds a live shadow; it simply
+    /// gains mutate rights.
+    pub(super) fn deregister(&mut self, idx: usize, state: &mut AppState) {
+        if state.rest.oauth_gui_client == Some(self.clients[idx].id) {
+            state.rest.oauth_gui_client = None;
+        }
         let was_controller = self.clients[idx].is_controller;
         self.clients.remove(idx);
         if was_controller && !self.clients.iter().any(|c| c.is_controller) {

@@ -381,6 +381,39 @@ pub enum ClientRequest {
     /// rebuilds the foreground session's roster and re-pushes a fresh
     /// [`DaemonEvent::AgentsValues`] as the reply. gui-gated.
     DeleteAgent { scope: String, name: String },
+
+    // ─── GUI OAuth surface (Codex + Kilo Code login) ─────────────────────────
+    /// Fetch the current OAuth state (idle): the persisted connections + the available
+    /// providers, phase `"idle"`. Read-only + ALWAYS-reply (a one-shot
+    /// [`DaemonEvent::OAuthState`]) like [`GetSettings`]/[`ListAgents`]; delivered whether
+    /// or not the requesting client is session-attached so the OAuth screen never hangs.
+    /// gui-gated: the TUI drives OAuth through `Mode::Settings`/`OnboardProvider`.
+    GetOAuthState,
+    /// Start an OAuth login flow. `provider` is `"codex"` (browser PKCE loopback),
+    /// `"kilocode"` (device code), or `"codex_paste"` (surface the paste-a-token input).
+    /// For the two browser/device flows the daemon reuses the EXISTING
+    /// `Action::OAuthStart` machinery (spawns `run_codex_flow`/`run_kilo_flow`, which drain
+    /// via `drain_oauth` + persist on success) and streams progress back to THIS client as
+    /// a sequence of [`DaemonEvent::OAuthState`] pushes (`starting` → `waiting_url` /
+    /// `waiting_code` → `success` / `failed`). `codex_paste` just replies `paste` (the
+    /// token then arrives via [`SubmitOAuthPaste`]). Attached-only (the flow runs on the
+    /// daemon's runtime). gui-gated.
+    StartOAuth { provider: String },
+    /// Complete the Codex paste-token flow: build a connection straight from a hand-pasted
+    /// raw access token via the EXISTING `Action::OAuthPaste` path (persist + seed cache),
+    /// then reply with a `success` [`DaemonEvent::OAuthState`] carrying the fresh
+    /// connection list. Attached-only. gui-gated.
+    SubmitOAuthPaste { token: String },
+    /// Cancel an in-flight OAuth flow via the EXISTING `Action::OAuthCancel` path (abort the
+    /// background task + drop its receiver), then reply with an `idle`
+    /// [`DaemonEvent::OAuthState`]. Attached-only. gui-gated.
+    CancelOAuth,
+    /// Delete a persisted OAuth connection by `uuid` via the EXISTING `Action::OAuthDelete`
+    /// path (remove from `config.oauth_conns` + persist + evict the token-refresh cache),
+    /// then reply with a fresh `idle` [`DaemonEvent::OAuthState`]. Works UN-ATTACHED too (the
+    /// connector is reachable pre-session): the GUI host removes + evicts from the on-disk
+    /// config and re-pushes host-side. gui-gated.
+    DeleteOAuthConn { uuid: String },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -516,6 +549,34 @@ pub enum DaemonEvent {
         catalogue_models: Vec<CatalogueModelSnapshot>,
         catalogue_providers: Vec<CatalogueProviderSnapshot>,
         available_tools: Vec<String>,
+    },
+    /// The streaming GUI OAuth surface's authoritative state, for the webview's OAuth
+    /// screen. Sent as the one-shot reply to a [`ClientRequest::GetOAuthState`] /
+    /// [`ClientRequest::DeleteOAuthConn`] / [`ClientRequest::CancelOAuth`] /
+    /// [`ClientRequest::SubmitOAuthPaste`], AND streamed repeatedly as an in-flight
+    /// [`ClientRequest::StartOAuth`] progresses (`starting` → `waiting_url` /
+    /// `waiting_code` → `success` / `failed`) — the daemon hub delivers each transition to
+    /// exactly the initiating client via its per-client seq'd `send_to` (a background flow
+    /// task can't advance the seq), so the frames interleave gap-free with the snapshot
+    /// stream (mirrors the `ModelList`/`SettingsValues` out-of-band replies).
+    ///
+    /// `phase` ∈ `"idle"` | `"starting"` | `"waiting_url"` | `"waiting_code"` | `"paste"` |
+    /// `"success"` | `"failed"`. `url` is the Codex authorization URL (`waiting_url`);
+    /// `user_code` + `verification_url` are the Kilo Code device fields (`waiting_code`);
+    /// `error` is the failure reason (`failed`). `conns` is the CURRENT persisted
+    /// connection list (TOKENLESS [`OAuthConnWire`] — never an access/refresh/id token) and
+    /// `providers` the available-provider catalogue ([`OAuthProviderWire`]); both are
+    /// (re)built from the live config + the registry on every push so the webview store
+    /// stays authoritative. The GUI host re-pushes it as an `OAuthState` envelope; the TUI
+    /// shadow ignores it.
+    OAuthState {
+        phase: String,
+        url: Option<String>,
+        user_code: Option<String>,
+        verification_url: Option<String>,
+        error: Option<String>,
+        conns: Vec<OAuthConnWire>,
+        providers: Vec<OAuthProviderWire>,
     },
 }
 

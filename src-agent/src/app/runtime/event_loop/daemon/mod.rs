@@ -332,6 +332,13 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     `ModelRoutes` frame to the requesting client.
         hub.drain_list_routes();
 
+        // 3-quat. Drain the GUI OAuth push outbox (`state.rest.oauth_pushes`), queued by the
+        //     `drain_oauth` global drain (run in `service_global` above) as an in-flight
+        //     `StartOAuth` login progresses: turn each transition into a seq'd `OAuthState`
+        //     frame to the initiating client. Same one-shot pattern as the two drains above —
+        //     the flow runs off-thread and can't advance the per-client seq itself.
+        hub.drain_oauth_pushes(state);
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the

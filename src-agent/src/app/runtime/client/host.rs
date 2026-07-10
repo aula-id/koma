@@ -27,8 +27,8 @@ use super::diff::{compute_file_diff, compute_usage_preview};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_file_diff, push_model_list, push_route_list, push_settings_values,
-    push_switching, push_usage_preview,
+    push_agents_values, push_file_diff, push_model_list, push_oauth_state, push_route_list,
+    push_settings_values, push_switching, push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -378,6 +378,41 @@ pub(super) fn build_host_agents_values() -> (
     (agents, catalogue_models, catalogue_providers)
 }
 
+/// Build the UN-ATTACHED GUI OAuth reply (a [`HostCtl::GetOAuthState`] serviced by the
+/// swapper / start-screen): the persisted OAuth connections (TOKENLESS wire projection off
+/// `~/.koma/config.json`) + the data-driven provider catalogue. Mirrors the daemon's
+/// attached `send_oauth_state` builder but sources the connections from disk (the swapper
+/// holds no in-memory `AppConfig`), so the OAuth screen populates identically on the start
+/// screen. NEVER serializes a token — the wire type ([`crate::ipc::proto::OAuthConnWire`])
+/// has no token field. `pub(super)` so the sibling swapper delete arm can reuse it.
+pub(super) fn build_host_oauth_state() -> (
+    Vec<crate::ipc::proto::OAuthConnWire>,
+    Vec<crate::ipc::proto::OAuthProviderWire>,
+) {
+    let cfg = crate::model::app_config::AppConfig::load();
+    let conns = cfg
+        .oauth_conns
+        .iter()
+        .map(|c| crate::ipc::proto::OAuthConnWire {
+            uuid: c.uuid.clone(),
+            name: c.name.clone(),
+            provider: c.provider.wire_id().to_string(),
+            email: c.email.clone(),
+            plan: c.plan.clone(),
+            account_id: c.account_id.clone(),
+        })
+        .collect();
+    let providers = crate::service::oauth::registry::oauth_providers()
+        .into_iter()
+        .map(|(id, label, kind)| crate::ipc::proto::OAuthProviderWire {
+            id: id.to_string(),
+            label: label.to_string(),
+            kind: kind.to_string(),
+        })
+        .collect();
+    (conns, providers)
+}
+
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
 /// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
@@ -510,6 +545,32 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     catalogue_providers,
                     available_tools,
                 );
+            }
+            // GUI OAuth screen opened while detached (StartScreen / swapper): there is no
+            // attached daemon to run a login flow on, so answer from the GLOBAL config — the
+            // persisted connections + the provider catalogue, phase "idle". The login FLOW is
+            // attached-only; this read populates the screen pre-session. Cheap, synchronous (a
+            // config load), so it runs inline.
+            Ok(HostCtl::GetOAuthState) => {
+                let (conns, providers) = build_host_oauth_state();
+                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+            }
+            // GUI OAuth connection delete while detached: remove it from `~/.koma/config.json`,
+            // persist, evict its token-refresh cache entry OFF-thread (evict is async), then
+            // re-push a fresh "idle" `OAuthState`. Reachable pre-session so a connection is
+            // removable before any session exists.
+            Ok(HostCtl::DeleteOAuthConn { uuid }) => {
+                let mut cfg = crate::model::app_config::AppConfig::load();
+                cfg.oauth_conns.retain(|c| c.uuid != uuid);
+                if let Err(e) = cfg.save() {
+                    eprintln!("[gui] pre-session oauth delete save failed: {e}");
+                }
+                let uuid2 = uuid.clone();
+                handle.spawn(async move {
+                    crate::service::oauth::manager::evict(&uuid2).await;
+                });
+                let (conns, providers) = build_host_oauth_state();
+                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
             }
             // A hub row's KILL button. In the swapper there is no ATTACHED session, so this
             // is always a background/live-row kill: escalate the kill OFF this thread (it
