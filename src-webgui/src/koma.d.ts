@@ -238,6 +238,31 @@ declare global {
     // dir (errors otherwise), anything else deletes from global. Builtins are
     // delete-rejected daemon-side. Reply lands as a fresh AgentsValues push.
     | { r: 'DeleteAgent'; scope: 'global' | 'session'; name: string }
+    // OAuth login screen: fetch the current connections + available login
+    // providers. Dual-routed like GetSettings/GetAgents — safe to send with NO
+    // session attached (the host answers from ~/.koma/config.json + the
+    // provider registry). Reply lands as the OAuthState push envelope, always.
+    | { r: 'GetOAuthState' }
+    // Start a login flow. `provider` is the wire id of one of the CURRENT
+    // `OAuthState.providers` entries (data-driven — today "codex" (PKCE
+    // browser), "kilocode" (device code), or "codex_paste" (manual token), but
+    // never hardcode this list client-side). ATTACHED-ONLY: with no session
+    // attached this is silently dropped host-side before ever reaching a
+    // daemon — no reply, no error, no state change. Progress streams back as
+    // further OAuthState pushes (phase transitions).
+    | { r: 'StartOAuth'; provider: string }
+    // Complete the "paste token" flow (phase 'paste') with a raw access
+    // `token`. Attached-only, same silent-drop-if-unattached semantics as
+    // StartOAuth. An empty/whitespace token is rejected daemon-side (re-surfaces
+    // phase 'paste') — never crashes, just re-prompts.
+    | { r: 'SubmitOAuthPaste'; token: string }
+    // Cancel an in-flight login flow, back to phase 'idle'. Attached-only,
+    // same silent-drop-if-unattached semantics as StartOAuth.
+    | { r: 'CancelOAuth' }
+    // Delete a persisted OAuth connection by uuid. Dual-routed like
+    // GetOAuthState/DeleteAgent — works with NO session attached. Reply lands
+    // as a fresh OAuthState push (phase 'idle', conns updated).
+    | { r: 'DeleteOAuthConn'; uuid: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

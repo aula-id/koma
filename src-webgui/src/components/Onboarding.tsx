@@ -69,7 +69,16 @@ export function Onboarding() {
   const themes = useKoma((s) => s.config.themes)
   const activeTheme = useKoma((s) => s.config.theme)
   const providers = useKoma((s) => s.config.providers)
+  const oauthProviders = useKoma((s) => s.oauth.providers)
   const req = useKoma((s) => s.req)
+
+  // GetOAuthState works pre-session (unlike StartOAuth/SubmitOAuthPaste/
+  // CancelOAuth, which are attached-only and a silent no-op this early) — so
+  // onboarding CAN show the real, current provider list even though it can't
+  // actually start a login flow yet. Fired once on mount.
+  useEffect(() => {
+    req({ r: 'GetOAuthState' })
+  }, [req])
 
   type Step = 'theme' | 'choose' | 'pickProvider' | 'providerForm' | 'modelForm'
 
@@ -314,14 +323,24 @@ export function Onboarding() {
                 </span>
               </button>
 
-              {/* OAuth — stubbed/greyed for now. */}
+              {/* OAuth — real, data-driven provider list (never hardcoded), but the
+                  login flow itself (StartOAuth/SubmitOAuthPaste/CancelOAuth) is
+                  attached-only and silently no-ops with no session — there's
+                  nothing actionable to click yet, so this stays a greyed note
+                  rather than a working picker. Connect fully from the Connector
+                  panel once a session exists. */}
               <div className="flex cursor-not-allowed flex-col items-start gap-1 rounded-lg border border-dashed border-koma-border px-3.5 py-3 opacity-55">
                 <span className="flex items-center gap-1.5 text-[13px] font-semibold text-koma-fg">
                   <Lock size={14} className="flex-none" />
                   Sign in with OAuth
                 </span>
                 <span className="text-[11.5px] text-koma-fg opacity-60">
-                  Connect OpenAI, Anthropic or Kilo Code with your account — coming soon.
+                  {oauthProviders.length > 0
+                    ? `Connect ${oauthProviders
+                        .filter((p) => p.kind !== 'paste')
+                        .map((p) => p.label)
+                        .join(' or ')} with your account — start a session first, then connect from Connector.`
+                    : 'Connect with your account — start a session first, then connect from Connector.'}
                 </span>
               </div>
             </div>

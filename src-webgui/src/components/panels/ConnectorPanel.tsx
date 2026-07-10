@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { DetailHeader } from './helpers'
 import { ConnectorListView } from './connector/ConnectorListView'
@@ -6,7 +6,7 @@ import { ProviderForm, type ProviderSavePayload } from './connector/ProviderForm
 import { OAuthConnect } from './connector/OAuthConnect'
 import { ModelForm } from './connector/ModelForm'
 import { useKoma } from '../../store/koma'
-import type { Provider, OAuthProv, OAuthConn, Model } from '../../types/config'
+import type { Provider, Model } from '../../types/config'
 
 const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 
@@ -24,17 +24,41 @@ type View =
 
 // Design reference: Connector = 3 catalogues (Providers / OAuth / Models) as a
 // master accordion list; add/edit slides to an inline detail form; delete arms
-// inline. Providers/models are the authoritative config slice (pushed by the
-// host); OAuth stays a local-only stub (untouched, no backend).
+// inline. Providers/models/OAuth conns are all authoritative store slices
+// (pushed by the host) — OAuth is real now, wired to the OAuthState push.
 export function ConnectorPanel() {
   const providers = useKoma((s) => s.config.providers)
   const models = useKoma((s) => s.config.models)
+  const conns = useKoma((s) => s.oauth.conns)
   const req = useKoma((s) => s.req)
-  const [conns, setConns] = useState<OAuthConn[]>([])
   const [view, setView] = useState<View>({ kind: 'list' })
   const [armed, setArmed] = useState<string | null>(null)
 
+  // Fire once when the connector/oauth UI mounts — the OAuth section (list +
+  // provider picker) reads straight off the store thereafter; every
+  // StartOAuth/SubmitOAuthPaste/CancelOAuth/DeleteOAuthConn also re-pushes a
+  // fresh OAuthState, so no polling is needed after this.
+  useEffect(() => {
+    req({ r: 'GetOAuthState' })
+  }, [req])
+
   const back = () => setView({ kind: 'list' })
+
+  // Both the OAuth detail view's DetailHeader back-arrow AND OAuthConnect's
+  // own Cancel button route through this single exit path (passed as
+  // `onDone`), so leaving the screen is coherent no matter which control
+  // triggers it: mid-flow (anything but 'idle'/'failed') it aborts the
+  // running flow server-side — the PKCE browser tab / device poll / paste
+  // prompt — via CancelOAuth before dropping back to the list, instead of
+  // silently orphaning it. `oauth.phase` is read fresh via getState() (not a
+  // subscribed value) since this only needs to be current at click-time.
+  const leaveOAuth = () => {
+    const phase = useKoma.getState().oauth.phase
+    if (phase !== 'idle' && phase !== 'failed') {
+      req({ r: 'CancelOAuth' })
+    }
+    back()
+  }
 
   const saveProvider = (d: ProviderSavePayload) => {
     // Flat payload matching the daemon's GuiReq::SetProvider. `uuid` is `null`
@@ -62,23 +86,16 @@ export function ConnectorPanel() {
     })
     back()
   }
-  const connect = (provider: OAuthProv) => {
-    setConns((l) => [...l, { id: nid('oauth'), provider, account: 'connected' }])
-    back()
-  }
-
   // ModelForm's Provider select stores the chosen option's `value` into
   // model.provider, which crosses the wire as `providerUuid` and is resolved by
   // the daemon via `p.uuid == provider` (SetModel + ListModels). So the value
-  // MUST be the provider uuid, not its name. OAuth conns stay label-valued
-  // (local stub — no daemon uuid to resolve against). The synthetic koma-free
-  // provider is dropdown-only (see ConnectorListView) — exclude it here too so
-  // it can't be hand-picked for a new/edited model (that gateway serves a
-  // single fixed model, not an arbitrary modelId).
-  const providerOptions = [
-    ...providers.filter((p) => !p.isKomaFree).map((p) => ({ value: p.id, label: p.name })),
-    ...conns.map((c) => ({ value: `${c.provider} (oauth)`, label: `${c.provider} (oauth)` })),
-  ]
+  // MUST be a real provider uuid — an OAuth connection isn't one (it's a
+  // separate auth mechanism, not a `config.providers` catalogue entry), so
+  // conns are deliberately NOT offered here. The synthetic koma-free provider
+  // is dropdown-only (see ConnectorListView) — exclude it here too so it can't
+  // be hand-picked for a new/edited model (that gateway serves a single fixed
+  // model, not an arbitrary modelId).
+  const providerOptions = providers.filter((p) => !p.isKomaFree).map((p) => ({ value: p.id, label: p.name }))
 
   return (
     <div className="relative h-full overflow-hidden">
@@ -101,7 +118,7 @@ export function ConnectorPanel() {
               onArm={(id) => setArmed(id)}
               onDisarm={() => setArmed(null)}
               onConfirmProvider={(id) => { req({ r: 'DeleteProvider', uuid: id }); setArmed(null) }}
-              onConfirmOAuth={(id) => { setConns((l) => l.filter((x) => x.id !== id)); setArmed(null) }}
+              onConfirmOAuth={(uuid) => { req({ r: 'DeleteOAuthConn', uuid }); setArmed(null) }}
               onConfirmModel={(id) => {
                 // DeleteModel needs the scope to pick global vs session-local list.
                 const scope = models.find((m) => m.id === id)?.scope ?? 'global'
@@ -120,7 +137,7 @@ export function ConnectorPanel() {
             className="absolute inset-0 flex flex-col bg-koma-panel"
           >
             <DetailHeader
-              onBack={back}
+              onBack={view.kind === 'oauth' ? leaveOAuth : back}
               title={
                 view.kind === 'provider'
                   ? view.isNew
@@ -134,7 +151,7 @@ export function ConnectorPanel() {
               }
             />
             {view.kind === 'provider' && <ProviderForm draft={view.draft} onSave={saveProvider} onCancel={back} />}
-            {view.kind === 'oauth' && <OAuthConnect onPick={connect} onCancel={back} />}
+            {view.kind === 'oauth' && <OAuthConnect onDone={leaveOAuth} />}
             {view.kind === 'model' && <ModelForm draft={view.draft} providerOptions={providerOptions} onSave={saveModel} onCancel={back} />}
           </motion.div>
         )}

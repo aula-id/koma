@@ -32,8 +32,8 @@ export type McpServer = {
 // project the flag yet (and on every real provider).
 export type Provider = { id: string; name: string; endpoint: string; hasKey: boolean; isKomaFree?: boolean }
 
-export type OAuthProv = 'OpenAI' | 'Kilo Code' | 'Anthropic'
-export type OAuthConn = { id: string; provider: OAuthProv; account: string }
+// OAuth types (`OAuthConn`/`OAuthProviderEntry`) live in store/koma.ts now —
+// they're populated by the real `OAuthState` push envelope, not a local stub.
 
 export type Scope = 'global' | 'local'
 export type Role = 'main' | 'awareness' | 'safeguard' | 'compactor' | 'planner'
