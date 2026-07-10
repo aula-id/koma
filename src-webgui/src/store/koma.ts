@@ -345,6 +345,11 @@ export type GitStatus = {
   staged: GitFileEntry[]
   unstaged: GitFileEntry[]
   error: string | null
+  // The SSH vault key (by name) currently assigned to this repo for remote ops
+  // (wave 4b), or null when none is assigned (remote ops then use the system
+  // default ssh-agent/keys). Mirrors the host's `GitStatusResult.key_name`. The
+  // GIT panel's key picker's current selection.
+  keyName: string | null
 }
 
 // One keypair entry in the Settings "SSH Keys" section's vault list — mirrors
@@ -725,6 +730,7 @@ export type PushEnvelope =
       staged: GitFileEntry[]
       unstaged: GitFileEntry[]
       error: string | null
+      keyName: string | null
     }
   // Reply to GuiReq GitDiff — a host-computed git diff for one GIT-panel file
   // row, for a Monaco diff tab. `staged` echoes the request (index-vs-HEAD vs
@@ -739,16 +745,21 @@ export type PushEnvelope =
       error: string | null
       binary: boolean
     }
-  // Reply to a GitStage/GitUnstage/GitDiscard/GitCommit mutation. `op` is
-  // "stage"/"unstage"/"discard"/"commit"; `error` (only when `ok` is false) is
-  // git's own failure message. Carries no list data — ALWAYS immediately
-  // followed by a fresh GitStatus push, which is what actually refreshes the
-  // panel.
+  // Reply to a GitStage/GitUnstage/GitDiscard/GitCommit/GitFetch/GitPull/GitPush
+  // mutation. `op` is "stage"/"unstage"/"discard"/"commit"/"fetch"/"pull"/"push";
+  // `error` (only when `ok` is false) is git's own failure message. `message`
+  // (wave 4b remote ops only — a short human-readable SUCCESS summary, e.g. a
+  // fetch/pull/push's own stdout/stderr) is present only when the host had
+  // something worth surfacing; absent (undefined) for every local mutation and
+  // for a remote op with nothing to say. Carries no list data — ALWAYS
+  // immediately followed by a fresh GitStatus push, which is what actually
+  // refreshes the panel.
   | {
       k: 'GitOp'
       ok: boolean
       op: string
       error: string | null
+      message?: string
     }
   // Reply to GuiReq KeyList — the Settings "SSH Keys" section's authoritative
   // vault list. ALWAYS a reply so the section never hangs loading (an empty
@@ -1002,6 +1013,13 @@ type KomaState = {
   // it off the foreground session's workdir). REPLACED wholesale on each
   // push; starts at the neutral "no repo" default until the first reply.
   git: GitStatus
+  // Which remote sync op (Fetch/Pull/Push) is currently in flight, or null when
+  // none is — a transient (not host-authoritative) flag so the GIT panel's sync
+  // toolbar can disable its buttons + spinner the active one. Set by
+  // `gitFetch`/`gitPull`/`gitPush` right before firing the req; cleared by the
+  // matching `GitOp` push reply (success OR failure — either way the op is no
+  // longer in flight).
+  remoteBusy: string | null
   // Controlled draft text for the GIT panel's commit box. Store-level (not
   // component state) so navigating away from Source Control and back doesn't
   // lose an in-progress message; cleared automatically on a successful commit
@@ -1100,6 +1118,19 @@ type KomaState = {
   gitUnstage: (paths: string[]) => void
   gitDiscard: (paths: string[]) => void
   gitCommit: (message: string) => void
+  // GIT panel key-picker: assign the repo to vault key `name`, or clear the
+  // assignment (`null` — "Default (system ssh)"). No dedicated reply; a fresh
+  // GitStatus push (host-side, always follows) reflects the new `keyName`.
+  setGitKey: (name: string | null) => void
+  // GIT panel sync toolbar: fetch/pull/push the repo's configured remote, using
+  // its assigned key's SSH override if one is set. Each sets `remoteBusy` to its
+  // op name BEFORE firing the req (disabling the toolbar + showing a spinner on
+  // the active button); the matching GitOp reply clears it and toasts the
+  // outcome (an error, or a short success confirmation using `message` if
+  // present), followed by a fresh GitStatus push that refreshes ahead/behind.
+  gitFetch: () => void
+  gitPull: () => void
+  gitPush: () => void
   // Settings "SSH Keys" section: re-fetch the vault's key list. Fired on the
   // section opening/re-activating.
   refreshKeys: () => void
@@ -1260,6 +1291,7 @@ const initialGit: GitStatus = {
   staged: [],
   unstaged: [],
   error: null,
+  keyName: null,
 }
 
 const initialKeys: KeyInfo[] = []
@@ -1331,6 +1363,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   catalogueProviders: [],
   availableTools: [],
   git: initialGit,
+  remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
   keyRevealResult: null,
@@ -1724,6 +1757,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             staged: env.staged,
             unstaged: env.unstaged,
             error: env.error,
+            keyName: env.keyName,
           },
         }))
         break
@@ -1757,27 +1791,43 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
-      case 'GitOp':
+      case 'GitOp': {
+        // Fetch/pull/push are the only ops that ever set `remoteBusy`; clearing
+        // it unconditionally on every OTHER op is a harmless no-op (already null).
+        const isRemote = env.op === 'fetch' || env.op === 'pull' || env.op === 'push'
+        // Surface a failed mutation the same de-duped way the Status case raises
+        // a toast: only start a NEW toast when the text actually differs from
+        // what's already showing, so a repeated failure (e.g. clicking "Stage
+        // All" twice on a locked index) doesn't reset the auto-dismiss timer. A
+        // SUCCESSFUL remote op ALSO gets a toast — a short confirmation using the
+        // host's own `message` if it sent one, else a generic "<op> complete" —
+        // so the sync toolbar's outcome is visible even when nothing else in the
+        // UI changes (e.g. a fetch with nothing new). Local mutations
+        // (stage/unstage/discard/commit) stay silent on success, unchanged.
+        const text = env.error
+          ? `git ${env.op}: ${env.error}`
+          : isRemote
+            ? (env.message ?? `${env.op} complete`)
+            : null
+        const kind: 'error' | 'success' = env.error ? 'error' : 'success'
         set((s) => {
-          // Surface a failed mutation the same de-duped way the Status case
-          // raises a toast: only start a NEW toast when the text actually
-          // differs from what's already showing, so a repeated failure (e.g.
-          // clicking "Stage All" twice on a locked index) doesn't reset the
-          // auto-dismiss timer.
-          const text = env.error ? `git ${env.op}: ${env.error}` : null
           const raise = !!text && text !== s.ui.toast?.text
           const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
           return {
             ui: raise
-              ? { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind: 'error' } }
+              ? { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind } }
               : s.ui,
             // A successful commit empties the draft, ready for the next
             // message. Any other op — or a failed commit — leaves it alone
             // (a failed commit's typed message must not be lost).
             ...(env.op === 'commit' && env.ok ? { commitDraft: '' } : {}),
+            // A remote op is no longer in flight once its reply lands, success
+            // OR failure — clear the sync toolbar's busy flag.
+            ...(isRemote ? { remoteBusy: null } : {}),
           }
         })
         break
+      }
       case 'KeyList':
         set(() => ({ keys: env.keys }))
         break
@@ -1928,6 +1978,21 @@ export const useKoma = create<KomaState>((set, get) => ({
   gitCommit: (message) => {
     if (!message.trim()) return
     get().req({ r: 'GitCommit', message })
+  },
+  setGitKey: (name) => {
+    get().req({ r: 'SetGitKey', name })
+  },
+  gitFetch: () => {
+    set(() => ({ remoteBusy: 'fetch' }))
+    get().req({ r: 'GitFetch' })
+  },
+  gitPull: () => {
+    set(() => ({ remoteBusy: 'pull' }))
+    get().req({ r: 'GitPull' })
+  },
+  gitPush: () => {
+    set(() => ({ remoteBusy: 'push' }))
+    get().req({ r: 'GitPush' })
   },
   refreshKeys: () => {
     get().req({ r: 'KeyList' })

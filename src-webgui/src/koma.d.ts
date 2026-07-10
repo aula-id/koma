@@ -291,6 +291,21 @@ declare global {
     // git invocation). Reply lands as GitOp then a fresh GitStatus; the commit box
     // clears its draft on a successful (ok:true) reply.
     | { r: 'GitCommit'; message: string }
+    // GIT panel key-picker changed: assign the foreground session's repo to use
+    // SSH key `name` (a vault key) for remote ops, or clear the assignment
+    // (`name: null` — "Default (system ssh)"). No dedicated reply; a fresh
+    // GitStatus push reflects the new `keyName`.
+    | { r: 'SetGitKey'; name: string | null }
+    // GIT panel Fetch button: `git fetch --prune` using the repo's assigned key's
+    // SSH override if one is set. Reply lands as a one-shot GitOp push (op:
+    // 'fetch'), immediately followed by a fresh GitStatus push.
+    | { r: 'GitFetch' }
+    // GIT panel Pull button: `git pull --ff-only` (fails loudly on divergence
+    // rather than merging/leaving a half-merged tree). Same reply pattern as
+    // GitFetch.
+    | { r: 'GitPull' }
+    // GIT panel Push button. Same reply pattern as GitFetch.
+    | { r: 'GitPush' }
     // Settings "SSH Keys" section opened / refreshed: fetch the host key vault's
     // current key list (`<~/.koma>/keys/`). GUI-only, manual, user-owned vault —
     // completely separate from the model's own git credential machinery. Serviced

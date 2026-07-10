@@ -317,6 +317,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitCommit { message } => {
             let _ = ctx.ctl.send(HostCtl::GitCommit { message });
         }
+        // GIT panel key-picker + remote sync buttons: same routing as
+        // `GitStatus`/`GitDiff` — host-side only, never the daemon.
+        GuiReq::SetGitKey { name } => {
+            let _ = ctx.ctl.send(HostCtl::SetGitKey { name });
+        }
+        GuiReq::GitFetch => {
+            let _ = ctx.ctl.send(HostCtl::GitFetch);
+        }
+        GuiReq::GitPull => {
+            let _ = ctx.ctl.send(HostCtl::GitPull);
+        }
+        GuiReq::GitPush => {
+            let _ = ctx.ctl.send(HostCtl::GitPush);
+        }
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
         // ALWAYS routed to the host-relay thread — never the daemon —
         // regardless of attach state (see `HostCtl::UsagePreview`). A "session"

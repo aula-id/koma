@@ -108,6 +108,24 @@ pub(super) fn sanitize_name(name: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+/// Resolve the PRIVATE-key file path for `name` (wave 4b — used by
+/// [`super::git_remote`]'s remote ops to build a `GIT_SSH_COMMAND` override).
+/// `name` is rejected via [`sanitize_name`] first; `None` is also returned
+/// when the vault dir can't be resolved OR the named private-key file doesn't
+/// exist (an assigned-but-since-deleted key), so a caller can safely treat
+/// `None` as "fall back to no SSH override" without a separate existence
+/// check of its own.
+pub(super) fn key_private_path(name: &str) -> Option<PathBuf> {
+    let name = sanitize_name(name)?;
+    let dir = keys_dir().ok()?;
+    let path = dir.join(&name);
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 /// Run `ssh-keygen <args>` with `GIT_TERMINAL_PROMPT=0` (never block on an
 /// interactive passphrase/prompt, mirroring `git_cmd`'s guard), returning
 /// `None` on any spawn failure rather than panicking.

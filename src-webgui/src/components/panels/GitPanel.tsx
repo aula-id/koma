@@ -1,6 +1,20 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { GitBranch, ArrowUp, ArrowDown, FileText, Search, Plus, Minus, Undo2, Check, X } from 'lucide-react'
+import {
+  GitBranch,
+  ArrowUp,
+  ArrowDown,
+  FileText,
+  Search,
+  Plus,
+  Minus,
+  Undo2,
+  Check,
+  X,
+  KeyRound,
+  Loader2,
+  RefreshCw,
+} from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
@@ -84,6 +98,42 @@ function HeaderAction({
       className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
     >
       {children}
+    </button>
+  )
+}
+
+// A sync-toolbar button (Fetch/Pull/Push) — disabled + swaps its icon for a
+// spinner while ITS OWN op (`busy`) is the one currently in flight; disabled
+// (no spinner) while a DIFFERENT op is running (only one remote op runs at a
+// time). `badge` renders a small trailing count (ahead/behind) when > 0.
+function SyncButton({
+  title,
+  onClick,
+  disabled,
+  busy,
+  badge,
+  children,
+}: {
+  title: string
+  onClick: () => void
+  disabled: boolean
+  busy: boolean
+  badge?: number
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      className="flex flex-none items-center gap-1 rounded px-1.5 py-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35"
+    >
+      {busy ? <Loader2 size={13} className="flex-none animate-spin" /> : children}
+      {typeof badge === 'number' && badge > 0 && (
+        <span className="font-mono text-[11px] leading-none">{badge}</span>
+      )}
     </button>
   )
 }
@@ -209,21 +259,30 @@ export function GitPanel() {
   const DISCARD_ALL = '\0discard-all'
 
   const git = useKoma((s) => s.git)
+  const keys = useKoma((s) => s.keys)
+  const remoteBusy = useKoma((s) => s.remoteBusy)
   const commitDraft = useKoma((s) => s.commitDraft)
   const setCommitDraft = useKoma((s) => s.setCommitDraft)
   const refreshGitStatus = useKoma((s) => s.refreshGitStatus)
+  const refreshKeys = useKoma((s) => s.refreshKeys)
   const openGitDiffTab = useKoma((s) => s.openGitDiffTab)
   const gitStage = useKoma((s) => s.gitStage)
   const gitUnstage = useKoma((s) => s.gitUnstage)
   const gitDiscard = useKoma((s) => s.gitDiscard)
   const gitCommit = useKoma((s) => s.gitCommit)
+  const setGitKey = useKoma((s) => s.setGitKey)
+  const gitFetch = useKoma((s) => s.gitFetch)
+  const gitPull = useKoma((s) => s.gitPull)
+  const gitPush = useKoma((s) => s.gitPush)
 
   // Fetch fresh status on mount (panel opened/activated). GitPanel unmounts
   // when the sidebar switches to another view, so re-selecting "Source
-  // Control" re-runs this — no separate "became active" plumbing needed.
+  // Control" re-runs this — no separate "became active" plumbing needed. Also
+  // (re)fetch the SSH vault list so the key picker below has options.
   useEffect(() => {
     refreshGitStatus()
-  }, [refreshGitStatus])
+    refreshKeys()
+  }, [refreshGitStatus, refreshKeys])
 
   // `error` set OR no resolved root means the workdir isn't inside a git
   // repository at all — distinct from a detached-HEAD repo (still a real
@@ -260,6 +319,49 @@ export function GitPanel() {
             {git.behind}
           </span>
         )}
+      </div>
+      <div className="flex flex-none items-center gap-1 border-b border-koma-border px-3 py-1.5">
+        <SyncButton
+          title="Fetch"
+          onClick={gitFetch}
+          disabled={!!remoteBusy}
+          busy={remoteBusy === 'fetch'}
+        >
+          <RefreshCw size={13} />
+        </SyncButton>
+        <SyncButton
+          title={(git.behind ?? 0) > 0 ? `Pull (${git.behind} behind)` : 'Pull'}
+          onClick={gitPull}
+          disabled={!!remoteBusy}
+          busy={remoteBusy === 'pull'}
+          badge={git.behind ?? 0}
+        >
+          <ArrowDown size={13} />
+        </SyncButton>
+        <SyncButton
+          title={(git.ahead ?? 0) > 0 ? `Push (${git.ahead} ahead)` : 'Push'}
+          onClick={gitPush}
+          disabled={!!remoteBusy}
+          busy={remoteBusy === 'push'}
+          badge={git.ahead ?? 0}
+        >
+          <ArrowUp size={13} />
+        </SyncButton>
+        <span className="flex-1" />
+        <KeyRound size={12} className="flex-none text-koma-dim opacity-60" />
+        <select
+          value={git.keyName ?? ''}
+          onChange={(e) => setGitKey(e.target.value || null)}
+          title="SSH key used for fetch/pull/push"
+          className="min-w-0 max-w-[130px] flex-none truncate rounded border border-koma-border bg-koma-bg px-1 py-0.5 font-mono text-[11px] text-koma-fg focus:outline-none focus:ring-1 focus:ring-koma-accent"
+        >
+          <option value="">Default (system ssh)</option>
+          {keys.map((k) => (
+            <option key={k.name} value={k.name}>
+              {k.name}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="flex flex-none flex-col gap-1.5 border-b border-koma-border px-3 py-2">
         <textarea

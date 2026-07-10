@@ -253,6 +253,25 @@ pub(super) enum GuiReq {
     /// stderr, e.g. "nothing to commit"). Same routing as `GitStage`; the React commit
     /// box clears its draft on a successful (`ok:true`) reply.
     GitCommit { message: String },
+    /// The GIT panel's key-picker changed: assign the foreground session's repo to
+    /// use SSH key `name` (a vault key from the Settings "SSH Keys" section) for
+    /// remote ops, or clear the assignment (`name: null` — "Default (system ssh)").
+    /// Routed UNCONDITIONALLY to the host-relay thread via `HostCtl::SetGitKey`,
+    /// same reasoning as `GitStage` — host-local, never the daemon. No dedicated
+    /// reply; the reply is a fresh `GitStatus` push reflecting the new `keyName`.
+    SetGitKey { name: Option<String> },
+    /// The GIT panel's Fetch button: `git fetch --prune` for the foreground
+    /// session's repo, using its assigned key's SSH override if one is set. Same
+    /// routing as `GitStage` — host-local, never the daemon. The reply is a
+    /// one-shot `GitOp` envelope (`op: "fetch"`), immediately followed by a fresh
+    /// `GitStatus` push so ahead/behind refresh.
+    GitFetch,
+    /// The GIT panel's Pull button: `git pull --ff-only` (fails loudly on any
+    /// divergence rather than merging or leaving a half-merged tree). Same
+    /// routing + reply pattern as `GitFetch`.
+    GitPull,
+    /// The GIT panel's Push button. Same routing + reply pattern as `GitFetch`.
+    GitPush,
     /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
     /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a
