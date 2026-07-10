@@ -104,6 +104,11 @@ pub enum OAuthProvider {
     #[default]
     Codex,
     Kilocode,
+    /// xAI (Grok): an RFC 8628 device-code grant (like Kilo Code) but with a
+    /// discovered token endpoint + refresh tokens (see `service::oauth::xai`).
+    /// Resolves to an `OpenAiCompatible` chat route with an EMPTY `account_id`
+    /// (no org concept), so the Kilo org header never fires for it.
+    Xai,
 }
 
 impl OAuthProvider {
@@ -112,6 +117,7 @@ impl OAuthProvider {
         match self {
             OAuthProvider::Codex => "Codex",
             OAuthProvider::Kilocode => "Kilo Code",
+            OAuthProvider::Xai => "xAI (Grok)",
         }
     }
 
@@ -123,6 +129,7 @@ impl OAuthProvider {
         match self {
             OAuthProvider::Codex => "codex",
             OAuthProvider::Kilocode => "kilocode",
+            OAuthProvider::Xai => "xai",
         }
     }
 
@@ -135,6 +142,7 @@ impl OAuthProvider {
         match self {
             OAuthProvider::Codex => "pkce",
             OAuthProvider::Kilocode => "device",
+            OAuthProvider::Xai => "device",
         }
     }
 }

@@ -224,10 +224,17 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
     let api_type = match conn.provider {
         OAuthProvider::Codex => ApiType::Codex,
         OAuthProvider::Kilocode => ApiType::OpenAiCompatible,
+        // xAI is a plain OpenAI-compatible chat endpoint (bearer JWT).
+        OAuthProvider::Xai => ApiType::OpenAiCompatible,
     };
     let account_id = match conn.provider {
         OAuthProvider::Codex => conn.account_id.clone(),
         OAuthProvider::Kilocode => conn.org_id.clone(),
+        // xAI has NO org/account concept — keep account_id empty. This is load-bearing:
+        // the OpenAI-compatible transport only stamps `X-Kilocode-OrganizationID` when
+        // account_id is non-empty, so an empty one guarantees that Kilo-only header can
+        // never leak to api.x.ai.
+        OAuthProvider::Xai => String::new(),
     };
     Some(Resolved {
         model_id: entry.model_id.clone(),

@@ -52,6 +52,7 @@ pub(super) fn handle_oauth_start(
     let join = match provider {
         OAuthProvider::Codex => handle.spawn(run_codex_flow(tx)),
         OAuthProvider::Kilocode => handle.spawn(run_kilo_flow(tx)),
+        OAuthProvider::Xai => handle.spawn(run_xai_flow(tx)),
     };
     state.rest.oauth_task = Some(join.abort_handle());
     Ok(())
@@ -115,6 +116,44 @@ async fn run_kilo_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     };
     let (org_id, email) = crate::service::oauth::kilo::profile(&http, &token).await;
     let conn = crate::service::oauth::kilo::to_conn(token, org_id, email);
+    let _ = tx.send(OAuthEvent::Success { conn });
+}
+
+/// The xAI (Grok) device flow: request a device code, open the verification URL,
+/// poll xAI's DISCOVERED token endpoint for approval, then build the connection
+/// from the returned access + refresh token set. Reuses the `KiloCode` event as
+/// the generic device-code carrier (`user_code` + `verification_url`). Sends
+/// exactly one terminal event after an initial `KiloCode`.
+async fn run_xai_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+    let http = reqwest::Client::new();
+    let dc = match crate::service::oauth::xai::device_init(&http).await {
+        Ok(dc) => dc,
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+            return;
+        }
+    };
+    let _ = tx.send(OAuthEvent::KiloCode {
+        user_code: dc.user_code.clone(),
+        verification_url: dc.verification_url.clone(),
+    });
+    crate::service::oauth::browser::open_in_browser(&dc.verification_url);
+
+    let tokens = match crate::service::oauth::xai::poll(
+        &http,
+        &dc.device_code,
+        dc.expires_in,
+        dc.interval,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+            return;
+        }
+    };
+    let conn = crate::service::oauth::xai::to_conn(tokens);
     let _ = tx.send(OAuthEvent::Success { conn });
 }
 
