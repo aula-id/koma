@@ -126,8 +126,8 @@ impl OAuthProvider {
         match self {
             OAuthProvider::Codex => "Codex",
             OAuthProvider::Kilocode => "Kilo Code",
-            OAuthProvider::Xai => "xAI (Grok)",
-            OAuthProvider::ClaudeAI => "Claude (Anthropic)",
+            OAuthProvider::Xai => "xAI",
+            OAuthProvider::ClaudeAI => "Claude",
         }
     }
 

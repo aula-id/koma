@@ -128,7 +128,7 @@ pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
             .iter()
             .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
             .collect();
-    providers.push(("codex_paste", "Codex (paste token)", "paste"));
+    providers.push(("codex_paste", "Codex paste", "paste"));
     providers
 }
 
