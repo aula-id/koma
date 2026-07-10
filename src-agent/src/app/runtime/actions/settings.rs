@@ -147,6 +147,10 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // field None so it stops being serialized (migration on save).
             roles: d.roles.clone(),
             role: None,
+            // Preserve the clone-source identity through the save so a /settings save
+            // that never opened this override keeps the GUI picker's exact match
+            // (a modal edit re-authors the draft to None — see save_model_modal).
+            source_uuid: d.source_uuid.clone(),
         };
         // Global catalogue: session_only == false. Session override layer:
         // session_only == true (persisted to settings.json, never config).

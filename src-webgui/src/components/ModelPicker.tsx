@@ -13,8 +13,10 @@ import type { Model } from '../types/config'
 //
 // The current selection is DERIVED from the authoritative config slice: the
 // session-local model holding the `main` role is the active override, else
-// "(inherit)". A local override is a CLONE of a global model with a NEW uuid,
-// so the active global row is matched by model id + provider (not by uuid).
+// "(inherit)". A local override is a CLONE of a global model with a NEW uuid but
+// REMEMBERS its source global's uuid (`sourceUuid`), so the active global row is
+// matched by that EXACT identity (with a name fallback for pre-`sourceUuid`
+// overrides created on an older daemon).
 export function ModelPicker() {
   const models = useKoma((s) => s.config.models)
   const providers = useKoma((s) => s.config.providers)
@@ -41,18 +43,22 @@ export function ModelPicker() {
     () => models.find((m) => m.scope === 'local' && m.roles.includes('main')),
     [models],
   )
-  // A local override is a CLONE of a global model with a NEW uuid but the SAME
-  // name (set_session_main copies chosen.name daemon-side) — so matching on
-  // modelId+provider alone checks EVERY global sharing that model_id+provider
-  // (e.g. two global entries both pointing at the same OAuth-backed grok-4.5).
-  // Requiring the name too narrows it back down to the one actually picked.
-  // Two globals with identical name+modelId+provider legitimately both
-  // checking is an acceptable degenerate case — not worth over-engineering.
-  const sameModel = (m: Model) =>
-    localMain != null &&
-    m.modelId === localMain.modelId &&
-    m.provider === localMain.provider &&
-    m.name === localMain.name
+  // EXACT identity match: the local override remembers the uuid of the global it
+  // was cloned from (daemon `set_session_main` stamps `sourceUuid`), so precisely
+  // the global the user clicked lights up — no name / model_id / provider guessing,
+  // and no false double-check when two globals share a model_id+provider.
+  // FALLBACK: an override created BEFORE `sourceUuid` existed (an in-flight session
+  // on an older daemon) carries no source, so fall back to the previous
+  // name+modelId+provider compare rather than matching nothing mid-session.
+  const sameModel = (m: Model) => {
+    if (localMain == null) return false
+    if (localMain.sourceUuid != null) return localMain.sourceUuid === m.id
+    return (
+      m.modelId === localMain.modelId &&
+      m.provider === localMain.provider &&
+      m.name === localMain.name
+    )
+  }
 
   const triggerLabel = localMain ? localMain.name || localMain.modelId || 'main' : '(inherit)'
   const triggerTitle = localMain

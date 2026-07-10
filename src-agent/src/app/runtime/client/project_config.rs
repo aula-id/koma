@@ -136,6 +136,9 @@ fn push_model(m: &crate::model::app_config::ModelEntry, scope: &'static str) -> 
         roles: m.effective_roles().into_iter().map(role_token).collect(),
         scope,
         free: false,
+        // A local override remembers the global uuid it was cloned from (set by
+        // `set_session_main`); `None` on every global entry.
+        source_uuid: m.source_uuid.clone(),
     }
 }
 
@@ -163,6 +166,8 @@ fn koma_free_synthetic_model(providers: &[crate::model::app_config::ProviderConn
         roles: vec!["main"],
         scope: "global",
         free: true,
+        // The synthetic free row is not a clone of any global — no source identity.
+        source_uuid: None,
     }
 }
 

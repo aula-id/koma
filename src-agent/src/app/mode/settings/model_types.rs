@@ -146,6 +146,13 @@ pub struct ModelDraft {
     /// `true` = saved for this session only (not persisted globally);
     /// `false` = global scope.
     pub session_only: bool,
+    /// For a session-local override CLONED from a global entry, the `uuid` of that
+    /// global (mirrors [`crate::model::app_config::ModelEntry::source_uuid`]).
+    /// Threaded through the TUI /settings load→save round-trip (map_entry→to_entry)
+    /// so saving an unrelated setting never wipes the GUI picker's exact-identity
+    /// match. `None` for a directly-authored entry; a modal edit re-authors it to
+    /// `None` (the modal has no clone-source concept).
+    pub source_uuid: Option<String>,
 }
 
 /// State for the "Add / Edit model" modal overlay.

@@ -122,6 +122,7 @@ fn oauth_model_entry(provider_uuid: &str) -> ModelEntry {
         route: None,
         roles: vec![ModelRole::Main],
         role: None,
+        source_uuid: None,
     }
 }
 

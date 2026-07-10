@@ -263,6 +263,11 @@ impl SettingsState {
                 roles: m.roles.clone(),
                 route: m.route.clone(),
                 session_only,
+                // A modal edit re-authors the model from its fields; it carries no
+                // clone-source (only `set_session_main`'s GUI clone sets one). A
+                // settings save that never opens this model keeps the source it was
+                // loaded with (map_entry → to_entry).
+                source_uuid: None,
             };
 
             // Determine the operation and target index:

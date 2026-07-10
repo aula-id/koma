@@ -274,6 +274,14 @@ pub(super) struct PushModel {
     /// it; picking it round-trips the sentinel id back as `SetSessionMain`, which the
     /// daemon routes through the `/free` find-or-create flow.
     pub(super) free: bool,
+    /// For a `"local"`-scope override CLONED from a global entry, the `uuid` of that
+    /// global (`ModelEntry::source_uuid`) — serialized as `sourceUuid`. The GUI
+    /// ModelPicker lights the active session-Main's origin row by matching THIS exact
+    /// id, falling back to a name compare only for an override authored before the
+    /// field existed. Omitted from the wire (`None`) for every global row, the synthetic
+    /// free row, and a directly-authored local entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) source_uuid: Option<String>,
 }
 
 /// One MCP-server row in a [`PushEnvelope::Config`] (the McpPanel Server model). `id` is

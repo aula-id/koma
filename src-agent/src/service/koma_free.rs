@@ -9,7 +9,7 @@
 //! pins [`KOMA_FREE_MODEL`].
 
 use crate::model::app_config::{
-    new_uuid, ApiType, AppConfig, ModelEntry, ModelRole, ProviderConn,
+    new_uuid, strip_role, ApiType, AppConfig, ModelEntry, ModelRole, ProviderConn,
 };
 
 /// Base URL for the koma-free gateway. NO trailing slash: the request path is
@@ -93,7 +93,9 @@ pub fn ensure_koma_free_config(cfg: &mut AppConfig) {
         ModelRole::Compactor,
         ModelRole::Planner,
     ];
-    if let Some(existing) = cfg.models.iter_mut().find(|m| m.provider_uuid == provider_uuid) {
+    let koma_free_uuid = if let Some(existing) =
+        cfg.models.iter_mut().find(|m| m.provider_uuid == provider_uuid)
+    {
         let mut roles = existing.effective_roles();
         for role in all_roles {
             if !roles.contains(&role) {
@@ -101,15 +103,38 @@ pub fn ensure_koma_free_config(cfg: &mut AppConfig) {
             }
         }
         existing.roles = roles;
+        // The union now lives in `roles`; clear the stale legacy single-role field
+        // so a later demotion of THIS entry (some other model stealing a role) can
+        // never resurface a role from the legacy slot.
+        existing.role = None;
+        existing.uuid.clone()
     } else {
+        let uuid = new_uuid();
         cfg.models.push(ModelEntry {
-            uuid: new_uuid(),
+            uuid: uuid.clone(),
             name: "koma free".to_string(),
             model_id: KOMA_FREE_MODEL.to_string(),
             provider_uuid,
             route: None,
             roles: all_roles.to_vec(),
             role: None,
+            source_uuid: None,
         });
+        uuid
+    };
+
+    // Single-holder invariant (the same one `upsert_model_entry` keeps for the GUI
+    // ModelForm save): koma-free now claims EVERY runtime role, so steal each of
+    // those roles from every OTHER global model — from BOTH the roles vec and the
+    // legacy role field (via `strip_role`). Without this, a model the user had
+    // pinned to Main (or any role) stays a second effective holder and either
+    // shadows koma-free or is shadowed BY it through `resolve_role`'s first-wins
+    // scan (the exact "koma-free + grpk both hold Main" duplicate this closes).
+    for other in cfg.models.iter_mut() {
+        if other.uuid != koma_free_uuid {
+            for role in all_roles {
+                strip_role(other, role);
+            }
+        }
     }
 }
