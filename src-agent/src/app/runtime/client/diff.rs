@@ -27,12 +27,15 @@ pub(super) struct FileDiffResult {
 }
 
 /// Cap on either side of a diff (~2MiB) — past this we bail with `error: "file too
-/// large to diff"` rather than shipping a multi-megabyte string into Monaco.
-const FILE_DIFF_SIZE_CAP: usize = 2 * 1024 * 1024;
+/// large to diff"` rather than shipping a multi-megabyte string into Monaco. Bumped
+/// to `pub(super)` (was private) so [`super::git`]'s git-diff computation reuses the
+/// SAME cap rather than duplicating the constant.
+pub(super) const FILE_DIFF_SIZE_CAP: usize = 2 * 1024 * 1024;
 
 /// Heuristic binary-content test, mirroring the harness's own sniff: a NUL byte in the
-/// first 8KiB, or the bytes failing UTF-8 decode.
-fn looks_binary(bytes: &[u8]) -> bool {
+/// first 8KiB, or the bytes failing UTF-8 decode. Bumped to `pub(super)` (was private)
+/// so [`super::git`]'s git-diff computation reuses this exact sniff.
+pub(super) fn looks_binary(bytes: &[u8]) -> bool {
     let probe = &bytes[..bytes.len().min(8192)];
     probe.contains(&0) || std::str::from_utf8(bytes).is_err()
 }
@@ -49,8 +52,10 @@ fn looks_binary(bytes: &[u8]) -> bool {
 /// order, picking the first whose join either exists on disk or whose parent
 /// directory exists (a plausible location for a file that was since deleted);
 /// falling back to the first (primary) root if none match, or the bare relative path
-/// if the session can't be resolved at all (e.g. `current_session` is `None`).
-fn resolve_diff_path(path: &str, current_session: Option<&str>) -> std::path::PathBuf {
+/// if the session can't be resolved at all (e.g. `current_session` is `None`). Bumped
+/// to `pub(super)` (was private) so [`super::git`]'s git-diff computation resolves a
+/// `path` the SAME way rather than duplicating the workdir-probing logic.
+pub(super) fn resolve_diff_path(path: &str, current_session: Option<&str>) -> std::path::PathBuf {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
         return p.to_path_buf();
@@ -73,7 +78,9 @@ fn resolve_diff_path(path: &str, current_session: Option<&str>) -> std::path::Pa
 /// Look up a session's configured workdir roots straight off disk (sqlite registry for
 /// the `pwd_hash` bucket, then that session's `settings.json` for the actual list) —
 /// no daemon connection required. `None` if the session can't be found on disk at all.
-fn session_workdirs_for(uuid: &str) -> Option<Vec<std::path::PathBuf>> {
+/// Bumped to `pub(super)` (was private) so [`super::git`]'s git-status/-diff
+/// computation resolves the repo root / a relative path the SAME way.
+pub(super) fn session_workdirs_for(uuid: &str) -> Option<Vec<std::path::PathBuf>> {
     let dir = session_dir_for(uuid)?;
     let session = crate::model::session::Session::load(&dir).ok()?;
     Some(session.workdirs())
@@ -81,8 +88,10 @@ fn session_workdirs_for(uuid: &str) -> Option<Vec<std::path::PathBuf>> {
 
 /// Resolve a session's on-disk directory (where `messages.sqlite` and its side tables
 /// live) straight off the sqlite registry — no daemon connection required. `None` if
-/// the session can't be found on disk at all.
-fn session_dir_for(uuid: &str) -> Option<std::path::PathBuf> {
+/// the session can't be found on disk at all. Bumped to `pub(super)` (was private) so
+/// [`super::git`] can reuse it (currently only via [`session_workdirs_for`], but kept
+/// visible for any future direct use).
+pub(super) fn session_dir_for(uuid: &str) -> Option<std::path::PathBuf> {
     let row = crate::model::session_registry::get(uuid).ok().flatten()?;
     crate::model::store::session_dir(&row.pwd_hash, uuid).ok()
 }

@@ -24,11 +24,12 @@ use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_file_diff, compute_usage_preview};
+use super::git::{compute_git_diff, compute_git_status};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_file_diff, push_model_list, push_oauth_state, push_route_list,
-    push_settings_values, push_switching, push_usage_preview,
+    push_agents_values, push_file_diff, push_git_diff, push_git_status, push_model_list,
+    push_oauth_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -510,6 +511,27 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 std::thread::spawn(move || {
                     let result = compute_file_diff(&path, cur.as_deref());
                     push_file_diff(&push2, result);
+                });
+            }
+            // Explore GIT panel opened while detached (StartScreen / swapper): git is
+            // blocking, so this runs on a plain OS thread rather than the async
+            // runtime. Never touches the daemon in either host state — see
+            // `compute_git_status`.
+            Ok(HostCtl::GitStatus) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    let result = compute_git_status(cur.as_deref());
+                    push_git_status(&push2, result);
+                });
+            }
+            // GIT panel file-row click while detached: same reasoning as `GitStatus`.
+            Ok(HostCtl::GitDiff { path, staged }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    let result = compute_git_diff(&path, staged, cur.as_deref());
+                    push_git_diff(&push2, result);
                 });
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is

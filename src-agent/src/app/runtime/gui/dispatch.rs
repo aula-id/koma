@@ -292,6 +292,17 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::FileDiff { path } => {
             let _ = ctx.ctl.send(HostCtl::FileDiff { path });
         }
+        // Explore GIT panel: host-side git status fetch. ALWAYS routed to the
+        // host-relay thread — never the daemon — regardless of attach state (see
+        // `HostCtl::GitStatus`), same reasoning as `FileDiff`.
+        GuiReq::GitStatus => {
+            let _ = ctx.ctl.send(HostCtl::GitStatus);
+        }
+        // GIT panel file-row click: host-side git diff fetch, same routing as
+        // `GitStatus`/`FileDiff`.
+        GuiReq::GitDiff { path, staged } => {
+            let _ = ctx.ctl.send(HostCtl::GitDiff { path, staged });
+        }
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
         // ALWAYS routed to the host-relay thread — never the daemon —
         // regardless of attach state (see `HostCtl::UsagePreview`). A "session"
