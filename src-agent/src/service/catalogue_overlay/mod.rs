@@ -128,12 +128,14 @@ pub fn overlay_cost(
 }
 
 /// All overlay entries for `endpoint`, mapped to the OpenRouter-shaped
-/// `ModelInfo` so a future consumer can feed them straight into
-/// `effort_caps`/`context_length_for`. Empty vec if the endpoint has no
-/// overlay entries (or [`init`] hasn't run — callers must not assume this is
-/// non-empty).
-// dead_code: infra-only for now — no consumer wired yet (W2/W3 will read this).
-#[allow(dead_code)]
+/// `ModelInfo` so a consumer can feed them straight into `effort_caps`/
+/// `context_length_for`. Empty vec if the endpoint has no overlay entries (or
+/// [`init`] hasn't run — callers must not assume this is non-empty).
+///
+/// Consumer: the GUI/TUI model-id suggestion paths (`ListModels` hub handler,
+/// its un-attached `host.rs` mirror, and the TUI's `candidate_model_ids`) fall
+/// back to this for OAuth-conn providers (Codex/Claude have no live `/models`
+/// endpoint at all) and for any live fetch that comes back empty.
 pub fn models_for(endpoint: &str) -> Vec<ModelInfo> {
     let Some(lock) = OVERLAY.get() else {
         return Vec::new();

@@ -250,29 +250,48 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 
 
 /// UN-ATTACHED GUI model-picker fetch (a [`HostCtl::ListModels`] serviced by the swapper):
-/// load the GLOBAL config, resolve the provider by uuid, and `GET {endpoint}/models`,
-/// returning the model ids. Returns an EMPTY list on an unknown provider OR any fetch error
-/// — the caller ALWAYS pushes a reply, so the React picker's spinner clears. Mirrors the
-/// daemon's attached-path `ClientRequest::ListModels` handler (`hub::requests`), but sources
-/// the provider from disk since the swapper holds no in-memory `AppConfig`.
+/// load the GLOBAL config and resolve the provider by uuid. A `config.providers` entry
+/// gets a live `GET {endpoint}/models`, falling back to the curated `catalogue_overlay`
+/// if that comes back empty; a `config.oauth_conns` entry (Codex/Claude/xAI) has no live
+/// fetch worth making and resolves straight to the overlay via
+/// `registry::meta(conn.provider).chat_endpoint`. Returns an EMPTY list on an unknown
+/// provider OR any fetch error — the caller ALWAYS pushes a reply, so the React picker's
+/// spinner clears. Mirrors the daemon's attached-path `ClientRequest::ListModels` handler
+/// (`hub::requests_read`), but sources the provider from disk since the swapper holds no
+/// in-memory `AppConfig`.
 async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
     let cfg = crate::model::app_config::AppConfig::load();
-    let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) else {
-        return Vec::new();
-    };
-    let c = crate::app::runtime::session_mgmt::build_client();
-    let conn = crate::service::openrouter::Conn {
-        endpoint: &p.endpoint,
-        api_key: &p.api_key,
-        api_type: crate::model::app_config::ApiType::OpenAiCompatible,
-        account_id: "",
-        oauth_uuid: "",
-        install_id: "",
-    };
-    c.list_models(conn)
-        .await
-        .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
-        .unwrap_or_default()
+    if let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) {
+        let c = crate::app::runtime::session_mgmt::build_client();
+        let conn = crate::service::openrouter::Conn {
+            endpoint: &p.endpoint,
+            api_key: &p.api_key,
+            api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+            account_id: "",
+            oauth_uuid: "",
+            install_id: "",
+        };
+        let mut models = c
+            .list_models(conn)
+            .await
+            .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if models.is_empty() {
+            models = crate::service::catalogue_overlay::models_for(&p.endpoint)
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
+        }
+        return models;
+    }
+    if let Some(conn) = cfg.oauth_conns.iter().find(|c| c.uuid == provider) {
+        let endpoint = crate::service::oauth::registry::meta(conn.provider).chat_endpoint;
+        return crate::service::catalogue_overlay::models_for(endpoint)
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+    }
+    Vec::new()
 }
 
 /// UN-ATTACHED GUI route-picker fetch (a [`HostCtl::ListRoutes`] serviced by the swapper):
