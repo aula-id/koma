@@ -451,6 +451,81 @@ pub fn resolve_role_dispatch(config: &AppConfig, settings: &Settings, role: Mode
     resolved
 }
 
+/// Why a Main turn is being silently downgraded to the keyless koma-free tier by
+/// [`resolve_role_dispatch`] — the diagnosis a user-facing "you're on the free
+/// tier" toast needs. Each variant is a DISTINCT, user-actionable state of the
+/// assigned Main model whose route came back unusable:
+///
+/// - `ProviderRemoved` — the assigned model still points at a `provider_uuid` that
+///   exists in NEITHER `providers` nor `oauth_conns` (its connection was deleted).
+/// - `NoKey` — the assigned model's static provider exists but its `api_key` is empty.
+/// - `NotSignedIn` — the assigned model's provider is an OAuth connection whose
+///   `access_token` is empty (never signed in / signed out / token cleared).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainFallback {
+    ProviderRemoved,
+    NoKey,
+    NotSignedIn,
+}
+
+/// Diagnose whether the CURRENT Main route will be silently downgraded to koma-free
+/// by [`resolve_role_dispatch`], and if so WHY — so the dispatch seam (`stream::run`)
+/// can surface a toast instead of swapping to the free tier with zero indication.
+/// Read-only: never mutates or persists `config`/`settings`.
+///
+/// Mirrors [`resolve_role`]'s step-1 assignment lookup EXACTLY (session overrides
+/// win over the global catalogue) and its usability gate:
+///
+/// - No model holds the Main role → `None`. This is the unconfigured / onboarding
+///   install, whose dispatch fallback routes the user to the first-run chooser, NOT
+///   a toast (see [`resolve_role_dispatch`]'s "do NOT call from a gate" note) — so
+///   warning here would be wrong.
+/// - The assigned Main resolves to a USABLE route — a real key, a live OAuth token,
+///   or a keyless koma-free provider the user chose themselves → `None`. Nothing is
+///   downgraded (koma-free either isn't involved or WAS the deliberate choice).
+/// - The assigned Main resolves to an UNUSABLE route (koma-free will substitute) →
+///   `Some(reason)`, attributed off the assigned entry's `provider_uuid` with
+///   `from_entry`'s providers-before-oauth precedence: matches a static provider →
+///   `NoKey`; matches an OAuth conn → `NotSignedIn`; matches neither → `ProviderRemoved`.
+pub fn main_fallback_reason(config: &AppConfig, settings: &Settings) -> Option<MainFallback> {
+    // 1. The Main-assigned entry, resolved with the SAME precedence as
+    //    `resolve_role` step 1: per-session overrides first, then the global
+    //    catalogue. Nothing holds Main → unconfigured install → never warn (that
+    //    path is onboarding, not a silent koma-free swap).
+    let assigned = settings
+        .session_models
+        .iter()
+        .find(|e| e.effective_roles().contains(&ModelRole::Main))
+        .or_else(|| {
+            config
+                .models
+                .iter()
+                .find(|e| e.effective_roles().contains(&ModelRole::Main))
+        })?;
+
+    // 2. koma-free substitutes iff `resolve_role(Main)` is missing or unusable —
+    //    the exact gate `resolve_role_dispatch` applies. A usable route (real key,
+    //    live OAuth token, or a keyless koma-free the user selected) means NO silent
+    //    downgrade, so there is nothing to warn about.
+    if resolve_role(config, settings, ModelRole::Main).is_some_and(|r| r.is_usable()) {
+        return None;
+    }
+
+    // 3. Downgrade confirmed. Attribute the reason off the assigned entry's
+    //    provider_uuid, mirroring `from_entry`'s providers-before-oauth order.
+    //    Reaching here means the resolved route was unusable, so a matching static
+    //    provider necessarily has an empty `api_key`, and a matching OAuth conn an
+    //    empty `access_token` (a populated credential would have resolved usable at
+    //    step 2 and returned `None`).
+    if config.providers.iter().any(|p| p.uuid == assigned.provider_uuid) {
+        Some(MainFallback::NoKey)
+    } else if config.oauth_conns.iter().any(|c| c.uuid == assigned.provider_uuid) {
+        Some(MainFallback::NotSignedIn)
+    } else {
+        Some(MainFallback::ProviderRemoved)
+    }
+}
+
 /// True when `a` and `b` name the exact same route: same model id, same
 /// provider endpoint, and the same OpenRouter upstream pin. Deliberately does
 /// NOT compare `api_key`/`api_type`/`effort` — those can never differ for two
