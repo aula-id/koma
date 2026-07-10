@@ -161,6 +161,13 @@ impl OpenRouterClient {
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
+                if let Some(ctx) = image_ctx.as_ref() {
+                    crate::model::store::append_error_log(
+                        &ctx.session_dir,
+                        "request send failed",
+                        &e.to_string(),
+                    );
+                }
                 emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
                 return Ok(());
             }
@@ -169,6 +176,13 @@ impl OpenRouterClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            if let Some(ctx) = image_ctx.as_ref() {
+                crate::model::store::append_error_log(
+                    &ctx.session_dir,
+                    &format!("HTTP {status} from {} (model {model})", conn.endpoint),
+                    &text,
+                );
+            }
             // koma-free is rate-limited per install against a shared free-tier
             // bucket; a 429 means it is busy/exhausted (Retry-After ignored on
             // purpose). Surface a human hint instead of the raw upstream JSON.
@@ -208,6 +222,13 @@ impl OpenRouterClient {
             let bytes = match chunk {
                 Ok(b) => b,
                 Err(e) => {
+                    if let Some(ctx) = image_ctx.as_ref() {
+                        crate::model::store::append_error_log(
+                            &ctx.session_dir,
+                            "stream read error",
+                            &e.to_string(),
+                        );
+                    }
                     emit(&tx, StreamEvent::Error(format!("stream error: {e}")));
                     return Ok(());
                 }

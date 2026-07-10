@@ -132,6 +132,12 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
     rt.current_task = None;
     match error.or(save_err) {
         Some(e) => {
+            // Catch-all: persist the real error to the per-session error log
+            // BEFORE any friendly-notice swap below, so the raw upstream detail
+            // is never lost even when the toast shows a simplified message.
+            if let Some(sess) = rest.sessions[sess_idx].session.as_ref() {
+                crate::model::store::append_error_log(&sess.path, "turn error", &e);
+            }
             // If the provider rejected the request because the model can't take
             // images (e.g. "No endpoints found that support image input") and the
             // last user message actually carried image attachments, swap the raw

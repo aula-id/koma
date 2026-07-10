@@ -74,6 +74,13 @@ impl OpenRouterClient {
         let resp = match rb.json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
+                if let Some(ctx) = image_ctx.as_ref() {
+                    crate::model::store::append_error_log(
+                        &ctx.session_dir,
+                        "request send failed",
+                        &e.to_string(),
+                    );
+                }
                 emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
                 return Ok(());
             }
@@ -81,6 +88,13 @@ impl OpenRouterClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            if let Some(ctx) = image_ctx.as_ref() {
+                crate::model::store::append_error_log(
+                    &ctx.session_dir,
+                    &format!("HTTP {status} from {} (model {model})", conn.endpoint),
+                    &text,
+                );
+            }
             emit(&tx, StreamEvent::Error(clean_error(status, &text)));
             return Ok(());
         }
@@ -94,6 +108,13 @@ impl OpenRouterClient {
             let bytes = match chunk {
                 Ok(b) => b,
                 Err(e) => {
+                    if let Some(ctx) = image_ctx.as_ref() {
+                        crate::model::store::append_error_log(
+                            &ctx.session_dir,
+                            "stream read error",
+                            &e.to_string(),
+                        );
+                    }
                     emit(&tx, StreamEvent::Error(format!("stream error: {e}")));
                     return Ok(());
                 }
@@ -200,11 +221,27 @@ impl OpenRouterClient {
                         return Ok(());
                     }
                     ResponsesEvent::Failed { response } => {
-                        emit(&tx, StreamEvent::Error(failed_message(response)));
+                        let err_msg = failed_message(response);
+                        if let Some(ctx) = image_ctx.as_ref() {
+                            crate::model::store::append_error_log(
+                                &ctx.session_dir,
+                                "in-band stream error (failed)",
+                                &err_msg,
+                            );
+                        }
+                        emit(&tx, StreamEvent::Error(err_msg));
                         return Ok(());
                     }
                     ResponsesEvent::Error { message, code } => {
-                        emit(&tx, StreamEvent::Error(error_message(message, code)));
+                        let err_msg = error_message(message, code);
+                        if let Some(ctx) = image_ctx.as_ref() {
+                            crate::model::store::append_error_log(
+                                &ctx.session_dir,
+                                "in-band stream error",
+                                &err_msg,
+                            );
+                        }
+                        emit(&tx, StreamEvent::Error(err_msg));
                         return Ok(());
                     }
                     ResponsesEvent::Other => {}
