@@ -243,7 +243,13 @@ pub(super) fn provider_routing_for(
 /// (OpenAI itself, a codex/9router gateway, etc.) reject those with
 /// `400 Unknown parameter: 'reasoning.exclude'`, so we emit them ONLY here. Groq
 /// & friends are reached THROUGH OpenRouter, so they match and keep working.
-pub(super) fn is_openrouter(endpoint: &str) -> bool {
+///
+/// `pub(crate)` (not `pub(super)`) so `effort_menu`
+/// (`app::runtime::commands::effort`) can use the SAME OpenRouter-vs-not
+/// precedence rule as the streaming path when deciding whether to trust the
+/// live `models_cache` catalogue or the curated `catalogue_overlay` for a
+/// non-OpenRouter endpoint (Codex/Claude/xAI/DeepSeek).
+pub(crate) fn is_openrouter(endpoint: &str) -> bool {
     endpoint.to_lowercase().contains("openrouter")
 }
 
