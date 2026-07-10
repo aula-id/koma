@@ -22,7 +22,7 @@ pub(super) const TASK_TOOLS: [&str; 3] = ["task", "task_output", "task_kill"];
 pub enum AgentSource {
     /// Built-in agent compiled into the binary.
     Builtin,
-    /// Global agent from `~/.simple-coder/agents/`.
+    /// Global agent from `~/.koma/agents/`.
     Global,
     /// Session-specific agent from `<session_dir>/agents/`.
     #[default]

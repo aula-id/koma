@@ -160,7 +160,7 @@ pub fn pwd_hash(workdir: &Path) -> String {
         .to_string()
 }
 
-/// The bucket directory for a working dir: `~/.simple-coder/sessions/<pwd_hash>/`.
+/// The bucket directory for a working dir: `~/.koma/sessions/<pwd_hash>/`.
 /// Shared by every session opened from that directory.
 pub fn pwd_bucket_dir(pwd_hash: &str) -> Result<PathBuf> {
     Ok(sessions_dir()?.join(pwd_hash))

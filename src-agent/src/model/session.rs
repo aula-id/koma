@@ -3,7 +3,7 @@
 //! A `Session` owns everything that belongs to one named conversation on disk:
 //!
 //! ```text
-//! ~/.simple-coder/sessions/<id>/
+//! ~/.koma/sessions/<id>/
 //!     settings.json   ← Settings (model, api_key, compaction…)
 //!     messages.json   ← Vec<ChatMessage> (the full history)
 //!     memory/

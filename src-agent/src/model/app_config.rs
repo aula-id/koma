@@ -1,4 +1,4 @@
-//! Global application configuration persisted to `~/.simple-coder/config.json`.
+//! Global application configuration persisted to `~/.koma/config.json`.
 //!
 //! Unlike per-session `settings.json`, this file stores user-wide preferences
 //! that apply across all sessions: visual theme, accent colour, and any future
@@ -455,7 +455,7 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Load from `~/.simple-coder/config.json`.
+    /// Load from `~/.koma/config.json`.
     ///
     /// Returns `AppConfig::default()` on ANY error (file absent, parse failure,
     /// etc.) so startup is never blocked by a missing or corrupt config file.
@@ -626,7 +626,7 @@ impl AppConfig {
         true
     }
 
-    /// Serialise (pretty-printed) to `~/.simple-coder/config.json`.
+    /// Serialise (pretty-printed) to `~/.koma/config.json`.
     ///
     /// Called by the `/settings` dashboard when the user saves theme/accent
     /// changes.

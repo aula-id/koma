@@ -15,7 +15,7 @@ use super::parse::{load_agent_file, validate_agent_name};
 // Directories
 // ---------------------------------------------------------------------------
 
-/// Returns `~/.simple-coder/agents/` (the global agent registry directory).
+/// Returns `~/.koma/agents/` (the global agent registry directory).
 pub fn global_agents_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("agents"))
 }
@@ -28,7 +28,7 @@ pub fn session_agents_dir(session_dir: &Path) -> PathBuf {
 /// Scope an agent operation targets: the global registry or a session directory.
 #[derive(Debug, Clone, Copy)]
 pub enum AgentScope<'a> {
-    /// `~/.simple-coder/agents/`.
+    /// `~/.koma/agents/`.
     Global,
     /// `<session_dir>/agents/`.
     Session(&'a Path),

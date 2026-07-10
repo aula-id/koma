@@ -5,7 +5,7 @@
 //! buffer, the input, and the status line into a structured layout:
 //!
 //! ```text
-//! simple-coder · {name} [{model}]          ← header (1 line)
+//! koma · {name} [{model}]          ← header (1 line)
 //! ─────────────────────────────────────────  ← dim bottom border
 //! [messages / transcript area]             ← scrollable, fills space,
 //!                                             auto-follows the bottom
