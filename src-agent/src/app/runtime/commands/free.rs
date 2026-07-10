@@ -48,7 +48,11 @@ pub(super) fn handle_free(state: &mut AppState) -> Result<()> {
     let idx = koma_free_main_idx(&state.rest.config, &sess.settings);
 
     if let Some(idx) = idx {
-        // Toggle OFF: drop the local override; global/config Main resurfaces.
+        // Toggle OFF: drop the local override; global/config Main resurfaces —
+        // which may be a DIFFERENT model than koma-free, so snapshot before/
+        // after to catch a BUG FIX effort reset (stale effort from koma-free/
+        // the old model must not carry onto whatever resurfaces).
+        let before_main = state.rest.main_identity_now();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.session_models.remove(idx);
             if let Err(e) = sess.save() {
@@ -56,6 +60,7 @@ pub(super) fn handle_free(state: &mut AppState) -> Result<()> {
                 return Ok(());
             }
         }
+        state.rest.reset_effort_if_main_changed(before_main);
         state
             .rest
             .fg_mut()
@@ -92,6 +97,11 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
     if koma_free_main_idx(&state.rest.config, &sess.settings).is_some() {
         return Ok(());
     }
+    // BUG FIX: snapshot the resolved Main route before the swap below so the
+    // caller-agnostic effort reset fires whether this was reached via the TUI
+    // `/free` toggle-ON or the GUI model quick-picker's synthetic "advertised
+    // free" row (`SetSessionMain { model_uuid: Some(KOMA_FREE_SENTINEL) }`).
+    let before_main = state.rest.main_identity_now();
 
     // The koma-free `X-Koma` header must never be empty. `install_id` is
     // serde-default + Default-minted, but mint one defensively if it somehow
@@ -159,5 +169,6 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
         });
         sess.save()?;
     }
+    state.rest.reset_effort_if_main_changed(before_main);
     Ok(())
 }

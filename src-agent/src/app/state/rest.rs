@@ -461,6 +461,41 @@ impl AppStateRest {
         &mut self.sessions[i]
     }
 
+    /// Snapshot the foreground session's resolved Main-route identity — call
+    /// BEFORE a settings mutation that might reassign the Main role, then pass
+    /// the result to [`Self::reset_effort_if_main_changed`] after the mutation
+    /// to detect (and correct for) an actual model swap.
+    pub fn main_identity_now(&self) -> Option<(String, String, Option<String>)> {
+        self.fg()
+            .session
+            .as_ref()
+            .and_then(|s| crate::app::resolve::main_identity(&self.config, &s.settings))
+    }
+
+    /// BUG FIX: reset the foreground session's `settings.effort` to the
+    /// model-default (unset) value when the resolved Main route CHANGED since
+    /// `before` was captured (via [`Self::main_identity_now`]) — i.e. the Main
+    /// model this session chats with actually swapped, not merely a re-pick of
+    /// the same model or a change to some OTHER role. Different models expose
+    /// different effort scales (see
+    /// `app::runtime::commands::effort::{build_effort_options, preselect_effort}`,
+    /// where an empty string is exactly the value that preselects "default"),
+    /// so a stale effort chosen for the OLD model must never silently carry
+    /// onto the new one. No-ops (skips the write + extra save) when nothing
+    /// changed or `effort` is already the default — safe to call
+    /// unconditionally after any settings mutation that might touch Main.
+    pub fn reset_effort_if_main_changed(&mut self, before: Option<(String, String, Option<String>)>) {
+        let after = self.main_identity_now();
+        if before != after {
+            if let Some(sess) = self.fg_mut().session.as_mut() {
+                if !sess.settings.effort.is_empty() {
+                    sess.settings.effort = String::new();
+                    let _ = sess.save();
+                }
+            }
+        }
+    }
+
     /// Single choke-point for changing `agent_mode` — used by both the
     /// Shift+Tab cycle and `/mode`, so `plan_return_mode` and the Plan-mode
     /// system-prompt nudge never drift out of sync between the two entry

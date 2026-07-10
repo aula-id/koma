@@ -167,6 +167,14 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         // Capture old internet mode before overwriting, so we can toast only
         // on actual change (avoids a spurious toast on every settings save).
         let old_internet = state.rest.fg().session.as_ref().map(|s| s.settings.internet_mode);
+        // BUG FIX: this save can reassign the Main role two ways at once — the
+        // session-local `session_models` write below, AND the global
+        // `config.models` write further down (b) — either of which can change
+        // what THIS session's Main resolves to. Snapshot before, compare after
+        // both writes land, and reset a now-stale `effort` iff the resolved
+        // Main model actually swapped (never on a re-save of the same model,
+        // and never for the many OTHER fields this same save also touches).
+        let before_main = state.rest.main_identity_now();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.api_key = api_key;
             sess.settings.model = model;
@@ -222,6 +230,11 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 state.rest.fg_mut().status = format!("error: {e}");
             }
         }
+        // c1) BUG FIX: both Main-affecting writes (a + b above) have landed and
+        // persisted — now check whether the resolved Main model actually
+        // swapped, and if so reset the stale `effort` (this call is its own
+        // save, on top of (c)'s, but ONLY fires on an actual swap).
+        state.rest.reset_effort_if_main_changed(before_main);
         // c2) Reindex the dir cache against the (possibly changed) workdirs.
         //     Spawns a background thread; non-blocking.
         let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());

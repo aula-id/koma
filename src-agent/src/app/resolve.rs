@@ -362,6 +362,16 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
     legacy_fallback(settings, role)
 }
 
+/// Identity of the resolved Main route — model id + endpoint + upstream route
+/// pin — used ONLY to detect whether a settings mutation actually SWAPPED the
+/// model the session will chat with (vs a no-op re-pick, or a change to some
+/// OTHER role). Never used to build a request; see [`AppStateRest::main_identity_now`]
+/// / [`AppStateRest::reset_effort_if_main_changed`](crate::app::state::rest::AppStateRest::reset_effort_if_main_changed)
+/// for the effort-reset bug fix that consumes this.
+pub fn main_identity(config: &AppConfig, settings: &Settings) -> Option<(String, String, Option<String>)> {
+    resolve_role(config, settings, ModelRole::Main).map(|r| (r.model_id, r.endpoint, r.route))
+}
+
 /// Build the keyless koma-free [`Resolved`] directly (no [`ModelEntry`] /
 /// [`crate::model::app_config::ProviderConn`] involved), mirroring the
 /// `ApiType::KomaFree` special-case in [`from_entry`]: `KOMA_FREE_ENDPOINT` +

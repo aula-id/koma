@@ -130,6 +130,14 @@ impl DaemonHub {
             // A directly-authored ModelForm entry, not a clone of a global — no source.
             source_uuid: None,
         };
+        // BUG FIX: an upsert that claims the Main role steals it from whatever
+        // OTHER entry held it (`upsert_model_entry`'s role-invariant, or the
+        // global-scope equivalent) — which can change what THIS session's Main
+        // resolves to even though this request never touches `session_models`
+        // directly (a global-scope edit changes it too, when the session has no
+        // local override). Snapshot before the upsert, compare after, and reset
+        // a now-stale `effort` iff the resolved Main model actually swapped.
+        let before_main = state.rest.main_identity_now();
         let result = if scope == "local" {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 crate::model::app_config::upsert_model_entry(
@@ -144,6 +152,7 @@ impl DaemonHub {
             state.rest.config.upsert_model(entry);
             state.rest.config.save()
         };
+        state.rest.reset_effort_if_main_changed(before_main);
         self.ack_or_error(idx, result);
     }
 
@@ -333,6 +342,13 @@ impl DaemonHub {
         model_uuid: Option<String>,
     ) {
         use crate::model::app_config::{new_uuid, ModelEntry, ModelRole};
+        // BUG FIX: this whole request exists to reassign the session's Main
+        // role (every branch below either pins, clones, or drops a local Main
+        // override). Snapshot the resolved Main route BEFORE any branch runs,
+        // so a stale `effort` (whose scale/support may not even apply to the
+        // NEW model) gets reset back to model-default once we know whether the
+        // model actually swapped — see `reset_effort_if_main_changed`.
+        let before_main = state.rest.main_identity_now();
         // Free-pin (wave-3+4 D): the SYNTHETIC "advertised free" row carries the
         // dedicated `KOMA_FREE_SENTINEL` id (never a real `config.models` uuid), so
         // route it through the SAME `/free` find-or-create-and-pin flow the slash
@@ -340,6 +356,7 @@ impl DaemonHub {
         // sentinel can never fall into the "unknown uuid" no-op.
         if model_uuid.as_deref() == Some(crate::service::koma_free::KOMA_FREE_SENTINEL) {
             let result = crate::app::runtime::commands::free::set_session_koma_free(state);
+            state.rest.reset_effort_if_main_changed(before_main);
             self.ack_or_error(idx, result);
             return;
         }
@@ -396,6 +413,7 @@ impl DaemonHub {
         } else {
             Ok(()) // no foreground session to hold a local override
         };
+        state.rest.reset_effort_if_main_changed(before_main);
         self.ack_or_error(idx, result);
     }
 }
