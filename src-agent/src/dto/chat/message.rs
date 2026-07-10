@@ -11,7 +11,11 @@ use super::tool::ToolCall;
 /// their chain-of-thought across tool calls within a turn. Typed fields cover the
 /// documented shape; `extra` (serde flatten) preserves any unknown fields verbatim
 /// for byte-fidelity / forward-compat (signatures are load-bearing — never drop them).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+///
+/// `Default` (all fields `None` / empty) lets transports mint a detail from a few
+/// fields via struct-update syntax — e.g. the Anthropic transport building a
+/// `thinking` / `redacted_thinking` detail from a streamed thinking block.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReasoningDetail {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

@@ -4,9 +4,11 @@
 //! always duplicates the event name in its own `"type"` field, so we IGNORE the
 //! `event:` lines entirely and internally-tag on `data.type` (exactly like the
 //! codex transport). Every enum carries a `#[serde(other)] Other` arm (and every
-//! field defaults) so an unknown event, a new field, a `ping` keepalive, or a
-//! `thinking` block we don't model never fails the parse — we simply skip what we
-//! don't model. Purely declarative + unit-tested; no I/O here.
+//! field defaults) so an unknown event, a new field, or a `ping` keepalive never
+//! fails the parse. `thinking` and `redacted_thinking` content blocks ARE
+//! modeled (parsed and replayed on continuation requests) — only truly
+//! unrecognized variants fall through to `Other` and are skipped. Purely
+//! declarative + unit-tested; no I/O here.
 
 use serde::Deserialize;
 
@@ -18,7 +20,7 @@ pub(super) enum AnthropicEvent {
     /// Opens the response: carries the input-side usage accounting.
     #[serde(rename = "message_start")]
     MessageStart { message: MessageStartBody },
-    /// Opens one content block (text, tool_use, or an ignored thinking block).
+    /// Opens one content block (text, tool_use, thinking, or redacted_thinking).
     #[serde(rename = "content_block_start")]
     ContentBlockStart {
         index: usize,
@@ -73,8 +75,8 @@ pub(super) struct StartUsage {
     pub cache_read_input_tokens: u64,
 }
 
-/// The `content_block` of a `content_block_start` event. Internally tagged; a
-/// `thinking` / `redacted_thinking` block (we don't request thinking) → `Other`.
+/// The `content_block` of a `content_block_start` event. Internally tagged; any
+/// unmodelled block type → `Other`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub(super) enum ContentBlockStart {
@@ -86,12 +88,26 @@ pub(super) enum ContentBlockStart {
     },
     #[serde(rename = "tool_use")]
     ToolUse { id: String, name: String },
+    /// Opens a thinking block. `thinking` seeds the text accumulator (usually ""
+    /// — the body arrives via `thinking_delta`); `signature` is usually absent at
+    /// start and streamed later via `signature_delta`.
+    #[serde(rename = "thinking")]
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+        #[serde(default)]
+        signature: Option<String>,
+    },
+    /// Opens a redacted (encrypted) thinking block; `data` is the opaque blob
+    /// replayed verbatim on a continuation request.
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(other)]
     Other,
 }
 
-/// The `delta` of a `content_block_delta` event. Internally tagged; a
-/// `thinking_delta` / `signature_delta` (ignored) → `Other`.
+/// The `delta` of a `content_block_delta` event. Internally tagged; any
+/// unmodelled delta type → `Other`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub(super) enum BlockDelta {
@@ -99,6 +115,14 @@ pub(super) enum BlockDelta {
     TextDelta { text: String },
     #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
+    /// A fragment of a thinking block's text — routed to the reasoning channel for
+    /// live display AND accumulated (with the block's signature) for replay.
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { thinking: String },
+    /// The cryptographic signature over a thinking block, streamed at its close.
+    /// Accumulated (never displayed) so the block replays intact on continuation.
+    #[serde(rename = "signature_delta")]
+    SignatureDelta { signature: String },
     #[serde(other)]
     Other,
 }
@@ -191,18 +215,49 @@ mod tests {
     }
 
     #[test]
-    fn thinking_block_start_is_other() {
+    fn thinking_block_start_parses_with_seed_and_signature() {
         let e = parse_event(
-            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"seed","signature":"sig0"}}"#,
+        )
+        .unwrap();
+        match e {
+            AnthropicEvent::ContentBlockStart {
+                index,
+                content_block: ContentBlockStart::Thinking { thinking, signature },
+            } => {
+                assert_eq!(index, 0);
+                assert_eq!(thinking, "seed");
+                assert_eq!(signature.as_deref(), Some("sig0"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        // The common empty-seed / no-signature start still parses (fields default).
+        let e2 = parse_event(
+            r#"{"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":""}}"#,
         )
         .unwrap();
         assert!(matches!(
-            e,
+            e2,
             AnthropicEvent::ContentBlockStart {
-                content_block: ContentBlockStart::Other,
+                content_block: ContentBlockStart::Thinking { signature: None, .. },
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn redacted_thinking_block_start_parses() {
+        let e = parse_event(
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"AAAA"}}"#,
+        )
+        .unwrap();
+        match e {
+            AnthropicEvent::ContentBlockStart {
+                content_block: ContentBlockStart::RedactedThinking { data },
+                ..
+            } => assert_eq!(data, "AAAA"),
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -235,18 +290,32 @@ mod tests {
     }
 
     #[test]
-    fn thinking_delta_is_other() {
+    fn thinking_delta_and_signature_delta_parse() {
         let e = parse_event(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"x"}}"#,
         )
         .unwrap();
-        assert!(matches!(
-            e,
+        match e {
             AnthropicEvent::ContentBlockDelta {
-                delta: BlockDelta::Other,
-                ..
+                index,
+                delta: BlockDelta::ThinkingDelta { thinking },
+            } => {
+                assert_eq!(index, 0);
+                assert_eq!(thinking, "x");
             }
-        ));
+            other => panic!("wrong variant: {other:?}"),
+        }
+        let e2 = parse_event(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}"#,
+        )
+        .unwrap();
+        match e2 {
+            AnthropicEvent::ContentBlockDelta {
+                delta: BlockDelta::SignatureDelta { signature },
+                ..
+            } => assert_eq!(signature, "sig"),
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 
     #[test]

@@ -48,6 +48,17 @@ pub(super) struct MessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Value>,
     pub max_tokens: u32,
+    /// Extended-thinking controls, in canonical order (after `max_tokens`, before
+    /// `stream`): `thinking` selects the adaptive mode + summarized display,
+    /// `context_management` clears prior thinking from the model's context, and
+    /// `output_config` pins the effort. All three are omitted (skip `None`) on the
+    /// off / forced-tool_choice paths. Built by [`thinking_params`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<Value>,
     pub stream: bool,
 }
 
@@ -90,6 +101,15 @@ pub(super) enum Block {
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+    /// A REPLAYED extended-thinking block. [`assistant_blocks`] emits it BEFORE any
+    /// text/tool_use so an interleaved-thinking tool loop keeps the model's signed
+    /// chain-of-thought. `signature` is REQUIRED by real Anthropic — an unsigned
+    /// thinking block 400s, so callers drop rather than send an empty signature.
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String, signature: String },
+    /// A REPLAYED redacted (encrypted) thinking block; `data` is echoed verbatim.
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 }
 
 /// A base64 image source for an [`Block::Image`].
@@ -262,11 +282,39 @@ fn user_blocks(m: &ChatMessage, image_ctx: Option<&ImageWireCtx>) -> Vec<Block> 
     blocks
 }
 
-/// Build the content blocks for an `assistant` message. All text precedes any
-/// `tool_use` (Anthropic validator requirement). Returns empty for a
-/// content-less, tool-less turn so the caller can skip it.
+/// Build the content blocks for an `assistant` message. Ordering follows the
+/// Anthropic validator requirement: any replayed `thinking` / `redacted_thinking`
+/// blocks FIRST, then text, then `tool_use`. Returns empty for a content-less,
+/// tool-less, thinking-less turn so the caller can skip it.
 fn assistant_blocks(m: &ChatMessage) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
+    // Thinking must LEAD the assistant turn (Anthropic requires thinking → text →
+    // tool_use). Replay the signed thinking captured for THIS turn (in-memory
+    // `reasoning_details`, never persisted) so an interleaved-thinking tool loop
+    // doesn't 400 on the continuation request. Skip an unsigned thinking detail:
+    // real Anthropic REQUIRES the signature, so dropping it is safer than sending
+    // `signature: ""`.
+    if let Some(details) = &m.reasoning_details {
+        for d in details {
+            match d.kind.as_deref() {
+                Some("thinking") => {
+                    let sig = d.signature.clone().unwrap_or_default();
+                    if !sig.is_empty() {
+                        blocks.push(Block::Thinking {
+                            thinking: d.text.clone().unwrap_or_default(),
+                            signature: sig,
+                        });
+                    }
+                }
+                Some("redacted_thinking") => {
+                    if let Some(data) = &d.data {
+                        blocks.push(Block::RedactedThinking { data: data.clone() });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     if !m.content.is_empty() {
         blocks.push(Block::Text {
             text: m.content.clone(),
@@ -349,230 +397,59 @@ fn normalize_schema(schema: Value) -> Value {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::dto::chat::{ChatMessage, FunctionCall, Role, ToolCall};
+/// The exact Anthropic `output_config.effort` levels koma's effort token maps to
+/// 1:1 (mirrors this endpoint's `supported_efforts` in `models.json`). A token
+/// outside this set — and outside the `off` / empty / `default` special cases — is
+/// treated as "adaptive thinking, no explicit effort".
+const ANTHROPIC_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-    fn tool_call(id: &str, name: &str, args: &str) -> ToolCall {
-        ToolCall {
-            id: id.to_string(),
-            kind: "function".to_string(),
-            function: FunctionCall {
-                name: name.to_string(),
-                arguments: args.to_string(),
-            },
-        }
+/// Compute the `(thinking, context_management, output_config)` request-body triple
+/// for the Anthropic Messages API from koma's stored effort token.
+///
+/// Target = CURRENT Claude models (Opus 4.8 / Sonnet 5) over OAuth = ADAPTIVE
+/// thinking. These shapes are 400-sensitive — do not reorder or rename fields.
+///
+/// `context_management` is always `None`: the `clear_thinking_20251015` edit
+/// requires the `context-management-2025-06-27` beta, which koma does not send,
+/// so the field is dropped entirely rather than gated behind an unsent beta.
+///
+/// - `tool_choice_forced` (the oneshot forced-`respond` structured-output path):
+///   Anthropic DELETES thinking under a forced `tool_choice`, so send none of the
+///   three → `(None, None, None)`.
+/// - `"off"` / `"none"`: adaptive thinking can't be disabled on these models, and
+///   pinning `output_config.effort` requires the (unsent) `effort-2025-11-24`
+///   beta, so this is the same all-None shape as forced → `(None, None, None)`.
+/// - `"low"`/`"medium"`/`"high"`/`"xhigh"`/`"max"`: adaptive thinking WITH the
+///   effort echoed verbatim into `output_config.effort`.
+/// - `""` / `"default"` / any UNKNOWN token: adaptive thinking, NO explicit effort
+///   (`output_config = None`).
+///
+/// The caller sets the header `thinking_on` flag to `thinking.is_some()`. Since
+/// `output_config` is only ever `Some` alongside `thinking = Some` (the effort-level
+/// branch above), `thinking_on` correctly gates the `effort-2025-11-24` beta too
+/// (see [`anthropic_headers`](super::anthropic_headers)).
+pub(super) fn thinking_params(
+    effort: &str,
+    tool_choice_forced: bool,
+) -> (Option<Value>, Option<Value>, Option<Value>) {
+    if tool_choice_forced {
+        return (None, None, None);
     }
-
-    #[test]
-    fn system_role_becomes_claude_code_head_plus_content() {
-        let (system, msgs) = build_messages(
-            vec![
-                ChatMessage::new(Role::System, "PROJECT RULES"),
-                ChatMessage::new(Role::User, "hi"),
-            ],
+    let adaptive = || serde_json::json!({"type": "adaptive", "display": "summarized"});
+    match effort.trim() {
+        // Adaptive thinking can't be disabled on these models, and pinning
+        // output_config.effort here would need an unsent beta — same as forced.
+        "off" | "none" => (None, None, None),
+        level if ANTHROPIC_EFFORTS.contains(&level) => (
+            Some(adaptive()),
             None,
-        );
-        // Head is always the Claude Code identity; the koma system content follows.
-        assert_eq!(system[0].text, CLAUDE_CODE_SYSTEM);
-        assert_eq!(system[1].text, "PROJECT RULES");
-        // System never leaks into messages; only the user turn is present.
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].role, "user");
-        assert_eq!(
-            msgs[0].content,
-            vec![Block::Text {
-                text: "hi".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn cache_split_mark_is_stripped_from_system() {
-        let sys = format!("HEAD{}TAIL", crate::dto::chat::CACHE_SPLIT_MARK);
-        let (system, _msgs) = build_messages(
-            vec![
-                ChatMessage::new(Role::System, sys),
-                ChatMessage::new(Role::User, "hi"),
-            ],
-            None,
-        );
-        // The boundary marker is removed; head + tail concatenate into one block.
-        assert_eq!(system[1].text, "HEADTAIL");
-    }
-
-    #[test]
-    fn assistant_text_precedes_tool_use_and_input_is_object() {
-        let asst = ChatMessage::assistant_with_tools(
-            "let me look".to_string(),
-            vec![tool_call("call_1", "read", r#"{"path":"a"}"#)],
-        );
-        let (_system, msgs) = build_messages(
-            vec![
-                ChatMessage::new(Role::System, "sys"),
-                ChatMessage::new(Role::User, "go"),
-                asst,
-            ],
-            None,
-        );
-        // msgs[0] = user "go", msgs[1] = assistant.
-        assert_eq!(msgs[1].role, "assistant");
-        assert_eq!(
-            msgs[1].content[0],
-            Block::Text {
-                text: "let me look".to_string()
-            }
-        );
-        match &msgs[1].content[1] {
-            Block::ToolUse { id, name, input } => {
-                assert_eq!(id, "call_1");
-                assert_eq!(name, "read");
-                // Arguments stored as a STRING are parsed to a JSON OBJECT.
-                assert_eq!(input, &serde_json::json!({"path": "a"}));
-            }
-            other => panic!("expected tool_use, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parallel_tool_results_coalesce_into_one_user_message() {
-        let asst = ChatMessage::assistant_with_tools(
-            String::new(),
-            vec![
-                tool_call("c1", "read", "{}"),
-                tool_call("c2", "grep", "{}"),
-            ],
-        );
-        let (_system, msgs) = build_messages(
-            vec![
-                ChatMessage::new(Role::System, "sys"),
-                ChatMessage::new(Role::User, "go"),
-                asst,
-                ChatMessage::tool_result("c1".to_string(), "body one".to_string()),
-                ChatMessage::tool_result("c2".to_string(), "body two".to_string()),
-            ],
-            None,
-        );
-        // user "go", assistant (2 tool_use), ONE user turn with 2 tool_result blocks.
-        assert_eq!(msgs.len(), 3);
-        assert_eq!(msgs[2].role, "user");
-        assert_eq!(msgs[2].content.len(), 2, "two tool results must coalesce");
-        assert!(matches!(
-            &msgs[2].content[0],
-            Block::ToolResult { tool_use_id, .. } if tool_use_id == "c1"
-        ));
-        assert!(matches!(
-            &msgs[2].content[1],
-            Block::ToolResult { tool_use_id, .. } if tool_use_id == "c2"
-        ));
-    }
-
-    #[test]
-    fn tool_result_then_user_text_merge_into_one_user_turn() {
-        let asst = ChatMessage::assistant_with_tools(
-            String::new(),
-            vec![tool_call("c1", "read", "{}")],
-        );
-        let (_system, msgs) = build_messages(
-            vec![
-                ChatMessage::new(Role::System, "sys"),
-                ChatMessage::new(Role::User, "go"),
-                asst,
-                ChatMessage::tool_result("c1".to_string(), "result".to_string()),
-                ChatMessage::new(Role::User, "and now this"),
-            ],
-            None,
-        );
-        // user "go", assistant, then ONE user turn = [tool_result, text].
-        assert_eq!(msgs.len(), 3);
-        assert_eq!(msgs[2].role, "user");
-        assert_eq!(msgs[2].content.len(), 2);
-        assert!(matches!(&msgs[2].content[0], Block::ToolResult { .. }));
-        assert_eq!(
-            msgs[2].content[1],
-            Block::Text {
-                text: "and now this".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn empty_history_gets_user_placeholder() {
-        let (_system, msgs) = build_messages(vec![], None);
-        assert_eq!(
-            msgs,
-            vec![Message {
-                role: "user",
-                content: vec![Block::Text {
-                    text: "...".to_string()
-                }],
-            }]
-        );
-    }
-
-    #[test]
-    fn user_marks_are_stripped() {
-        let marked = format!("{}$ ls\nfile.txt", crate::dto::chat::SHELL_MARK);
-        let (_system, msgs) = build_messages(vec![ChatMessage::new(Role::User, marked)], None);
-        assert_eq!(
-            msgs[0].content,
-            vec![Block::Text {
-                text: "$ ls\nfile.txt".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn tool_input_edge_cases() {
-        // A non-object argument string collapses to an empty object.
-        assert_eq!(tool_use_input("\"just a string\""), serde_json::json!({}));
-        assert_eq!(tool_use_input(""), serde_json::json!({}));
-        // Duplicate-fragment args are repaired then parsed.
-        assert_eq!(
-            tool_use_input(r#"{"a":1}{"a":1}"#),
-            serde_json::json!({"a": 1})
-        );
-    }
-
-    #[test]
-    fn normalize_schema_defaults_empty_to_object() {
-        assert_eq!(
-            normalize_schema(Value::Null),
-            serde_json::json!({"type": "object", "properties": {}})
-        );
-        assert_eq!(
-            normalize_schema(serde_json::json!({})),
-            serde_json::json!({"type": "object", "properties": {}})
-        );
-        // A real schema is passed through untouched.
-        let real = serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}});
-        assert_eq!(normalize_schema(real.clone()), real);
-    }
-
-    #[test]
-    fn image_source_parses_media_type_and_data() {
-        let src = image_source_from_data_url("data:image/png;base64,QUJD").unwrap();
-        assert_eq!(src.kind, "base64");
-        assert_eq!(src.media_type, "image/png");
-        assert_eq!(src.data, "QUJD");
-        // Malformed URLs yield None.
-        assert!(image_source_from_data_url("not-a-data-url").is_none());
-        assert!(image_source_from_data_url("data:image/png;base64,").is_none());
-    }
-
-    #[test]
-    fn block_serializes_with_type_tag() {
-        let v = serde_json::to_value(Block::ToolResult {
-            tool_use_id: "c1".to_string(),
-            content: "out".to_string(),
-            is_error: None,
-        })
-        .unwrap();
-        assert_eq!(v["type"], "tool_result");
-        assert_eq!(v["tool_use_id"], "c1");
-        assert_eq!(v["content"], "out");
-        // is_error omitted when None.
-        assert!(v.get("is_error").is_none());
+            Some(serde_json::json!({"effort": level})),
+        ),
+        // "", "default", and any unknown token → adaptive, no explicit effort.
+        _ => (Some(adaptive()), None, None),
     }
 }
+
+#[cfg(test)]
+#[path = "request_tests.rs"]
+mod tests;

@@ -14,13 +14,17 @@
 //! Anthropic-specific (request-shaping in [`request`], SSE parsing in [`sse`], the
 //! streaming and collect drivers in [`stream`] / [`oneshot`]) lives under it.
 //!
-//! ## v1 scope
+//! ## Scope
 //!
-//! Thinking blocks are NOT requested and are ignored on the wire; structured
-//! output (the oneshot classifier/fold/router paths) is implemented via a FORCED
-//! TOOL rather than a native schema field. The X-Stainless / client fingerprint
-//! headers are intentionally omitted — only the two load-bearing OAuth/Claude Code
-//! betas are sent. If the live backend rejects a request we add fields then.
+//! EXTENDED THINKING (adaptive, current Claude models) is requested on the
+//! interactive streaming path — the `thinking` / `context_management` /
+//! `output_config` body params plus the interleaved-thinking + effort betas — and
+//! the model's thinking blocks are parsed for live display AND REPLAYED (with
+//! their signatures) across a tool loop so continuation requests don't 400. The
+//! oneshot structured-output paths (classifier/fold/router) send NO thinking: they
+//! force a `respond` tool, and Anthropic deletes thinking under a forced
+//! `tool_choice`. The X-Stainless / client fingerprint headers are intentionally
+//! omitted. If the live backend rejects a request we add fields then.
 
 mod oneshot;
 mod request;
@@ -39,8 +43,17 @@ pub(super) const CLAUDE_CODE_SYSTEM: &str =
 
 /// The minimal `anthropic-beta` set. `oauth-2025-04-20` authorizes the
 /// `sk-ant-oat…` bearer; `claude-code-20250219` unlocks the Claude Code surface.
-/// Kept deliberately minimal for v1 (no extra feature betas).
+/// Always sent; the extended-thinking betas below are appended on top when a
+/// request actually carries a `thinking` param.
 pub(super) const CLAUDE_BETAS: &str = "oauth-2025-04-20,claude-code-20250219";
+
+/// Extra `anthropic-beta` entries appended (after [`CLAUDE_BETAS`]) ONLY when a
+/// request carries extended thinking. `interleaved-thinking-2025-05-14` lets
+/// `tool_use` blocks interleave with thinking across a tool loop;
+/// `effort-2025-11-24` unlocks the adaptive `output_config.effort` control. Never
+/// sent on the off / forced-tool_choice / oneshot paths (which carry no thinking).
+pub(super) const CLAUDE_THINKING_BETAS: &str =
+    "interleaved-thinking-2025-05-14,effort-2025-11-24";
 
 /// Auth + client-identity headers for an Anthropic `/v1/messages` request.
 ///
@@ -49,13 +62,23 @@ pub(super) const CLAUDE_BETAS: &str = "oauth-2025-04-20,claude-code-20250219";
 /// betas + CLI User-Agent/`x-app` identify us to the backend the same way the
 /// official CLI does; a fresh `x-client-request-id` is minted per call. The
 /// X-Stainless / fingerprint headers are omitted for v1.
+///
+/// `thinking_on` appends the extended-thinking betas ([`CLAUDE_THINKING_BETAS`]);
+/// the caller sets it iff the request body carries a `thinking` param (the
+/// streaming path with thinking enabled), never on the off/forced/oneshot paths.
 pub(super) fn anthropic_headers(
     rb: reqwest::RequestBuilder,
     bearer: &str,
+    thinking_on: bool,
 ) -> reqwest::RequestBuilder {
+    let betas = if thinking_on {
+        format!("{CLAUDE_BETAS},{CLAUDE_THINKING_BETAS}")
+    } else {
+        CLAUDE_BETAS.to_string()
+    };
     rb.header("Authorization", format!("Bearer {bearer}"))
         .header("anthropic-version", "2023-06-01")
-        .header("anthropic-beta", CLAUDE_BETAS)
+        .header("anthropic-beta", betas)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .header("anthropic-dangerous-direct-browser-access", "true")
