@@ -80,15 +80,55 @@ pub(crate) enum EffortMenu {
     },
 }
 
+/// Build a [`EffortMenu::Ready`]/[`EffortMenu::Unsupported`] outcome from
+/// already-derived [`EffortCaps`], shared by BOTH capability sources: the live
+/// `models_cache` catalogue (OpenRouter) and the curated `catalogue_overlay`
+/// (non-OpenRouter). Keeps the option-list/note/preselect logic in one place
+/// so the two callers can't drift.
+fn ready_from_caps(
+    state: &AppState,
+    caps: &crate::service::openrouter::EffortCaps,
+) -> EffortMenu {
+    match build_effort_options(caps) {
+        Some(options) => {
+            let note = if caps.efforts.is_empty() {
+                "thinking on/off only".to_string()
+            } else if caps.mandatory {
+                "reasoning is always on for this model".to_string()
+            } else {
+                "pick a thinking effort".to_string()
+            };
+            let stored = state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.effort.clone())
+                .unwrap_or_default();
+            let selected = preselect_effort(&options, &stored);
+            EffortMenu::Ready {
+                options,
+                selected,
+                note,
+            }
+        }
+        None => {
+            // No reasoning control: don't open the menu, just say so.
+            EffortMenu::Unsupported("model has no thinking control".to_string())
+        }
+    }
+}
+
 /// Derive the `/effort` menu for the current model (or report why one isn't
 /// available yet). Needs an active session + client (the menu is per-model and
 /// the catalogue fetch uses the client's endpoint).
 ///
-/// Side effect: when the Main route resolves, this ARMS a debounced catalogue
-/// fetch for its endpoint (if one isn't already pending/in-flight) so a
-/// SUBSEQUENT call has capabilities — this fires for BOTH callers (TUI open,
-/// GUI `GetEffortOptions`), which is exactly what lets a GUI-triggered cold
-/// fetch warm the cache for a following TUI/GUI open.
+/// Side effect: when the Main route resolves AND it's an OpenRouter endpoint
+/// (or the catalogue overlay doesn't cover it), this ARMS a debounced
+/// catalogue fetch for its endpoint (if one isn't already pending/in-flight)
+/// so a SUBSEQUENT call has capabilities — this fires for BOTH callers (TUI
+/// open, GUI `GetEffortOptions`), which is exactly what lets a GUI-triggered
+/// cold fetch warm the cache for a following TUI/GUI open.
 pub(crate) fn effort_menu(
     state: &mut AppState,
     client: &mut Option<Arc<OpenRouterClient>>,
@@ -110,6 +150,27 @@ pub(crate) fn effort_menu(
         &settings,
         crate::model::app_config::ModelRole::Main,
     );
+
+    // Non-OpenRouter endpoints (Codex `chatgpt.com/backend-api/codex`,
+    // Claude `api.anthropic.com`, xAI, DeepSeek, ...) don't expose a real
+    // `GET /models` listing, so the `models_cache` path below can NEVER
+    // resolve for them — without this, `/effort` sits in `Loading` forever
+    // (or churns "couldn't fetch capabilities — retrying..." once the armed
+    // fetch inevitably 404s/400s). Check the curated `catalogue_overlay`
+    // FIRST, before arming any fetch, so a hit short-circuits straight to
+    // `Ready` with NO network round-trip and NO Loading stall. OpenRouter
+    // itself is EXCLUDED from this path: it self-describes via a real
+    // `/models` call, so its live cache stays authoritative and the overlay
+    // is never consulted for it.
+    if let Some(r) = main.as_ref() {
+        if !crate::service::openrouter::is_openrouter(&r.endpoint) {
+            let overlay = crate::service::catalogue_overlay::models_for(&r.endpoint);
+            if overlay.iter().any(|m| m.id == r.model_id) {
+                let caps = crate::service::openrouter::effort_caps(&overlay, &r.model_id);
+                return ready_from_caps(state, &caps);
+            }
+        }
+    }
 
     // Arm a debounced fetch for the Main endpoint so a SUBSEQUENT
     // `/effort` open has capabilities. This open uses a matching successful
@@ -145,26 +206,15 @@ pub(crate) fn effort_menu(
         .unwrap_or(false);
 
     // Build the option list + capability note from the (cached) catalogue.
-    let (options, note) = if let Some(models) =
-        state.rest.models_cache.as_ref().filter(|_| cache_for_main)
-    {
-        let caps = crate::service::openrouter::effort_caps(models, &model);
-        match build_effort_options(&caps) {
-            Some(opts) => {
-                let note = if caps.efforts.is_empty() {
-                    "thinking on/off only".to_string()
-                } else if caps.mandatory {
-                    "reasoning is always on for this model".to_string()
-                } else {
-                    "pick a thinking effort".to_string()
-                };
-                (opts, note)
-            }
-            None => {
-                // No reasoning control: don't open the menu, just say so.
-                return EffortMenu::Unsupported("model has no thinking control".to_string());
-            }
-        }
+    // MODEL-ID FIX (mirrors run.rs's WINDOW-SIZING FIX): look up caps by the
+    // RESOLVED Main model id (what we actually send), NOT the legacy
+    // `settings.model` — a per-session or config Main override must resolve
+    // capabilities for the model actually in use. Falls back to
+    // `settings.model` only when `main` didn't resolve.
+    let model_for_caps = main.as_ref().map(|r| r.model_id.as_str()).unwrap_or(&model);
+    if let Some(models) = state.rest.models_cache.as_ref().filter(|_| cache_for_main) {
+        let caps = crate::service::openrouter::effort_caps(models, model_for_caps);
+        ready_from_caps(state, &caps)
     } else {
         // Cache not available or doesn't match Main endpoint.
         // Report loading instead of a generic menu.
@@ -177,21 +227,7 @@ pub(crate) fn effort_menu(
         } else {
             "model capabilities unavailable"
         };
-        return EffortMenu::Loading(status.to_string());
-    };
-
-    let stored = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.settings.effort.clone())
-        .unwrap_or_default();
-    let selected = preselect_effort(&options, &stored);
-    EffortMenu::Ready {
-        options,
-        selected,
-        note,
+        EffortMenu::Loading(status.to_string())
     }
 }
 
