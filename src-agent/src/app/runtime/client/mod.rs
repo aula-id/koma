@@ -21,12 +21,15 @@
 //! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
 //! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
+//! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
+//! | `host_catalogue` | un-attached model/route/agents/oauth catalogue builders for `host` |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
 //! | `push_proto`| GUI push-envelope DTOs (`PushEnvelope` + the one-shot `push_*` fns) |
 //! | `push_rows` | The `Push*` row/DTO structs `PushEnvelope`'s variants carry       |
 //! | `project`   | GUI snapshot serialization (`serialize_and_push`, `push_hub`, `warm_status_label`) |
 //! | `project_config` | GUI config projection (`ConfigProjection`, `push_config`)          |
+//! | `push_intercept` | one-shot `DaemonEvent` -> `PushEnvelope` re-push checks for `push_loop` |
 //! | `push_loop` | The headless attached fold loop (`push_loop`, `PushState`, `HostTransition`) |
 
 #![allow(unused_imports)]
@@ -43,12 +46,15 @@ mod diff;
 mod git;
 mod git_remote;
 mod keys;
+mod git_host;
 mod host;
+mod host_catalogue;
 mod host_config;
 mod push_proto;
 mod push_rows;
 mod project;
 mod project_config;
+mod push_intercept;
 mod push_loop;
 
 use std::io::{stdout, Stdout};

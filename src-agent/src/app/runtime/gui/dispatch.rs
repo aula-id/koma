@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 use crate::app::runtime::client::{HostCtl, StreamView};
 use crate::ipc::proto::ClientRequest;
 
+use super::dispatch_forward::{forward_config_req, forward_or_host, forward_paste, write_attach_scratch};
+use super::dispatch_git;
 use super::proto::GuiReq;
 
 /// Handles the ipc-handler closure captured from `run_gui` for dispatching a
@@ -292,45 +294,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::FileDiff { path } => {
             let _ = ctx.ctl.send(HostCtl::FileDiff { path });
         }
-        // Explore GIT panel: host-side git status fetch. ALWAYS routed to the
-        // host-relay thread — never the daemon — regardless of attach state (see
-        // `HostCtl::GitStatus`), same reasoning as `FileDiff`.
-        GuiReq::GitStatus => {
-            let _ = ctx.ctl.send(HostCtl::GitStatus);
-        }
-        // GIT panel file-row click: host-side git diff fetch, same routing as
-        // `GitStatus`/`FileDiff`.
-        GuiReq::GitDiff { path, staged } => {
-            let _ = ctx.ctl.send(HostCtl::GitDiff { path, staged });
-        }
-        // GIT panel stage/unstage/discard/commit mutations: same routing as
-        // `GitStatus`/`GitDiff` — host-side only, never the daemon.
-        GuiReq::GitStage { paths } => {
-            let _ = ctx.ctl.send(HostCtl::GitStage { paths });
-        }
-        GuiReq::GitUnstage { paths } => {
-            let _ = ctx.ctl.send(HostCtl::GitUnstage { paths });
-        }
-        GuiReq::GitDiscard { paths } => {
-            let _ = ctx.ctl.send(HostCtl::GitDiscard { paths });
-        }
-        GuiReq::GitCommit { message } => {
-            let _ = ctx.ctl.send(HostCtl::GitCommit { message });
-        }
-        // GIT panel key-picker + remote sync buttons: same routing as
-        // `GitStatus`/`GitDiff` — host-side only, never the daemon.
-        GuiReq::SetGitKey { name } => {
-            let _ = ctx.ctl.send(HostCtl::SetGitKey { name });
-        }
-        GuiReq::GitFetch => {
-            let _ = ctx.ctl.send(HostCtl::GitFetch);
-        }
-        GuiReq::GitPull => {
-            let _ = ctx.ctl.send(HostCtl::GitPull);
-        }
-        GuiReq::GitPush => {
-            let _ = ctx.ctl.send(HostCtl::GitPush);
-        }
+        // Explore GIT panel: host-side git status/diff fetch + stage/unstage/discard/
+        // commit mutations + key-picker/remote-sync buttons. ALWAYS routed to the
+        // host-relay thread — never the daemon — regardless of attach state, same
+        // reasoning as `FileDiff`. Bodies live in the sibling `dispatch_git` module.
+        GuiReq::GitStatus => dispatch_git::git_status(&ctx.ctl),
+        GuiReq::GitDiff { path, staged } => dispatch_git::git_diff(&ctx.ctl, path, staged),
+        GuiReq::GitStage { paths } => dispatch_git::git_stage(&ctx.ctl, paths),
+        GuiReq::GitUnstage { paths } => dispatch_git::git_unstage(&ctx.ctl, paths),
+        GuiReq::GitDiscard { paths } => dispatch_git::git_discard(&ctx.ctl, paths),
+        GuiReq::GitCommit { message } => dispatch_git::git_commit(&ctx.ctl, message),
+        GuiReq::SetGitKey { name } => dispatch_git::set_git_key(&ctx.ctl, name),
+        GuiReq::GitFetch => dispatch_git::git_fetch(&ctx.ctl),
+        GuiReq::GitPull => dispatch_git::git_pull(&ctx.ctl),
+        GuiReq::GitPush => dispatch_git::git_push(&ctx.ctl),
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
         // ALWAYS routed to the host-relay thread — never the daemon —
         // regardless of attach state (see `HostCtl::UsagePreview`). A "session"
@@ -626,111 +603,15 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // Settings "SSH Keys" section: host-side key-vault fetch/mutations. ALWAYS
         // routed to the host-relay thread — never the daemon — regardless of
         // attach state (see `HostCtl::KeyList`), same reasoning as `GitStatus`.
-        GuiReq::KeyList => {
-            let _ = ctx.ctl.send(HostCtl::KeyList);
-        }
-        GuiReq::KeyGenerate { name, comment } => {
-            let _ = ctx.ctl.send(HostCtl::KeyGenerate { name, comment });
-        }
-        GuiReq::KeyImport { name, private_key } => {
-            let _ = ctx.ctl.send(HostCtl::KeyImport { name, private_key });
-        }
-        GuiReq::KeyReveal { name, private } => {
-            let _ = ctx.ctl.send(HostCtl::KeyReveal { name, private });
-        }
-        GuiReq::KeyDelete { name } => {
-            let _ = ctx.ctl.send(HostCtl::KeyDelete { name });
-        }
+        // Bodies live in the sibling `dispatch_git` module.
+        GuiReq::KeyList => dispatch_git::key_list(&ctx.ctl),
+        GuiReq::KeyGenerate { name, comment } => dispatch_git::key_generate(&ctx.ctl, name, comment),
+        GuiReq::KeyImport { name, private_key } => dispatch_git::key_import(&ctx.ctl, name, private_key),
+        GuiReq::KeyReveal { name, private } => dispatch_git::key_reveal(&ctx.ctl, name, private),
+        GuiReq::KeyDelete { name } => dispatch_git::key_delete(&ctx.ctl, name),
     }
 }
 
-/// Write `bytes` to a host-writable scratch file, returning its absolute path.
-///
-/// Used by the [`GuiReq::AttachFile`] raw-bytes route: the host can't address the
-/// daemon's per-session `images/` dir (it knows neither `pwd_hash` nor the session
-/// uuid), so it drops the incoming bytes into `<tmp>/koma/gui-attach/<uuid>-<name>`
-/// and hands the daemon that path via [`ClientRequest::Paste`] — the daemon then
-/// re-copies it into the session's `images/` on ingest. The original basename +
-/// extension are preserved (behind a uuid to avoid collisions) so the daemon's
-/// extension-based image sniff still fires. Returns `None` on any fs error (the ipc
-/// handler must never panic).
-fn write_attach_scratch(name: &str, bytes: &[u8]) -> Option<std::path::PathBuf> {
-    let mut dir = std::env::temp_dir();
-    dir.push("koma");
-    dir.push("gui-attach");
-    std::fs::create_dir_all(&dir).ok()?;
-    let base = std::path::Path::new(name)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "file".to_string());
-    let unique = format!("{}-{}", uuid::Uuid::new_v4(), base);
-    let path = dir.join(unique);
-    std::fs::write(&path, bytes).ok()?;
-    Some(path)
-}
-
-/// Forward a `ClientRequest::Paste { text: path }` to the currently-attached daemon
-/// through the shared live-request slot. Shared by the [`GuiReq::AttachFile`] and
-/// [`GuiReq::AttachPath`] arms — both funnel a filesystem path into the daemon's
-/// existing paste/attachment ingest. A missing live sender (no session attached yet)
-/// is a silent no-op.
-fn forward_paste(
-    live_req: &std::sync::Mutex<Option<std::sync::mpsc::Sender<crate::ipc::proto::ClientRequest>>>,
-    path: String,
-) {
-    if let Ok(g) = live_req.lock() {
-        if let Some(tx) = g.as_ref() {
-            let _ = tx.send(crate::ipc::proto::ClientRequest::Paste { text: path });
-        }
-    }
-}
-
-/// Route a CONFIG-mutating `ClientRequest` to the daemon when a session is ATTACHED, else
-/// to the swapper thread for PRE-SESSION apply.
-///
-/// The Connector/theme setters live in BOTH host states: while attached they forward to
-/// the daemon (which owns the authoritative `AppConfig` + re-pushes `Config`); during
-/// onboarding/empty-state (the swapper, before any session exists) there is no `live_req`
-/// sender, so the request is handed to the client-thread as a [`HostCtl::ConfigMutate`],
-/// which applies the config-global subset straight to `~/.koma/config.json` and re-pushes.
-/// This is what lets the onboarding theme + provider + model steps work with NO session.
-fn forward_config_req(
-    live_req: &std::sync::Mutex<Option<std::sync::mpsc::Sender<crate::ipc::proto::ClientRequest>>>,
-    ctl: &std::sync::mpsc::Sender<HostCtl>,
-    req: crate::ipc::proto::ClientRequest,
-) {
-    if let Ok(g) = live_req.lock() {
-        if let Some(tx) = g.as_ref() {
-            let _ = tx.send(req);
-            return;
-        }
-    }
-    let _ = ctl.send(HostCtl::ConfigMutate(req));
-}
-
-/// Route a live-catalogue fetch to the ATTACHED daemon when a session is live, else to the
-/// host/swapper thread — the ListModels/ListRoutes twin of [`forward_config_req`].
-///
-/// Unlike a config setter (which the swapper applies to disk as a single
-/// [`HostCtl::ConfigMutate`] wrapping the SAME `ClientRequest`), a catalogue fetch is
-/// SERVICED differently on each side — the attached daemon runs it as a `ClientRequest` and
-/// replies over the frame stream, while the un-attached swapper runs it as a distinct
-/// [`HostCtl`] variant that does the network GET itself — so the two carry different payloads
-/// and the caller supplies both. This is what makes the Connector model/route pickers work
-/// during onboarding (no session attached), where the plain daemon-only path silently drops
-/// the request and strands the picker's spinner.
-fn forward_or_host(
-    live_req: &std::sync::Mutex<Option<std::sync::mpsc::Sender<crate::ipc::proto::ClientRequest>>>,
-    ctl: &std::sync::mpsc::Sender<HostCtl>,
-    attached: crate::ipc::proto::ClientRequest,
-    detached: HostCtl,
-) {
-    if let Ok(g) = live_req.lock() {
-        if let Some(tx) = g.as_ref() {
-            let _ = tx.send(attached);
-            return;
-        }
-    }
-    let _ = ctl.send(detached);
-}
+// `write_attach_scratch`, `forward_paste`, `forward_config_req`, and `forward_or_host`
+// moved to the sibling `dispatch_forward` module (file size) — see the `use
+// super::dispatch_forward::{...}` import above.

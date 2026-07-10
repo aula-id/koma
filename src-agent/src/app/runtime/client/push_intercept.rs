@@ -1,0 +1,164 @@
+//! One-shot `DaemonEvent` -> `PushEnvelope` re-push intercepts for [`super::push_loop`]'s
+//! attached fold loop. Split out of `push_loop.rs` for file size — PURE code motion, no
+//! behaviour change: same checks, same `push` calls, in the same relative order among
+//! themselves (each `if let` matches a DISTINCT, mutually-exclusive `DaemonEvent` variant,
+//! so at most one branch ever fires per frame — their order relative to EACH OTHER is
+//! inert; only their order relative to `apply_frame`, preserved by the caller running this
+//! BEFORE it, matters).
+//!
+//! Each of these daemon replies is a non-visual one-shot the fold treats as a no-op (seq
+//! stays gap-free), so it must be re-pushed to JS as its own envelope BEFORE `apply_frame`
+//! folds the frame — otherwise the reply would be silently swallowed.
+
+use crate::ipc::proto::DaemonEvent;
+
+use super::push_proto::{PushEnvelope, PushRoute};
+
+/// Check `frame.event` against every one-shot reply variant the GUI re-pushes as its own
+/// `PushEnvelope` ahead of the fold, pushing whichever one matches (at most one — see the
+/// module doc). Does NOT touch the `Snapshot` config-cache (that stays inline in
+/// `push_loop`, which owns the loop-local `current_config`) and does NOT call
+/// `apply_frame` (the caller does that right after, unchanged).
+pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &dyn Fn(String)) {
+    // Omnisearch reply: intercept the one-shot `FileSearchResults` and re-push it to JS as
+    // a `SearchResults` envelope BEFORE folding (the fold treats it as a non-visual no-op,
+    // keeping the seq gap-free).
+    if let DaemonEvent::FileSearchResults { query, items } = &frame.event {
+        let env = PushEnvelope::SearchResults {
+            query: query.clone(),
+            items: items.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Live model-id catalogue reply (Connector model picker): re-push it as a `ModelList`
+    // envelope BEFORE folding (the fold treats it as a non-visual no-op, keeping the seq
+    // gap-free).
+    if let DaemonEvent::ModelList { provider, models } = &frame.event {
+        let env = PushEnvelope::ModelList {
+            provider: provider.clone(),
+            models: models.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Live provider-route reply (Connector ModelForm route picker): re-push it as a
+    // `RouteList` envelope BEFORE folding (a non-visual fold no-op), flattening each wire
+    // route to the camelCase `PushRoute` JS contract.
+    if let DaemonEvent::ModelRoutes { provider, model_id, routes } = &frame.event {
+        let env = PushEnvelope::RouteList {
+            provider: provider.clone(),
+            model_id: model_id.clone(),
+            routes: routes
+                .iter()
+                .map(|r| PushRoute {
+                    name: r.name.clone(),
+                    provider_name: r.provider_name.clone(),
+                    price_prompt: r.price_prompt.clone(),
+                    price_completion: r.price_completion.clone(),
+                    uptime_last_30m: r.uptime_last_30m,
+                })
+                .collect(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // GUI Settings-tab reply (GetSettings / post-SetSessionPrefs re-push): re-push it as a
+    // `SettingsValues` envelope BEFORE folding (a non-visual fold no-op, keeping the seq
+    // gap-free), same as the ModelList/RouteList intercepts above.
+    if let DaemonEvent::SettingsValues {
+        name,
+        workdir,
+        short_send,
+        sliding_cache,
+        bash_saving,
+        internet_mode,
+        palette,
+        effort,
+    } = &frame.event
+    {
+        let env = PushEnvelope::SettingsValues {
+            name: name.clone(),
+            workdir: workdir.clone(),
+            short_send: *short_send,
+            sliding_cache: *sliding_cache,
+            bash_saving: *bash_saving,
+            internet_mode: internet_mode.clone(),
+            palette: palette.clone(),
+            effort: effort.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // GUI /agents-dashboard reply (GetAgents / post-SetAgent / -DeleteAgent re-push):
+    // re-push it as an `AgentsValues` envelope BEFORE folding (a non-visual fold no-op,
+    // keeping the seq gap-free), same as the SettingsValues intercept above.
+    if let DaemonEvent::AgentsValues {
+        agents,
+        catalogue_models,
+        catalogue_providers,
+        available_tools,
+    } = &frame.event
+    {
+        let env = PushEnvelope::AgentsValues {
+            agents: agents.clone(),
+            catalogue_models: catalogue_models.clone(),
+            catalogue_providers: catalogue_providers.clone(),
+            available_tools: available_tools.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Composer EFFORT-picker reply (GetEffortOptions): re-push it as an `EffortOptions`
+    // envelope BEFORE folding (a non-visual fold no-op, keeping the seq gap-free), same as
+    // the SettingsValues intercept above.
+    if let DaemonEvent::EffortOptions {
+        options,
+        selected,
+        note,
+        state,
+    } = &frame.event
+    {
+        let env = PushEnvelope::EffortOptions {
+            options: options.clone(),
+            selected: *selected,
+            note: note.clone(),
+            state: state.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Streaming GUI OAuth reply (GetOAuthState / StartOAuth progress / SubmitOAuthPaste /
+    // CancelOAuth / DeleteOAuthConn): re-push it as an `OAuthState` envelope BEFORE folding
+    // (a non-visual fold no-op, keeping the seq gap-free), same as the
+    // SettingsValues/AgentsValues intercepts.
+    if let DaemonEvent::OAuthState {
+        phase,
+        url,
+        user_code,
+        verification_url,
+        error,
+        conns,
+        providers,
+    } = &frame.event
+    {
+        let env = PushEnvelope::OAuthState {
+            phase: phase.clone(),
+            url: url.clone(),
+            user_code: user_code.clone(),
+            verification_url: verification_url.clone(),
+            error: error.clone(),
+            conns: conns.clone(),
+            providers: providers.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+}

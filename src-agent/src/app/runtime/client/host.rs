@@ -24,17 +24,16 @@ use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_file_diff, compute_usage_preview};
-use super::git::{
-    compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
+use super::git_host;
+use super::host_catalogue::{
+    build_host_agents_values, build_host_oauth_state, fetch_models_for_provider,
+    fetch_routes_for_provider,
 };
-use super::git_remote::{git_fetch, git_pull, git_push, set_current_key};
-use super::keys::{delete_key, generate_key, import_key, list_keys, reveal_key};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_file_diff, push_git_diff, push_git_op, push_git_status,
-    push_key_list, push_key_op, push_key_reveal, push_model_list, push_oauth_state,
-    push_route_list, push_settings_values, push_switching, push_usage_preview,
+    push_agents_values, push_file_diff, push_model_list, push_oauth_state, push_route_list,
+    push_settings_values, push_switching, push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -255,188 +254,9 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
 }
 
 
-/// UN-ATTACHED GUI model-picker fetch (a [`HostCtl::ListModels`] serviced by the swapper):
-/// load the GLOBAL config and resolve the provider by uuid. A `config.providers` entry
-/// gets a live `GET {endpoint}/models`, falling back to the curated `catalogue_overlay`
-/// if that comes back empty; a `config.oauth_conns` entry (Codex/Claude/xAI) has no live
-/// fetch worth making and resolves straight to the overlay via
-/// `registry::meta(conn.provider).chat_endpoint`. Returns an EMPTY list on an unknown
-/// provider OR any fetch error — the caller ALWAYS pushes a reply, so the React picker's
-/// spinner clears. Mirrors the daemon's attached-path `ClientRequest::ListModels` handler
-/// (`hub::requests_read`), but sources the provider from disk since the swapper holds no
-/// in-memory `AppConfig`.
-async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
-    let cfg = crate::model::app_config::AppConfig::load();
-    if let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) {
-        let c = crate::app::runtime::session_mgmt::build_client();
-        let conn = crate::service::openrouter::Conn {
-            endpoint: &p.endpoint,
-            api_key: &p.api_key,
-            api_type: crate::model::app_config::ApiType::OpenAiCompatible,
-            account_id: "",
-            oauth_uuid: "",
-            install_id: "",
-        };
-        let mut models = c
-            .list_models(conn)
-            .await
-            .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
-            .unwrap_or_default();
-        if models.is_empty() {
-            models = crate::service::catalogue_overlay::models_for(&p.endpoint)
-                .into_iter()
-                .map(|m| m.id)
-                .collect();
-        }
-        return models;
-    }
-    if let Some(conn) = cfg.oauth_conns.iter().find(|c| c.uuid == provider) {
-        let endpoint = crate::service::oauth::registry::meta(conn.provider).chat_endpoint;
-        return crate::service::catalogue_overlay::models_for(endpoint)
-            .into_iter()
-            .map(|m| m.id)
-            .collect();
-    }
-    Vec::new()
-}
-
-/// UN-ATTACHED GUI route-picker fetch (a [`HostCtl::ListRoutes`] serviced by the swapper):
-/// load the GLOBAL config, resolve the provider by uuid, GATE on it being an OpenRouter-
-/// style routable endpoint (the model-endpoints API is OpenRouter-specific — a non-OpenRouter
-/// provider gets an immediate EMPTY list with no network call), then `GET
-/// {endpoint}/models/{model_id}/endpoints`, flattening each route to the wire subset.
-/// Returns EMPTY on an unknown/non-OpenRouter provider OR any fetch error (the caller always
-/// pushes a reply → the form falls back to "Auto"). Mirrors the daemon's attached-path
-/// `ClientRequest::ListRoutes` handler, including its OpenRouter gate.
-async fn fetch_routes_for_provider(
-    provider: &str,
-    model_id: &str,
-) -> Vec<crate::ipc::proto::ModelEndpointWire> {
-    let cfg = crate::model::app_config::AppConfig::load();
-    let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) else {
-        return Vec::new();
-    };
-    // OpenRouter-only gate, mirroring the daemon path: the endpoints API is OpenRouter-
-    // specific, so a non-OpenRouter provider yields an empty route list (form → "Auto").
-    if !(p.api_type.is_routable() && p.endpoint.to_lowercase().contains("openrouter")) {
-        return Vec::new();
-    }
-    let c = crate::app::runtime::session_mgmt::build_client();
-    let conn = crate::service::openrouter::Conn {
-        endpoint: &p.endpoint,
-        api_key: &p.api_key,
-        api_type: crate::model::app_config::ApiType::OpenAiCompatible,
-        account_id: "",
-        oauth_uuid: "",
-        install_id: "",
-    };
-    c.list_model_endpoints(conn, model_id)
-        .await
-        .map(|eps| {
-            eps.into_iter()
-                .map(|ep| crate::ipc::proto::ModelEndpointWire {
-                    name: ep.name,
-                    provider_name: ep.provider_name,
-                    price_prompt: ep.pricing.as_ref().and_then(|pr| pr.prompt.clone()),
-                    price_completion: ep.pricing.as_ref().and_then(|pr| pr.completion.clone()),
-                    uptime_last_30m: ep.uptime_last_30m,
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-/// Build the UN-ATTACHED GUI /agents reply (a [`HostCtl::GetAgents`] serviced by the
-/// swapper / start-screen): the built-in + global agent roster (`load_registry(None)` — no
-/// session overlay) plus the GLOBAL model / provider catalogue off the loaded config.
-/// Mirrors the daemon's attached `send_agents_values` builder but with NO session (no
-/// `session_models`, no session agents), so the dashboard populates identically on the
-/// start screen. ALWAYS returns a value (empty vecs at worst), so the caller always pushes
-/// a reply and the loading state clears. `pub(super)` so the sibling `host_config` swapper
-/// mutation path can reuse it to re-push after an un-attached agent create / delete.
-pub(super) fn build_host_agents_values() -> (
-    Vec<crate::ipc::proto::AgentEntry>,
-    Vec<crate::ipc::proto::CatalogueModelSnapshot>,
-    Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
-) {
-    use crate::model::agent_def::{load_registry, AgentSource};
-    let registry = load_registry(None);
-    let agents = registry
-        .list(false)
-        .into_iter()
-        .map(|ag| crate::ipc::proto::AgentEntry {
-            name: ag.name.clone(),
-            description: ag.description.clone(),
-            conditions: ag.conditions.clone(),
-            source: match ag.source {
-                AgentSource::Session => "session",
-                AgentSource::Global => "global",
-                AgentSource::Builtin => "builtin",
-            }
-            .to_string(),
-            model_uuid: ag.model_uuid.clone(),
-            model: ag.model.clone(),
-            tools: ag.tools.clone(),
-            prompt: ag.prompt.clone(),
-        })
-        .collect();
-    let cfg = crate::model::app_config::AppConfig::load();
-    let catalogue_models = cfg
-        .models
-        .iter()
-        .map(|e| crate::ipc::proto::CatalogueModelSnapshot {
-            uuid: e.uuid.clone(),
-            name: e.name.clone(),
-            model_id: e.model_id.clone(),
-            provider_uuid: e.provider_uuid.clone(),
-        })
-        .collect();
-    let catalogue_providers = cfg
-        .providers
-        .iter()
-        .map(|p| crate::ipc::proto::CatalogueProviderSnapshot {
-            uuid: p.uuid.clone(),
-            name: p.name.clone(),
-            endpoint: p.endpoint.clone(),
-        })
-        .collect();
-    (agents, catalogue_models, catalogue_providers)
-}
-
-/// Build the UN-ATTACHED GUI OAuth reply (a [`HostCtl::GetOAuthState`] serviced by the
-/// swapper / start-screen): the persisted OAuth connections (TOKENLESS wire projection off
-/// `~/.koma/config.json`) + the data-driven provider catalogue. Mirrors the daemon's
-/// attached `send_oauth_state` builder but sources the connections from disk (the swapper
-/// holds no in-memory `AppConfig`), so the OAuth screen populates identically on the start
-/// screen. NEVER serializes a token — the wire type ([`crate::ipc::proto::OAuthConnWire`])
-/// has no token field. `pub(super)` so the sibling swapper delete arm can reuse it.
-pub(super) fn build_host_oauth_state() -> (
-    Vec<crate::ipc::proto::OAuthConnWire>,
-    Vec<crate::ipc::proto::OAuthProviderWire>,
-) {
-    let cfg = crate::model::app_config::AppConfig::load();
-    let conns = cfg
-        .oauth_conns
-        .iter()
-        .map(|c| crate::ipc::proto::OAuthConnWire {
-            uuid: c.uuid.clone(),
-            name: c.name.clone(),
-            provider: c.provider.wire_id().to_string(),
-            email: c.email.clone(),
-            plan: c.plan.clone(),
-            account_id: c.account_id.clone(),
-        })
-        .collect();
-    let providers = crate::service::oauth::registry::oauth_providers()
-        .into_iter()
-        .map(|(id, label, kind)| crate::ipc::proto::OAuthProviderWire {
-            id: id.to_string(),
-            label: label.to_string(),
-            kind: kind.to_string(),
-        })
-        .collect();
-    (conns, providers)
-}
+// `fetch_models_for_provider`, `fetch_routes_for_provider`, `build_host_agents_values`,
+// and `build_host_oauth_state` moved to the sibling `host_catalogue` module (file size) —
+// see the `use super::host_catalogue::{...}` import above.
 
 /// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
 /// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
@@ -518,147 +338,57 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     push_file_diff(&push2, result);
                 });
             }
-            // Explore GIT panel opened while detached (StartScreen / swapper): git is
-            // blocking, so this runs on a plain OS thread rather than the async
-            // runtime. Never touches the daemon in either host state — see
-            // `compute_git_status`.
+            // Explore GIT panel + Settings SSH-key vault, all opened/mutated while
+            // detached (StartScreen / swapper): git/fs/`ssh-keygen` are blocking, so
+            // each runs on a plain OS thread rather than the async runtime, and NEVER
+            // touches the daemon in either host state. Bodies live in the sibling
+            // `git_host` module (shared with `push_loop`'s attached twin) — see there
+            // for the per-op reasoning (mutations push a `GitOp`/`KeyOp` reply THEN a
+            // follow-up refreshed `GitStatus`/`KeyList`).
             Ok(HostCtl::GitStatus) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    let result = compute_git_status(cur.as_deref());
-                    push_git_status(&push2, result);
-                });
+                git_host::spawn_git_status(P::clone(push), current.map(str::to_string));
             }
-            // GIT panel file-row click while detached: same reasoning as `GitStatus`.
             Ok(HostCtl::GitDiff { path, staged }) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    let result = compute_git_diff(&path, staged, cur.as_deref());
-                    push_git_diff(&push2, result);
-                });
+                git_host::spawn_git_diff(P::clone(push), current.map(str::to_string), path, staged);
             }
-            // GIT panel mutations (stage/unstage/discard/commit) while detached: run
-            // the git mutation OFF-thread (blocking), push its `GitOp` reply, then
-            // recompute + push a fresh `GitStatus` so the panel's lists refresh from
-            // authoritative state — same reasoning as `GitStatus`/`GitDiff` above;
-            // never touches the daemon in either host state.
             Ok(HostCtl::GitStage { paths }) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_stage(&paths, cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_stage(P::clone(push), current.map(str::to_string), paths);
             }
             Ok(HostCtl::GitUnstage { paths }) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_unstage(&paths, cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_unstage(P::clone(push), current.map(str::to_string), paths);
             }
             Ok(HostCtl::GitDiscard { paths }) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_discard(&paths, cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_discard(P::clone(push), current.map(str::to_string), paths);
             }
             Ok(HostCtl::GitCommit { message }) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_commit(&message, cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_commit(P::clone(push), current.map(str::to_string), message);
             }
-            // GIT panel key-picker changed while detached: assign/clear the repo's
-            // SSH key (fs I/O, off-thread), then push a fresh `GitStatus` so the
-            // picker reflects the new `keyName` — no `GitOp` reply of its own.
             Ok(HostCtl::SetGitKey { name }) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    set_current_key(cur.as_deref(), name);
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_set_git_key(P::clone(push), current.map(str::to_string), name);
             }
-            // GIT panel remote sync buttons (Fetch/Pull/Push) while detached: git
-            // network I/O is blocking, so each runs on a one-shot worker thread;
-            // never touches the daemon in either host state — see `git_remote`.
             Ok(HostCtl::GitFetch) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_fetch(cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_fetch(P::clone(push), current.map(str::to_string));
             }
             Ok(HostCtl::GitPull) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_pull(cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_pull(P::clone(push), current.map(str::to_string));
             }
             Ok(HostCtl::GitPush) => {
-                let push2 = P::clone(push);
-                let cur = current.map(str::to_string);
-                std::thread::spawn(move || {
-                    push_git_op(&push2, git_push(cur.as_deref()));
-                    push_git_status(&push2, compute_git_status(cur.as_deref()));
-                });
+                git_host::spawn_git_push(P::clone(push), current.map(str::to_string));
             }
-            // Settings "SSH Keys" section opened while detached (StartScreen /
-            // swapper): fs + `ssh-keygen` are blocking, so this runs on a plain OS
-            // thread rather than the async runtime. Never touches the daemon in
-            // either host state (this is a GUI-only, manual, user-owned key vault,
-            // separate from the model's own git credential machinery) — see
-            // `list_keys`.
             Ok(HostCtl::KeyList) => {
-                let push2 = P::clone(push);
-                std::thread::spawn(move || {
-                    push_key_list(&push2, list_keys());
-                });
+                git_host::spawn_key_list(P::clone(push));
             }
-            // SSH key vault mutations (generate/import/delete) while detached: run
-            // the mutation OFF-thread (blocking), push its `KeyOp` reply, then
-            // recompute + push a fresh `KeyList` so the section's list refreshes
-            // from authoritative state — same reasoning as the GIT mutations
-            // above; never touches the daemon in either host state.
             Ok(HostCtl::KeyGenerate { name, comment }) => {
-                let push2 = P::clone(push);
-                std::thread::spawn(move || {
-                    push_key_op(&push2, generate_key(&name, &comment));
-                    push_key_list(&push2, list_keys());
-                });
+                git_host::spawn_key_generate(P::clone(push), name, comment);
             }
             Ok(HostCtl::KeyImport { name, private_key }) => {
-                let push2 = P::clone(push);
-                std::thread::spawn(move || {
-                    push_key_op(&push2, import_key(&name, &private_key));
-                    push_key_list(&push2, list_keys());
-                });
+                git_host::spawn_key_import(P::clone(push), name, private_key);
             }
             Ok(HostCtl::KeyDelete { name }) => {
-                let push2 = P::clone(push);
-                std::thread::spawn(move || {
-                    push_key_op(&push2, delete_key(&name));
-                    push_key_list(&push2, list_keys());
-                });
+                git_host::spawn_key_delete(P::clone(push), name);
             }
-            // SSH key reveal (copy-public / reveal-private) while detached: same
-            // reasoning as `GitDiff` above.
             Ok(HostCtl::KeyReveal { name, private }) => {
-                let push2 = P::clone(push);
-                std::thread::spawn(move || {
-                    push_key_reveal(&push2, reveal_key(&name, private));
-                });
+                git_host::spawn_key_reveal(P::clone(push), name, private);
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
             // a global file the host reads directly, so this never touches a daemon in

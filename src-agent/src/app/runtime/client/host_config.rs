@@ -9,7 +9,7 @@
 
 use crate::ipc::proto::ClientRequest;
 
-use super::host::build_host_agents_values;
+use super::host_catalogue::build_host_agents_values;
 use super::project_config::{push_config, ConfigProjection};
 use super::push_loop;
 use super::push_proto::push_agents_values;

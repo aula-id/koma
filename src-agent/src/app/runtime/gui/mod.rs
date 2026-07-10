@@ -26,8 +26,11 @@ use wry::http::{Request, Response, StatusCode};
 // The ipc-bridge wire types (`UserEvent`/`WinCmd`/`ClientMsg`/`GuiReq`) and the
 // `GuiReq` dispatcher (`handle_gui_req` + its `GuiReqCtx`) live in the sibling
 // `proto`/`dispatch` modules (file size); re-imported here so `run_gui` keeps
-// compiling unchanged.
+// compiling unchanged. `dispatch_git`/`dispatch_forward` are `dispatch`'s own
+// split-out git/key routing + generic forwarding helpers (file size).
 mod dispatch;
+mod dispatch_forward;
+mod dispatch_git;
 mod proto;
 use proto::{ClientMsg, UserEvent, WinCmd};
 
