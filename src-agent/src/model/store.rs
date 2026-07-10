@@ -200,6 +200,31 @@ pub fn session_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
     Ok(pwd_bucket_dir(pwd_hash)?.join(uuid))
 }
 
+/// Path to a session's append-only error log: `<session_dir>/error.log`.
+pub fn error_log_path(session_dir: &Path) -> PathBuf {
+    session_dir.join("error.log")
+}
+
+/// Best-effort append to the per-session error log. Never panics, never
+/// propagates — logging must not break a request. `header` is a short label
+/// (e.g. "HTTP 400 from <endpoint>"), `body` the detail (e.g. the raw
+/// upstream response body).
+pub fn append_error_log(session_dir: &Path, header: &str, body: &str) {
+    use std::io::Write;
+    let path = error_log_path(session_dir);
+    // defensive; the dir normally already exists
+    let _ = std::fs::create_dir_all(session_dir);
+    // No `chrono` dependency in this crate — use a plain unix-seconds stamp.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!("[unix:{ts}] {header}\n{body}\n\n");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(entry.as_bytes());
+    }
+}
+
 /// Physically delete a session: remove its on-disk directory tree AND its
 /// registry row. `path` MUST be a session directory under [`sessions_dir`]
 /// (e.g. a hub `HistoryEntry::path`); its final component is the session UUID.
