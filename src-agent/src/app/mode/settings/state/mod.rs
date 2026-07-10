@@ -222,6 +222,9 @@ impl SettingsState {
                 roles: m.effective_roles(),
                 route: m.route.clone(),
                 session_only,
+                // Carry the clone-source identity through the settings editor so a
+                // save that doesn't touch this model preserves the GUI picker match.
+                source_uuid: m.source_uuid.clone(),
             }
         };
         let mut models: Vec<ModelDraft> =

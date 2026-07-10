@@ -225,6 +225,7 @@ fn apply_global_config_req(
                 route: ModelEntry::normalize_route(route.clone()),
                 roles,
                 role: None,
+                source_uuid: None,
             });
             true
         }

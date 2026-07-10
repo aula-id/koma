@@ -50,6 +50,13 @@ export type Model = {
   // the TOP of the session-main quick-picker. Optional-tolerant: absent on a
   // host build that doesn't advertise a free model.
   free?: boolean
+  // For a `local`-scope override CLONED from a global entry, the uuid of that
+  // global (daemon `ModelEntry.source_uuid`, wire `sourceUuid`). The ModelPicker
+  // matches its active session-Main against the global rows by THIS exact id
+  // (identity), not by name. Optional-tolerant: absent on every global row, the
+  // synthetic free row, a directly-authored local entry, AND on an override created
+  // before the field existed (the picker then falls back to a name match).
+  sourceUuid?: string
 }
 
 // Live per-provider model-id catalogue entry (replaces ModelForm's

@@ -269,6 +269,15 @@ pub struct ModelEntry {
     /// migrates into `roles` via [`Self::effective_roles`].
     #[serde(default, skip_serializing)]
     pub role: Option<ModelRole>,
+    /// For a session-local override CLONED from a global entry, the `uuid` of that
+    /// global — the EXACT identity the GUI model quick-picker matches against to
+    /// light the active row (rather than a fuzzy name/model_id compare). `None` for
+    /// a directly-authored entry (every global catalogue entry, a TUI/settings-
+    /// authored model, a koma-free mint). `#[serde(default)]` so an older config
+    /// lacking the key deserializes to `None` (backward-compatible); omitted from the
+    /// JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_uuid: Option<String>,
 }
 
 impl ModelEntry {
@@ -600,6 +609,7 @@ impl AppConfig {
             },
             roles: vec![ModelRole::Main],
             role: None,
+            source_uuid: None,
         });
         true
     }
@@ -616,11 +626,35 @@ impl AppConfig {
     }
 }
 
+/// Strip `role` from `entry`'s EFFECTIVE role set so [`ModelEntry::effective_roles`]
+/// can never surface it again — regardless of which field carried it. The role is
+/// removed from the `roles` vec, AND when the LEGACY single-`role` field equals `role`
+/// it is cleared to `None`.
+///
+/// The dual clear is load-bearing: `effective_roles` folds the legacy field in ONLY
+/// when `roles` is empty, so demoting via the vec alone would leave a role carried
+/// solely by an OLD config's legacy field intact — and [`resolve_role`]'s first-wins
+/// scan would then still find that stale second holder and shadow the intended one.
+///
+/// [`resolve_role`]: crate::app::resolve::resolve_role
+pub(crate) fn strip_role(entry: &mut ModelEntry, role: ModelRole) {
+    entry.roles.retain(|r| *r != role);
+    if entry.role == Some(role) {
+        entry.role = None;
+    }
+}
+
 /// Upsert `entry` into a model `list` by uuid with per-role STEAL (the invariant that
 /// each role is held by at most ONE model within a given scope): every role `entry` now
-/// holds is first removed from every OTHER model in `list`, then `entry` replaces its
+/// holds is first removed from every OTHER model in `list` — from BOTH its `roles` vec
+/// and its legacy `role` field (via [`strip_role`]) — then `entry` replaces its
 /// uuid-match (or is appended). An `entry` arriving with an EMPTY uuid is treated as
 /// brand-new (a fresh uuid is minted).
+///
+/// The legacy-field clear is what makes the FIRST-WINS resolver correct: without it, an
+/// OTHER model that held the stolen role only through its legacy single-`role` field
+/// (an old config) would stay an effective holder, and `resolve_role` could pick it over
+/// the just-saved entry.
 ///
 /// Scope-agnostic on purpose: the GLOBAL catalogue (`AppConfig::models`, via
 /// [`AppConfig::upsert_model`]) and each session's LOCAL override layer
@@ -632,9 +666,14 @@ pub(crate) fn upsert_model_entry(list: &mut Vec<ModelEntry>, mut entry: ModelEnt
     if entry.uuid.is_empty() {
         entry.uuid = new_uuid();
     }
+    // The roles the incoming entry claims — folded through `effective_roles` so a
+    // (hypothetical) legacy-field entry still steals the right role from others.
+    let claimed = entry.effective_roles();
     for other in list.iter_mut() {
         if other.uuid != entry.uuid {
-            other.roles.retain(|r| !entry.roles.contains(r));
+            for role in &claimed {
+                strip_role(other, *role);
+            }
         }
     }
     match list.iter_mut().find(|m| m.uuid == entry.uuid) {

@@ -90,6 +90,10 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
                 roles: m.roles.iter().map(|r| shadow_role(r)).collect(),
                 route: m.route,
                 session_only: m.session_only,
+                // Display-only client shadow: the snapshot carries no source_uuid
+                // (the authoritative daemon SettingsState owns it) and this shadow is
+                // never persisted, so None here can't clobber the real value.
+                source_uuid: None,
             })
             .collect(),
         model_sel: s.model_sel,

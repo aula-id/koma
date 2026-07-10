@@ -155,6 +155,7 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
                 ModelRole::Planner,
             ],
             role: None,
+            source_uuid: None,
         });
         sess.save()?;
     }

@@ -127,6 +127,8 @@ impl DaemonHub {
             route: crate::model::app_config::ModelEntry::normalize_route(route),
             roles,
             role: None,
+            // A directly-authored ModelForm entry, not a clone of a global — no source.
+            source_uuid: None,
         };
         let result = if scope == "local" {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
@@ -354,12 +356,17 @@ impl DaemonHub {
                     .retain(|e| !e.effective_roles().contains(&ModelRole::Main));
                 sess.save()
             } else if let Some(chosen) = chosen {
-                // Reuse: a local Main override already pointing at this exact model
-                // (same model_id + provider) is already the session main — no-op.
+                // Reuse: no-op ONLY when the current local Main override was cloned
+                // from THIS exact global (source_uuid identity). Two globals that
+                // share model_id+provider but differ by uuid/route (the user's XAI vs
+                // grpk grok-4.5 twins) are DISTINCT picks — matching on
+                // model_id+provider alone would wrongly no-op the switch, leaving the
+                // old source_uuid + route pinned. A `None` source (a pre-identity or
+                // koma-free override) never matches, so it's always replaced (and thus
+                // upgraded to carry the source identity).
                 let already = sess.settings.session_models.iter().any(|e| {
                     e.effective_roles().contains(&ModelRole::Main)
-                        && e.model_id == chosen.model_id
-                        && e.provider_uuid == chosen.provider_uuid
+                        && e.source_uuid.as_deref() == Some(chosen.uuid.as_str())
                 });
                 if !already {
                     // Drop any OTHER local Main override (one local Main per scope),
@@ -375,6 +382,10 @@ impl DaemonHub {
                         route: chosen.route.clone(),
                         roles: vec![ModelRole::Main],
                         role: None,
+                        // Remember EXACTLY which global this local Main override was
+                        // cloned from, so the GUI ModelPicker can light that global's
+                        // row by identity (source uuid) rather than a fuzzy name match.
+                        source_uuid: Some(chosen.uuid.clone()),
                     });
                 }
                 sess.save()

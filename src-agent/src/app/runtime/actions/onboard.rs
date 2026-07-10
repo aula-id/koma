@@ -164,6 +164,7 @@ pub(super) fn handle_onboard_provider_save_model(
         route: None,
         roles: vec![ModelRole::Main],
         role: None,
+        source_uuid: None,
     });
     if let Err(e) = state.rest.config.save() {
         state.rest.fg_mut().status = format!("config save failed: {e}");
