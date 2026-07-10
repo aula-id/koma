@@ -70,6 +70,7 @@ export function Onboarding() {
   const activeTheme = useKoma((s) => s.config.theme)
   const providers = useKoma((s) => s.config.providers)
   const oauthProviders = useKoma((s) => s.oauth.providers)
+  const oauthConns = useKoma((s) => s.oauth.conns)
   const req = useKoma((s) => s.req)
 
   // GetOAuthState works pre-session (unlike StartOAuth/SubmitOAuthPaste/
@@ -82,7 +83,12 @@ export function Onboarding() {
 
   type Step = 'theme' | 'choose' | 'pickProvider' | 'providerForm' | 'modelForm'
 
-  const hasProvider = providers.length > 0
+  // An OAuth connection counts as "has a provider" too — it's a fully valid
+  // model provider (see providerOptions below), and a user whose ONLY
+  // connection is an OAuth one (zero config.providers) must still be able to
+  // jump straight to the model step instead of being funneled into "add an
+  // API-key provider first".
+  const hasProvider = providers.length > 0 || oauthConns.length > 0
   // Edge case: re-entering onboarding with a provider already configured (but
   // no Main model yet, e.g. after a partial setup) — land on the chooser
   // instead of re-picking a theme.
@@ -140,9 +146,19 @@ export function Onboarding() {
     setStep('providerForm')
   }
 
+  // Mirrors ConnectorPanel's providerOptions exactly: the daemon resolves a
+  // model's `provider_uuid` against EITHER catalogue — a real config provider
+  // OR an OAuth connection (uuid == `OAuthConn.uuid`, routed through that
+  // connection's bearer token / chat endpoint) — so an OAuth conn is a fully
+  // valid model provider here too, not just inside the Connector panel.
+  // OAuth-backed options are label-suffixed "· OAuth" so they're visually
+  // distinct from a static API-key provider.
   const providerOptions = useMemo(
-    () => providers.map((p) => ({ value: p.id, label: p.name })),
-    [providers],
+    () => [
+      ...providers.map((p) => ({ value: p.id, label: p.name })),
+      ...oauthConns.map((c) => ({ value: c.uuid, label: `${c.name} · OAuth` })),
+    ],
+    [providers, oauthConns],
   )
 
   const saveProvider = (d: ProviderSavePayload) => {
@@ -183,13 +199,15 @@ export function Onboarding() {
     [providerPreset],
   )
   // The model draft pre-selects the (first) provider + seeds the Main role so
-  // completing it satisfies the "usable Main" gate immediately.
+  // completing it satisfies the "usable Main" gate immediately. Prefers a real
+  // config provider, falling back to the first OAuth connection when that's
+  // all the user has (e.g. an OAuth-only setup with zero config.providers).
   const modelDraft = useMemo<Model>(
     () => ({
       id: nid('model'),
       name: '',
       modelId: '',
-      provider: providers[0]?.id ?? '',
+      provider: providers[0]?.id ?? oauthConns[0]?.uuid ?? '',
       route: '',
       roles: ['main'],
       scope: 'global',
