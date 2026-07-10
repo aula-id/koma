@@ -297,7 +297,7 @@ pub(super) fn drain_subagents(
                     &note,
                     None,
                 );
-                sess.conversation.push_assistant(note, None);
+                sess.conversation.push_assistant(note, None, false);
                 let _ = sess.save();
             }
         }

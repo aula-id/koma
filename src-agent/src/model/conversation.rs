@@ -73,9 +73,13 @@ impl Conversation {
     /// enters the list so the transcript cache captures it on first render, and
     /// it is never serialised (the field is `#[serde(skip)]`) — it only ever
     /// shows above the answer, never re-entering the conversation or disk.
-    pub fn push_assistant(&mut self, content: impl Into<String>, reasoning: Option<String>) {
+    pub fn push_assistant(&mut self, content: impl Into<String>, reasoning: Option<String>, promoted: bool) {
         self.messages
-            .push(ChatMessage::new(Role::Assistant, content).with_reasoning(reasoning));
+            .push(
+                ChatMessage::new(Role::Assistant, content)
+                    .with_reasoning(reasoning)
+                    .with_reasoning_promoted(promoted),
+            );
     }
 
     /// Append an assistant turn that requested tool calls. `content` is the
@@ -186,6 +190,16 @@ impl Conversation {
                         out.push(m2);
                     }
                     // else: empty dangling assistant → drop entirely
+                }
+                Role::Assistant if m.reasoning_promoted => {
+                    // Excluded from the wire only: this turn's content was PROMOTED
+                    // from raw reasoning/chain-of-thought by `final_answer` (empty
+                    // `content` + non-empty `reasoning`). Replaying that prose
+                    // few-shot-conditions other models into skipping tool use, so it
+                    // is dropped from the sent history — storage/display (the stored
+                    // `Conversation` + msglog) are untouched. Promoted turns never
+                    // carry `tool_calls` (that's handled by the arm above), so
+                    // dropping one here can never orphan a Tool result.
                 }
                 Role::Tool => {
                     // keep tool results only when their call was fully answered
