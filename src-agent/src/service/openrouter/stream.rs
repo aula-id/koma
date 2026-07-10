@@ -6,8 +6,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::dto::chat::{ChatMessage, ToolCall};
 use crate::dto::openrouter::{
-    to_wire_with_images, ChatRequest, ImageWireCtx, StreamChunk, ToolDef, ToolFunctionDef,
-    UsageRequest,
+    to_wire_with_images, ChatRequest, ImageWireCtx, StreamChunk, StreamOptions, ToolDef,
+    ToolFunctionDef, UsageRequest,
 };
 use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
@@ -144,6 +144,15 @@ impl OpenRouterClient {
             stream: true,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            // OpenAI-standard streaming usage directive: generic OpenAI-spec
+            // servers (e.g. api.x.ai) ignore `usage:{include:true}` above and
+            // only emit the terminal usage chunk when this is set. Omitted for
+            // OpenRouter/koma-free, which already get cost data via `usage`.
+            stream_options: if is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree {
+                None
+            } else {
+                Some(StreamOptions { include_usage: true })
+            },
             tools: Some(tools),
             // Interactive chat is the only path that thinks; map the resolved
             // role's effort token to a `reasoning` directive (None = model default).

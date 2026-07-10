@@ -53,6 +53,7 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // /compact summarisation uses no tools.
             tools: None,
             // Compaction is a mechanical summary; no thinking needed.
@@ -121,6 +122,7 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Secondary-model calls use no tools.
             tools: None,
             // Secondary-model calls (awareness / classifier) don't think.
@@ -254,6 +256,7 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Classifier calls use no tools.
             tools: None,
             // `exclude: true` (strip reasoning, keep it mandatory for gateways that
@@ -406,6 +409,7 @@ impl OpenRouterClient {
             // provider behaves the same (no pin).
             provider: provider_routing_for(provider.unwrap_or("")),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Fold calls use no tools.
             tools: None,
             // `exclude: true` (strip reasoning, keep it mandatory for gateways that
@@ -561,6 +565,7 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Router calls use no tools.
             tools: None,
             // `exclude: true` (strip reasoning, keep it mandatory for gateways that
