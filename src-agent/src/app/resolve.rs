@@ -226,6 +226,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::Kilocode => ApiType::OpenAiCompatible,
         // xAI is a plain OpenAI-compatible chat endpoint (bearer JWT).
         OAuthProvider::Xai => ApiType::OpenAiCompatible,
+        OAuthProvider::ClaudeAI => ApiType::AnthropicCompatible,
     };
     let account_id = match conn.provider {
         OAuthProvider::Codex => conn.account_id.clone(),
@@ -235,6 +236,8 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         // account_id is non-empty, so an empty one guarantees that Kilo-only header can
         // never leak to api.x.ai.
         OAuthProvider::Xai => String::new(),
+        // Claude has no org/account header concept either — keep empty, same as xAI.
+        OAuthProvider::ClaudeAI => String::new(),
     };
     Some(Resolved {
         model_id: entry.model_id.clone(),

@@ -20,10 +20,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 
 use super::registry::{
-    CODEX_MAX_REFRESH_AGE_SECS, CODEX_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS,
-    XAI_REFRESH_LEAD_SECS,
+    CLAUDE_MAX_REFRESH_AGE_SECS, CLAUDE_REFRESH_LEAD_SECS, CODEX_MAX_REFRESH_AGE_SECS,
+    CODEX_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS, XAI_REFRESH_LEAD_SECS,
 };
-use super::{codex, xai};
+use super::{claude, codex, xai};
 use crate::model::app_config::{AppConfig, OAuthConn, OAuthProvider};
 
 #[derive(Clone)]
@@ -49,6 +49,9 @@ impl TokenSnap {
             // xAI has no org/account identity — the send-time account string stays
             // empty (so the Kilo org header never fires on an xAI request).
             OAuthProvider::Xai => String::new(),
+            // Anthropic doesn't use a chatgpt-account-id-style header; keep it empty
+            // like xAI.
+            OAuthProvider::ClaudeAI => String::new(),
         };
         TokenSnap {
             access_token: conn.access_token.clone(),
@@ -118,6 +121,7 @@ fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
     match provider {
         OAuthProvider::Codex => Some((CODEX_REFRESH_LEAD_SECS, CODEX_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::Xai => Some((XAI_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS)),
+        OAuthProvider::ClaudeAI => Some((CLAUDE_REFRESH_LEAD_SECS, CLAUDE_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::Kilocode => None,
     }
 }
@@ -212,6 +216,7 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
     let refreshed = match snap.provider {
         OAuthProvider::Xai => xai::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::Codex => codex::refresh(http_client(), &snap.refresh_token).await,
+        OAuthProvider::ClaudeAI => claude::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
     };
     match refreshed {
