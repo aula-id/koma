@@ -156,6 +156,7 @@ mod roundtrip_tests {
             config_models: Vec::new(),
             session_models: Vec::new(),
             mcp_servers: Vec::new(),
+            oauth_conn_uuids: Vec::new(),
             // Non-default sub-agent viewer + `$` panel state so the round-trip proves
             // these stage-3 global flags survive serialize -> deserialize.
             agent_viewer: Some(1),
