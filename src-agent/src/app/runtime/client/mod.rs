@@ -19,6 +19,7 @@
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
+//! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
 //! | `push_proto`| GUI push-envelope DTOs (`PushEnvelope` + the one-shot `push_*` fns) |
@@ -39,6 +40,7 @@ mod swapper;
 mod swapper_keys;
 mod diff;
 mod git;
+mod keys;
 mod host;
 mod host_config;
 mod push_proto;
@@ -389,6 +391,29 @@ pub(super) enum HostCtl {
         session: Option<String>,
         scope: String,
     },
+    /// Host-side SSH KEY VAULT list fetch for the Settings "SSH Keys" section
+    /// (`<~/.koma>/keys/`). Same reasoning as [`GitStatus`](Self::GitStatus): NEVER
+    /// touches the daemon regardless of attach state — this is a GUI-only, manual,
+    /// user-owned key vault, entirely separate from the model's own git credential
+    /// machinery (`git_cred.rs`/`git_operator.rs`). Serviced off-thread (fs +
+    /// `ssh-keygen` are blocking) in both host states; see [`keys::list_keys`].
+    KeyList,
+    /// Host-side SSH KEY GENERATE mutation (a fresh passphrase-less ed25519
+    /// keypair). Same reasoning + reply pattern as [`GitStage`](Self::GitStage) —
+    /// the worker pushes a `KeyOp` reply THEN a follow-up `KeyList` push so the
+    /// vault list refreshes from authoritative state. See [`keys::generate_key`].
+    KeyGenerate { name: String, comment: String },
+    /// Host-side SSH KEY IMPORT mutation (an existing pasted private key). Same
+    /// reasoning + reply pattern as [`KeyGenerate`](Self::KeyGenerate); see
+    /// [`keys::import_key`].
+    KeyImport { name: String, private_key: String },
+    /// Host-side SSH KEY REVEAL fetch ("Copy public key" / "Reveal private key").
+    /// Same reasoning as [`GitDiff`](Self::GitDiff) — ALWAYS a one-shot `KeyReveal`
+    /// reply, never touches the daemon. See [`keys::reveal_key`].
+    KeyReveal { name: String, private: bool },
+    /// Host-side SSH KEY DELETE mutation. Same reasoning + reply pattern as
+    /// [`KeyGenerate`](Self::KeyGenerate); see [`keys::delete_key`].
+    KeyDelete { name: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

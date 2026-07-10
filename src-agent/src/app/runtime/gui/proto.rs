@@ -484,4 +484,39 @@ pub(super) enum GuiReq {
     /// removes it from the on-disk config + evicts the cache — then re-pushes a fresh
     /// `OAuthState`, so a connection is removable pre-session too.
     DeleteOAuthConn { uuid: String },
+
+    // ─── GUI SSH key vault (Settings "SSH Keys" submenu, wave 4a) ────────────────
+    // A GUI-only, MANUAL, user-owned key vault (`<~/.koma>/keys/`) — completely
+    // separate from the model's own git credential machinery (`git_cred.rs`/
+    // `git_operator.rs`). Every request here is routed UNCONDITIONALLY to the
+    // host-relay thread, same reasoning as `GitStatus`/`FileDiff`: the host process
+    // already has direct filesystem + `ssh-keygen` access, so no daemon round-trip
+    // is needed or wanted, and it works identically whether a session is attached or
+    // not. Remote push/pull (wave 4b) is NOT covered by this wave.
+    /// The Settings "SSH Keys" section opened / refreshed: fetch the vault's current
+    /// key list. Forwarded as [`HostCtl::KeyList`]; the reply is a one-shot `KeyList`
+    /// envelope that never hangs (an empty vault is a valid "no keys yet" state).
+    KeyList,
+    /// Generate a fresh passphrase-less ed25519 keypair named `name` (`comment`
+    /// defaults to `"koma"` when blank). Forwarded as [`HostCtl::KeyGenerate`]; the
+    /// reply is a one-shot `KeyOp` envelope, immediately followed by a fresh
+    /// `KeyList` push so the section's list refreshes.
+    KeyGenerate { name: String, comment: String },
+    /// Import an EXISTING private key (`name` + pasted `privateKey` text) into the
+    /// vault; the host derives + writes the matching public half. Forwarded as
+    /// [`HostCtl::KeyImport`]; same reply pattern as `KeyGenerate`.
+    KeyImport {
+        name: String,
+        #[serde(rename = "privateKey")]
+        private_key: String,
+    },
+    /// Reveal key `name`'s contents — `private: false` for "Copy public key" (no
+    /// confirmation needed React-side), `private: true` for "Reveal private key"
+    /// (gated behind a deliberate click + warning React-side; never surfaced
+    /// passively — the user owns these keys outright). Forwarded as
+    /// [`HostCtl::KeyReveal`]; the reply is a one-shot `KeyReveal` envelope.
+    KeyReveal { name: String, private: bool },
+    /// Delete keypair `name` (both halves, best-effort). Forwarded as
+    /// [`HostCtl::KeyDelete`]; same reply pattern as `KeyGenerate`.
+    KeyDelete { name: String },
 }

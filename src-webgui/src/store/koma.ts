@@ -347,6 +347,28 @@ export type GitStatus = {
   error: string | null
 }
 
+// One keypair entry in the Settings "SSH Keys" section's vault list — mirrors
+// the host's `KeyInfo` (keys.rs, `rename_all = "camelCase"`). This is a
+// GUI-only, manual, user-owned key vault (`<~/.koma>/keys/`), completely
+// separate from the model's own git credential machinery.
+export type KeyInfo = {
+  name: string
+  fingerprint: string
+  comment: string
+  keyType: string
+}
+
+// A one-shot reveal of a keypair's contents (KeyReveal push) — the SSH Keys
+// section's transient "Copy public key" / "Reveal private key" result, kept
+// separate from the authoritative `keys` list. `private` echoes which half
+// was read; `error` set means `content` is empty.
+export type KeyReveal = {
+  name: string
+  private: boolean
+  content: string
+  error: string | null
+}
+
 // One entry in the Agents dashboard's model catalogue (host
 // `CatalogueModelSnapshot`, snake_case on the wire — see `AgentsValues`).
 export type CatalogueModelEntry = { uuid: string; name: string; modelId: string; providerUuid: string }
@@ -728,6 +750,35 @@ export type PushEnvelope =
       op: string
       error: string | null
     }
+  // Reply to GuiReq KeyList — the Settings "SSH Keys" section's authoritative
+  // vault list. ALWAYS a reply so the section never hangs loading (an empty
+  // vault is itself a valid "no keys yet" state). Also arrives as the
+  // follow-up refresh after any KeyGenerate/KeyImport/KeyDelete mutation.
+  | {
+      k: 'KeyList'
+      keys: KeyInfo[]
+    }
+  // Reply to GuiReq KeyReveal — a host-computed keypair reveal for the "Copy
+  // public key" / "Reveal private key" actions. `private` echoes the request
+  // so the reducer never mismatches a public reveal with a private one.
+  | {
+      k: 'KeyReveal'
+      name: string
+      private: boolean
+      content: string
+      error: string | null
+    }
+  // Reply to a KeyGenerate/KeyImport/KeyDelete mutation. `op` is
+  // "generate"/"import"/"delete"; `error` (only when `ok` is false) is the
+  // host's own failure message. Carries no list data — ALWAYS immediately
+  // followed by a fresh KeyList push, which is what actually refreshes the
+  // section's list.
+  | {
+      k: 'KeyOp'
+      ok: boolean
+      op: string
+      error: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -956,6 +1007,17 @@ type KomaState = {
   // lose an in-progress message; cleared automatically on a successful commit
   // (see the push reducer's 'GitOp' case).
   commitDraft: string
+  // The Settings "SSH Keys" section's authoritative vault list (latest KeyList
+  // push) — a GUI-only, manual, user-owned key vault, entirely separate from
+  // the model's own git credential machinery. REPLACED wholesale on each push;
+  // empty until the first reply lands. Global (not per-session), mirroring `git`.
+  keys: KeyInfo[]
+  // The SSH Keys section's transient "Copy public key" / "Reveal private key"
+  // result (latest KeyReveal push), or `null` when nothing has been revealed
+  // yet / the reveal box was dismissed. Kept separate from `keys` (the list
+  // itself never carries key material). Named distinctly from the `keyReveal`
+  // ACTION below (same-name field+method would collide in this one object type).
+  keyRevealResult: KeyReveal | null
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -1038,6 +1100,24 @@ type KomaState = {
   gitUnstage: (paths: string[]) => void
   gitDiscard: (paths: string[]) => void
   gitCommit: (message: string) => void
+  // Settings "SSH Keys" section: re-fetch the vault's key list. Fired on the
+  // section opening/re-activating.
+  refreshKeys: () => void
+  // Generate a fresh passphrase-less ed25519 keypair. The reply lands as a
+  // one-shot KeyOp push (toasted on failure) followed by a fresh KeyList push
+  // that refreshes `keys` — this action never mutates `keys` optimistically.
+  keyGenerate: (name: string, comment: string) => void
+  // Import an existing pasted private key under `name`. Same reply pattern as
+  // keyGenerate.
+  keyImport: (name: string, privateKey: string) => void
+  // Reveal a keypair's public (`private: false`) or private (`private: true`)
+  // half. The reply lands as a one-shot KeyReveal push into `keyReveal`.
+  keyReveal: (name: string, priv: boolean) => void
+  // Dismiss the currently-shown reveal box (local-only — no wire request).
+  clearKeyReveal: () => void
+  // Delete a keypair (both halves, best-effort). Same reply pattern as
+  // keyGenerate.
+  keyDelete: (name: string) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
   // job (`kind:'bash'`) by its numeric id: find-or-create (dedup by the stable
   // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
@@ -1182,6 +1262,8 @@ const initialGit: GitStatus = {
   error: null,
 }
 
+const initialKeys: KeyInfo[] = []
+
 const initialModelList: ModelListEntry[] = []
 
 const initialRouteList: KomaState['routeList'] = null
@@ -1250,6 +1332,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   availableTools: [],
   git: initialGit,
   commitDraft: '',
+  keys: initialKeys,
+  keyRevealResult: null,
 
   push: (env) => {
     switch (env.k) {
@@ -1694,6 +1778,45 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
+      case 'KeyList':
+        set(() => ({ keys: env.keys }))
+        break
+      case 'KeyReveal':
+        set((s) => {
+          // Toast only a COPY-public-key failure (`private: false`) — a
+          // private-reveal failure already renders inline in the reveal box
+          // (see SshKeysSettings' `revealedPrivate.error` branch) and would
+          // otherwise double-surface. Same de-duped toast idiom as the KeyOp
+          // case: only start a NEW toast when the text actually differs from
+          // what's already showing.
+          const text = env.error && !env.private ? `ssh key reveal: ${env.error}` : null
+          const raise = !!text && text !== s.ui.toast?.text
+          const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+          return {
+            keyRevealResult: {
+              name: env.name,
+              private: env.private,
+              content: env.content,
+              error: env.error,
+            },
+            ui: raise
+              ? { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind: 'error' } }
+              : s.ui,
+          }
+        })
+        break
+      case 'KeyOp':
+        set((s) => {
+          // Same de-duped toast idiom as the GitOp case above: only start a NEW
+          // toast when the text actually differs from what's already showing.
+          const text = env.error ? `ssh key ${env.op}: ${env.error}` : null
+          const raise = !!text && text !== s.ui.toast?.text
+          const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+          return raise
+            ? { ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind: 'error' } } }
+            : {}
+        })
+        break
     }
   },
 
@@ -1806,6 +1929,24 @@ export const useKoma = create<KomaState>((set, get) => ({
     if (!message.trim()) return
     get().req({ r: 'GitCommit', message })
   },
+  refreshKeys: () => {
+    get().req({ r: 'KeyList' })
+  },
+  keyGenerate: (name, comment) => {
+    if (!name.trim()) return
+    get().req({ r: 'KeyGenerate', name: name.trim(), comment })
+  },
+  keyImport: (name, privateKey) => {
+    if (!name.trim() || !privateKey.trim()) return
+    get().req({ r: 'KeyImport', name: name.trim(), privateKey })
+  },
+  keyReveal: (name, priv) => {
+    get().req({ r: 'KeyReveal', name, private: priv })
+  },
+  clearKeyReveal: () => set(() => ({ keyRevealResult: null })),
+  keyDelete: (name) => {
+    get().req({ r: 'KeyDelete', name })
+  },
   openStreamTab: (kind, targetId, title) => {
     const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`
     set((s) => {
@@ -1876,7 +2017,14 @@ export const useKoma = create<KomaState>((set, get) => ({
     }
     // Re-focusing the Settings tab re-requests its values so they're fresh (the
     // name/workdir may have changed via other paths, e.g. the RenameOverlay).
-    if (tab.kind === 'settings') get().req({ r: 'GetSettings' })
+    // Also re-fetch the SSH Keys vault list — the Settings tab stays mounted
+    // (CSS-hidden) across a close/reopen, so without this the "SSH Keys"
+    // section would only ever reflect whatever the vault looked like on the
+    // FIRST open of the session.
+    if (tab.kind === 'settings') {
+      get().req({ r: 'GetSettings' })
+      get().refreshKeys()
+    }
     // Sync the stream view to the now-active tab: a stream tab → stream its target;
     // any other tab (chat/diff/settings) → clear the view. The host/daemon dedupe an
     // unchanged view, so activating a non-stream tab repeatedly is cheap.

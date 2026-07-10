@@ -27,12 +27,13 @@ use super::diff::{compute_file_diff, compute_usage_preview};
 use super::git::{
     compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
 };
+use super::keys::{delete_key, generate_key, import_key, list_keys, reveal_key};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
     push_agents_values, push_file_diff, push_git_diff, push_git_op, push_git_status,
-    push_model_list, push_oauth_state, push_route_list, push_settings_values, push_switching,
-    push_usage_preview,
+    push_key_list, push_key_op, push_key_reveal, push_model_list, push_oauth_state,
+    push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -572,6 +573,52 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 std::thread::spawn(move || {
                     push_git_op(&push2, git_commit(&message, cur.as_deref()));
                     push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            // Settings "SSH Keys" section opened while detached (StartScreen /
+            // swapper): fs + `ssh-keygen` are blocking, so this runs on a plain OS
+            // thread rather than the async runtime. Never touches the daemon in
+            // either host state (this is a GUI-only, manual, user-owned key vault,
+            // separate from the model's own git credential machinery) — see
+            // `list_keys`.
+            Ok(HostCtl::KeyList) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    push_key_list(&push2, list_keys());
+                });
+            }
+            // SSH key vault mutations (generate/import/delete) while detached: run
+            // the mutation OFF-thread (blocking), push its `KeyOp` reply, then
+            // recompute + push a fresh `KeyList` so the section's list refreshes
+            // from authoritative state — same reasoning as the GIT mutations
+            // above; never touches the daemon in either host state.
+            Ok(HostCtl::KeyGenerate { name, comment }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    push_key_op(&push2, generate_key(&name, &comment));
+                    push_key_list(&push2, list_keys());
+                });
+            }
+            Ok(HostCtl::KeyImport { name, private_key }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    push_key_op(&push2, import_key(&name, &private_key));
+                    push_key_list(&push2, list_keys());
+                });
+            }
+            Ok(HostCtl::KeyDelete { name }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    push_key_op(&push2, delete_key(&name));
+                    push_key_list(&push2, list_keys());
+                });
+            }
+            // SSH key reveal (copy-public / reveal-private) while detached: same
+            // reasoning as `GitDiff` above.
+            Ok(HostCtl::KeyReveal { name, private }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    push_key_reveal(&push2, reveal_key(&name, private));
                 });
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is

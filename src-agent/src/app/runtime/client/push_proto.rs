@@ -375,6 +375,32 @@ pub(super) enum PushEnvelope {
         workspace: String,
         awareness: String,
     },
+    /// One-shot host-computed SSH KEY LIST answering a `KeyList` request from the
+    /// Settings "SSH Keys" section: every keypair currently in the vault
+    /// (`<~/.koma>/keys/`). Computed ENTIRELY host-side (see `keys::list_keys` —
+    /// never forwarded to the daemon; this is a GUI-only, manual, user-owned key
+    /// vault, separate from the model's own git credential machinery), so this is
+    /// pushed the SAME way regardless of attach state, and — like `GitStatus` — is
+    /// ALWAYS a reply so the section never hangs loading (an empty vault is itself
+    /// a valid "no keys yet" state). Also pushed as the follow-up refresh after
+    /// any `KeyOp` mutation. A named `keys` field (not a bare newtype) since an
+    /// internally-tagged enum (`tag = "k"`) can't carry a top-level array.
+    KeyList { keys: Vec<super::keys::KeyInfo> },
+    /// One-shot host-computed SSH KEY REVEAL answering a `KeyReveal` request (the
+    /// "Copy public key" / "Reveal private key" actions). Carries
+    /// [`super::keys::KeyRevealResult`] verbatim (already camelCase) — `private`
+    /// echoes the request so React applies the reply to the right affordance;
+    /// `error` set means `content` is empty.
+    KeyReveal(super::keys::KeyRevealResult),
+    /// One-shot host-computed SSH KEY OP result answering a `KeyGenerate`/
+    /// `KeyImport`/`KeyDelete` mutation from the Settings "SSH Keys" section. `op`
+    /// (`"generate"`/`"import"`/`"delete"`) lets React branch per-kind; `error`
+    /// (set only when `ok` is `false`) surfaces the failure as a toast. Carries NO
+    /// list data itself — ALWAYS immediately followed by a fresh `KeyList` push
+    /// (the mutation worker computes + pushes that right after), mirroring
+    /// `GitOp`/`GitStatus`. Carries [`super::keys::KeyOpResult`] verbatim (already
+    /// camelCase).
+    KeyOp(super::keys::KeyOpResult),
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -585,4 +611,29 @@ pub(super) fn push_oauth_state(
             providers,
         },
     );
+}
+
+/// Emit a one-shot `KeyList` envelope for the GUI Settings "SSH Keys" section,
+/// carrying a host-computed [`super::keys::KeyInfo`] list verbatim. Shared by the
+/// UN-ATTACHED swapper fallback and the attached `push_loop`'s off-thread worker,
+/// since a `KeyList` is serviced entirely host-side regardless of attach state —
+/// mirrors `push_git_status`. Also fired as the follow-up refresh after any
+/// `KeyOp` mutation.
+pub(super) fn push_key_list(push: &dyn Fn(String), keys: Vec<super::keys::KeyInfo>) {
+    super::render::emit(push, &PushEnvelope::KeyList { keys });
+}
+
+/// Emit a one-shot `KeyReveal` envelope for the "Copy public key" / "Reveal
+/// private key" actions, carrying a host-computed
+/// [`super::keys::KeyRevealResult`] verbatim. Mirrors `push_git_diff`.
+pub(super) fn push_key_reveal(push: &dyn Fn(String), result: super::keys::KeyRevealResult) {
+    super::render::emit(push, &PushEnvelope::KeyReveal(result));
+}
+
+/// Emit a one-shot `KeyOp` envelope for the Settings "SSH Keys" section, carrying
+/// a host-computed [`super::keys::KeyOpResult`] verbatim. Mirrors `push_git_op` —
+/// ALWAYS immediately followed by a fresh `KeyList` push so the vault list
+/// refreshes from authoritative state.
+pub(super) fn push_key_op(push: &dyn Fn(String), result: super::keys::KeyOpResult) {
+    super::render::emit(push, &PushEnvelope::KeyOp(result));
 }
