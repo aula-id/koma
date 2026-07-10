@@ -281,6 +281,11 @@ over sec_remote (stateful socket).\n",
     // model that actually served this request.
     state.rest.sessions[sess_idx].pending_dispatch_model_id =
         main.as_ref().map(|m| m.model_id.clone());
+    // Snapshot the endpoint alongside the model id (same dispatch-time
+    // rationale) so the usage-ledger write can look up curated overlay
+    // pricing (W3) when the provider reports cost as 0.0.
+    state.rest.sessions[sess_idx].pending_dispatch_endpoint =
+        main.as_ref().map(|m| m.endpoint.clone());
 
     // Surface the SILENT koma-free downgrade — but only ONCE per user-visible turn,
     // on its FIRST dispatch. `start_stream_task` re-enters on every tool-round

@@ -115,6 +115,27 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
         if let Some((pt, ct, cost)) = usage {
             if let Some(sess) = rt.session.as_ref() {
                 let model_id = rt.pending_dispatch_model_id.clone().unwrap_or_default();
+                // Provider reported no cost (Codex/Claude hardcode 0.0; direct
+                // APIs like DeepSeek may omit it) — fall back to the curated
+                // catalogue overlay's per-1M-token pricing, if it has any for
+                // this (endpoint, model). Non-zero provider cost (OpenRouter's
+                // live figure) always wins and is left untouched.
+                let cost = if cost == 0.0 {
+                    rt.pending_dispatch_endpoint
+                        .as_deref()
+                        .and_then(|ep| {
+                            crate::service::catalogue_overlay::overlay_cost(
+                                ep,
+                                &model_id,
+                                pt,
+                                rt.tokens_cached,
+                                ct,
+                            )
+                        })
+                        .unwrap_or(cost)
+                } else {
+                    cost
+                };
                 crate::model::usage::record_usage(
                     &model_id,
                     "main",
@@ -318,6 +339,24 @@ pub(crate) fn advance_turn(
         if let Some((pt, ct, cost)) = usage {
             if let Some(sess) = rt.session.as_ref() {
                 let model_id = rt.pending_dispatch_model_id.clone().unwrap_or_default();
+                // Same zero-cost overlay fallback as `finish_stream` — see its
+                // comment for the rationale.
+                let cost = if cost == 0.0 {
+                    rt.pending_dispatch_endpoint
+                        .as_deref()
+                        .and_then(|ep| {
+                            crate::service::catalogue_overlay::overlay_cost(
+                                ep,
+                                &model_id,
+                                pt,
+                                rt.tokens_cached,
+                                ct,
+                            )
+                        })
+                        .unwrap_or(cost)
+                } else {
+                    cost
+                };
                 crate::model::usage::record_usage(
                     &model_id,
                     "main",

@@ -98,6 +98,35 @@ pub fn lookup(endpoint: &str, model_id: &str) -> Option<OverlayModel> {
     guard.get(endpoint)?.iter().find(|m| m.id == model_id).cloned()
 }
 
+/// Compute a usage-ledger cost (USD) from this overlay's curated per-1M-token
+/// pricing, for providers that report zero/no cost themselves (Codex/Claude
+/// hardcode `0.0`; direct APIs like DeepSeek may omit it entirely). The
+/// overlay's pricing PRESENCE is the toggle: `None` when the model has no
+/// `pricing` block in the catalogue (subscription models like Codex/Claude/
+/// SuperGrok stay honest at $0 unless the user prices them in `models.json`).
+///
+/// `cached_tokens` are billed at the discounted `pricing.cached` rate and
+/// excluded from the uncached `pricing.input` rate (`prompt_tokens` minus
+/// `cached_tokens`, saturating so a cached count that somehow exceeds prompt
+/// never underflows). Display-only: koma doesn't track cache-WRITE tokens, so
+/// only cache-READ (`cached_tokens`) factors in here.
+pub fn overlay_cost(
+    endpoint: &str,
+    model_id: &str,
+    prompt_tokens: u64,
+    cached_tokens: u64,
+    completion_tokens: u64,
+) -> Option<f64> {
+    let m = lookup(endpoint, model_id)?;
+    let p = m.pricing?;
+    let uncached = prompt_tokens.saturating_sub(cached_tokens);
+    let cost = (uncached as f64 * p.input
+        + cached_tokens as f64 * p.cached
+        + completion_tokens as f64 * p.output)
+        / 1_000_000.0;
+    Some(cost)
+}
+
 /// All overlay entries for `endpoint`, mapped to the OpenRouter-shaped
 /// `ModelInfo` so a future consumer can feed them straight into
 /// `effort_caps`/`context_length_for`. Empty vec if the endpoint has no

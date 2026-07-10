@@ -143,6 +143,14 @@ pub struct SessionRuntime {
     /// to be configured NOW, not the one that actually served the request. Reset
     /// on every dispatch; `None` only before the very first send of a session.
     pub pending_dispatch_model_id: Option<String>,
+    /// The endpoint actually DISPATCHED for the in-flight request, captured
+    /// alongside `pending_dispatch_model_id` at the same dispatch-time
+    /// snapshot in `stream::run::start_stream_task`. Used by the usage-ledger
+    /// write (W3) to look up curated per-1M-token pricing in the catalogue
+    /// overlay when a provider reports cost as 0.0 (Codex/Claude hardcode it;
+    /// direct APIs like DeepSeek may omit it entirely). `None` only before the
+    /// very first send of a session.
+    pub pending_dispatch_endpoint: Option<String>,
     /// THIS session's cumulative token/cost totals (summed from its own
     /// messages.sqlite on open via `load_token_totals`, incremented per response).
     /// Per-session so each tab tracks only its own usage — switching foreground
@@ -511,6 +519,7 @@ impl SessionRuntime {
             harness_rx: None,
             pending_usage: None,
             pending_dispatch_model_id: None,
+            pending_dispatch_endpoint: None,
             tokens_in: 0,
             tokens_out: 0,
             cost: 0.0,
