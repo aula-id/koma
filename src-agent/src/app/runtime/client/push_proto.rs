@@ -245,6 +245,16 @@ pub(super) enum PushEnvelope {
     /// way regardless of attach state, and — like `FileDiff` — is ALWAYS a reply so
     /// the diff tab never hangs. Carries [`super::git::GitDiffResult`] verbatim.
     GitDiff(super::git::GitDiffResult),
+    /// One-shot host-computed GIT OP result answering a `GitStage`/`GitUnstage`/
+    /// `GitDiscard`/`GitCommit` mutation from the Source Control "GIT" panel. `op`
+    /// (`"stage"`/`"unstage"`/`"discard"`/`"commit"`) lets React branch per-kind (e.g.
+    /// clear the commit box only on a successful commit); `error` (set only when `ok`
+    /// is `false`) surfaces the failure as a toast. Carries NO list data itself — it is
+    /// ALWAYS immediately followed by a fresh `GitStatus` push (the mutation worker
+    /// computes + pushes that right after), which is what actually refreshes the
+    /// panel's staged/unstaged lists. Carries [`super::git::GitOpResult`] verbatim (it
+    /// is already `Serialize`, camelCase).
+    GitOp(super::git::GitOpResult),
     /// One-shot host-computed LAST-7-DAYS usage preview answering a `UsagePreview`
     /// request from the activity-bar Usage panel: aggregate totals, a 7-entry daily cost
     /// series (oldest first, today last — zero-filled for days with no ledger rows), and
@@ -445,6 +455,15 @@ pub(super) fn push_git_status(push: &dyn Fn(String), result: super::git::GitStat
 /// `GitDiff` is serviced entirely host-side regardless of attach state.
 pub(super) fn push_git_diff(push: &dyn Fn(String), result: super::git::GitDiffResult) {
     super::render::emit(push, &PushEnvelope::GitDiff(result));
+}
+
+/// Emit a one-shot `GitOp` envelope for the GUI Source Control panel, carrying a
+/// host-computed [`super::git::GitOpResult`] verbatim. Shared by the UN-ATTACHED
+/// swapper fallback and the attached `push_loop`'s off-thread worker, since a git
+/// mutation (stage/unstage/discard/commit) is serviced entirely host-side regardless
+/// of attach state — mirrors `push_git_status`/`push_git_diff`.
+pub(super) fn push_git_op(push: &dyn Fn(String), result: super::git::GitOpResult) {
+    super::render::emit(push, &PushEnvelope::GitOp(result));
 }
 
 /// Emit a one-shot `UsagePreview` envelope for the GUI activity-bar Usage panel, carrying

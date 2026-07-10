@@ -303,6 +303,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitDiff { path, staged } => {
             let _ = ctx.ctl.send(HostCtl::GitDiff { path, staged });
         }
+        // GIT panel stage/unstage/discard/commit mutations: same routing as
+        // `GitStatus`/`GitDiff` — host-side only, never the daemon.
+        GuiReq::GitStage { paths } => {
+            let _ = ctx.ctl.send(HostCtl::GitStage { paths });
+        }
+        GuiReq::GitUnstage { paths } => {
+            let _ = ctx.ctl.send(HostCtl::GitUnstage { paths });
+        }
+        GuiReq::GitDiscard { paths } => {
+            let _ = ctx.ctl.send(HostCtl::GitDiscard { paths });
+        }
+        GuiReq::GitCommit { message } => {
+            let _ = ctx.ctl.send(HostCtl::GitCommit { message });
+        }
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
         // ALWAYS routed to the host-relay thread — never the daemon —
         // regardless of attach state (see `HostCtl::UsagePreview`). A "session"

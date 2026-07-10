@@ -20,8 +20,8 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_proto::{
-    push_file_diff, push_git_diff, push_git_status, push_switching, push_usage_preview,
-    PushEnvelope, PushRoute,
+    push_file_diff, push_git_diff, push_git_op, push_git_status, push_switching,
+    push_usage_preview, PushEnvelope, PushRoute,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -187,6 +187,16 @@ pub(super) fn push_loop(
     // reasoning as `FileDiff` above — so it runs on a one-shot worker thread; the loop
     // drains completed results non-blocking and pushes each as a `GitDiff` envelope.
     let (git_diff_tx, git_diff_rx) = std::sync::mpsc::channel::<super::git::GitDiffResult>();
+
+    // --- GIT OP mutation (GitStage/GitUnstage/GitDiscard/GitCommit) ---
+    // Each mutation shells out to git (blocking), same reasoning as `GitStatus`/
+    // `GitDiff` above — so it runs on a one-shot worker thread; the loop drains
+    // completed results non-blocking and pushes each as a `GitOp` envelope. The SAME
+    // worker thread ALSO recomputes the status right after the mutation and sends it
+    // over `git_status_tx` (reusing the channel above), so the panel's lists refresh
+    // from authoritative state immediately after every op — no separate coalescing
+    // needed for that follow-up.
+    let (git_op_tx, git_op_rx) = std::sync::mpsc::channel::<super::git::GitOpResult>();
 
     // --- USAGE PANEL preview fetch (UsagePreview) ---
     // `compute_usage_preview` hits sqlite, blocking, so — same reasoning as `FileDiff`
@@ -375,6 +385,49 @@ pub(super) fn push_loop(
                     std::thread::spawn(move || {
                         let result = super::git::compute_git_diff(&path, staged, cur.as_deref());
                         let _ = tx.send(result);
+                    });
+                }
+                // GIT panel mutations: NEVER touch the daemon (host-side only,
+                // regardless of attach state) — spawn the blocking git work off this
+                // thread. The worker sends the `GitOp` result over `git_op_tx` (drained
+                // + pushed below at (b-oct)), THEN recomputes + sends the refreshed
+                // status over the EXISTING `git_status_tx` (drained + pushed at
+                // (b-sex)) so the panel's lists reflect authoritative state right after
+                // the mutation.
+                Ok(super::HostCtl::GitStage { paths }) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git::git_stage(&paths, cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
+                Ok(super::HostCtl::GitUnstage { paths }) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git::git_unstage(&paths, cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
+                Ok(super::HostCtl::GitDiscard { paths }) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git::git_discard(&paths, cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
+                Ok(super::HostCtl::GitCommit { message }) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git::git_commit(&message, cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
                     });
                 }
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
@@ -633,6 +686,14 @@ pub(super) fn push_loop(
         // --- (b-sept) GIT panel: push any completed off-thread diff fetch ---
         while let Ok(result) = git_diff_rx.try_recv() {
             push_git_diff(push, result);
+        }
+
+        // --- (b-oct) GIT panel: push any completed off-thread mutation result ---
+        // The worker also sent a follow-up status over `git_status_tx`, drained at
+        // (b-sex) above — same frame or the next, whichever the loop happens to reach
+        // first (harmless either order: both are one-shot, self-contained pushes).
+        while let Ok(result) = git_op_rx.try_recv() {
+            push_git_op(push, result);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

@@ -717,6 +717,17 @@ export type PushEnvelope =
       error: string | null
       binary: boolean
     }
+  // Reply to a GitStage/GitUnstage/GitDiscard/GitCommit mutation. `op` is
+  // "stage"/"unstage"/"discard"/"commit"; `error` (only when `ok` is false) is
+  // git's own failure message. Carries no list data — ALWAYS immediately
+  // followed by a fresh GitStatus push, which is what actually refreshes the
+  // panel.
+  | {
+      k: 'GitOp'
+      ok: boolean
+      op: string
+      error: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -940,6 +951,11 @@ type KomaState = {
   // it off the foreground session's workdir). REPLACED wholesale on each
   // push; starts at the neutral "no repo" default until the first reply.
   git: GitStatus
+  // Controlled draft text for the GIT panel's commit box. Store-level (not
+  // component state) so navigating away from Source Control and back doesn't
+  // lose an in-progress message; cleared automatically on a successful commit
+  // (see the push reducer's 'GitOp' case).
+  commitDraft: string
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   push: (env: PushEnvelope) => void
@@ -1009,6 +1025,19 @@ type KomaState = {
   // since a git diff needs BOTH staged and unstaged tabs open for the SAME
   // path without colliding. Marks loading + fires the GitDiff req.
   openGitDiffTab: (path: string, staged: boolean) => void
+  // Update the GIT panel's commit-box draft text (controlled textarea).
+  setCommitDraft: (text: string) => void
+  // GIT panel mutations — stage/unstage/discard a batch of repo-root-relative
+  // paths (a single path for a row action, every staged/unstaged path for a
+  // "Stage All"/"Unstage All"/"Discard All Changes" header action), or commit
+  // whatever is currently staged. Each fires the matching req; the reply lands
+  // as a one-shot GitOp push (surfaced as an error toast on failure) followed
+  // by a fresh GitStatus push that refreshes the panel's lists — these
+  // actions never touch `git`/`commitDraft` optimistically themselves.
+  gitStage: (paths: string[]) => void
+  gitUnstage: (paths: string[]) => void
+  gitDiscard: (paths: string[]) => void
+  gitCommit: (message: string) => void
   // Open (or focus) a read-only STREAM tab for a sub-agent (`kind:'subagent'`) or bash
   // job (`kind:'bash'`) by its numeric id: find-or-create (dedup by the stable
   // `sa:`/`bash:` id), activate it, and sync the stream view so the host starts streaming
@@ -1220,6 +1249,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   catalogueProviders: [],
   availableTools: [],
   git: initialGit,
+  commitDraft: '',
 
   push: (env) => {
     switch (env.k) {
@@ -1643,6 +1673,27 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
+      case 'GitOp':
+        set((s) => {
+          // Surface a failed mutation the same de-duped way the Status case
+          // raises a toast: only start a NEW toast when the text actually
+          // differs from what's already showing, so a repeated failure (e.g.
+          // clicking "Stage All" twice on a locked index) doesn't reset the
+          // auto-dismiss timer.
+          const text = env.error ? `git ${env.op}: ${env.error}` : null
+          const raise = !!text && text !== s.ui.toast?.text
+          const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+          return {
+            ui: raise
+              ? { ...s.ui, toastSeq: seq, toast: { id: seq, text: text as string, kind: 'error' } }
+              : s.ui,
+            // A successful commit empties the draft, ready for the next
+            // message. Any other op — or a failed commit — leaves it alone
+            // (a failed commit's typed message must not be lost).
+            ...(env.op === 'commit' && env.ok ? { commitDraft: '' } : {}),
+          }
+        })
+        break
     }
   },
 
@@ -1737,6 +1788,23 @@ export const useKoma = create<KomaState>((set, get) => ({
       return { ui: { ...s.ui, tabs, activeTabId: id } }
     })
     get().req({ r: 'GitDiff', path, staged })
+  },
+  setCommitDraft: (text) => set(() => ({ commitDraft: text })),
+  gitStage: (paths) => {
+    if (paths.length === 0) return
+    get().req({ r: 'GitStage', paths })
+  },
+  gitUnstage: (paths) => {
+    if (paths.length === 0) return
+    get().req({ r: 'GitUnstage', paths })
+  },
+  gitDiscard: (paths) => {
+    if (paths.length === 0) return
+    get().req({ r: 'GitDiscard', paths })
+  },
+  gitCommit: (message) => {
+    if (!message.trim()) return
+    get().req({ r: 'GitCommit', message })
   },
   openStreamTab: (kind, targetId, title) => {
     const id = kind === 'subagent' ? `sa:${targetId}` : `bash:${targetId}`

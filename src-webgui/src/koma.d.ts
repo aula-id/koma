@@ -274,6 +274,23 @@ declare global {
     // worktree-vs-index (false, the UNSTAGED changes) — to open a Monaco diff
     // tab. Reply lands as the GitDiff push envelope.
     | { r: 'GitDiff'; path: string; staged: boolean }
+    // GIT panel "Stage All" header action / a row's hover "+" button: `git add --`
+    // every path in `paths` (repo-root-relative, straight off a GitFileEntry). Reply
+    // lands as a one-shot GitOp push, immediately followed by a fresh GitStatus push.
+    | { r: 'GitStage'; paths: string[] }
+    // GIT panel "Unstage All" header action / a staged row's hover "−" button:
+    // `git restore --staged --` every path in `paths`. Same reply pattern as GitStage.
+    | { r: 'GitUnstage'; paths: string[] }
+    // GIT panel "Discard All Changes" header action / an unstaged row's discard
+    // button — destructive, so the UI gates this behind an inline confirm before ever
+    // sending it. Untracked paths are deleted from disk; tracked paths are reset from
+    // the index (staged content is never touched). Same reply pattern as GitStage.
+    | { r: 'GitDiscard'; paths: string[] }
+    // GIT panel commit box submit: `git commit -m <message>` whatever is currently
+    // staged. An empty/whitespace message is rejected host-side (GitOp.error set, no
+    // git invocation). Reply lands as GitOp then a fresh GitStatus; the commit box
+    // clears its draft on a successful (ok:true) reply.
+    | { r: 'GitCommit'; message: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

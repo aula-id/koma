@@ -24,12 +24,15 @@ use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
 use super::diff::{compute_file_diff, compute_usage_preview};
-use super::git::{compute_git_diff, compute_git_status};
+use super::git::{
+    compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
+};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_file_diff, push_git_diff, push_git_status, push_model_list,
-    push_oauth_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
+    push_agents_values, push_file_diff, push_git_diff, push_git_op, push_git_status,
+    push_model_list, push_oauth_state, push_route_list, push_settings_values, push_switching,
+    push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -532,6 +535,43 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 std::thread::spawn(move || {
                     let result = compute_git_diff(&path, staged, cur.as_deref());
                     push_git_diff(&push2, result);
+                });
+            }
+            // GIT panel mutations (stage/unstage/discard/commit) while detached: run
+            // the git mutation OFF-thread (blocking), push its `GitOp` reply, then
+            // recompute + push a fresh `GitStatus` so the panel's lists refresh from
+            // authoritative state — same reasoning as `GitStatus`/`GitDiff` above;
+            // never touches the daemon in either host state.
+            Ok(HostCtl::GitStage { paths }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_stage(&paths, cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            Ok(HostCtl::GitUnstage { paths }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_unstage(&paths, cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            Ok(HostCtl::GitDiscard { paths }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_discard(&paths, cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            Ok(HostCtl::GitCommit { message }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_commit(&message, cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
                 });
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
