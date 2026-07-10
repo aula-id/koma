@@ -18,6 +18,7 @@
 //! | `input`     | `local_echo`, `QuitConfirmKey`, quit overlay keys               |
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
+//! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
 //! | `push_proto`| GUI push-envelope DTOs (`PushEnvelope` + the one-shot `push_*` fns) |
@@ -37,6 +38,7 @@ mod bridge;
 mod swapper;
 mod swapper_keys;
 mod diff;
+mod git;
 mod host;
 mod host_config;
 mod push_proto;
@@ -311,6 +313,20 @@ pub(super) enum HostCtl {
     /// access and the daemon would have to do the exact same local work anyway. Serviced
     /// off-thread (git + fs are blocking) in both host states; see [`compute_file_diff`].
     FileDiff { path: String },
+    /// Host-side GIT STATUS fetch for the Explore "GIT" panel (branch, ahead/behind,
+    /// staged/unstaged file lists). Same reasoning as [`FileDiff`](Self::FileDiff):
+    /// NEVER touches the daemon regardless of attach state — the host process already
+    /// has direct git access. Serviced off-thread (git is blocking) in both host
+    /// states; see [`compute_git_status`]. Carries no session — the receiving loop
+    /// supplies its OWN foreground-session id (`current`/`current_owned`), exactly
+    /// like `FileDiff` does, since the GUI page never needs to say which session (the
+    /// host already knows what's attached).
+    GitStatus,
+    /// Host-side GIT DIFF fetch for the GIT panel's file-row click (`path` is the
+    /// clicked entry's path; `staged` selects index-vs-HEAD when `true`, worktree-vs-
+    /// index when `false`) to open a Monaco diff tab. Same reasoning + routing as
+    /// [`GitStatus`](Self::GitStatus); see [`compute_git_diff`].
+    GitDiff { path: String, staged: bool },
     /// UN-ATTACHED GUI Settings-tab fetch (a [`ClientRequest::GetSettings`] serviced by the
     /// swapper, where the ipc `live_req` daemon path is `None`). There is no foreground
     /// session pre-attach, so the swapper answers from the GLOBAL config: the active

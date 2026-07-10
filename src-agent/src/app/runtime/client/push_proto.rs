@@ -230,6 +230,21 @@ pub(super) enum PushEnvelope {
         binary: bool,
         origin: String,
     },
+    /// One-shot host-computed GIT STATUS answering a `GitStatus` request from the
+    /// Explore "GIT" panel: branch (+ ahead/behind, detached flag) and the staged /
+    /// unstaged file lists. Computed ENTIRELY host-side (see `compute_git_status` —
+    /// never forwarded to the daemon), so this is pushed the SAME way regardless of
+    /// attach state, and — like `FileDiff` — is ALWAYS a reply so the panel never
+    /// hangs loading. Carries [`super::git::GitStatusResult`] verbatim (it is already
+    /// `Serialize`, camelCase).
+    GitStatus(super::git::GitStatusResult),
+    /// One-shot host-computed GIT DIFF answering a `GitDiff` request from the GIT
+    /// panel's file-row click (opening a Monaco diff tab): `staged` selects
+    /// index-vs-HEAD or worktree-vs-index. Computed ENTIRELY host-side (see
+    /// `compute_git_diff` — never forwarded to the daemon), so this is pushed the SAME
+    /// way regardless of attach state, and — like `FileDiff` — is ALWAYS a reply so
+    /// the diff tab never hangs. Carries [`super::git::GitDiffResult`] verbatim.
+    GitDiff(super::git::GitDiffResult),
     /// One-shot host-computed LAST-7-DAYS usage preview answering a `UsagePreview`
     /// request from the activity-bar Usage panel: aggregate totals, a 7-entry daily cost
     /// series (oldest first, today last — zero-filled for days with no ledger rows), and
@@ -414,6 +429,22 @@ pub(super) fn push_file_diff(push: &dyn Fn(String), result: super::diff::FileDif
         origin: result.origin.to_string(),
     };
     super::render::emit(push, &env);
+}
+
+/// Emit a one-shot `GitStatus` envelope for the GUI Explore "GIT" panel, carrying a
+/// host-computed [`super::git::GitStatusResult`] verbatim. Shared by the UN-ATTACHED
+/// swapper fallback and the attached `push_loop`'s off-thread worker, since a
+/// `GitStatus` is serviced entirely host-side regardless of attach state.
+pub(super) fn push_git_status(push: &dyn Fn(String), result: super::git::GitStatusResult) {
+    super::render::emit(push, &PushEnvelope::GitStatus(result));
+}
+
+/// Emit a one-shot `GitDiff` envelope for the GIT panel's Monaco diff tab, carrying a
+/// host-computed [`super::git::GitDiffResult`] verbatim. Shared by the UN-ATTACHED
+/// swapper fallback and the attached `push_loop`'s off-thread worker, since a
+/// `GitDiff` is serviced entirely host-side regardless of attach state.
+pub(super) fn push_git_diff(push: &dyn Fn(String), result: super::git::GitDiffResult) {
+    super::render::emit(push, &PushEnvelope::GitDiff(result));
 }
 
 /// Emit a one-shot `UsagePreview` envelope for the GUI activity-bar Usage panel, carrying

@@ -212,6 +212,21 @@ pub(super) enum GuiReq {
     /// unlike `ListModels`/`ListRoutes`'s attached-daemon-preferring dual routing, so it
     /// works identically whether a session is attached or not.
     FileDiff { path: String },
+    /// Explore "GIT" panel opened / refreshed: fetch a host-computed git status
+    /// (branch, ahead/behind, staged + unstaged file lists) for the foreground
+    /// session's repo. Same reasoning as `FileDiff` — the host process has direct git
+    /// access, so no daemon round-trip is needed or wanted: routed UNCONDITIONALLY to
+    /// the host-relay thread via `HostCtl::GitStatus`, regardless of attach state.
+    GitStatus,
+    /// The GIT panel's file row clicked: fetch a host-computed git diff for `path` —
+    /// `staged` selects index-vs-HEAD (`true`, the STAGED changes) or worktree-vs-index
+    /// (`false`, the UNSTAGED changes) — to open a Monaco diff tab. Same reasoning and
+    /// routing as `GitStatus`/`FileDiff`: routed UNCONDITIONALLY to the host-relay
+    /// thread via `HostCtl::GitDiff`.
+    GitDiff {
+        path: String,
+        staged: bool,
+    },
     /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
     /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a

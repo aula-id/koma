@@ -19,7 +19,10 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
-use super::push_proto::{push_file_diff, push_switching, push_usage_preview, PushEnvelope, PushRoute};
+use super::push_proto::{
+    push_file_diff, push_git_diff, push_git_status, push_switching, push_usage_preview,
+    PushEnvelope, PushRoute,
+};
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
 
@@ -170,6 +173,20 @@ pub(super) fn push_loop(
     // wins" coalescing: each request is for a (possibly different) path, so every
     // completed result is pushed, not just the newest.
     let (file_diff_tx, file_diff_rx) = std::sync::mpsc::channel::<super::diff::FileDiffResult>();
+
+    // --- GIT STATUS fetch (GitStatus) ---
+    // `compute_git_status` shells out to `git status`, blocking — same reasoning as
+    // `FileDiff` above — so it runs on a one-shot worker thread; the loop drains
+    // completed results non-blocking and pushes each as a `GitStatus` envelope. No
+    // "latest wins" coalescing needed (a `GitStatus` fetch is rare enough, and each
+    // reply is self-contained), mirroring `FileDiff`'s per-request-pushed rule.
+    let (git_status_tx, git_status_rx) = std::sync::mpsc::channel::<super::git::GitStatusResult>();
+
+    // --- GIT DIFF fetch (GitDiff) ---
+    // `compute_git_diff` shells out to `git show` (+ a disk read), blocking — same
+    // reasoning as `FileDiff` above — so it runs on a one-shot worker thread; the loop
+    // drains completed results non-blocking and pushes each as a `GitDiff` envelope.
+    let (git_diff_tx, git_diff_rx) = std::sync::mpsc::channel::<super::git::GitDiffResult>();
 
     // --- USAGE PANEL preview fetch (UsagePreview) ---
     // `compute_usage_preview` hits sqlite, blocking, so — same reasoning as `FileDiff`
@@ -336,6 +353,27 @@ pub(super) fn push_loop(
                     let cur = current_owned.clone();
                     std::thread::spawn(move || {
                         let result = super::diff::compute_file_diff(&path, cur.as_deref());
+                        let _ = tx.send(result);
+                    });
+                }
+                // Explore GIT panel: NEVER touches the daemon (host-side only,
+                // regardless of attach state) — spawn the blocking git work off this
+                // thread; the result is drained + pushed below at (b-sex).
+                Ok(super::HostCtl::GitStatus) => {
+                    let tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let result = super::git::compute_git_status(cur.as_deref());
+                        let _ = tx.send(result);
+                    });
+                }
+                // GIT panel file-row click: same reasoning as `GitStatus` above; the
+                // result is drained + pushed below at (b-sept).
+                Ok(super::HostCtl::GitDiff { path, staged }) => {
+                    let tx = git_diff_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let result = super::git::compute_git_diff(&path, staged, cur.as_deref());
                         let _ = tx.send(result);
                     });
                 }
@@ -585,6 +623,16 @@ pub(super) fn push_loop(
         // --- (b-quin) USAGE PANEL: push any completed off-thread preview fetch ---
         while let Ok((result, scope, session_id)) = usage_preview_rx.try_recv() {
             push_usage_preview(push, result, scope, session_id);
+        }
+
+        // --- (b-sex) GIT panel: push any completed off-thread status fetch ---
+        while let Ok(result) = git_status_rx.try_recv() {
+            push_git_status(push, result);
+        }
+
+        // --- (b-sept) GIT panel: push any completed off-thread diff fetch ---
+        while let Ok(result) = git_diff_rx.try_recv() {
+            push_git_diff(push, result);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---
