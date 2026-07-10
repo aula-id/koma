@@ -83,6 +83,10 @@ function RootLayout() {
       push: (j) => useKoma.getState().push(JSON.parse(j)),
     }
     useKoma.getState().req({ r: 'Ready' })
+    // Also kick off an initial git-status fetch so the chat footer's branch
+    // indicator has data on load, without requiring the Source Control panel
+    // to ever be opened.
+    useKoma.getState().req({ r: 'GitStatus' })
     return () => {
       window.__komaClient = undefined
     }
