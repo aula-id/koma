@@ -106,9 +106,13 @@ export function ModelForm({
   }, [d.provider])
 
   // Route (OpenRouter-style upstream provider picker) only makes sense once a
-  // model id is chosen, and only for API-key providers — not OAuth connections
-  // (mirrors koma: Route is OpenRouter-only, gated behind provider + model).
-  const showRoute = d.modelId.trim() !== '' && d.provider.trim() !== '' && !d.provider.trim().endsWith('(oauth)')
+  // model id + provider are both chosen. `provider` here is a uuid — either a
+  // real config provider or an OAuth connection (see ConnectorPanel's
+  // providerOptions) — so this no longer special-cases OAuth: a non-OpenRouter
+  // provider (API-key or OAuth alike, e.g. xAI's api.x.ai) just gets an empty
+  // ListRoutes reply and the section correctly renders "No upstream routes —
+  // using Auto" below.
+  const showRoute = d.modelId.trim() !== '' && d.provider.trim() !== ''
 
   // On-demand ROUTE fetch (replaces DEMO_ROUTES): whenever a provider+model_id
   // pair is set, ask the host for the model's live OpenRouter endpoints
