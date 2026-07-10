@@ -340,6 +340,37 @@ export function resolveModelLabel(
   return p ? `${m.name} @ ${p.name}` : m.name
 }
 
+// The OAuth login screen's state machine phase (host `OAuthState.phase`).
+// 'idle' = list/picker view; 'starting' = flow spawning (spinner); 'waiting_url'
+// = codex-style PKCE (browser already opened daemon-side, `url` is the
+// fallback/status link); 'waiting_code' = kilocode-style device flow
+// (`userCode`/`verificationUrl`); 'paste' = manual access-token entry;
+// 'success'/'failed' are terminal (conns updated / `error` set respectively).
+export type OAuthPhase = 'idle' | 'starting' | 'waiting_url' | 'waiting_code' | 'paste' | 'success' | 'failed'
+
+// One persisted OAuth connection (host `OAuthConnWire` — a deliberately
+// TOKENLESS projection; no access/refresh/id token ever crosses the bridge).
+// NOTE snake_case on the wire (`account_id`), like AgentEntry's nested
+// structs — the push case normalizes it to `accountId` below.
+export type OAuthConn = {
+  uuid: string
+  name: string
+  // Wire provider token, e.g. "codex" | "kilocode" — matches an
+  // OAuthProviderEntry.id when that provider is still available.
+  provider: string
+  email: string
+  plan: string
+  accountId: string
+}
+
+// One available OAuth login provider (host `OAuthProviderWire`) — DATA-DRIVEN,
+// never hardcode this list client-side (it's designed to grow). `kind`
+// distinguishes the flow shape: 'pkce' (browser redirect), 'device' (user
+// code), 'paste' (manual token) — typed as a bare `string` (not a closed
+// union) so an unforeseen future kind degrades to a generic render instead of
+// a type error.
+export type OAuthProviderEntry = { id: string; label: string; kind: string }
+
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
 // uncloseable chat tab; diff tabs are opened from the Explorer's File-changed
 // rows. The `kind` discriminant is deliberately left open — a future
@@ -597,6 +628,26 @@ export type PushEnvelope =
       catalogueProviders: { uuid: string; name: string; endpoint: string }[]
       availableTools?: string[]
     }
+  // Reply to GuiReq GetOAuthState (and the re-push after every StartOAuth
+  // progress tick / SubmitOAuthPaste / CancelOAuth / DeleteOAuthConn) — the
+  // OAuth login screen's full state: which phase the flow is in + its
+  // phase-specific fields + the connections/providers lists. ALWAYS a reply to
+  // GetOAuthState, even un-attached (host answers from disk + the provider
+  // registry). Same MIXED CASING as AgentsValues: the envelope's OWN fields
+  // are camelCase (`userCode`/`verificationUrl`), but the nested `conns`/
+  // `providers` entry structs have no rename_all of their own and serialize
+  // plain snake_case (`account_id`) — normalized to camelCase `OAuthConn` in
+  // the push case.
+  | {
+      k: 'OAuthState'
+      phase: string
+      url: string | null
+      userCode: string | null
+      verificationUrl: string | null
+      error: string | null
+      conns: { uuid: string; name: string; provider: string; email: string; plan: string; account_id: string }[]
+      providers: { id: string; label: string; kind: string }[]
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -673,6 +724,21 @@ type ConfigSlice = {
   // Full palette catalogue with resolved colours (Settings Appearance grid).
   // Empty until the first Config push that carries it.
   palettes: PaletteInfo[]
+}
+
+// The OAuth login screen's full state (host `OAuthState` push) — global, not
+// per-session (mirrors ConfigSlice). REPLACED wholesale on each push, never
+// accumulated. `url`/`userCode`/`verificationUrl`/`error` are only meaningful
+// for the phase that produces them (see `OAuthPhase`); the others sit at
+// `null` outside their owning phase.
+type OAuthSlice = {
+  phase: OAuthPhase
+  url: string | null
+  userCode: string | null
+  verificationUrl: string | null
+  error: string | null
+  conns: OAuthConn[]
+  providers: OAuthProviderEntry[]
 }
 
 // Local-only UI state (never pushed by the host, never sent upstream) — the
@@ -758,6 +824,7 @@ type KomaState = {
   palette: PaletteColors
   ui: UiSlice
   config: ConfigSlice
+  oauth: OAuthSlice
   // Live per-provider model-id catalogue, keyed by the most recent
   // ListModels reply's provider (see ModelForm's provider-select trigger).
   modelList: ModelListEntry[]
@@ -980,6 +1047,16 @@ const initialConfig: ConfigSlice = {
   palettes: [],
 }
 
+const initialOAuth: OAuthSlice = {
+  phase: 'idle',
+  url: null,
+  userCode: null,
+  verificationUrl: null,
+  error: null,
+  conns: [],
+  providers: [],
+}
+
 const initialModelList: ModelListEntry[] = []
 
 const initialRouteList: KomaState['routeList'] = null
@@ -1035,6 +1112,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   palette: initialPalette,
   ui: initialUi,
   config: initialConfig,
+  oauth: initialOAuth,
   modelList: initialModelList,
   routeList: initialRouteList,
   settingsValues: null,
@@ -1361,6 +1439,41 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
           return { agents, catalogueModels, catalogueProviders, availableTools, ui: { ...s.ui, tabs, activeTabId } }
         })
+        break
+      }
+      case 'OAuthState': {
+        const KNOWN_PHASES: OAuthPhase[] = [
+          'idle',
+          'starting',
+          'waiting_url',
+          'waiting_code',
+          'paste',
+          'success',
+          'failed',
+        ]
+        const phase: OAuthPhase = KNOWN_PHASES.includes(env.phase as OAuthPhase)
+          ? (env.phase as OAuthPhase)
+          : 'idle'
+        set(() => ({
+          oauth: {
+            phase,
+            url: env.url,
+            userCode: env.userCode,
+            verificationUrl: env.verificationUrl,
+            error: env.error,
+            // Normalize the wire's snake_case `account_id` to camelCase,
+            // matching the AgentsValues normalization pattern.
+            conns: env.conns.map((c) => ({
+              uuid: c.uuid,
+              name: c.name,
+              provider: c.provider,
+              email: c.email,
+              plan: c.plan,
+              accountId: c.account_id,
+            })),
+            providers: env.providers.map((p) => ({ id: p.id, label: p.label, kind: p.kind })),
+          },
+        }))
         break
       }
       case 'UsagePreview':
