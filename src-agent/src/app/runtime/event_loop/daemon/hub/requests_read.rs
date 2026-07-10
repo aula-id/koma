@@ -153,15 +153,22 @@ impl DaemonHub {
         self.send_to(idx, DaemonEvent::FileSearchResults { query, items });
     }
 
-    // GUI Connector model picker: fetch the live model-id catalogue for a
-    // provider (`GET {endpoint}/models`). Read-only wrt session state, but a
-    // NETWORK call — so it must NOT run inline on the loop thread. Resolve the
-    // provider's (endpoint, api_key) from config, then SPAWN the GET on the tokio
-    // handle; the task ships a `ListModelsReply` back over the hub's channel, which
+    // GUI Connector model picker: fetch the model-id catalogue for a provider.
+    // Read-only wrt session state. Three cases:
+    //  - A `config.providers` entry: live `GET {endpoint}/models` (network call, so
+    //    SPAWNed on the tokio handle rather than run inline); if that comes back
+    //    empty (error OR a genuinely empty catalogue), fall back to the curated
+    //    `catalogue_overlay` for that endpoint.
+    //  - A `config.oauth_conns` entry (Codex/Claude/xAI): these have no live
+    //    `/models` fetch worth making (Codex/Claude expose none at all; xAI's ids
+    //    are curated too) — resolve straight to the `catalogue_overlay` keyed by
+    //    `registry::meta(conn.provider).chat_endpoint`, no network call needed.
+    //  - Neither: unknown provider uuid — reply with an EMPTY list so the picker's
+    //    spinner clears instead of hanging with no answer.
+    // Every branch ships a `ListModelsReply` over the hub's channel, which
     // `drain_list_models` turns into a seq'd `ModelList` frame to THIS client next
     // tick (so the per-client seq stays gap-free — a background task can't advance
-    // it). An unknown provider uuid is a silent no-op (no reply). Mirrors the
-    // FileSearch one-shot pattern, async.
+    // it). Mirrors the FileSearch one-shot pattern.
     pub(super) fn list_models(
         &mut self,
         idx: usize,
@@ -169,11 +176,11 @@ impl DaemonHub {
         handle: &tokio::runtime::Handle,
         provider: String,
     ) {
+        let client_id = self.clients[idx].id;
+        let tx = self.list_models_tx.clone();
         if let Some(p) = state.rest.config.providers.iter().find(|p| p.uuid == provider) {
             let endpoint = p.endpoint.clone();
             let api_key = p.api_key.clone();
-            let client_id = self.clients[idx].id;
-            let tx = self.list_models_tx.clone();
             let prov = provider.clone();
             let c = crate::app::runtime::session_mgmt::build_client();
             handle.spawn(async move {
@@ -185,18 +192,47 @@ impl DaemonHub {
                     oauth_uuid: "",
                     install_id: "",
                 };
-                // On any error, reply with an EMPTY list (the picker shows nothing)
-                // rather than stranding the request with no answer.
-                let models = c
+                // On any error, fall through to the overlay below (the picker
+                // shows curated ids rather than nothing).
+                let mut models = c
                     .list_models(conn)
                     .await
                     .map(|v| v.into_iter().map(|m| m.id).collect::<Vec<_>>())
                     .unwrap_or_default();
+                if models.is_empty() {
+                    models = crate::service::catalogue_overlay::models_for(&endpoint)
+                        .into_iter()
+                        .map(|m| m.id)
+                        .collect();
+                }
                 let _ = tx.send(super::core::ListModelsReply {
                     client_id,
                     provider: prov,
                     models,
                 });
+            });
+        } else if let Some(conn) =
+            state.rest.config.oauth_conns.iter().find(|c| c.uuid == provider)
+        {
+            // OAuth-conn provider: no live fetch — resolve straight to the curated
+            // catalogue overlay for this provider's chat endpoint.
+            let endpoint = crate::service::oauth::registry::meta(conn.provider).chat_endpoint;
+            let models = crate::service::catalogue_overlay::models_for(endpoint)
+                .into_iter()
+                .map(|m| m.id)
+                .collect();
+            let _ = tx.send(super::core::ListModelsReply {
+                client_id,
+                provider,
+                models,
+            });
+        } else {
+            // Unknown provider uuid — reply empty so the GUI picker's spinner
+            // clears rather than hanging with no answer.
+            let _ = tx.send(super::core::ListModelsReply {
+                client_id,
+                provider,
+                models: Vec::new(),
             });
         }
     }

@@ -128,12 +128,14 @@ impl OnboardProviderState {
 
 /// Compute the filtered candidate model ids for the `ModelSelect` step.
 ///
-/// Codex has no network catalogue — its static [`CODEX_MODELS`](registry::CODEX_MODELS)
-/// list is served through the SAME [`filter_models`] omnisearch as a fetched catalogue
-/// (mirrors the `/settings` model modal's Codex substitution). Every other OAuth
-/// provider filters the on-demand `models_cache`, but ONLY when it was fetched for THAT
-/// provider's catalogue endpoint (else the cache is stale / for another provider →
-/// empty, and the caller falls back to committing the raw typed id).
+/// A network provider's on-demand `models_cache` counts ONLY when it was fetched for
+/// THAT provider's own catalogue endpoint (else the cache is stale / for another
+/// provider). Whenever it doesn't match — Codex/Claude have no network catalogue at
+/// all, and a network provider (e.g. xAI) whose cache hasn't landed yet also lands
+/// here — fall back to the curated [`catalogue_overlay`](crate::service::catalogue_overlay)
+/// for the provider's chat endpoint, served through the SAME [`filter_models`]
+/// omnisearch as a fetched catalogue (mirrors the `/settings` model modal's Codex
+/// substitution, generalized to every OAuth provider the overlay covers).
 ///
 /// Returns OWNED ids (no borrow held) so callers can freely mutate state afterwards.
 /// Shared by the input handler (selection) and the view (render list) so they never
@@ -144,28 +146,23 @@ pub fn candidate_model_ids(
     models_cache: &[ModelInfo],
     models_cache_endpoint: Option<&str>,
 ) -> Vec<String> {
-    let is_codex = provider == Some(OAuthProvider::Codex);
-    // Always initialise (empty when not Codex) so `cache` below borrows a live local.
-    let codex_cache = if is_codex {
-        registry::codex_static_catalogue()
-    } else {
+    // A network provider's live cache only counts when it was fetched for THAT
+    // provider's own catalogue endpoint.
+    let cache_matches = provider
+        .map(|p| registry::meta(p).catalogue_endpoint)
+        .filter(|ep| !ep.is_empty())
+        .map(|ep| models_cache_endpoint == Some(ep))
+        .unwrap_or(false);
+    // Overlay fallback: no matching live cache — resolve the curated catalogue for
+    // this provider's chat endpoint (empty if the provider has none / is unknown).
+    let overlay_cache = if cache_matches {
         Vec::new()
-    };
-    let cache: &[ModelInfo] = if is_codex { &codex_cache } else { models_cache };
-    // Codex's static list always matches; a network provider only filters its cache
-    // when that cache was fetched for its own catalogue endpoint.
-    let cache_matches = if is_codex {
-        true
     } else {
         provider
-            .map(|p| registry::meta(p).catalogue_endpoint)
-            .filter(|ep| !ep.is_empty())
-            .map(|ep| models_cache_endpoint == Some(ep))
-            .unwrap_or(false)
+            .map(|p| crate::service::catalogue_overlay::models_for(registry::meta(p).chat_endpoint))
+            .unwrap_or_default()
     };
-    if !cache_matches {
-        return Vec::new();
-    }
+    let cache: &[ModelInfo] = if cache_matches { models_cache } else { &overlay_cache };
     filter_models(cache, query)
         .into_iter()
         .map(|i| cache[i].id.clone())
