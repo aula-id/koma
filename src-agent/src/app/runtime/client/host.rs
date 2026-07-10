@@ -27,6 +27,7 @@ use super::diff::{compute_file_diff, compute_usage_preview};
 use super::git::{
     compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
 };
+use super::git_remote::{git_fetch, git_pull, git_push, set_current_key};
 use super::keys::{delete_key, generate_key, import_key, list_keys, reveal_key};
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
@@ -572,6 +573,44 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let cur = current.map(str::to_string);
                 std::thread::spawn(move || {
                     push_git_op(&push2, git_commit(&message, cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            // GIT panel key-picker changed while detached: assign/clear the repo's
+            // SSH key (fs I/O, off-thread), then push a fresh `GitStatus` so the
+            // picker reflects the new `keyName` — no `GitOp` reply of its own.
+            Ok(HostCtl::SetGitKey { name }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    set_current_key(cur.as_deref(), name);
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            // GIT panel remote sync buttons (Fetch/Pull/Push) while detached: git
+            // network I/O is blocking, so each runs on a one-shot worker thread;
+            // never touches the daemon in either host state — see `git_remote`.
+            Ok(HostCtl::GitFetch) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_fetch(cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            Ok(HostCtl::GitPull) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_pull(cur.as_deref()));
+                    push_git_status(&push2, compute_git_status(cur.as_deref()));
+                });
+            }
+            Ok(HostCtl::GitPush) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    push_git_op(&push2, git_push(cur.as_deref()));
                     push_git_status(&push2, compute_git_status(cur.as_deref()));
                 });
             }

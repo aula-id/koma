@@ -441,6 +441,51 @@ pub(super) fn push_loop(
                         let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
                     });
                 }
+                // GIT panel key-picker changed: NEVER touches the daemon (host-side
+                // only) — assign/clear the repo's key off-thread, then send a fresh
+                // status over the EXISTING `git_status_tx` (drained + pushed at
+                // (b-sex)) so the picker reflects the new `keyName`. No `GitOp` reply.
+                Ok(super::HostCtl::SetGitKey { name }) => {
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        super::git_remote::set_current_key(cur.as_deref(), name);
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
+                // GIT panel remote sync buttons (Fetch/Pull/Push): NEVER touch the
+                // daemon (host-side only) — git network I/O is blocking, so each runs
+                // on a one-shot worker thread. The worker sends the `GitOp` result over
+                // `git_op_tx` (drained + pushed at (b-oct)), THEN a refreshed status over
+                // `git_status_tx` (drained + pushed at (b-sex)) so ahead/behind reflect
+                // the sync immediately after.
+                Ok(super::HostCtl::GitFetch) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git_remote::git_fetch(cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
+                Ok(super::HostCtl::GitPull) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git_remote::git_pull(cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
+                Ok(super::HostCtl::GitPush) => {
+                    let op_tx = git_op_tx.clone();
+                    let status_tx = git_status_tx.clone();
+                    let cur = current_owned.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::git_remote::git_push(cur.as_deref()));
+                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
+                    });
+                }
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
                 // off this thread; the result is drained + pushed below at (b-quin).

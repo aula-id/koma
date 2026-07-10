@@ -19,6 +19,7 @@
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
+//! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
@@ -40,6 +41,7 @@ mod swapper;
 mod swapper_keys;
 mod diff;
 mod git;
+mod git_remote;
 mod keys;
 mod host;
 mod host_config;
@@ -414,6 +416,27 @@ pub(super) enum HostCtl {
     /// Host-side SSH KEY DELETE mutation. Same reasoning + reply pattern as
     /// [`KeyGenerate`](Self::KeyGenerate); see [`keys::delete_key`].
     KeyDelete { name: String },
+    /// Source Control panel's key-picker changed: assign (`Some(name)`) or clear
+    /// (`None`, "Default (system ssh)") the foreground session's repo's SSH key for
+    /// remote ops (wave 4b). Same reasoning as [`GitStatus`](Self::GitStatus) — NEVER
+    /// touches the daemon regardless of attach state. Serviced off-thread (fs I/O);
+    /// see [`git_remote::set_current_key`]. Carries no reply of its own — the worker
+    /// pushes a follow-up [`GitStatus`](Self::GitStatus) so the panel's key picker
+    /// reflects the new assignment (`GitStatusResult.key_name`).
+    SetGitKey { name: Option<String> },
+    /// Source Control panel's Fetch button: `git fetch --prune` for the foreground
+    /// session's repo, using its assigned key's `GIT_SSH_COMMAND` override if one is
+    /// set. Same reasoning + reply pattern as [`GitStage`](Self::GitStage) (a one-shot
+    /// `GitOp` reply, THEN a follow-up `GitStatus` so ahead/behind refresh); see
+    /// [`git_remote::git_fetch`].
+    GitFetch,
+    /// Source Control panel's Pull button: `git pull --ff-only` (fails loudly on
+    /// divergence rather than merging/leaving a half-merged tree). Same reasoning +
+    /// reply pattern as [`GitFetch`](Self::GitFetch); see [`git_remote::git_pull`].
+    GitPull,
+    /// Source Control panel's Push button. Same reasoning + reply pattern as
+    /// [`GitFetch`](Self::GitFetch); see [`git_remote::git_push`].
+    GitPush,
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

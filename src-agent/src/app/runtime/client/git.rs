@@ -14,6 +14,7 @@
 //! worker thread — exactly mirroring [`super::diff::compute_file_diff`].
 
 use super::diff::{looks_binary, session_workdirs_for, FILE_DIFF_SIZE_CAP};
+use super::git_remote::assigned_key;
 
 /// One file entry in a [`GitStatusResult`]'s `staged`/`unstaged` list, mirroring one
 /// `XY` half of a `git status --porcelain=v2` record. `status` is a single-character
@@ -46,6 +47,13 @@ pub(super) struct GitStatusResult {
     pub staged: Vec<GitFileEntry>,
     pub unstaged: Vec<GitFileEntry>,
     pub error: Option<String>,
+    /// The SSH key (by name in the vault) currently assigned to this repo root for
+    /// remote ops (wave 4b — [`super::git_remote::git_fetch`]/`git_pull`/`git_push`),
+    /// or `None` when no key is assigned (remote ops then run with no `GIT_SSH_COMMAND`
+    /// override — the system default agent/keys). Looked up via
+    /// [`super::git_remote::assigned_key`] keyed by `root`. Additive field — a `None`
+    /// repo (`root` itself `None`) always carries `key_name: None` too.
+    pub key_name: Option<String>,
 }
 
 /// The result of a host-side [`compute_git_diff`], pushed to the GUI as a `GitDiff`
@@ -78,26 +86,49 @@ pub(super) struct GitOpResult {
     pub ok: bool,
     pub op: String,
     pub error: Option<String>,
+    /// A short human-readable SUCCESS message (wave 4b remote ops — e.g. `git
+    /// fetch`/`pull`/`push`'s own stdout/stderr summary), so the Source Control
+    /// toolbar can toast what actually happened rather than a bare "push
+    /// complete". `None` for every local mutation (stage/unstage/discard/commit —
+    /// their success is silent, only a failure toasts) and omitted from the wire
+    /// entirely when absent (`skip_serializing_if`), so this is purely additive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 fn op_ok(op: &str) -> GitOpResult {
-    GitOpResult { ok: true, op: op.to_string(), error: None }
+    GitOpResult { ok: true, op: op.to_string(), error: None, message: None }
 }
 
 fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
-    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()) }
+    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()), message: None }
 }
 
 /// Run `git <args>` with `dir` as cwd, `GIT_TERMINAL_PROMPT=0` (never block on an
 /// interactive credential prompt — same guard `git_operator.rs` uses), returning
-/// `None` on any spawn failure rather than panicking.
+/// `None` on any spawn failure rather than panicking. Thin wrapper over
+/// [`git_cmd_env`] with no extra env var — every LOCAL git op (status/diff/stage/
+/// unstage/discard/commit) goes through this; only [`super::git_remote`]'s
+/// fetch/pull/push need the `extra` slot (a `GIT_SSH_COMMAND` override).
 fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
-    std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .ok()
+    git_cmd_env(dir, args, None)
+}
+
+/// [`git_cmd`]'s general form: same `GIT_TERMINAL_PROMPT=0` guard, plus an optional
+/// extra `(name, value)` env var. `pub(super)` so the sibling [`super::git_remote`]
+/// module can inject `GIT_SSH_COMMAND` for a repo's assigned key without duplicating
+/// the `Command` plumbing (or losing the terminal-prompt guard).
+pub(super) fn git_cmd_env(
+    dir: &std::path::Path,
+    args: &[&str],
+    extra: Option<(&str, &str)>,
+) -> Option<std::process::Output> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0");
+    if let Some((k, v)) = extra {
+        cmd.env(k, v);
+    }
+    cmd.output().ok()
 }
 
 /// Resolve the git repository root for `session`, probing EVERY one of its configured
@@ -106,7 +137,7 @@ fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output>
 /// the host process's own cwd when the session has no workdirs, none of them resolve, or
 /// there's no session at all (the StartScreen case). `None` when nothing — not even the
 /// cwd fallback — is inside a git repository.
-fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf> {
+pub(super) fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf> {
     let toplevel = |dir: &std::path::Path| -> Option<std::path::PathBuf> {
         match git_cmd(dir, &["rev-parse", "--show-toplevel"]) {
             Some(out) if out.status.success() => Some(std::path::PathBuf::from(
@@ -174,6 +205,7 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         staged: Vec::new(),
         unstaged: Vec::new(),
         error,
+        key_name: None,
     };
 
     let Some(root) = repo_root_for(session) else {
@@ -268,6 +300,8 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         i += 1;
     }
 
+    let key_name = assigned_key(&root);
+
     GitStatusResult {
         root: Some(root.to_string_lossy().into_owned()),
         branch,
@@ -277,6 +311,7 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         staged,
         unstaged,
         error: None,
+        key_name,
     }
 }
 
@@ -380,7 +415,7 @@ fn safe_join(root: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
 /// (where most git errors land), falling back to stdout (e.g. `git commit`'s
 /// "nothing to commit, working tree clean" prints there, not stderr), then a
 /// generic fallback if both are empty.
-fn git_failure(out: &std::process::Output, fallback: &str) -> String {
+pub(super) fn git_failure(out: &std::process::Output, fallback: &str) -> String {
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !stderr.is_empty() {
         return stderr;
