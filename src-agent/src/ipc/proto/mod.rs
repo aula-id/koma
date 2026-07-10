@@ -349,7 +349,7 @@ pub enum ClientRequest {
     /// `Mode::Agents` + `SendKey`.
     ListAgents,
     /// Upsert one sub-agent definition (the /agents editor's create / save / rename).
-    /// `scope` is `"global"` (`~/.simple-coder/agents/`) or `"session"`
+    /// `scope` is `"global"` (`~/.koma/agents/`) or `"session"`
     /// (`<session_dir>/agents/`); a `"session"` scope with no foreground session is an
     /// error. `original_name` is the agent's name BEFORE this edit: `Some(x)` with
     /// `x != name` is a RENAME (the old `<scope>/<x>.md` is deleted AFTER the new file

@@ -1,4 +1,4 @@
-//! Binary entry point for the simple-coders-agent TUI.
+//! Binary entry point for the koma TUI.
 //!
 //! Parses CLI arguments via [`cli::parse`], handles any short-circuit modes
 //! (provisioner flags), then routes into one of the launch paths below.

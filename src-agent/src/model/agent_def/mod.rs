@@ -16,7 +16,7 @@
 //!
 //! **Loader tiers** (later overrides earlier, by lowercased name):
 //! 1. Built-in agents compiled into the binary ([`registry::builtin_agents`]).
-//! 2. Global agents from `~/.simple-coder/agents/*.md`.
+//! 2. Global agents from `~/.koma/agents/*.md`.
 //! 3. Session agents from `<session_dir>/agents/*.md`.
 //!
 //! After merging, `disable: true` removes a name from the registry, and
