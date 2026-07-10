@@ -227,6 +227,32 @@ pub(super) enum GuiReq {
         path: String,
         staged: bool,
     },
+    /// The GIT panel's "Stage All" header action / a row's hover "+" button: `git add
+    /// --` the given repo-root-relative `paths` (a `Vec` so "stage all" is ONE
+    /// round-trip covering every unstaged path at once). This also stages the removal
+    /// of a tracked file deleted on disk (`git add`'s own behaviour — correct, not a
+    /// bug). Routed UNCONDITIONALLY to the host-relay thread via `HostCtl::GitStage`,
+    /// same reasoning as `GitStatus`/`GitDiff` — host-local, never the daemon. The
+    /// reply is a one-shot `GitOp` envelope, immediately followed by a fresh
+    /// `GitStatus` push so the panel's lists refresh from authoritative state.
+    GitStage { paths: Vec<String> },
+    /// The GIT panel's "Unstage All" header action / a staged row's hover "−" button:
+    /// `git restore --staged --` the given `paths`. Same routing + reply pattern as
+    /// `GitStage`.
+    GitUnstage { paths: Vec<String> },
+    /// The GIT panel's "Discard All Changes" header action / an unstaged row's discard
+    /// button — destructive, so the React side gates it behind a confirm BEFORE
+    /// sending this (this request itself is not reconfirmed host-side). PER PATH: an
+    /// untracked file is deleted from disk; a tracked file's unstaged edits are reset
+    /// from the index (`git restore --`) — staged content is never touched. Same
+    /// routing + reply pattern as `GitStage`; see `git_discard`.
+    GitDiscard { paths: Vec<String> },
+    /// The GIT panel's commit box submit: `git commit -m <message>` whatever is
+    /// CURRENTLY staged. An empty/whitespace-only `message` is rejected host-side (no
+    /// git invocation at all) — the reply's `GitOp.error` surfaces that (or git's own
+    /// stderr, e.g. "nothing to commit"). Same routing as `GitStage`; the React commit
+    /// box clears its draft on a successful (`ok:true`) reply.
+    GitCommit { message: String },
     /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
     /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a

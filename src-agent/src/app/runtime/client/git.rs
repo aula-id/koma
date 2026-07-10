@@ -64,6 +64,30 @@ pub(super) struct GitDiffResult {
     pub binary: bool,
 }
 
+/// The result of a host-side git MUTATION (stage/unstage/discard/commit), pushed to
+/// the GUI as a `GitOp` envelope. `op` is `"stage"`/`"unstage"`/`"discard"`/`"commit"`
+/// so React can react per-kind (e.g. clear the commit box only on a successful
+/// commit); `error` (set only when `ok` is `false`) is git's own stderr (or a
+/// host-side rejection, e.g. an empty commit message) so the panel can toast it. This
+/// envelope carries NO list data — it is always followed by a fresh `GitStatus` push
+/// (the mutation worker computes + pushes that right after), which is what actually
+/// refreshes the panel's staged/unstaged lists.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GitOpResult {
+    pub ok: bool,
+    pub op: String,
+    pub error: Option<String>,
+}
+
+fn op_ok(op: &str) -> GitOpResult {
+    GitOpResult { ok: true, op: op.to_string(), error: None }
+}
+
+fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
+    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()) }
+}
+
 /// Run `git <args>` with `dir` as cwd, `GIT_TERMINAL_PROMPT=0` (never block on an
 /// interactive credential prompt — same guard `git_operator.rs` uses), returning
 /// `None` on any spawn failure rather than panicking.
@@ -291,9 +315,14 @@ pub(super) fn compute_git_diff(path: &str, staged: bool, session: Option<&str>) 
         return empty(Some("not a git repository".to_string()), false);
     };
 
-    // `path` is already repo-root-relative — join straight onto `root` for the on-disk
-    // read, and pass it as-is into `git show`'s `<rev>:<path>` spec.
-    let abs = root.join(path);
+    // `path` is already repo-root-relative but wire-supplied (untrusted) — anchor it
+    // via `safe_join` rather than a plain `root.join(path)` so an absolute path or a
+    // `..` traversal can't read arbitrary files into the diff viewer. It's still
+    // passed as-is into `git show`'s `<rev>:<path>` spec below — git itself rejects
+    // out-of-repo paths there, so only the raw on-disk read needs the guard.
+    let Some(abs) = safe_join(&root, path) else {
+        return empty(Some("invalid path".to_string()), false);
+    };
 
     let show = |spec: &str| -> Vec<u8> {
         match git_cmd(&root, &["show", spec]) {
@@ -323,5 +352,164 @@ pub(super) fn compute_git_diff(path: &str, staged: bool, session: Option<&str>) 
         modified: String::from_utf8_lossy(&modified_bytes).into_owned(),
         error: None,
         binary: false,
+    }
+}
+
+/// Anchor an untrusted, wire-supplied repo-root-relative `rel` onto `root`, rejecting
+/// anything that could escape it — an absolute path (`PathBuf::join` would otherwise
+/// replace `root` entirely) or any `..`/root/prefix component (would resolve outside
+/// `root` at the syscall level). Component-based rejection is the guard; deliberately
+/// NOT `canonicalize`-based since the target file may not exist yet (delete path) and
+/// symlink resolution semantics differ from what we want here. `None` means reject.
+fn safe_join(root: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    let relp = std::path::Path::new(rel);
+    if relp.is_absolute() {
+        return None;
+    }
+    for c in relp.components() {
+        match c {
+            Component::Normal(_) | Component::CurDir => {}
+            _ => return None, // ParentDir, RootDir, Prefix -> reject
+        }
+    }
+    Some(root.join(relp))
+}
+
+/// Extract git's own failure message from a non-zero `Output`: prefer stderr
+/// (where most git errors land), falling back to stdout (e.g. `git commit`'s
+/// "nothing to commit, working tree clean" prints there, not stderr), then a
+/// generic fallback if both are empty.
+fn git_failure(out: &std::process::Output, fallback: &str) -> String {
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return stdout;
+    }
+    fallback.to_string()
+}
+
+/// Stage `paths` (repo-root-relative, straight off a `GitStatus` row) via `git add --
+/// <paths...>`, answering a [`super::HostCtl::GitStage`]. This ALSO stages the removal
+/// of a tracked file deleted on disk (`git add`'s own behaviour on a missing path) —
+/// intentional, matching VSCode's "Stage All Changes" / per-row stage.
+pub(super) fn git_stage(paths: &[String], session: Option<&str>) -> GitOpResult {
+    const OP: &str = "stage";
+    if paths.is_empty() {
+        return op_ok(OP);
+    }
+    let Some(root) = repo_root_for(session) else {
+        return op_err(OP, "not a git repository");
+    };
+    let mut args: Vec<&str> = vec!["add", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    match git_cmd(&root, &args) {
+        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) => op_err(OP, git_failure(&out, "git add failed")),
+        None => op_err(OP, "failed to run git"),
+    }
+}
+
+/// Unstage `paths` via `git restore --staged -- <paths...>` (moves the index back to
+/// HEAD for just those paths, leaving worktree content untouched), answering a
+/// [`super::HostCtl::GitUnstage`].
+pub(super) fn git_unstage(paths: &[String], session: Option<&str>) -> GitOpResult {
+    const OP: &str = "unstage";
+    if paths.is_empty() {
+        return op_ok(OP);
+    }
+    let Some(root) = repo_root_for(session) else {
+        return op_err(OP, "not a git repository");
+    };
+    let mut args: Vec<&str> = vec!["restore", "--staged", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    match git_cmd(&root, &args) {
+        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) => op_err(OP, git_failure(&out, "git restore --staged failed")),
+        None => op_err(OP, "failed to run git"),
+    }
+}
+
+/// Discard unstaged changes for `paths` — VSCode's "Discard Changes" on the Changes
+/// (unstaged) group, answering a [`super::HostCtl::GitDiscard`]. PER PATH: a path
+/// untracked by git (absent from the index — checked via `git ls-files
+/// --error-unmatch`, which also covers "absent at HEAD" since an index-less path was
+/// never committed either) is DELETED straight off disk (best-effort — a failed
+/// remove is reported but doesn't abort the rest of the batch); a path git already
+/// tracks gets `git restore -- <path>`, which resets the WORKTREE from the INDEX —
+/// i.e. discards only the unstaged edit, never touching staged content. Restorable
+/// paths are batched into a single `git restore` call; deletes are unavoidably
+/// per-path (`std::fs::remove_file`).
+pub(super) fn git_discard(paths: &[String], session: Option<&str>) -> GitOpResult {
+    const OP: &str = "discard";
+    if paths.is_empty() {
+        return op_ok(OP);
+    }
+    let Some(root) = repo_root_for(session) else {
+        return op_err(OP, "not a git repository");
+    };
+
+    let mut restore_paths: Vec<&str> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for path in paths {
+        let tracked = git_cmd(&root, &["ls-files", "--error-unmatch", "--", path])
+            .is_some_and(|out| out.status.success());
+        if tracked {
+            restore_paths.push(path.as_str());
+        } else {
+            // Untracked (not in the index) — "discard" means delete the file. A
+            // remove failure (permissions, already gone) is collected, not fatal
+            // to the rest of the batch. `path` is wire-supplied, so anchor it via
+            // `safe_join` FIRST — an absolute path or `..` traversal is rejected
+            // (recorded as an error, nothing deleted) rather than escaping `root`.
+            let Some(abs) = safe_join(&root, path) else {
+                errors.push(format!("{path}: unsafe path"));
+                continue;
+            };
+            if let Err(e) = std::fs::remove_file(abs) {
+                errors.push(format!("{path}: {e}"));
+            }
+        }
+    }
+
+    if !restore_paths.is_empty() {
+        let mut args: Vec<&str> = vec!["restore", "--"];
+        args.extend(restore_paths);
+        match git_cmd(&root, &args) {
+            Some(out) if out.status.success() => {}
+            Some(out) => errors.push(git_failure(&out, "git restore failed")),
+            None => errors.push("failed to run git".to_string()),
+        }
+    }
+
+    if errors.is_empty() {
+        op_ok(OP)
+    } else {
+        op_err(OP, errors.join("; "))
+    }
+}
+
+/// Commit whatever is CURRENTLY STAGED with `message`, answering a
+/// [`super::HostCtl::GitCommit`]. An empty/whitespace-only `message` is rejected
+/// OUTRIGHT — no git invocation at all, never an accidental empty-message commit.
+/// Runs `git commit -m <message>` (never `-a`, so unstaged changes are untouched);
+/// failure (e.g. nothing staged, no configured identity) surfaces git's own message
+/// (stderr, falling back to stdout for "nothing to commit, working tree clean").
+pub(super) fn git_commit(message: &str, session: Option<&str>) -> GitOpResult {
+    const OP: &str = "commit";
+    if message.trim().is_empty() {
+        return op_err(OP, "commit message is empty");
+    }
+    let Some(root) = repo_root_for(session) else {
+        return op_err(OP, "not a git repository");
+    };
+    match git_cmd(&root, &["commit", "-m", message]) {
+        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) => op_err(OP, git_failure(&out, "git commit failed")),
+        None => op_err(OP, "failed to run git"),
     }
 }

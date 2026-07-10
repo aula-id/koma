@@ -327,6 +327,23 @@ pub(super) enum HostCtl {
     /// index when `false`) to open a Monaco diff tab. Same reasoning + routing as
     /// [`GitStatus`](Self::GitStatus); see [`compute_git_diff`].
     GitDiff { path: String, staged: bool },
+    /// Host-side GIT STAGE mutation for the GIT panel's "+" row button / "Stage All"
+    /// header action (`paths` repo-root-relative). Same reasoning as
+    /// [`GitStatus`](Self::GitStatus) — NEVER touches the daemon regardless of attach
+    /// state. Serviced off-thread (git is blocking); the worker pushes a `GitOp` reply
+    /// THEN a follow-up [`compute_git_status`] `GitStatus` push so the panel's lists
+    /// refresh from authoritative state after the mutation. See [`git_stage`].
+    GitStage { paths: Vec<String> },
+    /// Host-side GIT UNSTAGE mutation ("−" row button / "Unstage All"). Same
+    /// reasoning + reply pattern as [`GitStage`](Self::GitStage); see [`git_unstage`].
+    GitUnstage { paths: Vec<String> },
+    /// Host-side GIT DISCARD mutation (destructive — the React side gates this behind
+    /// a confirm before ever sending it). Same reasoning + reply pattern as
+    /// [`GitStage`](Self::GitStage); see [`git_discard`].
+    GitDiscard { paths: Vec<String> },
+    /// Host-side GIT COMMIT of whatever is currently staged. Same reasoning + reply
+    /// pattern as [`GitStage`](Self::GitStage); see [`git_commit`].
+    GitCommit { message: String },
     /// UN-ATTACHED GUI Settings-tab fetch (a [`ClientRequest::GetSettings`] serviced by the
     /// swapper, where the ipc `live_req` daemon path is `None`). There is no foreground
     /// session pre-attach, so the swapper answers from the GLOBAL config: the active
