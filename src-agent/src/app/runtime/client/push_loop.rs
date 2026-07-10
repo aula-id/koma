@@ -17,11 +17,13 @@ use crate::app::mode::{Mode, SessionHub};
 use crate::app::state::AppState;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
+use super::git_host;
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
+use super::push_intercept;
 use super::push_proto::{
     push_file_diff, push_git_diff, push_git_op, push_git_status, push_key_list, push_key_op,
-    push_key_reveal, push_switching, push_usage_preview, PushEnvelope, PushRoute,
+    push_key_reveal, push_switching, push_usage_preview,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -377,114 +379,63 @@ pub(super) fn push_loop(
                         let _ = tx.send(result);
                     });
                 }
-                // Explore GIT panel: NEVER touches the daemon (host-side only,
-                // regardless of attach state) — spawn the blocking git work off this
-                // thread; the result is drained + pushed below at (b-sex).
+                // Explore GIT panel + Settings SSH-key vault: NEVER touch the daemon
+                // (host-side only, regardless of attach state) — each spawns its
+                // blocking git/fs work off this thread via the shared `git_host`
+                // bodies (also used by the detached `host_swapper` twin); a mutation
+                // ALSO sends a follow-up refreshed status/list over the EXISTING
+                // status/list channel, reusing whichever drain point a plain
+                // fetch uses (git: (b-sex)/(b-sept)/(b-oct); keys:
+                // (b-undec)/(b-tredec)/(b-duodec)).
                 Ok(super::HostCtl::GitStatus) => {
-                    let tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let result = super::git::compute_git_status(cur.as_deref());
-                        let _ = tx.send(result);
-                    });
+                    git_host::spawn_git_status_attached(git_status_tx.clone(), current_owned.clone());
                 }
-                // GIT panel file-row click: same reasoning as `GitStatus` above; the
-                // result is drained + pushed below at (b-sept).
                 Ok(super::HostCtl::GitDiff { path, staged }) => {
-                    let tx = git_diff_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let result = super::git::compute_git_diff(&path, staged, cur.as_deref());
-                        let _ = tx.send(result);
-                    });
+                    git_host::spawn_git_diff_attached(git_diff_tx.clone(), current_owned.clone(), path, staged);
                 }
-                // GIT panel mutations: NEVER touch the daemon (host-side only,
-                // regardless of attach state) — spawn the blocking git work off this
-                // thread. The worker sends the `GitOp` result over `git_op_tx` (drained
-                // + pushed below at (b-oct)), THEN recomputes + sends the refreshed
-                // status over the EXISTING `git_status_tx` (drained + pushed at
-                // (b-sex)) so the panel's lists reflect authoritative state right after
-                // the mutation.
                 Ok(super::HostCtl::GitStage { paths }) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git::git_stage(&paths, cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_stage_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        paths,
+                    );
                 }
                 Ok(super::HostCtl::GitUnstage { paths }) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git::git_unstage(&paths, cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_unstage_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        paths,
+                    );
                 }
                 Ok(super::HostCtl::GitDiscard { paths }) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git::git_discard(&paths, cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_discard_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        paths,
+                    );
                 }
                 Ok(super::HostCtl::GitCommit { message }) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git::git_commit(&message, cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_commit_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        message,
+                    );
                 }
-                // GIT panel key-picker changed: NEVER touches the daemon (host-side
-                // only) — assign/clear the repo's key off-thread, then send a fresh
-                // status over the EXISTING `git_status_tx` (drained + pushed at
-                // (b-sex)) so the picker reflects the new `keyName`. No `GitOp` reply.
                 Ok(super::HostCtl::SetGitKey { name }) => {
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        super::git_remote::set_current_key(cur.as_deref(), name);
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_set_git_key_attached(git_status_tx.clone(), current_owned.clone(), name);
                 }
-                // GIT panel remote sync buttons (Fetch/Pull/Push): NEVER touch the
-                // daemon (host-side only) — git network I/O is blocking, so each runs
-                // on a one-shot worker thread. The worker sends the `GitOp` result over
-                // `git_op_tx` (drained + pushed at (b-oct)), THEN a refreshed status over
-                // `git_status_tx` (drained + pushed at (b-sex)) so ahead/behind reflect
-                // the sync immediately after.
                 Ok(super::HostCtl::GitFetch) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git_remote::git_fetch(cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_fetch_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                 }
                 Ok(super::HostCtl::GitPull) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git_remote::git_pull(cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_pull_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                 }
                 Ok(super::HostCtl::GitPush) => {
-                    let op_tx = git_op_tx.clone();
-                    let status_tx = git_status_tx.clone();
-                    let cur = current_owned.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::git_remote::git_push(cur.as_deref()));
-                        let _ = status_tx.send(super::git::compute_git_status(cur.as_deref()));
-                    });
+                    git_host::spawn_git_push_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                 }
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
@@ -497,55 +448,20 @@ pub(super) fn push_loop(
                         let _ = tx.send((result, scope, session));
                     });
                 }
-                // Settings "SSH Keys" section: NEVER touches the daemon (host-side
-                // only, regardless of attach state) — spawn the blocking fs/
-                // `ssh-keygen` work off this thread; the result is drained + pushed
-                // below at (b-undec).
                 Ok(super::HostCtl::KeyList) => {
-                    let tx = key_list_tx.clone();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(super::keys::list_keys());
-                    });
+                    git_host::spawn_key_list_attached(key_list_tx.clone());
                 }
-                // SSH key vault mutations: NEVER touch the daemon (host-side only,
-                // regardless of attach state) — spawn the blocking work off this
-                // thread. The worker sends the `KeyOp` result over `key_op_tx`
-                // (drained + pushed below at (b-duodec)), THEN recomputes + sends
-                // the refreshed list over the EXISTING `key_list_tx` (drained +
-                // pushed at (b-undec)) so the section reflects authoritative state
-                // right after the mutation.
                 Ok(super::HostCtl::KeyGenerate { name, comment }) => {
-                    let op_tx = key_op_tx.clone();
-                    let list_tx = key_list_tx.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::keys::generate_key(&name, &comment));
-                        let _ = list_tx.send(super::keys::list_keys());
-                    });
+                    git_host::spawn_key_generate_attached(key_op_tx.clone(), key_list_tx.clone(), name, comment);
                 }
                 Ok(super::HostCtl::KeyImport { name, private_key }) => {
-                    let op_tx = key_op_tx.clone();
-                    let list_tx = key_list_tx.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::keys::import_key(&name, &private_key));
-                        let _ = list_tx.send(super::keys::list_keys());
-                    });
+                    git_host::spawn_key_import_attached(key_op_tx.clone(), key_list_tx.clone(), name, private_key);
                 }
                 Ok(super::HostCtl::KeyDelete { name }) => {
-                    let op_tx = key_op_tx.clone();
-                    let list_tx = key_list_tx.clone();
-                    std::thread::spawn(move || {
-                        let _ = op_tx.send(super::keys::delete_key(&name));
-                        let _ = list_tx.send(super::keys::list_keys());
-                    });
+                    git_host::spawn_key_delete_attached(key_op_tx.clone(), key_list_tx.clone(), name);
                 }
-                // SSH key reveal (copy-public / reveal-private): same reasoning as
-                // `KeyList` above; the result is drained + pushed below at
-                // (b-tredec).
                 Ok(super::HostCtl::KeyReveal { name, private }) => {
-                    let tx = key_reveal_tx.clone();
-                    std::thread::spawn(move || {
-                        let _ = tx.send(super::keys::reveal_key(&name, private));
-                    });
+                    git_host::spawn_key_reveal_attached(key_reveal_tx.clone(), name, private);
                 }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
@@ -560,154 +476,17 @@ pub(super) fn push_loop(
         loop {
             match frame_rx.try_recv() {
                 Ok(frame) => {
-                    // Omnisearch reply: intercept the one-shot `FileSearchResults` and
-                    // re-push it to JS as a `SearchResults` envelope BEFORE folding (the
-                    // fold treats it as a non-visual no-op, keeping the seq gap-free).
-                    if let DaemonEvent::FileSearchResults { query, items } = &frame.event {
-                        let env = PushEnvelope::SearchResults {
-                            query: query.clone(),
-                            items: items.clone(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
-                    }
+                    // Every one-shot non-visual `DaemonEvent` reply (FileSearchResults,
+                    // ModelList, ModelRoutes, SettingsValues, AgentsValues, EffortOptions,
+                    // OAuthState) is re-pushed to JS as its own `PushEnvelope` HERE, BEFORE
+                    // folding — see `push_intercept` (split out for file size; pure code
+                    // motion, no behaviour change).
+                    push_intercept::repush_before_fold(&frame, push);
                     // Cache the authoritative config off every full snapshot so the
                     // `Config` envelope can be (re)emitted below (a config edit forces a
                     // full snapshot — see `ipc::snapshot::diff`).
                     if let DaemonEvent::Snapshot(snap) = &frame.event {
                         current_config = Some(ConfigProjection::from_global(&snap.global));
-                    }
-                    // Live model-id catalogue reply (Connector model picker): re-push it as
-                    // a `ModelList` envelope BEFORE folding (the fold treats it as a
-                    // non-visual no-op, keeping the seq gap-free).
-                    if let DaemonEvent::ModelList { provider, models } = &frame.event {
-                        let env = PushEnvelope::ModelList {
-                            provider: provider.clone(),
-                            models: models.clone(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
-                    }
-                    // Live provider-route reply (Connector ModelForm route picker): re-push
-                    // it as a `RouteList` envelope BEFORE folding (a non-visual fold no-op),
-                    // flattening each wire route to the camelCase `PushRoute` JS contract.
-                    if let DaemonEvent::ModelRoutes { provider, model_id, routes } = &frame.event {
-                        let env = PushEnvelope::RouteList {
-                            provider: provider.clone(),
-                            model_id: model_id.clone(),
-                            routes: routes
-                                .iter()
-                                .map(|r| PushRoute {
-                                    name: r.name.clone(),
-                                    provider_name: r.provider_name.clone(),
-                                    price_prompt: r.price_prompt.clone(),
-                                    price_completion: r.price_completion.clone(),
-                                    uptime_last_30m: r.uptime_last_30m,
-                                })
-                                .collect(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
-                    }
-                    // GUI Settings-tab reply (GetSettings / post-SetSessionPrefs re-push):
-                    // re-push it as a `SettingsValues` envelope BEFORE folding (a non-visual
-                    // fold no-op, keeping the seq gap-free), same as the ModelList/RouteList
-                    // intercepts above.
-                    if let DaemonEvent::SettingsValues {
-                        name,
-                        workdir,
-                        short_send,
-                        sliding_cache,
-                        bash_saving,
-                        internet_mode,
-                        palette,
-                        effort,
-                    } = &frame.event
-                    {
-                        let env = PushEnvelope::SettingsValues {
-                            name: name.clone(),
-                            workdir: workdir.clone(),
-                            short_send: *short_send,
-                            sliding_cache: *sliding_cache,
-                            bash_saving: *bash_saving,
-                            internet_mode: internet_mode.clone(),
-                            palette: palette.clone(),
-                            effort: effort.clone(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
-                    }
-                    // GUI /agents-dashboard reply (GetAgents / post-SetAgent / -DeleteAgent
-                    // re-push): re-push it as an `AgentsValues` envelope BEFORE folding (a
-                    // non-visual fold no-op, keeping the seq gap-free), same as the
-                    // SettingsValues intercept above.
-                    if let DaemonEvent::AgentsValues {
-                        agents,
-                        catalogue_models,
-                        catalogue_providers,
-                        available_tools,
-                    } = &frame.event
-                    {
-                        let env = PushEnvelope::AgentsValues {
-                            agents: agents.clone(),
-                            catalogue_models: catalogue_models.clone(),
-                            catalogue_providers: catalogue_providers.clone(),
-                            available_tools: available_tools.clone(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
-                    }
-                    // Composer EFFORT-picker reply (GetEffortOptions): re-push it as an
-                    // `EffortOptions` envelope BEFORE folding (a non-visual fold no-op,
-                    // keeping the seq gap-free), same as the SettingsValues intercept above.
-                    if let DaemonEvent::EffortOptions {
-                        options,
-                        selected,
-                        note,
-                        state,
-                    } = &frame.event
-                    {
-                        let env = PushEnvelope::EffortOptions {
-                            options: options.clone(),
-                            selected: *selected,
-                            note: note.clone(),
-                            state: state.clone(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
-                    }
-                    // Streaming GUI OAuth reply (GetOAuthState / StartOAuth progress /
-                    // SubmitOAuthPaste / CancelOAuth / DeleteOAuthConn): re-push it as an
-                    // `OAuthState` envelope BEFORE folding (a non-visual fold no-op, keeping
-                    // the seq gap-free), same as the SettingsValues/AgentsValues intercepts.
-                    if let DaemonEvent::OAuthState {
-                        phase,
-                        url,
-                        user_code,
-                        verification_url,
-                        error,
-                        conns,
-                        providers,
-                    } = &frame.event
-                    {
-                        let env = PushEnvelope::OAuthState {
-                            phase: phase.clone(),
-                            url: url.clone(),
-                            user_code: user_code.clone(),
-                            verification_url: verification_url.clone(),
-                            error: error.clone(),
-                            conns: conns.clone(),
-                            providers: providers.clone(),
-                        };
-                        if let Ok(json) = serde_json::to_string(&env) {
-                            push(json);
-                        }
                     }
                     apply_frame(
                         frame,
