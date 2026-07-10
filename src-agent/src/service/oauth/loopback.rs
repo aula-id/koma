@@ -1,13 +1,11 @@
-//! One-shot HTTP loopback listener that catches the Codex OAuth redirect on
-//! `127.0.0.1:1455` (`registry::CODEX_PORT`). No web framework: this is a
-//! single GET request on a throwaway listener, so a hand-rolled parse of the
-//! request line is simpler than pulling in a server dependency for it.
+//! One-shot HTTP loopback listener that catches an OAuth redirect on a
+//! caller-specified loopback port. No web framework: this is a single GET
+//! request on a throwaway listener, so a hand-rolled parse of the request
+//! line is simpler than pulling in a server dependency for it.
 
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::time::{timeout, Duration, Instant};
-
-use super::registry::CODEX_PORT;
 
 /// The `code` + `state` query parameters lifted off a successful redirect.
 pub struct CallbackResult {
@@ -24,8 +22,8 @@ const MAX_REQUEST_BYTES: usize = 8 * 1024;
 const SUCCESS_BODY: &str = "<html><body style=\"font-family:monospace\"><h3>koma: login complete</h3>You can close this tab.</body></html>";
 const FAILURE_BODY: &str = "<html><body style=\"font-family:monospace\"><h3>koma: login failed</h3>You can close this tab and return to the terminal.</body></html>";
 
-/// Wait up to `timeout_secs` for the Codex OAuth redirect, validate `state`,
-/// and return the authorization `code`.
+/// Wait up to `timeout_secs` for the OAuth redirect on `127.0.0.1:port`,
+/// validate `state`, and return the authorization `code`.
 ///
 /// Browsers sometimes probe unrelated paths (e.g. `/favicon.ico`) before the
 /// real redirect lands; those get a bare 404 and the loop keeps waiting,
@@ -33,10 +31,11 @@ const FAILURE_BODY: &str = "<html><body style=\"font-family:monospace\"><h3>koma
 pub async fn catch_callback(
     expected_state: &str,
     timeout_secs: u64,
+    port: u16,
 ) -> Result<CallbackResult, String> {
-    let listener = TcpListener::bind(("127.0.0.1", CODEX_PORT))
+    let listener = TcpListener::bind(("127.0.0.1", port))
         .await
-        .map_err(|_| "port 1455 busy — close any running codex CLI and retry".to_string())?;
+        .map_err(|_| format!("port {port} busy — close any running CLI on it and retry"))?;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 

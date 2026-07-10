@@ -85,6 +85,20 @@ pub const XAI_REFRESH_LEAD_SECS: u64 = 300;
 /// token keeps working no matter how long since the last successful refresh.
 pub const XAI_MAX_REFRESH_AGE_SECS: u64 = 0;
 
+// --- Claude (Anthropic) OAuth ---
+
+pub const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+pub const CLAUDE_AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
+pub const CLAUDE_TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
+pub const CLAUDE_SCOPE: &str =
+    "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+pub const CLAUDE_REDIRECT: &str = "http://localhost:54545/callback";
+pub const CLAUDE_PORT: u16 = 54545;
+
+/// Same lead/age windows as Codex (see `CODEX_REFRESH_LEAD_SECS`/`CODEX_MAX_REFRESH_AGE_SECS`).
+pub const CLAUDE_REFRESH_LEAD_SECS: u64 = CODEX_REFRESH_LEAD_SECS;
+pub const CLAUDE_MAX_REFRESH_AGE_SECS: u64 = CODEX_MAX_REFRESH_AGE_SECS;
+
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
 /// into the chat-request resolution boundary.
 pub struct OAuthProviderMeta {
@@ -110,7 +124,7 @@ pub struct OAuthProviderMeta {
 /// this same source is a future dedup.
 pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
     let mut providers: Vec<(&'static str, &'static str, &'static str)> =
-        [OAuthProvider::Codex, OAuthProvider::Kilocode, OAuthProvider::Xai]
+        [OAuthProvider::Codex, OAuthProvider::Kilocode, OAuthProvider::Xai, OAuthProvider::ClaudeAI]
             .iter()
             .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
             .collect();
@@ -135,6 +149,10 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
         OAuthProvider::Xai => OAuthProviderMeta {
             chat_endpoint: "https://api.x.ai/v1",
             catalogue_endpoint: "https://api.x.ai/v1",
+        },
+        OAuthProvider::ClaudeAI => OAuthProviderMeta {
+            chat_endpoint: "https://api.anthropic.com",
+            catalogue_endpoint: "",
         },
     }
 }

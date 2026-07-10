@@ -12,6 +12,7 @@
 //! and re-persists it to `config.json` before a request goes out.
 
 pub mod browser;
+pub mod claude;
 pub mod codex;
 pub mod jwt;
 pub mod kilo;

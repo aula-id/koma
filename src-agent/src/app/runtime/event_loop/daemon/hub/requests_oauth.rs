@@ -92,10 +92,11 @@ impl DaemonHub {
     ) {
         let client_id = self.clients[idx].id;
         match provider.as_str() {
-            "codex" | "kilocode" | "xai" => {
+            "codex" | "kilocode" | "xai" | "claudeai" => {
                 let p = match provider.as_str() {
                     "kilocode" => OAuthProvider::Kilocode,
                     "xai" => OAuthProvider::Xai,
+                    "claudeai" => OAuthProvider::ClaudeAI,
                     _ => OAuthProvider::Codex,
                 };
                 // Spawn the flow FIRST — `handle_oauth_start` DISARMS `oauth_gui_client`

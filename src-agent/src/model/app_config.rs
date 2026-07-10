@@ -109,6 +109,10 @@ pub enum OAuthProvider {
     /// Resolves to an `OpenAiCompatible` chat route with an EMPTY `account_id`
     /// (no org concept), so the Kilo org header never fires for it.
     Xai,
+    /// Claude (Anthropic) via claude.ai OAuth: a PKCE authorization-code grant with a
+    /// local loopback callback (see `service::oauth::claude`), mirroring Codex's flow
+    /// shape but against Anthropic's own endpoints.
+    ClaudeAI,
 }
 
 impl OAuthProvider {
@@ -118,6 +122,7 @@ impl OAuthProvider {
             OAuthProvider::Codex => "Codex",
             OAuthProvider::Kilocode => "Kilo Code",
             OAuthProvider::Xai => "xAI (Grok)",
+            OAuthProvider::ClaudeAI => "Claude (Anthropic)",
         }
     }
 
@@ -130,6 +135,7 @@ impl OAuthProvider {
             OAuthProvider::Codex => "codex",
             OAuthProvider::Kilocode => "kilocode",
             OAuthProvider::Xai => "xai",
+            OAuthProvider::ClaudeAI => "claudeai",
         }
     }
 
@@ -143,6 +149,7 @@ impl OAuthProvider {
             OAuthProvider::Codex => "pkce",
             OAuthProvider::Kilocode => "device",
             OAuthProvider::Xai => "device",
+            OAuthProvider::ClaudeAI => "pkce",
         }
     }
 }
