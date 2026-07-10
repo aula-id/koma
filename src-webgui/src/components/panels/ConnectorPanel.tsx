@@ -87,15 +87,22 @@ export function ConnectorPanel() {
     back()
   }
   // ModelForm's Provider select stores the chosen option's `value` into
-  // model.provider, which crosses the wire as `providerUuid` and is resolved by
-  // the daemon via `p.uuid == provider` (SetModel + ListModels). So the value
-  // MUST be a real provider uuid — an OAuth connection isn't one (it's a
-  // separate auth mechanism, not a `config.providers` catalogue entry), so
-  // conns are deliberately NOT offered here. The synthetic koma-free provider
-  // is dropdown-only (see ConnectorListView) — exclude it here too so it can't
-  // be hand-picked for a new/edited model (that gateway serves a single fixed
-  // model, not an arbitrary modelId).
-  const providerOptions = providers.filter((p) => !p.isKomaFree).map((p) => ({ value: p.id, label: p.name }))
+  // model.provider, which crosses the wire as `providerUuid`. The daemon
+  // resolves that against EITHER catalogue — a real config provider (uuid ==
+  // `Provider.id`) OR an OAuth connection (uuid == `OAuthConn.uuid` —
+  // resolve.rs matches `config.oauth_conns` by uuid too, routing the model
+  // through that connection's bearer token / chat endpoint). So an OAuth conn
+  // IS a fully valid model provider, not just a config.providers entry —
+  // offer both. OAuth-backed options are label-suffixed "· OAuth" so the user
+  // can tell them apart from a static API-key provider at a glance (the
+  // Select component has no option-grouping to lean on instead). The
+  // synthetic koma-free provider is dropdown-only (see ConnectorListView) —
+  // excluded here too so it can't be hand-picked for a new/edited model (that
+  // gateway serves a single fixed model, not an arbitrary modelId).
+  const providerOptions = [
+    ...providers.filter((p) => !p.isKomaFree).map((p) => ({ value: p.id, label: p.name })),
+    ...conns.map((c) => ({ value: c.uuid, label: `${c.name} · OAuth` })),
+  ]
 
   return (
     <div className="relative h-full overflow-hidden">
