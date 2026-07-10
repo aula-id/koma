@@ -119,7 +119,10 @@ pub(super) fn apply_frame(
         // re-pushes an `EffortOptions` envelope; the TUI opens `Mode::Effort` directly
         // and never sends `GetEffortOptions`). `AgentsValues` follows it too for the GUI
         // /agents dashboard (the host re-pushes an `AgentsValues` envelope; the TUI drives
-        // the roster through `Mode::Agents` and never sends `ListAgents`).
+        // the roster through `Mode::Agents` and never sends `ListAgents`). `OAuthState`
+        // follows the same story for the streaming GUI OAuth surface (the host re-pushes an
+        // `OAuthState` envelope; the TUI drives login through `Mode::Settings`/
+        // `OnboardProvider` and never sends `GetOAuthState`/`StartOAuth`).
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
@@ -128,7 +131,8 @@ pub(super) fn apply_frame(
         | DaemonEvent::ModelRoutes { .. }
         | DaemonEvent::SettingsValues { .. }
         | DaemonEvent::EffortOptions { .. }
-        | DaemonEvent::AgentsValues { .. } => false,
+        | DaemonEvent::AgentsValues { .. }
+        | DaemonEvent::OAuthState { .. } => false,
     }
 }
 

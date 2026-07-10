@@ -149,6 +149,16 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 for flow in oauth_flow_states(state) {
                     *flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0, copied: false };
                 }
+                // GUI side-channel: queue a `waiting_url` push to the initiating push
+                // client (if any). The mode fold above is untouched (TUI parity).
+                push_oauth_gui(
+                    state,
+                    "waiting_url",
+                    Some(url.clone()),
+                    None,
+                    None,
+                    None,
+                );
                 state.rest.oauth_rx = Some(orx);
                 dirty = true;
             }
@@ -161,6 +171,14 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                         copied: false,
                     };
                 }
+                push_oauth_gui(
+                    state,
+                    "waiting_code",
+                    None,
+                    Some(user_code.clone()),
+                    Some(verification_url.clone()),
+                    None,
+                );
                 state.rest.oauth_rx = Some(orx);
                 dirty = true;
             }
@@ -223,6 +241,9 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                     state.rest.request_catalogue(ep, &conn_token, &conn_uuid);
                 }
                 state.rest.oauth_task = None;
+                // GUI side-channel: terminal `success` push (conns are rebuilt hub-side
+                // from the now-updated `config.oauth_conns`). Terminal → disarm the client.
+                push_oauth_gui_terminal(state, "success", None);
                 dirty = true;
                 // Receiver consumed (terminal event) — don't put it back.
             }
@@ -230,6 +251,7 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 for flow in oauth_flow_states(state) {
                     *flow = OAuthFlowState::Failed(error.clone());
                 }
+                push_oauth_gui_terminal(state, "failed", Some(error.clone()));
                 state.rest.oauth_task = None;
                 dirty = true;
             }
@@ -247,12 +269,58 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                             OAuthFlowState::Failed("login flow ended unexpectedly".to_string());
                     }
                 }
+                push_oauth_gui_terminal(
+                    state,
+                    "failed",
+                    Some("login flow ended unexpectedly".to_string()),
+                );
                 state.rest.oauth_task = None;
                 dirty = true;
             }
         }
     }
     dirty
+}
+
+/// Queue a NON-TERMINAL GUI OAuth phase push onto `state.rest.oauth_pushes` for the daemon
+/// hub to deliver to the initiating client — a no-op unless a GUI/push client actually
+/// started this flow (`oauth_gui_client` is `Some`). Leaves `oauth_gui_client` ARMED so
+/// later transitions keep reaching the same client. Parallel to the drain's mode fold, so
+/// TUI parity is untouched.
+fn push_oauth_gui(
+    state: &mut AppState,
+    phase: &'static str,
+    url: Option<String>,
+    user_code: Option<String>,
+    verification_url: Option<String>,
+    error: Option<String>,
+) {
+    if let Some(client_id) = state.rest.oauth_gui_client {
+        state.rest.oauth_pushes.push(crate::service::oauth::OAuthPushOut {
+            client_id,
+            phase,
+            url,
+            user_code,
+            verification_url,
+            error,
+        });
+    }
+}
+
+/// Queue a TERMINAL GUI OAuth phase push (`"success"` / `"failed"`) and DISARM the
+/// initiating client (`take`), so a superseding flow re-arms cleanly and no stray late
+/// transition can re-push after the flow ended. A no-op when no GUI client is armed.
+fn push_oauth_gui_terminal(state: &mut AppState, phase: &'static str, error: Option<String>) {
+    if let Some(client_id) = state.rest.oauth_gui_client.take() {
+        state.rest.oauth_pushes.push(crate::service::oauth::OAuthPushOut {
+            client_id,
+            phase,
+            url: None,
+            user_code: None,
+            verification_url: None,
+            error,
+        });
+    }
 }
 
 /// Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),

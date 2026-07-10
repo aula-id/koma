@@ -73,6 +73,28 @@ pub struct OAuthProviderMeta {
     pub catalogue_endpoint: &'static str,
 }
 
+/// The available OAuth login providers as DATA — the SINGLE source of truth the GUI's
+/// `GetOAuthState` reply (`DaemonEvent::OAuthState.providers`) is built from, so adding a
+/// new provider (a future xAI / Claude) surfaces in the webview by extending THIS list,
+/// never by editing a wire builder. Each tuple is `(id, label, kind)`: `id` is the
+/// `StartOAuth` wire token, `label` the human name, `kind` the flow shape (`"pkce"` /
+/// `"device"` / `"paste"`).
+///
+/// Derived from the [`OAuthProvider`] enum (each variant's `wire_id`/`label`/`flow_kind`),
+/// plus the Codex paste-token option — a third login choice that reuses Codex's connection
+/// shape and so has no enum variant of its own. The TUI's hardcoded picker OPTIONS array
+/// (`app::mode::settings` / `app::mode::onboard`) stays as-is this wave; folding it onto
+/// this same source is a future dedup.
+pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut providers: Vec<(&'static str, &'static str, &'static str)> =
+        [OAuthProvider::Codex, OAuthProvider::Kilocode]
+            .iter()
+            .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
+            .collect();
+    providers.push(("codex_paste", "Codex (paste token)", "paste"));
+    providers
+}
+
 /// Static metadata for `p`.
 pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
     match p {

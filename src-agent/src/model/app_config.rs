@@ -114,6 +114,29 @@ impl OAuthProvider {
             OAuthProvider::Kilocode => "Kilo Code",
         }
     }
+
+    /// The stable wire id token (`"codex"` / `"kilocode"`) — identical to the serde
+    /// `snake_case` tag, but available as a `&str` WITHOUT serializing. The `StartOAuth`
+    /// GUI request keys on this, and the tokenless [`OAuthConn`]→wire projection stamps
+    /// it as the connection's `provider`, so the webview never needs to see the raw enum.
+    pub fn wire_id(&self) -> &'static str {
+        match self {
+            OAuthProvider::Codex => "codex",
+            OAuthProvider::Kilocode => "kilocode",
+        }
+    }
+
+    /// The login flow SHAPE, for the data-driven GUI provider list: `"pkce"` (Codex's
+    /// browser loopback authorization-code grant) or `"device"` (Kilo Code's device-code
+    /// grant). The Codex paste-token option is NOT an `OAuthProvider` variant (it reuses
+    /// Codex's connection shape), so its `"paste"` kind is carried separately by
+    /// [`crate::service::oauth::registry::oauth_providers`].
+    pub fn flow_kind(&self) -> &'static str {
+        match self {
+            OAuthProvider::Codex => "pkce",
+            OAuthProvider::Kilocode => "device",
+        }
+    }
 }
 
 /// One OAuth-authenticated connection, keyed by `uuid`. Populated by the login

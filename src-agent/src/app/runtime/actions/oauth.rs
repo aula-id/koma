@@ -31,6 +31,13 @@ pub(super) fn handle_oauth_start(
         h.abort();
     }
     state.rest.oauth_rx = None;
+    // Disarm any GUI OAuth push side-channel the superseded flow armed. This runs on
+    // EVERY start path (a GUI `StartOAuth` request AND a TUI keypress → `SendKey` →
+    // here), so arm/disarm is path-agnostic: a TUI-originated start leaves it disarmed,
+    // and the GUI request handler re-arms with its own client id AFTER this returns —
+    // so a stale id can never push another client this flow's state (incl. the email /
+    // plan / account_id PII on success).
+    state.rest.oauth_gui_client = None;
 
     // Optimistic transitional paint on whichever oauth-flow-bearing mode is active.
     match state.mode_mut() {
@@ -119,6 +126,10 @@ pub(super) fn handle_oauth_cancel(state: &mut AppState) -> Result<()> {
         h.abort();
     }
     state.rest.oauth_rx = None;
+    // Disarm the GUI OAuth push side-channel regardless of who cancelled (a GUI
+    // `CancelOAuth` request OR a TUI Esc keypress) — the flow is over, so no further
+    // state should be pushed to a previously-armed client (path-agnostic disarm).
+    state.rest.oauth_gui_client = None;
     match state.mode_mut() {
         Mode::Settings(s) => s.oauth_flow = OAuthFlowState::Idle,
         // The wizard has no idle connections list — cancelling a wait returns to the

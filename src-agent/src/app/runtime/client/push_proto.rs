@@ -295,6 +295,29 @@ pub(super) enum PushEnvelope {
         catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
         available_tools: Vec<String>,
     },
+    /// The streaming GUI OAuth surface's authoritative state — the one-shot reply to a
+    /// `GetOAuthState` / `DeleteOAuthConn` / `CancelOAuth` / `SubmitOAuthPaste`, AND the
+    /// streamed transitions of an in-flight `StartOAuth` (`starting` → `waiting_url` /
+    /// `waiting_code` → `success` / `failed`). Pushed out-of-band (not fingerprinted)
+    /// whenever the daemon emits a `DaemonEvent::OAuthState` — or, un-attached, straight from
+    /// the host's config + provider-registry fallback. `phase` is a data value token:
+    /// `"idle"` / `"starting"` / `"waiting_url"` / `"waiting_code"` / `"paste"` / `"success"`
+    /// / `"failed"`. `url` (Codex auth URL) / `userCode` + `verificationUrl` (Kilo device) /
+    /// `error` (failure reason) are set per phase (the envelope KEYS are camelCase; the phase
+    /// VALUE stays as-is). `conns` is the TOKENLESS connection list (`OAuthConnWire` — never an
+    /// access/refresh/id token) and `providers` the available-provider catalogue
+    /// (`OAuthProviderWire`); React REPLACES its OAuth slice on each push. ALWAYS a reply so
+    /// the OAuth screen's loading state can never hang.
+    #[serde(rename_all = "camelCase")]
+    OAuthState {
+        phase: String,
+        url: Option<String>,
+        user_code: Option<String>,
+        verification_url: Option<String>,
+        error: Option<String>,
+        conns: Vec<crate::ipc::proto::OAuthConnWire>,
+        providers: Vec<crate::ipc::proto::OAuthProviderWire>,
+    },
     /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
     /// foreground session's current model. `state` is `"loading"` (a catalogue
     /// fetch was just armed or is already in flight — `options` empty),
@@ -480,6 +503,36 @@ pub(super) fn push_agents_values(
             catalogue_models,
             catalogue_providers,
             available_tools,
+        },
+    );
+}
+
+/// Emit a one-shot `OAuthState` envelope for the streaming GUI OAuth surface. Shared by the
+/// attached `push_loop` intercept (which unpacks the daemon's `DaemonEvent::OAuthState`) and
+/// the UN-ATTACHED host fallback ([`super::host`]), so a detached `GetOAuthState` /
+/// `DeleteOAuthConn` lands the SAME envelope the attached path produces. `conns` is the
+/// TOKENLESS connection list; no secret ever crosses here.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn push_oauth_state(
+    push: &dyn Fn(String),
+    phase: String,
+    url: Option<String>,
+    user_code: Option<String>,
+    verification_url: Option<String>,
+    error: Option<String>,
+    conns: Vec<crate::ipc::proto::OAuthConnWire>,
+    providers: Vec<crate::ipc::proto::OAuthProviderWire>,
+) {
+    super::render::emit(
+        push,
+        &PushEnvelope::OAuthState {
+            phase,
+            url,
+            user_code,
+            verification_url,
+            error,
+            conns,
+            providers,
         },
     );
 }

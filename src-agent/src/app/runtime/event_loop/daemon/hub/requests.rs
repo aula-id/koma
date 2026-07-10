@@ -92,10 +92,10 @@ impl DaemonHub {
                 self.handle_request(client_id, req, state, client, handle);
             }
             HubInbound::Disconnect { client_id } => {
-                // Transport gone: deregister + pass the controller seat. Unknown id
-                // (already removed via Detach) is a harmless no-op.
+                // Transport gone: deregister + pass the controller seat (also disarms the
+                // GUI OAuth side-channel if armed). Unknown id (already Detached) is a no-op.
                 if let Some(idx) = self.clients.iter().position(|c| c.id == client_id) {
-                    self.deregister(idx);
+                    self.deregister(idx, state);
                 }
             }
         }
@@ -182,7 +182,7 @@ impl DaemonHub {
                 self.status(idx, state);
             }
             ClientRequest::Detach => {
-                self.detach(idx);
+                self.detach(idx, state);
             }
 
             ClientRequest::FileSearch { query, limit } => {
@@ -593,6 +593,12 @@ impl DaemonHub {
             ClientRequest::DeleteAgent { scope, name } => {
                 self.delete_agent(idx, state, scope, name);
             }
+
+            ClientRequest::GetOAuthState
+            | ClientRequest::StartOAuth { .. }
+            | ClientRequest::SubmitOAuthPaste { .. }
+            | ClientRequest::CancelOAuth
+            | ClientRequest::DeleteOAuthConn { .. } => self.oauth(idx, req, state, client, handle),
 
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs

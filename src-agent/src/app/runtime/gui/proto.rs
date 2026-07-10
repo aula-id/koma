@@ -418,4 +418,29 @@ pub(super) enum GuiReq {
     /// The /agents dashboard's delete (a file-backed agent; a built-in is a daemon-side
     /// error). `scope` is `"global"` / `"session"`. Forwarded like the config setters.
     DeleteAgent { scope: String, name: String },
+
+    // ─── GUI OAuth surface (Codex + Kilo Code login) ─────────────────────────────
+    /// The OAuth screen opened / refreshed: fetch the current state (connections +
+    /// available providers). Dual-routed like `GetSettings`/`GetAgents` via
+    /// [`forward_or_host`] — the attached daemon answers with `OAuthState`, or (un-attached)
+    /// the host answers from `~/.koma/config.json` + the provider registry — so the screen
+    /// populates in BOTH host states and never hangs.
+    GetOAuthState,
+    /// Start a login flow. `provider` is `"codex"` / `"kilocode"` / `"codex_paste"`.
+    /// Forwarded as [`ClientRequest::StartOAuth`], attached-only (like `Interrupt` — the flow
+    /// runs on the daemon's runtime; un-attached login is not supported this wave). The daemon
+    /// streams progress back as `OAuthState` pushes the host re-pushes as `OAuthState`
+    /// envelopes.
+    StartOAuth { provider: String },
+    /// Complete the Codex paste-token flow with a raw access `token`. Forwarded as
+    /// [`ClientRequest::SubmitOAuthPaste`], attached-only.
+    SubmitOAuthPaste { token: String },
+    /// Cancel an in-flight login flow. Forwarded as [`ClientRequest::CancelOAuth`],
+    /// attached-only.
+    CancelOAuth,
+    /// Delete a persisted OAuth connection by `uuid`. Dual-routed like `GetOAuthState` via
+    /// [`forward_or_host`] — the attached daemon deletes + evicts, or (un-attached) the host
+    /// removes it from the on-disk config + evicts the cache — then re-pushes a fresh
+    /// `OAuthState`, so a connection is removable pre-session too.
+    DeleteOAuthConn { uuid: String },
 }

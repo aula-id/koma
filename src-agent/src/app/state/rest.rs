@@ -325,6 +325,21 @@ pub struct AppStateRest {
     /// flow) can actually stop the in-flight browser/poll loop rather than merely
     /// dropping its receiver. `None` when no flow is in flight.
     pub oauth_task: Option<tokio::task::AbortHandle>,
+    /// The hub connection id of the GUI/push client that initiated the CURRENT OAuth login
+    /// flow (`ClientRequest::StartOAuth`), or `None` for a TUI-driven flow / no flow. While
+    /// `Some`, the OAuth drain (`event_loop::global::drains::drain_oauth`) queues each flow
+    /// transition onto `oauth_pushes` for the daemon hub to deliver to this client as a
+    /// [`crate::ipc::proto::DaemonEvent::OAuthState`]. Cleared on the terminal event
+    /// (success / failure, taken in the drain) and by `CancelOAuth`. The drain's mode-state
+    /// fold + config persist are UNCHANGED — this is a parallel side-channel, so TUI parity
+    /// is preserved (a TUI client renders the flow off its snapshot as before).
+    pub oauth_gui_client: Option<u64>,
+    /// Outbox of GUI OAuth phase pushes queued by `drain_oauth` when a background flow
+    /// transition lands (only while `oauth_gui_client` is `Some`), drained each tick by the
+    /// daemon hub's `drain_oauth_pushes` — which turns each into a seq'd
+    /// [`crate::ipc::proto::DaemonEvent::OAuthState`] to the initiating client. Empty except
+    /// in the ticks a transition lands; never touched by the standalone/TUI loop.
+    pub oauth_pushes: Vec<crate::service::oauth::OAuthPushOut>,
     /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
     /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
     /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
@@ -428,6 +443,8 @@ impl AppStateRest {
             sec_health_rx: None,
             oauth_rx: None,
             oauth_task: None,
+            oauth_gui_client: None,
+            oauth_pushes: Vec::new(),
             awareness_rx: None,
             awareness_tx: None,
         }

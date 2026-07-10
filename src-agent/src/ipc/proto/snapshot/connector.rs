@@ -13,6 +13,40 @@ pub struct ModelEndpointWire {
     pub uptime_last_30m: Option<f64>,
 }
 
+/// A TOKENLESS serde-safe projection of one persisted OAuth connection
+/// ([`crate::model::app_config::OAuthConn`]) for the streaming GUI OAuth surface
+/// ([`crate::ipc::proto::DaemonEvent::OAuthState`]).
+///
+/// CRITICAL: this carries ONLY display/identity fields — `uuid`/`name`/`provider`/`email`/
+/// `plan`/`account_id`. The `access_token`/`refresh_token`/`id_token` are DELIBERATELY
+/// absent from the wire type so a secret can never be serialized to the webview even by
+/// mistake. `provider` is the wire token (`"codex"` / `"kilocode"`, from
+/// [`crate::model::app_config::OAuthProvider::wire_id`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OAuthConnWire {
+    pub uuid: String,
+    pub name: String,
+    /// Wire provider token: `"codex"` | `"kilocode"`.
+    pub provider: String,
+    pub email: String,
+    pub plan: String,
+    pub account_id: String,
+}
+
+/// A serde-safe projection of one AVAILABLE OAuth login provider for the GUI's
+/// `GetOAuthState` reply, built from the data-driven
+/// [`crate::service::oauth::registry::oauth_providers`] source of truth. `id` is the
+/// `StartOAuth` wire token, `label` the human name, `kind` the flow shape
+/// (`"pkce"` / `"device"` / `"paste"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct OAuthProviderWire {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+}
+
 /// A serde-safe projection of one API-provider draft.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

@@ -319,6 +319,15 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GetAgents) => {
                     let _ = req_tx.send(ClientRequest::ListAgents);
                 }
+                // GUI OAuth fetch / delete raced in while attached (dual-routed to the daemon
+                // via `live_req` normally; only lands here on an attach-state flip). Forward
+                // the daemon request — it replies with `OAuthState`, re-pushed above.
+                Ok(super::HostCtl::GetOAuthState) => {
+                    let _ = req_tx.send(ClientRequest::GetOAuthState);
+                }
+                Ok(super::HostCtl::DeleteOAuthConn { uuid }) => {
+                    let _ = req_tx.send(ClientRequest::DeleteOAuthConn { uuid });
+                }
                 // FILE CHANGED diff fetch: NEVER touches the daemon (host-side only,
                 // regardless of attach state) — spawn the blocking git+fs work off this
                 // thread; the result is drained + pushed below at (b-quat).
@@ -471,6 +480,33 @@ pub(super) fn push_loop(
                             selected: *selected,
                             note: note.clone(),
                             state: state.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&env) {
+                            push(json);
+                        }
+                    }
+                    // Streaming GUI OAuth reply (GetOAuthState / StartOAuth progress /
+                    // SubmitOAuthPaste / CancelOAuth / DeleteOAuthConn): re-push it as an
+                    // `OAuthState` envelope BEFORE folding (a non-visual fold no-op, keeping
+                    // the seq gap-free), same as the SettingsValues/AgentsValues intercepts.
+                    if let DaemonEvent::OAuthState {
+                        phase,
+                        url,
+                        user_code,
+                        verification_url,
+                        error,
+                        conns,
+                        providers,
+                    } = &frame.event
+                    {
+                        let env = PushEnvelope::OAuthState {
+                            phase: phase.clone(),
+                            url: url.clone(),
+                            user_code: user_code.clone(),
+                            verification_url: verification_url.clone(),
+                            error: error.clone(),
+                            conns: conns.clone(),
+                            providers: providers.clone(),
                         };
                         if let Ok(json) = serde_json::to_string(&env) {
                             push(json);

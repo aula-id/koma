@@ -536,6 +536,54 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::DeleteAgent { scope, name } => {
             forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteAgent { scope, name });
         }
+        // OAuth screen open/refresh: dual-routed like GetSettings/GetAgents — the attached
+        // daemon (or the un-attached host) answers with an `OAuthState` reply the host
+        // re-pushes, so the screen populates in both host states.
+        GuiReq::GetOAuthState => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::GetOAuthState,
+                HostCtl::GetOAuthState,
+            );
+        }
+        // OAuth login start: attached-only (the flow runs on the daemon's runtime). No
+        // session attached → silent no-op (same pattern as `Interrupt`); the screen stays
+        // in its current state until an attach lands.
+        GuiReq::StartOAuth { provider } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::StartOAuth { provider });
+                }
+            }
+        }
+        // OAuth paste-token completion: attached-only, like `StartOAuth`.
+        GuiReq::SubmitOAuthPaste { token } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::SubmitOAuthPaste { token });
+                }
+            }
+        }
+        // OAuth cancel: attached-only, like `StartOAuth`.
+        GuiReq::CancelOAuth => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::CancelOAuth);
+                }
+            }
+        }
+        // OAuth connection delete: dual-routed like `GetOAuthState` — the attached daemon
+        // deletes + evicts + re-pushes, or (un-attached) the host does the same host-side, so
+        // a connection is removable pre-session too.
+        GuiReq::DeleteOAuthConn { uuid } => {
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::DeleteOAuthConn { uuid: uuid.clone() },
+                HostCtl::DeleteOAuthConn { uuid },
+            );
+        }
     }
 }
 
