@@ -20,8 +20,8 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_proto::{
-    push_file_diff, push_git_diff, push_git_op, push_git_status, push_switching,
-    push_usage_preview, PushEnvelope, PushRoute,
+    push_file_diff, push_git_diff, push_git_op, push_git_status, push_key_list, push_key_op,
+    push_key_reveal, push_switching, push_usage_preview, PushEnvelope, PushRoute,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -210,6 +210,17 @@ pub(super) fn push_loop(
     // wrong session's numbers.
     let (usage_preview_tx, usage_preview_rx) =
         std::sync::mpsc::channel::<(super::diff::UsagePreviewResult, String, Option<String>)>();
+
+    // --- SSH KEY VAULT (KeyList/KeyGenerate/KeyImport/KeyDelete/KeyReveal) ---
+    // Every op shells `ssh-keygen`/touches the filesystem (blocking) — same
+    // reasoning as the GIT channels above — so each runs on a one-shot worker
+    // thread; the loop drains completed results non-blocking and pushes each as
+    // its own envelope. A mutation (generate/import/delete) ALSO sends a
+    // follow-up refreshed list over `key_list_tx` (reusing the same channel a
+    // plain `KeyList` fetch uses), mirroring the GIT mutation's status re-fetch.
+    let (key_list_tx, key_list_rx) = std::sync::mpsc::channel::<Vec<super::keys::KeyInfo>>();
+    let (key_reveal_tx, key_reveal_rx) = std::sync::mpsc::channel::<super::keys::KeyRevealResult>();
+    let (key_op_tx, key_op_rx) = std::sync::mpsc::channel::<super::keys::KeyOpResult>();
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -439,6 +450,56 @@ pub(super) fn push_loop(
                     std::thread::spawn(move || {
                         let result = super::diff::compute_usage_preview(session.as_deref());
                         let _ = tx.send((result, scope, session));
+                    });
+                }
+                // Settings "SSH Keys" section: NEVER touches the daemon (host-side
+                // only, regardless of attach state) — spawn the blocking fs/
+                // `ssh-keygen` work off this thread; the result is drained + pushed
+                // below at (b-undec).
+                Ok(super::HostCtl::KeyList) => {
+                    let tx = key_list_tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(super::keys::list_keys());
+                    });
+                }
+                // SSH key vault mutations: NEVER touch the daemon (host-side only,
+                // regardless of attach state) — spawn the blocking work off this
+                // thread. The worker sends the `KeyOp` result over `key_op_tx`
+                // (drained + pushed below at (b-duodec)), THEN recomputes + sends
+                // the refreshed list over the EXISTING `key_list_tx` (drained +
+                // pushed at (b-undec)) so the section reflects authoritative state
+                // right after the mutation.
+                Ok(super::HostCtl::KeyGenerate { name, comment }) => {
+                    let op_tx = key_op_tx.clone();
+                    let list_tx = key_list_tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::keys::generate_key(&name, &comment));
+                        let _ = list_tx.send(super::keys::list_keys());
+                    });
+                }
+                Ok(super::HostCtl::KeyImport { name, private_key }) => {
+                    let op_tx = key_op_tx.clone();
+                    let list_tx = key_list_tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::keys::import_key(&name, &private_key));
+                        let _ = list_tx.send(super::keys::list_keys());
+                    });
+                }
+                Ok(super::HostCtl::KeyDelete { name }) => {
+                    let op_tx = key_op_tx.clone();
+                    let list_tx = key_list_tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = op_tx.send(super::keys::delete_key(&name));
+                        let _ = list_tx.send(super::keys::list_keys());
+                    });
+                }
+                // SSH key reveal (copy-public / reveal-private): same reasoning as
+                // `KeyList` above; the result is drained + pushed below at
+                // (b-tredec).
+                Ok(super::HostCtl::KeyReveal { name, private }) => {
+                    let tx = key_reveal_tx.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(super::keys::reveal_key(&name, private));
                     });
                 }
                 Err(TryRecvError::Empty) => break,
@@ -694,6 +755,25 @@ pub(super) fn push_loop(
         // first (harmless either order: both are one-shot, self-contained pushes).
         while let Ok(result) = git_op_rx.try_recv() {
             push_git_op(push, result);
+        }
+
+        // --- (b-undec) SSH key vault: push any completed off-thread list fetch ---
+        while let Ok(keys) = key_list_rx.try_recv() {
+            push_key_list(push, keys);
+        }
+
+        // --- (b-tredec) SSH key vault: push any completed off-thread reveal fetch ---
+        while let Ok(result) = key_reveal_rx.try_recv() {
+            push_key_reveal(push, result);
+        }
+
+        // --- (b-duodec) SSH key vault: push any completed off-thread mutation result ---
+        // The worker also sent a follow-up list over `key_list_tx`, drained at
+        // (b-undec) above — same frame or the next, whichever the loop happens to
+        // reach first (harmless either order: both are one-shot, self-contained
+        // pushes).
+        while let Ok(result) = key_op_rx.try_recv() {
+            push_key_op(push, result);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

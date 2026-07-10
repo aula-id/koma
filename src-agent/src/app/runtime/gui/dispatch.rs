@@ -609,6 +609,24 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 HostCtl::DeleteOAuthConn { uuid },
             );
         }
+        // Settings "SSH Keys" section: host-side key-vault fetch/mutations. ALWAYS
+        // routed to the host-relay thread — never the daemon — regardless of
+        // attach state (see `HostCtl::KeyList`), same reasoning as `GitStatus`.
+        GuiReq::KeyList => {
+            let _ = ctx.ctl.send(HostCtl::KeyList);
+        }
+        GuiReq::KeyGenerate { name, comment } => {
+            let _ = ctx.ctl.send(HostCtl::KeyGenerate { name, comment });
+        }
+        GuiReq::KeyImport { name, private_key } => {
+            let _ = ctx.ctl.send(HostCtl::KeyImport { name, private_key });
+        }
+        GuiReq::KeyReveal { name, private } => {
+            let _ = ctx.ctl.send(HostCtl::KeyReveal { name, private });
+        }
+        GuiReq::KeyDelete { name } => {
+            let _ = ctx.ctl.send(HostCtl::KeyDelete { name });
+        }
     }
 }
 

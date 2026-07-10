@@ -291,6 +291,28 @@ declare global {
     // git invocation). Reply lands as GitOp then a fresh GitStatus; the commit box
     // clears its draft on a successful (ok:true) reply.
     | { r: 'GitCommit'; message: string }
+    // Settings "SSH Keys" section opened / refreshed: fetch the host key vault's
+    // current key list (`<~/.koma>/keys/`). GUI-only, manual, user-owned vault —
+    // completely separate from the model's own git credential machinery. Serviced
+    // ENTIRELY host-side — works regardless of attach state. Reply lands as the
+    // KeyList push envelope.
+    | { r: 'KeyList' }
+    // Generate a fresh passphrase-less ed25519 keypair named `name` (`comment`
+    // defaults to "koma" when blank). Reply lands as a one-shot KeyOp push,
+    // immediately followed by a fresh KeyList push.
+    | { r: 'KeyGenerate'; name: string; comment: string }
+    // Import an EXISTING private key (`name` + pasted `privateKey` text) into the
+    // vault; the host derives + writes the matching public half. Same reply
+    // pattern as KeyGenerate.
+    | { r: 'KeyImport'; name: string; privateKey: string }
+    // Reveal key `name`'s contents — `private: false` for "Copy public key" (no
+    // confirmation needed), `private: true` for "Reveal private key" (gated
+    // behind a deliberate click + warning UI-side). Reply lands as a one-shot
+    // KeyReveal push.
+    | { r: 'KeyReveal'; name: string; private: boolean }
+    // Delete keypair `name` (both halves, best-effort). Same reply pattern as
+    // KeyGenerate.
+    | { r: 'KeyDelete'; name: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
