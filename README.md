@@ -59,4 +59,8 @@ More at **[koma.run](https://koma.run)**.
 
 ---
 
-*Curious how it works under the hood? See [`ARCHITECTURE.md`](docs/ARCHITECTURE.md).*
+*Curious how it works under the hood? See [`ARCHITECTURE.md`](docs/ARCHITECTURE.md).*  
+
+*Extending the desktop GUI? See [`WEBGUI_SIDEBAR_TABS.md`](docs/WEBGUI_SIDEBAR_TABS.md).*  
+
+*Connecting GUI tabs to Rust? See [`WEBGUI_IPC.md`](docs/WEBGUI_IPC.md).*
