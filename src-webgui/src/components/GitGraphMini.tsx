@@ -85,7 +85,7 @@ function MiniRow({ row, gutterW, isHead, selected, onSelect }: RowProps) {
         {headRef && (
           <span
             title={headRef.name}
-            className="flex-none truncate rounded-sm border border-koma-accent/70 bg-koma-bg/40 px-1 text-[9px] leading-[14px] text-koma-accent"
+            className="flex-none truncate rounded-sm border border-koma-accent/70 bg-koma-accent/15 px-1 text-[9px] leading-[14px] text-koma-accent"
           >
             {headRef.name}
           </span>
@@ -93,7 +93,7 @@ function MiniRow({ row, gutterW, isHead, selected, onSelect }: RowProps) {
         {otherRef && (
           <span
             title={otherRef.name}
-            className="hidden flex-none truncate rounded-sm border border-koma-border bg-koma-bg/40 px-1 text-[9px] leading-[14px] text-koma-dim sm:inline-block"
+            className="hidden flex-none truncate rounded-sm border border-koma-border bg-koma-head px-1 text-[9px] leading-[14px] text-koma-dim sm:inline-block"
           >
             {otherRef.name}
           </span>
