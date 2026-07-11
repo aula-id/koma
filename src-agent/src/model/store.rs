@@ -128,14 +128,64 @@ pub fn run_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("run"))
 }
 
-/// Create `~/.simple-coder/sessions/` and `~/.koma/run/` (and their parents) if they
-/// do not exist.
+/// Returns `~/.koma/extensions/` — the on-disk registry root for installed
+/// extensions.
+///
+/// Each installed extension unpacks into `extensions/<id>/` (its `manifest.json`
+/// plus `bin/<exec>`); the install path ([`crate::app::ext::install`]) writes here
+/// and the [`ExtHostManager`](crate::app::ext::ExtHostManager) resolves an
+/// extension's executable relative to `extensions/<id>/`. Created by [`ensure_dirs`].
+pub fn extensions_dir() -> Result<PathBuf> {
+    Ok(base_dir()?.join("extensions"))
+}
+
+/// Path to a per-extension host socket: `~/.koma/run/ext-<id>.sock`.
+///
+/// koma binds this unix socket BEFORE spawning a daemon-kind extension, hands the
+/// path to the child via `KOMA_EXT_SOCKET`, and accepts the child's inbound
+/// connection on it (the child sends `Hello`, koma replies `Welcome`). Lives beside
+/// the per-session daemon sockets under [`run_dir`]. The `id` is validated at install
+/// time; the `/`→`_` fold here is belt-and-suspenders so a stray separator can never
+/// escape the run dir when composing the filename.
+pub fn ext_sock_path(id: &str) -> Result<PathBuf> {
+    let safe: String = id
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    Ok(run_dir()?.join(format!("ext-{safe}.sock")))
+}
+
+/// Create `~/.koma/`, `~/.simple-coder/sessions/`, `~/.koma/run/`, and
+/// `~/.koma/extensions/` (and their parents) if they do not exist.
+///
+/// `~/.koma` and `~/.koma/run` are explicitly chmod'd `0700` on unix: `run/` holds
+/// every session daemon's unix socket AND the extension host's per-extension
+/// `ext-<id>.sock` files, none of which should ever be group/world-accessible on a
+/// shared machine; `~/.koma` itself is the visible root for all of that plus session
+/// creds, so it gets the same treatment. `create_dir_all`'s permissions otherwise
+/// depend on the process umask, which is not something to rely on here.
 pub fn ensure_dirs() -> Result<()> {
+    let base = base_dir()?;
+    std::fs::create_dir_all(&base)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+    }
+
     let sessions = sessions_dir()?;
     std::fs::create_dir_all(&sessions)?;
     // The per-session daemon socket/pid dir; the daemon binds `run/<id>.sock` here.
     let run = run_dir()?;
     std::fs::create_dir_all(&run)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700))?;
+    }
+    // The installed-extension registry root; the install path unpacks `extensions/<id>/`.
+    let extensions = extensions_dir()?;
+    std::fs::create_dir_all(&extensions)?;
     Ok(())
 }
 
