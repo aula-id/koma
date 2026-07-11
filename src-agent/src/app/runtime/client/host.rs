@@ -23,7 +23,7 @@ use crate::ipc::proto::ClientRequest;
 use crate::model::store;
 
 use super::connect::{connect_attach_and_handshake, Connection};
-use super::diff::{compute_file_diff, compute_usage_preview};
+use super::diff::{compute_analytics, compute_file_diff, compute_usage_preview};
 use super::git_host;
 use super::host_catalogue::{
     build_host_agents_values, build_host_oauth_state, fetch_models_for_provider,
@@ -33,7 +33,7 @@ use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
     push_agents_values, push_file_diff, push_model_list, push_oauth_state, push_route_list,
-    push_settings_values, push_switching, push_usage_preview,
+    push_analytics, push_settings_values, push_switching, push_usage_preview,
 };
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
@@ -486,6 +486,27 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 std::thread::spawn(move || {
                     let result = compute_usage_preview(session.as_deref());
                     push_usage_preview(&push2, result, scope, session);
+                });
+            }
+            // GUI Analytics tab opened while detached (StartScreen / swapper): the
+            // ledger is a global file the host reads directly, so this never
+            // touches a daemon in either state — see `compute_analytics`. Sqlite
+            // I/O is blocking, so it runs on a plain OS thread like
+            // `UsagePreview` above. All correlation inputs ride along unchanged
+            // so the reply echoes them (the React tab drops a reply whose
+            // reqSeq/scope/session/range/metric no longer matches what's current).
+            Ok(HostCtl::Analytics {
+                req_seq,
+                session,
+                scope,
+                range,
+                metric,
+            }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    let result =
+                        compute_analytics(req_seq, scope, session, range, metric);
+                    push_analytics(&push2, result);
                 });
             }
             // GUI Settings tab opened while detached (StartScreen / swapper): there is no

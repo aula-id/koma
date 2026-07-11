@@ -267,6 +267,9 @@ const StreamTab = lazy(() => import('../components/StreamTab'))
 // virtualized SVG gutter) only loads when the graph is first opened.
 const GraphTab = lazy(() => import('../components/GraphTab'))
 
+// Analytics dashboard tab — lazy so its chunk only loads when first opened.
+const AnalyticsTab = lazy(() => import('../components/AnalyticsTab'))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -330,6 +333,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <GraphTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'analytics' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <AnalyticsTab />
               </Suspense>
             </div>
           ) : null,

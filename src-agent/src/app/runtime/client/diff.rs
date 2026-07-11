@@ -325,3 +325,196 @@ pub(super) fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult
         top_models,
     }
 }
+
+/// One model row in a host-side Analytics dashboard reply.
+#[derive(Debug, Clone)]
+pub(super) struct AnalyticsModelRow {
+    pub model_id: String,
+    pub cost: f64,
+    pub tokens_in: i64,
+    pub tokens_cached: i64,
+    pub tokens_out: i64,
+    pub calls: i64,
+}
+
+/// One time-series bucket in a host-side Analytics dashboard reply.
+#[derive(Debug, Clone)]
+pub(super) struct AnalyticsSeriesPoint {
+    pub epoch: i64,
+    pub cost: f64,
+    pub tokens: i64,
+}
+
+/// Host-side Analytics dashboard projection. `status` is always one of
+/// `"ok"` / `"empty"` / `"error"` so the GUI can distinguish a successful zero
+/// window from a genuine failure. Correlation fields (`req_seq`, `scope`,
+/// `session_id`, `range`, `metric`) echo the request so React can drop a stale
+/// reply across rapid filter/session changes.
+#[derive(Debug, Clone)]
+pub(super) struct AnalyticsResult {
+    pub req_seq: u64,
+    pub scope: String,
+    pub session_id: Option<String>,
+    pub range: String,
+    pub metric: String,
+    /// `"ok"` | `"empty"` | `"error"`.
+    pub status: String,
+    pub error: Option<String>,
+    pub cost: f64,
+    pub tokens_in: i64,
+    pub tokens_cached: i64,
+    pub tokens_out: i64,
+    pub calls: i64,
+    /// Cache rate = tokens_cached / (tokens_in + tokens_cached), or 0 when the
+    /// denominator is 0. Defined here so the GUI and host never disagree.
+    pub cache_rate: f64,
+    pub series: Vec<AnalyticsSeriesPoint>,
+    pub models: Vec<AnalyticsModelRow>,
+    pub main_cost: f64,
+    pub main_calls: i64,
+    pub sub_cost: f64,
+    pub sub_calls: i64,
+}
+
+/// Resolve the Analytics dashboard's range token to a LOCAL-midnight-aligned
+/// `since` epoch + bucket size + expected bucket count. Anchoring on local
+/// midnight (for day/week ranges) matches `compute_usage_preview`'s window-
+/// consistency invariant: totals and the chart describe EXACTLY the same
+/// window. `"year"` uses a rolling 365-day cutoff with daily buckets (TUI
+/// parity for Year); `"30d"` is a rolling 30-day daily window.
+fn analytics_window(range: &str) -> (i64, crate::model::usage::BucketSize, usize) {
+    use crate::model::usage::{self, BucketSize};
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let tz = usage::local_utc_offset_secs();
+    let local_now = now + tz;
+    let today = local_now - local_now % 86400 - tz;
+
+    match range {
+        // Local midnight today → 24 hourly buckets.
+        "today" => (today, BucketSize::Hour, 24),
+        // Local midnight 6 days ago → 7 daily buckets (today inclusive).
+        "7d" => (today - 6 * 86400, BucketSize::Day, 7),
+        // Rolling 30 days, daily buckets (today inclusive).
+        "30d" => (today - 29 * 86400, BucketSize::Day, 30),
+        // Last 365 local calendar days (today inclusive), daily buckets.
+        // Anchored on local midnight so series epochs match SQL day floors.
+        "year" => (today - 364 * 86400, BucketSize::Day, 365),
+        // Unknown token → same as 7d (safe default; never panics).
+        _ => (today - 6 * 86400, BucketSize::Day, 7),
+    }
+}
+
+/// Compute a host-side Analytics dashboard reply for the GUI Analytics tab,
+/// answering a [`super::HostCtl::Analytics`]. Reads the global
+/// `~/.koma/usage.sqlite` ledger directly — no daemon involved, works attached
+/// or not (mirrors [`compute_usage_preview`]). ALWAYS returns a result so the
+/// tab never hangs loading: a clean install / empty window is `status:
+/// "empty"`, a genuine unexpected failure would be `status: "error"` (the
+/// underlying queries are non-fatal, so this path is defensive).
+///
+/// Correlation inputs (`req_seq`/`scope`/`session`/`range`/`metric`) are
+/// echoed back verbatim. `session` is `Some(uuid)` for a "session" scope or
+/// `None` for "all". `range` is `"today"`/`"7d"`/`"30d"`/`"year"`; `metric` is
+/// `"cost"`/`"tokens"` (host-side projection is identical either way — the
+/// metric only drives which series field the chart scales against).
+pub(super) fn compute_analytics(
+    req_seq: u64,
+    scope: String,
+    session: Option<String>,
+    range: String,
+    metric: String,
+) -> AnalyticsResult {
+    use crate::model::usage;
+
+    let session_ref = session.as_deref();
+    let (since, bucket, n) = analytics_window(&range);
+    let tz = usage::local_utc_offset_secs();
+
+    let totals = usage::range_totals_scoped(since, session_ref);
+    let buckets = usage::spend_buckets_scoped(since, bucket, n, tz, session_ref);
+    let top_models = usage::top_models_in_range_scoped(since, 20, session_ref);
+    let roles = usage::role_split_scoped(since, session_ref);
+
+    let denom = (totals.tokens_in + totals.tokens_cached) as f64;
+    let cache_rate = if denom > 0.0 {
+        (totals.tokens_cached as f64) / denom
+    } else {
+        0.0
+    };
+
+    // Zero-fill the series to a contiguous window so the chart never has to
+    // invent missing buckets. Hourly for "today", daily otherwise.
+    let secs = bucket.secs();
+    let bucket_map: std::collections::HashMap<i64, (f64, i64)> = buckets
+        .into_iter()
+        .map(|b| (b.bucket_epoch, (b.cost, b.tokens)))
+        .collect();
+
+    // Anchor the first bucket on the SAME floor the SQL uses for Day/Hour.
+    let start = match bucket {
+        crate::model::usage::BucketSize::Hour => {
+            // Floor `since` itself to the hour in local time, then convert back.
+            let local = since + tz;
+            local - local % 3600 - tz
+        }
+        crate::model::usage::BucketSize::Day | crate::model::usage::BucketSize::Week => since,
+    };
+    let series: Vec<AnalyticsSeriesPoint> = (0..n as i64)
+        .map(|i| {
+            let epoch = start + i * secs;
+            let (cost, tokens) = bucket_map.get(&epoch).copied().unwrap_or((0.0, 0));
+            AnalyticsSeriesPoint {
+                epoch,
+                cost,
+                tokens,
+            }
+        })
+        .collect();
+
+    let models: Vec<AnalyticsModelRow> = top_models
+        .into_iter()
+        .map(|m| AnalyticsModelRow {
+            model_id: m.model_id,
+            cost: m.total_cost,
+            tokens_in: m.tokens_in,
+            tokens_cached: m.tokens_cached,
+            tokens_out: m.tokens_out,
+            calls: m.call_count,
+        })
+        .collect();
+
+    // Empty = zero calls in the window (a successful zero result, NOT an error).
+    // The underlying queries never fail loudly, so status is never "error" in
+    // practice; the field is still present so the contract can grow.
+    let status = if totals.calls == 0 {
+        "empty".to_string()
+    } else {
+        "ok".to_string()
+    };
+
+    AnalyticsResult {
+        req_seq,
+        scope,
+        session_id: session,
+        range,
+        metric,
+        status,
+        error: None,
+        cost: totals.cost,
+        tokens_in: totals.tokens_in,
+        tokens_cached: totals.tokens_cached,
+        tokens_out: totals.tokens_out,
+        calls: totals.calls,
+        cache_rate,
+        series,
+        models,
+        main_cost: roles.main_cost,
+        main_calls: roles.main_calls,
+        sub_cost: roles.sub_cost,
+        sub_calls: roles.sub_calls,
+    }
+}

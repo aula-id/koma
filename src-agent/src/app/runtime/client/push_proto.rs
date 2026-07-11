@@ -15,9 +15,10 @@
 //! both this file and `project.rs`), referenced here as `super::render::emit`.
 
 pub(super) use super::push_rows::{
-    PushAttachment, PushBashJob, PushCooking, PushFileChange, PushHistory, PushMcpServer,
-    PushModel, PushMsg, PushPalette, PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider,
-    PushRoute, PushSubAgent, PushToolCall, PushUsageDay, PushUsageModel,
+    PushAnalyticsModel, PushAnalyticsSeriesPoint, PushAttachment, PushBashJob, PushCooking,
+    PushFileChange, PushHistory, PushMcpServer, PushModel, PushMsg, PushPalette, PushPaletteInfo,
+    PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent, PushToolCall,
+    PushUsageDay, PushUsageModel,
 };
 
 
@@ -314,6 +315,42 @@ pub(super) enum PushEnvelope {
         scope: String,
         session_id: Option<String>,
     },
+    /// One-shot host-computed Analytics dashboard answering a `Analytics`
+    /// request from the main Analytics tab: KPI totals (cost/calls/token
+    /// breakdown + cache rate), a zero-filled time series, per-model table, and
+    /// main-vs-sub-agent role split. Computed ENTIRELY host-side straight off the
+    /// global `~/.koma/usage.sqlite` ledger (see `compute_analytics` — never
+    /// forwarded to the daemon), so this is pushed the SAME way regardless of
+    /// attach state, and — like `UsagePreview` — is ALWAYS a reply so the tab
+    /// never hangs loading.
+    ///
+    /// Correlation fields (`req_seq`, `scope`, `session_id`, `range`, `metric`)
+    /// echo the request so React can drop a stale reply across rapid filter /
+    /// session changes. `status` is `"ok"` / `"empty"` / `"error"` — a successful
+    /// zero-call window is `"empty"` (not an error); `"error"` carries a
+    /// human-readable `error` string.
+    #[serde(rename_all = "camelCase")]
+    Analytics {
+        req_seq: u64,
+        scope: String,
+        session_id: Option<String>,
+        range: String,
+        metric: String,
+        status: String,
+        error: Option<String>,
+        cost: f64,
+        tokens_in: u64,
+        tokens_cached: u64,
+        tokens_out: u64,
+        calls: u64,
+        cache_rate: f64,
+        series: Vec<PushAnalyticsSeriesPoint>,
+        models: Vec<PushAnalyticsModel>,
+        main_cost: f64,
+        main_calls: u64,
+        sub_cost: f64,
+        sub_calls: u64,
+    },
     /// One-shot reply to a `GetSettings` (and the re-push after a `SetSessionPrefs`),
     /// carrying the foreground session's GUI-editable prefs + the active palette for the
     /// GUI Settings tab's Session section. Pushed out-of-band (not fingerprinted) whenever
@@ -570,6 +607,55 @@ pub(super) fn push_usage_preview(
             .collect(),
         scope,
         session_id,
+    };
+    super::render::emit(push, &env);
+}
+
+/// Emit a one-shot `Analytics` envelope for the GUI Analytics tab, carrying a
+/// host-computed [`super::diff::AnalyticsResult`] (correlation fields + KPI +
+/// series + models + role split). Shared by the UN-ATTACHED swapper fallback
+/// and the attached `push_loop`'s off-thread worker, since Analytics is
+/// serviced entirely host-side (the global ledger) regardless of attach state.
+pub(super) fn push_analytics(push: &dyn Fn(String), result: super::diff::AnalyticsResult) {
+    let env = PushEnvelope::Analytics {
+        req_seq: result.req_seq,
+        scope: result.scope,
+        session_id: result.session_id,
+        range: result.range,
+        metric: result.metric,
+        status: result.status,
+        error: result.error,
+        cost: result.cost,
+        tokens_in: result.tokens_in.max(0) as u64,
+        tokens_cached: result.tokens_cached.max(0) as u64,
+        tokens_out: result.tokens_out.max(0) as u64,
+        calls: result.calls.max(0) as u64,
+        cache_rate: result.cache_rate,
+        series: result
+            .series
+            .into_iter()
+            .map(|p| PushAnalyticsSeriesPoint {
+                epoch: p.epoch,
+                cost: p.cost,
+                tokens: p.tokens,
+            })
+            .collect(),
+        models: result
+            .models
+            .into_iter()
+            .map(|m| PushAnalyticsModel {
+                model_id: m.model_id,
+                cost: m.cost,
+                tokens_in: m.tokens_in.max(0) as u64,
+                tokens_cached: m.tokens_cached.max(0) as u64,
+                tokens_out: m.tokens_out.max(0) as u64,
+                calls: m.calls.max(0) as u64,
+            })
+            .collect(),
+        main_cost: result.main_cost,
+        main_calls: result.main_calls.max(0) as u64,
+        sub_cost: result.sub_cost,
+        sub_calls: result.sub_calls.max(0) as u64,
     };
     super::render::emit(push, &env);
 }

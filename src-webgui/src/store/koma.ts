@@ -125,6 +125,48 @@ export type UsagePreview = {
   topModels: UsageModelEntry[]
 }
 
+// Analytics tab filter tokens (host `Analytics` request / reply).
+export type AnalyticsScope = 'all' | 'session'
+export type AnalyticsRange = 'today' | '7d' | '30d' | 'year'
+export type AnalyticsMetric = 'cost' | 'tokens'
+export type AnalyticsStatus = 'ok' | 'empty' | 'error'
+
+// One time-series bucket in an Analytics reply.
+export type AnalyticsSeriesPoint = {
+  epoch: number
+  cost: number
+  tokens: number
+}
+
+// One model row in an Analytics reply (full token breakdown).
+export type AnalyticsModelRow = {
+  modelId: string
+  cost: number
+  tokensIn: number
+  tokensCached: number
+  tokensOut: number
+  calls: number
+}
+
+// Authoritative Analytics dashboard payload (host `Analytics` reply body when
+// status is ok/empty). Correlation fields are stored separately on the slice
+// so the reducer can reject stale replies.
+export type AnalyticsData = {
+  cost: number
+  tokensIn: number
+  tokensCached: number
+  tokensOut: number
+  calls: number
+  // cacheRate = tokensCached / (tokensIn + tokensCached), or 0 when denom is 0.
+  cacheRate: number
+  series: AnalyticsSeriesPoint[]
+  models: AnalyticsModelRow[]
+  mainCost: number
+  mainCalls: number
+  subCost: number
+  subCalls: number
+}
+
 export type HubCookingEntry = {
   kind: 'new' | 'session'
   id: string | null
@@ -612,6 +654,10 @@ export type Tab =
   // tab. Content (commits/selection/detail) lives in the `graph` store slice, not
   // on the tab — the GraphTab reads it live and fires refreshGraph on mount.
   | { id: 'graph'; kind: 'graph' }
+  // The singleton Analytics dashboard tab (id 'analytics'), opened from the
+  // Usage sidebar's pinned "See Analytics" footer. Deduped by the fixed id;
+  // closeable like a graph tab. Content lives in the `analytics` store slice.
+  | { id: 'analytics'; kind: 'analytics' }
 
 export type PushEnvelope =
   | {
@@ -758,6 +804,34 @@ export type PushEnvelope =
       topModels: UsageModelEntry[]
       scope: string
       sessionId: string | null
+    }
+  // Reply to GuiReq Analytics — host-computed usage dashboard (KPI totals,
+  // series, models, main-vs-sub role split). ALWAYS a reply so the Analytics
+  // tab never hangs. Echoes every correlation input (`reqSeq`/`scope`/
+  // `sessionId`/`range`/`metric`) so the reducer can drop a stale reply.
+  // `status` is "ok" | "empty" | "error" — empty is a successful zero-call
+  // window, not a failure.
+  | {
+      k: 'Analytics'
+      reqSeq: number
+      scope: string
+      sessionId: string | null
+      range: string
+      metric: string
+      status: AnalyticsStatus
+      error: string | null
+      cost: number
+      tokensIn: number
+      tokensCached: number
+      tokensOut: number
+      calls: number
+      cacheRate: number
+      series: AnalyticsSeriesPoint[]
+      models: AnalyticsModelRow[]
+      mainCost: number
+      mainCalls: number
+      subCost: number
+      subCalls: number
     }
   // Reply to GuiReq GetSettings (and the re-push after SetPrefs) — the Settings
   // tab's Session-section values + active palette. Guaranteed for every request
@@ -1213,6 +1287,30 @@ type ActivitySlice = {
   path: string | null
 }
 
+// The Analytics dashboard tab's slice — host-authoritative projection + local
+// filter/lifecycle state. `loading`/`error`/`data` are mutually exclusive
+// presentation states; correlation fields (`reqSeq`/`scope`/`sessionId`/
+// `range`/`metric`) reject stale replies. Global (ledger is process-local),
+// but session-scope results are still keyed by `sessionId`.
+type AnalyticsSlice = {
+  scope: AnalyticsScope
+  range: AnalyticsRange
+  metric: AnalyticsMetric
+  // Client-minted monotonic request id; 0 = none in flight yet.
+  reqSeq: number
+  // Session uuid actually requested for the in-flight/last accepted reply
+  // (null for "all" scope). Used with scope/range/metric/reqSeq to reject
+  // stale replies.
+  sessionId: string | null
+  loading: boolean
+  error: string | null
+  data: AnalyticsData | null
+  // True once a matching reply has been accepted for the CURRENT filters
+  // (even when status was "empty"). Distinguishes "never loaded" from
+  // "loaded empty".
+  hasData: boolean
+}
+
 type KomaState = {
   session: SessionSlice
   hub: HubSlice
@@ -1328,10 +1426,23 @@ type KomaState = {
   graph: GraphSlice
   // The bubble/activity chart's slice (GK5b). See ActivitySlice.
   activity: ActivitySlice
+  // The Analytics dashboard tab's slice. See AnalyticsSlice.
+  analytics: AnalyticsSlice
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
   // openSettingsTab's dedupe + activate shape.
   openGraphTab: () => void
+  // Open (or focus) the singleton Analytics tab (id 'analytics'). The
+  // AnalyticsTab fires refreshAnalytics on mount / filter change.
+  openAnalyticsTab: () => void
+  // (Re)load the Analytics dashboard for the CURRENT filters: bump reqSeq,
+  // mark loading, fire Analytics{...}. Safe to call repeatedly; stale replies
+  // are rejected by the reducer.
+  refreshAnalytics: () => void
+  // Local Analytics filter setters.
+  setAnalyticsScope: (scope: AnalyticsScope) => void
+  setAnalyticsRange: (range: AnalyticsRange) => void
+  setAnalyticsMetric: (metric: AnalyticsMetric) => void
   // (Re)load the FIRST page of the commit graph (replace mode): mark loading +
   // GitGraph{ limit:200, skip:0 }. Fired on GraphTab mount + its refresh button.
   refreshGraph: () => void
@@ -1723,6 +1834,18 @@ const initialActivity: ActivitySlice = {
   path: null,
 }
 
+const initialAnalytics: AnalyticsSlice = {
+  scope: 'all',
+  range: '7d',
+  metric: 'cost',
+  reqSeq: 0,
+  sessionId: null,
+  loading: false,
+  error: null,
+  data: null,
+  hasData: false,
+}
+
 const initialKeys: KeyInfo[] = []
 
 const initialModelList: ModelListEntry[] = []
@@ -1817,6 +1940,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   git: initialGit,
   graph: initialGraph,
   activity: initialActivity,
+  analytics: initialAnalytics,
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -1897,6 +2021,21 @@ export const useKoma = create<KomaState>((set, get) => ({
               ? {
                   git: initialGit,
                   activity: initialActivity,
+                  // Preserve Analytics filters (user preference) but drop any
+                  // session-scoped result so session A's numbers never render
+                  // under session B. All-scope data stays valid across switch.
+                  analytics: {
+                    ...s.analytics,
+                    ...(s.analytics.scope === 'session'
+                      ? {
+                          data: null,
+                          hasData: false,
+                          loading: false,
+                          error: null,
+                          sessionId: null,
+                        }
+                      : {}),
+                  },
                   graph: { ...initialGraph, graphMode: s.graph.graphMode },
                   repos: [],
                   activeRepoRoot: null,
@@ -2247,6 +2386,60 @@ export const useKoma = create<KomaState>((set, get) => ({
               calls: env.calls,
               days: env.days,
               topModels: env.topModels,
+            },
+          }
+        })
+        break
+      case 'Analytics':
+        set((s) => {
+          // Reject a stale reply: every correlation input must still match the
+          // CURRENT filters + the reqSeq that was in flight when this reply
+          // was requested. Out-of-order / superseded replies leave the slice
+          // alone (still loading for the newer request, or already settled).
+          if (env.reqSeq !== s.analytics.reqSeq) return s
+          if (env.scope !== s.analytics.scope) return s
+          if (env.range !== s.analytics.range) return s
+          if (env.metric !== s.analytics.metric) return s
+          // Session-scope replies must still match the CURRENTLY attached
+          // session (and the sessionId we actually requested).
+          if (env.scope === 'session') {
+            if (env.sessionId !== s.session.id) return s
+            if (env.sessionId !== s.analytics.sessionId) return s
+          }
+          if (env.status === 'error') {
+            return {
+              analytics: {
+                ...s.analytics,
+                loading: false,
+                error: env.error ?? 'Failed to load analytics',
+                data: null,
+                hasData: false,
+              },
+            }
+          }
+          // ok OR empty — both are successful replies. Empty still stores the
+          // zeroed payload so the tab can render an empty state without a
+          // permanent spinner.
+          return {
+            analytics: {
+              ...s.analytics,
+              loading: false,
+              error: null,
+              hasData: true,
+              data: {
+                cost: env.cost,
+                tokensIn: env.tokensIn,
+                tokensCached: env.tokensCached,
+                tokensOut: env.tokensOut,
+                calls: env.calls,
+                cacheRate: env.cacheRate,
+                series: env.series,
+                models: env.models,
+                mainCost: env.mainCost,
+                mainCalls: env.mainCalls,
+                subCost: env.subCost,
+                subCalls: env.subCalls,
+              },
             },
           }
         })
@@ -2674,6 +2867,88 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
     // No wire fetch here — the GraphTab fires refreshGraph on mount.
   },
+  openAnalyticsTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'analytics')
+      const tabs: Tab[] = exists
+        ? s.ui.tabs
+        : [...s.ui.tabs, { id: 'analytics', kind: 'analytics' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'analytics' } }
+    })
+    // No wire fetch here — the AnalyticsTab fires refreshAnalytics on mount.
+  },
+  refreshAnalytics: () => {
+    const a = get().analytics
+    const sessionId = get().session.id
+    // Welcome-screen rule: force "all" when there's no session to filter by.
+    const scope: AnalyticsScope =
+      a.scope === 'session' && sessionId === null ? 'all' : a.scope
+    const reqSeq = a.reqSeq + 1
+    const requestedSessionId = scope === 'session' ? sessionId : null
+    set((s) => ({
+      analytics: {
+        ...s.analytics,
+        scope,
+        reqSeq,
+        sessionId: requestedSessionId,
+        loading: true,
+        error: null,
+        // Keep previous data visible while loading so filter flips don't flash
+        // an empty shell; the reducer replaces it only when the matching reply
+        // lands. Clear hasData only when filters actually changed would be
+        // nicer, but keeping the previous payload is the UsagePreview pattern
+        // inverted — Analytics prefers keep-stale-until-fresh.
+      },
+    }))
+    get().req({
+      r: 'Analytics',
+      reqSeq,
+      scope,
+      sessionId: requestedSessionId ?? undefined,
+      range: a.range,
+      metric: a.metric,
+    })
+  },
+  setAnalyticsScope: (scope) => {
+    // Force "all" when there's no session (welcome screen).
+    const sessionId = get().session.id
+    const next: AnalyticsScope = scope === 'session' && sessionId === null ? 'all' : scope
+    set((s) => ({
+      analytics: {
+        ...s.analytics,
+        scope: next,
+        // Drop previous data immediately on a filter change so the wrong
+        // scope/range never flashes under the new selection.
+        data: null,
+        hasData: false,
+        error: null,
+      },
+    }))
+    get().refreshAnalytics()
+  },
+  setAnalyticsRange: (range) => {
+    set((s) => ({
+      analytics: {
+        ...s.analytics,
+        range,
+        data: null,
+        hasData: false,
+        error: null,
+      },
+    }))
+    get().refreshAnalytics()
+  },
+  setAnalyticsMetric: (metric) => {
+    set((s) => ({
+      analytics: {
+        ...s.analytics,
+        metric,
+        // Metric only rescales the same series — keep data, no re-fetch needed
+        // host-side (series carries both cost and tokens). Still bump nothing;
+        // just re-render.
+      },
+    }))
+  },
   refreshGraph: () => {
     // Serialize: at most one GitGraph request in flight, ever. If a load-more
     // (or another refresh) is already in flight, defer instead of racing it —
@@ -2859,6 +3134,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   closeTab: (id) => {
     if (id === 'chat') return
+    const closedAnalytics = id === 'analytics'
     set((s) => {
       const idx = s.ui.tabs.findIndex((t) => t.id === id)
       if (idx < 0) return s
@@ -2867,7 +3143,23 @@ export const useKoma = create<KomaState>((set, get) => ({
       // always valid (tabs[0] is the chat tab), so this never underflows.
       const activeTabId =
         s.ui.activeTabId === id ? s.ui.tabs[idx - 1]?.id ?? 'chat' : s.ui.activeTabId
-      return { ui: { ...s.ui, tabs, activeTabId } }
+      return {
+        ui: { ...s.ui, tabs, activeTabId },
+        // Closing the Analytics tab drops its in-flight state so a later reopen
+        // starts clean (filters preserved as user preference; data cleared so a
+        // stale session-scoped payload can't reappear).
+        ...(closedAnalytics
+          ? {
+              analytics: {
+                ...s.analytics,
+                loading: false,
+                error: null,
+                data: null,
+                hasData: false,
+              },
+            }
+          : {}),
+      }
     })
     // The active tab may have changed (closed the active one) — re-sync the stream
     // view so the host stops streaming a just-closed stream tab's target (or starts
@@ -2917,6 +3209,10 @@ export const useKoma = create<KomaState>((set, get) => ({
       get().req({ r: 'GetSettings' })
       get().refreshKeys()
     }
+    // Re-focusing the Analytics tab re-requests so the ledger is fresh.
+    if (tab.kind === 'analytics') {
+      get().refreshAnalytics()
+    }
     // Sync the stream view to the now-active tab: a stream tab → stream its target;
     // any other tab (chat/diff/settings) → clear the view. The host/daemon dedupe an
     // unchanged view, so activating a non-stream tab repeatedly is cheap.
@@ -2948,6 +3244,21 @@ export const useKoma = create<KomaState>((set, get) => ({
         // now-dead session's warm-up and must not linger over StartScreen.
         loading: null,
         loadingDismissed: false,
+      },
+      // Drop session-scoped Analytics result on detach (all-scope data can stay;
+      // filters are a user preference and are preserved).
+      analytics: {
+        ...s.analytics,
+        ...(s.analytics.scope === 'session'
+          ? {
+              scope: 'all' as const,
+              data: null,
+              hasData: false,
+              loading: false,
+              error: null,
+              sessionId: null,
+            }
+          : { sessionId: null }),
       },
     }))
     // Tabs just reset to chat-only → no stream tab is active; tell the host

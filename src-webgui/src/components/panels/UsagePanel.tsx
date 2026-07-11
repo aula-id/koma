@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { BarChart3 } from 'lucide-react'
 import { useKoma } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 
@@ -21,13 +22,15 @@ function fmtTokens(n: number): string {
 // data every time it mounts — Sidebar conditionally renders panels, so
 // switching to this view always re-fires the effect below — and whenever the
 // Sidebar header's all/session scope toggle flips or the attached session
-// changes.
+// changes. Pinned bottom footer opens the singleton Analytics tab (mirrors
+// AgentsPanel's "+ Add agent" footer).
 export function UsagePanel() {
   const req = useKoma((s) => s.req)
   const preview = useKoma((s) => s.usagePreview)
   const scope = useKoma((s) => s.ui.usageScope)
   const sessionId = useKoma((s) => s.session.id)
   const setUsageScope = useKoma((s) => s.setUsageScope)
+  const openAnalyticsTab = useKoma((s) => s.openAnalyticsTab)
 
   // Welcome-screen rule: there's no session to filter "session" scope by, so
   // force back to "all" the instant the session goes away (e.g. detaching back
@@ -51,13 +54,21 @@ export function UsagePanel() {
 
   if (!preview) {
     return (
-      <div className="flex h-full flex-col overflow-hidden">
+      <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
         <div className="flex h-[22px] flex-none items-center bg-koma-head px-2 text-[11px] font-semibold uppercase tracking-wide text-koma-fg opacity-75">
           Last 7 days
         </div>
-        <div className="flex items-center gap-2 px-3 py-6 text-[12px] text-koma-fg opacity-45">
+        <div className="flex min-h-0 flex-1 items-center gap-2 px-3 py-6 text-[12px] text-koma-fg opacity-45">
           <BrailleSpinner size={14} className="opacity-70" />
           Loading usage…
+        </div>
+        <div className="flex-none border-t border-koma-border p-2">
+          <button
+            onClick={openAnalyticsTab}
+            className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+          >
+            <BarChart3 size={14} /> See Analytics
+          </button>
         </div>
       </div>
     )
@@ -67,7 +78,7 @@ export function UsagePanel() {
   const todayEpoch = preview.days[preview.days.length - 1]?.epoch
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
       <div className="flex h-[22px] flex-none items-center bg-koma-head px-2 text-[11px] font-semibold uppercase tracking-wide text-koma-fg opacity-75">
         Last 7 days
       </div>
@@ -133,6 +144,14 @@ export function UsagePanel() {
             ))}
           </div>
         )}
+      </div>
+      <div className="flex-none border-t border-koma-border p-2">
+        <button
+          onClick={openAnalyticsTab}
+          className="flex w-full items-center justify-center gap-1.5 rounded border border-koma-border py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+        >
+          <BarChart3 size={14} /> See Analytics
+        </button>
       </div>
     </div>
   )

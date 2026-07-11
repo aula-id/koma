@@ -179,6 +179,21 @@ declare global {
     // omitted; "session" filters to `sessionId`'s ledger rows only — required
     // for a "session" scope to mean anything, ignored otherwise.
     | { r: 'UsagePreview'; scope?: 'all' | 'session'; sessionId?: string }
+    // Analytics tab: fetch a host-computed usage dashboard (KPI totals, time
+    // series, per-model table, main-vs-sub role split) straight off the global
+    // usage ledger. Host-owned; ALWAYS a reply (status ok/empty/error). Correlation
+    // inputs (`reqSeq`/`scope`/`sessionId`/`range`/`metric`) are echoed so the
+    // store can drop a stale reply. `range` is "today"/"7d"/"30d"/"year";
+    // `metric` is "cost"/"tokens". A "session" scope with no sessionId is forced
+    // to "all" host-side.
+    | {
+        r: 'Analytics'
+        reqSeq: number
+        scope?: 'all' | 'session'
+        sessionId?: string
+        range?: 'today' | '7d' | '30d' | 'year'
+        metric?: 'cost' | 'tokens'
+      }
     // Fetch the Settings tab's Session-section values (name / workdir / toggles /
     // internet mode) + the active palette. Sent when the tab opens or re-activates.
     // Reply lands as the SettingsValues push envelope (guaranteed for every request,
