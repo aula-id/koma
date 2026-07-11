@@ -63,4 +63,5 @@ More at **[koma.run](https://koma.run)**.
 
 *Extending the desktop GUI? See [`WEBGUI_SIDEBAR_TABS.md`](docs/WEBGUI_SIDEBAR_TABS.md).*  
 
+*Adding a new GUI feature? See [`ADDING_GUI_FEATURES.md`](docs/ADDING_GUI_FEATURES.md).*  
 *Connecting GUI tabs to Rust? See [`WEBGUI_IPC.md`](docs/WEBGUI_IPC.md).*
