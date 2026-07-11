@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useKoma, type Tab, type SubAgentEntry, type BashJobEntry } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Read-only STREAM tab: live-streams ONE sub-agent's transcript or ONE bash job's
 // output into a dedicated scrollable view (the non-key equivalent of the TUI's
@@ -46,7 +47,11 @@ function StatusBadge({ status }: { status: string }) {
   const tone = STATUS_TONE[status] ?? 'text-koma-dim opacity-60'
   return (
     <span className={`flex-none ${tone}`} title={status}>
-      <Icon size={13} strokeWidth={2} className={status === 'running' ? 'animate-spin' : ''} />
+      {status === 'running' ? (
+        <BrailleSpinner size={13} />
+      ) : (
+        <Icon size={13} strokeWidth={2} />
+      )}
     </span>
   )
 }
@@ -62,7 +67,7 @@ function Centered({ children }: { children: ReactNode }) {
 function Loading() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
-      <Loader2 size={18} className="animate-spin opacity-70" />
+      <BrailleSpinner size={18} className="opacity-70" />
     </div>
   )
 }

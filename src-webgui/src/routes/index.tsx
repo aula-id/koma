@@ -1,6 +1,5 @@
 import { createRootRoute, createRoute, Outlet } from '@tanstack/react-router'
 import { lazy, Suspense, useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Loader2 } from 'lucide-react'
 import { ChatView } from '../components/ChatView'
 import { TabBar } from '../components/TabBar'
 import { StartScreen } from '../components/StartScreen'
@@ -16,6 +15,7 @@ import { SwitchingOverlay } from '../components/SwitchingOverlay'
 import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from '../components/BrailleSpinner'
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -278,7 +278,7 @@ const GraphTab = lazy(() => import('../components/GraphTab'))
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
-      <Loader2 size={18} className="animate-spin opacity-70" />
+      <BrailleSpinner size={18} className="opacity-70" />
     </div>
   )
 }

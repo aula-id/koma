@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Gauge, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Gauge } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // Composer EFFORT picker — TUI `/effort` parity. Unlike ModeSelector's FIXED
 // mode list, the menu here is DERIVED per the foreground session's current
@@ -89,7 +90,7 @@ export function EffortPicker() {
         <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[200px] overflow-hidden rounded-md border border-koma-border bg-koma-panel py-1 shadow-sm">
           {menu == null || menu.state === 'loading' ? (
             <div className="flex items-center gap-2 px-2 py-1 text-[12px] text-koma-fg opacity-50">
-              <Loader2 size={12} className="flex-none animate-spin" />
+              <BrailleSpinner size={12} />
               <span className="min-w-0 flex-1">{menu?.note || 'fetching model capabilities…'}</span>
             </div>
           ) : menu.state === 'unsupported' ? (

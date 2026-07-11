@@ -1,6 +1,7 @@
-import { Loader2, FileText } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { relTime } from './GraphRow'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // git status char -> badge tone (mirrors GitPanel's STATUS_TONE): A = added
 // (good), M = modified (accent), D = deleted (error), R/C = rename/copy (warn).
@@ -42,7 +43,7 @@ export function GraphDetail() {
   if (!detail || detail.sha !== selectedSha) {
     return (
       <div className="flex h-full w-full items-center justify-center text-koma-dim">
-        <Loader2 size={16} className="animate-spin opacity-70" />
+        <BrailleSpinner size={16} className="opacity-70" />
       </div>
     )
   }

@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Check, Loader2, Minus, X } from 'lucide-react'
+import { Check, Minus, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { LoadPhase } from '../store/koma'
-
-// TUI-parity braille spinner frames (koma's terminal cooking indicator) + its
-// cycle interval, reused here for the 'running' phase glyph.
-const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-const BRAILLE_INTERVAL_MS = 80
+import { BrailleSpinner, useBrailleFrame } from './BrailleSpinner'
 
 // Duplicated from Titlebar.tsx's private (unexported) `post` helper — this
 // overlay covers the titlebar region too and needs the same win-drag/maximize
@@ -100,17 +96,10 @@ function PhaseRow({
 function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awareness: LoadPhase }) {
   const errorTint = useErrorTint()
   // ONE shared braille frame index for the whole splash (both phase rows
-  // stay in sync, matching the TUI's single cooking spinner) — mounted only
-  // while this component is (i.e. only while ui.loading?.active), so the
-  // interval never runs otherwise.
-  const [frameIdx, setFrameIdx] = useState(0)
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setFrameIdx((i) => (i + 1) % BRAILLE_FRAMES.length)
-    }, BRAILLE_INTERVAL_MS)
-    return () => window.clearInterval(id)
-  }, [])
-  const frame = BRAILLE_FRAMES[frameIdx]
+  // stay in sync, matching the TUI's single cooking spinner) — driven by the
+  // app-wide BrailleSpinner ticker (see useBrailleFrame) instead of its own
+  // interval.
+  const frame = useBrailleFrame()
 
   return (
     <div className="flex flex-col items-center gap-4">
@@ -212,7 +201,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
           </>
         ) : (
           <>
-            <Loader2 size={28} className="animate-spin text-koma-accent" />
+            <BrailleSpinner size={28} className="text-koma-accent" />
             <div className="text-[13px] text-koma-fg opacity-70">switching to {to}…</div>
             {stuck && (
               <motion.div

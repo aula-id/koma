@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
-import { Check, Loader2, Power, Trash2, X } from 'lucide-react'
+import { Check, Power, Trash2, X } from 'lucide-react'
 import { useKoma, isDying } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // The single armed row across ResumePalette/StartScreen — kept LOCAL to
 // whichever palette component renders the rows (not the store), per the
@@ -42,14 +43,7 @@ export function SessionRowActions({ id, kind, armed, onArm }: SessionRowActionsP
   }, [palettes, theme])
 
   if (dying) {
-    return (
-      <Loader2
-        size={13}
-        tabIndex={-1}
-        className="flex-none animate-spin opacity-70"
-        style={{ color: errorTint }}
-      />
-    )
+    return <BrailleSpinner size={13} />
   }
 
   // Already armed — the parent is rendering the full-row SessionRowConfirmStrip

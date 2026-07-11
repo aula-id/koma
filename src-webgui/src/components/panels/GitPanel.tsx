@@ -12,7 +12,6 @@ import {
   Check,
   X,
   KeyRound,
-  Loader2,
   RefreshCw,
   GitGraph,
   Maximize2,
@@ -25,6 +24,7 @@ import { ConflictBanner } from '../ConflictBanner'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
+import { BrailleSpinner } from '../BrailleSpinner'
 
 // git-porcelain status char -> badge tone. Mirrors ExplorePanel's FILE_STATUS
 // idiom (added = good, modified = accent, deleted = error): A/? = new
@@ -136,7 +136,7 @@ function SyncButton({
       onClick={onClick}
       className="flex flex-none items-center gap-1 rounded px-1.5 py-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35"
     >
-      {busy ? <Loader2 size={13} className="flex-none animate-spin" /> : children}
+      {busy ? <BrailleSpinner size={13} /> : children}
       {typeof badge === 'number' && badge > 0 && (
         <span className="font-mono text-[11px] leading-none">{badge}</span>
       )}

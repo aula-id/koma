@@ -7,8 +7,9 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { GitGraph, Loader2, RefreshCw, X } from 'lucide-react'
+import { GitGraph, RefreshCw, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 import type { GitRef } from '../store/koma'
 import { computeGitGraph } from '../lib/gitGraphLayout'
 import { GraphRow, ROW_H } from './GraphRow'
@@ -402,7 +403,7 @@ export default function GraphTab() {
                 {hasMore ? '+' : ''}
               </span>
               <span className="flex-1" />
-              {loading && <Loader2 size={13} className="flex-none animate-spin opacity-70" />}
+              {loading && <BrailleSpinner size={13} className="opacity-70" />}
               <button
                 type="button"
                 onClick={refreshGraph}
@@ -422,7 +423,7 @@ export default function GraphTab() {
               {total === 0 ? (
                 <div className="flex h-full w-full items-center justify-center px-6 text-center text-[12px] text-koma-dim">
                   {loading ? (
-                    <Loader2 size={18} className="animate-spin opacity-70" />
+                    <BrailleSpinner size={18} className="opacity-70" />
                   ) : (
                     'No commits to display.'
                   )}
@@ -476,7 +477,7 @@ export default function GraphTab() {
                           loading ? 'pointer-events-none opacity-60' : ''
                         }`}
                       >
-                        {loading && <Loader2 size={12} className="animate-spin" />}
+                        {loading && <BrailleSpinner size={12} />}
                         See more
                       </button>
                     </div>

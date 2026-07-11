@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
-import { Loader2 } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 import { computeGitGraph } from '../lib/gitGraphLayout'
 import type { GraphRow as GraphRowData, GraphSegment } from '../lib/gitGraphLayout'
 
@@ -147,7 +147,7 @@ export function GitGraphMini() {
   if (rows.length === 0) {
     return (
       <div className="flex h-16 w-full items-center justify-center text-[11px] text-koma-dim opacity-60">
-        {loading ? <Loader2 size={14} className="animate-spin opacity-70" /> : 'No commits to display.'}
+        {loading ? <BrailleSpinner size={14} className="opacity-70" /> : 'No commits to display.'}
       </div>
     )
   }

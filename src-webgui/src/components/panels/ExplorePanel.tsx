@@ -18,6 +18,7 @@ import {
 import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
 import { useKoma, visiblePlanTodos } from '../../store/koma'
+import { BrailleSpinner } from '../BrailleSpinner'
 
 // File-change status -> single-letter git-style badge + tone. added = new (good),
 // modified = touched (accent), deleted = removed (error/red).
@@ -55,7 +56,11 @@ function StatusBadge({ status }: { status: string }) {
   const tone = STATUS_TONE[status] ?? 'text-koma-dim opacity-60'
   return (
     <span className={`flex-none ${tone}`} title={status}>
-      <Icon size={13} strokeWidth={2} className={status === 'running' ? 'animate-spin' : ''} />
+      {status === 'running' ? (
+        <BrailleSpinner size={13} />
+      ) : (
+        <Icon size={13} strokeWidth={2} />
+      )}
     </span>
   )
 }

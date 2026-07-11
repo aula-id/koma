@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, Loader2 } from 'lucide-react'
+import { Check, Copy } from 'lucide-react'
 import { useKoma, type OAuthProviderEntry } from '../../../store/koma'
+import { BrailleSpinner } from '../../BrailleSpinner'
 
 // Copy-to-clipboard button — no existing reusable affordance in this codebase
 // to lift (the only prior "copy" surface is the markdown code-block copy
@@ -192,7 +193,7 @@ export function OAuthConnect({ onDone }: Props) {
   if (oauth.phase === 'starting') {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-        <Loader2 size={20} className="animate-spin text-koma-accent" />
+        <BrailleSpinner size={20} className="text-koma-accent" />
         <span className="text-[12px] text-koma-fg opacity-60">starting…</span>
       </div>
     )
@@ -212,7 +213,7 @@ export function OAuthConnect({ onDone }: Props) {
             {oauth.url && <CopyButton text={oauth.url} />}
           </div>
           <div className="mt-3 flex items-center gap-1.5 text-[11px] text-koma-fg opacity-50">
-            <Loader2 size={12} className="flex-none animate-spin" />
+            <BrailleSpinner size={12} />
             waiting for sign-in…
           </div>
         </div>
@@ -239,7 +240,7 @@ export function OAuthConnect({ onDone }: Props) {
             {oauth.verificationUrl && <CopyButton text={oauth.verificationUrl} label="Copy URL" />}
           </div>
           <div className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-koma-fg opacity-50">
-            <Loader2 size={12} className="flex-none animate-spin" />
+            <BrailleSpinner size={12} />
             waiting for approval…
           </div>
         </div>

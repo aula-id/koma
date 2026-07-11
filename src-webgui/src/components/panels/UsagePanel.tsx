@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { Loader2 } from 'lucide-react'
 import { useKoma } from '../../store/koma'
+import { BrailleSpinner } from '../BrailleSpinner'
 
 // Weekday letters, Date.getDay() order (0 = Sunday).
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -56,7 +56,7 @@ export function UsagePanel() {
           Last 7 days
         </div>
         <div className="flex items-center gap-2 px-3 py-6 text-[12px] text-koma-fg opacity-45">
-          <Loader2 size={14} className="animate-spin opacity-70" />
+          <BrailleSpinner size={14} className="opacity-70" />
           Loading usage…
         </div>
       </div>
