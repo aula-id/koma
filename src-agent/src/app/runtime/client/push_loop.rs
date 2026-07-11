@@ -22,9 +22,9 @@ use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
-    push_commit_detail, push_commit_diff, push_file_diff, push_git_diff, push_git_graph,
-    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal, push_switching,
-    push_usage_preview,
+    push_branch_list, push_commit_detail, push_commit_diff, push_file_diff, push_git_diff,
+    push_git_graph, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
+    push_switching, push_usage_preview,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -224,6 +224,12 @@ pub(super) fn push_loop(
     // wrong session's numbers.
     let (usage_preview_tx, usage_preview_rx) =
         std::sync::mpsc::channel::<(super::diff::UsagePreviewResult, String, Option<String>)>();
+
+    // --- BRANCH LIST (GitBranchList) --- one-shot worker thread (blocking `git
+    // for-each-ref`), like `GitGraph` above. `GitCheckout`/`GitCreateBranch`
+    // reuse the EXISTING `git_op_tx`/`git_status_tx` channels below instead of a
+    // dedicated channel (same `GitOp` + follow-up `GitStatus` reply pattern).
+    let (branch_list_tx, branch_list_rx) = std::sync::mpsc::channel::<super::git_branch::BranchListResult>();
 
     // --- SSH KEY VAULT (KeyList/KeyGenerate/KeyImport/KeyDelete/KeyReveal) ---
     // Every op shells `ssh-keygen`/touches the filesystem (blocking) — same
@@ -449,6 +455,24 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GitPush) => {
                     git_host::spawn_git_push_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                 }
+                // Branch-switcher / graph context menu (G4): host-local, never the
+                // daemon. `GitBranchList` drains at (b-octodec) below;
+                // `GitCheckout`/`GitCreateBranch` reuse the git-op channels above.
+                Ok(super::HostCtl::GitBranchList) => {
+                    git_host::spawn_git_branch_list_attached(branch_list_tx.clone(), current_owned.clone());
+                }
+                Ok(super::HostCtl::GitCheckout { ref_name }) => {
+                    git_host::spawn_git_checkout_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        ref_name,
+                    );
+                }
+                Ok(super::HostCtl::GitCreateBranch { name, start, checkout }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_create_branch_attached(ot, st, cur, name, start, checkout);
+                }
                 // Commit-graph panel: NEVER touches the daemon (host-local, regardless of
                 // attach state) — spawn the blocking git work off this thread; results are
                 // drained + pushed below at (b-quindec)/(b-sexdec)/(b-septdec).
@@ -603,6 +627,11 @@ pub(super) fn push_loop(
         // first (harmless either order: both are one-shot, self-contained pushes).
         while let Ok(result) = git_op_rx.try_recv() {
             push_git_op(push, result);
+        }
+
+        // --- (b-octodec) branch list: push any completed off-thread fetch ---
+        while let Ok(result) = branch_list_rx.try_recv() {
+            push_branch_list(push, result);
         }
 
         // --- (b-quindec) commit-graph panel: push any completed off-thread graph fetch ---

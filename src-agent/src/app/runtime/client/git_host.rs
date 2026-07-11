@@ -23,6 +23,7 @@ use super::git::{
     compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
     GitDiffResult, GitOpResult, GitStatusResult,
 };
+use super::git_branch::{git_branch_list, git_checkout, git_create_branch, BranchListResult};
 use super::git_graph::{
     compute_commit_detail, compute_commit_diff, compute_git_graph, CommitDetailResult,
     CommitDiffResult, GitGraphResult,
@@ -33,8 +34,8 @@ use super::keys::{
     KeyRevealResult,
 };
 use super::push_proto::{
-    push_commit_detail, push_commit_diff, push_git_diff, push_git_graph, push_git_op,
-    push_git_status, push_key_list, push_key_op, push_key_reveal,
+    push_branch_list, push_commit_detail, push_commit_diff, push_git_diff, push_git_graph,
+    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
 };
 
 // ─── DETACHED (host_swapper): push the reply straight through the cloned sink ───
@@ -178,6 +179,40 @@ pub(super) fn spawn_git_pull(push: impl Fn(String) + Send + 'static, cur: Option
 pub(super) fn spawn_git_push(push: impl Fn(String) + Send + 'static, cur: Option<String>) {
     std::thread::spawn(move || {
         push_git_op(&push, git_push(cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitBranchList` while detached.
+pub(super) fn spawn_git_branch_list(push: impl Fn(String) + Send + 'static, cur: Option<String>) {
+    std::thread::spawn(move || {
+        let result = git_branch_list(cur.as_deref());
+        push_branch_list(&push, result);
+    });
+}
+
+/// `HostCtl::GitCheckout` while detached.
+pub(super) fn spawn_git_checkout(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    ref_name: String,
+) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_checkout(&ref_name, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitCreateBranch` while detached.
+pub(super) fn spawn_git_create_branch(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    name: String,
+    start: Option<String>,
+    checkout: bool,
+) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_create_branch(&name, start.as_deref(), checkout, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
     });
 }
@@ -390,6 +425,44 @@ pub(super) fn spawn_git_push_attached(
 ) {
     std::thread::spawn(move || {
         let _ = op_tx.send(git_push(cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitBranchList` while attached.
+pub(super) fn spawn_git_branch_list_attached(tx: Sender<BranchListResult>, cur: Option<String>) {
+    std::thread::spawn(move || {
+        let result = git_branch_list(cur.as_deref());
+        let _ = tx.send(result);
+    });
+}
+
+/// `HostCtl::GitCheckout` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_checkout_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    ref_name: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_checkout(&ref_name, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitCreateBranch` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_create_branch_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    name: String,
+    start: Option<String>,
+    checkout: bool,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_create_branch(&name, start.as_deref(), checkout, cur.as_deref()));
         let _ = status_tx.send(compute_git_status(cur.as_deref()));
     });
 }

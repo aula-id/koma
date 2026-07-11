@@ -21,6 +21,7 @@
 //! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
 //! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
 //! | `git_graph` | host-side commit-graph + commit-detail + commit-diff computation |
+//! | `git_branch`| host-side branch list + checkout + create-branch computation     |
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
@@ -47,6 +48,7 @@ mod diff;
 mod git;
 mod git_remote;
 mod git_graph;
+mod git_branch;
 mod keys;
 mod git_host;
 mod host;
@@ -460,6 +462,22 @@ pub(super) enum HostCtl {
     /// Source Control panel's Push button. Same reasoning + reply pattern as
     /// [`GitFetch`](Self::GitFetch); see [`git_remote::git_push`].
     GitPush,
+    /// Branch-switcher popover (footer/GitPanel) or graph context menu opened:
+    /// fetch every local + remote-tracking branch (G4). Host-local, never the
+    /// daemon, like [`GitStatus`](Self::GitStatus); see
+    /// [`git_branch::git_branch_list`].
+    GitBranchList,
+    /// Branch-switcher pick / graph "Checkout" (G4 — SAFE only, never
+    /// `--force`): switch (or detach onto) `ref_name` (a branch or a sha). Same
+    /// reply pattern as [`GitStage`](Self::GitStage) (`GitOp` then `GitStatus`)
+    /// — React also fires a client-local `refreshGraph()` once it lands (HEAD
+    /// moved). See [`git_branch::git_checkout`].
+    GitCheckout { ref_name: String },
+    /// Branch-switcher "+ Create new branch" / graph "Create branch here…"
+    /// (G4 — SAFE only). `start` is the commit-ish to branch from (`None` =
+    /// HEAD); `checkout` switches to it immediately. Same reply pattern as
+    /// [`GitCheckout`](Self::GitCheckout). See [`git_branch::git_create_branch`].
+    GitCreateBranch { name: String, start: Option<String>, checkout: bool },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

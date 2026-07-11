@@ -424,6 +424,13 @@ pub(super) enum PushEnvelope {
     /// `GitOp`/`GitStatus`. Carries [`super::keys::KeyOpResult`] verbatim (already
     /// camelCase).
     KeyOp(super::keys::KeyOpResult),
+    /// One-shot host-computed BRANCH LIST answering a `GitBranchList` request
+    /// from the branch-switcher popover or the graph context menu (G4): every
+    /// local + remote-tracking branch, current one flagged. Computed ENTIRELY
+    /// host-side (never forwarded to the daemon) — like `GitStatus`, ALWAYS a
+    /// reply so the picker never hangs. Carries
+    /// [`super::git_branch::BranchListResult`] verbatim (already camelCase).
+    BranchList(super::git_branch::BranchListResult),
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every
@@ -682,4 +689,10 @@ pub(super) fn push_key_reveal(push: &dyn Fn(String), result: super::keys::KeyRev
 /// refreshes from authoritative state.
 pub(super) fn push_key_op(push: &dyn Fn(String), result: super::keys::KeyOpResult) {
     super::render::emit(push, &PushEnvelope::KeyOp(result));
+}
+
+/// Emit a one-shot `BranchList` envelope, carrying a host-computed
+/// [`super::git_branch::BranchListResult`] verbatim — mirrors `push_git_status`.
+pub(super) fn push_branch_list(push: &dyn Fn(String), result: super::git_branch::BranchListResult) {
+    super::render::emit(push, &PushEnvelope::BranchList(result));
 }

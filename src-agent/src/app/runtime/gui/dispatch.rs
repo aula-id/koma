@@ -313,6 +313,13 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitFetch => dispatch_git::git_fetch(&ctx.ctl),
         GuiReq::GitPull => dispatch_git::git_pull(&ctx.ctl),
         GuiReq::GitPush => dispatch_git::git_push(&ctx.ctl),
+        // Branch-switcher popover / graph context menu (G4 — safe branch ops
+        // only). Same reasoning + routing as `GitStatus`/`GitStage` above.
+        GuiReq::GitBranchList => dispatch_git::git_branch_list(&ctx.ctl),
+        GuiReq::GitCheckout { ref_name } => dispatch_git::git_checkout(&ctx.ctl, ref_name),
+        GuiReq::GitCreateBranch { name, start, checkout } => {
+            dispatch_git::git_create_branch(&ctx.ctl, name, start, checkout)
+        }
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
         // ALWAYS routed to the host-relay thread — never the daemon —
         // regardless of attach state (see `HostCtl::UsagePreview`). A "session"

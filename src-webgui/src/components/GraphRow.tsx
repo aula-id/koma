@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { motion } from 'framer-motion'
 import type { GraphRow as GraphRowData, GraphSegment } from '../lib/gitGraphLayout'
 import type { GitRef } from '../store/koma'
@@ -63,11 +64,32 @@ const REF_TONE: Record<GitRef['kind'], string> = {
   tag: 'border-koma-success/60 text-koma-success',
 }
 
-function RefChip({ r }: { r: GitRef }) {
+function RefChip({
+  r,
+  onContextMenu,
+}: {
+  r: GitRef
+  // Right-click on a BRANCH chip (local/remote — never a tag, which isn't
+  // switchable) opens the graph context menu's "Checkout <branch>"/"Copy
+  // branch name" mode. `undefined` for a tag chip, so it falls through to the
+  // row's own commit context menu instead. `kind` is threaded through so the
+  // menu knows whether the chip is a remote ref (needs the DWIM tracking-branch
+  // short-name strip before checkout) vs local/head (checked out as-is).
+  onContextMenu?: (e: ReactMouseEvent, name: string, kind: GitRef['kind']) => void
+}) {
   const tone = REF_TONE[r.kind] ?? 'border-koma-border text-koma-dim'
   return (
     <span
       title={`${r.kind}: ${r.name}`}
+      onContextMenu={
+        onContextMenu
+          ? (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onContextMenu(e, r.name, r.kind)
+            }
+          : undefined
+      }
       className={`flex-none truncate rounded-sm border bg-koma-bg/40 px-1 text-[10px] leading-[15px] ${tone}`}
     >
       {r.name}
@@ -90,6 +112,12 @@ type Props = {
   staggerIndex: number
   onSelect: (sha: string) => void
   onHover: (sha: string | null) => void
+  // Right-click on the row (not a ref chip) opens the graph context menu's
+  // commit mode ("Checkout commit"/"Create branch here…"/"Copy SHA").
+  onContextMenu?: (e: ReactMouseEvent, sha: string) => void
+  // Right-click on a branch ref chip opens the context menu's ref mode
+  // instead — see `RefChip`'s own `onContextMenu` doc.
+  onRefContextMenu?: (e: ReactMouseEvent, name: string, kind: GitRef['kind']) => void
 }
 
 // One virtualized commit row: the SVG lane gutter (edges + node, HEAD ringed) +
@@ -106,6 +134,8 @@ export const GraphRow = memo(function GraphRow({
   staggerIndex,
   onSelect,
   onHover,
+  onContextMenu,
+  onRefContextMenu,
 }: Props) {
   const gw = gutterWidth(laneCount)
   const cx = laneX(row.lane)
@@ -116,6 +146,14 @@ export const GraphRow = memo(function GraphRow({
       onClick={() => onSelect(row.sha)}
       onHoverStart={() => onHover(row.sha)}
       onHoverEnd={() => onHover(null)}
+      onContextMenu={
+        onContextMenu
+          ? (e) => {
+              e.preventDefault()
+              onContextMenu(e, row.sha)
+            }
+          : undefined
+      }
       initial={animate ? { opacity: 0, x: -8 } : false}
       animate={{ opacity: 1, x: 0 }}
       transition={{
@@ -153,7 +191,13 @@ export const GraphRow = memo(function GraphRow({
       </svg>
       <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-3">
         {row.refs.map((r, i) => (
-          <RefChip key={`${r.kind}:${r.name}:${i}`} r={r} />
+          <RefChip
+            key={`${r.kind}:${r.name}:${i}`}
+            r={r}
+            // A tag isn't switchable — its chip falls through to the row's
+            // own commit context menu instead of opening a ref-mode menu.
+            onContextMenu={r.kind === 'tag' ? undefined : onRefContextMenu}
+          />
         ))}
         <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{row.commit.subject}</span>
         <span className="hidden max-w-[130px] flex-none truncate text-[11px] text-koma-dim md:inline">

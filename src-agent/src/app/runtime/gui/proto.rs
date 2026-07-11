@@ -284,6 +284,30 @@ pub(super) enum GuiReq {
     GitPull,
     /// The GIT panel's Push button. Same routing + reply pattern as `GitFetch`.
     GitPush,
+    /// Branch-switcher popover (footer/GitPanel) or graph context menu opened
+    /// (G4): fetch every local + remote-tracking branch. Same routing as
+    /// `GitStatus` — host-local, never the daemon. Reply lands as a
+    /// `BranchList` push.
+    GitBranchList,
+    /// Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
+    /// only, never `--force`): switch (or detach onto) `ref` — a branch name or
+    /// a sha. `ref` is a Rust keyword, so the field is `ref_name`
+    /// (`#[serde(rename = "ref")]` keeps the wire key `ref`). Same routing +
+    /// reply pattern as `GitStage` (`GitOp` then a fresh `GitStatus`).
+    GitCheckout {
+        #[serde(rename = "ref")]
+        ref_name: String,
+    },
+    /// Branch-switcher "+ Create new branch" / graph "Create branch here…"
+    /// (G4 — SAFE only): create branch `name`. `start` is the commit-ish to
+    /// branch from (`null`/omitted = current HEAD); `checkout` switches to it
+    /// immediately (`git checkout -b`) vs only creating it (`git branch`).
+    /// Same routing + reply pattern as `GitCheckout`.
+    GitCreateBranch {
+        name: String,
+        start: Option<String>,
+        checkout: bool,
+    },
     /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
     /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a

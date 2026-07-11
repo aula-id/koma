@@ -385,6 +385,24 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitPush) => {
                 git_host::spawn_git_push(P::clone(push), current.map(str::to_string));
             }
+            // Branch-switcher popover / graph context menu (G4): same host-local
+            // reasoning as `GitStatus`/`GitGraph`. Bodies live in the shared
+            // `git_branch`/`git_host` modules.
+            Ok(HostCtl::GitBranchList) => {
+                git_host::spawn_git_branch_list(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitCheckout { ref_name }) => {
+                git_host::spawn_git_checkout(P::clone(push), current.map(str::to_string), ref_name);
+            }
+            Ok(HostCtl::GitCreateBranch { name, start, checkout }) => {
+                git_host::spawn_git_create_branch(
+                    P::clone(push),
+                    current.map(str::to_string),
+                    name,
+                    start,
+                    checkout,
+                );
+            }
             Ok(HostCtl::KeyList) => {
                 git_host::spawn_key_list(P::clone(push));
             }
