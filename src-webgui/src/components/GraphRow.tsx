@@ -59,10 +59,10 @@ function segPath(s: GraphSegment): string {
 // per kind, like the lane palette): HEAD = accent, local = info(blue), remote =
 // warn(amber), tag = success(green). Falls back to a neutral border.
 const REF_TONE: Record<GitRef['kind'], string> = {
-  head: 'border-koma-accent/70 text-koma-accent',
-  local: 'border-koma-info/60 text-koma-info',
-  remote: 'border-koma-warn/60 text-koma-warn',
-  tag: 'border-koma-success/60 text-koma-success',
+  head: 'border-koma-accent/70 bg-koma-accent/15 text-koma-accent',
+  local: 'border-koma-info/60 bg-koma-info/20 text-koma-fg',
+  remote: 'border-koma-warn/60 bg-koma-warn/20 text-koma-fg',
+  tag: 'border-koma-success/60 bg-koma-success/20 text-koma-fg',
 }
 
 function RefChip({
@@ -96,7 +96,7 @@ function RefChip({
   onDropHover: (id: string | null) => void
   onRefDrop: (e: ReactDragEvent, name: string) => void
 }) {
-  const tone = REF_TONE[r.kind] ?? 'border-koma-border text-koma-dim'
+  const tone = REF_TONE[r.kind] ?? 'border-koma-border bg-koma-head text-koma-dim'
   // Only a local/HEAD ref can be the DRAG SOURCE of a rebase — you can't
   // rebase a remote-tracking ref (it only ever moves via fetch); every kind of
   // chip (incl. remote/tag) is still a valid DROP TARGET (rebasing onto
@@ -156,7 +156,7 @@ function RefChip({
             }
           : undefined
       }
-      className={`flex-none truncate rounded-sm border bg-koma-bg/40 px-1 text-[10px] leading-[15px] transition-shadow ${tone} ${
+      className={`flex-none truncate rounded-sm border px-1 text-[10px] leading-[15px] transition-shadow ${tone} ${
         draggableChip ? 'cursor-grab active:cursor-grabbing' : ''
       } ${dropHighlight ? 'ring-1 ring-koma-accent bg-koma-accent/10' : ''}`}
     >
