@@ -32,9 +32,10 @@ use super::host_catalogue::{
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_file_diff, push_model_list, push_oauth_state, push_route_list,
-    push_analytics, push_settings_values, push_switching, push_usage_preview,
+    push_agents_values, push_ext_no_session, push_file_diff, push_model_list, push_oauth_state,
+    push_route_list, push_analytics, push_settings_values, push_switching, push_usage_preview,
 };
+use super::store_host;
 use super::swapper::build_local_hub;
 use super::{push_loop, render, HostCtl, StreamView};
 
@@ -470,6 +471,26 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             }
             Ok(HostCtl::KeyReveal { name, private }) => {
                 git_host::spawn_key_reveal(P::clone(push), name, private);
+            }
+            // Extension STORE browse/detail/installed-list opened while detached
+            // (StartScreen / swapper, e.g. the Store tab mounting on the home screen
+            // with no session): koma.run is a PUBLIC endpoint and the installed list is
+            // a local config read, so both NEVER touch the daemon in either host state
+            // — see `store_host`. Bodies live in the sibling `store_host` module
+            // (shared with `push_loop`'s attached twin).
+            Ok(HostCtl::StoreBrowse { query, category }) => {
+                store_host::spawn_store_browse(P::clone(push), query, category);
+            }
+            Ok(HostCtl::StoreDetail { id }) => {
+                store_host::spawn_store_detail(P::clone(push), id);
+            }
+            Ok(HostCtl::ListInstalledExtensions) => {
+                store_host::spawn_list_installed(P::clone(push));
+            }
+            // Install/uninstall arrived with no session attached (always true in the
+            // swapper): push the graceful failure rather than silently dropping it.
+            Ok(HostCtl::ExtNoSession { id }) => {
+                push_ext_no_session(push, id);
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
             // a global file the host reads directly, so this never touches a daemon in

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Store, Package, Blocks } from 'lucide-react'
+import { Package, Blocks } from 'lucide-react'
 import { useKoma } from '../../store/koma'
 
 // Sidebar launcher for the extension STORE. The store itself is a full tab
@@ -22,7 +22,7 @@ export function StorePanel() {
         onClick={openStoreTab}
         className="flex items-center gap-2 px-3 py-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
       >
-        <Store size={14} className="flex-none opacity-80" />
+        <Blocks size={14} className="flex-none opacity-80" />
         <span>Browse Extensions</span>
       </button>
 

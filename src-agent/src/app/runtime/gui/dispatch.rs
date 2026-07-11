@@ -660,44 +660,55 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 HostCtl::DeleteOAuthConn { uuid },
             );
         }
-        // Extension STORE: forward the whole family to the attached daemon (which owns the
-        // install pipeline + the live managers + config). Attached-only, like `StartOAuth` —
-        // a GUI window always has a session daemon attached in normal use; un-attached these
-        // are a silent no-op. The daemon's reply frames are intercepted in `push_loop` and
-        // re-pushed as the Store* envelopes.
+        // Extension STORE browse/detail/installed-list: HOST-LOCAL — ALWAYS routed to the
+        // host-relay thread, never the daemon, regardless of attach state, same reasoning
+        // as `GitStatus`/`FileDiff`. koma.run browse/detail is a PUBLIC (no-auth) network
+        // fetch and the installed list is a local config read, so both work identically
+        // pre-session (the Store tab mounting on the home screen) as attached — see
+        // `HostCtl::StoreBrowse` and friends / the `store_host` module.
         GuiReq::StoreBrowse { query, category } => {
-            if let Ok(g) = ctx.req.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::StoreBrowse { query, category });
-                }
-            }
+            let _ = ctx.ctl.send(HostCtl::StoreBrowse { query, category });
         }
         GuiReq::StoreDetail { id } => {
-            if let Ok(g) = ctx.req.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::StoreDetail { id });
-                }
-            }
+            let _ = ctx.ctl.send(HostCtl::StoreDetail { id });
         }
+        GuiReq::ListInstalledExtensions => {
+            let _ = ctx.ctl.send(HostCtl::ListInstalledExtensions);
+        }
+        // Install/uninstall MUTATE live daemon runtime state (`ext_manager`/
+        // `mcp_manager` + `AppConfig`), so — unlike browse/detail above — these stay
+        // DAEMON-forwarded, attached-only. With NO attached daemon (the home screen /
+        // swapper) this pushes a graceful `ExtensionOpResult{ok:false}` via
+        // `HostCtl::ExtNoSession` instead of silently dropping the request.
+        // `// TODO: global ext manager for pre-session install.`
         GuiReq::InstallExtension { id, version } => {
-            if let Ok(g) = ctx.req.lock() {
+            let forwarded = if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::InstallExtension { id, version });
+                    let _ = tx.send(ClientRequest::InstallExtension { id: id.clone(), version });
+                    true
+                } else {
+                    false
                 }
+            } else {
+                false
+            };
+            if !forwarded {
+                let _ = ctx.ctl.send(HostCtl::ExtNoSession { id });
             }
         }
         GuiReq::UninstallExtension { id } => {
-            if let Ok(g) = ctx.req.lock() {
+            let forwarded = if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::UninstallExtension { id });
+                    let _ = tx.send(ClientRequest::UninstallExtension { id: id.clone() });
+                    true
+                } else {
+                    false
                 }
-            }
-        }
-        GuiReq::ListInstalledExtensions => {
-            if let Ok(g) = ctx.req.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::ListInstalledExtensions);
-                }
+            } else {
+                false
+            };
+            if !forwarded {
+                let _ = ctx.ctl.send(HostCtl::ExtNoSession { id });
             }
         }
         // Settings "SSH Keys" section: host-side key-vault fetch/mutations. ALWAYS

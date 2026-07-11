@@ -22,9 +22,13 @@ use super::git_host;
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
-use super::push_proto::{push_analytics, push_file_diff, push_switching, push_usage_preview};
+use super::push_proto::{
+    push_analytics, push_ext_no_session, push_file_diff, push_installed_extensions,
+    push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
+};
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
+use super::store_host;
 
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
 /// [`serialize_and_push`] / [`push_hub`] only emit an envelope when something
@@ -244,6 +248,24 @@ pub(super) fn push_loop(
     let (key_list_tx, key_list_rx) = std::sync::mpsc::channel::<Vec<super::keys::KeyInfo>>();
     let (key_reveal_tx, key_reveal_rx) = std::sync::mpsc::channel::<super::keys::KeyRevealResult>();
     let (key_op_tx, key_op_rx) = std::sync::mpsc::channel::<super::keys::KeyOpResult>();
+
+    // --- Extension STORE (StoreBrowse/StoreDetail/ListInstalledExtensions) ---
+    // Browse/detail are a blocking `reqwest` GET (koma.run, PUBLIC/no-auth) and the
+    // installed-list is a blocking `~/.koma/config.json` read, so — same reasoning as
+    // the GIT/key channels above — each runs on a one-shot worker thread via the
+    // shared `store_host` bodies (also used by the detached `host_swapper` twin);
+    // NEVER touches the daemon in either host state (unlike `ListModels`/`ListRoutes`
+    // above, which DO forward to the daemon while attached).
+    let (store_catalogue_tx, store_catalogue_rx) = std::sync::mpsc::channel::<(
+        Vec<crate::ipc::proto::StoreItemWire>,
+        Option<String>,
+    )>();
+    let (store_detail_tx, store_detail_rx) = std::sync::mpsc::channel::<(
+        Option<crate::ipc::proto::StoreDetailWire>,
+        Option<String>,
+    )>();
+    let (installed_ext_tx, installed_ext_rx) =
+        std::sync::mpsc::channel::<Vec<crate::ipc::proto::InstalledExtWire>>();
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -592,6 +614,27 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::KeyReveal { name, private }) => {
                     git_host::spawn_key_reveal_attached(key_reveal_tx.clone(), name, private);
                 }
+                // Extension STORE browse/detail/installed-list: NEVER touches the
+                // daemon (host-side only, regardless of attach state) — spawn the
+                // blocking network/config work off this thread via the shared
+                // `store_host` bodies (also used by the detached `host_swapper`
+                // twin); results are drained + pushed below.
+                Ok(super::HostCtl::StoreBrowse { query, category }) => {
+                    store_host::spawn_store_browse_attached(store_catalogue_tx.clone(), query, category);
+                }
+                Ok(super::HostCtl::StoreDetail { id }) => {
+                    store_host::spawn_store_detail_attached(store_detail_tx.clone(), id);
+                }
+                Ok(super::HostCtl::ListInstalledExtensions) => {
+                    store_host::spawn_list_installed_attached(installed_ext_tx.clone());
+                }
+                // Install/uninstall raced in with no daemon attached (in practice this
+                // can't happen here — an ATTACHED push_loop always has a live `req_tx`
+                // — but the arm must exist for the match to stay exhaustive; push the
+                // same graceful failure `host_swapper` would).
+                Ok(super::HostCtl::ExtNoSession { id }) => {
+                    push_ext_no_session(push, id);
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,
@@ -718,6 +761,19 @@ pub(super) fn push_loop(
             &stash_list_rx,
             &activity_rx,
         );
+
+        // --- Extension STORE: push any completed off-thread browse/detail/installed-
+        // list fetches. No coalescing needed — each is a self-contained, per-request
+        // reply, like the GIT channels above.
+        while let Ok((items, error)) = store_catalogue_rx.try_recv() {
+            push_store_catalogue(push, items, error);
+        }
+        while let Ok((detail, error)) = store_detail_rx.try_recv() {
+            push_store_detail(push, detail, error);
+        }
+        while let Ok(items) = installed_ext_rx.try_recv() {
+            push_installed_extensions(push, items);
+        }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---
         // The ipc thread appends these `[Image #N]` markers to a chat send so the daemon's
