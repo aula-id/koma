@@ -15,8 +15,10 @@ import {
   Loader2,
   RefreshCw,
   GitGraph,
+  Maximize2,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
+import { GitGraphMini } from '../GitGraphMini'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
@@ -250,7 +252,7 @@ function FileRow({
 // --porcelain`'s staged/unstaged split. Discard is destructive, gated behind
 // an inline per-row (or section-wide) confirm.
 export function GitPanel() {
-  const [open, setOpen] = useState({ staged: true, unstaged: true })
+  const [open, setOpen] = useState({ staged: true, unstaged: true, graph: false })
   const [filter, setFilter] = useState('')
   // The single armed discard confirm across BOTH the per-row buttons and the
   // section-wide "Discard All Changes" action — a sentinel string for the
@@ -491,6 +493,18 @@ export function GitPanel() {
           </AccordionSection>
         </>
       )}
+      <AccordionSection
+        title="Commit Graph"
+        open={open.graph}
+        onToggle={() => setOpen((s) => ({ ...s, graph: !s.graph }))}
+        action={
+          <HeaderAction title="Explore full graph" onClick={openGraphTab}>
+            <Maximize2 size={13} />
+          </HeaderAction>
+        }
+      >
+        <GitGraphMini />
+      </AccordionSection>
     </div>
   )
 }
