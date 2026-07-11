@@ -1,0 +1,28 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.echo-tool-daemon",
+  "name": "Echo Tool",
+  "version": "0.0.0",
+  "description": "A minimal daemon extension that contributes a single echo tool.",
+  "tier": "free",
+  "kind": "daemon",
+  "runtime": {
+    "exec": "echo-tool-daemon",
+    "args": []
+  },
+  "contributes": {
+    "tools": [
+      {
+        "name": "echo",
+        "description": "echo input back",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" }
+          }
+        }
+      }
+    ]
+  },
+  "requires": []
+}

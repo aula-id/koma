@@ -1,0 +1,17 @@
+[package]
+name = "koma-extension"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]
+members = [
+  "example/echo-tool-daemon",
+  "example/upper-tool-oneshot",
+  "example/fleet-board-daemon",
+  "example/agent-peek-oneshot",
+]
