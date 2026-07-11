@@ -600,6 +600,16 @@ impl DaemonHub {
             | ClientRequest::CancelOAuth
             | ClientRequest::DeleteOAuthConn { .. } => self.oauth(idx, req, state, client, handle),
 
+            // GUI extension STORE (browse / detail / install / uninstall / list-installed):
+            // route the whole family to `requests_ext`'s thin `ext` router. Browse/detail hit
+            // the PUBLIC store endpoints; install/uninstall mutate the live managers + config
+            // (daemon-owned). Replies land out-of-band via the hub's `drain_store_replies`.
+            ClientRequest::StoreBrowse { .. }
+            | ClientRequest::StoreDetail { .. }
+            | ClientRequest::InstallExtension { .. }
+            | ClientRequest::UninstallExtension { .. }
+            | ClientRequest::ListInstalledExtensions => self.ext(idx, req, state, handle),
+
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.

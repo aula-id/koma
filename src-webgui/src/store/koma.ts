@@ -576,6 +576,55 @@ export type OAuthConn = {
 // a type error.
 export type OAuthProviderEntry = { id: string; label: string; kind: string }
 
+// ─── extension STORE (koma.run marketplace) ────────────────────────────────
+// One catalogue row (host `StoreItemWire`, camelCase on the wire). The store
+// browse/detail come from the PUBLIC koma.run endpoints; there are no secrets.
+export type StoreItem = {
+  id: string
+  name: string
+  tagline: string
+  // 'free' | 'paid' — bare string so a future tier degrades gracefully.
+  tier: string
+  // 'daemon' | 'oneshot'.
+  kind: string
+  latestVersion: string
+  iconUrl: string
+  categories: string[]
+  author: string
+  updatedAt: string
+}
+
+// Per-kind contribution COUNTS (host `StoreContributesWire`) — the detail
+// install card's "provides" summary.
+export type StoreContributes = {
+  models: number
+  panels: number
+  tools: number
+  subAgents: number
+}
+
+// One extension's full detail (host `StoreDetailWire`) — the browse card plus
+// the long description, screenshots, contribution counts, `requires` grant list
+// (the install card's "wants" line), and available versions.
+export type StoreDetail = StoreItem & {
+  descriptionMd: string
+  screenshots: string[]
+  contributes: StoreContributes
+  requires: string[]
+  versions: string[]
+}
+
+// One locally-installed extension (host `InstalledExtWire`). No tokens exist in
+// the registry, so this is a full projection.
+export type InstalledExt = {
+  id: string
+  version: string
+  tier: string
+  kind: string
+  enabled: boolean
+  granted: string[]
+}
+
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
 // uncloseable chat tab; diff tabs are opened from the Explorer's File-changed
 // rows. The `kind` discriminant is deliberately left open — a future
@@ -658,6 +707,11 @@ export type Tab =
   // Usage sidebar's pinned "See Analytics" footer. Deduped by the fixed id;
   // closeable like a graph tab. Content lives in the `analytics` store slice.
   | { id: 'analytics'; kind: 'analytics' }
+  // The singleton extension-STORE tab (id 'store'), opened from the ActivityBar's
+  // Store icon / its Sidebar panel. Deduped by the fixed id; closeable like a diff
+  // tab. Content (catalogue/detail/installed) lives in the `store` slice — the
+  // StoreTab reads it live and fires browseStore + refreshInstalled on mount.
+  | { id: 'store'; kind: 'store' }
 
 export type PushEnvelope =
   | {
@@ -909,6 +963,23 @@ export type PushEnvelope =
       conns: { uuid: string; name: string; provider: string; email: string; plan: string; account_id: string }[]
       providers: { id: string; label: string; kind: string }[]
     }
+  // Extension STORE replies. Unlike the OAuth push, the nested wire structs are
+  // ALREADY camelCase on the wire (StoreItemWire/StoreDetailWire/InstalledExtWire
+  // carry `#[serde(rename_all="camelCase")]`), so these map straight to the
+  // StoreItem/StoreDetail/InstalledExt store types with no snake_case normalize.
+  // Reply to StoreBrowse — the catalogue grid. `error` set (items empty) on a
+  // store network/parse failure so the grid shows an error, not a hang.
+  | { k: 'StoreCatalogue'; items: StoreItem[]; error: string | null }
+  // Reply to StoreDetail — one extension's full detail. `detail` null (+ error)
+  // when the fetch failed / the id was unknown.
+  | { k: 'StoreItemDetail'; detail: StoreDetail | null; error: string | null }
+  // Reply to ListInstalledExtensions + the re-push after a successful install/
+  // uninstall — the local registry for the "Installed" section.
+  | { k: 'InstalledExtensions'; items: InstalledExt[] }
+  // Result of an install/uninstall op (echoes `id` to clear that card's pending
+  // spinner). On success the authoritative registry reply is the following
+  // InstalledExtensions push; `ok:false` + `error` surfaces a failure.
+  | { k: 'ExtensionOpResult'; id: string; ok: boolean; error: string | null }
   // Reply to GuiReq GitStatus — host-computed branch/ahead/behind + staged/
   // unstaged file lists for the Source Control "GIT" panel. Carries the
   // Rust `GitStatusResult` verbatim (already camelCase) flattened onto the
@@ -1165,6 +1236,23 @@ type OAuthSlice = {
   providers: OAuthProviderEntry[]
 }
 
+// The extension-STORE tab's full state — global (not per-session). `catalogue`
+// is the last browse result; `detail` is the currently-open detail (null on the
+// grid view or while loading); `installed` is the local registry (kept fresh via
+// the InstalledExtensions push after every install/uninstall). `busy` covers a
+// browse/detail fetch OR an in-flight install/uninstall (the grid/detail show a
+// spinner); `error` is the last store/op error string (null when clear).
+type StoreSlice = {
+  catalogue: StoreItem[]
+  detail: StoreDetail | null
+  installed: InstalledExt[]
+  busy: boolean
+  error: string | null
+  // Per-extension in-flight install/uninstall id (so ONLY that card shows its
+  // button spinner, not the whole grid). Cleared on its ExtensionOpResult.
+  pendingOp: string | null
+}
+
 // Local-only UI state (never pushed by the host, never sent upstream) — the
 // omnisearch overlay's open/closed flag. Kept in the store (rather than
 // component state) so the Composer, nested under a different route subtree
@@ -1318,6 +1406,7 @@ type KomaState = {
   ui: UiSlice
   config: ConfigSlice
   oauth: OAuthSlice
+  store: StoreSlice
   // Live per-provider model-id catalogue, keyed by the most recent
   // ListModels reply's provider (see ModelForm's provider-select trigger).
   modelList: ModelListEntry[]
@@ -1443,6 +1532,28 @@ type KomaState = {
   setAnalyticsScope: (scope: AnalyticsScope) => void
   setAnalyticsRange: (range: AnalyticsRange) => void
   setAnalyticsMetric: (metric: AnalyticsMetric) => void
+  // Open (or focus) the singleton extension-STORE tab (id 'store'). The StoreTab
+  // fires browseStore + refreshInstalled on mount. Mirrors openGraphTab's shape.
+  openStoreTab: () => void
+  // Browse the store catalogue (optional full-text / category filters). Marks the
+  // store busy + clears the last error, then StoreBrowse; the StoreCatalogue push
+  // fills `catalogue` + clears busy. Also returns to the grid (clears `detail`).
+  browseStore: (query?: string, category?: string) => void
+  // Open one extension's detail (StoreDetail): marks busy, sets `detail` null
+  // (grid→detail transition shows a spinner), fires the request. The
+  // StoreItemDetail push fills `detail`.
+  openStoreDetail: (id: string) => void
+  // Back to the catalogue grid from a detail view (local only — no request).
+  closeStoreDetail: () => void
+  // Install one extension by id (optional version). Marks that card's pendingOp,
+  // fires InstallExtension; the ExtensionOpResult clears it + surfaces any error,
+  // and the following InstalledExtensions push refreshes the registry.
+  installExtension: (id: string, version?: string) => void
+  // Uninstall one extension by id (same pendingOp lifecycle as install).
+  uninstallExtension: (id: string) => void
+  // Fetch the local installed registry (ListInstalledExtensions → the
+  // InstalledExtensions push). Fired on StoreTab mount.
+  refreshInstalled: () => void
   // (Re)load the FIRST page of the commit graph (replace mode): mark loading +
   // GitGraph{ limit:200, skip:0 }. Fired on GraphTab mount + its refresh button.
   refreshGraph: () => void
@@ -1689,17 +1800,6 @@ type KomaState = {
   // gate then falls back to StartScreen immediately instead of waiting on a
   // push that isn't coming.
   detachSession: () => void
-  // Agent-tab saving lifecycle tracker — set right before a SetAgent request,
-  // cleared on the matching confirmatory push (AgentsValues success with the
-  // new name visible, or AgentOp error). `seq` monotonically increases per
-  // save so a stale reply cannot clear a newer request. `null` when no save
-  // is in flight.
-  agentSaving: {
-    tabId: string
-    seq: number
-    originalName: string | null
-    newName: string
-  } | null
   // Set agentSaving to track a pending save (called right before the SetAgent
   // request is sent). `tabId` is the agent tab's client-local id, `originalName`
   // is the pre-edit name (null for create), `newName` is the trimmed final name.
@@ -1799,6 +1899,15 @@ const initialOAuth: OAuthSlice = {
   error: null,
   conns: [],
   providers: [],
+}
+
+const initialStore: StoreSlice = {
+  catalogue: [],
+  detail: null,
+  installed: [],
+  busy: false,
+  error: null,
+  pendingOp: null,
 }
 
 const initialGit: GitStatus = {
@@ -1927,6 +2036,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   ui: initialUi,
   config: initialConfig,
   oauth: initialOAuth,
+  store: initialStore,
   modelList: initialModelList,
   routeList: initialRouteList,
   settingsValues: null,
@@ -2364,6 +2474,42 @@ export const useKoma = create<KomaState>((set, get) => ({
         }))
         break
       }
+      // Store catalogue reply: REPLACE the grid + clear busy. `error` set means
+      // the fetch failed (items already empty) — surface it, keep `detail` as-is
+      // (a browse is a grid-level action; it doesn't disturb an open detail).
+      case 'StoreCatalogue':
+        set((s) => ({
+          store: { ...s.store, catalogue: env.items, busy: false, error: env.error },
+        }))
+        break
+      // Store detail reply: fill `detail` (null on error) + clear busy. A failed
+      // fetch surfaces `error` and leaves the detail null (the tab shows the
+      // error), so the grid's own error isn't clobbered by a later detail error
+      // only while the detail pane is what's showing.
+      case 'StoreItemDetail':
+        set((s) => ({
+          store: { ...s.store, detail: env.detail, busy: false, error: env.error },
+        }))
+        break
+      // Installed-registry reply (list / post-op re-push): REPLACE `installed`.
+      // Never touches busy/error — an install op's spinner is cleared by its
+      // ExtensionOpResult, which arrives just before this.
+      case 'InstalledExtensions':
+        set((s) => ({ store: { ...s.store, installed: env.items } }))
+        break
+      // Install/uninstall result: clear that card's pendingOp (if it's still the
+      // one in flight — guard against a stale reply for a superseded op) and
+      // surface any error. The authoritative registry refresh is the following
+      // InstalledExtensions push.
+      case 'ExtensionOpResult':
+        set((s) => ({
+          store: {
+            ...s.store,
+            pendingOp: s.store.pendingOp === env.id ? null : s.store.pendingOp,
+            error: env.ok ? null : env.error,
+          },
+        }))
+        break
       case 'UsagePreview':
         set((s) => {
           // Drop a reply for a scope the user has since switched away from (a
@@ -2949,6 +3095,39 @@ export const useKoma = create<KomaState>((set, get) => ({
       },
     }))
   },
+  openStoreTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'store')
+      const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: 'store', kind: 'store' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'store' } }
+    })
+    // No wire fetch here — the StoreTab fires browseStore + refreshInstalled on mount.
+  },
+  browseStore: (query, category) => {
+    // Return to the grid (clear any open detail) and mark it loading.
+    set((s) => ({ store: { ...s.store, busy: true, error: null, detail: null } }))
+    get().req({ r: 'StoreBrowse', query, category })
+  },
+  openStoreDetail: (id) => {
+    // Grid→detail: null the previous detail so the pane shows a spinner rather
+    // than a stale extension while the fetch is in flight.
+    set((s) => ({ store: { ...s.store, busy: true, error: null, detail: null } }))
+    get().req({ r: 'StoreDetail', id })
+  },
+  closeStoreDetail: () => {
+    set((s) => ({ store: { ...s.store, detail: null, error: null } }))
+  },
+  installExtension: (id, version) => {
+    set((s) => ({ store: { ...s.store, pendingOp: id, error: null } }))
+    get().req({ r: 'InstallExtension', id, version })
+  },
+  uninstallExtension: (id) => {
+    set((s) => ({ store: { ...s.store, pendingOp: id, error: null } }))
+    get().req({ r: 'UninstallExtension', id })
+  },
+  refreshInstalled: () => {
+    get().req({ r: 'ListInstalledExtensions' })
+  },
   refreshGraph: () => {
     // Serialize: at most one GitGraph request in flight, ever. If a load-more
     // (or another refresh) is already in flight, defer instead of racing it —
@@ -3212,6 +3391,12 @@ export const useKoma = create<KomaState>((set, get) => ({
     // Re-focusing the Analytics tab re-requests so the ledger is fresh.
     if (tab.kind === 'analytics') {
       get().refreshAnalytics()
+    }
+    // Re-focusing the Store tab refreshes the installed registry (an extension
+    // may have been installed/removed via another path). The catalogue is left
+    // as-is (a browse is user-initiated) so re-focus doesn't re-hit the network.
+    if (tab.kind === 'store') {
+      get().refreshInstalled()
     }
     // Sync the stream view to the now-active tab: a stream tab → stream its target;
     // any other tab (chat/diff/settings) → clear the view. The host/daemon dedupe an

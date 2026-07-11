@@ -178,6 +178,47 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             push(json);
         }
     }
+    // GUI extension-STORE replies (StoreBrowse / StoreDetail / ListInstalledExtensions /
+    // Install / Uninstall): re-push each as its own envelope BEFORE folding (a non-visual
+    // fold no-op, keeping the seq gap-free), same as the OAuthState intercept. The nested
+    // wire structs are re-embedded verbatim (they carry their own camelCase serde), so the
+    // re-push is a straight field clone.
+    if let DaemonEvent::StoreCatalogue { items, error } = &frame.event {
+        let env = PushEnvelope::StoreCatalogue {
+            items: items.clone(),
+            error: error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    if let DaemonEvent::StoreItemDetail { detail, error } = &frame.event {
+        let env = PushEnvelope::StoreItemDetail {
+            detail: detail.clone(),
+            error: error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    if let DaemonEvent::InstalledExtensions { items } = &frame.event {
+        let env = PushEnvelope::InstalledExtensions {
+            items: items.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    if let DaemonEvent::ExtensionOpResult { id, ok, error } = &frame.event {
+        let env = PushEnvelope::ExtensionOpResult {
+            id: id.clone(),
+            ok: *ok,
+            error: error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
     // Generic daemon-to-GUI error: re-push as an AgentOp envelope so the
     // GUI surfaces it as an error toast and clears any pending saving state.
     // Any DaemonEvent::Error not handled by a more specific intercept above

@@ -425,6 +425,37 @@ pub enum ClientRequest {
     /// connector is reachable pre-session): the GUI host removes + evicts from the on-disk
     /// config and re-pushes host-side. gui-gated.
     DeleteOAuthConn { uuid: String },
+
+    // ─── GUI extension STORE surface (browse / install / uninstall) ──────────
+    // The koma.run extension marketplace, wired to koma's install pipeline
+    // (`crate::app::ext`). Browse/detail hit the PUBLIC store endpoints (no auth);
+    // install needs the KomaRun account bearer + verifies + spawns, so the whole
+    // family is DAEMON-owned (install mutates the live MCP/ext managers + config),
+    // NOT host-local. Every reply lands out-of-band on a later tick via the hub's
+    // per-client seq'd `send_to` (the network fetch is spawned), like `ListModels`.
+    /// Browse the store catalogue: `GET https://koma.run/api/v1/extensions` with the
+    /// optional `q` (full-text) / `category` filters. PUBLIC (no auth). Read-only + async:
+    /// the daemon spawns the GET and replies out-of-band with a [`DaemonEvent::StoreCatalogue`]
+    /// (empty items + an `error` string on a network failure — never a hang). gui-gated.
+    StoreBrowse { query: Option<String>, category: Option<String> },
+    /// Fetch one extension's full detail: `GET .../extensions/{id}`. PUBLIC (no auth).
+    /// Read-only + async like [`StoreBrowse`]; replies with a [`DaemonEvent::StoreItemDetail`]
+    /// (`detail: None` + an `error` on failure). gui-gated.
+    StoreDetail { id: String },
+    /// Install `id` (optionally pinning `version`, else latest). The install action: detect
+    /// the `<os>-<arch>` platform, resolve the KomaRun account bearer (via
+    /// [`crate::service::oauth::manager::fresh_key`]), `GET .../extensions/{id}/download`
+    /// following the 302 → signed URI, verify the artifact's sha256 + Ed25519 signature, then
+    /// unpack + register + (daemon-kind) spawn it. Replies with a [`DaemonEvent::ExtensionOpResult`]
+    /// then a fresh [`DaemonEvent::InstalledExtensions`]. gui-gated.
+    InstallExtension { id: String, version: Option<String> },
+    /// Uninstall `id`: purge its contributions, stop its process, remove its on-disk dir +
+    /// registry entry. Replies with a [`DaemonEvent::ExtensionOpResult`] then a fresh
+    /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
+    UninstallExtension { id: String },
+    /// Fetch the locally-installed extension registry (read-only): replies with a one-shot
+    /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
+    ListInstalledExtensions,
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -603,6 +634,38 @@ pub enum DaemonEvent {
         error: Option<String>,
         conns: Vec<OAuthConnWire>,
         providers: Vec<OAuthProviderWire>,
+    },
+    /// One-shot reply to a [`ClientRequest::StoreBrowse`]: the store catalogue rows for the
+    /// GUI Store grid. `error` is `Some` (and `items` empty) on a network/parse failure so
+    /// the grid renders an error state rather than hanging. Delivered out-of-band on a later
+    /// tick via the hub's per-client seq'd `send_to` (the fetch is async), whether or not the
+    /// client is session-attached. The GUI host re-pushes it as a `StoreCatalogue` envelope;
+    /// the TUI shadow treats it as a no-op.
+    StoreCatalogue {
+        items: Vec<StoreItemWire>,
+        error: Option<String>,
+    },
+    /// One-shot reply to a [`ClientRequest::StoreDetail`]: one extension's full detail.
+    /// `detail` is `None` (and `error` `Some`) when the fetch failed or the id was unknown.
+    /// Same out-of-band delivery as [`StoreCatalogue`].
+    StoreItemDetail {
+        detail: Option<StoreDetailWire>,
+        error: Option<String>,
+    },
+    /// The locally-installed extension registry — the reply to
+    /// [`ClientRequest::ListInstalledExtensions`] AND the re-push after a successful
+    /// [`ClientRequest::InstallExtension`] / [`ClientRequest::UninstallExtension`]. The GUI
+    /// host re-pushes it as an `InstalledExtensions` envelope; the TUI shadow ignores it.
+    InstalledExtensions { items: Vec<InstalledExtWire> },
+    /// One-shot result of an install/uninstall op. On success the authoritative registry
+    /// reply is the following [`InstalledExtensions`] push; this carries the ok/error status
+    /// (echoing `id` so the GUI can clear that card's pending spinner). `ok: false` +
+    /// `error` surfaces the failure (e.g. "sign in to koma.run to install", an entitlement
+    /// error, or a signature-verification hard stop).
+    ExtensionOpResult {
+        id: String,
+        ok: bool,
+        error: Option<String>,
     },
 }
 

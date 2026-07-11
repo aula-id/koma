@@ -416,6 +416,37 @@ pub(super) enum PushEnvelope {
         conns: Vec<crate::ipc::proto::OAuthConnWire>,
         providers: Vec<crate::ipc::proto::OAuthProviderWire>,
     },
+    /// The GUI extension-STORE catalogue — the one-shot reply to a `StoreBrowse`. `error` is
+    /// set (and `items` empty) on a store network/parse failure so the grid renders an error
+    /// state rather than hanging. Re-pushed from the intercepted `DaemonEvent::StoreCatalogue`;
+    /// the nested `StoreItemWire`s carry their own camelCase keys.
+    #[serde(rename_all = "camelCase")]
+    StoreCatalogue {
+        items: Vec<crate::ipc::proto::StoreItemWire>,
+        error: Option<String>,
+    },
+    /// One extension's full detail — the reply to a `StoreDetail`. `detail` is `null` (and
+    /// `error` set) when the fetch failed / the id was unknown.
+    #[serde(rename_all = "camelCase")]
+    StoreItemDetail {
+        detail: Option<crate::ipc::proto::StoreDetailWire>,
+        error: Option<String>,
+    },
+    /// The locally-installed extension registry — the reply to `ListInstalledExtensions` and
+    /// the re-push after a successful install/uninstall.
+    #[serde(rename_all = "camelCase")]
+    InstalledExtensions {
+        items: Vec<crate::ipc::proto::InstalledExtWire>,
+    },
+    /// The ok/error result of an install/uninstall op (echoing `id` so the GUI clears that
+    /// card's pending spinner). On success the authoritative registry reply is the following
+    /// `InstalledExtensions` push; this carries the status + any failure message.
+    #[serde(rename_all = "camelCase")]
+    ExtensionOpResult {
+        id: String,
+        ok: bool,
+        error: Option<String>,
+    },
     /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
     /// foreground session's current model. `state` is `"loading"` (a catalogue
     /// fetch was just armed or is already in flight — `options` empty),

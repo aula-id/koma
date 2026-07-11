@@ -7,10 +7,11 @@ import { McpPanel } from './panels/McpPanel'
 import { ConnectorPanel } from './panels/ConnectorPanel'
 import { AgentsPanel } from './panels/AgentsPanel'
 import { UsagePanel } from './panels/UsagePanel'
+import { StorePanel } from './panels/StorePanel'
 import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
 
-export type SidebarView = 'explore' | 'git' | 'mcp' | 'connector' | 'agents' | 'usage'
+export type SidebarView = 'explore' | 'git' | 'mcp' | 'connector' | 'agents' | 'usage' | 'store'
 
 type SidebarProps = {
   width: number
@@ -24,6 +25,7 @@ const TITLES: Record<SidebarView, string> = {
   connector: 'Connector',
   agents: 'Agents',
   usage: 'Usage',
+  store: 'Extensions',
 }
 
 // Sidebar shell: header + the active view's panel. Width from RootLayout state.
@@ -86,6 +88,7 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'connector' && <ConnectorPanel />}
         {view === 'agents' && <AgentsPanel />}
         {view === 'usage' && <UsagePanel />}
+        {view === 'store' && <StorePanel />}
       </div>
     </div>
   )

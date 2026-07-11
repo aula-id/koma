@@ -339,6 +339,15 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     the flow runs off-thread and can't advance the per-client seq itself.
         hub.drain_oauth_pushes(state);
 
+        // 3-quint. Drain the extension-STORE reply channel (`store_rx`), fed by the async
+        //     browse/detail/download tasks the `requests_ext` handlers spawn: turn each landed
+        //     browse/detail reply into a seq'd `StoreCatalogue`/`StoreItemDetail` frame, and
+        //     finish a downloaded install artifact (verify + unpack + register + spawn) ON the
+        //     loop — where it has `&mut state` + the managers. Same one-shot pattern as the
+        //     drains above; the network fetch runs off-thread and can't advance the per-client
+        //     seq itself.
+        hub.drain_store_replies(state);
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the

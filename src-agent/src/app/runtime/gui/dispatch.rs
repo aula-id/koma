@@ -660,6 +660,46 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 HostCtl::DeleteOAuthConn { uuid },
             );
         }
+        // Extension STORE: forward the whole family to the attached daemon (which owns the
+        // install pipeline + the live managers + config). Attached-only, like `StartOAuth` —
+        // a GUI window always has a session daemon attached in normal use; un-attached these
+        // are a silent no-op. The daemon's reply frames are intercepted in `push_loop` and
+        // re-pushed as the Store* envelopes.
+        GuiReq::StoreBrowse { query, category } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::StoreBrowse { query, category });
+                }
+            }
+        }
+        GuiReq::StoreDetail { id } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::StoreDetail { id });
+                }
+            }
+        }
+        GuiReq::InstallExtension { id, version } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::InstallExtension { id, version });
+                }
+            }
+        }
+        GuiReq::UninstallExtension { id } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::UninstallExtension { id });
+                }
+            }
+        }
+        GuiReq::ListInstalledExtensions => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ListInstalledExtensions);
+                }
+            }
+        }
         // Settings "SSH Keys" section: host-side key-vault fetch/mutations. ALWAYS
         // routed to the host-relay thread — never the daemon — regardless of
         // attach state (see `HostCtl::KeyList`), same reasoning as `GitStatus`.
