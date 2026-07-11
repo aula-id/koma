@@ -135,8 +135,14 @@ export function BranchSwitcher({ variant }: BranchSwitcherProps) {
     }
   }, [open])
 
+  // Tags (GK4a — listed alongside branches for the graph's ref-tree) aren't
+  // switchable from here: `git checkout <tag>` detaches HEAD, which this
+  // popover's SAFE-only branch-pick idiom doesn't offer — the ref-tree TAGS
+  // group is the place for those. Filter them out before the local/remote
+  // split below.
+  const switchable = useMemo(() => branches.filter((b) => b.kind !== 'tag'), [branches])
   const q = filter.trim().toLowerCase()
-  const filtered = q ? branches.filter((b) => b.name.toLowerCase().includes(q)) : branches
+  const filtered = q ? switchable.filter((b) => b.name.toLowerCase().includes(q)) : switchable
   const locals = useMemo(() => filtered.filter((b) => b.kind === 'local'), [filtered])
   const remotes = useMemo(() => filtered.filter((b) => b.kind === 'remote'), [filtered])
 

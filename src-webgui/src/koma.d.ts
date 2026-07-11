@@ -388,6 +388,22 @@ declare global {
     // GitOpAbort. Reply lands as a one-shot GitOp push (`op: 'continue'`) —
     // git refuses (and the GitOp reply carries an error) if conflicts remain.
     | { r: 'GitOpContinue'; kind: string }
+    // Toolbar "Stash" button (GK4c): `git stash push` (tracked + staged
+    // changes only, matching plain `git stash`'s own default). Reply lands as
+    // a one-shot GitOp push (`op: 'stash'`) — the host already follows every
+    // GitOp mutation with its own fresh GitStatus push, so the toolbar's
+    // staged/unstaged counts update on their own; the GitOp reducer also
+    // re-fetches the stash list.
+    | { r: 'GitStash' }
+    // Toolbar "Pop" button (GK4c): `git stash pop`. May conflict — same
+    // reasoning as GitCherryPick (the existing G5 conflict banner surfaces
+    // it via the host's follow-up GitStatus push). Reply lands as a one-shot
+    // GitOp push (`op: 'stashPop'`).
+    | { r: 'GitStashPop' }
+    // Toolbar mount / stash-op follow-up (GK4c): fetch every `git stash list`
+    // entry for the Stash/Pop buttons' counts. Serviced entirely host-side.
+    // Reply lands as the StashList push envelope.
+    | { r: 'GitStashList' }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded
