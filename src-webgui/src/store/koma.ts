@@ -1121,6 +1121,10 @@ type GraphSlice = {
   pendingRefresh: boolean
   selectedSha: string | null
   detail: CommitDetail | null
+  // Rail-line (default, the existing virtualized commit list) vs Bubble
+  // (GK5's activity view — a placeholder here) mode switch (GK2). Local UI
+  // preference, never persisted, never touches the wire.
+  graphMode: 'rail' | 'bubble'
 }
 
 type KomaState = {
@@ -1228,6 +1232,8 @@ type KomaState = {
   // its GitCommitDetail. Clears stale `detail` when the sha actually changes so
   // the detail pane shows a loading state, not the previous commit's detail.
   selectCommit: (sha: string) => void
+  // Rail-line/Bubble mode switch (GK2) — local UI toggle, no wire request.
+  setGraphMode: (mode: 'rail' | 'bubble') => void
   // Open (or focus) a Monaco diff tab for `path` at commit `sha` vs its first
   // parent — distinct `commitdiff:${sha}:${path}` id from openDiffTab/
   // openGitDiffTab (never collides). Marks loading + fires the GitCommitDiff req.
@@ -1543,6 +1549,7 @@ const initialGraph: GraphSlice = {
   pendingRefresh: false,
   selectedSha: null,
   detail: null,
+  graphMode: 'rail',
 }
 
 const initialKeys: KeyInfo[] = []
@@ -2399,6 +2406,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       },
     }))
     get().req({ r: 'GitCommitDetail', sha })
+  },
+  setGraphMode: (mode) => {
+    set((s) => ({ graph: { ...s.graph, graphMode: mode } }))
   },
   openCommitDiffTab: (sha, path) => {
     const id = `commitdiff:${sha}:${path}`
