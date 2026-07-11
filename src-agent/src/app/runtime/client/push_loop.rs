@@ -471,9 +471,9 @@ pub(super) fn push_loop(
                     let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                     git_host::spawn_git_merge_attached(ot, st, cur, ref_name);
                 }
-                Ok(super::HostCtl::GitRebase { upstream }) => {
+                Ok(super::HostCtl::GitRebase { upstream, branch }) => {
                     let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
-                    git_host::spawn_git_rebase_attached(ot, st, cur, upstream);
+                    git_host::spawn_git_rebase_attached(ot, st, cur, upstream, branch);
                 }
                 Ok(super::HostCtl::GitOpAbort { kind }) => {
                     let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());

@@ -373,9 +373,12 @@ declare global {
     // may conflict, same reasoning as GitCherryPick). Reply lands as a
     // one-shot GitOp push (`op: 'merge'`).
     | { r: 'GitMerge'; ref: string }
-    // Plain rebase of the current branch onto `upstream` (G5c). May conflict.
-    // Reply lands as a one-shot GitOp push (`op: 'rebase'`).
-    | { r: 'GitRebase'; upstream: string }
+    // Rebase onto `upstream` (G5c/G6). `branch` is a branch name for the
+    // GitKraken-style drag-to-rebase (drag a branch chip onto a commit/ref —
+    // that branch is checked out + rebased onto `upstream`, current branch
+    // untouched), or `null` for the plain "rebase current branch" op. May
+    // conflict. Reply lands as a one-shot GitOp push (`op: 'rebase'`).
+    | { r: 'GitRebase'; upstream: string; branch: string | null }
     // The conflict banner's Abort button (G5c). `kind` is
     // 'merge'/'rebase'/'cherry-pick'/'revert' (echoing GitStatus.inProgress).
     // Reply lands as a one-shot GitOp push (`op: 'abort'`), immediately

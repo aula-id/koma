@@ -330,10 +330,16 @@ pub(super) enum GuiReq {
         #[serde(rename = "ref")]
         ref_name: String,
     },
-    /// Plain rebase of the current branch onto `upstream` (G5b — the op a later
-    /// drag-to-rebase UI will call with a resolved upstream). May conflict.
-    /// Forwarded as [`HostCtl::GitRebase`].
-    GitRebase { upstream: String },
+    /// Rebase onto `upstream` (G5b/G6). `branch` is `Some(name)` for the
+    /// GitKraken-style drag-to-rebase (drag a branch chip onto a commit/ref —
+    /// `branch` is checked out and rebased onto `upstream`; the current branch is
+    /// left alone), or `None` for the plain "rebase current branch" op. May
+    /// conflict. Forwarded as [`HostCtl::GitRebase`].
+    GitRebase {
+        upstream: String,
+        #[serde(default)]
+        branch: Option<String>,
+    },
     /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/
     /// `"rebase"`/`"cherry-pick"`/`"revert"` (echoing `GitStatus.inProgress`).
     /// Forwarded as [`HostCtl::GitOpAbort`].

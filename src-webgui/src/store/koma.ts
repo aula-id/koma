@@ -1355,9 +1355,12 @@ type KomaState = {
   // may conflict, same reasoning as `gitCherryPick`. `ref` is a branch name or
   // a sha.
   gitMerge: (ref: string) => void
-  // Rebase the current branch onto `upstream` (G5c) — a branch name or a sha.
-  // May conflict, same reasoning as `gitCherryPick`.
-  gitRebase: (upstream: string) => void
+  // Rebase onto `upstream` (G5c/G6) — a branch name or a sha. `branch`
+  // (G6 GitKraken-style drag-to-rebase — a dragged branch chip dropped onto a
+  // commit/ref) checks out + rebases THAT branch instead of the current one;
+  // omitted rebases the current branch (unchanged G5c behaviour). May
+  // conflict, same reasoning as `gitCherryPick`.
+  gitRebase: (upstream: string, branch?: string) => void
   // The conflict banner's Abort button (G5c): `kind` is `git.inProgress`
   // verbatim ('merge'/'rebase'/'cherry-pick'/'revert'). Same reply pattern as
   // `gitCherryPick`.
@@ -2462,9 +2465,9 @@ export const useKoma = create<KomaState>((set, get) => ({
     if (!ref.trim()) return
     get().req({ r: 'GitMerge', ref })
   },
-  gitRebase: (upstream) => {
+  gitRebase: (upstream, branch) => {
     if (!upstream.trim()) return
-    get().req({ r: 'GitRebase', upstream })
+    get().req({ r: 'GitRebase', upstream, branch: branch ?? null })
   },
   gitOpAbort: (kind) => {
     get().req({ r: 'GitOpAbort', kind })

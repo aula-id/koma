@@ -119,20 +119,32 @@ pub(super) fn git_merge(ref_: &str, session: Option<&str>) -> GitOpResult {
     }
 }
 
-/// `git rebase <upstream>`, answering a [`super::HostCtl::GitRebase`]. `upstream` (a
-/// branch name or a sha) is validated via [`valid_commit_ref`] first. This is the
-/// PLAIN rebase op a later drag-to-rebase UI will call with a resolved upstream — no
+/// `git rebase <upstream> [branch]`, answering a [`super::HostCtl::GitRebase`].
+/// `upstream` (a branch name or a sha) is validated via [`valid_commit_ref`] first;
+/// when `branch` is `Some` (the GitKraken-style drag-to-rebase: drag branch `branch`
+/// onto `upstream`) it is validated the same way before being appended — git checks
+/// `branch` out and rebases IT onto `upstream`, leaving the current branch untouched.
+/// `branch: None` rebases the CURRENT branch instead (the plain G5b op). No
 /// interactive/`--onto` support here. May conflict — same reasoning as
 /// [`git_cherry_pick`].
-pub(super) fn git_rebase(upstream: &str, session: Option<&str>) -> GitOpResult {
+pub(super) fn git_rebase(upstream: &str, branch: Option<&str>, session: Option<&str>) -> GitOpResult {
     const OP: &str = "rebase";
     if !valid_commit_ref(upstream) {
         return op_err(OP, "invalid upstream");
     }
+    if let Some(b) = branch {
+        if !valid_commit_ref(b) {
+            return op_err(OP, "invalid branch");
+        }
+    }
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
     };
-    match git_cmd_env(&root, &["rebase", upstream], None) {
+    let args: Vec<&str> = match branch {
+        Some(b) => vec!["rebase", upstream, b],
+        None => vec!["rebase", upstream],
+    };
+    match git_cmd_env(&root, &args, None) {
         Some(out) if out.status.success() => op_ok(OP),
         Some(out) => op_err(OP, git_failure(&out, "git rebase failed")),
         None => op_err(OP, "failed to run git"),

@@ -113,9 +113,9 @@ pub(super) fn git_merge(ctl: &Sender<HostCtl>, ref_name: String) {
     let _ = ctl.send(HostCtl::GitMerge { ref_name });
 }
 
-/// `GuiReq::GitRebase` (G5b).
-pub(super) fn git_rebase(ctl: &Sender<HostCtl>, upstream: String) {
-    let _ = ctl.send(HostCtl::GitRebase { upstream });
+/// `GuiReq::GitRebase` (G5b/G6).
+pub(super) fn git_rebase(ctl: &Sender<HostCtl>, upstream: String, branch: Option<String>) {
+    let _ = ctl.send(HostCtl::GitRebase { upstream, branch });
 }
 
 /// `GuiReq::GitOpAbort` (G5b).

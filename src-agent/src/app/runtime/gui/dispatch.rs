@@ -328,7 +328,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitRevert { sha } => dispatch_git::git_revert(&ctx.ctl, sha),
         GuiReq::GitReset { sha, mode } => dispatch_git::git_reset(&ctx.ctl, sha, mode),
         GuiReq::GitMerge { ref_name } => dispatch_git::git_merge(&ctx.ctl, ref_name),
-        GuiReq::GitRebase { upstream } => dispatch_git::git_rebase(&ctx.ctl, upstream),
+        GuiReq::GitRebase { upstream, branch } => dispatch_git::git_rebase(&ctx.ctl, upstream, branch),
         GuiReq::GitOpAbort { kind } => dispatch_git::git_op_abort(&ctx.ctl, kind),
         GuiReq::GitOpContinue { kind } => dispatch_git::git_op_continue(&ctx.ctl, kind),
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
