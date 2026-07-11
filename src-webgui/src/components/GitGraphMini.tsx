@@ -122,11 +122,16 @@ export function GitGraphMini() {
   const refreshGraph = useKoma((s) => s.refreshGraph)
   const openGraphTab = useKoma((s) => s.openGraphTab)
   const selectCommit = useKoma((s) => s.selectCommit)
+  const sessionId = useKoma((s) => s.session.id)
 
+  // Keyed on `sessionId`: this mounts while the "Commit Graph" accordion is
+  // open and stays mounted across a session switch, so a plain "only fetch
+  // when empty" guard would never refetch (the OLD session's commits are
+  // still sitting in the slice). `refreshGraph` already serializes via its
+  // own `pendingRefresh` flag, so re-firing on every session change is safe.
   useEffect(() => {
-    if (commits.length === 0 && !loading) refreshGraph()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    refreshGraph()
+  }, [refreshGraph, sessionId])
 
   const rows = useMemo(() => computeGitGraph(commits).rows.slice(0, MINI_MAX), [commits])
   const gutterW = useMemo(() => miniLaneCount(rows) * LANE_W, [rows])

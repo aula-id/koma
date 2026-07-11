@@ -54,16 +54,21 @@ export default function GraphBubble() {
   const error = useKoma((s) => s.activity.error)
   const activePath = useKoma((s) => s.activity.path)
   const refreshActivity = useKoma((s) => s.refreshActivity)
+  const sessionId = useKoma((s) => s.session.id)
 
-  // Fetch (or re-fetch) the CURRENT path filter on mount — this component
-  // only mounts while bubble mode is showing, so re-opening the tab always
-  // reloads. Deliberately reads `activity.path`'s value at mount time rather
-  // than reacting to it (a live dependency would loop: refreshActivity sets
-  // `path`, which would re-trigger this effect).
+  // Fetch (or re-fetch) the CURRENT path filter on mount, and again whenever
+  // `sessionId` changes — this component only mounts while bubble mode is
+  // showing, so re-opening the tab always reloads, but it can also stay
+  // mounted ACROSS a session switch, so `sessionId` re-fires this to drop the
+  // OLD session's activity series. Deliberately reads `activity.path`'s value
+  // at mount/switch time rather than reacting to it (a live dependency would
+  // loop: refreshActivity sets `path`, which would re-trigger this effect).
+  // `activePath` stays OUT of the deps on purpose — path changes are driven
+  // by the explicit filter submit, not this effect.
   useEffect(() => {
     refreshActivity(activePath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshActivity])
+  }, [refreshActivity, sessionId])
 
   // ---- Responsive width (never divide by 0) ----
   const containerRef = useRef<HTMLDivElement | null>(null)

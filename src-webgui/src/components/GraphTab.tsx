@@ -63,12 +63,15 @@ export default function GraphTab() {
   // re-measure `viewportH` on the display:none -> visible flip, since a
   // ResizeObserver frequently misses that transition on WebKitGTK.
   const isActiveTab = useKoma((s) => s.ui.activeTabId === 'graph')
+  const sessionId = useKoma((s) => s.session.id)
 
-  // Fetch the first page on mount. The tab persists mounted once opened (see
-  // TabbedMain), so this fires exactly once per open.
+  // Fetch the first page on mount, and again whenever `sessionId` changes —
+  // the tab persists mounted once opened (see TabbedMain) and survives a
+  // session switch, so without the `sessionId` dep this would otherwise keep
+  // showing the OLD session's commits forever.
   useEffect(() => {
     refreshGraph()
-  }, [refreshGraph])
+  }, [refreshGraph, sessionId])
 
   // Recompute the whole layout whenever the commit array changes (a new array is
   // pushed on every GitGraph reply — refresh replaces, load-more concatenates).
