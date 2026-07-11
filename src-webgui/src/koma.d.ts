@@ -306,6 +306,18 @@ declare global {
     | { r: 'GitPull' }
     // GIT panel Push button. Same reply pattern as GitFetch.
     | { r: 'GitPush' }
+    // Commit-graph tab: fetch a host-computed paginated commit graph across
+    // every ref (GitKraken-style). `limit`/`skip` page it (200 per page); reply
+    // lands as the GitGraph push envelope — ALWAYS a reply, serviced entirely
+    // host-side (works regardless of attach state). Matches the Rust
+    // GuiReq::GitGraph { limit, skip }.
+    | { r: 'GitGraph'; limit: number; skip: number }
+    // Commit-graph row click: fetch one commit's full metadata (incl. body) +
+    // first-parent changed-file list. Reply lands as the CommitDetail push.
+    | { r: 'GitCommitDetail'; sha: string }
+    // Commit-detail file-row click: fetch one file's diff at `sha` vs its first
+    // parent, for a Monaco diff tab. Reply lands as the CommitDiff push.
+    | { r: 'GitCommitDiff'; sha: string; path: string }
     // Settings "SSH Keys" section opened / refreshed: fetch the host key vault's
     // current key list (`<~/.koma>/keys/`). GUI-only, manual, user-owned vault —
     // completely separate from the model's own git credential machinery. Serviced

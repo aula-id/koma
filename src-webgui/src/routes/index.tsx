@@ -263,6 +263,10 @@ const AgentTab = lazy(() => import('../components/AgentTab'))
 // loads when the first stream tab is opened from the Explorer.
 const StreamTab = lazy(() => import('../components/StreamTab'))
 
+// GitKraken-style commit-graph tab — lazy so its chunk (layout engine + the
+// virtualized SVG gutter) only loads when the graph is first opened.
+const GraphTab = lazy(() => import('../components/GraphTab'))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -319,6 +323,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <StreamTab tab={t} />
+              </Suspense>
+            </div>
+          ) : t.kind === 'graph' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <GraphTab />
               </Suspense>
             </div>
           ) : null,

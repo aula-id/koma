@@ -352,6 +352,57 @@ export type GitStatus = {
   keyName: string | null
 }
 
+// ---- Commit graph (G2) wire types — mirror the host's git_graph.rs DTOs
+// (every struct `rename_all = "camelCase"`), matched field-for-field so a wire
+// mismatch can't silently read `undefined` at runtime. -----------------------
+
+// One ref (branch/tag/HEAD pointer) decorating a commit — host `GitRef`. `kind`
+// classifies it off the FULL ref path host-side (a distinct chip colour per
+// kind); `isHead` marks the single `HEAD -> …` current-branch pointer.
+export type GitRef = {
+  name: string
+  kind: 'head' | 'local' | 'remote' | 'tag'
+  isHead: boolean
+}
+
+// One commit row in a GitGraph reply — host `GitCommitNode`. The list is
+// newest-first, already `--date-order --parents`; `parents` is empty for a root
+// commit; `refs` is empty for the common case of a commit nothing points at.
+export type GitCommitNode = {
+  sha: string
+  parents: string[]
+  refs: GitRef[]
+  author: string
+  email: string
+  date: string
+  subject: string
+}
+
+// One changed-file entry in a CommitDetail — host `CommitFile`. `status` is
+// git's own token ("M"/"A"/"D"/"R100"/…); `origPath` is non-null only on a
+// rename/copy record (then `path` is the NEW path, `origPath` the OLD one).
+export type CommitFile = {
+  status: string
+  path: string
+  origPath: string | null
+}
+
+// A single commit's full metadata (incl. body) + first-parent changed-file list
+// — host `CommitDetailResult`. `error` non-null means the sha failed validation
+// or the workdir isn't a git repo (every other field then a neutral default).
+// Stored into the graph slice's `detail` by the CommitDetail push.
+export type CommitDetail = {
+  sha: string
+  author: string
+  email: string
+  date: string
+  subject: string
+  body: string
+  parents: string[]
+  files: CommitFile[]
+  error: string | null
+}
+
 // One keypair entry in the Settings "SSH Keys" section's vault list — mirrors
 // the host's `KeyInfo` (keys.rs, `rename_all = "camelCase"`). This is a
 // GUI-only, manual, user-owned key vault (`<~/.koma>/keys/`), completely
@@ -470,6 +521,14 @@ export type Tab =
       // index). Undefined on a plain File-changed diff tab — this is what
       // `activateTab`'s re-request routes on (GitDiff vs FileDiff).
       staged?: boolean
+      // Present ONLY on a commit-graph diff tab (opened via `openCommitDiffTab`):
+      // the commit sha whose first-parent diff this tab shows. Distinct tab-id
+      // scheme (`commitdiff:${sha}:${path}`) from the File-changed (`diff:`) and
+      // GIT-panel (`gitdiff:`) schemes, so a commit-history diff never collides
+      // with either. `activateTab`'s re-request checks this FIRST (GitCommitDiff)
+      // before the `staged` (GitDiff) / plain (FileDiff) branches — a commit-diff
+      // tab has no `staged`, so it would otherwise wrongly re-fire FileDiff.
+      commitSha?: string
     }
   // A read-only STREAM tab live-streaming ONE sub-agent's transcript. Stable id
   // `sa:${agentId}` so open/dedupe is trivial. Content is NOT stored on the tab — the
@@ -493,6 +552,11 @@ export type Tab =
   // closing an unsaved tab discards silently (no local draft is ever
   // persisted to the store).
   | { id: string; kind: 'agent'; agentId: string | null }
+  // The singleton GitKraken-style commit-graph tab (id 'graph'), opened from the
+  // Source Control panel header. Deduped by the fixed id; closeable like a diff
+  // tab. Content (commits/selection/detail) lives in the `graph` store slice, not
+  // on the tab — the GraphTab reads it live and fires refreshGraph on mount.
+  | { id: 'graph'; kind: 'graph' }
 
 export type PushEnvelope =
   | {
@@ -761,6 +825,50 @@ export type PushEnvelope =
       error: string | null
       message?: string
     }
+  // Reply to GuiReq GitGraph — a host-computed paginated commit graph across
+  // every ref (GitKraken-style tab). Carries `GitGraphResult` verbatim (already
+  // camelCase) flattened onto the envelope (a `#[serde(tag = "k")]` newtype
+  // variant). `head` is the current HEAD sha (null when unresolved); `hasMore`
+  // hints more history exists past this page (scroll-load-more). `error` set
+  // means not a git repository (`commits` then empty). ALWAYS a reply.
+  | {
+      k: 'GitGraph'
+      commits: GitCommitNode[]
+      head: string | null
+      hasMore: boolean
+      error: string | null
+    }
+  // Reply to GuiReq GitCommitDetail — one commit's full metadata (incl. body) +
+  // first-parent changed-file list, for the graph's detail pane. Carries
+  // `CommitDetailResult` verbatim (already camelCase) flattened onto the
+  // envelope. `sha` echoes the request so the reducer can drop a stale reply for
+  // a since-changed selection.
+  | {
+      k: 'CommitDetail'
+      sha: string
+      author: string
+      email: string
+      date: string
+      subject: string
+      body: string
+      parents: string[]
+      files: CommitFile[]
+      error: string | null
+    }
+  // Reply to GuiReq GitCommitDiff — one file's diff at `sha` vs its first parent,
+  // for a Monaco diff tab. SEPARATE envelope + tab-id scheme
+  // (`commitdiff:${sha}:${path}`) from GitDiff (working-tree/index) so a
+  // commit-history diff never collides with a Source-Control one. `sha`/`path`
+  // echo the request so the reducer applies it to the matching tab.
+  | {
+      k: 'CommitDiff'
+      sha: string
+      path: string
+      original: string
+      modified: string
+      error: string | null
+      binary: boolean
+    }
   // Reply to GuiReq KeyList — the Settings "SSH Keys" section's authoritative
   // vault list. ALWAYS a reply so the section never hangs loading (an empty
   // vault is itself a valid "no keys yet" state). Also arrives as the
@@ -960,6 +1068,29 @@ type UiSlice = {
   loading: { active: boolean; workspace: LoadPhase; awareness: LoadPhase } | null
 }
 
+// The commit-graph tab's slice (G2) — the loaded commit page(s) + selection +
+// fetched detail. `loadMode` records how the LAST GitGraph req was issued so the
+// reducer knows whether to concat (append) or replace the incoming page. Global
+// (mirrors the `git` slice; the host resolves the graph off the foreground
+// session's repo). Reset naturally: a session switch closes the tab (tabs reset
+// to chat), and reopening remounts GraphTab → a fresh refreshGraph.
+type GraphSlice = {
+  commits: GitCommitNode[]
+  head: string | null
+  hasMore: boolean
+  loading: boolean
+  loadMode: 'replace' | 'append'
+  // A refreshGraph() call that landed while a GitGraph request was already in
+  // flight (append or replace) — client-side serialization keeps at most one
+  // GitGraph request in flight at a time so `loadMode` is never ambiguous
+  // between a racing append and replace reply. Set true instead of firing;
+  // replayed by the 'GitGraph' reducer once the in-flight reply lands and
+  // `loading` clears.
+  pendingRefresh: boolean
+  selectedSha: string | null
+  detail: CommitDetail | null
+}
+
 type KomaState = {
   session: SessionSlice
   hub: HubSlice
@@ -1038,6 +1169,27 @@ type KomaState = {
   keyRevealResult: KeyReveal | null
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
+  // The GitKraken-style commit-graph tab's slice (G2). See GraphSlice.
+  graph: GraphSlice
+  // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
+  // itself fires refreshGraph on mount, so opening is enough. Mirrors
+  // openSettingsTab's dedupe + activate shape.
+  openGraphTab: () => void
+  // (Re)load the FIRST page of the commit graph (replace mode): mark loading +
+  // GitGraph{ limit:200, skip:0 }. Fired on GraphTab mount + its refresh button.
+  refreshGraph: () => void
+  // Append the NEXT page (append mode, skip = current commit count) when scrolled
+  // near the bottom and `hasMore`. Guarded against a duplicate in-flight load via
+  // the `loading` flag, and a no-op past the last page.
+  loadMoreGraph: () => void
+  // Select a commit (graph row / a parent-chip click): set selectedSha + fetch
+  // its GitCommitDetail. Clears stale `detail` when the sha actually changes so
+  // the detail pane shows a loading state, not the previous commit's detail.
+  selectCommit: (sha: string) => void
+  // Open (or focus) a Monaco diff tab for `path` at commit `sha` vs its first
+  // parent — distinct `commitdiff:${sha}:${path}` id from openDiffTab/
+  // openGitDiffTab (never collides). Marks loading + fires the GitCommitDiff req.
+  openCommitDiffTab: (sha: string, path: string) => void
   push: (env: PushEnvelope) => void
   // JS -> Rust: typed request helper, tags the envelope { t: 'req', ...g }.
   req: (g: GuiReq) => void
@@ -1294,6 +1446,17 @@ const initialGit: GitStatus = {
   keyName: null,
 }
 
+const initialGraph: GraphSlice = {
+  commits: [],
+  head: null,
+  hasMore: false,
+  loading: false,
+  loadMode: 'replace',
+  pendingRefresh: false,
+  selectedSha: null,
+  detail: null,
+}
+
 const initialKeys: KeyInfo[] = []
 
 const initialModelList: ModelListEntry[] = []
@@ -1337,6 +1500,21 @@ function tabBaseName(path: string): string {
   return parts[parts.length - 1] || path
 }
 
+// De-duplicate a commit list by sha, keeping the FIRST occurrence's order — the
+// load-more append path can re-receive an overlapping commit (a page boundary,
+// or a commit reachable from two refs under `--all`), and a stable dedupe keeps
+// the layout deterministic + the virtualized row keys unique.
+function dedupCommits(commits: GitCommitNode[]): GitCommitNode[] {
+  const seen = new Set<string>()
+  const out: GitCommitNode[] = []
+  for (const c of commits) {
+    if (seen.has(c.sha)) continue
+    seen.add(c.sha)
+    out.push(c)
+  }
+  return out
+}
+
 // Mints a stable, client-local id for a new agent editor tab — independent of
 // agentId (see the Tab union's 'agent' member comment for why).
 let agentTabSeq = 0
@@ -1363,6 +1541,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   catalogueProviders: [],
   availableTools: [],
   git: initialGit,
+  graph: initialGraph,
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -1791,6 +1970,82 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
         })
         break
+      case 'GitGraph':
+        set((s) => {
+          // Append (load-more) concatenates onto the existing page and dedupes;
+          // replace (refresh / first load) drops the old page entirely. Only one
+          // GitGraph request is ever in flight (see refreshGraph/loadMoreGraph),
+          // so `loadMode` here is unambiguously the mode of THIS reply.
+          const commits =
+            s.graph.loadMode === 'append'
+              ? dedupCommits([...s.graph.commits, ...env.commits])
+              : env.commits
+          return {
+            graph: { ...s.graph, commits, head: env.head, hasMore: env.hasMore, loading: false },
+          }
+        })
+        // A refreshGraph() that landed while this request was in flight couldn't
+        // fire (serialization guard) and instead set pendingRefresh — now that
+        // loading is committed false above, replay it.
+        if (get().graph.pendingRefresh) {
+          set((s) => ({ graph: { ...s.graph, pendingRefresh: false } }))
+          get().refreshGraph()
+        }
+        break
+      case 'CommitDetail':
+        set((s) => {
+          // Drop a stale reply for a since-changed selection (the echoed `sha` no
+          // longer matches what's selected) — the detail pane keeps its loading
+          // state until the reply matching the CURRENT selection lands.
+          if (env.sha !== s.graph.selectedSha) return s
+          return {
+            graph: {
+              ...s.graph,
+              detail: {
+                sha: env.sha,
+                author: env.author,
+                email: env.email,
+                date: env.date,
+                subject: env.subject,
+                body: env.body,
+                parents: env.parents,
+                files: env.files,
+                error: env.error,
+              },
+            },
+          }
+        })
+        break
+      case 'CommitDiff':
+        set((s) => {
+          const id = `commitdiff:${env.sha}:${env.path}`
+          // Ignore a reply for a tab closed while the req was in flight.
+          if (!s.ui.tabs.some((t) => t.id === id)) return s
+          return {
+            ui: {
+              ...s.ui,
+              tabs: s.ui.tabs.map((t) =>
+                t.id === id && t.kind === 'diff'
+                  ? {
+                      ...t,
+                      loading: false,
+                      diff: {
+                        original: env.original,
+                        modified: env.modified,
+                        error: env.error,
+                        binary: env.binary,
+                        // A commit diff is always a real git diff (`git show
+                        // <sha>^1:…` vs `<sha>:…`) — never a "virtual git"
+                        // baseline, so origin is always 'git'.
+                        origin: 'git',
+                      },
+                    }
+                  : t,
+              ),
+            },
+          }
+        })
+        break
       case 'GitOp': {
         // Fetch/pull/push are the only ops that ever set `remoteBusy`; clearing
         // it unconditionally on every OTHER op is a harmless no-op (already null).
@@ -1962,6 +2217,60 @@ export const useKoma = create<KomaState>((set, get) => ({
     })
     get().req({ r: 'GitDiff', path, staged })
   },
+  openGraphTab: () => {
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === 'graph')
+      const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: 'graph', kind: 'graph' }]
+      return { ui: { ...s.ui, tabs, activeTabId: 'graph' } }
+    })
+    // No wire fetch here — the GraphTab fires refreshGraph on mount.
+  },
+  refreshGraph: () => {
+    // Serialize: at most one GitGraph request in flight, ever. If a load-more
+    // (or another refresh) is already in flight, defer instead of racing it —
+    // the 'GitGraph' reducer replays this once that reply lands and clears
+    // `loading`. This keeps `loadMode` unambiguous for whichever reply comes
+    // back next.
+    if (get().graph.loading) {
+      set((s) => ({ graph: { ...s.graph, pendingRefresh: true } }))
+      return
+    }
+    set((s) => ({
+      graph: { ...s.graph, loading: true, loadMode: 'replace', pendingRefresh: false },
+    }))
+    get().req({ r: 'GitGraph', limit: 200, skip: 0 })
+  },
+  loadMoreGraph: () => {
+    const g = get().graph
+    // Guard against a duplicate in-flight load and a no-op past the last page.
+    if (g.loading || !g.hasMore) return
+    set((s) => ({ graph: { ...s.graph, loading: true, loadMode: 'append' } }))
+    get().req({ r: 'GitGraph', limit: 200, skip: g.commits.length })
+  },
+  selectCommit: (sha) => {
+    set((s) => ({
+      graph: {
+        ...s.graph,
+        selectedSha: sha,
+        // Clear stale detail when the selection actually changes so the pane
+        // shows a loading state instead of the previous commit's detail.
+        detail: s.graph.selectedSha === sha ? s.graph.detail : null,
+      },
+    }))
+    get().req({ r: 'GitCommitDetail', sha })
+  },
+  openCommitDiffTab: (sha, path) => {
+    const id = `commitdiff:${sha}:${path}`
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const title = `${tabBaseName(path)} @ ${sha.slice(0, 7)}`
+      const tabs: Tab[] = exists
+        ? s.ui.tabs.map((t) => (t.id === id && t.kind === 'diff' ? { ...t, loading: true } : t))
+        : [...s.ui.tabs, { id, kind: 'diff', path, title, loading: true, commitSha: sha }]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
+    get().req({ r: 'GitCommitDiff', sha, path })
+  },
   setCommitDraft: (text) => set(() => ({ commitDraft: text })),
   gitStage: (paths) => {
     if (paths.length === 0) return
@@ -2074,7 +2383,12 @@ export const useKoma = create<KomaState>((set, get) => ({
     // diff tab (no `staged`) re-requests via FileDiff — the two paths are
     // NOT interchangeable (different host handlers, different tab-id scheme).
     if (isDiff && tab.kind === 'diff') {
-      if (tab.staged !== undefined) {
+      if (tab.commitSha !== undefined) {
+        // A commit-graph diff tab re-requests via GitCommitDiff — checked FIRST
+        // (it carries no `staged`, so it would otherwise wrongly fall into the
+        // FileDiff branch and fetch a working-tree diff for a historical path).
+        get().req({ r: 'GitCommitDiff', sha: tab.commitSha, path: tab.path })
+      } else if (tab.staged !== undefined) {
         get().req({ r: 'GitDiff', path: tab.path, staged: tab.staged })
       } else {
         get().req({ r: 'FileDiff', path: tab.path })

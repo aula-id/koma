@@ -14,6 +14,7 @@ import {
   KeyRound,
   Loader2,
   RefreshCw,
+  GitGraph,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
@@ -274,6 +275,7 @@ export function GitPanel() {
   const gitFetch = useKoma((s) => s.gitFetch)
   const gitPull = useKoma((s) => s.gitPull)
   const gitPush = useKoma((s) => s.gitPush)
+  const openGraphTab = useKoma((s) => s.openGraphTab)
 
   // Fetch fresh status on mount (panel opened/activated). GitPanel unmounts
   // when the sidebar switches to another view, so re-selecting "Source
@@ -319,6 +321,16 @@ export function GitPanel() {
             {git.behind}
           </span>
         )}
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={openGraphTab}
+          title="Commit graph"
+          aria-label="Commit graph"
+          className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+        >
+          <GitGraph size={13} />
+        </button>
       </div>
       <div className="flex flex-none items-center gap-1 border-b border-koma-border px-3 py-1.5">
         <SyncButton
