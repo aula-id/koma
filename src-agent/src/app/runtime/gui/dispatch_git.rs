@@ -93,6 +93,41 @@ pub(super) fn git_create_branch(
     let _ = ctl.send(HostCtl::GitCreateBranch { name, start, checkout });
 }
 
+/// `GuiReq::GitCherryPick` (G5b).
+pub(super) fn git_cherry_pick(ctl: &Sender<HostCtl>, sha: String) {
+    let _ = ctl.send(HostCtl::GitCherryPick { sha });
+}
+
+/// `GuiReq::GitRevert` (G5b).
+pub(super) fn git_revert(ctl: &Sender<HostCtl>, sha: String) {
+    let _ = ctl.send(HostCtl::GitRevert { sha });
+}
+
+/// `GuiReq::GitReset` (G5b).
+pub(super) fn git_reset(ctl: &Sender<HostCtl>, sha: String, mode: String) {
+    let _ = ctl.send(HostCtl::GitReset { sha, mode });
+}
+
+/// `GuiReq::GitMerge` (G5b).
+pub(super) fn git_merge(ctl: &Sender<HostCtl>, ref_name: String) {
+    let _ = ctl.send(HostCtl::GitMerge { ref_name });
+}
+
+/// `GuiReq::GitRebase` (G5b).
+pub(super) fn git_rebase(ctl: &Sender<HostCtl>, upstream: String) {
+    let _ = ctl.send(HostCtl::GitRebase { upstream });
+}
+
+/// `GuiReq::GitOpAbort` (G5b).
+pub(super) fn git_op_abort(ctl: &Sender<HostCtl>, kind: String) {
+    let _ = ctl.send(HostCtl::GitOpAbort { kind });
+}
+
+/// `GuiReq::GitOpContinue` (G5b).
+pub(super) fn git_op_continue(ctl: &Sender<HostCtl>, kind: String) {
+    let _ = ctl.send(HostCtl::GitOpContinue { kind });
+}
+
 /// `GuiReq::KeyList`.
 pub(super) fn key_list(ctl: &Sender<HostCtl>) {
     let _ = ctl.send(HostCtl::KeyList);

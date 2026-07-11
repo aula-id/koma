@@ -24,6 +24,9 @@ use super::git::{
     GitDiffResult, GitOpResult, GitStatusResult,
 };
 use super::git_branch::{git_branch_list, git_checkout, git_create_branch, BranchListResult};
+use super::git_destructive::{
+    git_cherry_pick, git_merge, git_op_abort, git_op_continue, git_rebase, git_reset, git_revert,
+};
 use super::git_graph::{
     compute_commit_detail, compute_commit_diff, compute_git_graph, CommitDetailResult,
     CommitDiffResult, GitGraphResult,
@@ -213,6 +216,67 @@ pub(super) fn spawn_git_create_branch(
 ) {
     std::thread::spawn(move || {
         push_git_op(&push, git_create_branch(&name, start.as_deref(), checkout, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitCherryPick` while detached.
+pub(super) fn spawn_git_cherry_pick(push: impl Fn(String) + Send + 'static, cur: Option<String>, sha: String) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_cherry_pick(&sha, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitRevert` while detached.
+pub(super) fn spawn_git_revert(push: impl Fn(String) + Send + 'static, cur: Option<String>, sha: String) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_revert(&sha, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitReset` while detached.
+pub(super) fn spawn_git_reset(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    sha: String,
+    mode: String,
+) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_reset(&sha, &mode, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitMerge` while detached.
+pub(super) fn spawn_git_merge(push: impl Fn(String) + Send + 'static, cur: Option<String>, ref_name: String) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_merge(&ref_name, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitRebase` while detached.
+pub(super) fn spawn_git_rebase(push: impl Fn(String) + Send + 'static, cur: Option<String>, upstream: String) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_rebase(&upstream, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitOpAbort` while detached.
+pub(super) fn spawn_git_op_abort(push: impl Fn(String) + Send + 'static, cur: Option<String>, kind: String) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_op_abort(&kind, cur.as_deref()));
+        push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitOpContinue` while detached.
+pub(super) fn spawn_git_op_continue(push: impl Fn(String) + Send + 'static, cur: Option<String>, kind: String) {
+    std::thread::spawn(move || {
+        push_git_op(&push, git_op_continue(&kind, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
     });
 }
@@ -463,6 +527,105 @@ pub(super) fn spawn_git_create_branch_attached(
 ) {
     std::thread::spawn(move || {
         let _ = op_tx.send(git_create_branch(&name, start.as_deref(), checkout, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitCherryPick` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_cherry_pick_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    sha: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_cherry_pick(&sha, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitRevert` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_revert_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    sha: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_revert(&sha, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitReset` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_reset_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    sha: String,
+    mode: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_reset(&sha, &mode, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitMerge` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_merge_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    ref_name: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_merge(&ref_name, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitRebase` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_rebase_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    upstream: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_rebase(&upstream, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitOpAbort` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_op_abort_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    kind: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_op_abort(&kind, cur.as_deref()));
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitOpContinue` while attached. Same reply pattern as
+/// [`spawn_git_stage_attached`].
+pub(super) fn spawn_git_op_continue_attached(
+    op_tx: Sender<GitOpResult>,
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    kind: String,
+) {
+    std::thread::spawn(move || {
+        let _ = op_tx.send(git_op_continue(&kind, cur.as_deref()));
         let _ = status_tx.send(compute_git_status(cur.as_deref()));
     });
 }

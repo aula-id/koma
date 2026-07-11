@@ -449,6 +449,40 @@ pub(super) fn push_loop(
                     let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                     git_host::spawn_git_create_branch_attached(ot, st, cur, name, start, checkout);
                 }
+                // Commit-graph interactive/destructive ops (G5b): host-local, never
+                // the daemon. Each reuses the EXISTING `git_op_tx`/`git_status_tx`
+                // channels (same `GitOp` + follow-up `GitStatus` reply pattern) —
+                // drained at (b-oct)/(b-sex) below via `git_drain`, no new channel
+                // needed (`GitStatus` already carries the fresh `inProgress`/
+                // `conflicted` fields).
+                Ok(super::HostCtl::GitCherryPick { sha }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_cherry_pick_attached(ot, st, cur, sha);
+                }
+                Ok(super::HostCtl::GitRevert { sha }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_revert_attached(ot, st, cur, sha);
+                }
+                Ok(super::HostCtl::GitReset { sha, mode }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_reset_attached(ot, st, cur, sha, mode);
+                }
+                Ok(super::HostCtl::GitMerge { ref_name }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_merge_attached(ot, st, cur, ref_name);
+                }
+                Ok(super::HostCtl::GitRebase { upstream }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_rebase_attached(ot, st, cur, upstream);
+                }
+                Ok(super::HostCtl::GitOpAbort { kind }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_op_abort_attached(ot, st, cur, kind);
+                }
+                Ok(super::HostCtl::GitOpContinue { kind }) => {
+                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_op_continue_attached(ot, st, cur, kind);
+                }
                 // Commit-graph panel: NEVER touches the daemon (host-local, regardless of
                 // attach state) — spawn the blocking git work off this thread; results are
                 // drained + pushed below at (b-quindec)/(b-sexdec)/(b-septdec).
