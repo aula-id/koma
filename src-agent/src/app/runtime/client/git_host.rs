@@ -33,7 +33,7 @@ use super::keys::{
     delete_key, generate_key, import_key, list_keys, reveal_key, KeyInfo, KeyOpResult,
     KeyRevealResult,
 };
-use super::push_proto::{
+use super::push_proto_git::{
     push_branch_list, push_commit_detail, push_commit_diff, push_git_diff, push_git_graph,
     push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
 };

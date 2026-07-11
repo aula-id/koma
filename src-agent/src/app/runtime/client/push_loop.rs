@@ -17,15 +17,12 @@ use crate::app::mode::{Mode, SessionHub};
 use crate::app::state::AppState;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 
+use super::git_drain::drain_git_replies;
 use super::git_host;
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
-use super::push_proto::{
-    push_branch_list, push_commit_detail, push_commit_diff, push_file_diff, push_git_diff,
-    push_git_graph, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
-    push_switching, push_usage_preview,
-};
+use super::push_proto::{push_file_diff, push_switching, push_usage_preview};
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
 
@@ -177,35 +174,16 @@ pub(super) fn push_loop(
     // completed result is pushed, not just the newest.
     let (file_diff_tx, file_diff_rx) = std::sync::mpsc::channel::<super::diff::FileDiffResult>();
 
-    // --- GIT STATUS fetch (GitStatus) ---
-    // `compute_git_status` shells out to `git status`, blocking — same reasoning as
-    // `FileDiff` above — so it runs on a one-shot worker thread; the loop drains
-    // completed results non-blocking and pushes each as a `GitStatus` envelope. No
-    // "latest wins" coalescing needed (a `GitStatus` fetch is rare enough, and each
-    // reply is self-contained), mirroring `FileDiff`'s per-request-pushed rule.
+    // --- GIT STATUS / DIFF / OP / GRAPH / COMMIT DETAIL / COMMIT DIFF fetches ---
+    // Each shells out to git (blocking, same reasoning as `FileDiff` above), so each
+    // runs on a one-shot worker thread; the loop drains completed results
+    // non-blocking and pushes each as its own envelope (see `git_drain`'s module
+    // doc). No coalescing needed — each is a self-contained, per-request reply. A
+    // `GitOp` mutation's worker ALSO recomputes + resends over `git_status_tx`
+    // (reusing the channel below), refreshing the panel right after every op.
     let (git_status_tx, git_status_rx) = std::sync::mpsc::channel::<super::git::GitStatusResult>();
-
-    // --- GIT DIFF fetch (GitDiff) ---
-    // `compute_git_diff` shells out to `git show` (+ a disk read), blocking — same
-    // reasoning as `FileDiff` above — so it runs on a one-shot worker thread; the loop
-    // drains completed results non-blocking and pushes each as a `GitDiff` envelope.
     let (git_diff_tx, git_diff_rx) = std::sync::mpsc::channel::<super::git::GitDiffResult>();
-
-    // --- GIT OP mutation (GitStage/GitUnstage/GitDiscard/GitCommit) ---
-    // Each mutation shells out to git (blocking), same reasoning as `GitStatus`/
-    // `GitDiff` above — so it runs on a one-shot worker thread; the loop drains
-    // completed results non-blocking and pushes each as a `GitOp` envelope. The SAME
-    // worker thread ALSO recomputes the status right after the mutation and sends it
-    // over `git_status_tx` (reusing the channel above), so the panel's lists refresh
-    // from authoritative state immediately after every op — no separate coalescing
-    // needed for that follow-up.
     let (git_op_tx, git_op_rx) = std::sync::mpsc::channel::<super::git::GitOpResult>();
-
-    // --- COMMIT GRAPH / COMMIT DETAIL / COMMIT DIFF (GitGraph/GitCommitDetail/GitCommitDiff) ---
-    // Each shells out to git (blocking) — same reasoning as `GitStatus`/`GitDiff` above —
-    // so each runs on a one-shot worker thread; the loop drains completed results
-    // non-blocking and pushes each as its own envelope. No coalescing needed (each is a
-    // self-contained, per-request reply), mirroring `FileDiff`/`GitDiff`.
     let (git_graph_tx, git_graph_rx) = std::sync::mpsc::channel::<super::git_graph::GitGraphResult>();
     let (commit_detail_tx, commit_detail_rx) =
         std::sync::mpsc::channel::<super::git_graph::CommitDetailResult>();
@@ -232,12 +210,10 @@ pub(super) fn push_loop(
     let (branch_list_tx, branch_list_rx) = std::sync::mpsc::channel::<super::git_branch::BranchListResult>();
 
     // --- SSH KEY VAULT (KeyList/KeyGenerate/KeyImport/KeyDelete/KeyReveal) ---
-    // Every op shells `ssh-keygen`/touches the filesystem (blocking) — same
-    // reasoning as the GIT channels above — so each runs on a one-shot worker
-    // thread; the loop drains completed results non-blocking and pushes each as
-    // its own envelope. A mutation (generate/import/delete) ALSO sends a
-    // follow-up refreshed list over `key_list_tx` (reusing the same channel a
-    // plain `KeyList` fetch uses), mirroring the GIT mutation's status re-fetch.
+    // Every op shells `ssh-keygen`/touches the filesystem (blocking), same
+    // reasoning as the GIT channels above. A mutation (generate/import/delete)
+    // ALSO resends a refreshed list over `key_list_tx`, mirroring the GIT
+    // mutation's status re-fetch.
     let (key_list_tx, key_list_rx) = std::sync::mpsc::channel::<Vec<super::keys::KeyInfo>>();
     let (key_reveal_tx, key_reveal_rx) = std::sync::mpsc::channel::<super::keys::KeyRevealResult>();
     let (key_op_tx, key_op_rx) = std::sync::mpsc::channel::<super::keys::KeyOpResult>();
@@ -611,62 +587,24 @@ pub(super) fn push_loop(
             push_usage_preview(push, result, scope, session_id);
         }
 
-        // --- (b-sex) GIT panel: push any completed off-thread status fetch ---
-        while let Ok(result) = git_status_rx.try_recv() {
-            push_git_status(push, result);
-        }
-
-        // --- (b-sept) GIT panel: push any completed off-thread diff fetch ---
-        while let Ok(result) = git_diff_rx.try_recv() {
-            push_git_diff(push, result);
-        }
-
-        // --- (b-oct) GIT panel: push any completed off-thread mutation result ---
-        // The worker also sent a follow-up status over `git_status_tx`, drained at
-        // (b-sex) above — same frame or the next, whichever the loop happens to reach
-        // first (harmless either order: both are one-shot, self-contained pushes).
-        while let Ok(result) = git_op_rx.try_recv() {
-            push_git_op(push, result);
-        }
-
-        // --- (b-octodec) branch list: push any completed off-thread fetch ---
-        while let Ok(result) = branch_list_rx.try_recv() {
-            push_branch_list(push, result);
-        }
-
-        // --- (b-quindec) commit-graph panel: push any completed off-thread graph fetch ---
-        while let Ok(result) = git_graph_rx.try_recv() {
-            push_git_graph(push, result);
-        }
-
-        // --- (b-sexdec) commit-graph panel: push any completed off-thread detail fetch ---
-        while let Ok(result) = commit_detail_rx.try_recv() {
-            push_commit_detail(push, result);
-        }
-
-        // --- (b-septdec) commit-graph panel: push any completed off-thread commit-diff fetch ---
-        while let Ok(result) = commit_diff_rx.try_recv() {
-            push_commit_diff(push, result);
-        }
-
-        // --- (b-undec) SSH key vault: push any completed off-thread list fetch ---
-        while let Ok(keys) = key_list_rx.try_recv() {
-            push_key_list(push, keys);
-        }
-
-        // --- (b-tredec) SSH key vault: push any completed off-thread reveal fetch ---
-        while let Ok(result) = key_reveal_rx.try_recv() {
-            push_key_reveal(push, result);
-        }
-
-        // --- (b-duodec) SSH key vault: push any completed off-thread mutation result ---
-        // The worker also sent a follow-up list over `key_list_tx`, drained at
-        // (b-undec) above — same frame or the next, whichever the loop happens to
-        // reach first (harmless either order: both are one-shot, self-contained
-        // pushes).
-        while let Ok(result) = key_op_rx.try_recv() {
-            push_key_op(push, result);
-        }
+        // --- (b-sex)..(b-duodec) GIT / SSH-key-vault panels: push any completed
+        // off-thread status/diff/op/branch-list/graph/detail/commit-diff/key-list/
+        // key-reveal/key-op fetches, in the SAME order as before — split out into
+        // `git_drain::drain_git_replies` for file size (pure code motion, no
+        // behaviour change).
+        drain_git_replies(
+            push,
+            &git_status_rx,
+            &git_diff_rx,
+            &git_op_rx,
+            &branch_list_rx,
+            &git_graph_rx,
+            &commit_detail_rx,
+            &commit_diff_rx,
+            &key_list_rx,
+            &key_reveal_rx,
+            &key_op_rx,
+        );
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---
         // The ipc thread appends these `[Image #N]` markers to a chat send so the daemon's
