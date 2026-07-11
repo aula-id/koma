@@ -281,6 +281,29 @@ declare global {
     // GetOAuthState/DeleteAgent — works with NO session attached. Reply lands
     // as a fresh OAuthState push (phase 'idle', conns updated).
     | { r: 'DeleteOAuthConn'; uuid: string }
+    // Extension STORE (koma.run marketplace). Browse/detail hit the PUBLIC store
+    // endpoints; install/uninstall mutate the live daemon (managers + config), so
+    // the whole family is forwarded to the attached daemon. Replies land as the
+    // StoreCatalogue / StoreItemDetail / InstalledExtensions / ExtensionOpResult
+    // push envelopes. Attached-only (a GUI window always has a session daemon
+    // attached in normal use).
+    // Browse the catalogue with optional full-text (`query`) + `category`
+    // filters. Reply lands as StoreCatalogue.
+    | { r: 'StoreBrowse'; query?: string; category?: string }
+    // Fetch one extension's full detail (long description + contributes/requires
+    // + versions). Reply lands as StoreItemDetail.
+    | { r: 'StoreDetail'; id: string }
+    // Install `id` (optional `version`, else latest): download → verify signature
+    // → unpack → register → spawn. Reply lands as ExtensionOpResult then a fresh
+    // InstalledExtensions. Requires a signed-in koma.run account (else the
+    // ExtensionOpResult carries "sign in to koma.run to install").
+    | { r: 'InstallExtension'; id: string; version?: string }
+    // Uninstall `id`: purge contributions + stop + remove dir + registry entry.
+    // Reply lands as ExtensionOpResult then a fresh InstalledExtensions.
+    | { r: 'UninstallExtension'; id: string }
+    // Fetch the locally-installed extension registry. Reply lands as
+    // InstalledExtensions.
+    | { r: 'ListInstalledExtensions' }
     // Source Control "GIT" panel opened / refreshed: fetch a host-computed git
     // status (branch, ahead/behind, staged + unstaged file lists) for the
     // foreground session's repo. Serviced ENTIRELY host-side — works

@@ -122,7 +122,11 @@ pub(super) fn apply_frame(
         // the roster through `Mode::Agents` and never sends `ListAgents`). `OAuthState`
         // follows the same story for the streaming GUI OAuth surface (the host re-pushes an
         // `OAuthState` envelope; the TUI drives login through `Mode::Settings`/
-        // `OnboardProvider` and never sends `GetOAuthState`/`StartOAuth`).
+        // `OnboardProvider` and never sends `GetOAuthState`/`StartOAuth`). The extension-STORE
+        // replies (`StoreCatalogue` / `StoreItemDetail` / `InstalledExtensions` /
+        // `ExtensionOpResult`) follow the same story: the GUI host intercepts each in
+        // `push_loop` (re-pushing its own envelope), and the TUI client never sends the store
+        // requests, so they fold as non-visual no-ops here.
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
@@ -133,7 +137,11 @@ pub(super) fn apply_frame(
         | DaemonEvent::EffortOptions { .. }
         | DaemonEvent::AgentsValues { .. }
         | DaemonEvent::AgentOp { .. }
-        | DaemonEvent::OAuthState { .. } => false,
+        | DaemonEvent::OAuthState { .. }
+        | DaemonEvent::StoreCatalogue { .. }
+        | DaemonEvent::StoreItemDetail { .. }
+        | DaemonEvent::InstalledExtensions { .. }
+        | DaemonEvent::ExtensionOpResult { .. } => false,
     }
 }
 

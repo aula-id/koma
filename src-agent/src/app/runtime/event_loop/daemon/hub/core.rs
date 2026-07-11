@@ -64,6 +64,43 @@ pub(super) struct ListRoutesReply {
     pub(super) routes: Vec<crate::ipc::proto::ModelEndpointWire>,
 }
 
+/// An async extension-STORE result, tagged with the client that asked, so
+/// [`DaemonHub::drain_store_replies`] can reply to exactly that client via the per-client
+/// seq'd `send_to` (a background reqwest task can't touch the per-client seq directly).
+/// `Catalogue`/`Detail` are the browse/detail fetches; `InstallArtifact` carries a downloaded
+/// (+ integrity-checked) zip whose verify + unpack + register + spawn the drain finishes ON
+/// the event loop (where it has `&mut AppState` + the managers); `InstallFailed` is any
+/// pre-verify failure (platform, auth, network) surfaced as an `ExtensionOpResult`.
+pub(super) enum StoreReply {
+    Catalogue {
+        client_id: u64,
+        items: Vec<crate::ipc::proto::StoreItemWire>,
+        error: Option<String>,
+    },
+    Detail {
+        client_id: u64,
+        detail: Option<crate::ipc::proto::StoreDetailWire>,
+        error: Option<String>,
+    },
+    /// A downloaded artifact ready for the on-loop verify+install step. `sha256` is the
+    /// advertised digest (empty if the server gave none); `signature` is the base64 Ed25519
+    /// signature, or `None` when the artifact is unsigned (dev — koma.run signing not live).
+    InstallArtifact {
+        client_id: u64,
+        id: String,
+        zip: Vec<u8>,
+        sha256: String,
+        signature: Option<String>,
+    },
+    /// A pre-verify install failure (platform unsupported / not signed in / network / HTTP
+    /// error) — surfaced verbatim as an `ExtensionOpResult{ok:false}`.
+    InstallFailed {
+        client_id: u64,
+        id: String,
+        error: String,
+    },
+}
+
 /// One enrolled client in the hub registry.
 pub(super) struct HubClient {
     /// Loop-assigned connection id (matches the per-client task's `client_id`).
@@ -185,6 +222,15 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// which turns each landed reply into a seq'd `ModelRoutes` frame to the requesting
     /// client.
     pub(super) list_routes_rx: Receiver<ListRoutesReply>,
+    /// Sender the async extension-STORE fetch/download tasks ship their [`StoreReply`] back
+    /// on (a hub-owned clone, so the paired `store_rx` never observes a premature
+    /// `Disconnected`). Mirrors `list_models_tx`; cloned into each spawned reqwest task by the
+    /// `requests_ext` handlers.
+    pub(super) store_tx: std::sync::mpsc::Sender<StoreReply>,
+    /// Receiver drained each tick by [`drain_store_replies`](Self::drain_store_replies),
+    /// which turns each landed browse/detail reply into a seq'd `StoreCatalogue`/
+    /// `StoreItemDetail` frame, and finishes a downloaded `InstallArtifact` on the loop.
+    pub(super) store_rx: Receiver<StoreReply>,
     /// Set by [`ClientRequest::Interrupt`] (the GUI stop button / TUI Esc-equivalent
     /// unconditional cut): forces [`stream_deltas`](Self::stream_deltas) to send EVERY
     /// attached client a full `Snapshot` on its very next pass, bypassing the per-client
@@ -211,6 +257,7 @@ impl DaemonHub {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
         let (list_models_tx, list_models_rx) = std::sync::mpsc::channel();
         let (list_routes_tx, list_routes_rx) = std::sync::mpsc::channel();
+        let (store_tx, store_rx) = std::sync::mpsc::channel();
         (
             Self {
                 msg_rx,
@@ -221,6 +268,8 @@ impl DaemonHub {
                 list_models_rx,
                 list_routes_tx,
                 list_routes_rx,
+                store_tx,
+                store_rx,
                 force_resync: false,
             },
             msg_tx,

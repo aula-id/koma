@@ -625,6 +625,32 @@ pub(super) enum GuiReq {
     /// `OAuthState`, so a connection is removable pre-session too.
     DeleteOAuthConn { uuid: String },
 
+    // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────
+    // Forwarded to the attached daemon (which owns the install pipeline + the live
+    // MCP/ext managers + config); the daemon's reply frames are intercepted in
+    // `push_loop` and re-pushed as `StoreCatalogue`/`StoreItemDetail`/
+    // `InstalledExtensions`/`ExtensionOpResult` envelopes. Attached-only (like
+    // `StartOAuth` — a GUI window always has a session daemon attached in normal use;
+    // un-attached, these are a silent no-op).
+    /// Browse the store catalogue (optional `q` / `category` filters). Forwarded as
+    /// [`ClientRequest::StoreBrowse`].
+    StoreBrowse {
+        query: Option<String>,
+        category: Option<String>,
+    },
+    /// Fetch one extension's detail. Forwarded as [`ClientRequest::StoreDetail`].
+    StoreDetail { id: String },
+    /// Install `id` (optional `version`). Forwarded as [`ClientRequest::InstallExtension`].
+    InstallExtension {
+        id: String,
+        version: Option<String>,
+    },
+    /// Uninstall `id`. Forwarded as [`ClientRequest::UninstallExtension`].
+    UninstallExtension { id: String },
+    /// Fetch the locally-installed registry. Forwarded as
+    /// [`ClientRequest::ListInstalledExtensions`].
+    ListInstalledExtensions,
+
     // ─── GUI SSH key vault (Settings "SSH Keys" submenu, wave 4a) ────────────────
     // A GUI-only, MANUAL, user-owned key vault (`<~/.koma>/keys/`) — completely
     // separate from the model's own git credential machinery (`git_cred.rs`/

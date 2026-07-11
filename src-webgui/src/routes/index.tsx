@@ -270,6 +270,10 @@ const GraphTab = lazy(() => import('../components/GraphTab'))
 // Analytics dashboard tab — lazy so its chunk only loads when first opened.
 const AnalyticsTab = lazy(() => import('../components/AnalyticsTab'))
 
+// Extension STORE tab — lazy so its chunk only loads when the store is first
+// opened from the ActivityBar.
+const StoreTab = lazy(() => import('../components/StoreTab'))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -339,6 +343,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <AnalyticsTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'store' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <StoreTab />
               </Suspense>
             </div>
           ) : null,
