@@ -51,6 +51,7 @@ use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
 pub mod install;
+pub mod register;
 mod wire;
 use wire::{connect_and_handshake, reader_task, writer_task, Handshaked};
 
@@ -589,6 +590,92 @@ mod tests {
         mgr.stop(&installed.id);
         assert!(!mgr.is_running(&installed.id), "extension should be stopped");
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Wave B: an extension's `contributes.tools` (the echo sample declares one
+    /// `echo` tool) registers as `mcp__<sanitized-id>__echo` on a live
+    /// [`crate::app::mcp::McpManager`], and a call through
+    /// `McpManager::execute_blocking` — the SAME dispatch path a model's tool
+    /// call actually takes, unlike `install_verify_and_echo_roundtrip` above
+    /// which calls `ExtHostManager::invoke` directly — routes end to end through
+    /// `ExtHostManager::invoke` and returns the echoed output. Also proves
+    /// `purge_extension_tools` removes it again (the uninstall/disable shape).
+    #[test]
+    fn extension_tool_registers_and_routes_through_mcp_manager() {
+        let binary = sample_binary();
+        if !binary.exists() {
+            eprintln!(
+                "SKIP extension_tool_registers_and_routes_through_mcp_manager: {} missing \
+                 (run `cargo build --workspace --release` in src-extension/)",
+                binary.display()
+            );
+            return;
+        }
+
+        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        let signing = SigningKey::from_bytes(&[77u8; 32]);
+        let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
+        let digest = Sha256::digest(&zip_bytes);
+        let sha_hex = install::hex_encode(&digest);
+        let sig_b64 = b64(&signing.sign(digest.as_slice()).to_bytes());
+
+        let tmp = std::env::temp_dir().join(format!("koma-ext-mcp-test-{}", uuid::Uuid::new_v4()));
+        let installed =
+            install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+                .expect("signed install should succeed");
+
+        let _ = store::ensure_dirs();
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let ext_mgr = ExtHostManager::new(rt.handle());
+        let install_dir = tmp.join(&installed.id);
+        ext_mgr
+            .ensure_started_at(&installed, &install_dir)
+            .expect("ensure_started should hand-shake");
+
+        // Read the manifest back exactly as `register::register_contributions`
+        // does, to get `contributes.tools`.
+        let manifest_bytes =
+            std::fs::read(install_dir.join("manifest.json")).expect("read manifest");
+        let manifest: koma_extension::protocol::ExtensionManifest =
+            serde_json::from_slice(&manifest_bytes).expect("parse manifest");
+        assert_eq!(manifest.contributes.tools.len(), 1, "sample declares one tool");
+
+        let mcp = crate::app::mcp::McpManager::connect_all(rt.handle(), &[]);
+        mcp.register_extension_tools(
+            &installed.id,
+            &manifest.contributes.tools,
+            std::sync::Arc::clone(&ext_mgr),
+        );
+
+        // Advertised alongside regular MCP tools, namespaced mcp__<ext>__<tool>.
+        let names = mcp.tool_names();
+        let namespaced = names
+            .iter()
+            .find(|n| n.ends_with("__echo"))
+            .cloned()
+            .expect("echo tool should be advertised");
+        assert!(namespaced.starts_with("mcp__"), "namespaced as mcp__<ext>__echo");
+        assert!(
+            mcp.tool_defs().iter().any(|d| d.function.name == namespaced),
+            "the same namespaced tool must appear in tool_defs()"
+        );
+
+        // Call it through the model-facing dispatch path — NOT ExtHostManager
+        // directly — and confirm it reaches the extension and returns "ping".
+        let result = mcp
+            .execute_blocking(&namespaced, &serde_json::json!({ "text": "ping" }))
+            .expect("extension tool call should succeed");
+        assert_eq!(result, "ping");
+
+        // Lifecycle: purge (uninstall/disable) removes it again.
+        mcp.purge_extension_tools(&installed.id);
+        assert!(
+            mcp.tool_names().is_empty(),
+            "purge_extension_tools should remove every tool for this ext_id"
+        );
+
+        ext_mgr.stop(&installed.id);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

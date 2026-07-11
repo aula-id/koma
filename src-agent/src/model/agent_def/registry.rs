@@ -92,8 +92,15 @@ impl AgentRegistry {
     /// Load the full registry for a session (or `None` for built-in + global only).
     ///
     /// Merge order, later overriding earlier by lowercased name: built-in, then
-    /// global, then session. After merging, `disable: true` agents are removed
-    /// from the registry.
+    /// global, then EXTENSION-contributed sub-agents, then session (so a session
+    /// agent always wins over an extension's). After merging, `disable: true`
+    /// agents are removed from the registry.
+    ///
+    /// The extension tier reads `AppConfig::installed_extensions` + each enabled
+    /// entry's on-disk `manifest.json` fresh on every call (like the global/session
+    /// tiers re-scan their directories every call) — so installing, uninstalling,
+    /// enabling, or disabling an extension is reflected on the very next `load()`
+    /// with no separate cache-invalidation/reload trigger needed.
     pub fn load(session_dir: Option<&Path>) -> Self {
         let mut agents: HashMap<String, AgentDef> = HashMap::new();
 
@@ -107,7 +114,14 @@ impl AgentRegistry {
             load_agents_from_dir(&dir, AgentSource::Global, &mut agents);
         }
 
-        // Tier 3: session.
+        // Tier 3: extension-contributed sub-agents (see `app::ext::register` for
+        // the sibling `contributes.tools` half of this wiring).
+        if let Ok(ext_root) = crate::model::store::extensions_dir() {
+            let config = crate::model::app_config::AppConfig::load();
+            merge_extension_sub_agents(&config, &ext_root, &mut agents);
+        }
+
+        // Tier 4: session.
         if let Some(session_path) = session_dir {
             let dir = session_agents_dir(session_path);
             load_agents_from_dir(&dir, AgentSource::Session, &mut agents);
@@ -187,6 +201,79 @@ fn load_agents_from_dir(
                     &format!("skipped agent {}: {e}", path.display()),
                 );
             }
+        }
+    }
+}
+
+/// Merge extension-contributed sub-agents into `agents` (tier 3 of
+/// [`AgentRegistry::load`], between global and session).
+///
+/// For every ENABLED [`InstalledExtension`](crate::model::app_config::InstalledExtension)
+/// in `config`, reads `<ext_root>/<id>/manifest.json` and turns each
+/// `contributes.sub_agents` entry into an [`AgentDef`] tagged
+/// [`AgentSource::Extension`]: `description`/`conditions`/`prompt` all come from
+/// the manifest's `description` (no separate agent-body field on the wire
+/// contribution), and `model`/`tools` are left at their defaults (inherit the
+/// session model; safe read-only tool set).
+///
+/// `InstalledExtension` only carries a flat projection of the manifest (id,
+/// version, tier, kind, exec, enabled) — NOT a cached `contributes` — so this
+/// re-reads `manifest.json` from disk every call, same as `install::unpack`
+/// does at install time. A missing/unparsable manifest, or an extension with no
+/// `sub_agents`, contributes nothing (best-effort: one broken extension must
+/// never break the whole registry load).
+///
+/// Split out with explicit `config`/`ext_root` parameters (rather than calling
+/// `AppConfig::load()` / `store::extensions_dir()` directly) so it is
+/// unit-testable against a temp dir instead of the real `~/.koma`; the only
+/// production caller is [`AgentRegistry::load`], which supplies both from the
+/// real global config + `store::extensions_dir()`.
+pub(crate) fn merge_extension_sub_agents(
+    config: &crate::model::app_config::AppConfig,
+    ext_root: &Path,
+    agents: &mut HashMap<String, AgentDef>,
+) {
+    for ext in &config.installed_extensions {
+        if !ext.enabled {
+            continue;
+        }
+        let manifest_path = ext_root.join(&ext.id).join("manifest.json");
+        let bytes = match std::fs::read(&manifest_path) {
+            Ok(b) => b,
+            // Not installed on disk (or unreadable) — skip silently; a dangling
+            // config entry with no unpacked dir contributes nothing.
+            Err(_) => continue,
+        };
+        let manifest: koma_extension::protocol::ExtensionManifest =
+            match serde_json::from_slice(&bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    crate::model::store::append_global_error_log(
+                        "agent registry",
+                        &format!(
+                            "extension '{}': skipped sub_agents, bad manifest.json: {e}",
+                            ext.id
+                        ),
+                    );
+                    continue;
+                }
+            };
+        for sub in &manifest.contributes.sub_agents {
+            let name = sub.name.trim().to_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            agents.insert(
+                name.clone(),
+                AgentDef {
+                    name,
+                    description: sub.description.clone(),
+                    conditions: sub.description.clone(),
+                    prompt: sub.description.clone(),
+                    source: AgentSource::Extension,
+                    ..AgentDef::default()
+                },
+            );
         }
     }
 }

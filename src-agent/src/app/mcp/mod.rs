@@ -99,7 +99,24 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// gives up and returns an error string to the model.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A discovered remote tool, namespaced for advertisement.
+/// Where a [`DiscoveredTool`]'s calls are dispatched. Every tool in the snapshot
+/// is either a plain rmcp MCP server tool (the original design) or an
+/// extension-owned tool from `contributes.tools` (Wave B; see
+/// `crate::app::ext::register`) — the two are advertised identically via
+/// `tool_defs`/`tool_names`, but `execute_blocking` routes them completely
+/// differently (an rmcp `call_tool` vs. `ExtHostManager::invoke`).
+#[derive(Clone)]
+enum ToolSource {
+    /// Dispatch via the owning MCP server's live `Peer`, looked up in
+    /// `Snapshot::conns` by this server uuid.
+    McpServer(String),
+    /// Dispatch via `ExtHostManager::invoke(ext_id, "tool.call", { name, args })`.
+    /// Registered by [`McpManager::register_extension_tools`], never spawns an
+    /// rmcp/stdio connection (no `Snapshot::conns` entry exists for it).
+    Extension(String),
+}
+
+/// A discovered tool, namespaced for advertisement (`mcp__<server-or-ext>__<tool>`).
 #[derive(Clone)]
 struct DiscoveredTool {
     /// Namespaced name advertised to the model: `mcp__<server>__<tool>`.
@@ -108,9 +125,9 @@ struct DiscoveredTool {
     description: String,
     /// The tool's raw JSON-Schema parameters object (verbatim from the server).
     parameters: serde_json::Value,
-    /// uuid of the owning server entry (used to find the live `Peer` to call).
-    server_uuid: String,
-    /// The tool's ORIGINAL (un-namespaced) name, as the server knows it.
+    /// Where this tool's calls are dispatched (an MCP server or an extension).
+    source: ToolSource,
+    /// The tool's ORIGINAL (un-namespaced) name, as the server/extension knows it.
     original: String,
 }
 
@@ -214,6 +231,14 @@ pub struct McpManager {
     /// and the first [`Self::advertise_cached`] call kicks a refresh. Local backends
     /// ignore this (they serve live).
     advertise_cache_at: Mutex<Option<std::time::Instant>>,
+    /// The extension host manager, set by [`Self::register_extension_tools`] so
+    /// [`Self::execute_blocking`] can route an `Extension`-sourced tool's call
+    /// through `ExtHostManager::invoke`. `None` until the first extension tool is
+    /// registered (or ever, on a build with no extensions installed) — there is
+    /// exactly one `ExtHostManager` per process, so the last-registered clone wins
+    /// (they are always the same `Arc`). Only meaningful on the `Local` backend;
+    /// see [`Self::register_extension_tools`]'s docs for why `Proxy` is a no-op.
+    ext_manager: Mutex<Option<Arc<crate::app::ext::ExtHostManager>>>,
 }
 
 impl McpManager {
@@ -368,8 +393,13 @@ impl McpManager {
                 // connected; then tally the discovered tools by their owning server.
                 let mut counts: std::collections::HashMap<String, usize> =
                     snap.conns.keys().map(|uuid| (uuid.clone(), 0)).collect();
+                // Only tally McpServer-sourced tools here — extension tools have
+                // no `conns` entry (no rmcp connection at all) and are not part of
+                // this per-MCP-server status map.
                 for t in &snap.tools {
-                    *counts.entry(t.server_uuid.clone()).or_insert(0) += 1;
+                    if let ToolSource::McpServer(uuid) = &t.source {
+                        *counts.entry(uuid.clone()).or_insert(0) += 1;
+                    }
                 }
                 counts
             }
@@ -497,20 +527,59 @@ impl McpManager {
             }
         };
 
-        // --- Local dispatch (unchanged) ---
-        // Resolve the owning server + original tool name, and clone the Peer so the
-        // async closure owns it (and we drop the snapshot lock before spawning).
-        let (peer, original) = {
+        // --- Local dispatch ---
+        // Resolve the tool's source first. An `Extension`-sourced tool never had
+        // an rmcp connection to begin with, so it short-circuits straight to
+        // `ExtHostManager::invoke` (itself a synchronous, already-blocking call —
+        // no sync->async bridge needed) and returns before the rmcp path below.
+        enum Dispatch {
+            Ext { ext_id: String, original: String },
+            Server(Peer<RoleClient>, String),
+        }
+        let dispatch = {
             let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
             let tool = snap
                 .tools
                 .iter()
                 .find(|t| t.namespaced == namespaced_name)
                 .ok_or_else(|| format!("unknown MCP tool '{namespaced_name}'"))?;
-            let conn = snap.conns.get(&tool.server_uuid).ok_or_else(|| {
-                format!("MCP server for tool '{namespaced_name}' is not connected")
-            })?;
-            (conn.peer.clone(), tool.original.clone())
+            match &tool.source {
+                ToolSource::Extension(ext_id) => Dispatch::Ext {
+                    ext_id: ext_id.clone(),
+                    original: tool.original.clone(),
+                },
+                ToolSource::McpServer(server_uuid) => {
+                    let conn = snap.conns.get(server_uuid).ok_or_else(|| {
+                        format!("MCP server for tool '{namespaced_name}' is not connected")
+                    })?;
+                    Dispatch::Server(conn.peer.clone(), tool.original.clone())
+                }
+            }
+        };
+
+        let (peer, original) = match dispatch {
+            Dispatch::Ext { ext_id, original } => {
+                let ext_manager = self
+                    .ext_manager
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                let Some(ext_manager) = ext_manager else {
+                    return Err(format!(
+                        "extension tool '{namespaced_name}': extension host not available"
+                    ));
+                };
+                let params = serde_json::json!({ "name": original, "args": args });
+                return match ext_manager.invoke(&ext_id, "tool.call", params) {
+                    Ok(v) => Ok(match v.get("output") {
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        Some(other) => other.to_string(),
+                        None => v.to_string(),
+                    }),
+                    Err(e) => Err(format!("extension tool '{namespaced_name}' failed: {e:#}")),
+                };
+            }
+            Dispatch::Server(peer, original) => (peer, original),
         };
 
         // Convert the JSON arguments into the `JsonObject` (serde_json::Map) rmcp
@@ -551,6 +620,62 @@ impl McpManager {
                 "MCP tool '{namespaced_name}' task dropped before result (runtime shut down?)"
             )),
         }
+    }
+
+    /// Register an extension's `contributes.tools` as extension-dispatched tools,
+    /// namespaced `mcp__<ext>__<tool>` (reusing [`util::sanitize_server_name`] on
+    /// the extension id), advertised alongside regular MCP server tools via
+    /// [`Self::tool_defs`]/[`Self::tool_names`]/[`Self::advertise_cached`]. A call
+    /// to one of these routes through [`Self::execute_blocking`] to
+    /// `ext_manager.invoke(ext_id, "tool.call", ...)` instead of an rmcp
+    /// connection — no stdio/rmcp connection is ever spawned for these.
+    ///
+    /// Idempotent: re-registering the same `ext_id` (e.g. a disable→re-enable
+    /// cycle) first drops its prior entries, so nothing duplicates. Called by
+    /// [`crate::app::ext::register::register_contributions`] from the runtime
+    /// layer (boot-load today; a future install/enable command handler too) —
+    /// never from inside `ExtHostManager` itself, which has no visibility into
+    /// this manager.
+    ///
+    /// Local-backend only: a session daemon proxying to the global MCP daemon
+    /// (`Proxy` backend) has no wire-protocol support yet for routing a call
+    /// through to an extension living in a DIFFERENT process's `ExtHostManager` —
+    /// that is a later wave. On `Proxy` this is a silent no-op (matches
+    /// `spawn_connect`'s own Local-only guard).
+    pub fn register_extension_tools(
+        &self,
+        ext_id: &str,
+        tools: &[koma_extension::protocol::ToolDef],
+        ext_manager: Arc<crate::app::ext::ExtHostManager>,
+    ) {
+        let snapshot = match &self.backend {
+            McpBackend::Local { snapshot, .. } => snapshot,
+            McpBackend::Proxy { .. } => return,
+        };
+        let discovered = util::namespace_ext_tools(ext_id, tools);
+        {
+            let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+            snap.tools
+                .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
+            snap.tools.extend(discovered);
+            snap.generation = snap.generation.wrapping_add(1);
+        }
+        *self.ext_manager.lock().unwrap_or_else(|p| p.into_inner()) = Some(ext_manager);
+    }
+
+    /// Remove every tool previously registered for `ext_id` via
+    /// [`Self::register_extension_tools`] (uninstall or disable). Called by
+    /// [`crate::app::ext::register::purge_contributions`]. A no-op on the `Proxy`
+    /// backend, or if `ext_id` had nothing registered.
+    pub fn purge_extension_tools(&self, ext_id: &str) {
+        let snapshot = match &self.backend {
+            McpBackend::Local { snapshot, .. } => snapshot,
+            McpBackend::Proxy { .. } => return,
+        };
+        let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        snap.tools
+            .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
+        snap.generation = snap.generation.wrapping_add(1);
     }
 }
 

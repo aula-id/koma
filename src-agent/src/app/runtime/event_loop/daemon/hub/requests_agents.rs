@@ -85,7 +85,7 @@ impl DaemonHub {
         let want_session = if is_edit {
             match existing.as_ref().map(|d| d.source) {
                 Some(AgentSource::Global) => false,
-                Some(AgentSource::Session) | Some(AgentSource::Builtin) => true,
+                Some(AgentSource::Session) | Some(AgentSource::Builtin) | Some(AgentSource::Extension) => true,
                 None => scope == "session",
             }
         } else {

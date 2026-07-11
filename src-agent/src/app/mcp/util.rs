@@ -7,7 +7,7 @@ use rmcp::model::Tool as RmcpTool;
 
 use crate::model::app_config::McpServerEntry;
 
-use super::DiscoveredTool;
+use super::{DiscoveredTool, ToolSource};
 
 /// Turn a server's raw rmcp tools into namespaced [`DiscoveredTool`]s.
 pub(super) fn namespace_tools(server: &McpServerEntry, tools: &[RmcpTool]) -> Vec<DiscoveredTool> {
@@ -27,9 +27,32 @@ pub(super) fn namespace_tools(server: &McpServerEntry, tools: &[RmcpTool]) -> Ve
                 // back into a `Value::Object` so it rides the wire as the tool's
                 // raw JSON-Schema `parameters`, exactly like a built-in tool.
                 parameters: serde_json::Value::Object((*t.input_schema).clone()),
-                server_uuid: server.uuid.clone(),
+                source: ToolSource::McpServer(server.uuid.clone()),
                 original,
             }
+        })
+        .collect()
+}
+
+/// Turn an extension's `contributes.tools` into namespaced [`DiscoveredTool`]s,
+/// mirroring [`namespace_tools`] but for `app::ext`-owned tools: the `<server>`
+/// segment is the sanitized extension id, and `source` is
+/// [`ToolSource::Extension`] so [`super::McpManager::execute_blocking`] routes
+/// calls through `ExtHostManager::invoke` instead of an rmcp `Peer`. See
+/// [`super::McpManager::register_extension_tools`].
+pub(super) fn namespace_ext_tools(
+    ext_id: &str,
+    tools: &[koma_extension::protocol::ToolDef],
+) -> Vec<DiscoveredTool> {
+    let prefix = sanitize_server_name(ext_id);
+    tools
+        .iter()
+        .map(|t| DiscoveredTool {
+            namespaced: format!("mcp__{prefix}__{}", t.name),
+            description: t.description.clone(),
+            parameters: t.input_schema.clone(),
+            source: ToolSource::Extension(ext_id.to_string()),
+            original: t.name.clone(),
         })
         .collect()
 }

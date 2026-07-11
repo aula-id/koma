@@ -475,6 +475,7 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
                     crate::model::agent_def::AgentSource::Session => "session",
                     crate::model::agent_def::AgentSource::Global => "global",
                     crate::model::agent_def::AgentSource::Builtin => "builtin",
+                    crate::model::agent_def::AgentSource::Extension => "extension",
                 }
                 .to_string(),
                 model_uuid: ag.model_uuid.clone(),
