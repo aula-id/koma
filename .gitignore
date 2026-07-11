@@ -1,6 +1,9 @@
 .serena/
-/target
 .env
 **/*.pyc
-src-webgui/node_modules/
-src-webgui/dist/
+
+# build artifacts — non-anchored so they match at ANY depth
+# (root-anchored /target missed src-agent/target etc.)
+target/
+node_modules/
+dist/
