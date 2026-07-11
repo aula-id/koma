@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { GitGraph, Loader2, RefreshCw } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { GitRef } from '../store/koma'
@@ -25,6 +33,12 @@ export default function GraphTab() {
   const head = useKoma((s) => s.graph.head)
   const hasMore = useKoma((s) => s.graph.hasMore)
   const loading = useKoma((s) => s.graph.loading)
+  // How the LAST GitGraph reply was folded in — 'append' (load-more) keeps the
+  // viewport pinned where the user was; 'replace' (refresh / first load) is the
+  // only case that's SUPPOSED to land back at the top. Read (not a dep) inside
+  // the scroll-preserving effect below so it reflects the mode of whichever
+  // reply just landed, not a stale value from the click that triggered it.
+  const loadMode = useKoma((s) => s.graph.loadMode)
   const selectedSha = useKoma((s) => s.graph.selectedSha)
   const refreshGraph = useKoma((s) => s.refreshGraph)
   const loadMoreGraph = useKoma((s) => s.loadMoreGraph)
@@ -137,16 +151,65 @@ export default function GraphTab() {
     for (const r of visible) animatedRef.current.add(r.sha)
   })
 
+  // The scrollTop captured the instant a load-more fires (button click OR the
+  // near-bottom auto-trigger), replayed once the appended page actually lands
+  // — see the layout effect below. `null` when no restore is pending.
+  const pendingScrollRestoreRef = useRef<number | null>(null)
+
+  // Shared load-more trigger for both the explicit button and the near-bottom
+  // auto-load. Re-guards `loading`/`hasMore` itself (loadMoreGraph() also
+  // guards store-side, but re-checking here means a no-op click never
+  // stomps a stale scrollTop into `pendingScrollRestoreRef`).
+  const handleLoadMore = useCallback(() => {
+    if (loading || !hasMore) return
+    const el = scrollerRef.current
+    if (el) pendingScrollRestoreRef.current = el.scrollTop
+    loadMoreGraph()
+  }, [loading, hasMore, loadMoreGraph])
+
+  // Load-more append growing `commits` re-renders the whole windowed list
+  // (new `rows`/`totalH` from the layout useMemo), but never itself touches
+  // the scroller's native scrollTop — so by default the browser leaves it
+  // exactly where it was, which is the behaviour we want (new rows only
+  // extend the content BELOW the fold). What used to visibly "teleport to
+  // top" was the OLD `disabled` attribute on the load-more button: disabling
+  // a focused control forces an immediate blur, and the browser's implicit
+  // focus-revert-to-<body> step scrolls the nearest scrollable ancestor back
+  // toward its default (0,0) origin — a real WebKit/Blink quirk, not
+  // something React caused. The button below now uses `aria-disabled` +
+  // pointer-events instead of `disabled`, so it never loses focus and the
+  // browser never gets a chance to "helpfully" re-scroll. This effect is the
+  // belt-and-suspenders half: it restores the captured scrollTop after every
+  // reply (a no-op if nothing moved), and explicitly snaps back to the top
+  // for a genuine refresh/first-load — the one case that SHOULD reset.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    const pending = pendingScrollRestoreRef.current
+    if (pending != null) {
+      el.scrollTop = pending
+      pendingScrollRestoreRef.current = null
+    } else if (loadMode === 'replace') {
+      el.scrollTop = 0
+    }
+    // Intentionally keyed on `commits` alone (the actual GitGraph reply
+    // landing), not `loadMode` — `loadMode` flips to 'append' synchronously
+    // on the click, well before the reply arrives, and firing this early
+    // would consume `pendingScrollRestoreRef` before the row count it was
+    // meant to compensate for ever changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commits])
+
   const onScroll = useCallback(() => {
     const el = scrollerRef.current
     if (!el) return
     setScrollTop(el.scrollTop)
-    // Near-bottom infinite scroll — the store's own `loading`/`hasMore` guard
-    // makes a duplicate call a no-op, but gating here avoids the churn.
+    // Near-bottom auto-load — a gentle assist; the explicit "See more" button
+    // below is the primary, always-visible trigger.
     if (hasMore && !loading && el.scrollTop + el.clientHeight >= el.scrollHeight - LOAD_MORE_PX) {
-      loadMoreGraph()
+      handleLoadMore()
     }
-  }, [hasMore, loading, loadMoreGraph])
+  }, [hasMore, loading, handleLoadMore])
 
   const onSelect = useCallback((sha: string) => selectCommit(sha), [selectCommit])
   const onHover = useCallback((sha: string | null) => setHoveredSha(sha), [])
@@ -266,17 +329,26 @@ export default function GraphTab() {
                   )
                 })}
               </div>
-              {/* Manual load-more fallback (below the spacer, in normal flow). */}
+              {/* Explicit "See more" pagination (below the spacer, in normal flow) —
+                  the primary load-more trigger; the near-bottom auto-load in
+                  `onScroll` is just a gentle assist on top of this. Uses
+                  `aria-disabled` + pointer-events (NOT the `disabled` attribute) so a
+                  focused click never forces a blur — disabling a focused control
+                  makes the browser revert focus to <body>, which drags the nearest
+                  scrollable ancestor's scrollTop back toward 0 as a side effect
+                  (the old "teleports to top" bug). */}
               {hasMore && (
-                <div className="flex justify-center py-2">
+                <div className="flex justify-center py-3">
                   <button
                     type="button"
-                    onClick={loadMoreGraph}
-                    disabled={loading}
-                    className="flex items-center gap-1.5 rounded border border-koma-border px-2.5 py-1 text-[11px] text-koma-dim transition hover:bg-koma-hover hover:text-koma-fg disabled:opacity-50"
+                    onClick={handleLoadMore}
+                    aria-disabled={loading}
+                    className={`flex items-center gap-1.5 rounded bg-koma-accent px-3.5 py-1.5 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 ${
+                      loading ? 'pointer-events-none opacity-60' : ''
+                    }`}
                   >
                     {loading && <Loader2 size={12} className="animate-spin" />}
-                    Load more
+                    See more
                   </button>
                 </div>
               )}
