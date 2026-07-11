@@ -258,9 +258,14 @@ pub(super) fn spawn_git_merge(push: impl Fn(String) + Send + 'static, cur: Optio
 }
 
 /// `HostCtl::GitRebase` while detached.
-pub(super) fn spawn_git_rebase(push: impl Fn(String) + Send + 'static, cur: Option<String>, upstream: String) {
+pub(super) fn spawn_git_rebase(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    upstream: String,
+    branch: Option<String>,
+) {
     std::thread::spawn(move || {
-        push_git_op(&push, git_rebase(&upstream, cur.as_deref()));
+        push_git_op(&push, git_rebase(&upstream, branch.as_deref(), cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
     });
 }
@@ -595,9 +600,10 @@ pub(super) fn spawn_git_rebase_attached(
     status_tx: Sender<GitStatusResult>,
     cur: Option<String>,
     upstream: String,
+    branch: Option<String>,
 ) {
     std::thread::spawn(move || {
-        let _ = op_tx.send(git_rebase(&upstream, cur.as_deref()));
+        let _ = op_tx.send(git_rebase(&upstream, branch.as_deref(), cur.as_deref()));
         let _ = status_tx.send(compute_git_status(cur.as_deref()));
     });
 }

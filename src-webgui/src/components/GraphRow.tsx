@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { MouseEvent as ReactMouseEvent, DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
 import type { GraphRow as GraphRowData, GraphSegment } from '../lib/gitGraphLayout'
 import type { GitRef } from '../store/koma'
@@ -67,6 +67,12 @@ const REF_TONE: Record<GitRef['kind'], string> = {
 function RefChip({
   r,
   onContextMenu,
+  draggedBranch,
+  dropHighlight,
+  onBranchDragStart,
+  onBranchDragEnd,
+  onDropHover,
+  onRefDrop,
 }: {
   r: GitRef
   // Right-click on a BRANCH chip (local/remote — never a tag, which isn't
@@ -76,11 +82,70 @@ function RefChip({
   // menu knows whether the chip is a remote ref (needs the DWIM tracking-branch
   // short-name strip before checkout) vs local/head (checked out as-is).
   onContextMenu?: (e: ReactMouseEvent, name: string, kind: GitRef['kind']) => void
+  // ---- GitKraken-style drag-to-rebase (G6) ----
+  // The branch name currently being dragged ANYWHERE in the graph (lifted to
+  // GraphTab so every chip/row can react to it), or null when nothing is
+  // dragging. Gates whether THIS chip shows drop-hover affordance at all.
+  draggedBranch: string | null
+  // True while this exact chip is the drop target currently under the drag —
+  // drives the highlight ring (the main drop affordance).
+  dropHighlight: boolean
+  onBranchDragStart: (name: string) => void
+  onBranchDragEnd: () => void
+  onDropHover: (id: string | null) => void
+  onRefDrop: (e: ReactDragEvent, name: string) => void
 }) {
   const tone = REF_TONE[r.kind] ?? 'border-koma-border text-koma-dim'
+  // Only a local/HEAD ref can be the DRAG SOURCE of a rebase — you can't
+  // rebase a remote-tracking ref (it only ever moves via fetch); every kind of
+  // chip (incl. remote/tag) is still a valid DROP TARGET (rebasing onto
+  // `origin/main` or a tag is a legitimate distinct target — see the module's
+  // "never remote-strip a rebase target" reasoning, matches G5c's git_merge/
+  // git_rebase callers).
+  const draggableChip = r.kind === 'local' || r.kind === 'head'
   return (
     <span
       title={`${r.kind}: ${r.name}`}
+      draggable={draggableChip}
+      onDragStart={
+        draggableChip
+          ? (e) => {
+              e.stopPropagation()
+              e.dataTransfer.setData('text/koma-branch', r.name)
+              e.dataTransfer.effectAllowed = 'move'
+              onBranchDragStart(r.name)
+            }
+          : undefined
+      }
+      // dragend ALWAYS fires (successful drop or cancelled drag) — the
+      // authoritative point that clears the host-wide drag state.
+      onDragEnd={draggableChip ? () => onBranchDragEnd() : undefined}
+      onDragOver={
+        draggedBranch
+          ? (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onDropHover(`ref:${r.name}`)
+            }
+          : undefined
+      }
+      onDragLeave={
+        draggedBranch
+          ? (e) => {
+              e.stopPropagation()
+              onDropHover(null)
+            }
+          : undefined
+      }
+      onDrop={
+        draggedBranch
+          ? (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onRefDrop(e, r.name)
+            }
+          : undefined
+      }
       onContextMenu={
         onContextMenu
           ? (e) => {
@@ -90,7 +155,9 @@ function RefChip({
             }
           : undefined
       }
-      className={`flex-none truncate rounded-sm border bg-koma-bg/40 px-1 text-[10px] leading-[15px] ${tone}`}
+      className={`flex-none truncate rounded-sm border bg-koma-bg/40 px-1 text-[10px] leading-[15px] transition-shadow ${tone} ${
+        draggableChip ? 'cursor-grab active:cursor-grabbing' : ''
+      } ${dropHighlight ? 'ring-1 ring-koma-accent bg-koma-accent/10' : ''}`}
     >
       {r.name}
     </span>
@@ -118,12 +185,29 @@ type Props = {
   // Right-click on a branch ref chip opens the context menu's ref mode
   // instead — see `RefChip`'s own `onContextMenu` doc.
   onRefContextMenu?: (e: ReactMouseEvent, name: string, kind: GitRef['kind']) => void
+  // ---- GitKraken-style drag-to-rebase (G6) ----
+  // The branch name currently being dragged anywhere in the graph, lifted to
+  // GraphTab (a single host-wide drag can span many virtualized rows) — null
+  // when nothing is dragging.
+  draggedBranch: string | null
+  // The drop-target id (`commit:<sha>` for this row, `ref:<name>` for one of
+  // its chips) currently hovered by the drag, or null. Compared against this
+  // row's own ids to decide which highlight (if any) to show.
+  dropHoverId: string | null
+  onBranchDragStart: (name: string) => void
+  onBranchDragEnd: () => void
+  onDropHover: (id: string | null) => void
+  // A valid (non-no-op) drop landed: `branch` was dragged onto `target` (a sha
+  // or a ref name, unstripped) labelled `targetLabel`, at client point (x, y).
+  // GraphTab turns this into the confirm popover — see the module doc for the
+  // no-op rules (dropped on the branch's own tip / onto itself).
+  onRebaseDrop: (branch: string, target: string, targetLabel: string, x: number, y: number) => void
 }
 
 // One virtualized commit row: the SVG lane gutter (edges + node, HEAD ringed) +
 // ref chips + subject + right-aligned author/relative-date/short-sha. Memoized —
 // the parent passes stable sha-keyed callbacks, so a row only re-renders when its
-// own selected/dim/animate state changes.
+// own selected/dim/animate/drag-related state changes.
 export const GraphRow = memo(function GraphRow({
   row,
   laneCount,
@@ -136,14 +220,55 @@ export const GraphRow = memo(function GraphRow({
   onHover,
   onContextMenu,
   onRefContextMenu,
+  draggedBranch,
+  dropHoverId,
+  onBranchDragStart,
+  onBranchDragEnd,
+  onDropHover,
+  onRebaseDrop,
 }: Props) {
   const gw = gutterWidth(laneCount)
   const cx = laneX(row.lane)
   const cy = ROW_H / 2
+  const rowDropId = `commit:${row.sha}`
+  const rowDropHighlight = dropHoverId === rowDropId
+
+  // Drop on the commit row itself: target = this commit's sha. A no-op when
+  // the dragged branch's own tip is ALREADY this commit (dropping a branch
+  // onto its current position) — silently ignored, no confirm raised.
+  const handleRowDrop = (e: ReactDragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const branch = draggedBranch
+    onDropHover(null)
+    if (!branch) return
+    const isOwnTip = row.refs.some((r) => (r.kind === 'local' || r.kind === 'head') && r.name === branch)
+    if (!isOwnTip) {
+      onRebaseDrop(branch, row.sha, `commit ${row.sha.slice(0, 7)}`, e.clientX, e.clientY)
+    }
+    onBranchDragEnd()
+  }
+
+  // Drop on a ref chip: target = that ref's name AS-IS (never remote-stripped
+  // — rebasing onto `origin/main` is a distinct valid target, per the G5c
+  // fix). A no-op when the target IS the dragged branch itself.
+  const handleRefDrop = (e: ReactDragEvent, name: string) => {
+    const branch = draggedBranch
+    onDropHover(null)
+    if (!branch) return
+    if (name !== branch) {
+      onRebaseDrop(branch, name, name, e.clientX, e.clientY)
+    }
+    onBranchDragEnd()
+  }
 
   return (
     <motion.div
-      onClick={() => onSelect(row.sha)}
+      onClick={() => {
+        // A drag-drop landing on the row must never also fire row select —
+        // guarded by the drag state rather than relying on click suppression.
+        if (!draggedBranch) onSelect(row.sha)
+      }}
       onHoverStart={() => onHover(row.sha)}
       onHoverEnd={() => onHover(null)}
       onContextMenu={
@@ -154,6 +279,16 @@ export const GraphRow = memo(function GraphRow({
             }
           : undefined
       }
+      onDragOver={
+        draggedBranch
+          ? (e) => {
+              e.preventDefault()
+              onDropHover(rowDropId)
+            }
+          : undefined
+      }
+      onDragLeave={draggedBranch ? () => onDropHover(null) : undefined}
+      onDrop={draggedBranch ? handleRowDrop : undefined}
       initial={animate ? { opacity: 0, x: -8 } : false}
       animate={{ opacity: 1, x: 0 }}
       transition={{
@@ -164,7 +299,7 @@ export const GraphRow = memo(function GraphRow({
       style={{ height: ROW_H }}
       className={`group flex cursor-pointer items-center ${
         selected ? 'bg-koma-hover' : 'hover:bg-koma-hover'
-      }`}
+      } ${rowDropHighlight ? 'ring-1 ring-inset ring-koma-accent' : ''}`}
     >
       <svg
         width={gw}
@@ -197,6 +332,12 @@ export const GraphRow = memo(function GraphRow({
             // A tag isn't switchable — its chip falls through to the row's
             // own commit context menu instead of opening a ref-mode menu.
             onContextMenu={r.kind === 'tag' ? undefined : onRefContextMenu}
+            draggedBranch={draggedBranch}
+            dropHighlight={dropHoverId === `ref:${r.name}`}
+            onBranchDragStart={onBranchDragStart}
+            onBranchDragEnd={onBranchDragEnd}
+            onDropHover={onDropHover}
+            onRefDrop={handleRefDrop}
           />
         ))}
         <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{row.commit.subject}</span>

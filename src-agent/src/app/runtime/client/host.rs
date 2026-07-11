@@ -420,8 +420,8 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitMerge { ref_name }) => {
                 git_host::spawn_git_merge(P::clone(push), current.map(str::to_string), ref_name);
             }
-            Ok(HostCtl::GitRebase { upstream }) => {
-                git_host::spawn_git_rebase(P::clone(push), current.map(str::to_string), upstream);
+            Ok(HostCtl::GitRebase { upstream, branch }) => {
+                git_host::spawn_git_rebase(P::clone(push), current.map(str::to_string), upstream, branch);
             }
             Ok(HostCtl::GitOpAbort { kind }) => {
                 git_host::spawn_git_op_abort(P::clone(push), current.map(str::to_string), kind);

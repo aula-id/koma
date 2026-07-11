@@ -7,6 +7,7 @@ import { GraphRow, ROW_H } from './GraphRow'
 import { GraphDetail } from './GraphDetail'
 import { GraphContextMenu, type GraphMenuTarget } from './GraphContextMenu'
 import { ConflictBanner } from './ConflictBanner'
+import { RebaseDropConfirm } from './RebaseDropConfirm'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
@@ -28,6 +29,7 @@ export default function GraphTab() {
   const refreshGraph = useKoma((s) => s.refreshGraph)
   const loadMoreGraph = useKoma((s) => s.loadMoreGraph)
   const selectCommit = useKoma((s) => s.selectCommit)
+  const gitRebase = useKoma((s) => s.gitRebase)
 
   // Fetch the first page on mount. The tab persists mounted once opened (see
   // TabbedMain), so this fires exactly once per open.
@@ -49,6 +51,63 @@ export default function GraphTab() {
   // closed. Left in local state (not the store) — purely a transient UI
   // overlay, unlike selectedSha/commits which are host-authoritative.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: GraphMenuTarget } | null>(null)
+
+  // ---- GitKraken-style drag-to-rebase (G6) ----
+  // The branch name currently being dragged (from a local/HEAD ref chip), or
+  // null when nothing is dragging — lifted here so it's shared across every
+  // virtualized row (a drag can span rows the source row is no longer near).
+  const [draggedBranch, setDraggedBranch] = useState<string | null>(null)
+  // The drop-target id (`commit:<sha>` / `ref:<name>`) currently hovered by
+  // the drag — drives the hover highlight, the main drop affordance.
+  const [dropHoverId, setDropHoverId] = useState<string | null>(null)
+  // A valid (non-no-op) drop just landed — the pending confirm popover's
+  // position + branch/target, or null when none is showing. Cleared on
+  // confirm, cancel, or dismiss; never fires the rebase speculatively.
+  const [rebaseConfirm, setRebaseConfirm] = useState<{
+    x: number
+    y: number
+    branch: string
+    target: string
+    targetLabel: string
+  } | null>(null)
+
+  const handleBranchDragStart = useCallback((name: string) => setDraggedBranch(name), [])
+  // dragend is the authoritative clear point (fires on both a successful drop
+  // and a cancelled drag) — also called defensively right after a drop.
+  const handleBranchDragEnd = useCallback(() => {
+    setDraggedBranch(null)
+    setDropHoverId(null)
+  }, [])
+  const handleDropHover = useCallback((id: string | null) => setDropHoverId(id), [])
+  const handleRebaseDrop = useCallback(
+    (branch: string, target: string, targetLabel: string, x: number, y: number) => {
+      setRebaseConfirm({ x, y, branch, target, targetLabel })
+    },
+    [],
+  )
+
+  // Belt-and-suspenders drag-state cleanup (G6 fix): the graph rows are
+  // virtualized, so if the source chip's row scrolls out of the overscan
+  // window mid-drag, React unmounts that chip and the native dragend/drop
+  // fires on the now-detached node — it never reaches GraphRow's own
+  // onDragEnd (React's delegated handler), so draggedBranch/dropHoverId get
+  // stuck forever (the `if (!draggedBranch) onSelect(...)` guard in
+  // GraphRow then blocks selecting ANY commit until reload). Per the HTML DnD
+  // spec, when an event's original target is no longer in a document, the
+  // user agent redirects dispatch to the Window — so a capture-phase window
+  // listener always sees dragend/drop, detached chip or not. Harmless on a
+  // normal drop too: it just re-clears the same transient state GraphRow's
+  // own onDragEnd already cleared; the rebaseConfirm popover below holds its
+  // own branch/target copy (staged by onRebaseDrop before this runs), so a
+  // pending confirm is never wiped by this.
+  useEffect(() => {
+    window.addEventListener('dragend', handleBranchDragEnd, true)
+    window.addEventListener('drop', handleBranchDragEnd, true)
+    return () => {
+      window.removeEventListener('dragend', handleBranchDragEnd, true)
+      window.removeEventListener('drop', handleBranchDragEnd, true)
+    }
+  }, [handleBranchDragEnd])
 
   // Track the scroller's height so the window math has a real viewport (also
   // re-measures when the detail split resizes the list area).
@@ -196,6 +255,12 @@ export default function GraphTab() {
                         onHover={onHover}
                         onContextMenu={onRowContextMenu}
                         onRefContextMenu={onRefContextMenu}
+                        draggedBranch={draggedBranch}
+                        dropHoverId={dropHoverId}
+                        onBranchDragStart={handleBranchDragStart}
+                        onBranchDragEnd={handleBranchDragEnd}
+                        onDropHover={handleDropHover}
+                        onRebaseDrop={handleRebaseDrop}
                       />
                     </div>
                   )
@@ -234,6 +299,20 @@ export default function GraphTab() {
 
       {ctxMenu && (
         <GraphContextMenu x={ctxMenu.x} y={ctxMenu.y} target={ctxMenu.target} onClose={closeCtxMenu} />
+      )}
+
+      {rebaseConfirm && (
+        <RebaseDropConfirm
+          x={rebaseConfirm.x}
+          y={rebaseConfirm.y}
+          branch={rebaseConfirm.branch}
+          targetLabel={rebaseConfirm.targetLabel}
+          onConfirm={() => {
+            gitRebase(rebaseConfirm.target, rebaseConfirm.branch)
+            setRebaseConfirm(null)
+          }}
+          onCancel={() => setRebaseConfirm(null)}
+        />
       )}
     </div>
   )

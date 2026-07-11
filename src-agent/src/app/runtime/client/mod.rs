@@ -457,9 +457,11 @@ pub(super) enum HostCtl {
     /// conflict, same reasoning as [`GitCherryPick`](Self::GitCherryPick). See
     /// [`git_destructive::git_merge`].
     GitMerge { ref_name: String },
-    /// Plain rebase of the current branch onto `upstream` (G5b) — the op a later
-    /// drag-to-rebase UI will call. May conflict. See [`git_destructive::git_rebase`].
-    GitRebase { upstream: String },
+    /// Rebase onto `upstream` (G5b/G6). `branch: Some(name)` is the GitKraken-style
+    /// drag-to-rebase (checks out + rebases `branch`, not the current branch);
+    /// `None` rebases the current branch. May conflict. See
+    /// [`git_destructive::git_rebase`].
+    GitRebase { upstream: String, branch: Option<String> },
     /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/`"rebase"`/
     /// `"cherry-pick"`/`"revert"`. See [`git_destructive::git_op_abort`].
     GitOpAbort { kind: String },
