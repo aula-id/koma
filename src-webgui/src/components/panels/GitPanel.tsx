@@ -16,6 +16,7 @@ import {
   RefreshCw,
   GitGraph,
   Maximize2,
+  FolderGit2,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
 import { BranchSwitcher } from '../BranchSwitcher'
@@ -265,6 +266,10 @@ export function GitPanel() {
 
   const git = useKoma((s) => s.git)
   const keys = useKoma((s) => s.keys)
+  const repos = useKoma((s) => s.repos)
+  const activeRepoRoot = useKoma((s) => s.activeRepoRoot)
+  const setActiveRepo = useKoma((s) => s.setActiveRepo)
+  const refreshRepos = useKoma((s) => s.refreshRepos)
   const remoteBusy = useKoma((s) => s.remoteBusy)
   const commitDraft = useKoma((s) => s.commitDraft)
   const setCommitDraft = useKoma((s) => s.setCommitDraft)
@@ -292,15 +297,24 @@ export function GitPanel() {
   useEffect(() => {
     refreshGitStatus()
     refreshKeys()
-  }, [refreshGitStatus, refreshKeys, sessionId])
+    refreshRepos()
+  }, [refreshGitStatus, refreshKeys, refreshRepos, sessionId, activeRepoRoot])
 
+  // No session attached yet — the home screen, before any workdir exists.
+  if (sessionId === null) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <Empty>Open a project to use Source Control</Empty>
+      </div>
+    )
+  }
   // `error` set OR no resolved root means the workdir isn't inside a git
   // repository at all — distinct from a detached-HEAD repo (still a real
   // repo, just no branch name), which renders normally below.
   if (git.error || !git.root) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <Empty>{git.error ?? 'Not a git repository'}</Empty>
+        <Empty>{repos.length === 0 ? 'No repository detected in this workspace' : (git.error ?? 'Not a git repository')}</Empty>
       </div>
     )
   }
@@ -320,6 +334,23 @@ export function GitPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {repos.length > 1 && (
+        <div className="flex items-center gap-1.5 border-b border-koma-border px-2 py-1">
+          <FolderGit2 size={12} className="flex-none text-koma-dim opacity-60" />
+          <select
+            value={activeRepoRoot ?? git.root ?? ''}
+            onChange={(e) => setActiveRepo(e.target.value)}
+            title="Active repository"
+            className="min-w-0 flex-1 truncate rounded border border-koma-border bg-koma-bg px-1 py-0.5 text-[11px] text-koma-fg focus:outline-none focus:ring-1 focus:ring-koma-accent"
+          >
+            {repos.map((r) => (
+              <option key={r.root} value={r.root}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <ConflictBanner />
       <div className="flex flex-none items-center gap-1.5 border-b border-koma-border px-3 py-2 font-mono text-[12px] text-koma-fg">
         <GitBranch size={13} className="flex-none opacity-60" />

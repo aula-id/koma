@@ -345,6 +345,8 @@ declare global {
     // host-side — works regardless of attach state. Reply lands as the
     // BranchList push envelope.
     | { r: 'GitBranchList' }
+    | { r: 'GitRepos' }
+    | { r: 'SetActiveRepo'; root: string }
     // Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     // only, never `--force`): switch (or detach onto) `ref` — a branch name or
     // a sha. Reply lands as a one-shot GitOp push (`op: 'checkout'`),
