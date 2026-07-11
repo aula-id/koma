@@ -94,6 +94,7 @@ pub(super) fn drain_subagents(
                             l.starts_with("— ")
                                 || l.starts_with("→ ")
                                 || l.starts_with("✓ ")
+                                || l.starts_with("⋯ ")
                                 || l.starts_with("done:")
                                 || l.starts_with("error:")
                         });
@@ -113,9 +114,51 @@ pub(super) fn drain_subagents(
                         }
                     }
                     AgentEvent::Step(n) => {
-                        sa.transcript.push(format!("— step {n} —"));
+                        // The stall/continue path re-emits the SAME step number after a
+                        // reasoning-only round; don't stack a duplicate divider. Skip if
+                        // the most recent step divider in the tail is already this one.
+                        let divider = format!("— step {n} —");
+                        let dup = sa
+                            .transcript
+                            .iter()
+                            .rev()
+                            .find(|l| l.starts_with("— step "))
+                            .is_some_and(|l| l == &divider);
+                        if !dup {
+                            sa.transcript.push(divider);
+                        }
                     }
                     AgentEvent::Snapshot(m) => {
+                        // Surface reasoning for an otherwise-SILENT step: if the step
+                        // that just committed produced no Token/tool lines (its divider
+                        // is still the last transcript line), the model spent the step
+                        // thinking. Reasoning is never streamed as Token, so this is the
+                        // only place it can reach the flat transcript — without it a
+                        // thinking-only step is a blank `— step N —`. Pull the newest
+                        // assistant message's reasoning and log a one-line summary.
+                        let step_silent = sa
+                            .transcript
+                            .last()
+                            .is_some_and(|l| l.starts_with("— step "));
+                        if step_silent {
+                            if let Some(first) = m
+                                .iter()
+                                .rev()
+                                .find(|msg| {
+                                    matches!(msg.role, crate::dto::chat::Role::Assistant)
+                                        && msg
+                                            .reasoning
+                                            .as_deref()
+                                            .is_some_and(|r| !r.trim().is_empty())
+                                })
+                                .and_then(|msg| msg.reasoning.as_deref())
+                                .and_then(|r| {
+                                    r.trim().lines().map(str::trim).find(|l| !l.is_empty())
+                                })
+                            {
+                                sa.transcript.push(format!("⋯ {}", trunc(first, 140)));
+                            }
+                        }
                         // Replace the structured history wholesale; drives the
                         // full-screen sub-agent viewer.
                         sa.messages = m;
@@ -125,7 +168,11 @@ pub(super) fn drain_subagents(
                         sa.live_text = String::new();
                     }
                     AgentEvent::ToolStarted { name, args } => {
-                        sa.transcript.push(format!("→ {name} {}", trunc(&args, 120)));
+                        // Readable quote-less signature (`read(koma.ts)`,
+                        // `grep(enum HostCtl)`) instead of raw JSON args, reusing the
+                        // same formatter the main chat transcript uses.
+                        let sig = crate::view::chat::transcript::format_tool_signature(&name, &args);
+                        sa.transcript.push(format!("→ {sig}"));
                     }
                     AgentEvent::ToolDone { name, result } => {
                         let first = result.lines().next().unwrap_or("").trim();
