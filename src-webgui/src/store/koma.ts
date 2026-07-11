@@ -1159,6 +1159,12 @@ type UiSlice = {
   // `switched` branch) and in `detachSession()` so a stale splash from the OLD
   // session/warm-up can never leak into a new attach.
   loading: { active: boolean; workspace: LoadPhase; awareness: LoadPhase } | null
+  // Skip-latch: set true when the user dismisses the cold-start splash via
+  // the Skip button. Suppresses splash VISIBILITY only — `loading` itself
+  // keeps updating with fresh host `Loading` pushes underneath. Reset to
+  // false on a genuine session switch/detach so a NEW cold-start splash can
+  // still show later.
+  loadingDismissed: boolean
 }
 
 // The commit-graph tab's slice (G2) — the loaded commit page(s) + selection +
@@ -1364,6 +1370,7 @@ type KomaState = {
   // loader — the eventual Snapshot for the target session still lands and is
   // applied normally.
   cancelSwitching: () => void
+  dismissLoading: () => void
   // Dismiss the active toast (auto-dismiss timer, or a manual close). No-op if
   // the id no longer matches the current toast (a newer toast already replaced
   // it — its own timer owns the dismissal).
@@ -1606,6 +1613,7 @@ const initialUi: UiSlice = {
   focusPlanTick: 0,
   usageScope: 'all',
   loading: null,
+  loadingDismissed: false,
 }
 
 // Bundled fallback theme (palette) registry — mirrors the host's theme.rs
@@ -1837,7 +1845,9 @@ export const useKoma = create<KomaState>((set, get) => ({
               // described the OLD attach's warm-up, and must not bleed into
               // the new session's view (the host will push a fresh `Loading`
               // for the new session if it's cold too).
-              ...(switched ? { tabs: [makeChatTab()], activeTabId: 'chat', loading: null } : {}),
+              ...(switched
+                ? { tabs: [makeChatTab()], activeTabId: 'chat', loading: null, loadingDismissed: false }
+                : {}),
             },
             // A genuine switch also drops the OLD session's git/graph/activity
             // slices — they're host-driven for the PREVIOUS repo/session and
@@ -2483,6 +2493,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   requestScrollBottom: () => set((s) => ({ ui: { ...s.ui, scrollTick: s.ui.scrollTick + 1 } })),
   startSwitching: (name) => set((s) => ({ ui: { ...s.ui, switchingTo: name } })),
   cancelSwitching: () => set((s) => ({ ui: { ...s.ui, switchingTo: null } })),
+  dismissLoading: () => set((s) => ({ ui: { ...s.ui, loadingDismissed: true } })),
   dismissToast: (id) =>
     set((s) => (s.ui.toast?.id === id ? { ui: { ...s.ui, toast: null } } : s)),
   openSettingsTab: () => {
@@ -2837,6 +2848,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // Defensive: also drop any stale startup splash — it described the
         // now-dead session's warm-up and must not linger over StartScreen.
         loading: null,
+        loadingDismissed: false,
       },
     }))
     // Tabs just reset to chat-only → no stream tab is active; tell the host

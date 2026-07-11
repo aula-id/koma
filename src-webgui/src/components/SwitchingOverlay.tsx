@@ -147,6 +147,9 @@ function LoadingSplash({ workspace, awareness }: { workspace: LoadPhase; awarene
 export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
   const to = useKoma((s) => s.ui.switchingTo)
   const loading = useKoma((s) => s.ui.loading)
+  const loadingDismissed = useKoma((s) => s.ui.loadingDismissed)
+  const dismissLoading = useKoma((s) => s.dismissLoading)
+  const showSplash = !!loading?.active && !loadingDismissed
   const [stuck, setStuck] = useState(false)
   const timersRef = useRef<{ hint: number; autoCancel: number } | null>(null)
   const onCancelRef = useRef(onCancel)
@@ -167,7 +170,7 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
     }
   }, [to])
 
-  if (!to && !loading?.active) return null
+  if (!to && !showSplash) return null
 
   // The overlay is full-screen, including the titlebar region — without this
   // it'd swallow every mousedown there and the frameless window couldn't be
@@ -197,8 +200,16 @@ export function SwitchingOverlay({ onCancel }: SwitchingOverlayProps) {
         transition={{ duration: 0.16, ease: 'easeOut' }}
         className="flex flex-col items-center gap-4"
       >
-        {loading?.active ? (
-          <LoadingSplash workspace={loading.workspace} awareness={loading.awareness} />
+        {showSplash && loading ? (
+          <>
+            <LoadingSplash workspace={loading.workspace} awareness={loading.awareness} />
+            <button
+              onClick={dismissLoading}
+              className="mt-6 rounded-md border border-koma-border bg-koma-panel px-3 py-1.5 text-[12px] text-koma-fg opacity-70 transition-colors hover:bg-koma-hover hover:opacity-100"
+            >
+              Skip
+            </button>
+          </>
         ) : (
           <>
             <Loader2 size={28} className="animate-spin text-koma-accent" />
