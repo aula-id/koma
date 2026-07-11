@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent, DragEvent as ReactDragEvent } from 
 import { motion } from 'framer-motion'
 import type { GraphRow as GraphRowData, GraphSegment } from '../lib/gitGraphLayout'
 import type { GitRef } from '../store/koma'
+import { AuthorAvatar } from './AuthorAvatar'
 
 // ---- Render geometry (shared with GraphTab's virtualization math) -----------
 export const ROW_H = 28
@@ -341,8 +342,9 @@ export const GraphRow = memo(function GraphRow({
           />
         ))}
         <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{row.commit.subject}</span>
-        <span className="hidden max-w-[130px] flex-none truncate text-[11px] text-koma-dim md:inline">
-          {row.commit.author}
+        <span className="hidden max-w-[140px] flex-none items-center gap-1 md:flex">
+          <AuthorAvatar name={row.commit.author} email={row.commit.email} />
+          <span className="min-w-0 truncate text-[11px] text-koma-dim">{row.commit.author}</span>
         </span>
         <span className="flex-none text-[11px] text-koma-dim opacity-70">{relTime(row.commit.date)}</span>
         <span className="flex-none font-mono text-[11px] text-koma-dim opacity-55">{row.sha.slice(0, 7)}</span>
