@@ -95,3 +95,12 @@ pub(super) fn push_branch_list(push: &dyn Fn(String), result: super::git_branch:
 pub(super) fn push_stash_list(push: &dyn Fn(String), result: super::git_stash::StashListResult) {
     super::render::emit(push, &PushEnvelope::StashList(result));
 }
+
+/// Emit a one-shot `Activity` envelope for the bubble/activity chart (GK5a),
+/// carrying a host-computed [`super::git_activity::ActivityResult`] verbatim.
+/// Shared by the UN-ATTACHED swapper fallback and the attached `push_loop`'s
+/// off-thread worker, since a `GitActivity` is serviced entirely host-side
+/// regardless of attach state — mirrors `push_git_graph`.
+pub(super) fn push_activity(push: &dyn Fn(String), result: super::git_activity::ActivityResult) {
+    super::render::emit(push, &PushEnvelope::Activity(result));
+}

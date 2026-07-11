@@ -23,6 +23,7 @@ use super::git::{
     compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
     GitDiffResult, GitOpResult, GitStatusResult,
 };
+use super::git_activity::{compute_git_activity, ActivityResult};
 use super::git_branch::{git_branch_list, git_checkout, git_create_branch, BranchListResult};
 use super::git_graph::{
     compute_commit_detail, compute_commit_diff, compute_git_graph, CommitDetailResult,
@@ -35,8 +36,9 @@ use super::keys::{
     KeyRevealResult,
 };
 use super::push_proto_git::{
-    push_branch_list, push_commit_detail, push_commit_diff, push_git_diff, push_git_graph,
-    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal, push_stash_list,
+    push_activity, push_branch_list, push_commit_detail, push_commit_diff, push_git_diff,
+    push_git_graph, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
+    push_stash_list,
 };
 
 // The G5b DESTRUCTIVE/INTERACTIVE spawn flavors (cherry-pick/revert/reset/merge/
@@ -132,6 +134,19 @@ pub(super) fn spawn_git_graph(
     std::thread::spawn(move || {
         let result = compute_git_graph(limit, skip, cur.as_deref());
         push_git_graph(&push, result);
+    });
+}
+
+/// `HostCtl::GitActivity` while detached (GK5a).
+pub(super) fn spawn_git_activity(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    path: Option<String>,
+    limit: u32,
+) {
+    std::thread::spawn(move || {
+        let result = compute_git_activity(path.as_deref(), limit, cur.as_deref());
+        push_activity(&push, result);
     });
 }
 
@@ -327,6 +342,19 @@ pub(super) fn spawn_git_graph_attached(
 ) {
     std::thread::spawn(move || {
         let result = compute_git_graph(limit, skip, cur.as_deref());
+        let _ = tx.send(result);
+    });
+}
+
+/// `HostCtl::GitActivity` while attached (GK5a).
+pub(super) fn spawn_git_activity_attached(
+    tx: Sender<ActivityResult>,
+    cur: Option<String>,
+    path: Option<String>,
+    limit: u32,
+) {
+    std::thread::spawn(move || {
+        let result = compute_git_activity(path.as_deref(), limit, cur.as_deref());
         let _ = tx.send(result);
     });
 }

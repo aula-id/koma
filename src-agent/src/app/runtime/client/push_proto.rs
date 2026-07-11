@@ -281,6 +281,13 @@ pub(super) enum PushEnvelope {
     /// pushed the SAME way regardless of attach state, ALWAYS a reply. Carries
     /// [`super::git_graph::CommitDiffResult`] verbatim.
     CommitDiff(super::git_graph::CommitDiffResult),
+    /// One-shot host-computed per-commit ACTIVITY answering a `GitActivity` request
+    /// from the bubble/activity chart (GK5a): author/date/lines-changed for each
+    /// commit on `HEAD`. Computed ENTIRELY host-side (see
+    /// `git_activity::compute_git_activity`), pushed the SAME way regardless of
+    /// attach state, ALWAYS a reply. Carries [`super::git_activity::ActivityResult`]
+    /// verbatim (already camelCase).
+    Activity(super::git_activity::ActivityResult),
     /// One-shot host-computed LAST-7-DAYS usage preview answering a `UsagePreview`
     /// request from the activity-bar Usage panel: aggregate totals, a 7-entry daily cost
     /// series (oldest first, today last — zero-filled for days with no ledger rows), and

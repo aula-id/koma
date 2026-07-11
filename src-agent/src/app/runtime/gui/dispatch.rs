@@ -637,6 +637,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitStash => dispatch_git::git_stash(&ctx.ctl),
         GuiReq::GitStashPop => dispatch_git::git_stash_pop(&ctx.ctl),
         GuiReq::GitStashList => dispatch_git::git_stash_list(&ctx.ctl),
+        // Bubble/activity chart (GK5a): host-side, ALWAYS routed to the host-relay
+        // thread — never the daemon — same reasoning as `GitStatus`/`GitGraph`.
+        GuiReq::GitActivity { path, limit } => dispatch_git::git_activity(&ctx.ctl, path, limit),
     }
 }
 

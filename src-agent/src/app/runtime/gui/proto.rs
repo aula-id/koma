@@ -632,4 +632,17 @@ pub(super) enum GuiReq {
     /// entry. Forwarded as [`HostCtl::GitStashList`]; the reply is a one-shot
     /// `StashList` envelope.
     GitStashList,
+
+    // ─── Bubble/activity chart (GK5a) ────────────────────────────────────────
+    /// The activity chart opened / refreshed: fetch per-commit author/date/
+    /// lines-changed for `limit` commits on the ACTIVE branch (`HEAD`), optionally
+    /// scoped to one `path`. Same reasoning as `GitStatus`/`GitGraph` — the host
+    /// process already has direct git access, so this is routed UNCONDITIONALLY to
+    /// the host-relay thread via `HostCtl::GitActivity`, regardless of attach
+    /// state. Reply lands as an `Activity` push.
+    GitActivity {
+        #[serde(default)]
+        path: Option<String>,
+        limit: u32,
+    },
 }

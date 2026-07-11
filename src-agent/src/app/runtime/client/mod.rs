@@ -21,6 +21,7 @@
 //! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
 //! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
 //! | `git_graph` | host-side commit-graph + commit-detail + commit-diff computation |
+//! | `git_activity` | host-side per-commit activity (author/date/lines-changed) computation (GK5a) |
 //! | `git_branch`| host-side branch list + checkout + create-branch computation     |
 //! | `git_destructive` | host-side cherry-pick/revert/reset/merge/rebase/abort/continue (G5b) |
 //! | `git_stash` | host-side stash push/pop/list (GK4a)                              |
@@ -53,6 +54,7 @@ mod diff;
 mod git;
 mod git_remote;
 mod git_graph;
+mod git_activity;
 mod git_branch;
 mod git_destructive;
 mod git_stash;
@@ -107,10 +109,9 @@ enum ClientState {
 }
 
 /// Restart the stale session-daemon while showing an animated "reopening" spinner.
-/// The restart (`manage::restart_daemon`) is blocking (~1s), so it runs on a
-/// background thread while THIS (main) thread — which owns the terminal — draws the
-/// spinner each frame until the restart completes, then propagates its result.
-/// Kept fully silent (quiet=true) so nothing bleeds into the alt-screen.
+/// The restart (`manage::restart_daemon`) is blocking (~1s), so it runs on a background
+/// thread while THIS (main) thread — which owns the terminal — draws the spinner each
+/// frame until it completes, then propagates its result. Kept silent (quiet=true).
 fn restart_daemon_animated(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     session_id: &str,
@@ -195,19 +196,14 @@ fn attach_session(
     Ok(conn)
 }
 
-/// Tear a live [`Connection`] down cleanly: queue a polite `Detach`, then drop the request
-/// sender and JOIN the writer so the final frame(s) flush before the runtime is touched.
-///
-/// Run on EVERY exit from an [`ClientState::Attached`] — a plain exit, a render error, AND
-/// the detach-then-swap into the swapper — so the source daemon is never left orphaned
-/// (socket open, no controller) and never stuck mid-hub. The `/quit` overlay's `[k]`/`[d]`
-/// paths may have queued their own `Detach` (and a `QuitDaemon` for `[k]`, which kills the
-/// daemon outright) already; this extra `Detach` is then a harmless no-op (the daemon
-/// deregistered this client by id, so a second one matches nobody). Dropping `req_tx` closes the outbound channel, which the
-/// writer observes as `Disconnected`: it drains EVERY remaining queued request to the
-/// socket and returns. We JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`], so a wedged socket
-/// can't hang exit) BEFORE returning, guaranteeing the shutdown frames land. MUST NOT be
-/// called while a tokio runtime context is entered (it `block_on`s — panics otherwise).
+/// Tear a live [`Connection`] down cleanly: queue a polite `Detach`, then drop the
+/// request sender and JOIN the writer so the final frame(s) flush before the runtime
+/// is touched. Run on EVERY exit from [`ClientState::Attached`] (plain exit, render
+/// error, or detach-then-swap) so the source daemon is never left orphaned; a `/quit`
+/// overlay `Detach` already queued makes this a harmless no-op. Dropping `req_tx`
+/// closes the outbound channel — the writer drains every queued request then returns;
+/// we JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`]) so a wedged socket can't hang exit.
+/// MUST NOT be called while a tokio runtime context is entered (it `block_on`s).
 fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
     let Connection {
         frame_rx: _,
@@ -472,6 +468,11 @@ pub(super) enum HostCtl {
     /// Stash count/indicator fetch (GK4a): `git stash list`. Host-local, never
     /// the daemon, like [`GitStatus`](Self::GitStatus). See [`git_stash::git_stash_list`].
     GitStashList,
+    /// Per-commit ACTIVITY fetch for the bubble/activity chart (GK5a): author/date/
+    /// lines-changed for `limit` commits on `HEAD`, optionally scoped to `path`.
+    /// Host-local, never the daemon, like [`GitGraph`](Self::GitGraph); see
+    /// [`git_activity::compute_git_activity`].
+    GitActivity { path: Option<String>, limit: u32 },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

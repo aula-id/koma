@@ -167,3 +167,8 @@ pub(super) fn git_stash_pop(ctl: &Sender<HostCtl>) {
 pub(super) fn git_stash_list(ctl: &Sender<HostCtl>) {
     let _ = ctl.send(HostCtl::GitStashList);
 }
+
+/// `GuiReq::GitActivity` (GK5a).
+pub(super) fn git_activity(ctl: &Sender<HostCtl>, path: Option<String>, limit: u32) {
+    let _ = ctl.send(HostCtl::GitActivity { path, limit });
+}
