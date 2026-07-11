@@ -36,12 +36,14 @@ export function Sidebar({ width, view }: SidebarProps) {
   const hasSession = useKoma((s) => s.session.id !== null)
   const refreshGitStatus = useKoma((s) => s.refreshGitStatus)
   const refreshRepos = useKoma((s) => s.refreshRepos)
+  const refreshGraph = useKoma((s) => s.refreshGraph)
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = () => {
     setRefreshing(true)
     refreshGitStatus()
     refreshRepos()
+    refreshGraph()
     window.setTimeout(() => setRefreshing(false), 800)
   }
 

@@ -518,6 +518,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let available_tools = crate::tool::agent_selectable_tools();
                 push_agents_values(
                     push,
+                    0, // req_seq — no correlation for host-built fallback
                     agents,
                     catalogue_models,
                     catalogue_providers,

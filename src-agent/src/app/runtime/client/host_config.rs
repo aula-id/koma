@@ -49,6 +49,7 @@ pub(super) fn apply_swapper_config_mutation(
         let (agents, catalogue_models, catalogue_providers) = build_host_agents_values();
         push_agents_values(
             push,
+            0, // req_seq — no correlation for host-built fallback
             agents,
             catalogue_models,
             catalogue_providers,
@@ -96,6 +97,7 @@ fn apply_swapper_agent_mutation(req: &ClientRequest) -> bool {
             model_uuid,
             tools,
             prompt,
+            ..
         } => {
             let is_edit = original_name.is_some();
             let lookup = original_name.clone().unwrap_or_else(|| name.clone());
@@ -146,7 +148,7 @@ fn apply_swapper_agent_mutation(req: &ClientRequest) -> bool {
             }
             true
         }
-        ClientRequest::DeleteAgent { scope, name } => {
+        ClientRequest::DeleteAgent { scope, name, .. } => {
             // Built-in delete rejected; only the GLOBAL tier is writable pre-session.
             let registry = load_registry(None);
             let is_builtin =

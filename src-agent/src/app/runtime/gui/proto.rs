@@ -559,10 +559,20 @@ pub(super) enum GuiReq {
         tools: Vec<String>,
         #[serde(default)]
         prompt: String,
+        /// Client request sequence for stale-reply protection. The host fills this
+        /// before forwarding (mirrors `agentSaving.seq` from the JS store).
+        #[serde(default)]
+        req_seq: u64,
     },
     /// The /agents dashboard's delete (a file-backed agent; a built-in is a daemon-side
     /// error). `scope` is `"global"` / `"session"`. Forwarded like the config setters.
-    DeleteAgent { scope: String, name: String },
+    DeleteAgent {
+        scope: String,
+        name: String,
+        /// Client request sequence for stale-reply protection.
+        #[serde(default)]
+        req_seq: u64,
+    },
 
     // ─── GUI OAuth surface (Codex / Kilo Code / xAI login) ───────────────────────
     /// The OAuth screen opened / refreshed: fetch the current state (connections +

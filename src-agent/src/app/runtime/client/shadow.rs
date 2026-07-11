@@ -132,6 +132,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::SettingsValues { .. }
         | DaemonEvent::EffortOptions { .. }
         | DaemonEvent::AgentsValues { .. }
+        | DaemonEvent::AgentOp { .. }
         | DaemonEvent::OAuthState { .. } => false,
     }
 }

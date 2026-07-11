@@ -444,7 +444,7 @@ impl DaemonHub {
     // snapshot / foreground move) and ALWAYS replies, even with no session (built-in +
     // global only) — mirrors the `get_settings` one-shot.
     pub(super) fn list_agents(&mut self, idx: usize, state: &AppState) {
-        self.send_agents_values(idx, state);
+        self.send_agents_values(idx, state, 0);
     }
 
     /// Build + send client `idx` a [`DaemonEvent::AgentsValues`]: the merged sub-agent
@@ -458,7 +458,7 @@ impl DaemonHub {
     /// with no foreground session it loads built-in + global only and seeds from the global
     /// config — so the dashboard never hangs. `send_to` delivers regardless of attach state
     /// (like `send_settings_values`).
-    pub(super) fn send_agents_values(&mut self, idx: usize, state: &AppState) {
+    pub(super) fn send_agents_values(&mut self, idx: usize, state: &AppState, req_seq: u64) {
         use crate::model::agent_def::{load_registry, AgentSource};
         let config = &state.rest.config;
         let session = state.rest.fg().session.as_ref();
@@ -520,11 +520,10 @@ impl DaemonHub {
         self.send_to(
             idx,
             DaemonEvent::AgentsValues {
+                req_seq,
                 agents,
                 catalogue_models,
                 catalogue_providers,
-                // The editor's tool-picker options — the SAME shared source the TUI picker
-                // uses, so the two never drift.
                 available_tools: crate::tool::agent_selectable_tools(),
             },
         );
