@@ -34,10 +34,15 @@ pub(super) struct ActivityCommit {
 /// `Activity` envelope. `error` set means the workdir isn't a git repository (or
 /// `git log` itself failed) — `commits` is then empty rather than the caller
 /// panicking, mirroring [`super::git_graph::GitGraphResult`]'s always-reply rule.
+/// `path` echoes the REQUEST's pathspec (`None` for the whole-branch case) verbatim,
+/// mirroring [`super::git_graph::CommitDetailResult`]'s `sha` echo — the reducer on the
+/// GUI side compares it against the currently-requested path to drop a stale reply when
+/// two `GitActivity` requests race (lock-acquisition/thread-scheduling order isn't FIFO).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ActivityResult {
     pub commits: Vec<ActivityCommit>,
+    pub path: Option<String>,
     pub error: Option<String>,
 }
 
@@ -116,7 +121,11 @@ pub(super) fn compute_git_activity(
     limit: u32,
     session: Option<&str>,
 ) -> ActivityResult {
-    let empty = |error: Option<String>| ActivityResult { commits: Vec::new(), error };
+    let empty = |error: Option<String>| ActivityResult {
+        commits: Vec::new(),
+        path: path.map(str::to_string),
+        error,
+    };
 
     let Some(root) = repo_root_for(session) else {
         return empty(Some("not a git repository".to_string()));
@@ -145,5 +154,9 @@ pub(super) fn compute_git_activity(
     };
 
     let text = String::from_utf8_lossy(&stdout);
-    ActivityResult { commits: parse_activity(&text), error: None }
+    ActivityResult {
+        commits: parse_activity(&text),
+        path: path.map(str::to_string),
+        error: None,
+    }
 }

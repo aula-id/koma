@@ -410,6 +410,19 @@ export type GitCommitNode = {
   subject: string
 }
 
+// One commit row in an Activity reply (GK5b) — host `ActivityCommit`. `date`
+// is the author date as an ISO-8601 string (parsed client-side, never
+// host-side); `added`/`deleted` are the commit's SUMMED line counts across
+// every changed file (binary files contribute 0 to both).
+export type ActivityCommit = {
+  sha: string
+  author: string
+  email: string
+  date: string
+  added: number
+  deleted: number
+}
+
 // One changed-file entry in a CommitDetail — host `CommitFile`. `status` is
 // git's own token ("M"/"A"/"D"/"R100"/…); `origPath` is non-null only on a
 // rename/copy record (then `path` is the NEW path, `origPath` the OLD one).
@@ -951,6 +964,18 @@ export type PushEnvelope =
       entries: StashEntry[]
       error: string | null
     }
+  // Reply to GuiReq GitActivity (GK5b) — per-commit author/date/lines-changed
+  // rows for the bubble/activity chart. Carries `ActivityResult` verbatim
+  // (already camelCase) flattened onto the envelope. `error` set means the
+  // workdir isn't a git repository (`commits` then empty). `path` echoes the
+  // request's pathspec (`null` for the whole-branch case) so the reducer can
+  // drop a stale reply for a since-changed path filter. ALWAYS a reply.
+  | {
+      k: 'Activity'
+      commits: ActivityCommit[]
+      path: string | null
+      error: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1148,6 +1173,18 @@ type GraphSlice = {
   graphMode: 'rail' | 'bubble'
 }
 
+// The bubble/activity chart's slice (GK5b) — the loaded per-commit activity
+// series for whatever path is currently narrowed to (`null` = whole active
+// branch). Global (mirrors `graph`; the host resolves it off the foreground
+// session's repo). `error` set means the workdir isn't a git repo — `commits`
+// is then empty rather than the chart guessing at a stale page.
+type ActivitySlice = {
+  commits: ActivityCommit[]
+  loading: boolean
+  error: string | null
+  path: string | null
+}
+
 type KomaState = {
   session: SessionSlice
   hub: HubSlice
@@ -1244,6 +1281,8 @@ type KomaState = {
   // relevant slice fields — never accumulates/appends.
   // The GitKraken-style commit-graph tab's slice (G2). See GraphSlice.
   graph: GraphSlice
+  // The bubble/activity chart's slice (GK5b). See ActivitySlice.
+  activity: ActivitySlice
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
   // openSettingsTab's dedupe + activate shape.
@@ -1261,6 +1300,11 @@ type KomaState = {
   selectCommit: (sha: string) => void
   // Rail-line/Bubble mode switch (GK2) — local UI toggle, no wire request.
   setGraphMode: (mode: 'rail' | 'bubble') => void
+  // (Re)load the bubble/activity chart's commit series (GK5b): mark loading +
+  // GitActivity{ path, limit:800 }. `path` narrows to one pathspec; omitted or
+  // `null` means the whole active branch. Fired on GraphBubble mount + its
+  // path-filter submit.
+  refreshActivity: (path?: string | null) => void
   // Open (or focus) a Monaco diff tab for `path` at commit `sha` vs its first
   // parent — distinct `commitdiff:${sha}:${path}` id from openDiffTab/
   // openGitDiffTab (never collides). Marks loading + fires the GitCommitDiff req.
@@ -1593,6 +1637,13 @@ const initialGraph: GraphSlice = {
   graphMode: 'rail',
 }
 
+const initialActivity: ActivitySlice = {
+  commits: [],
+  loading: false,
+  error: null,
+  path: null,
+}
+
 const initialKeys: KeyInfo[] = []
 
 const initialModelList: ModelListEntry[] = []
@@ -1678,6 +1729,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   availableTools: [],
   git: initialGit,
   graph: initialGraph,
+  activity: initialActivity,
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -2297,6 +2349,19 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'StashList':
         set(() => ({ stashes: env.entries }))
         break
+      case 'Activity':
+        set((s) => {
+          // Drop a stale reply for a since-changed path filter (the echoed `path`
+          // no longer matches what's currently requested) — lock-acquisition
+          // order between two racing GitActivity requests isn't FIFO, so a
+          // slower earlier reply can otherwise land after a faster later one and
+          // clobber it. `null === null` still matches the whole-branch case.
+          if (env.path !== s.activity.path) return s
+          return {
+            activity: { ...s.activity, commits: env.commits, error: env.error, loading: false },
+          }
+        })
+        break
       case 'KeyReveal':
         set((s) => {
           // Toast only a COPY-public-key failure (`private: false`) — a
@@ -2472,6 +2537,11 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   setGraphMode: (mode) => {
     set((s) => ({ graph: { ...s.graph, graphMode: mode } }))
+  },
+  refreshActivity: (path) => {
+    const p = path ?? null
+    set((s) => ({ activity: { ...s.activity, loading: true, path: p } }))
+    get().req({ r: 'GitActivity', path: p, limit: 800 })
   },
   openCommitDiffTab: (sha, path) => {
     const id = `commitdiff:${sha}:${path}`

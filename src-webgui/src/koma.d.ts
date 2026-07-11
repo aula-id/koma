@@ -404,6 +404,11 @@ declare global {
     // entry for the Stash/Pop buttons' counts. Serviced entirely host-side.
     // Reply lands as the StashList push envelope.
     | { r: 'GitStashList' }
+    // Bubble/activity chart (GK5b): fetch per-commit author/date/lines-changed
+    // rows for the ACTIVE branch, optionally narrowed to one pathspec. `path`
+    // null means the whole branch. Reply lands as the Activity push envelope
+    // (matches the Rust GuiReq::GitActivity { path, limit }).
+    | { r: 'GitActivity'; path: string | null; limit: number }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

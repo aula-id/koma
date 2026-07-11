@@ -16,8 +16,9 @@ import { GraphDetail } from './GraphDetail'
 import { GraphContextMenu, type GraphMenuTarget } from './GraphContextMenu'
 import { ConflictBanner } from './ConflictBanner'
 import { RebaseDropConfirm } from './RebaseDropConfirm'
-import { GraphBreadcrumb, GraphBubblePlaceholder } from './GraphBreadcrumb'
+import { GraphBreadcrumb } from './GraphBreadcrumb'
 import { GraphRefTree } from './GraphRefTree'
+import GraphBubble from './GraphBubble'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
@@ -504,8 +505,8 @@ export default function GraphTab() {
       )}
 
       {graphMode === 'bubble' && (
-        <div className="min-h-0 flex-1">
-          <GraphBubblePlaceholder />
+        <div className="flex min-h-0 flex-1">
+          <GraphBubble />
         </div>
       )}
 
