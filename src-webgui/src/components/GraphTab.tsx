@@ -56,6 +56,11 @@ export default function GraphTab() {
   const selectCommit = useKoma((s) => s.selectCommit)
   const gitRebase = useKoma((s) => s.gitRebase)
   const graphMode = useKoma((s) => s.graph.graphMode)
+  // Whether THIS tab is the one currently showing (routes/index.tsx toggles
+  // tabs via a `hidden` class, it never unmounts them) — used below to
+  // re-measure `viewportH` on the display:none -> visible flip, since a
+  // ResizeObserver frequently misses that transition on WebKitGTK.
+  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'graph')
 
   // Fetch the first page on mount. The tab persists mounted once opened (see
   // TabbedMain), so this fires exactly once per open.
@@ -69,7 +74,14 @@ export default function GraphTab() {
 
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
-  const [viewportH, setViewportH] = useState(0)
+  // Non-zero from the first render (falls back to the window's height when
+  // `window` isn't available, e.g. SSR) — a real ResizeObserver measurement
+  // corrects this shortly after, but the window calc below must never see a
+  // 0 here or it collapses to just OVERSCAN rows (see the effects below for
+  // why the observer alone isn't reliable on this tab).
+  const [viewportH, setViewportH] = useState(() =>
+    typeof window !== 'undefined' ? window.innerHeight : 800,
+  )
   const [hoveredSha, setHoveredSha] = useState<string | null>(null)
   // Right detail-pane WIDTH (GK4b) — a plain drag-grip resize, mirroring
   // startSidebarResize below but on the opposite edge.
@@ -142,15 +154,44 @@ export default function GraphTab() {
   // Track the scroller's height so the window math has a real viewport (also
   // re-fires on a sidebar/detail-pane WIDTH resize — those are ResizeObserver
   // events too, just harmless no-ops for `viewportH` since they don't change
-  // the scroller's height).
+  // the scroller's height). Guarded to only ever apply a POSITIVE height: a
+  // transient 0 (e.g. mid-hide, or this tab currently being the non-visible
+  // one) must never stomp a good measurement back down to 0.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setViewportH(el.clientHeight))
+    const ro = new ResizeObserver(() => {
+      if (el.clientHeight > 0) setViewportH(el.clientHeight)
+    })
     ro.observe(el)
-    setViewportH(el.clientHeight)
-    return () => ro.disconnect()
+    if (el.clientHeight > 0) setViewportH(el.clientHeight)
+    // Belt-and-suspenders: measure once more after layout settles, in case
+    // the very first synchronous read above raced the initial paint.
+    const raf = requestAnimationFrame(() => {
+      if (el.clientHeight > 0) setViewportH(el.clientHeight)
+    })
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(raf)
+    }
   }, [])
+
+  // Re-measure when this tab actually becomes the visible one. The tab is
+  // mounted (and may be auto-opened) while its container is still
+  // `display:none` (routes/index.tsx toggles tabs via a `hidden` class
+  // rather than unmounting), so the mount-time `clientHeight` above can read
+  // 0 — and on WebKitGTK the ResizeObserver frequently never fires on the
+  // subsequent display:none -> visible flip. Rerun the measurement on that
+  // transition specifically, inside a `requestAnimationFrame` so the reveal's
+  // layout has actually settled before reading `clientHeight`.
+  useEffect(() => {
+    if (!isActiveTab) return
+    const raf = requestAnimationFrame(() => {
+      const el = scrollerRef.current
+      if (el && el.clientHeight > 0) setViewportH(el.clientHeight)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [isActiveTab])
 
   // Windowed slice: only the visible rows (+ overscan) ever hit the DOM, so a
   // 10k-commit graph renders ~40 rows, not 10k.
