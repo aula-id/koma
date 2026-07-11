@@ -118,6 +118,11 @@ pub enum OAuthProvider {
     /// local loopback callback (see `service::oauth::claude`), mirroring Codex's flow
     /// shape but against Anthropic's own endpoints.
     ClaudeAI,
+    /// Koma (koma.run) account login: a PKCE authorization-code grant with a local
+    /// loopback callback (see `service::oauth::komarun`), cloned from the Claude flow
+    /// shape but against koma.run's native-client OAuth endpoints (form-encoded token
+    /// exchange, no client_id/scope). Account login only — not a model provider yet.
+    KomaRun,
 }
 
 impl OAuthProvider {
@@ -128,6 +133,7 @@ impl OAuthProvider {
             OAuthProvider::Kilocode => "Kilo Code",
             OAuthProvider::Xai => "xAI",
             OAuthProvider::ClaudeAI => "Claude",
+            OAuthProvider::KomaRun => "Koma",
         }
     }
 
@@ -141,6 +147,7 @@ impl OAuthProvider {
             OAuthProvider::Kilocode => "kilocode",
             OAuthProvider::Xai => "xai",
             OAuthProvider::ClaudeAI => "claudeai",
+            OAuthProvider::KomaRun => "komarun",
         }
     }
 
@@ -155,6 +162,7 @@ impl OAuthProvider {
             OAuthProvider::Kilocode => "device",
             OAuthProvider::Xai => "device",
             OAuthProvider::ClaudeAI => "pkce",
+            OAuthProvider::KomaRun => "pkce",
         }
     }
 }

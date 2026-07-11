@@ -54,6 +54,7 @@ pub(super) fn handle_oauth_start(
         OAuthProvider::Kilocode => handle.spawn(run_kilo_flow(tx)),
         OAuthProvider::Xai => handle.spawn(run_xai_flow(tx)),
         OAuthProvider::ClaudeAI => handle.spawn(run_claude_flow(tx)),
+        OAuthProvider::KomaRun => handle.spawn(run_komarun_flow(tx)),
     };
     state.rest.oauth_task = Some(join.abort_handle());
     Ok(())
@@ -128,6 +129,48 @@ async fn run_claude_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     {
         Ok(tokens) => {
             let conn = crate::service::oauth::claude::to_conn(tokens);
+            let _ = tx.send(OAuthEvent::Success { conn });
+        }
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+        }
+    }
+}
+
+/// The Koma (koma.run) browser flow: build the PKCE authorization URL, open the
+/// system browser, wait on the loopback redirect (port 51004), then exchange the
+/// code for tokens. Mirrors `run_claude_flow` exactly, against koma.run's own
+/// (form-encoded, no client_id/scope) endpoints.
+async fn run_komarun_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+    let auth = crate::service::oauth::komarun::build_auth_url();
+    let _ = tx.send(OAuthEvent::CodexUrl { url: auth.url.clone() });
+    crate::service::oauth::browser::open_in_browser(&auth.url);
+
+    let cb = match crate::service::oauth::loopback::catch_callback(
+        &auth.pkce.state,
+        300,
+        crate::service::oauth::registry::KOMA_PORT,
+    )
+    .await
+    {
+        Ok(cb) => cb,
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+            return;
+        }
+    };
+
+    let http = reqwest::Client::new();
+    match crate::service::oauth::komarun::exchange_code(
+        &http,
+        &cb.code,
+        &auth.pkce.verifier,
+        &auth.pkce.state,
+    )
+    .await
+    {
+        Ok(tokens) => {
+            let conn = crate::service::oauth::komarun::to_conn(tokens);
             let _ = tx.send(OAuthEvent::Success { conn });
         }
         Err(e) => {

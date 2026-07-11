@@ -110,6 +110,7 @@ impl OAuthDraft {
                     OAuthProvider::Kilocode => "kilocode",
                     OAuthProvider::Xai => "xai",
                     OAuthProvider::ClaudeAI => "claude",
+                    OAuthProvider::KomaRun => "koma",
                 };
                 let ident = if !c.email.is_empty() {
                     c.email.clone()
