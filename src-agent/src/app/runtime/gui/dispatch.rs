@@ -632,6 +632,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::KeyImport { name, private_key } => dispatch_git::key_import(&ctx.ctl, name, private_key),
         GuiReq::KeyReveal { name, private } => dispatch_git::key_reveal(&ctx.ctl, name, private),
         GuiReq::KeyDelete { name } => dispatch_git::key_delete(&ctx.ctl, name),
+        // Source Control toolbar stash ops (GK4a): host-side, ALWAYS routed to the
+        // host-relay thread — never the daemon — same reasoning as `GitStatus`.
+        GuiReq::GitStash => dispatch_git::git_stash(&ctx.ctl),
+        GuiReq::GitStashPop => dispatch_git::git_stash_pop(&ctx.ctl),
+        GuiReq::GitStashList => dispatch_git::git_stash_list(&ctx.ctl),
     }
 }
 

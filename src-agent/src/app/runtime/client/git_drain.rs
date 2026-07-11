@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 
 use super::push_proto_git::{
     push_branch_list, push_commit_detail, push_commit_diff, push_git_diff, push_git_graph,
-    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
+    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal, push_stash_list,
 };
 
 /// Drain every completed GIT / SSH-key-vault off-thread reply and push each as its
@@ -32,6 +32,7 @@ pub(super) fn drain_git_replies(
     key_list_rx: &Receiver<Vec<super::keys::KeyInfo>>,
     key_reveal_rx: &Receiver<super::keys::KeyRevealResult>,
     key_op_rx: &Receiver<super::keys::KeyOpResult>,
+    stash_list_rx: &Receiver<super::git_stash::StashListResult>,
 ) {
     // --- (b-sex) GIT panel: push any completed off-thread status fetch ---
     while let Ok(result) = git_status_rx.try_recv() {
@@ -88,5 +89,10 @@ pub(super) fn drain_git_replies(
     // pushes).
     while let Ok(result) = key_op_rx.try_recv() {
         push_key_op(push, result);
+    }
+
+    // --- (b-quattuordec) stash indicator: push any completed off-thread list fetch ---
+    while let Ok(result) = stash_list_rx.try_recv() {
+        push_stash_list(push, result);
     }
 }

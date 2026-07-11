@@ -434,6 +434,13 @@ pub(super) enum PushEnvelope {
     /// reply so the picker never hangs. Carries
     /// [`super::git_branch::BranchListResult`] verbatim (already camelCase).
     BranchList(super::git_branch::BranchListResult),
+    /// One-shot host-computed STASH LIST answering a `GitStashList` request (GK4a)
+    /// for the Source Control toolbar's stash count/indicator: every stash entry
+    /// (`index` + `message`), git's own `stash list` order. Computed ENTIRELY
+    /// host-side (never forwarded to the daemon) — like `GitStatus`, ALWAYS a
+    /// reply so the indicator never hangs. Carries
+    /// [`super::git_stash::StashListResult`] verbatim (already camelCase).
+    StashList(super::git_stash::StashListResult),
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every

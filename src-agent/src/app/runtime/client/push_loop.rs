@@ -209,6 +209,12 @@ pub(super) fn push_loop(
     // dedicated channel (same `GitOp` + follow-up `GitStatus` reply pattern).
     let (branch_list_tx, branch_list_rx) = std::sync::mpsc::channel::<super::git_branch::BranchListResult>();
 
+    // --- STASH (GitStashList) --- one-shot worker thread (blocking `git stash
+    // list`), like `GitBranchList` above (GK4a). `GitStash`/`GitStashPop` reuse the
+    // EXISTING `git_op_tx`/`git_status_tx` channels instead (same `GitOp` + follow-up
+    // `GitStatus` reply pattern, since stashing changes the working tree).
+    let (stash_list_tx, stash_list_rx) = std::sync::mpsc::channel::<super::git_stash::StashListResult>();
+
     // --- SSH KEY VAULT (KeyList/KeyGenerate/KeyImport/KeyDelete/KeyReveal) ---
     // Every op shells `ssh-keygen`/touches the filesystem (blocking), same
     // reasoning as the GIT channels above. A mutation (generate/import/delete)
@@ -431,6 +437,19 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GitPush) => {
                     git_host::spawn_git_push_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                 }
+                // Source Control toolbar stash ops (GK4a): host-local, never the
+                // daemon. `GitStash`/`GitStashPop` reuse the EXISTING `git_op_tx`/
+                // `git_status_tx` channels (drained at (b-oct)/(b-sex) via
+                // `git_drain`); `GitStashList` drains at (b-quattuordec).
+                Ok(super::HostCtl::GitStash) => {
+                    git_host::spawn_git_stash_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                }
+                Ok(super::HostCtl::GitStashPop) => {
+                    git_host::spawn_git_stash_pop_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                }
+                Ok(super::HostCtl::GitStashList) => {
+                    git_host::spawn_git_stash_list_attached(stash_list_tx.clone(), current_owned.clone());
+                }
                 // Branch-switcher / graph context menu (G4): host-local, never the
                 // daemon. `GitBranchList` drains at (b-octodec) below;
                 // `GitCheckout`/`GitCreateBranch` reuse the git-op channels above.
@@ -638,6 +657,7 @@ pub(super) fn push_loop(
             &key_list_rx,
             &key_reveal_rx,
             &key_op_rx,
+            &stash_list_rx,
         );
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

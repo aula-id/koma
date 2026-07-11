@@ -23,8 +23,10 @@
 //! | `git_graph` | host-side commit-graph + commit-detail + commit-diff computation |
 //! | `git_branch`| host-side branch list + checkout + create-branch computation     |
 //! | `git_destructive` | host-side cherry-pick/revert/reset/merge/rebase/abort/continue (G5b) |
+//! | `git_stash` | host-side stash push/pop/list (GK4a)                              |
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
+//! | `git_host_mut` | `git_host`'s G5b destructive spawn flavors, split out for size |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `host_catalogue` | un-attached model/route/agents/oauth catalogue builders for `host` |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
@@ -53,8 +55,10 @@ mod git_remote;
 mod git_graph;
 mod git_branch;
 mod git_destructive;
+mod git_stash;
 mod keys;
 mod git_host;
+mod git_host_mut;
 mod host;
 mod host_catalogue;
 mod host_config;
@@ -141,25 +145,14 @@ fn restart_daemon_animated(
 /// Attach to a session-daemon, spawning it if needed, and run the build-skew handshake.
 ///
 /// The single attach primitive used everywhere the client connects: the initial
-/// non-resume attach, a swapper PICK, and a swapper CANCEL-reconnect. It:
-/// 1. ensures the session's daemon is RUNNING ([`super::manage::ensure_daemon_running`],
-///    `resume=false`): for a LIVE session this is a no-op (the daemon is already up); for
-///    a brand-new minted id it spawns a fresh `--daemon --session <id>` (create branch);
-///    for an on-disk history id it spawns one that create-or-LOADs that session;
-/// 2. connects + attaches + runs the `Hello` handshake ([`connect_attach_and_handshake`]);
-/// 3. on a CONFIRMED build-skew mismatch, restarts that one stale daemon (AT MOST ONCE)
-///    via the SAME machinery `koma daemon restart` uses and reconnects.
-///
-/// # Build-skew auto-restart (task #142)
-///
-/// The koma daemon outlives a rebuild, so a freshly-built client can attach to a daemon
-/// still running OLD code and silently render its stale frames (this caused a phantom
-/// `/agents` bug). The client compares its OWN fresh fingerprint
-/// ([`store::build_fingerprint`]) against the daemon's reported `Hello`; on a mismatch it
-/// restarts the stale daemon and reconnects. LOOP GUARD: the restart fires at most once —
-/// if the just-spawned daemon STILL mismatches (it shouldn't, it was built from the current
-/// binary) it warns and renders against it rather than restart-looping. A daemon that sends
-/// no `Hello` (slow / pre-handshake) is never restarted on that absence alone.
+/// non-resume attach, a swapper PICK, and a swapper CANCEL-reconnect. Ensures the
+/// session's daemon is running ([`super::manage::ensure_daemon_running`]), connects +
+/// handshakes ([`connect_attach_and_handshake`]), then on a CONFIRMED build-skew
+/// mismatch (the daemon outlives a rebuild — task #142, this caused a phantom
+/// `/agents` bug) restarts that ONE stale daemon (AT MOST ONCE, via the same
+/// machinery `koma daemon restart` uses) and reconnects — comparing its own fresh
+/// [`store::build_fingerprint`] against the daemon's reported `Hello`. A daemon that
+/// sends no `Hello` (slow / pre-handshake) is never restarted on that absence alone.
 fn attach_session(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     handle: &tokio::runtime::Handle,
@@ -213,8 +206,8 @@ fn attach_session(
 /// deregistered this client by id, so a second one matches nobody). Dropping `req_tx` closes the outbound channel, which the
 /// writer observes as `Disconnected`: it drains EVERY remaining queued request to the
 /// socket and returns. We JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`], so a wedged socket
-/// can't hang exit) BEFORE returning, which is what guarantees the shutdown frames land.
-/// MUST NOT be called while a tokio runtime context is entered (it `block_on`s).
+/// can't hang exit) BEFORE returning, guaranteeing the shutdown frames land. MUST NOT be
+/// called while a tokio runtime context is entered (it `block_on`s — panics otherwise).
 fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
     let Connection {
         frame_rx: _,
@@ -469,6 +462,16 @@ pub(super) enum HostCtl {
     /// a `--continue` never hangs on an editor. See
     /// [`git_destructive::git_op_continue`].
     GitOpContinue { kind: String },
+    /// Source Control toolbar Stash button (GK4a): `git stash push`. Same reply
+    /// pattern as [`GitStage`](Self::GitStage). See [`git_stash::git_stash`].
+    GitStash,
+    /// Source Control toolbar Pop button (GK4a): `git stash pop`. May conflict,
+    /// same reasoning as [`GitCherryPick`](Self::GitCherryPick). See
+    /// [`git_stash::git_stash_pop`].
+    GitStashPop,
+    /// Stash count/indicator fetch (GK4a): `git stash list`. Host-local, never
+    /// the daemon, like [`GitStatus`](Self::GitStatus). See [`git_stash::git_stash_list`].
+    GitStashList,
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

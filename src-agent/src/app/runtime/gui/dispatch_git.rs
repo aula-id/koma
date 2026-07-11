@@ -152,3 +152,18 @@ pub(super) fn key_reveal(ctl: &Sender<HostCtl>, name: String, private: bool) {
 pub(super) fn key_delete(ctl: &Sender<HostCtl>, name: String) {
     let _ = ctl.send(HostCtl::KeyDelete { name });
 }
+
+/// `GuiReq::GitStash` (GK4a).
+pub(super) fn git_stash(ctl: &Sender<HostCtl>) {
+    let _ = ctl.send(HostCtl::GitStash);
+}
+
+/// `GuiReq::GitStashPop` (GK4a).
+pub(super) fn git_stash_pop(ctl: &Sender<HostCtl>) {
+    let _ = ctl.send(HostCtl::GitStashPop);
+}
+
+/// `GuiReq::GitStashList` (GK4a).
+pub(super) fn git_stash_list(ctl: &Sender<HostCtl>) {
+    let _ = ctl.send(HostCtl::GitStashList);
+}
