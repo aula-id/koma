@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { BrailleSpinner } from './BrailleSpinner'
 import { ExplorePanel } from './panels/ExplorePanel'
 import { GitPanel } from './panels/GitPanel'
 import { McpPanel } from './panels/McpPanel'
@@ -34,6 +36,14 @@ export function Sidebar({ width, view }: SidebarProps) {
   const hasSession = useKoma((s) => s.session.id !== null)
   const refreshGitStatus = useKoma((s) => s.refreshGitStatus)
   const refreshRepos = useKoma((s) => s.refreshRepos)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const handleRefresh = () => {
+    setRefreshing(true)
+    refreshGitStatus()
+    refreshRepos()
+    window.setTimeout(() => setRefreshing(false), 800)
+  }
 
   return (
     <div
@@ -57,15 +67,13 @@ export function Sidebar({ width, view }: SidebarProps) {
         {view === 'git' && (
           <button
             type="button"
-            onClick={() => {
-              refreshGitStatus()
-              refreshRepos()
-            }}
+            onClick={handleRefresh}
+            disabled={refreshing}
             title="Refresh"
             aria-label="Refresh source control"
-            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
           >
-            <RefreshCw size={12} />
+            {refreshing ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
           </button>
         )}
       </div>
