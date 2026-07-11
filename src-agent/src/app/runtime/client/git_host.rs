@@ -30,6 +30,7 @@ use super::git_graph::{
     CommitDiffResult, GitGraphResult,
 };
 use super::git_remote::{git_fetch, git_pull, git_push, set_current_key};
+use super::git_repos::{self, RepoListResult};
 use super::git_stash::{git_stash, git_stash_list, git_stash_pop, StashListResult};
 use super::keys::{
     delete_key, generate_key, import_key, list_keys, reveal_key, KeyInfo, KeyOpResult,
@@ -38,7 +39,7 @@ use super::keys::{
 use super::push_proto_git::{
     push_activity, push_branch_list, push_commit_detail, push_commit_diff, push_git_diff,
     push_git_graph, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
-    push_stash_list,
+    push_repo_list, push_stash_list,
 };
 
 // The G5b DESTRUCTIVE/INTERACTIVE spawn flavors (cherry-pick/revert/reset/merge/
@@ -216,6 +217,28 @@ pub(super) fn spawn_git_branch_list(push: impl Fn(String) + Send + 'static, cur:
     std::thread::spawn(move || {
         let result = git_branch_list(cur.as_deref());
         push_branch_list(&push, result);
+    });
+}
+
+/// `HostCtl::GitRepos` while detached. Mirrors [`spawn_git_branch_list`].
+pub(super) fn spawn_git_repos(push: impl Fn(String) + Send + 'static, cur: Option<String>) {
+    std::thread::spawn(move || {
+        let repos = git_repos::discover_repos(cur.as_deref());
+        let active = git_repos::active_repo(cur.as_deref()).map(|p| p.to_string_lossy().into_owned());
+        push_repo_list(&push, RepoListResult { repos, active });
+    });
+}
+
+/// `HostCtl::SetActiveRepo` while detached: no `GitOp` reply of its own — only a
+/// follow-up refreshed status for the newly-active repo. Mirrors [`spawn_set_git_key`].
+pub(super) fn spawn_set_active_repo(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    root: String,
+) {
+    std::thread::spawn(move || {
+        let _ = git_repos::set_active_repo_checked(cur.as_deref(), &root);
+        push_git_status(&push, compute_git_status(cur.as_deref()));
     });
 }
 
@@ -498,6 +521,29 @@ pub(super) fn spawn_git_branch_list_attached(tx: Sender<BranchListResult>, cur: 
     std::thread::spawn(move || {
         let result = git_branch_list(cur.as_deref());
         let _ = tx.send(result);
+    });
+}
+
+/// `HostCtl::GitRepos` while attached. Mirrors [`spawn_git_branch_list_attached`].
+pub(super) fn spawn_git_repos_attached(tx: Sender<RepoListResult>, cur: Option<String>) {
+    std::thread::spawn(move || {
+        let repos = git_repos::discover_repos(cur.as_deref());
+        let active = git_repos::active_repo(cur.as_deref()).map(|p| p.to_string_lossy().into_owned());
+        let _ = tx.send(RepoListResult { repos, active });
+    });
+}
+
+/// `HostCtl::SetActiveRepo` while attached: no `GitOp` reply of its own — only a
+/// follow-up refreshed status over `status_tx` for the newly-active repo. Mirrors
+/// [`spawn_set_git_key_attached`].
+pub(super) fn spawn_set_active_repo_attached(
+    status_tx: Sender<GitStatusResult>,
+    cur: Option<String>,
+    root: String,
+) {
+    std::thread::spawn(move || {
+        let _ = git_repos::set_active_repo_checked(cur.as_deref(), &root);
+        let _ = status_tx.send(compute_git_status(cur.as_deref()));
     });
 }
 

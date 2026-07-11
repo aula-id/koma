@@ -316,6 +316,10 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // Branch-switcher popover / graph context menu (G4 — safe branch ops
         // only). Same reasoning + routing as `GitStatus`/`GitStage` above.
         GuiReq::GitBranchList => dispatch_git::git_branch_list(&ctx.ctl),
+        // Source Control multi-repo picker (discover + set-active). Same host-local
+        // routing as `GitBranchList`/`SetGitKey` above.
+        GuiReq::GitRepos => dispatch_git::git_repos(&ctx.ctl),
+        GuiReq::SetActiveRepo { root } => dispatch_git::set_active_repo(&ctx.ctl, root),
         GuiReq::GitCheckout { ref_name } => dispatch_git::git_checkout(&ctx.ctl, ref_name),
         GuiReq::GitCreateBranch { name, start, checkout } => {
             dispatch_git::git_create_branch(&ctx.ctl, name, start, checkout)

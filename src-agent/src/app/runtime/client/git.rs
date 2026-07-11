@@ -13,7 +13,7 @@
 //! `host_swapper` (a sibling module) and [`super::push_loop`] both call them off a
 //! worker thread — exactly mirroring [`super::diff::compute_file_diff`].
 
-use super::diff::{looks_binary, session_workdirs_for, FILE_DIFF_SIZE_CAP};
+use super::diff::{looks_binary, FILE_DIFF_SIZE_CAP};
 use super::git_remote::assigned_key;
 
 /// One file entry in a [`GitStatusResult`]'s `staged`/`unstaged` list, mirroring one
@@ -163,28 +163,15 @@ pub(super) fn git_cmd_env(
     cmd.output().ok()
 }
 
-/// Resolve the git repository root for `session`, probing EVERY one of its configured
-/// workdirs in order (mirroring how [`super::diff::resolve_diff_path`] tries each root)
-/// via `git rev-parse --show-toplevel`, returning the first that succeeds. `None` when
-/// the session has no workdirs, none of them resolve, or there's no session at all (the
-/// StartScreen case) — deliberately does NOT fall back to the host process's own cwd.
+/// Resolve the git repository root for `session` — the SINGLE choke point every git
+/// op funnels through. Now delegates to [`super::git_repos::resolve_repo_root`], which
+/// consults the per-session active-repo registry (multi-repo support) and only walks
+/// the filesystem to discover repos on first touch. `None` when the session has no
+/// workdirs, none hold a repo, or there's no session at all (the StartScreen case) —
+/// deliberately does NOT fall back to the host process's own cwd. Signature is
+/// unchanged, so all 27 callers stay untouched.
 pub(super) fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf> {
-    let toplevel = |dir: &std::path::Path| -> Option<std::path::PathBuf> {
-        match git_cmd(dir, &["rev-parse", "--show-toplevel"]) {
-            Some(out) if out.status.success() => Some(std::path::PathBuf::from(
-                String::from_utf8_lossy(&out.stdout).trim().to_string(),
-            )),
-            _ => None,
-        }
-    };
-
-    let dirs = session.and_then(session_workdirs_for).unwrap_or_default();
-    for dir in &dirs {
-        if let Some(root) = toplevel(dir) {
-            return Some(root);
-        }
-    }
-    None
+    super::git_repos::resolve_repo_root(session)
 }
 
 /// Split an ordinary/renamed-or-copied `<XY>` pair into the `staged` (index/`X`) and

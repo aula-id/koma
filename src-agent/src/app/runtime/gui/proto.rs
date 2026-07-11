@@ -289,6 +289,15 @@ pub(super) enum GuiReq {
     /// `GitStatus` — host-local, never the daemon. Reply lands as a
     /// `BranchList` push.
     GitBranchList,
+    /// Source Control multi-repo picker opened: discover every git repo across the
+    /// session's workdirs. Same routing as `GitStatus` — host-local, never the
+    /// daemon. Reply lands as a `RepoList` push.
+    GitRepos,
+    /// Source Control repo picker changed: set the session's ACTIVE repo to `root`
+    /// (an absolute toplevel path from a prior `RepoList`). Routed to the host-relay
+    /// thread via `HostCtl::SetActiveRepo`, same reasoning as `SetGitKey` — the reply
+    /// is a fresh `GitStatus` push for the newly-active repo.
+    SetActiveRepo { root: String },
     /// Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     /// only, never `--force`): switch (or detach onto) `ref` — a branch name or
     /// a sha. `ref` is a Rust keyword, so the field is `ref_name`

@@ -209,6 +209,13 @@ pub(super) fn push_loop(
     // dedicated channel (same `GitOp` + follow-up `GitStatus` reply pattern).
     let (branch_list_tx, branch_list_rx) = std::sync::mpsc::channel::<super::git_branch::BranchListResult>();
 
+    // --- REPO LIST (GitRepos) --- multi-repo picker discovery, one-shot worker
+    // thread (blocking filesystem walk), like `GitBranchList` above.
+    // `SetActiveRepo` carries no dedicated channel — it reuses the EXISTING
+    // `git_status_tx` below (a follow-up `GitStatus` for the newly-active repo,
+    // same pattern as `SetGitKey`).
+    let (repo_list_tx, repo_list_rx) = std::sync::mpsc::channel::<super::git_repos::RepoListResult>();
+
     // --- STASH (GitStashList) --- one-shot worker thread (blocking `git stash
     // list`), like `GitBranchList` above (GK4a). `GitStash`/`GitStashPop` reuse the
     // EXISTING `git_op_tx`/`git_status_tx` channels instead (same `GitOp` + follow-up
@@ -461,6 +468,15 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GitBranchList) => {
                     git_host::spawn_git_branch_list_attached(branch_list_tx.clone(), current_owned.clone());
                 }
+                // Source Control multi-repo picker: host-local, never the daemon.
+                // `GitRepos` drains at (b-octodec-bis) below; `SetActiveRepo` reuses
+                // the git-status channel above (fresh `GitStatus` for the new repo).
+                Ok(super::HostCtl::GitRepos) => {
+                    git_host::spawn_git_repos_attached(repo_list_tx.clone(), current_owned.clone());
+                }
+                Ok(super::HostCtl::SetActiveRepo { root }) => {
+                    git_host::spawn_set_active_repo_attached(git_status_tx.clone(), current_owned.clone(), root);
+                }
                 Ok(super::HostCtl::GitCheckout { ref_name }) => {
                     git_host::spawn_git_checkout_attached(
                         git_op_tx.clone(),
@@ -659,6 +675,7 @@ pub(super) fn push_loop(
             &git_diff_rx,
             &git_op_rx,
             &branch_list_rx,
+            &repo_list_rx,
             &git_graph_rx,
             &commit_detail_rx,
             &commit_diff_rx,

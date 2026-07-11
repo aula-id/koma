@@ -14,7 +14,7 @@ use std::sync::mpsc::Receiver;
 use super::push_proto_git::{
     push_activity, push_branch_list, push_commit_detail, push_commit_diff, push_git_diff,
     push_git_graph, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
-    push_stash_list,
+    push_repo_list, push_stash_list,
 };
 
 /// Drain every completed GIT / SSH-key-vault off-thread reply and push each as its
@@ -27,6 +27,7 @@ pub(super) fn drain_git_replies(
     git_diff_rx: &Receiver<super::git::GitDiffResult>,
     git_op_rx: &Receiver<super::git::GitOpResult>,
     branch_list_rx: &Receiver<super::git_branch::BranchListResult>,
+    repo_list_rx: &Receiver<super::git_repos::RepoListResult>,
     git_graph_rx: &Receiver<super::git_graph::GitGraphResult>,
     commit_detail_rx: &Receiver<super::git_graph::CommitDetailResult>,
     commit_diff_rx: &Receiver<super::git_graph::CommitDiffResult>,
@@ -57,6 +58,11 @@ pub(super) fn drain_git_replies(
     // --- (b-octodec) branch list: push any completed off-thread fetch ---
     while let Ok(result) = branch_list_rx.try_recv() {
         push_branch_list(push, result);
+    }
+
+    // --- (b-octodec-bis) repo list (multi-repo picker): push any completed fetch ---
+    while let Ok(result) = repo_list_rx.try_recv() {
+        push_repo_list(push, result);
     }
 
     // --- (b-quindec) commit-graph panel: push any completed off-thread graph fetch ---
