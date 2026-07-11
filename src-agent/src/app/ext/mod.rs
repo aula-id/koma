@@ -45,14 +45,16 @@ use anyhow::{bail, Result};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 
-use koma_extension::protocol::KomaMsg;
+use koma_extension::protocol::{Grant, KomaMsg};
 
 use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
+pub mod broker;
 pub mod install;
 pub mod register;
 mod wire;
+pub use broker::{ExtAgentRegistry, ExtCallRequest};
 use wire::{connect_and_handshake, reader_task, writer_task, Handshaked};
 
 /// A reply to a koma→ext `Invoke`: the extension's `result` value, or an error string
@@ -95,6 +97,12 @@ struct ExtEntry {
     child: Option<tokio::process::Child>,
     /// Last `Health{ok}` reported by the extension (advisory liveness hint).
     last_health_ok: bool,
+    /// The scopes koma granted this extension (parsed from `InstalledExtension.granted`
+    /// at [`ExtHostManager::ensure_started_at`]). Read by the reader task via
+    /// [`ExtHostManager::granted_for`] when packaging an `agents.*` `Call` into an
+    /// [`ExtCallRequest`], so the grant broker gates against exactly what was extended
+    /// to THIS extension.
+    granted: Vec<Grant>,
 }
 
 /// The extension host manager. Holds the runtime [`Handle`] (so async socket work can be
@@ -104,6 +112,13 @@ struct ExtEntry {
 pub struct ExtHostManager {
     handle: Handle,
     inner: Mutex<HashMap<String, ExtEntry>>,
+    /// Sender into the event loop's `ext_call_rx` drain, used by every reader task
+    /// to hand an `agents.*` `Call` off to the grant broker (the reader task has no
+    /// `AppState` access). Set once at startup via [`Self::set_ext_call_tx`]; `None`
+    /// until then (and in unit tests that never drive `agents.*` calls), in which
+    /// case the reader answers such a call with a "broker not initialized" error
+    /// rather than hanging the extension.
+    ext_call_tx: Mutex<Option<mpsc::UnboundedSender<ExtCallRequest>>>,
 }
 
 impl ExtHostManager {
@@ -112,7 +127,36 @@ impl ExtHostManager {
         Arc::new(Self {
             handle: handle.clone(),
             inner: Mutex::new(HashMap::new()),
+            ext_call_tx: Mutex::new(None),
         })
+    }
+
+    /// Wire the event-loop grant-broker channel into the manager (called once at
+    /// startup with a clone of `AppStateRest::ext_call_tx`). Every reader task reads
+    /// it via [`Self::ext_call_tx`] to forward an `agents.*` `Call` to the broker.
+    pub fn set_ext_call_tx(&self, tx: mpsc::UnboundedSender<ExtCallRequest>) {
+        *self.ext_call_tx.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+    }
+
+    /// A clone of the grant-broker sender, or `None` if it was never wired
+    /// ([`Self::set_ext_call_tx`] not yet called). Consulted by the reader task per
+    /// `agents.*` `Call`.
+    pub(crate) fn ext_call_tx(&self) -> Option<mpsc::UnboundedSender<ExtCallRequest>> {
+        self.ext_call_tx
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// The scopes granted to the running extension `ext_id` (empty if unknown/not
+    /// running). Read by the reader task when packaging an `agents.*` `Call`.
+    pub(crate) fn granted_for(&self, ext_id: &str) -> Vec<Grant> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(ext_id)
+            .map(|e| e.granted.clone())
+            .unwrap_or_default()
     }
 
     /// Spawn + handshake a daemon-kind extension if it is not already running (a no-op
@@ -149,11 +193,16 @@ impl ExtHostManager {
         }
 
         // Bump this extension's generation under the lock and capture it. Any in-flight
-        // start for a previous generation will discard itself at the store step.
+        // start for a previous generation will discard itself at the store step. Also
+        // (re-)record this extension's granted scopes here — parsed from the persisted
+        // wire strings — so the reader task spawned by this start gates `agents.*` calls
+        // against exactly what koma extended to it (refreshed on every start/restart).
+        let granted = broker::parse_grants(&ext.granted);
         let gen_at_start = {
             let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             let entry = inner.entry(ext.id.clone()).or_default();
             entry.generation = entry.generation.wrapping_add(1);
+            entry.granted = granted;
             entry.generation
         };
 

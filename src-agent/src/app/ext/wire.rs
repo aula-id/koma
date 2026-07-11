@@ -15,12 +15,12 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use koma_extension::protocol::{ExtMsg, KomaMsg, PROTOCOL_VERSION};
 
 use super::install;
-use super::{ExtHostManager, PendingMap, CONNECT_TIMEOUT};
+use super::{ExtCallRequest, ExtHostManager, PendingMap, CONNECT_TIMEOUT};
 
 /// Hard cap on a single newline-delimited frame — the handshake `Hello` line AND
 /// every steady-state `ExtMsg`/`KomaMsg` line. Both read sites buffer one line
@@ -29,6 +29,13 @@ use super::{ExtHostManager, PendingMap, CONNECT_TIMEOUT};
 /// comfortably covers any real manifest/result payload while still being a hard
 /// stop.
 pub(super) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// How long the reader task waits for the event loop's grant broker to answer one
+/// `agents.*` `Call` before replying an error to the extension (so a stalled/absent
+/// drain can never leave the extension's `call()` hanging). Comfortably shorter than
+/// the extension SDK's own 120s `host_call` timeout, and generous versus the broker's
+/// real cost (one event-loop tick — the broker itself never blocks).
+const EXT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Why [`read_capped_line`] failed: distinguishes "the frame is too big" (fatal —
 /// the caller should kill the connection/child rather than keep reading a desynced
@@ -247,8 +254,11 @@ pub(super) async fn connect_and_handshake(
         }
     };
 
-    // Handshake OK → Welcome. `granted` echoes the manifest's `requires`; real grant
-    // enforcement is a later wave.
+    // Handshake OK → Welcome. `granted` echoes the manifest's `requires` back to
+    // the extension for its own info — the REAL grant enforcement lives in the
+    // event loop's grant broker (`app::ext::broker::handle_ext_call`, gated via
+    // `ExtHostManager::granted_for`), which re-checks every `agents.*` call
+    // against what koma persisted, not what this handshake echoed.
     let welcome = KomaMsg::Welcome {
         protocol: PROTOCOL_VERSION.to_string(),
         koma_version: crate::model::store::current_version().to_string(),
@@ -264,6 +274,17 @@ pub(super) async fn connect_and_handshake(
         reader,
         write_half,
     })
+}
+
+/// Queue a `KomaMsg::Result { id, result }` (reply to an ext→koma `Call`) onto the
+/// writer task's channel as one newline-delimited frame. Best-effort: a closed
+/// writer (child gone) simply drops it. Shared by every reply site in the reader
+/// task's `Call` handling so the framing/serialization lives in one place.
+fn send_result_frame(writer: &mpsc::UnboundedSender<String>, id: u64, result: serde_json::Value) {
+    if let Ok(mut s) = serde_json::to_string(&KomaMsg::Result { id, result }) {
+        s.push('\n');
+        let _ = writer.send(s);
+    }
 }
 
 /// Serialize `msg` as one newline-delimited JSON frame and write+flush it to `w`.
@@ -294,9 +315,13 @@ pub(super) async fn writer_task(mut write_half: OwnedWriteHalf, mut rx: mpsc::Un
 ///
 /// - `Result{id,result}` completes (and removes) the matching pending koma→ext
 ///   `Invoke` with `Ok(result)`.
-/// - `Call{id,method,params}` is an ext→koma request. Wave A has no grant broker, so
-///   every call is answered with a uniform error `KomaMsg::Result` (via `writer`) so
-///   the extension's `call()` unblocks; the real broker is Wave C.
+/// - `Call{id,method,params}` is an ext→koma request. An `agents.*` method is routed
+///   to the grant broker: it is packaged into an [`ExtCallRequest`] and forwarded to
+///   the event loop over `ext_call_tx` (the only place with `AppState` access), gated
+///   there by this extension's granted scopes; the broker's reply is written back
+///   (same `id`) from a detached task so this loop keeps reading. Any other method
+///   (and a channel-closed / timeout on an `agents.*` call) gets a uniform error
+///   `KomaMsg::Result` so the extension's `call()` always unblocks.
 /// - `Health{ok}` updates the entry's liveness flag.
 /// - a post-handshake `Hello` is unexpected and ignored.
 ///
@@ -341,15 +366,71 @@ pub(super) async fn reader_task(
                         }
                     }
                     ExtMsg::Call { id, method, params } => {
-                        let _ = params; // reserved for the Wave-C grant broker
-                        let result = if method.starts_with("agents.") {
-                            serde_json::json!({ "error": "no grant broker yet" })
+                        if method.starts_with("agents.") {
+                            // The grant broker (`agents.*`): the reader task has no
+                            // `AppState`/session access, so hand the call off to the
+                            // event loop via `ext_call_tx` — gated there by THIS
+                            // extension's granted scopes — and reply with the broker's
+                            // Value once it answers. The await happens on a DETACHED
+                            // task so this loop keeps draining the socket (a reply
+                            // carries the same `id`, so out-of-order replies are fine);
+                            // on channel-closed / timeout it still replies an error so
+                            // the extension's `call()` never hangs.
+                            match mgr.ext_call_tx() {
+                                Some(tx) => {
+                                    let granted = mgr.granted_for(&ext_id);
+                                    let (reply_tx, reply_rx) = oneshot::channel::<serde_json::Value>();
+                                    let req = ExtCallRequest {
+                                        ext_id: ext_id.clone(),
+                                        granted,
+                                        method,
+                                        params,
+                                        reply: reply_tx,
+                                    };
+                                    if tx.send(req).is_err() {
+                                        // Event loop receiver gone (shutdown).
+                                        send_result_frame(
+                                            &writer,
+                                            id,
+                                            serde_json::json!({ "error": "grant broker unavailable" }),
+                                        );
+                                    } else {
+                                        let writer_reply = writer.clone();
+                                        tokio::spawn(async move {
+                                            let result = match tokio::time::timeout(
+                                                EXT_CALL_TIMEOUT,
+                                                reply_rx,
+                                            )
+                                            .await
+                                            {
+                                                Ok(Ok(v)) => v,
+                                                Ok(Err(_)) => serde_json::json!({
+                                                    "error": "grant broker dropped request"
+                                                }),
+                                                Err(_) => serde_json::json!({
+                                                    "error": "grant broker timed out"
+                                                }),
+                                            };
+                                            send_result_frame(&writer_reply, id, result);
+                                        });
+                                    }
+                                }
+                                None => {
+                                    // Broker not wired (pre-startup / test manager).
+                                    send_result_frame(
+                                        &writer,
+                                        id,
+                                        serde_json::json!({ "error": "grant broker not initialized" }),
+                                    );
+                                }
+                            }
                         } else {
-                            serde_json::json!({ "error": format!("unknown koma method: {method}") })
-                        };
-                        if let Ok(mut s) = serde_json::to_string(&KomaMsg::Result { id, result }) {
-                            s.push('\n');
-                            let _ = writer.send(s);
+                            // Non-`agents.*` ext→koma methods keep the uniform stub.
+                            send_result_frame(
+                                &writer,
+                                id,
+                                serde_json::json!({ "error": format!("unknown koma method: {method}") }),
+                            );
                         }
                     }
                     ExtMsg::Health { ok } => {
