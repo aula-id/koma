@@ -62,8 +62,9 @@ fn load_initial() -> OverlayTable {
         if let Ok(bytes) = std::fs::read_to_string(&cache_path) {
             match serde_json::from_str::<OverlayTable>(&bytes) {
                 Ok(table) => return table,
-                Err(e) => eprintln!(
-                    "koma: catalogue overlay: cache parse failed ({e}), falling back to bundled default"
+                Err(e) => crate::model::store::append_global_error_log(
+                    "catalogue overlay",
+                    &format!("cache parse failed ({e}), falling back to bundled default"),
                 ),
             }
         }
@@ -71,7 +72,10 @@ fn load_initial() -> OverlayTable {
     match serde_json::from_str::<OverlayTable>(BUNDLED_DEFAULT) {
         Ok(table) => table,
         Err(e) => {
-            eprintln!("koma: catalogue overlay: bundled default failed to parse ({e}) — starting empty");
+            crate::model::store::append_global_error_log(
+                "catalogue overlay",
+                &format!("bundled default failed to parse ({e}) — starting empty"),
+            );
             HashMap::new()
         }
     }

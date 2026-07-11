@@ -181,9 +181,9 @@ fn attach_session(
         .is_some_and(|v| v != my_fingerprint)
     {
         if already_restarted {
-            eprintln!(
-                "koma: daemon still reports a different build after a restart; \
-                 continuing against it"
+            crate::model::store::append_global_error_log(
+                "client",
+                "daemon still reports a different build after a restart; continuing against it",
             );
             break;
         }
@@ -610,8 +610,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 ClientState::Attached(conn)
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "koma: could not start a new session {new_id}: {e:#}"
+                                crate::model::store::append_global_error_log(
+                                    "client",
+                                    &format!("could not start a new session {new_id}: {e:#}"),
                                 );
                                 // Degrade to the swapper (fresh discovery). Don't disturb
                                 // `prev_session`; the old daemon (if not killed) is still in
@@ -643,7 +644,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         ClientState::Attached(conn)
                     }
                     Err(e) => {
-                        eprintln!("koma: could not attach to session {target}: {e:#}");
+                        crate::model::store::append_global_error_log(
+                            "client",
+                            &format!("could not attach to session {target}: {e:#}"),
+                        );
                         ClientState::Swapper(build_local_hub(prev_session.as_deref()))
                     }
                 },
@@ -658,7 +662,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                             ClientState::Attached(conn)
                         }
                         Err(e) => {
-                            eprintln!("koma: could not reconnect to session {prev}: {e:#}");
+                            crate::model::store::append_global_error_log(
+                                "client",
+                                &format!("could not reconnect to session {prev}: {e:#}"),
+                            );
                             ClientState::Swapper(build_local_hub(None))
                         }
                     },

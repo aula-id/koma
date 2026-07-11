@@ -130,7 +130,10 @@ pub(super) fn set_assigned_key(root: &Path, name: Option<String>) {
     let path = match git_keys_path() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[gui] git key vault: could not resolve git_keys.json: {e}");
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("git key vault: could not resolve git_keys.json: {e}"),
+            );
             return;
         }
     };
@@ -147,12 +150,18 @@ pub(super) fn set_assigned_key(root: &Path, name: Option<String>) {
     let bytes = match serde_json::to_vec_pretty(&map) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[gui] git key vault: failed to serialize git_keys.json: {e}");
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("git key vault: failed to serialize git_keys.json: {e}"),
+            );
             return;
         }
     };
     if let Err(e) = atomic_write(&path, &bytes) {
-        eprintln!("[gui] git key vault: failed to persist git_keys.json: {e}");
+        crate::model::store::append_global_error_log(
+            "gui",
+            &format!("git key vault: failed to persist git_keys.json: {e}"),
+        );
     }
 }
 

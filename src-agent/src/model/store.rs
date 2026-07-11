@@ -205,24 +205,46 @@ pub fn error_log_path(session_dir: &Path) -> PathBuf {
     session_dir.join("error.log")
 }
 
-/// Best-effort append to the per-session error log. Never panics, never
-/// propagates — logging must not break a request. `header` is a short label
-/// (e.g. "HTTP 400 from <endpoint>"), `body` the detail (e.g. the raw
-/// upstream response body).
-pub fn append_error_log(session_dir: &Path, header: &str, body: &str) {
+/// Best-effort append of one `"[unix:{ts}] {header}\n{body}\n\n"` entry to
+/// `path` (creating `parent` first). Never panics, never propagates — shared
+/// tail of [`append_error_log`] and [`append_global_error_log`].
+fn append_log_entry(parent: &Path, path: &Path, header: &str, body: &str) {
     use std::io::Write;
-    let path = error_log_path(session_dir);
-    // defensive; the dir normally already exists
-    let _ = std::fs::create_dir_all(session_dir);
+    let _ = std::fs::create_dir_all(parent);
     // No `chrono` dependency in this crate — use a plain unix-seconds stamp.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let entry = format!("[unix:{ts}] {header}\n{body}\n\n");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = f.write_all(entry.as_bytes());
     }
+}
+
+/// Best-effort append to the per-session error log. Never panics, never
+/// propagates — logging must not break a request. `header` is a short label
+/// (e.g. "HTTP 400 from <endpoint>"), `body` the detail (e.g. the raw
+/// upstream response body).
+pub fn append_error_log(session_dir: &Path, header: &str, body: &str) {
+    append_log_entry(session_dir, &error_log_path(session_dir), header, body);
+}
+
+/// Path to the global (session-less) error log: `~/.koma/error.log`, for
+/// startup/background diagnostics that have no session to log into.
+// dead_code: no consumer needs the raw path yet — kept as the sibling of
+// `error_log_path` for a future consumer (e.g. a `/errors` viewer).
+#[allow(dead_code)]
+pub fn global_error_log_path() -> Option<PathBuf> {
+    base_dir().ok().map(|d| d.join("error.log"))
+}
+
+/// Best-effort append to the global error log; mirrors [`append_error_log`]
+/// (never panics, never propagates).
+pub fn append_global_error_log(header: &str, body: &str) {
+    let Ok(dir) = base_dir() else { return };
+    let path = dir.join("error.log");
+    append_log_entry(&dir, &path, header, body);
 }
 
 /// Physically delete a session: remove its on-disk directory tree AND its
@@ -590,7 +612,10 @@ pub fn create_session_in_with_id(workdir: &Path, id: &str) -> Result<Session> {
     // Best-effort: create the per-session scratch dir so it is ready immediately.
     let scratch = scratch_dir(&uuid);
     if let Err(e) = std::fs::create_dir_all(&scratch) {
-        eprintln!("koma: warning: could not create scratch dir {}: {e}", scratch.display());
+        append_global_error_log(
+            "session",
+            &format!("warning: could not create scratch dir {}: {e}", scratch.display()),
+        );
     }
 
     // Pre-create the image-attachment dir so the first paste-ingest has a home.

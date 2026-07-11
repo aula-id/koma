@@ -81,9 +81,9 @@ fn attach_session_headless(
         .is_some_and(|v| v != my_fingerprint)
     {
         if already_restarted {
-            eprintln!(
-                "koma: daemon still reports a different build after a restart; \
-                 continuing against it"
+            crate::model::store::append_global_error_log(
+                "gui",
+                "daemon still reports a different build after a restart; continuing against it",
             );
             break;
         }
@@ -140,7 +140,10 @@ pub(in crate::app::runtime) fn run_host_relay(
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("[gui] could not build the host-relay tokio runtime: {e}");
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("could not build the host-relay tokio runtime: {e}"),
+            );
             return;
         }
     };
@@ -514,7 +517,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 let mut cfg = crate::model::app_config::AppConfig::load();
                 cfg.oauth_conns.retain(|c| c.uuid != uuid);
                 if let Err(e) = cfg.save() {
-                    eprintln!("[gui] pre-session oauth delete save failed: {e}");
+                    crate::model::store::append_global_error_log(
+                        "gui",
+                        &format!("pre-session oauth delete save failed: {e}"),
+                    );
                 }
                 let uuid2 = uuid.clone();
                 handle.spawn(async move {
@@ -581,7 +587,10 @@ fn host_attached(
     let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[gui] host-relay could not attach session {id}: {e:#}");
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("host-relay could not attach session {id}: {e:#}"),
+            );
             // Degrade to the swapper (fresh discovery) — the user can pick again.
             return HostStep::Swapper;
         }

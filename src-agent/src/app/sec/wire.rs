@@ -227,7 +227,10 @@ pub(super) async fn reader_task(
                 let frame: serde_json::Value = match serde_json::from_str(trimmed) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!("sec: ignoring unparseable daemon frame: {e}");
+                        crate::model::store::append_global_error_log(
+                            "security",
+                            &format!("ignoring unparseable daemon frame: {e}"),
+                        );
                         continue;
                     }
                 };
@@ -268,7 +271,10 @@ pub(super) async fn reader_task(
             // stragglers, then mark the manager stopped so stale tools stop advertising.
             Ok(None) => break,
             Err(e) => {
-                eprintln!("sec: error reading daemon stdout: {e}");
+                crate::model::store::append_global_error_log(
+                    "security",
+                    &format!("error reading daemon stdout: {e}"),
+                );
                 break;
             }
         }

@@ -304,7 +304,10 @@ impl McpManager {
                         return (defs, names);
                     }
                     Ok(_) => {}
-                    Err(e) => eprintln!("mcp proxy: inline advertise List failed: {e:#}"),
+                    Err(e) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: inline advertise List failed: {e:#}"),
+                    ),
                 }
             }
             // Daemon not ready yet (or a transient error) — return the empty cache;
@@ -333,7 +336,10 @@ impl McpManager {
                             *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
                         }
                         Ok(_) => {}
-                        Err(e) => eprintln!("mcp proxy: advertise refresh List failed: {e:#}"),
+                        Err(e) => crate::model::store::append_global_error_log(
+                            "mcp",
+                            &format!("proxy: advertise refresh List failed: {e:#}"),
+                        ),
                     }
                 }
                 *mgr.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) =
