@@ -280,15 +280,19 @@ export function GitPanel() {
   const gitPull = useKoma((s) => s.gitPull)
   const gitPush = useKoma((s) => s.gitPush)
   const openGraphTab = useKoma((s) => s.openGraphTab)
+  const sessionId = useKoma((s) => s.session.id)
 
   // Fetch fresh status on mount (panel opened/activated). GitPanel unmounts
   // when the sidebar switches to another view, so re-selecting "Source
   // Control" re-runs this — no separate "became active" plumbing needed. Also
-  // (re)fetch the SSH vault list so the key picker below has options.
+  // (re)fetch the SSH vault list so the key picker below has options. Keyed on
+  // `sessionId` too: the panel can stay mounted ACROSS a session switch (the
+  // sidebar view state is unaffected), so this re-fires to load the NEW
+  // session's repo instead of showing the old one's stale status.
   useEffect(() => {
     refreshGitStatus()
     refreshKeys()
-  }, [refreshGitStatus, refreshKeys])
+  }, [refreshGitStatus, refreshKeys, sessionId])
 
   // `error` set OR no resolved root means the workdir isn't inside a git
   // repository at all — distinct from a detached-HEAD repo (still a real

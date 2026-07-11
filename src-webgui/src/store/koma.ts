@@ -1810,6 +1810,19 @@ export const useKoma = create<KomaState>((set, get) => ({
               // for the new session if it's cold too).
               ...(switched ? { tabs: [makeChatTab()], activeTabId: 'chat', loading: null } : {}),
             },
+            // A genuine switch also drops the OLD session's git/graph/activity
+            // slices — they're host-driven for the PREVIOUS repo/session and
+            // must not bleed into the new one until each panel's own
+            // session-keyed effect re-fetches. The graph view MODE
+            // (rail/bubble) is a user preference, not session data, so it's
+            // preserved across the reset.
+            ...(switched
+              ? {
+                  git: initialGit,
+                  activity: initialActivity,
+                  graph: { ...initialGraph, graphMode: s.graph.graphMode },
+                }
+              : {}),
           }
         })
         applyPaletteVars(env.palette)
