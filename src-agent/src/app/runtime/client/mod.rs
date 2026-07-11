@@ -74,6 +74,10 @@ mod push_intercept;
 mod push_loop;
 mod git_drain;
 
+#[cfg(test)]
+#[path = "analytics_test.rs"]
+mod analytics_test;
+
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
 
@@ -376,6 +380,20 @@ pub(super) enum HostCtl {
     UsagePreview {
         session: Option<String>,
         scope: String,
+    },
+    /// Analytics tab: compute a host-side usage dashboard projection (KPI totals,
+    /// time series, per-model table, main-vs-sub role split) straight off the
+    /// global `~/.koma/usage.sqlite` ledger. Like [`UsagePreview`](Self::UsagePreview)
+    /// this NEVER touches the daemon in either host state. Serviced off-thread;
+    /// see [`compute_analytics`]. Correlation inputs (`req_seq`/`scope`/`session`/
+    /// `range`/`metric`) are all echoed back so the React tab can drop a stale
+    /// reply across rapid filter/session changes.
+    Analytics {
+        req_seq: u64,
+        session: Option<String>,
+        scope: String,
+        range: String,
+        metric: String,
     },
     /// Host-side SSH KEY VAULT list fetch for the Settings "SSH Keys" section
     /// (`<~/.koma>/keys/`). Same reasoning as [`GitStatus`](Self::GitStatus) — a

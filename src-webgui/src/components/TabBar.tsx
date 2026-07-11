@@ -1,4 +1,4 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useRef, useEffect, useState, useCallback } from 'react'
 
@@ -243,6 +243,43 @@ export function TabBar() {
                 {accent}
                 <GitGraph size={13} className="flex-none opacity-80" />
                 <span className="truncate">Graph</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Analytics tab: closeable singleton, BarChart3 icon + fixed title.
+          if (t.kind === 'analytics') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title="Analytics"
+                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <BarChart3 size={13} className="flex-none opacity-80" />
+                <span className="truncate">Analytics</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation()

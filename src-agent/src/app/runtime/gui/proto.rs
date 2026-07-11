@@ -378,6 +378,32 @@ pub(super) enum GuiReq {
         #[serde(default, rename = "sessionId")]
         session_id: Option<String>,
     },
+    /// Analytics tab: fetch a host-computed usage dashboard (KPI totals, time
+    /// series, per-model table, main-vs-sub role split) straight off the global
+    /// `~/.koma/usage.sqlite` ledger. Same reasoning as `UsagePreview`: the ledger
+    /// is a process-local file the host can read directly, so this is routed
+    /// UNCONDITIONALLY to the host-relay thread via `HostCtl::Analytics` regardless
+    /// of attach state — no daemon round-trip.
+    ///
+    /// Host-owned correlation: `reqSeq` is a client-minted monotonic request id
+    /// (stale-reply protection); `scope` is `"all"`/`"session"`; `sessionId` is
+    /// the foreground session uuid (required for a `"session"` scope); `range`
+    /// is `"today"`/`"7d"`/`"30d"`/`"year"`; `metric` is `"cost"`/`"tokens"`. A
+    /// `"session"` scope with no `sessionId` is FORCED to `"all"` by the ipc
+    /// handler before it queries — the echoed reply's `scope` always describes
+    /// what was actually queried.
+    Analytics {
+        #[serde(default, rename = "reqSeq")]
+        req_seq: u64,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default, rename = "sessionId")]
+        session_id: Option<String>,
+        #[serde(default)]
+        range: Option<String>,
+        #[serde(default)]
+        metric: Option<String>,
+    },
     /// Set the active theme (onboarding theme step + the future Settings gear). `name` is
     /// a `view::theme::PALETTES` key. Forwarded as [`ClientRequest::SetTheme`] when
     /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly

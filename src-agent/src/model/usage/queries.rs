@@ -215,27 +215,43 @@ pub fn top_models_in_range_scoped(
 /// **Non-fatal**: returns [`RoleSplit::default()`] (all zeroes) on any DB error.
 #[allow(dead_code)]
 pub fn role_split(since_ts: i64) -> RoleSplit {
+    role_split_scoped(since_ts, None)
+}
+
+/// Same as [`role_split`], additionally filtered to a single `session_uuid` when
+/// `Some` — the GUI Analytics tab's "session" scope. `None` behaves identically
+/// to [`role_split`]. The uuid is always parameter-bound, never interpolated.
+///
+/// **Non-fatal**: returns [`RoleSplit::default()`] (all zeroes) on any DB error.
+#[allow(dead_code)]
+pub fn role_split_scoped(since_ts: i64, session_uuid: Option<&str>) -> RoleSplit {
     let Some(conn) = open() else { return RoleSplit::default() };
-    let mut stmt = match conn.prepare(
+    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
+    let sql = format!(
         "SELECT
             COALESCE(SUM(CASE WHEN role = 'main' THEN cost ELSE 0 END), 0.0),
             COALESCE(SUM(CASE WHEN role = 'main' THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN role LIKE 'sub:%' THEN cost ELSE 0 END), 0.0),
             COALESCE(SUM(CASE WHEN role LIKE 'sub:%' THEN 1 ELSE 0 END), 0)
          FROM usage
-         WHERE ts >= ?1",
-    ) {
+         WHERE ts >= ?1{clause}"
+    );
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return RoleSplit::default(),
     };
-    stmt.query_row(rusqlite::params![since_ts], |r| {
+    let mapper = |r: &rusqlite::Row| {
         Ok(RoleSplit {
             main_cost: r.get(0)?,
             main_calls: r.get(1)?,
             sub_cost: r.get(2)?,
             sub_calls: r.get(3)?,
         })
-    })
+    };
+    match session_uuid {
+        Some(uuid) => stmt.query_row(rusqlite::params![since_ts, uuid], mapper),
+        None => stmt.query_row(rusqlite::params![since_ts], mapper),
+    }
     .unwrap_or_default()
 }
 

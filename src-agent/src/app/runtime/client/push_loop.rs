@@ -22,7 +22,7 @@ use super::git_host;
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
-use super::push_proto::{push_file_diff, push_switching, push_usage_preview};
+use super::push_proto::{push_analytics, push_file_diff, push_switching, push_usage_preview};
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
 
@@ -202,6 +202,15 @@ pub(super) fn push_loop(
     // wrong session's numbers.
     let (usage_preview_tx, usage_preview_rx) =
         std::sync::mpsc::channel::<(super::diff::UsagePreviewResult, String, Option<String>)>();
+
+    // --- ANALYTICS DASHBOARD fetch (Analytics) ---
+    // Same reasoning as UsagePreview: sqlite is blocking, so it runs on a one-
+    // shot worker thread; the loop drains completed results non-blocking and
+    // pushes each as an `Analytics` envelope. Correlation fields ride inside
+    // `AnalyticsResult` so React can drop a stale reply across rapid filter /
+    // session changes.
+    let (analytics_tx, analytics_rx) =
+        std::sync::mpsc::channel::<super::diff::AnalyticsResult>();
 
     // --- BRANCH LIST (GitBranchList) --- one-shot worker thread (blocking `git
     // for-each-ref`), like `GitGraph` above. `GitCheckout`/`GitCreateBranch`
@@ -549,6 +558,25 @@ pub(super) fn push_loop(
                         let _ = tx.send((result, scope, session));
                     });
                 }
+                // ANALYTICS DASHBOARD fetch: NEVER touches the daemon (host-side
+                // ledger read only, regardless of attach state) — spawn the
+                // blocking sqlite work off this thread; the result is drained +
+                // pushed below. All correlation inputs ride inside the result.
+                Ok(super::HostCtl::Analytics {
+                    req_seq,
+                    session,
+                    scope,
+                    range,
+                    metric,
+                }) => {
+                    let tx = analytics_tx.clone();
+                    std::thread::spawn(move || {
+                        let result = super::diff::compute_analytics(
+                            req_seq, scope, session, range, metric,
+                        );
+                        let _ = tx.send(result);
+                    });
+                }
                 Ok(super::HostCtl::KeyList) => {
                     git_host::spawn_key_list_attached(key_list_tx.clone());
                 }
@@ -662,6 +690,11 @@ pub(super) fn push_loop(
         // --- (b-quin) USAGE PANEL: push any completed off-thread preview fetch ---
         while let Ok((result, scope, session_id)) = usage_preview_rx.try_recv() {
             push_usage_preview(push, result, scope, session_id);
+        }
+
+        // --- Analytics dashboard: push any completed off-thread fetch ---
+        while let Ok(result) = analytics_rx.try_recv() {
+            push_analytics(push, result);
         }
 
         // --- (b-sex)..(b-duodec) GIT / SSH-key-vault panels: push any completed

@@ -354,3 +354,24 @@ pub(super) struct PushUsageModel {
     pub(super) cost: f64,
     pub(super) calls: u64,
 }
+
+/// One time-series point in a [`PushEnvelope::Analytics`] reply.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PushAnalyticsSeriesPoint {
+    pub(super) epoch: i64,
+    pub(super) cost: f64,
+    pub(super) tokens: i64,
+}
+
+/// One model row in a [`PushEnvelope::Analytics`] reply (full token breakdown).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PushAnalyticsModel {
+    pub(super) model_id: String,
+    pub(super) cost: f64,
+    pub(super) tokens_in: u64,
+    pub(super) tokens_cached: u64,
+    pub(super) tokens_out: u64,
+    pub(super) calls: u64,
+}
