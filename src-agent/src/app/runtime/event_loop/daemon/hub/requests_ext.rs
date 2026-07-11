@@ -27,8 +27,8 @@ use anyhow::Result;
 
 use crate::app::state::AppState;
 use crate::ipc::proto::{
-    ClientRequest, DaemonEvent, InstalledExtWire, StoreContributesWire, StoreDetailWire,
-    StoreItemWire,
+    ClientRequest, DaemonEvent, InstalledExtWire, PanelWire, StoreContributesWire,
+    StoreDetailWire, StoreItemWire,
 };
 use crate::model::app_config::OAuthProvider;
 use crate::model::store;
@@ -277,6 +277,7 @@ impl DaemonHub {
                 kind: e.kind.clone(),
                 enabled: e.enabled,
                 granted: e.granted.clone(),
+                panels: read_ext_panels(&e.id),
             })
             .collect();
         self.send_to(idx, DaemonEvent::InstalledExtensions { items });
@@ -497,6 +498,46 @@ fn is_safe_ext_id(id: &str) -> bool {
     let has_alnum = id.chars().any(|c| c.is_ascii_alphanumeric());
     let dot_wrapped = id.starts_with('.') || id.ends_with('.');
     all_allowed && has_alnum && !dot_wrapped
+}
+
+/// Read `contributes.panels` straight off `extensions_dir()/<id>/manifest.json` — the
+/// registry (`InstalledExtension`) doesn't carry contributions, so this is a fresh,
+/// best-effort re-read on every installed-list build: a missing/unreadable/unparsable
+/// manifest degrades to an empty panel list (never fails the whole installed-list
+/// projection over one bad entry), logged via `store::append_global_error_log` so a
+/// parse failure is still visible. SAME logic as the GUI host's
+/// `store_host::read_ext_panels` copy, mirroring this module's existing
+/// map_summary/map_detail/map_contributes duplication (that module is left untouched;
+/// see the file doc comment).
+fn read_ext_panels(id: &str) -> Vec<PanelWire> {
+    let path = match store::extensions_dir() {
+        Ok(dir) => dir.join(id).join("manifest.json"),
+        Err(_) => return Vec::new(),
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(), // not installed / unreadable — no panels
+    };
+    let manifest: koma_extension::protocol::ExtensionManifest = match serde_json::from_str(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            store::append_global_error_log(
+                "ext",
+                &format!("failed to parse manifest.json for {id}: {e}"),
+            );
+            return Vec::new();
+        }
+    };
+    manifest
+        .contributes
+        .panels
+        .into_iter()
+        .map(|p| PanelWire {
+            id: p.id,
+            title: p.title,
+            icon: p.icon,
+        })
+        .collect()
 }
 
 /// A shared reqwest client for the store fetches (default redirect policy — follows the
@@ -792,6 +833,17 @@ mod tests {
         assert!(!is_safe_ext_id("../etc"));
         assert!(!is_safe_ext_id("a/b"));
         assert!(!is_safe_ext_id(".hidden"));
+    }
+
+    /// A missing/never-installed manifest degrades to an empty panel list rather than
+    /// failing — the id here is guaranteed to have no `extensions/<id>/manifest.json` on
+    /// any test machine.
+    #[test]
+    fn read_ext_panels_degrades_to_empty_on_missing_manifest() {
+        assert_eq!(
+            read_ext_panels("run.koma.definitely-not-installed.test-fixture"),
+            Vec::<PanelWire>::new()
+        );
     }
 
     /// The summary mapping pulls exactly the wire fields from an `ExtensionSummary`-shaped

@@ -614,6 +614,15 @@ export type StoreDetail = StoreItem & {
   versions: string[]
 }
 
+// One contributed panel (host `PanelWire`, an installed extension's
+// `contributes.panels[]` entry) — the activity-bar icon + tab framing for
+// `koma://extension/<id>/...`.
+export type ExtPanel = {
+  id: string
+  title: string
+  icon: string
+}
+
 // One locally-installed extension (host `InstalledExtWire`). No tokens exist in
 // the registry, so this is a full projection.
 export type InstalledExt = {
@@ -623,6 +632,9 @@ export type InstalledExt = {
   kind: string
   enabled: boolean
   granted: string[]
+  // This extension's contributed panels (empty for one that contributes none).
+  // Drives the merged extension activity-bar items in ActivityBar.tsx.
+  panels: ExtPanel[]
 }
 
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
@@ -712,6 +724,15 @@ export type Tab =
   // tab. Content (catalogue/detail/installed) lives in the `store` slice — the
   // StoreTab reads it live and fires browseStore + refreshInstalled on mount.
   | { id: 'store'; kind: 'store' }
+  // One extension-contributed PANEL tab, opened from its merged ActivityBar icon
+  // (see resolveActivityBarOrder's extension-item merge). Stable id
+  // `ext:${extId}:${panelId}` — singleton PER PANEL (not per-extension: an
+  // extension with two panels gets two independently-dedupable tabs), so
+  // re-clicking the same icon just re-focuses the existing tab. No wire fetch on
+  // open/re-focus — the content is an `<iframe>` served straight off
+  // `koma://extension/${extId}/index.html`, a SEPARATE origin from the host
+  // chrome (the extension's own page manages its own state).
+  | { id: string; kind: 'extension'; extId: string; panelId: string; title: string }
 
 export type PushEnvelope =
   | {
@@ -1607,6 +1628,11 @@ type KomaState = {
   // Fetch the local installed registry (ListInstalledExtensions → the
   // InstalledExtensions push). Fired on StoreTab mount.
   refreshInstalled: () => void
+  // Open (or focus) one extension-contributed panel tab (id
+  // `ext:${extId}:${panelId}`) — the ActivityBar's merged extension items call
+  // this on click. No wire fetch: the tab renders a `koma://extension/...`
+  // iframe, which loads itself.
+  openExtensionTab: (extId: string, panelId: string, title: string) => void
   // (Re)load the FIRST page of the commit graph (replace mode): mark loading +
   // GitGraph{ limit:200, skip:0 }. Fired on GraphTab mount + its refresh button.
   refreshGraph: () => void
@@ -3211,6 +3237,16 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   refreshInstalled: () => {
     get().req({ r: 'ListInstalledExtensions' })
+  },
+  openExtensionTab: (extId, panelId, title) => {
+    const id = `ext:${extId}:${panelId}`
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const tabs: Tab[] = exists
+        ? s.ui.tabs
+        : [...s.ui.tabs, { id, kind: 'extension', extId, panelId, title }]
+      return { ui: { ...s.ui, tabs, activeTabId: id } }
+    })
   },
   refreshGraph: () => {
     // Serialize: at most one GitGraph request in flight, ever. If a load-more

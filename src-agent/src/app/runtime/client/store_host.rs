@@ -22,8 +22,11 @@
 
 use std::sync::mpsc::Sender;
 
-use crate::ipc::proto::{InstalledExtWire, StoreContributesWire, StoreDetailWire, StoreItemWire};
+use crate::ipc::proto::{
+    InstalledExtWire, PanelWire, StoreContributesWire, StoreDetailWire, StoreItemWire,
+};
 use crate::model::app_config::AppConfig;
+use crate::model::store;
 
 /// Base URL of the koma.run extension store API (contract v0) — same constant as the
 /// daemon's `requests_ext::STORE_API_BASE`.
@@ -119,6 +122,46 @@ fn installed_extensions() -> Vec<InstalledExtWire> {
             kind: e.kind.clone(),
             enabled: e.enabled,
             granted: e.granted.clone(),
+            panels: read_ext_panels(&e.id),
+        })
+        .collect()
+}
+
+/// Read `contributes.panels` straight off `extensions_dir()/<id>/manifest.json` — the
+/// registry (`InstalledExtension`) doesn't carry contributions, so this is a fresh,
+/// best-effort re-read on every installed-list build: a missing/unreadable/unparsable
+/// manifest degrades to an empty panel list (never fails the whole installed-list
+/// projection over one bad entry), logged via `append_global_error_log` so a parse
+/// failure is still visible. SAME logic as the daemon's
+/// `requests_ext::read_ext_panels` copy, mirroring this module's existing
+/// map_summary/map_detail/map_contributes duplication.
+fn read_ext_panels(id: &str) -> Vec<PanelWire> {
+    let path = match store::extensions_dir() {
+        Ok(dir) => dir.join(id).join("manifest.json"),
+        Err(_) => return Vec::new(),
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(), // not installed / unreadable — no panels
+    };
+    let manifest: koma_extension::protocol::ExtensionManifest = match serde_json::from_str(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            store::append_global_error_log(
+                "ext",
+                &format!("failed to parse manifest.json for {id}: {e}"),
+            );
+            return Vec::new();
+        }
+    };
+    manifest
+        .contributes
+        .panels
+        .into_iter()
+        .map(|p| PanelWire {
+            id: p.id,
+            title: p.title,
+            icon: p.icon,
         })
         .collect()
 }
@@ -347,6 +390,7 @@ mod tests {
                 kind: e.kind.clone(),
                 enabled: e.enabled,
                 granted: e.granted.clone(),
+                panels: read_ext_panels(&e.id),
             })
             .collect();
         assert_eq!(items.len(), 1);
@@ -354,5 +398,16 @@ mod tests {
         assert_eq!(items[0].tier, "paid");
         assert!(items[0].enabled);
         assert_eq!(items[0].granted, vec!["agents:read"]);
+    }
+
+    /// A missing/never-installed manifest degrades to an empty panel list rather than
+    /// failing — the id here is guaranteed to have no `extensions/<id>/manifest.json` on
+    /// any test machine.
+    #[test]
+    fn read_ext_panels_degrades_to_empty_on_missing_manifest() {
+        assert_eq!(
+            read_ext_panels("run.koma.definitely-not-installed.test-fixture"),
+            Vec::<PanelWire>::new()
+        );
     }
 }

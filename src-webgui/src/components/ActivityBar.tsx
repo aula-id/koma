@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal } from 'lucide-react'
+import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 import { useKoma, resolveActivityBarOrder } from '../store/koma'
@@ -13,6 +13,19 @@ type ActivityBarProps = {
 }
 
 type ActivityBarItem = { view: SidebarView; icon: LucideIcon; label: string }
+
+// A merged bar entry — either one of the built-in `ACTIVITY_BAR_ITEMS` (whose
+// `view` is a real `SidebarView`, switching the Sidebar panel) or an
+// extension-contributed entry (`ext` set): its `view` is a synthetic
+// `ext:<extId>` id that only exists to ride the SAME order/hidden/overflow
+// machinery — clicking it never touches the Sidebar at all, it opens the
+// extension's panel tab directly (see the click handler below).
+type BarItem = {
+  view: string
+  icon: LucideIcon
+  label: string
+  ext?: { extId: string; panelId: string }
+}
 
 const iconBtn =
   'relative flex h-10 w-10 items-center justify-center rounded-md text-koma-fg opacity-50 transition hover:bg-koma-hover hover:opacity-85'
@@ -53,11 +66,39 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
   const order = useKoma((s) => s.activityBar.order)
   const hidden = useKoma((s) => s.activityBar.hidden)
   const setActivityBarOrder = useKoma((s) => s.setActivityBarOrder)
+  const installed = useKoma((s) => s.store.installed)
+  const openExtensionTab = useKoma((s) => s.openExtensionTab)
 
-  const allIds = useMemo(() => ACTIVITY_BAR_ITEMS.map((i) => i.view), [])
+  // One bar entry per installed extension that contributes at least one panel
+  // (its FIRST panel is the representative — see the `BarItem`/`ext` doc
+  // above). `view` is a synthetic `ext:<extId>` id, distinct from every
+  // built-in `SidebarView`, so it can never collide in the shared
+  // order/hidden persistence.
+  const extItems = useMemo<BarItem[]>(
+    () =>
+      installed
+        .filter((e) => e.panels.length > 0)
+        .map((e) => {
+          const panel = e.panels[0]
+          return {
+            view: `ext:${e.id}`,
+            icon: Puzzle,
+            label: panel.title,
+            ext: { extId: e.id, panelId: panel.id },
+          }
+        }),
+    [installed],
+  )
+
+  // The full merged list — built-ins first, then extension-contributed items —
+  // feeding the SAME order/hidden/overflow machinery as the built-ins alone
+  // used to. A fresh `order` doesn't know about `ext:*` ids yet, so
+  // `resolveActivityBarOrder` appends them at the end, default-visible.
+  const allItems = useMemo<BarItem[]>(() => [...ACTIVITY_BAR_ITEMS, ...extItems], [extItems])
+  const allIds = useMemo(() => allItems.map((i) => i.view), [allItems])
   const itemByView = useMemo(
-    () => new Map<string, ActivityBarItem>(ACTIVITY_BAR_ITEMS.map((i) => [i.view, i])),
-    [],
+    () => new Map<string, BarItem>(allItems.map((i) => [i.view, i])),
+    [allItems],
   )
   // Full effective order across EVERY known item (visible + config-hidden),
   // forward-compatible with an id `order` doesn't know about yet.
@@ -69,7 +110,7 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
       effectiveOrder
         .filter((v) => !hiddenSet.has(v))
         .map((v) => itemByView.get(v))
-        .filter((x): x is ActivityBarItem => !!x),
+        .filter((x): x is BarItem => !!x),
     [effectiveOrder, hiddenSet, itemByView],
   )
   const configHiddenItems = useMemo(
@@ -77,7 +118,7 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
       effectiveOrder
         .filter((v) => hiddenSet.has(v))
         .map((v) => itemByView.get(v))
-        .filter((x): x is ActivityBarItem => !!x),
+        .filter((x): x is BarItem => !!x),
     [effectiveOrder, hiddenSet, itemByView],
   )
 
@@ -157,9 +198,19 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
     }
   }, [menuOpen])
 
-  const selectFromMenu = (view: SidebarView) => {
+  // Picking an item — built-in → switch the Sidebar view (unchanged); extension
+  // → open its panel tab directly (never touches the Sidebar/`onSelect` at all).
+  const pickItem = (item: BarItem) => {
+    if (item.ext) {
+      openExtensionTab(item.ext.extId, item.ext.panelId, item.label)
+    } else {
+      onSelect(item.view as SidebarView)
+    }
+  }
+
+  const selectFromMenu = (item: BarItem) => {
     setMenuOpen(false)
-    onSelect(view)
+    pickItem(item)
   }
 
   return (
@@ -167,8 +218,12 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
       ref={containerRef}
       className="flex w-12 flex-none flex-col items-center gap-0.5 border-r border-koma-border bg-koma-panel2 pt-1.5"
     >
-      {barItems.map(({ view, icon: Icon, label }) => {
-        const active = sidebarOpen && activeView === view
+      {barItems.map((item) => {
+        const { view, icon: Icon, label } = item
+        // Extension items never map onto a `SidebarView`, so they never show
+        // the sidebar-open active indicator — only a built-in item can be the
+        // Sidebar's current view.
+        const active = !item.ext && sidebarOpen && activeView === view
         const dragging = draggedView === view
         const dragOver = dragOverView === view && draggedView !== view
         return (
@@ -191,7 +246,7 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
               setDraggedView(null)
               setDragOverView(null)
             }}
-            onClick={() => onSelect(view)}
+            onClick={() => pickItem(item)}
             title={label}
             aria-label={label}
             className={`${iconBtn} ${active ? '!opacity-100' : ''} ${dragging ? 'opacity-25' : ''} ${
@@ -223,16 +278,19 @@ export function ActivityBar({ activeView, sidebarOpen, onSelect, onSettings, onH
               <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
                 Additional Views
               </div>
-              {menuItems.map(({ view, icon: Icon, label }) => (
-                <button
-                  key={view}
-                  onClick={() => selectFromMenu(view)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100"
-                >
-                  <Icon size={14} className="flex-none opacity-70" />
-                  <span className="truncate">{label}</span>
-                </button>
-              ))}
+              {menuItems.map((item) => {
+                const { view, icon: Icon, label } = item
+                return (
+                  <button
+                    key={view}
+                    onClick={() => selectFromMenu(item)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100"
+                  >
+                    <Icon size={14} className="flex-none opacity-70" />
+                    <span className="truncate">{label}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>

@@ -59,9 +59,19 @@ with open('$stage_dir/manifest.json', 'w') as f:
   # Copy release binary
   cp "$binary_src" "$stage_dir/bin/$example"
 
+  # Copy the extension's own UI (contributes.panels), if it has one — the zip
+  # layout becomes manifest.json + bin/<name> + ui/... . koma serves this dir
+  # straight off disk at `koma://extension/<id>/...` once installed.
+  zip_paths=(manifest.json bin/)
+  if [ -d "$example_dir/ui" ]; then
+    cp -r "$example_dir/ui" "$stage_dir/ui"
+    zip_paths+=(ui/)
+  fi
+
   # Create zip from the staging directory contents
-  # Navigate into the staging directory so zip root contains manifest.json and bin/
-  (cd "$stage_dir" && zip -q -r "$SCRIPT_DIR/dist/$example.zip" manifest.json bin/)
+  # Navigate into the staging directory so zip root contains manifest.json,
+  # bin/, and (if present) ui/
+  (cd "$stage_dir" && zip -q -r "$SCRIPT_DIR/dist/$example.zip" "${zip_paths[@]}")
 
   # Clean up temp directory
   rm -rf "$stage_dir"

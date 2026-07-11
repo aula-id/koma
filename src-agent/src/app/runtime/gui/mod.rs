@@ -21,6 +21,7 @@
 use anyhow::{Context, Result};
 use include_dir::{include_dir, Dir};
 use std::borrow::Cow;
+use std::path::PathBuf;
 use wry::http::{Request, Response, StatusCode};
 
 // The ipc-bridge wire types (`UserEvent`/`WinCmd`/`ClientMsg`/`GuiReq`) and the
@@ -58,9 +59,19 @@ fn mime_for(path: &str) -> &'static str {
 }
 
 /// Handle a `koma://localhost/<path>` request by serving the matching file out
-/// of the embedded [`WEBUI`] tree. Empty path or `/` maps to `index.html`.
+/// of the embedded [`WEBUI`] tree, OR a `koma://extension/<id>/<rest>` request
+/// by serving an installed extension's own `ui/` directory straight off disk
+/// (see [`handle_extension_request`]). The two are dispatched by the request
+/// URI's HOST/authority (`localhost` vs `extension`) — a DIFFERENT origin from
+/// the host chrome's, so an extension's panel can never script it even though
+/// both ride the same `koma` scheme. Empty path or `/` maps to `index.html`.
 fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
-    let path = request.uri().path().trim_start_matches('/');
+    let uri = request.uri();
+    if uri.host() == Some("extension") {
+        return handle_extension_request(uri.path());
+    }
+
+    let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
     match WEBUI.get_file(path) {
@@ -68,16 +79,149 @@ fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>
             .status(StatusCode::OK)
             .header("Content-Type", mime_for(path))
             .body(Cow::Borrowed(file.contents()))
-            .unwrap_or_else(|_| {
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Cow::Borrowed(&[][..]))
-                    .expect("static empty response is valid")
-            }),
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Cow::Borrowed(&b"not found"[..]))
-            .expect("static 404 response is valid"),
+            .unwrap_or_else(|_| internal_error_response()),
+        None => not_found_response(),
+    }
+}
+
+/// Serve `koma://extension/<id>/<rest>` from `extensions_dir()/<id>/ui/<rest>` on disk.
+/// This is a SEPARATE origin from `koma://localhost/` (the baked-in host UI) — wry/
+/// WebKit key script isolation off the URI's authority, so a different host means a
+/// different origin even under the same `koma` scheme; an extension's own UI running
+/// under `koma://extension/<id>/` can never script the host chrome under
+/// `koma://localhost/`. Empty `<rest>` (or `/`) maps to `index.html`.
+///
+/// HARD path-safety (both `<id>` and `<rest>` are attacker-reachable — they come
+/// straight off the request URI, which the extension's own page controls via its
+/// relative asset links): `<id>` must be a well-formed reverse-DNS-style component
+/// (whitelist: non-empty, only `[A-Za-z0-9._-]`, at least one alphanumeric character,
+/// no leading/trailing `.` — mirrors `app::ext::install::validate_id`'s whitelist) and
+/// `<rest>` must resolve to a path that can never escape `<id>/ui/` (no `..` component,
+/// no absolute path, no embedded backslash — mirrors `app::ext::install::safe_rel_path`'s
+/// zip-slip guard, applied here to protocol paths instead of zip entries). Anything that
+/// fails either check, or names a file that doesn't exist on disk, is a 404 — never a
+/// panic, never a path leaked into the response body. A rejection (as opposed to a
+/// plain missing file) is logged via `append_global_error_log` since it's the shape of
+/// an escape attempt, not ordinary 404 traffic.
+fn handle_extension_request(path: &str) -> Response<Cow<'static, [u8]>> {
+    let path = path.trim_start_matches('/');
+    let (id, rest) = path.split_once('/').unwrap_or((path, ""));
+    let rest = if rest.is_empty() { "index.html" } else { rest };
+
+    let (Some(safe_id), Some(rel)) = (safe_ext_id(id), safe_ext_rel_path(rest)) else {
+        crate::model::store::append_global_error_log(
+            "gui",
+            &format!("koma://extension rejected unsafe request path: id={id:?} rest={rest:?}"),
+        );
+        return not_found_response();
+    };
+
+    let extensions_dir = match crate::model::store::extensions_dir() {
+        Ok(d) => d,
+        Err(_) => return internal_error_response(),
+    };
+    let file_path = extensions_dir.join(safe_id).join("ui").join(&rel);
+
+    match std::fs::read(&file_path) {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", mime_for(rest))
+            .body(Cow::Owned(bytes))
+            .unwrap_or_else(|_| internal_error_response()),
+        Err(_) => not_found_response(),
+    }
+}
+
+/// Whitelist guard for the `<id>` path segment of a `koma://extension/<id>/...` request
+/// — mirrors `app::ext::install::validate_id`'s reverse-DNS whitelist so a request can
+/// never smuggle `..`, `/`, `\`, or a bare `.`/`..` id past this check.
+fn safe_ext_id(id: &str) -> Option<&str> {
+    let all_allowed = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    let has_alnum = id.chars().any(|c| c.is_ascii_alphanumeric());
+    let dot_wrapped = id.starts_with('.') || id.ends_with('.');
+    if !all_allowed || !has_alnum || dot_wrapped {
+        return None;
+    }
+    Some(id)
+}
+
+/// Turn the `<rest>` of a `koma://extension/<id>/<rest>` request into a clean relative
+/// path under `<id>/ui/`, or `None` if unsafe — mirrors `app::ext::install::safe_rel_path`
+/// (there, guarding zip-entry names against zip-slip) applied here to protocol-request
+/// paths instead: reject an absolute path or any `..` component; empty and `.` components
+/// are dropped.
+fn safe_ext_rel_path(name: &str) -> Option<PathBuf> {
+    if name.starts_with('/') || name.starts_with('\\') {
+        return None; // absolute
+    }
+    let mut out = PathBuf::new();
+    for part in name.split('/') {
+        match part {
+            "" | "." => continue,
+            ".." => return None, // escape attempt
+            _ => {
+                if part.contains('\\') {
+                    return None; // windows-style separator sneaking in
+                }
+                out.push(part);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Shared 404 body for both `koma://` request kinds (baked-in host UI + extension UI).
+fn not_found_response() -> Response<Cow<'static, [u8]>> {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Cow::Borrowed(&b"not found"[..]))
+        .expect("static 404 response is valid")
+}
+
+/// Shared 500 body for both `koma://` request kinds.
+fn internal_error_response() -> Response<Cow<'static, [u8]>> {
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Cow::Borrowed(&[][..]))
+        .expect("static empty response is valid")
+}
+
+#[cfg(test)]
+mod koma_request_tests {
+    use super::*;
+
+    /// A well-formed reverse-DNS id passes; anything that could escape `extensions_dir()`
+    /// as a directory name (empty, `.`/`..`, embedded `/`) is rejected.
+    #[test]
+    fn safe_ext_id_rejects_path_escapes() {
+        assert_eq!(safe_ext_id("run.koma.example.fleet-board-daemon"), Some("run.koma.example.fleet-board-daemon"));
+        assert_eq!(safe_ext_id(""), None);
+        assert_eq!(safe_ext_id("."), None);
+        assert_eq!(safe_ext_id(".."), None);
+        assert_eq!(safe_ext_id("../etc"), None);
+        assert_eq!(safe_ext_id("a/b"), None);
+        assert_eq!(safe_ext_id(".hidden"), None);
+    }
+
+    /// A plain relative asset path resolves cleanly; `..` (any position), an absolute
+    /// path, or an embedded backslash is rejected outright — the zip-slip-style guard
+    /// applied to protocol request paths instead of zip entries.
+    #[test]
+    fn safe_ext_rel_path_rejects_escapes() {
+        assert_eq!(safe_ext_rel_path("index.html"), Some(PathBuf::from("index.html")));
+        assert_eq!(
+            safe_ext_rel_path("assets/index-abc123.js"),
+            Some(PathBuf::from("assets/index-abc123.js"))
+        );
+        assert_eq!(safe_ext_rel_path(""), Some(PathBuf::new()));
+        assert_eq!(safe_ext_rel_path(".."), None);
+        assert_eq!(safe_ext_rel_path("../../etc/passwd"), None);
+        assert_eq!(safe_ext_rel_path("assets/../../escape"), None);
+        assert_eq!(safe_ext_rel_path("/etc/passwd"), None);
+        assert_eq!(safe_ext_rel_path("a\\b"), None);
     }
 }
 
