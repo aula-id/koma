@@ -561,7 +561,7 @@ pub(super) enum GuiReq {
         prompt: String,
         /// Client request sequence for stale-reply protection. The host fills this
         /// before forwarding (mirrors `agentSaving.seq` from the JS store).
-        #[serde(default)]
+        #[serde(default, rename = "reqSeq")]
         req_seq: u64,
     },
     /// The /agents dashboard's delete (a file-backed agent; a built-in is a daemon-side
