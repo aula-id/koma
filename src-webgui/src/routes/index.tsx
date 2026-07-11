@@ -87,6 +87,14 @@ function RootLayout() {
     // indicator has data on load, without requiring the Source Control panel
     // to ever be opened.
     useKoma.getState().req({ r: 'GitStatus' })
+    // GK2: auto-open the commit-graph tab on launch so it's available
+    // alongside the permanent chat tab without requiring the user to open it
+    // from the Source Control panel first. `openGraphTab` is find-or-focus
+    // (idempotent) and only ever adds the tab once — it's safe to call
+    // unconditionally in this mount-once ([]) effect even across re-renders,
+    // and if the user later closes the tab it won't be forced back open
+    // (this effect never re-runs).
+    useKoma.getState().openGraphTab()
     return () => {
       window.__komaClient = undefined
     }
