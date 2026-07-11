@@ -356,6 +356,35 @@ declare global {
     // as a one-shot GitOp push (`op: 'createBranch'`), immediately followed by
     // a fresh GitStatus push.
     | { r: 'GitCreateBranch'; name: string; start: string | null; checkout: boolean }
+    // Commit-graph row context menu "Cherry-pick" (G5c — may conflict; the
+    // follow-up GitStatus push's inProgress/conflicted fields carry that
+    // state, not this request's reply alone). Reply lands as a one-shot GitOp
+    // push (`op: 'cherryPick'`), immediately followed by a fresh GitStatus push.
+    | { r: 'GitCherryPick'; sha: string }
+    // Commit-graph row context menu "Revert" (G5c). Same conflict reasoning
+    // as GitCherryPick. Reply lands as a one-shot GitOp push (`op: 'revert'`).
+    | { r: 'GitRevert'; sha: string }
+    // Commit-graph row context menu "Reset branch to here" (G5c). `mode` is
+    // 'soft'/'mixed'/'hard' — 'hard' DISCARDS uncommitted changes; the UI
+    // gates this behind a strong inline confirm BEFORE sending it. Reply
+    // lands as a one-shot GitOp push (`op: 'reset'`).
+    | { r: 'GitReset'; sha: string; mode: 'soft' | 'mixed' | 'hard' }
+    // Branch-switcher / graph context menu "Merge into current branch" (G5c —
+    // may conflict, same reasoning as GitCherryPick). Reply lands as a
+    // one-shot GitOp push (`op: 'merge'`).
+    | { r: 'GitMerge'; ref: string }
+    // Plain rebase of the current branch onto `upstream` (G5c). May conflict.
+    // Reply lands as a one-shot GitOp push (`op: 'rebase'`).
+    | { r: 'GitRebase'; upstream: string }
+    // The conflict banner's Abort button (G5c). `kind` is
+    // 'merge'/'rebase'/'cherry-pick'/'revert' (echoing GitStatus.inProgress).
+    // Reply lands as a one-shot GitOp push (`op: 'abort'`), immediately
+    // followed by a fresh GitStatus push.
+    | { r: 'GitOpAbort'; kind: string }
+    // The conflict banner's Continue button (G5c). Same `kind` values as
+    // GitOpAbort. Reply lands as a one-shot GitOp push (`op: 'continue'`) —
+    // git refuses (and the GitOp reply carries an error) if conflicts remain.
+    | { r: 'GitOpContinue'; kind: string }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

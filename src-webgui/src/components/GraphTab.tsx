@@ -6,6 +6,7 @@ import { computeGitGraph } from '../lib/gitGraphLayout'
 import { GraphRow, ROW_H } from './GraphRow'
 import { GraphDetail } from './GraphDetail'
 import { GraphContextMenu, type GraphMenuTarget } from './GraphContextMenu'
+import { ConflictBanner } from './ConflictBanner'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
@@ -139,6 +140,7 @@ export default function GraphTab() {
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
+      <ConflictBanner />
       {/* Toolbar */}
       <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
         <GitGraph size={13} className="flex-none opacity-70" />

@@ -350,6 +350,16 @@ export type GitStatus = {
   // default ssh-agent/keys). Mirrors the host's `GitStatusResult.key_name`. The
   // GIT panel's key picker's current selection.
   keyName: string | null
+  // Which sequencer op (if any) is currently mid-flight (G5c) — one of
+  // "merge"/"cherry-pick"/"revert"/"rebase", or null when the repo is clean.
+  // Mirrors the host's `GitStatusResult.in_progress`. Drives the ConflictBanner
+  // (Abort/Continue).
+  inProgress: string | null
+  // The porcelain-v2 unmerged/conflict file records (G5c), split out of
+  // `staged`/`unstaged` — a conflicted file shouldn't masquerade as an ordinary
+  // modification. Empty outside a conflict. Mirrors the host's
+  // `GitStatusResult.conflicted`.
+  conflicted: GitFileEntry[]
 }
 
 // ---- Commit graph (G2) wire types — mirror the host's git_graph.rs DTOs
@@ -805,6 +815,9 @@ export type PushEnvelope =
       unstaged: GitFileEntry[]
       error: string | null
       keyName: string | null
+      // G5c additions — see GitStatus type comments.
+      inProgress: string | null
+      conflicted: GitFileEntry[]
     }
   // Reply to GuiReq GitDiff — a host-computed git diff for one GIT-panel file
   // row, for a Monaco diff tab. `staged` echoes the request (index-vs-HEAD vs
@@ -1324,6 +1337,35 @@ type KomaState = {
   // switching to it immediately (`checkout`). Same reply pattern as
   // `gitCheckout`.
   gitCreateBranch: (name: string, start: string | null, checkout: boolean) => void
+  // Commit-graph row context menu "Cherry-pick commit" (G5c) — may conflict;
+  // the follow-up GitStatus push's `inProgress`/`conflicted` carry that state.
+  // Reply lands as a one-shot GitOp push (toasted either way), followed by a
+  // fresh GitStatus AND graph refresh (see the `GitOp` reducer case).
+  gitCherryPick: (sha: string) => void
+  // Commit-graph row context menu "Revert commit" (G5c). Same reply pattern
+  // as `gitCherryPick`.
+  gitRevert: (sha: string) => void
+  // Commit-graph row context menu "Reset <branch> to here" (G5c). `mode` is
+  // 'soft'/'mixed'/'hard' — 'hard' DISCARDS uncommitted changes; the caller
+  // gates this behind a strong inline confirm BEFORE calling this (this
+  // action itself fires the request unconditionally). Same reply pattern as
+  // `gitCherryPick`.
+  gitReset: (sha: string, mode: 'soft' | 'mixed' | 'hard') => void
+  // Branch-switcher / graph context menu "Merge into current branch" (G5c) —
+  // may conflict, same reasoning as `gitCherryPick`. `ref` is a branch name or
+  // a sha.
+  gitMerge: (ref: string) => void
+  // Rebase the current branch onto `upstream` (G5c) — a branch name or a sha.
+  // May conflict, same reasoning as `gitCherryPick`.
+  gitRebase: (upstream: string) => void
+  // The conflict banner's Abort button (G5c): `kind` is `git.inProgress`
+  // verbatim ('merge'/'rebase'/'cherry-pick'/'revert'). Same reply pattern as
+  // `gitCherryPick`.
+  gitOpAbort: (kind: string) => void
+  // The conflict banner's Continue button (G5c). Same `kind` values and reply
+  // pattern as `gitOpAbort` — git refuses (surfacing an error toast) if
+  // conflicts remain.
+  gitOpContinue: (kind: string) => void
   // Settings "SSH Keys" section: re-fetch the vault's key list. Fired on the
   // section opening/re-activating.
   refreshKeys: () => void
@@ -1485,6 +1527,8 @@ const initialGit: GitStatus = {
   unstaged: [],
   error: null,
   keyName: null,
+  inProgress: null,
+  conflicted: [],
 }
 
 const initialGraph: GraphSlice = {
@@ -1980,6 +2024,8 @@ export const useKoma = create<KomaState>((set, get) => ({
             unstaged: env.unstaged,
             error: env.error,
             keyName: env.keyName,
+            inProgress: env.inProgress,
+            conflicted: env.conflicted,
           },
         }))
         break
@@ -2093,27 +2139,42 @@ export const useKoma = create<KomaState>((set, get) => ({
         // Fetch/pull/push are the only ops that ever set `remoteBusy`; clearing
         // it unconditionally on every OTHER op is a harmless no-op (already null).
         const isRemote = env.op === 'fetch' || env.op === 'pull' || env.op === 'push'
-        // The G4 branch ops (branch-switcher popover / graph context menu):
-        // checkout (switch/detach) and createBranch. Both get a success toast
+        // Every op that can move HEAD or change the in-progress/conflict state
+        // (branch-switcher/graph context menu ops G4 + the destructive/
+        // interactive ops G5c: cherry-pick/revert/reset/merge/rebase, and the
+        // conflict banner's abort/continue). All of these get a success toast
         // too — unlike the silent local mutations (stage/unstage/discard/
-        // commit) — since HEAD/the branch list just changed and nothing else
-        // in the UI necessarily reflects that on its own.
-        const isBranchOp = env.op === 'checkout' || env.op === 'createBranch'
+        // commit) — since HEAD/the branch list/conflict state just changed and
+        // nothing else in the UI necessarily reflects that on its own.
+        const HEAD_MOVING_OPS: Record<string, string> = {
+          checkout: 'switched branch',
+          createBranch: 'branch created',
+          cherryPick: 'commit cherry-picked',
+          revert: 'commit reverted',
+          reset: 'branch reset',
+          merge: 'merge complete',
+          rebase: 'rebase complete',
+          abort: 'operation aborted',
+          continue: 'operation continued',
+        }
+        const isHeadMovingOp = env.op in HEAD_MOVING_OPS
         // Surface a failed mutation the same de-duped way the Status case raises
         // a toast: only start a NEW toast when the text actually differs from
         // what's already showing, so a repeated failure (e.g. clicking "Stage
         // All" twice on a locked index) doesn't reset the auto-dismiss timer. A
-        // SUCCESSFUL remote/branch op ALSO gets a toast — a short confirmation
-        // using the host's own `message` if it sent one, else a generic "<op>
-        // complete" — so the outcome is visible even when nothing else in the
-        // UI changes (e.g. a fetch with nothing new). Local mutations
-        // (stage/unstage/discard/commit) stay silent on success, unchanged.
+        // SUCCESSFUL remote/head-moving op ALSO gets a toast — a short
+        // confirmation using the host's own `message` if it sent one, else a
+        // generic per-op label — so the outcome is visible even when nothing
+        // else in the UI changes (e.g. a fetch with nothing new, or a
+        // Continue that lands cleanly with no further conflicts). Local
+        // mutations (stage/unstage/discard/commit) stay silent on success,
+        // unchanged.
         const text = env.error
           ? `git ${env.op}: ${env.error}`
           : isRemote
             ? (env.message ?? `${env.op} complete`)
-            : isBranchOp
-              ? (env.op === 'checkout' ? 'switched branch' : 'branch created')
+            : isHeadMovingOp
+              ? HEAD_MOVING_OPS[env.op]
               : null
         const kind: 'error' | 'success' = env.error ? 'error' : 'success'
         set((s) => {
@@ -2132,14 +2193,22 @@ export const useKoma = create<KomaState>((set, get) => ({
             ...(isRemote ? { remoteBusy: null } : {}),
           }
         })
-        // A successful checkout/createBranch moved HEAD (and possibly the
-        // branch list) — refresh BOTH the footer/panel branch status and the
-        // commit graph (its HEAD ring) so neither is left stale. The host
-        // ALSO auto-follows every GitOp with its own fresh GitStatus push
-        // (mirrors every other mutation); this explicit call just guarantees
-        // it even if that race lands oddly, and always drives the graph
-        // refresh (which the host never pushes unprompted).
-        if (isBranchOp && env.ok) {
+        // A successful HEAD-moving op (checkout/createBranch/cherryPick/revert/
+        // reset/merge/rebase/abort/continue) moved HEAD, the branch list, and/or
+        // the in-progress/conflict state — refresh BOTH the footer/panel status
+        // and the commit graph (its HEAD ring) so neither is left stale. The
+        // host ALSO auto-follows every GitOp with its own fresh GitStatus push
+        // (mirrors every other mutation); this explicit call just guarantees it
+        // even if that race lands oddly, and always drives the graph refresh
+        // (which the host never pushes unprompted). A conflicting cherry-pick/
+        // merge/rebase/etc. returns `ok:false` (git's conflict exit IS reported
+        // as a failure here), so this gate skips the graph refresh for it —
+        // that's fine, HEAD hasn't finalized on a conflict, so there's nothing
+        // new for the graph to reflect until `continue` succeeds. The conflict
+        // banner still appears regardless, because the host pushes a fresh
+        // GitStatus unconditionally after every op (see git_host.rs's
+        // spawn_*_attached), independent of this `ok` gate.
+        if (isHeadMovingOp && env.ok) {
           get().refreshGitStatus()
           get().refreshGraph()
         }
@@ -2379,6 +2448,29 @@ export const useKoma = create<KomaState>((set, get) => ({
   gitCreateBranch: (name, start, checkout) => {
     if (!name.trim()) return
     get().req({ r: 'GitCreateBranch', name: name.trim(), start, checkout })
+  },
+  gitCherryPick: (sha) => {
+    get().req({ r: 'GitCherryPick', sha })
+  },
+  gitRevert: (sha) => {
+    get().req({ r: 'GitRevert', sha })
+  },
+  gitReset: (sha, mode) => {
+    get().req({ r: 'GitReset', sha, mode })
+  },
+  gitMerge: (ref) => {
+    if (!ref.trim()) return
+    get().req({ r: 'GitMerge', ref })
+  },
+  gitRebase: (upstream) => {
+    if (!upstream.trim()) return
+    get().req({ r: 'GitRebase', upstream })
+  },
+  gitOpAbort: (kind) => {
+    get().req({ r: 'GitOpAbort', kind })
+  },
+  gitOpContinue: (kind) => {
+    get().req({ r: 'GitOpContinue', kind })
   },
   refreshKeys: () => {
     get().req({ r: 'KeyList' })
