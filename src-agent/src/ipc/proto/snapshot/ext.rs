@@ -96,4 +96,23 @@ pub struct InstalledExtWire {
     pub enabled: bool,
     /// Grants koma extended to this extension (echoed manifest `requires`).
     pub granted: Vec<String>,
+    /// This extension's `contributes.panels` (read fresh off its installed
+    /// `manifest.json` — NOT part of the persisted `InstalledExtension` registry
+    /// entry), for the GUI's extension activity-bar icon + tab framing. Empty for
+    /// an extension that contributes no panels (or whose manifest couldn't be
+    /// read).
+    #[serde(default)]
+    pub panels: Vec<PanelWire>,
+}
+
+/// One contributed panel (a `contributes.panels[]` entry of an installed
+/// extension's manifest, [`koma_extension::protocol::PanelDef`]) — the GUI's
+/// activity-bar icon + tab framing for `koma://extension/<id>/...`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct PanelWire {
+    pub id: String,
+    pub title: String,
+    pub icon: String,
 }

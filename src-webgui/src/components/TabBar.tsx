@@ -1,4 +1,4 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useRef, useEffect, useState, useCallback } from 'react'
 
@@ -318,6 +318,46 @@ export function TabBar() {
                 {accent}
                 <Blocks size={13} className="flex-none opacity-80" />
                 <span className="truncate">Extensions</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Extension PANEL tab: closeable like a diff tab, Puzzle icon + the
+          // panel's title. Mirrors the Settings/Help/Graph/Store tab blocks
+          // exactly — content is the `<iframe>` TabbedMain renders for `t.kind
+          // === 'extension'`, not anything drawn here.
+          if (t.kind === 'extension') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title={t.title}
+                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <Puzzle size={13} className="flex-none opacity-80" />
+                <span className="truncate">{t.title}</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation()

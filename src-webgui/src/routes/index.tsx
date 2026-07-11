@@ -351,6 +351,22 @@ function TabbedMain() {
                 <StoreTab />
               </Suspense>
             </div>
+          ) : t.kind === 'extension' ? (
+            // No lazy chunk here — it's a plain iframe, not a React component.
+            // `koma://extension/<id>/index.html` is a SEPARATE origin from the
+            // host chrome (served by `handle_extension_request` off the
+            // installed extension's own `ui/` dir), so the panel's own page
+            // can never script this one. No `sandbox` attribute: the extension
+            // origin isolation already provides the security boundary, and a
+            // restrictive `sandbox` would block the custom `koma:` scheme from
+            // loading at all.
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <iframe
+                src={`koma://extension/${t.extId}/index.html`}
+                title={t.title}
+                className="h-full w-full border-0"
+              />
+            </div>
           ) : null,
         )}
       </div>
