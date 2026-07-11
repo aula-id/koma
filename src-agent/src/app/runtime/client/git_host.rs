@@ -23,12 +23,19 @@ use super::git::{
     compute_git_diff, compute_git_status, git_commit, git_discard, git_stage, git_unstage,
     GitDiffResult, GitOpResult, GitStatusResult,
 };
+use super::git_graph::{
+    compute_commit_detail, compute_commit_diff, compute_git_graph, CommitDetailResult,
+    CommitDiffResult, GitGraphResult,
+};
 use super::git_remote::{git_fetch, git_pull, git_push, set_current_key};
 use super::keys::{
     delete_key, generate_key, import_key, list_keys, reveal_key, KeyInfo, KeyOpResult,
     KeyRevealResult,
 };
-use super::push_proto::{push_git_diff, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal};
+use super::push_proto::{
+    push_commit_detail, push_commit_diff, push_git_diff, push_git_graph, push_git_op,
+    push_git_status, push_key_list, push_key_op, push_key_reveal,
+};
 
 // ─── DETACHED (host_swapper): push the reply straight through the cloned sink ───
 
@@ -98,6 +105,44 @@ pub(super) fn spawn_git_commit(
     std::thread::spawn(move || {
         push_git_op(&push, git_commit(&message, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
+    });
+}
+
+/// `HostCtl::GitGraph` while detached.
+pub(super) fn spawn_git_graph(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    limit: u32,
+    skip: u32,
+) {
+    std::thread::spawn(move || {
+        let result = compute_git_graph(limit, skip, cur.as_deref());
+        push_git_graph(&push, result);
+    });
+}
+
+/// `HostCtl::GitCommitDetail` while detached.
+pub(super) fn spawn_commit_detail(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    sha: String,
+) {
+    std::thread::spawn(move || {
+        let result = compute_commit_detail(&sha, cur.as_deref());
+        push_commit_detail(&push, result);
+    });
+}
+
+/// `HostCtl::GitCommitDiff` while detached.
+pub(super) fn spawn_commit_diff(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    sha: String,
+    path: String,
+) {
+    std::thread::spawn(move || {
+        let result = compute_commit_diff(&sha, &path, cur.as_deref());
+        push_commit_diff(&push, result);
     });
 }
 
@@ -198,6 +243,44 @@ pub(super) fn spawn_git_diff_attached(
 ) {
     std::thread::spawn(move || {
         let result = compute_git_diff(&path, staged, cur.as_deref());
+        let _ = tx.send(result);
+    });
+}
+
+/// `HostCtl::GitGraph` while attached.
+pub(super) fn spawn_git_graph_attached(
+    tx: Sender<GitGraphResult>,
+    cur: Option<String>,
+    limit: u32,
+    skip: u32,
+) {
+    std::thread::spawn(move || {
+        let result = compute_git_graph(limit, skip, cur.as_deref());
+        let _ = tx.send(result);
+    });
+}
+
+/// `HostCtl::GitCommitDetail` while attached.
+pub(super) fn spawn_commit_detail_attached(
+    tx: Sender<CommitDetailResult>,
+    cur: Option<String>,
+    sha: String,
+) {
+    std::thread::spawn(move || {
+        let result = compute_commit_detail(&sha, cur.as_deref());
+        let _ = tx.send(result);
+    });
+}
+
+/// `HostCtl::GitCommitDiff` while attached.
+pub(super) fn spawn_commit_diff_attached(
+    tx: Sender<CommitDiffResult>,
+    cur: Option<String>,
+    sha: String,
+    path: String,
+) {
+    std::thread::spawn(move || {
+        let result = compute_commit_diff(&sha, &path, cur.as_deref());
         let _ = tx.send(result);
     });
 }

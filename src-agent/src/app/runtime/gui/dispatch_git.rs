@@ -38,6 +38,21 @@ pub(super) fn git_commit(ctl: &Sender<HostCtl>, message: String) {
     let _ = ctl.send(HostCtl::GitCommit { message });
 }
 
+/// `GuiReq::GitGraph`.
+pub(super) fn git_graph(ctl: &Sender<HostCtl>, limit: u32, skip: u32) {
+    let _ = ctl.send(HostCtl::GitGraph { limit, skip });
+}
+
+/// `GuiReq::GitCommitDetail`.
+pub(super) fn git_commit_detail(ctl: &Sender<HostCtl>, sha: String) {
+    let _ = ctl.send(HostCtl::GitCommitDetail { sha });
+}
+
+/// `GuiReq::GitCommitDiff`.
+pub(super) fn git_commit_diff(ctl: &Sender<HostCtl>, sha: String, path: String) {
+    let _ = ctl.send(HostCtl::GitCommitDiff { sha, path });
+}
+
 /// `GuiReq::SetGitKey`.
 pub(super) fn set_git_key(ctl: &Sender<HostCtl>, name: Option<String>) {
     let _ = ctl.send(HostCtl::SetGitKey { name });

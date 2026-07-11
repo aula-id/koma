@@ -253,6 +253,18 @@ pub(super) enum GuiReq {
     /// stderr, e.g. "nothing to commit"). Same routing as `GitStage`; the React commit
     /// box clears its draft on a successful (`ok:true`) reply.
     GitCommit { message: String },
+    /// The GitKraken-style commit-graph panel opened / scrolled (load-more): fetch
+    /// `limit` commits starting `skip` back from the tip, across every ref. Same
+    /// reasoning + routing as `GitStatus` — routed UNCONDITIONALLY to the host-relay
+    /// thread via `HostCtl::GitGraph`, host-local, never the daemon.
+    GitGraph { limit: u32, skip: u32 },
+    /// A commit-graph row clicked: fetch that commit's full metadata (incl. body) +
+    /// changed-file list to open the commit-detail view. Same routing as `GitGraph`.
+    GitCommitDetail { sha: String },
+    /// A commit-detail file row clicked: fetch a host-computed diff for `path` at
+    /// commit `sha` (vs its first parent) to open a Monaco diff tab. Same routing as
+    /// `GitGraph`.
+    GitCommitDiff { sha: String, path: String },
     /// The GIT panel's key-picker changed: assign the foreground session's repo to
     /// use SSH key `name` (a vault key from the Settings "SSH Keys" section) for
     /// remote ops, or clear the assignment (`name: null` — "Default (system ssh)").

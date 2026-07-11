@@ -255,6 +255,29 @@ pub(super) enum PushEnvelope {
     /// panel's staged/unstaged lists. Carries [`super::git::GitOpResult`] verbatim (it
     /// is already `Serialize`, camelCase).
     GitOp(super::git::GitOpResult),
+    /// One-shot host-computed COMMIT GRAPH answering a `GitGraph` request from the
+    /// GitKraken-style commit-graph panel: `commits` (parents + refs per node), the
+    /// current `head` sha, and `hasMore` (a full page likely means more history exists
+    /// — a scroll-load-more hint). Computed ENTIRELY host-side (see
+    /// `git_graph::compute_git_graph` — never forwarded to the daemon), so this is
+    /// pushed the SAME way regardless of attach state, and — like `GitStatus` — is
+    /// ALWAYS a reply so the panel never hangs loading. Carries
+    /// [`super::git_graph::GitGraphResult`] verbatim (already camelCase).
+    GitGraph(super::git_graph::GitGraphResult),
+    /// One-shot host-computed COMMIT DETAIL answering a `GitCommitDetail` request (a
+    /// commit-graph row click): full metadata (incl. body) + the changed-file list
+    /// (first-parent view for a merge commit). Computed ENTIRELY host-side (see
+    /// `git_graph::compute_commit_detail`), pushed the SAME way regardless of attach
+    /// state, ALWAYS a reply. Carries [`super::git_graph::CommitDetailResult`] verbatim.
+    CommitDetail(super::git_graph::CommitDetailResult),
+    /// One-shot host-computed COMMIT DIFF answering a `GitCommitDiff` request (a
+    /// commit-detail file-row click): `path` at commit `sha` vs its first parent,
+    /// opening a Monaco diff tab. SEPARATE envelope from `GitDiff` (working-tree/index
+    /// diff) so the GUI can route a commit-history diff to its own tab id without
+    /// collision. Computed ENTIRELY host-side (see `git_graph::compute_commit_diff`),
+    /// pushed the SAME way regardless of attach state, ALWAYS a reply. Carries
+    /// [`super::git_graph::CommitDiffResult`] verbatim.
+    CommitDiff(super::git_graph::CommitDiffResult),
     /// One-shot host-computed LAST-7-DAYS usage preview answering a `UsagePreview`
     /// request from the activity-bar Usage panel: aggregate totals, a 7-entry daily cost
     /// series (oldest first, today last — zero-filled for days with no ledger rows), and
@@ -490,6 +513,29 @@ pub(super) fn push_git_diff(push: &dyn Fn(String), result: super::git::GitDiffRe
 /// of attach state — mirrors `push_git_status`/`push_git_diff`.
 pub(super) fn push_git_op(push: &dyn Fn(String), result: super::git::GitOpResult) {
     super::render::emit(push, &PushEnvelope::GitOp(result));
+}
+
+/// Emit a one-shot `GitGraph` envelope for the commit-graph panel, carrying a
+/// host-computed [`super::git_graph::GitGraphResult`] verbatim. Shared by the
+/// UN-ATTACHED swapper fallback and the attached `push_loop`'s off-thread worker,
+/// since a `GitGraph` is serviced entirely host-side regardless of attach state —
+/// mirrors `push_git_status`.
+pub(super) fn push_git_graph(push: &dyn Fn(String), result: super::git_graph::GitGraphResult) {
+    super::render::emit(push, &PushEnvelope::GitGraph(result));
+}
+
+/// Emit a one-shot `CommitDetail` envelope for the commit-detail view, carrying a
+/// host-computed [`super::git_graph::CommitDetailResult`] verbatim. Mirrors
+/// `push_git_diff`.
+pub(super) fn push_commit_detail(push: &dyn Fn(String), result: super::git_graph::CommitDetailResult) {
+    super::render::emit(push, &PushEnvelope::CommitDetail(result));
+}
+
+/// Emit a one-shot `CommitDiff` envelope for a commit-history file diff, carrying a
+/// host-computed [`super::git_graph::CommitDiffResult`] verbatim. Mirrors
+/// `push_git_diff`.
+pub(super) fn push_commit_diff(push: &dyn Fn(String), result: super::git_graph::CommitDiffResult) {
+    super::render::emit(push, &PushEnvelope::CommitDiff(result));
 }
 
 /// Emit a one-shot `UsagePreview` envelope for the GUI activity-bar Usage panel, carrying

@@ -363,6 +363,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitCommit { message }) => {
                 git_host::spawn_git_commit(P::clone(push), current.map(str::to_string), message);
             }
+            // Commit-graph panel: same host-local reasoning as `GitStatus`/`GitDiff`.
+            Ok(HostCtl::GitGraph { limit, skip }) => {
+                git_host::spawn_git_graph(P::clone(push), current.map(str::to_string), limit, skip);
+            }
+            Ok(HostCtl::GitCommitDetail { sha }) => {
+                git_host::spawn_commit_detail(P::clone(push), current.map(str::to_string), sha);
+            }
+            Ok(HostCtl::GitCommitDiff { sha, path }) => {
+                git_host::spawn_commit_diff(P::clone(push), current.map(str::to_string), sha, path);
+            }
             Ok(HostCtl::SetGitKey { name }) => {
                 git_host::spawn_set_git_key(P::clone(push), current.map(str::to_string), name);
             }
