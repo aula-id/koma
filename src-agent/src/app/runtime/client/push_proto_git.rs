@@ -85,3 +85,13 @@ pub(super) fn push_key_op(push: &dyn Fn(String), result: super::keys::KeyOpResul
 pub(super) fn push_branch_list(push: &dyn Fn(String), result: super::git_branch::BranchListResult) {
     super::render::emit(push, &PushEnvelope::BranchList(result));
 }
+
+/// Emit a one-shot `StashList` envelope for the Source Control toolbar's stash
+/// count/indicator (GK4a), carrying a host-computed
+/// [`super::git_stash::StashListResult`] verbatim. Shared by the UN-ATTACHED
+/// swapper fallback and the attached `push_loop`'s off-thread worker, since a
+/// `StashList` is serviced entirely host-side regardless of attach state —
+/// mirrors `push_git_status`.
+pub(super) fn push_stash_list(push: &dyn Fn(String), result: super::git_stash::StashListResult) {
+    super::render::emit(push, &PushEnvelope::StashList(result));
+}

@@ -388,6 +388,17 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitPush) => {
                 git_host::spawn_git_push(P::clone(push), current.map(str::to_string));
             }
+            // Source Control toolbar stash ops (GK4a): same host-local reasoning
+            // as `GitStatus`/`GitFetch` above. Bodies live in `git_host`.
+            Ok(HostCtl::GitStash) => {
+                git_host::spawn_git_stash(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitStashPop) => {
+                git_host::spawn_git_stash_pop(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitStashList) => {
+                git_host::spawn_git_stash_list(P::clone(push), current.map(str::to_string));
+            }
             // Branch-switcher popover / graph context menu (G4): same host-local
             // reasoning as `GitStatus`/`GitGraph`. Bodies live in the shared
             // `git_branch`/`git_host` modules.

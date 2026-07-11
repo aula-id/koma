@@ -35,12 +35,14 @@ fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
     GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()), message: None }
 }
 
-/// One branch entry in a [`BranchListResult`], parsed off one `git for-each-ref`
-/// record. `kind` is `"local"` (`refs/heads/…`) or `"remote"` (`refs/remotes/…`
-/// — a real remote-tracking ref, e.g. `origin/main`); `is_current` marks the
-/// SINGLE entry `git for-each-ref`'s `%(HEAD)` flags with `*` (the branch HEAD
-/// currently points at — never set for a remote entry, since HEAD can only
-/// point at a local branch or be detached).
+/// One ref entry in a [`BranchListResult`], parsed off one `git for-each-ref`
+/// record. `kind` is `"local"` (`refs/heads/…`), `"remote"` (`refs/remotes/…` —
+/// a real remote-tracking ref, e.g. `origin/main`), or `"tag"` (`refs/tags/…` —
+/// GK4a, listed alongside branches for the React ref-tree; a tag is never a
+/// switch/checkout TARGET's `is_current`, so it always carries `false`);
+/// `is_current` marks the SINGLE entry `git for-each-ref`'s `%(HEAD)` flags with
+/// `*` (the branch HEAD currently points at — never set for a remote or tag
+/// entry, since HEAD can only point at a local branch or be detached).
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BranchInfo {
@@ -79,17 +81,20 @@ fn valid_branch_name(root: &std::path::Path, name: &str) -> bool {
     }
 }
 
-/// Compute a host-side BRANCH LIST (every local + remote-tracking branch),
-/// answering a [`super::HostCtl::GitBranchList`]. Resolves the repo root off
-/// `session` ([`repo_root_for`]), then runs `git for-each-ref --format=
-/// %(refname)%09%(HEAD) refs/heads refs/remotes`: each record is
+/// Compute a host-side BRANCH LIST (every local + remote-tracking branch, PLUS
+/// every tag — GK4a), answering a [`super::HostCtl::GitBranchList`]. Resolves the
+/// repo root off `session` ([`repo_root_for`]), then runs `git for-each-ref --format=
+/// %(refname)%09%(HEAD) refs/heads refs/remotes refs/tags`: each record is
 /// `<refname>\t<HEAD-marker>`, `HEAD-marker` being `*` for the one entry HEAD
 /// currently points at, else empty. `refs/heads/X` -> local branch `X`;
 /// `refs/remotes/X` -> remote branch `X` (e.g. `origin/main`) — EXCEPT a
 /// remote's symbolic `HEAD` pointer (`refs/remotes/origin/HEAD`, `X` ending in
 /// `/HEAD`), which is skipped (not a real branch, just the remote's default-
-/// branch pointer). ALWAYS returns a result — a non-git workdir sets `error`
-/// rather than panicking, mirroring [`super::git::compute_git_status`].
+/// branch pointer); `refs/tags/X` -> tag `X`, `is_current` always `false`. The
+/// React ref-tree groups the combined list by `kind`; a branch SWITCHER further
+/// filters to local/remote only (a React-side concern, not this fn's). ALWAYS
+/// returns a result — a non-git workdir sets `error` rather than panicking,
+/// mirroring [`super::git::compute_git_status`].
 pub(super) fn git_branch_list(session: Option<&str>) -> BranchListResult {
     let empty = |error: Option<String>| BranchListResult { branches: Vec::new(), error };
 
@@ -99,7 +104,13 @@ pub(super) fn git_branch_list(session: Option<&str>) -> BranchListResult {
 
     let stdout = match git_cmd(
         &root,
-        &["for-each-ref", "--format=%(refname)%09%(HEAD)", "refs/heads", "refs/remotes"],
+        &[
+            "for-each-ref",
+            "--format=%(refname)%09%(HEAD)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ],
     ) {
         Some(out) if out.status.success() => out.stdout,
         Some(out) => return empty(Some(git_failure(&out, "git for-each-ref failed"))),
@@ -121,6 +132,8 @@ pub(super) fn git_branch_list(session: Option<&str>) -> BranchListResult {
                 continue;
             }
             branches.push(BranchInfo { name: name.to_string(), kind: "remote".to_string(), is_current: false });
+        } else if let Some(name) = refname.strip_prefix("refs/tags/") {
+            branches.push(BranchInfo { name: name.to_string(), kind: "tag".to_string(), is_current: false });
         }
     }
 

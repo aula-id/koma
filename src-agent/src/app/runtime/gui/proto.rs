@@ -614,4 +614,22 @@ pub(super) enum GuiReq {
     /// Delete keypair `name` (both halves, best-effort). Forwarded as
     /// [`HostCtl::KeyDelete`]; same reply pattern as `KeyGenerate`.
     KeyDelete { name: String },
+
+    // ─── GitKraken-style stash ops (GK4a) ─────────────────────────────────────
+    // Same reasoning as `GitStatus`/`GitStage` above — the host process already has
+    // direct git access, so every request here is routed UNCONDITIONALLY to the
+    // host-relay thread, regardless of attach state.
+    /// The Source Control toolbar's Stash button: `git stash push` (tracked +
+    /// staged changes). Forwarded as [`HostCtl::GitStash`]; the reply is a
+    /// one-shot `GitOp` envelope, immediately followed by a fresh `GitStatus`
+    /// push (stashing changes the working tree).
+    GitStash,
+    /// The Source Control toolbar's Pop button: `git stash pop`. May conflict —
+    /// the follow-up `GitStatus` push's `conflicted` field carries that, not
+    /// this reply alone. Forwarded as [`HostCtl::GitStashPop`].
+    GitStashPop,
+    /// The Source Control toolbar's stash count/indicator: fetch every stash
+    /// entry. Forwarded as [`HostCtl::GitStashList`]; the reply is a one-shot
+    /// `StashList` envelope.
+    GitStashList,
 }
