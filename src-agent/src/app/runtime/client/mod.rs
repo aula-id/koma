@@ -28,6 +28,7 @@
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `git_host_mut` | `git_host`'s G5b destructive spawn flavors, split out for size |
+//! | `store_host` | off-thread extension-STORE browse/detail/installed-list `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
 //! | `host_catalogue` | un-attached model/route/agents/oauth catalogue builders for `host` |
 //! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
@@ -62,6 +63,7 @@ mod git_repos;
 mod keys;
 mod git_host;
 mod git_host_mut;
+mod store_host;
 mod host;
 mod host_catalogue;
 mod host_config;
@@ -502,6 +504,31 @@ pub(super) enum HostCtl {
     /// Host-local, never the daemon, like [`GitGraph`](Self::GitGraph); see
     /// [`git_activity::compute_git_activity`].
     GitActivity { path: Option<String>, limit: u32 },
+    /// Extension-STORE browse (Store tab search/filter, or a mount-time fetch on the
+    /// home screen): fetch the koma.run catalogue. NEVER touches the daemon regardless
+    /// of attach state — the host does the PUBLIC (no-auth) network fetch itself, same
+    /// reasoning as [`GitStatus`](Self::GitStatus)/[`FileDiff`](Self::FileDiff) (this is
+    /// a stateless read, unlike install/uninstall, which mutate live daemon runtime
+    /// state and stay daemon-forwarded — see [`ExtNoSession`](Self::ExtNoSession)). See
+    /// `store_host::fetch_catalogue`.
+    StoreBrowse { query: Option<String>, category: Option<String> },
+    /// Extension-STORE detail (a catalogue card click): fetch one extension's full
+    /// detail. Same host-local reasoning as [`StoreBrowse`](Self::StoreBrowse); see
+    /// `store_host::fetch_detail`.
+    StoreDetail { id: String },
+    /// Extension-STORE "Installed" section fetch: read the local
+    /// `~/.koma/config.json` registry. Same host-local reasoning as
+    /// [`StoreBrowse`](Self::StoreBrowse) (a config read, not a daemon call); see
+    /// `store_host::installed_extensions`.
+    ListInstalledExtensions,
+    /// Graceful PRE-SESSION install/uninstall failure: `GuiReq::InstallExtension`/
+    /// `UninstallExtension` arrived with NO attached daemon (the ipc `live_req` slot is
+    /// `None` — the home screen / swapper). Install/uninstall mutate live daemon
+    /// runtime state (`ext_manager`/`mcp_manager`), so they stay daemon-forwarded and
+    /// simply can't run pre-session — this pushes a loud `ExtensionOpResult{ok:false}`
+    /// instead of silently dropping the request. `// TODO: global ext manager for
+    /// pre-session install`.
+    ExtNoSession { id: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

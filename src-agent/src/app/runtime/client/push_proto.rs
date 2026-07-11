@@ -746,6 +746,59 @@ pub(super) fn push_agents_values(
     );
 }
 
+/// Emit a one-shot `StoreCatalogue` envelope for the GUI Store tab, carrying host-computed
+/// koma.run catalogue rows (or an `error` on a network/parse failure). Shared by the
+/// UN-ATTACHED `host_swapper` fallback and the attached `push_loop`'s off-thread worker —
+/// Store browse is serviced ENTIRELY host-side (see `store_host::fetch_catalogue`)
+/// regardless of attach state, mirroring `push_file_diff`/`push_git_status`.
+pub(super) fn push_store_catalogue(
+    push: &dyn Fn(String),
+    items: Vec<crate::ipc::proto::StoreItemWire>,
+    error: Option<String>,
+) {
+    super::render::emit(push, &PushEnvelope::StoreCatalogue { items, error });
+}
+
+/// Emit a one-shot `StoreItemDetail` envelope for the GUI Store detail pane. Shared the
+/// same way as [`push_store_catalogue`] — see `store_host::fetch_detail`.
+pub(super) fn push_store_detail(
+    push: &dyn Fn(String),
+    detail: Option<crate::ipc::proto::StoreDetailWire>,
+    error: Option<String>,
+) {
+    super::render::emit(push, &PushEnvelope::StoreItemDetail { detail, error });
+}
+
+/// Emit a one-shot `InstalledExtensions` envelope for the GUI Store "Installed" section,
+/// carrying a host-read `~/.koma/config.json` registry projection. Shared the same way as
+/// [`push_store_catalogue`] — see `store_host::installed_extensions`. Also reused verbatim
+/// by the daemon-forwarded install/uninstall path's re-push (unchanged — that still rides
+/// `DaemonEvent::InstalledExtensions` through `push_intercept`).
+pub(super) fn push_installed_extensions(
+    push: &dyn Fn(String),
+    items: Vec<crate::ipc::proto::InstalledExtWire>,
+) {
+    super::render::emit(push, &PushEnvelope::InstalledExtensions { items });
+}
+
+/// Emit a one-shot `ExtensionOpResult` envelope for the graceful PRE-SESSION install/
+/// uninstall failure (`GuiReq::InstallExtension`/`UninstallExtension` with NO attached
+/// daemon — see `HostCtl::ExtNoSession`). Install/uninstall mutate live daemon runtime
+/// state (`ext_manager`/`mcp_manager`), which needs a session to exist; there is no global
+/// (pre-session) ext manager yet — `// TODO: global ext manager for pre-session install` —
+/// so this fails LOUDLY (`ok: false` + a human-readable reason) instead of silently
+/// dropping the request, echoing `id` so the GUI clears that card's pending spinner.
+pub(super) fn push_ext_no_session(push: &dyn Fn(String), id: String) {
+    super::render::emit(
+        push,
+        &PushEnvelope::ExtensionOpResult {
+            id,
+            ok: false,
+            error: Some("open a session to install".to_string()),
+        },
+    );
+}
+
 /// Emit a one-shot `OAuthState` envelope for the streaming GUI OAuth surface. Shared by the
 /// attached `push_loop` intercept (which unpacks the daemon's `DaemonEvent::OAuthState`) and
 /// the UN-ATTACHED host fallback ([`super::host`]), so a detached `GetOAuthState` /

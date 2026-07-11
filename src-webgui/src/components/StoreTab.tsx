@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
-  Store,
   ArrowLeft,
   Download,
   Trash2,
@@ -309,7 +308,7 @@ export default function StoreTab() {
     <div className="flex h-full min-h-0 flex-col">
       {/* Header: title + search + refresh. */}
       <div className="flex flex-none items-center gap-3 border-b border-koma-border px-4 py-3">
-        <Store size={16} className="flex-none text-koma-fg" />
+        <Blocks size={16} className="flex-none text-koma-fg" />
         <h1 className="flex-none text-[13px] font-semibold text-koma-fg">Extensions</h1>
         <form onSubmit={onSearch} className="relative ml-2 min-w-0 flex-1">
           <Search

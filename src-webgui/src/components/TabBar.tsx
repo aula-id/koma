@@ -1,4 +1,4 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Store, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useRef, useEffect, useState, useCallback } from 'react'
 
@@ -316,7 +316,7 @@ export function TabBar() {
                 className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
               >
                 {accent}
-                <Store size={13} className="flex-none opacity-80" />
+                <Blocks size={13} className="flex-none opacity-80" />
                 <span className="truncate">Extensions</span>
                 <button
                   onClick={(e) => {

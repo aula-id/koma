@@ -1,4 +1,4 @@
-import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, Store, CircleHelp, Settings } from 'lucide-react'
+import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 
@@ -20,7 +20,7 @@ const ITEMS: { view: SidebarView; icon: LucideIcon; label: string }[] = [
   { view: 'connector', icon: Plug, label: 'Connector' },
   { view: 'agents', icon: Bot, label: 'Agents' },
   { view: 'usage', icon: ChartColumn, label: 'Usage' },
-  { view: 'store', icon: Store, label: 'Extensions' },
+  { view: 'store', icon: Blocks, label: 'Extensions' },
 ]
 
 // Thin icon strip. Selecting a view switches the sidebar panel; the active

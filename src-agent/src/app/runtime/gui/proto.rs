@@ -626,29 +626,33 @@ pub(super) enum GuiReq {
     DeleteOAuthConn { uuid: String },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────
-    // Forwarded to the attached daemon (which owns the install pipeline + the live
-    // MCP/ext managers + config); the daemon's reply frames are intercepted in
-    // `push_loop` and re-pushed as `StoreCatalogue`/`StoreItemDetail`/
-    // `InstalledExtensions`/`ExtensionOpResult` envelopes. Attached-only (like
-    // `StartOAuth` — a GUI window always has a session daemon attached in normal use;
-    // un-attached, these are a silent no-op).
-    /// Browse the store catalogue (optional `q` / `category` filters). Forwarded as
-    /// [`ClientRequest::StoreBrowse`].
+    // Browse/detail/installed-list are HOST-LOCAL — routed UNCONDITIONALLY to the
+    // host-relay thread (`HostCtl::StoreBrowse` and friends), never the daemon,
+    // regardless of attach state, same reasoning as `GitStatus`/`FileDiff`: koma.run
+    // browse/detail is a PUBLIC (no-auth) network fetch and the installed list is a
+    // local config read, both of which work identically pre-session (the Store tab
+    // mounting on the home screen) as attached. Install/uninstall MUTATE live daemon
+    // runtime state (the live MCP/ext managers + config), so those two stay forwarded
+    // to the attached daemon; with no daemon attached the dispatcher pushes a graceful
+    // `ExtensionOpResult{ok:false}` (`HostCtl::ExtNoSession`) instead of a silent no-op.
+    /// Browse the store catalogue (optional `q` / `category` filters). Routed as
+    /// `HostCtl::StoreBrowse`.
     StoreBrowse {
         query: Option<String>,
         category: Option<String>,
     },
-    /// Fetch one extension's detail. Forwarded as [`ClientRequest::StoreDetail`].
+    /// Fetch one extension's detail. Routed as `HostCtl::StoreDetail`.
     StoreDetail { id: String },
-    /// Install `id` (optional `version`). Forwarded as [`ClientRequest::InstallExtension`].
+    /// Install `id` (optional `version`). Forwarded as [`ClientRequest::InstallExtension`]
+    /// to the attached daemon; with none attached, pushes a graceful
+    /// `ExtensionOpResult{ok:false}` instead.
     InstallExtension {
         id: String,
         version: Option<String>,
     },
-    /// Uninstall `id`. Forwarded as [`ClientRequest::UninstallExtension`].
+    /// Uninstall `id`. Same routing as [`InstallExtension`](Self::InstallExtension).
     UninstallExtension { id: String },
-    /// Fetch the locally-installed registry. Forwarded as
-    /// [`ClientRequest::ListInstalledExtensions`].
+    /// Fetch the locally-installed registry. Routed as `HostCtl::ListInstalledExtensions`.
     ListInstalledExtensions,
 
     // ─── GUI SSH key vault (Settings "SSH Keys" submenu, wave 4a) ────────────────
