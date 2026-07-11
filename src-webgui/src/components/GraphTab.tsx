@@ -18,23 +18,27 @@ import { ConflictBanner } from './ConflictBanner'
 import { RebaseDropConfirm } from './RebaseDropConfirm'
 import { GraphBreadcrumb, GraphBubblePlaceholder } from './GraphBreadcrumb'
 import { GraphChanges } from './GraphChanges'
+import { GraphRefTree } from './GraphRefTree'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
 // Distance from the bottom (px) that arms an auto load-more.
 const LOAD_MORE_PX = 400
-// Detail split-pane clamp (px).
-const DETAIL_MIN = 120
-const DETAIL_MAX = 560
-// Left sidebar (GK3: Changes accordion, GK4 will add a ref-tree below it)
+// Right detail-pane resizable-WIDTH clamp (px) — GK4b moved the detail pane
+// from a bottom split to a right split (GitKraken-style).
+const DETAIL_W_MIN = 240
+const DETAIL_W_MAX = 560
+const DETAIL_W_DEFAULT = 320
+// Left sidebar (GK3: Changes accordion, GK4b: ref-tree below it)
 // resizable-width clamp (px).
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
 const SIDEBAR_DEFAULT = 240
 
 // The GitKraken-style commit-graph tab (G2). A row-VIRTUALIZED commit list with
-// an SVG lane gutter, over a resizable detail split. Lazy-loaded (its chunk +
-// framer-motion land only when first opened). Read-only in this wave.
+// an SVG lane gutter, beside a resizable RIGHT detail pane (GK4b). Lazy-loaded
+// (its chunk + framer-motion land only when first opened). Read-only in this
+// wave.
 export default function GraphTab() {
   const commits = useKoma((s) => s.graph.commits)
   const head = useKoma((s) => s.graph.head)
@@ -64,11 +68,12 @@ export default function GraphTab() {
   const { rows, laneCount } = useMemo(() => computeGitGraph(commits), [commits])
 
   const scrollerRef = useRef<HTMLDivElement | null>(null)
-  const splitRef = useRef<HTMLDivElement | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportH, setViewportH] = useState(0)
   const [hoveredSha, setHoveredSha] = useState<string | null>(null)
-  const [detailH, setDetailH] = useState(240)
+  // Right detail-pane WIDTH (GK4b) — a plain drag-grip resize, mirroring
+  // startSidebarResize below but on the opposite edge.
+  const [detailW, setDetailW] = useState(DETAIL_W_DEFAULT)
   // Left sidebar width (GK3) — a plain drag-grip resize, mirroring
   // startDetailResize below but on the horizontal axis.
   const [sidebarW, setSidebarW] = useState(SIDEBAR_DEFAULT)
@@ -135,7 +140,9 @@ export default function GraphTab() {
   }, [handleBranchDragEnd])
 
   // Track the scroller's height so the window math has a real viewport (also
-  // re-measures when the detail split resizes the list area).
+  // re-fires on a sidebar/detail-pane WIDTH resize — those are ResizeObserver
+  // events too, just harmless no-ops for `viewportH` since they don't change
+  // the scroller's height).
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
@@ -247,17 +254,35 @@ export default function GraphTab() {
     }
   }, [selectedSha, rows])
 
-  // Detail split drag (vertical): dragging the handle UP grows the bottom detail
-  // pane. Clamped to [DETAIL_MIN, min(DETAIL_MAX, 70% of the split height)].
+  // Jump the graph scroller straight to a already-known sha (GK4b — the
+  // ref-tree's click handler resolves a ref to a loaded commit, then calls
+  // this to bring it into view before/alongside `selectCommit`). Distinct
+  // from the effect above (which only nudges when the selection is
+  // off-screen): this always scrolls, roughly centering the row. A no-op
+  // when the sha isn't in the currently-loaded page.
+  const scrollToSha = useCallback(
+    (sha: string) => {
+      const idx = rows.findIndex((r) => r.sha === sha)
+      if (idx < 0) return
+      const el = scrollerRef.current
+      if (!el) return
+      const rowTop = idx * ROW_H
+      const target = Math.max(0, Math.min(rowTop - el.clientHeight / 2, el.scrollHeight - el.clientHeight))
+      el.scrollTo({ top: target, behavior: 'smooth' })
+    },
+    [rows],
+  )
+
+  // Detail pane WIDTH drag (horizontal, GK4b): the grip sits on the pane's
+  // LEFT edge, so dragging it LEFT grows the (right-anchored) detail pane.
+  // Clamped to [DETAIL_W_MIN, DETAIL_W_MAX].
   const startDetailResize = (e: ReactMouseEvent) => {
     e.preventDefault()
-    const startY = e.clientY
-    const startH = detailH
-    const splitH = splitRef.current?.clientHeight ?? 0
+    const startX = e.clientX
+    const startW = detailW
     const onMove = (ev: MouseEvent) => {
-      const max = Math.min(DETAIL_MAX, splitH > 0 ? splitH * 0.7 : DETAIL_MAX)
-      const next = Math.min(max, Math.max(DETAIL_MIN, startH - (ev.clientY - startY)))
-      setDetailH(next)
+      const next = Math.min(DETAIL_W_MAX, Math.max(DETAIL_W_MIN, startW - (ev.clientX - startX)))
+      setDetailW(next)
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
@@ -265,7 +290,7 @@ export default function GraphTab() {
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-    document.body.style.cursor = 'ns-resize'
+    document.body.style.cursor = 'ew-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -300,23 +325,27 @@ export default function GraphTab() {
 
       {graphMode === 'rail' && (
         <div className="flex min-h-0 flex-1">
-          {/* LEFT sidebar (GK3): Changes accordion now, GK4 will add a
-              LOCAL/REMOTE/TAGS ref-tree beneath it in this same column — kept
-              as a scrollable vertical stack so a future section just stacks
-              below without restructuring this split. */}
+          {/* LEFT sidebar (GK3 Changes + GK4b ref-tree): a scrollable
+              vertical stack — each section is its own AccordionSection
+              (flex-fills when open, collapses to just its header when
+              closed), so they stack without any further restructuring. */}
           <div
             style={{ width: sidebarW }}
             className="flex min-h-0 flex-none flex-col overflow-y-auto border-r border-koma-border"
           >
             <GraphChanges />
+            <GraphRefTree scrollToSha={scrollToSha} />
           </div>
           <div
             onMouseDown={startSidebarResize}
             className="w-[5px] flex-none cursor-ew-resize border-r border-koma-border hover:bg-koma-grip"
           />
 
-          {/* CENTER/RIGHT: toolbar + list/detail split (unchanged behavior). */}
-          <div className="flex min-h-0 flex-1 flex-col">
+          {/* CENTER: toolbar + virtualized graph list (unchanged behavior,
+              now its own column instead of sharing one with the detail
+              pane below it — `min-w-0` lets it actually shrink instead of
+              shoving the right-hand detail pane off-screen). */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {/* Toolbar */}
             <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
               <GitGraph size={13} className="flex-none opacity-70" />
@@ -337,91 +366,98 @@ export default function GraphTab() {
               </button>
             </div>
 
-            {/* List (top) + detail (bottom) split */}
-            <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
-              <div
-                ref={scrollerRef}
-                onScroll={onScroll}
-                className="relative min-h-0 flex-1 overflow-y-auto"
-              >
-                {total === 0 ? (
-                  <div className="flex h-full w-full items-center justify-center px-6 text-center text-[12px] text-koma-dim">
-                    {loading ? (
-                      <Loader2 size={18} className="animate-spin opacity-70" />
-                    ) : (
-                      'No commits to display.'
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    {/* Spacer sized to the FULL list; visible rows absolutely placed. */}
-                    <div style={{ height: totalH }} className="relative">
-                      {visible.map((row, i) => {
-                        const globalIdx = start + i
-                        return (
-                          <div key={row.sha} className="absolute inset-x-0" style={{ top: globalIdx * ROW_H }}>
-                            <GraphRow
-                              row={row}
-                              laneCount={laneCount}
-                              isHead={row.sha === head}
-                              selected={row.sha === selectedSha}
-                              dim={hoveredSha !== null && hoveredSha !== row.sha}
-                              animate={!animatedRef.current.has(row.sha)}
-                              staggerIndex={i}
-                              onSelect={onSelect}
-                              onHover={onHover}
-                              onContextMenu={onRowContextMenu}
-                              onRefContextMenu={onRefContextMenu}
-                              draggedBranch={draggedBranch}
-                              dropHoverId={dropHoverId}
-                              onBranchDragStart={handleBranchDragStart}
-                              onBranchDragEnd={handleBranchDragEnd}
-                              onDropHover={handleDropHover}
-                              onRebaseDrop={handleRebaseDrop}
-                            />
-                          </div>
-                        )
-                      })}
-                    </div>
-                    {/* Explicit "See more" pagination (below the spacer, in normal flow) —
-                        the primary load-more trigger; the near-bottom auto-load in
-                        `onScroll` is just a gentle assist on top of this. Uses
-                        `aria-disabled` + pointer-events (NOT the `disabled` attribute) so a
-                        focused click never forces a blur — disabling a focused control
-                        makes the browser revert focus to <body>, which drags the nearest
-                        scrollable ancestor's scrollTop back toward 0 as a side effect
-                        (the old "teleports to top" bug). */}
-                    {hasMore && (
-                      <div className="flex justify-center py-3">
-                        <button
-                          type="button"
-                          onClick={handleLoadMore}
-                          aria-disabled={loading}
-                          className={`flex items-center gap-1.5 rounded bg-koma-accent px-3.5 py-1.5 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 ${
-                            loading ? 'pointer-events-none opacity-60' : ''
-                          }`}
-                        >
-                          {loading && <Loader2 size={12} className="animate-spin" />}
-                          See more
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {selectedSha && (
+            <div
+              ref={scrollerRef}
+              onScroll={onScroll}
+              className="relative min-h-0 flex-1 overflow-y-auto"
+            >
+              {total === 0 ? (
+                <div className="flex h-full w-full items-center justify-center px-6 text-center text-[12px] text-koma-dim">
+                  {loading ? (
+                    <Loader2 size={18} className="animate-spin opacity-70" />
+                  ) : (
+                    'No commits to display.'
+                  )}
+                </div>
+              ) : (
                 <>
-                  <div
-                    onMouseDown={startDetailResize}
-                    className="h-[5px] flex-none cursor-ns-resize border-t border-koma-border hover:bg-koma-grip"
-                  />
-                  <div style={{ height: detailH }} className="min-h-0 flex-none bg-koma-panel2">
-                    <GraphDetail />
+                  {/* Spacer sized to the FULL list; visible rows absolutely placed. */}
+                  <div style={{ height: totalH }} className="relative">
+                    {visible.map((row, i) => {
+                      const globalIdx = start + i
+                      return (
+                        <div key={row.sha} className="absolute inset-x-0" style={{ top: globalIdx * ROW_H }}>
+                          <GraphRow
+                            row={row}
+                            laneCount={laneCount}
+                            isHead={row.sha === head}
+                            selected={row.sha === selectedSha}
+                            dim={hoveredSha !== null && hoveredSha !== row.sha}
+                            animate={!animatedRef.current.has(row.sha)}
+                            staggerIndex={i}
+                            onSelect={onSelect}
+                            onHover={onHover}
+                            onContextMenu={onRowContextMenu}
+                            onRefContextMenu={onRefContextMenu}
+                            draggedBranch={draggedBranch}
+                            dropHoverId={dropHoverId}
+                            onBranchDragStart={handleBranchDragStart}
+                            onBranchDragEnd={handleBranchDragEnd}
+                            onDropHover={handleDropHover}
+                            onRebaseDrop={handleRebaseDrop}
+                          />
+                        </div>
+                      )
+                    })}
                   </div>
+                  {/* Explicit "See more" pagination (below the spacer, in normal flow) —
+                      the primary load-more trigger; the near-bottom auto-load in
+                      `onScroll` is just a gentle assist on top of this. Uses
+                      `aria-disabled` + pointer-events (NOT the `disabled` attribute) so a
+                      focused click never forces a blur — disabling a focused control
+                      makes the browser revert focus to <body>, which drags the nearest
+                      scrollable ancestor's scrollTop back toward 0 as a side effect
+                      (the old "teleports to top" bug). */}
+                  {hasMore && (
+                    <div className="flex justify-center py-3">
+                      <button
+                        type="button"
+                        onClick={handleLoadMore}
+                        aria-disabled={loading}
+                        className={`flex items-center gap-1.5 rounded bg-koma-accent px-3.5 py-1.5 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 ${
+                          loading ? 'pointer-events-none opacity-60' : ''
+                        }`}
+                      >
+                        {loading && <Loader2 size={12} className="animate-spin" />}
+                        See more
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
+          </div>
+
+          {/* RIGHT detail pane (GK4b) — a horizontal split instead of the
+              old bottom split, mirroring GitKraken's own commit-detail
+              placement. `min-w-0` (on top of the fixed inline width) keeps
+              it a well-behaved flex child; its own `overflow-y-auto` scrolls
+              independently of the graph column. */}
+          <div
+            onMouseDown={startDetailResize}
+            className="w-[5px] flex-none cursor-ew-resize border-l border-koma-border hover:bg-koma-grip"
+          />
+          <div
+            style={{ width: detailW }}
+            className="flex min-h-0 min-w-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel2"
+          >
+            {selectedSha ? (
+              <GraphDetail />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center px-4 text-center text-[12px] text-koma-dim opacity-50">
+                Select a commit
+              </div>
+            )}
           </div>
         </div>
       )}

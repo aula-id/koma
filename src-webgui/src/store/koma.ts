@@ -367,12 +367,14 @@ export type GitStatus = {
 // mismatch can't silently read `undefined` at runtime. -----------------------
 
 // One branch entry in a BranchList reply — host `BranchInfo` (git_branch.rs,
-// `rename_all = "camelCase"`) — G4. `kind` is "local" (`refs/heads/…`) or
-// "remote" (`refs/remotes/…`, e.g. `origin/main`); `isCurrent` marks the
-// single branch HEAD currently points at (never true for a remote entry).
+// `rename_all = "camelCase"`) — G4. `kind` is "local" (`refs/heads/…`),
+// "remote" (`refs/remotes/…`, e.g. `origin/main`), or "tag" (`refs/tags/…` —
+// GK4a, listed alongside branches for the React ref-tree); `isCurrent` marks
+// the single branch HEAD currently points at (never true for a remote or tag
+// entry).
 export type BranchInfo = {
   name: string
-  kind: 'local' | 'remote'
+  kind: 'local' | 'remote' | 'tag'
   isCurrent: boolean
 }
 
