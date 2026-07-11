@@ -378,6 +378,16 @@ export type BranchInfo = {
   isCurrent: boolean
 }
 
+// One stash entry in a StashList reply — host `StashEntry` (git_stash.rs,
+// `rename_all = "camelCase"`) — GK4c. `index` is the `stash@{N}` slot number
+// (0 is the most-recently-pushed stash); `message` is everything after the
+// `stash@{N}: ` marker verbatim (covers both git's default "WIP on <branch>:
+// …" message and a custom `git stash push -m <msg>`).
+export type StashEntry = {
+  index: number
+  message: string
+}
+
 // One ref (branch/tag/HEAD pointer) decorating a commit — host `GitRef`. `kind`
 // classifies it off the FULL ref path host-side (a distinct chip colour per
 // kind); `isHead` marks the single `HEAD -> …` current-branch pointer.
@@ -932,6 +942,15 @@ export type PushEnvelope =
       branches: BranchInfo[]
       error: string | null
     }
+  // Reply to GuiReq GitStashList (GK4c) — every `git stash list` entry for the
+  // toolbar's Stash/Pop buttons. Carries `StashListResult` verbatim (already
+  // camelCase) flattened onto the envelope. ALWAYS a reply so a non-repo
+  // workdir just shows an empty (Pop-disabled) list rather than hanging.
+  | {
+      k: 'StashList'
+      entries: StashEntry[]
+      error: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1215,6 +1234,12 @@ type KomaState = {
   // `refreshBranches()` until the matching `BranchList` reply lands, so the
   // popover can show a spinner instead of a stale/empty list.
   branchesLoading: boolean
+  // The toolbar's authoritative stash list (latest StashList push, GK4c) —
+  // every `git stash list` entry, newest (index 0) first. REPLACED wholesale
+  // on each push; empty until the first reply lands. Global (not
+  // per-session), mirroring `branches`. Drives the Pop button's
+  // enabled-state + count badge.
+  stashes: StashEntry[]
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   // The GitKraken-style commit-graph tab's slice (G2). See GraphSlice.
@@ -1337,6 +1362,20 @@ type KomaState = {
   // remote-tracking branch. Sets `branchesLoading` before firing the req;
   // cleared by the matching `BranchList` reply.
   refreshBranches: () => void
+  // Toolbar "Stash" button (GK4c): `git stash push`. Reply lands as a
+  // one-shot GitOp push (toasted either way); the GitOp reducer follows up
+  // with `refreshStashes()` (the working-tree change itself is already
+  // covered by the host's own follow-up GitStatus push, so no explicit
+  // refreshGitStatus here). This op never moves HEAD, so no graph refresh.
+  gitStash: () => void
+  // Toolbar "Pop" button (GK4c): `git stash pop`. May conflict — the
+  // existing G5 conflict banner surfaces it via the host's follow-up
+  // GitStatus push, same as `gitCherryPick`. Same reply/refresh pattern as
+  // `gitStash`.
+  gitStashPop: () => void
+  // Toolbar mount / stash-op follow-up (GK4c): re-fetch every stash list
+  // entry so the Stash/Pop buttons' counts stay correct.
+  refreshStashes: () => void
   // Switch (or detach onto) `ref` — a branch name or a sha. SAFE only (never
   // `--force`); the reply lands as a one-shot GitOp push (toasted either way)
   // followed by a fresh GitStatus AND a graph refresh (HEAD moved).
@@ -1645,6 +1684,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
+  stashes: [],
 
   push: (env) => {
     switch (env.k) {
@@ -2170,6 +2210,15 @@ export const useKoma = create<KomaState>((set, get) => ({
           continue: 'operation continued',
         }
         const isHeadMovingOp = env.op in HEAD_MOVING_OPS
+        // Stash push/pop (GK4c) — neither moves HEAD, so they're kept OUT of
+        // HEAD_MOVING_OPS (no graph refresh below), but still get a success
+        // toast same as a head-moving op (nothing else in the UI reflects
+        // "stashed"/"popped" on its own).
+        const STASH_OPS: Record<string, string> = {
+          stash: 'changes stashed',
+          stashPop: 'stash applied',
+        }
+        const isStashOp = env.op in STASH_OPS
         // Surface a failed mutation the same de-duped way the Status case raises
         // a toast: only start a NEW toast when the text actually differs from
         // what's already showing, so a repeated failure (e.g. clicking "Stage
@@ -2187,7 +2236,9 @@ export const useKoma = create<KomaState>((set, get) => ({
             ? (env.message ?? `${env.op} complete`)
             : isHeadMovingOp
               ? HEAD_MOVING_OPS[env.op]
-              : null
+              : isStashOp
+                ? STASH_OPS[env.op]
+                : null
         const kind: 'error' | 'success' = env.error ? 'error' : 'success'
         set((s) => {
           const raise = !!text && text !== s.ui.toast?.text
@@ -2228,6 +2279,13 @@ export const useKoma = create<KomaState>((set, get) => ({
         if (isHeadMovingOp && env.ok) {
           get().refreshGraph()
         }
+        // A stash push/pop changed the stash list either way (a failed pop
+        // left it unchanged, but re-fetching is harmless) — refresh the
+        // toolbar's Stash/Pop count. These ops never move HEAD, so — unlike
+        // the branch above — this never triggers a graph refresh.
+        if (isStashOp) {
+          get().refreshStashes()
+        }
         break
       }
       case 'KeyList':
@@ -2235,6 +2293,9 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       case 'BranchList':
         set(() => ({ branches: env.branches, branchesLoading: false }))
+        break
+      case 'StashList':
+        set(() => ({ stashes: env.entries }))
         break
       case 'KeyReveal':
         set((s) => {
@@ -2459,6 +2520,15 @@ export const useKoma = create<KomaState>((set, get) => ({
   refreshBranches: () => {
     set(() => ({ branchesLoading: true }))
     get().req({ r: 'GitBranchList' })
+  },
+  gitStash: () => {
+    get().req({ r: 'GitStash' })
+  },
+  gitStashPop: () => {
+    get().req({ r: 'GitStashPop' })
+  },
+  refreshStashes: () => {
+    get().req({ r: 'GitStashList' })
   },
   gitCheckout: (ref) => {
     if (!ref.trim()) return
