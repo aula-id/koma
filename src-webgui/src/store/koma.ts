@@ -1298,6 +1298,9 @@ type KomaState = {
   // its GitCommitDetail. Clears stale `detail` when the sha actually changes so
   // the detail pane shows a loading state, not the previous commit's detail.
   selectCommit: (sha: string) => void
+  // Clear the current commit selection (closes the right detail pane): resets
+  // `selectedSha`/`detail` back to null without touching the wire.
+  clearSelection: () => void
   // Rail-line/Bubble mode switch (GK2) — local UI toggle, no wire request.
   setGraphMode: (mode: 'rail' | 'bubble') => void
   // (Re)load the bubble/activity chart's commit series (GK5b): mark loading +
@@ -2535,6 +2538,7 @@ export const useKoma = create<KomaState>((set, get) => ({
     }))
     get().req({ r: 'GitCommitDetail', sha })
   },
+  clearSelection: () => set((s) => ({ graph: { ...s.graph, selectedSha: null, detail: null } })),
   setGraphMode: (mode) => {
     set((s) => ({ graph: { ...s.graph, graphMode: mode } }))
   },

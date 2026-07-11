@@ -254,7 +254,7 @@ function FileRow({
 // --porcelain`'s staged/unstaged split. Discard is destructive, gated behind
 // an inline per-row (or section-wide) confirm.
 export function GitPanel() {
-  const [open, setOpen] = useState({ staged: true, unstaged: true, conflicts: true, graph: false })
+  const [open, setOpen] = useState({ staged: true, unstaged: true, conflicts: true, graph: true })
   const [filter, setFilter] = useState('')
   // The single armed discard confirm across BOTH the per-row buttons and the
   // section-wide "Discard All Changes" action — a sentinel string for the
