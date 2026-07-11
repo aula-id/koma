@@ -17,6 +17,7 @@ import { GraphContextMenu, type GraphMenuTarget } from './GraphContextMenu'
 import { ConflictBanner } from './ConflictBanner'
 import { RebaseDropConfirm } from './RebaseDropConfirm'
 import { GraphBreadcrumb, GraphBubblePlaceholder } from './GraphBreadcrumb'
+import { GraphChanges } from './GraphChanges'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
@@ -25,6 +26,11 @@ const LOAD_MORE_PX = 400
 // Detail split-pane clamp (px).
 const DETAIL_MIN = 120
 const DETAIL_MAX = 560
+// Left sidebar (GK3: Changes accordion, GK4 will add a ref-tree below it)
+// resizable-width clamp (px).
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 420
+const SIDEBAR_DEFAULT = 240
 
 // The GitKraken-style commit-graph tab (G2). A row-VIRTUALIZED commit list with
 // an SVG lane gutter, over a resizable detail split. Lazy-loaded (its chunk +
@@ -63,6 +69,9 @@ export default function GraphTab() {
   const [viewportH, setViewportH] = useState(0)
   const [hoveredSha, setHoveredSha] = useState<string | null>(null)
   const [detailH, setDetailH] = useState(240)
+  // Left sidebar width (GK3) — a plain drag-grip resize, mirroring
+  // startDetailResize below but on the horizontal axis.
+  const [sidebarW, setSidebarW] = useState(SIDEBAR_DEFAULT)
   // The right-click context menu's position + target (G4): `null` when
   // closed. Left in local state (not the store) — purely a transient UI
   // overlay, unlike selectedSha/commits which are host-authoritative.
@@ -262,119 +271,159 @@ export default function GraphTab() {
     window.addEventListener('mouseup', onUp)
   }
 
+  // Sidebar width drag (horizontal): dragging the handle RIGHT grows the
+  // sidebar. Clamped to [SIDEBAR_MIN, SIDEBAR_MAX].
+  const startSidebarResize = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = sidebarW
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + (ev.clientX - startX)))
+      setSidebarW(next)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
       <ConflictBanner />
       <GraphBreadcrumb />
 
       {graphMode === 'rail' && (
-        <>
-          {/* Toolbar */}
-          <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
-            <GitGraph size={13} className="flex-none opacity-70" />
-            <span className="font-mono">
-              {total} commit{total === 1 ? '' : 's'}
-              {hasMore ? '+' : ''}
-            </span>
-            <span className="flex-1" />
-            {loading && <Loader2 size={13} className="flex-none animate-spin opacity-70" />}
-            <button
-              type="button"
-              onClick={refreshGraph}
-              title="Refresh graph"
-              aria-label="Refresh graph"
-              className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
-            >
-              <RefreshCw size={13} />
-            </button>
+        <div className="flex min-h-0 flex-1">
+          {/* LEFT sidebar (GK3): Changes accordion now, GK4 will add a
+              LOCAL/REMOTE/TAGS ref-tree beneath it in this same column — kept
+              as a scrollable vertical stack so a future section just stacks
+              below without restructuring this split. */}
+          <div
+            style={{ width: sidebarW }}
+            className="flex min-h-0 flex-none flex-col overflow-y-auto border-r border-koma-border"
+          >
+            <GraphChanges />
           </div>
+          <div
+            onMouseDown={startSidebarResize}
+            className="w-[5px] flex-none cursor-ew-resize border-r border-koma-border hover:bg-koma-grip"
+          />
 
-          {/* List (top) + detail (bottom) split */}
-          <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
-            <div
-              ref={scrollerRef}
-              onScroll={onScroll}
-              className="relative min-h-0 flex-1 overflow-y-auto"
-            >
-              {total === 0 ? (
-                <div className="flex h-full w-full items-center justify-center px-6 text-center text-[12px] text-koma-dim">
-                  {loading ? (
-                    <Loader2 size={18} className="animate-spin opacity-70" />
-                  ) : (
-                    'No commits to display.'
-                  )}
-                </div>
-              ) : (
-                <>
-                  {/* Spacer sized to the FULL list; visible rows absolutely placed. */}
-                  <div style={{ height: totalH }} className="relative">
-                    {visible.map((row, i) => {
-                      const globalIdx = start + i
-                      return (
-                        <div key={row.sha} className="absolute inset-x-0" style={{ top: globalIdx * ROW_H }}>
-                          <GraphRow
-                            row={row}
-                            laneCount={laneCount}
-                            isHead={row.sha === head}
-                            selected={row.sha === selectedSha}
-                            dim={hoveredSha !== null && hoveredSha !== row.sha}
-                            animate={!animatedRef.current.has(row.sha)}
-                            staggerIndex={i}
-                            onSelect={onSelect}
-                            onHover={onHover}
-                            onContextMenu={onRowContextMenu}
-                            onRefContextMenu={onRefContextMenu}
-                            draggedBranch={draggedBranch}
-                            dropHoverId={dropHoverId}
-                            onBranchDragStart={handleBranchDragStart}
-                            onBranchDragEnd={handleBranchDragEnd}
-                            onDropHover={handleDropHover}
-                            onRebaseDrop={handleRebaseDrop}
-                          />
-                        </div>
-                      )
-                    })}
+          {/* CENTER/RIGHT: toolbar + list/detail split (unchanged behavior). */}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {/* Toolbar */}
+            <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[12px] text-koma-dim">
+              <GitGraph size={13} className="flex-none opacity-70" />
+              <span className="font-mono">
+                {total} commit{total === 1 ? '' : 's'}
+                {hasMore ? '+' : ''}
+              </span>
+              <span className="flex-1" />
+              {loading && <Loader2 size={13} className="flex-none animate-spin opacity-70" />}
+              <button
+                type="button"
+                onClick={refreshGraph}
+                title="Refresh graph"
+                aria-label="Refresh graph"
+                className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+              >
+                <RefreshCw size={13} />
+              </button>
+            </div>
+
+            {/* List (top) + detail (bottom) split */}
+            <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
+              <div
+                ref={scrollerRef}
+                onScroll={onScroll}
+                className="relative min-h-0 flex-1 overflow-y-auto"
+              >
+                {total === 0 ? (
+                  <div className="flex h-full w-full items-center justify-center px-6 text-center text-[12px] text-koma-dim">
+                    {loading ? (
+                      <Loader2 size={18} className="animate-spin opacity-70" />
+                    ) : (
+                      'No commits to display.'
+                    )}
                   </div>
-                  {/* Explicit "See more" pagination (below the spacer, in normal flow) —
-                      the primary load-more trigger; the near-bottom auto-load in
-                      `onScroll` is just a gentle assist on top of this. Uses
-                      `aria-disabled` + pointer-events (NOT the `disabled` attribute) so a
-                      focused click never forces a blur — disabling a focused control
-                      makes the browser revert focus to <body>, which drags the nearest
-                      scrollable ancestor's scrollTop back toward 0 as a side effect
-                      (the old "teleports to top" bug). */}
-                  {hasMore && (
-                    <div className="flex justify-center py-3">
-                      <button
-                        type="button"
-                        onClick={handleLoadMore}
-                        aria-disabled={loading}
-                        className={`flex items-center gap-1.5 rounded bg-koma-accent px-3.5 py-1.5 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 ${
-                          loading ? 'pointer-events-none opacity-60' : ''
-                        }`}
-                      >
-                        {loading && <Loader2 size={12} className="animate-spin" />}
-                        See more
-                      </button>
+                ) : (
+                  <>
+                    {/* Spacer sized to the FULL list; visible rows absolutely placed. */}
+                    <div style={{ height: totalH }} className="relative">
+                      {visible.map((row, i) => {
+                        const globalIdx = start + i
+                        return (
+                          <div key={row.sha} className="absolute inset-x-0" style={{ top: globalIdx * ROW_H }}>
+                            <GraphRow
+                              row={row}
+                              laneCount={laneCount}
+                              isHead={row.sha === head}
+                              selected={row.sha === selectedSha}
+                              dim={hoveredSha !== null && hoveredSha !== row.sha}
+                              animate={!animatedRef.current.has(row.sha)}
+                              staggerIndex={i}
+                              onSelect={onSelect}
+                              onHover={onHover}
+                              onContextMenu={onRowContextMenu}
+                              onRefContextMenu={onRefContextMenu}
+                              draggedBranch={draggedBranch}
+                              dropHoverId={dropHoverId}
+                              onBranchDragStart={handleBranchDragStart}
+                              onBranchDragEnd={handleBranchDragEnd}
+                              onDropHover={handleDropHover}
+                              onRebaseDrop={handleRebaseDrop}
+                            />
+                          </div>
+                        )
+                      })}
                     </div>
-                  )}
+                    {/* Explicit "See more" pagination (below the spacer, in normal flow) —
+                        the primary load-more trigger; the near-bottom auto-load in
+                        `onScroll` is just a gentle assist on top of this. Uses
+                        `aria-disabled` + pointer-events (NOT the `disabled` attribute) so a
+                        focused click never forces a blur — disabling a focused control
+                        makes the browser revert focus to <body>, which drags the nearest
+                        scrollable ancestor's scrollTop back toward 0 as a side effect
+                        (the old "teleports to top" bug). */}
+                    {hasMore && (
+                      <div className="flex justify-center py-3">
+                        <button
+                          type="button"
+                          onClick={handleLoadMore}
+                          aria-disabled={loading}
+                          className={`flex items-center gap-1.5 rounded bg-koma-accent px-3.5 py-1.5 text-[12px] font-semibold text-koma-bg transition-opacity hover:opacity-90 ${
+                            loading ? 'pointer-events-none opacity-60' : ''
+                          }`}
+                        >
+                          {loading && <Loader2 size={12} className="animate-spin" />}
+                          See more
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {selectedSha && (
+                <>
+                  <div
+                    onMouseDown={startDetailResize}
+                    className="h-[5px] flex-none cursor-ns-resize border-t border-koma-border hover:bg-koma-grip"
+                  />
+                  <div style={{ height: detailH }} className="min-h-0 flex-none bg-koma-panel2">
+                    <GraphDetail />
+                  </div>
                 </>
               )}
             </div>
-
-            {selectedSha && (
-              <>
-                <div
-                  onMouseDown={startDetailResize}
-                  className="h-[5px] flex-none cursor-ns-resize border-t border-koma-border hover:bg-koma-grip"
-                />
-                <div style={{ height: detailH }} className="min-h-0 flex-none bg-koma-panel2">
-                  <GraphDetail />
-                </div>
-              </>
-            )}
           </div>
-        </>
+        </div>
       )}
 
       {graphMode === 'bubble' && (
