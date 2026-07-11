@@ -185,6 +185,10 @@ pub(super) struct PushPalette {
     pub(super) accent: String,
     pub(super) dim: String,
     pub(super) panel: String,
+    pub(super) warn: String,
+    pub(super) success: String,
+    pub(super) info: String,
+    pub(super) error: String,
 }
 
 /// One named palette in the [`PushEnvelope::Config`] `palettes` catalogue — the GUI

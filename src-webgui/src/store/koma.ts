@@ -50,6 +50,10 @@ export type PaletteColors = {
   accent: string
   dim: string
   panel: string
+  warn: string
+  success: string
+  info: string
+  error: string
 }
 
 // One named palette in the host's theme registry, WITH resolved colours (host
@@ -1659,6 +1663,10 @@ const initialPalette: PaletteColors = {
   accent: '#39ff14',
   dim: '#adadad',
   panel: '#2b2f38',
+  warn: '#ffb43c',
+  success: '#00c853',
+  info: '#50c8ff',
+  error: '#ff3c3c',
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -1681,6 +1689,10 @@ function applyPaletteVars(palette: PaletteColors) {
   setVar('--koma-accent', palette?.accent)
   setVar('--koma-dim', palette?.dim)
   setVar('--koma-panel', palette?.panel)
+  setVar('--koma-warn', palette?.warn)
+  setVar('--koma-success', palette?.success)
+  setVar('--koma-info', palette?.info)
+  setVar('--koma-error', palette?.error)
 }
 
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding

@@ -102,6 +102,10 @@ pub(super) fn push_palette_from_config(cfg: &crate::model::app_config::AppConfig
         accent: color_hex(pal.accent, "#39ff14"),
         dim: color_hex(pal.dim, "#adadad"),
         panel: color_hex(pal.panel, "#2b2f38"),
+        warn: color_hex(pal.warn, "#ffb43c"),
+        success: color_hex(pal.success, "#00c853"),
+        info: color_hex(pal.info, "#50c8ff"),
+        error: color_hex(pal.error, "#ff3c3c"),
     }
 }
 
