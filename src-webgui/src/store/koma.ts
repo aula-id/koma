@@ -382,6 +382,12 @@ export type BranchInfo = {
   isCurrent: boolean
 }
 
+// One repo entry in a RepoList reply — host `RepoEntry` (multi-repo support,
+// `rename_all = "camelCase"`). `root` is the repo's absolute workdir root
+// (also the `SetActiveRepo` request's `root` value); `name` is its display
+// label (basename) for the repo picker.
+export type RepoEntry = { root: string; name: string }
+
 // One stash entry in a StashList reply — host `StashEntry` (git_stash.rs,
 // `rename_all = "camelCase"`) — GK4c. `index` is the `stash@{N}` slot number
 // (0 is the most-recently-pushed stash); `message` is everything after the
@@ -959,6 +965,11 @@ export type PushEnvelope =
       branches: BranchInfo[]
       error: string | null
     }
+  // Reply to GuiReq GitRepos (multi-repo support) — every detected repository
+  // root in the workspace + which one is currently active. Carries
+  // `RepoEntry[]` verbatim (already camelCase) flattened onto the envelope.
+  // ALWAYS a reply so the picker never hangs loading.
+  | { k: 'RepoList'; repos: RepoEntry[]; active: string | null }
   // Reply to GuiReq GitStashList (GK4c) — every `git stash list` entry for the
   // toolbar's Stash/Pop buttons. Carries `StashListResult` verbatim (already
   // camelCase) flattened onto the envelope. ALWAYS a reply so a non-repo
@@ -1275,6 +1286,14 @@ type KomaState = {
   // `refreshBranches()` until the matching `BranchList` reply lands, so the
   // popover can show a spinner instead of a stale/empty list.
   branchesLoading: boolean
+  // Every detected repository root in the workspace (multi-repo support) —
+  // latest RepoList push. REPLACED wholesale on each push; empty until the
+  // first reply lands. Global (not per-session), mirroring `branches`.
+  repos: RepoEntry[]
+  // The repo picker's currently-active root (latest RepoList push's `active`
+  // field), or `null` when no repo has been detected/selected yet. Drives
+  // which repo `git`/`graph`/`activity` describe.
+  activeRepoRoot: string | null
   // The toolbar's authoritative stash list (latest StashList push, GK4c) —
   // every `git stash list` entry, newest (index 0) first. REPLACED wholesale
   // on each push; empty until the first reply lands. Global (not
@@ -1413,6 +1432,14 @@ type KomaState = {
   // remote-tracking branch. Sets `branchesLoading` before firing the req;
   // cleared by the matching `BranchList` reply.
   refreshBranches: () => void
+  // Repo picker (multi-repo support): re-fetch every detected repository root
+  // + which one is active.
+  refreshRepos: () => void
+  // Repo picker pick: switch the active repo to `root`. Optimistically
+  // updates `activeRepoRoot` + clears the stale graph/activity slices
+  // (preserving the graph view mode) before telling the host — each panel's
+  // `activeRepoRoot`-keyed effect then refetches for the newly-active repo.
+  setActiveRepo: (root: string) => void
   // Toolbar "Stash" button (GK4c): `git stash push`. Reply lands as a
   // one-shot GitOp push (toasted either way); the GitOp reducer follows up
   // with `refreshStashes()` (the working-tree change itself is already
@@ -1751,6 +1778,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
+  repos: [],
+  activeRepoRoot: null,
   stashes: [],
 
   push: (env) => {
@@ -1821,6 +1850,8 @@ export const useKoma = create<KomaState>((set, get) => ({
                   git: initialGit,
                   activity: initialActivity,
                   graph: { ...initialGraph, graphMode: s.graph.graphMode },
+                  repos: [],
+                  activeRepoRoot: null,
                 }
               : {}),
           }
@@ -1837,6 +1868,7 @@ export const useKoma = create<KomaState>((set, get) => ({
         // pill and the Settings tab (if open) rehydrate for the NEW session
         // instead of showing the old one's values until Settings is reopened.
         if (switched) get().req({ r: 'GetSettings' })
+        if (switched) get().refreshRepos()
         break
       }
       case 'Switching':
@@ -2374,6 +2406,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       case 'BranchList':
         set(() => ({ branches: env.branches, branchesLoading: false }))
         break
+      case 'RepoList':
+        set(() => ({ repos: env.repos, activeRepoRoot: env.active }))
+        break
       case 'StashList':
         set(() => ({ stashes: env.entries }))
         break
@@ -2619,6 +2654,17 @@ export const useKoma = create<KomaState>((set, get) => ({
   refreshBranches: () => {
     set(() => ({ branchesLoading: true }))
     get().req({ r: 'GitBranchList' })
+  },
+  refreshRepos: () => {
+    get().req({ r: 'GitRepos' })
+  },
+  setActiveRepo: (root) => {
+    set((s) => ({
+      activeRepoRoot: root,
+      graph: { ...initialGraph, graphMode: s.graph.graphMode },
+      activity: initialActivity,
+    }))
+    get().req({ r: 'SetActiveRepo', root })
   },
   gitStash: () => {
     get().req({ r: 'GitStash' })
