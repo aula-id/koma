@@ -340,6 +340,22 @@ declare global {
     // Delete keypair `name` (both halves, best-effort). Same reply pattern as
     // KeyGenerate.
     | { r: 'KeyDelete'; name: string }
+    // Branch-switcher popover (footer/GitPanel) or graph context menu opened
+    // (G4): fetch every local + remote-tracking branch. Serviced ENTIRELY
+    // host-side — works regardless of attach state. Reply lands as the
+    // BranchList push envelope.
+    | { r: 'GitBranchList' }
+    // Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
+    // only, never `--force`): switch (or detach onto) `ref` — a branch name or
+    // a sha. Reply lands as a one-shot GitOp push (`op: 'checkout'`),
+    // immediately followed by a fresh GitStatus push.
+    | { r: 'GitCheckout'; ref: string }
+    // Branch-switcher "+ Create new branch" / graph "Create branch here…"
+    // (G4 — SAFE only): create branch `name` from `start` (`null` = current
+    // HEAD), optionally switching to it immediately (`checkout`). Reply lands
+    // as a one-shot GitOp push (`op: 'createBranch'`), immediately followed by
+    // a fresh GitStatus push.
+    | { r: 'GitCreateBranch'; name: string; start: string | null; checkout: boolean }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

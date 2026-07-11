@@ -1,5 +1,6 @@
-import { Activity, FoldVertical, GitBranch } from 'lucide-react'
+import { Activity, FoldVertical } from 'lucide-react'
 import { useKoma, visiblePlanTodos } from '../store/koma'
+import { BranchSwitcher } from './BranchSwitcher'
 
 // Human-compact token count: >=10_000 collapses to "12.4k" (one decimal,
 // trailing ".0" trimmed); below that the raw integer is shown. Local helper —
@@ -67,16 +68,11 @@ export function UsageFooter() {
       {/* Activity pulse — non-interactive, hidden when nothing runs */}
       {hasActivity && <Activity size={12} className="flex-none animate-pulse text-koma-accent" />}
 
-      {/* Current-branch indicator — subtle, non-interactive. Hidden entirely
-          outside a git repo (no error tolerance — a stale/unresolved branch
-          name is worse than no indicator) and on detached HEAD (no branch
-          name to show). */}
-      {!gitError && gitBranch && !gitDetached && (
-        <span className="flex flex-none items-center gap-1 opacity-70" title={`git branch: ${gitBranch}`}>
-          <GitBranch size={11} className="flex-none" />
-          <span className="max-w-[140px] truncate">{gitBranch}</span>
-        </span>
-      )}
+      {/* Current-branch indicator — a clickable branch-switcher trigger.
+          Hidden entirely outside a git repo (no error tolerance — a
+          stale/unresolved branch name is worse than no indicator) and on
+          detached HEAD (no branch name to show as the trigger label). */}
+      {!gitError && gitBranch && !gitDetached && <BranchSwitcher variant="footer" />}
 
       <div className="flex-1" />
 

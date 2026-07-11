@@ -18,6 +18,7 @@ import {
   Maximize2,
 } from 'lucide-react'
 import { AccordionSection } from '../AccordionSection'
+import { BranchSwitcher } from '../BranchSwitcher'
 import { GitGraphMini } from '../GitGraphMini'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
@@ -323,6 +324,7 @@ export function GitPanel() {
             {git.behind}
           </span>
         )}
+        <BranchSwitcher variant="icon" />
         <span className="flex-1" />
         <button
           type="button"

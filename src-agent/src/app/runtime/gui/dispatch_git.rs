@@ -73,6 +73,26 @@ pub(super) fn git_push(ctl: &Sender<HostCtl>) {
     let _ = ctl.send(HostCtl::GitPush);
 }
 
+/// `GuiReq::GitBranchList` (G4).
+pub(super) fn git_branch_list(ctl: &Sender<HostCtl>) {
+    let _ = ctl.send(HostCtl::GitBranchList);
+}
+
+/// `GuiReq::GitCheckout` (G4).
+pub(super) fn git_checkout(ctl: &Sender<HostCtl>, ref_name: String) {
+    let _ = ctl.send(HostCtl::GitCheckout { ref_name });
+}
+
+/// `GuiReq::GitCreateBranch` (G4).
+pub(super) fn git_create_branch(
+    ctl: &Sender<HostCtl>,
+    name: String,
+    start: Option<String>,
+    checkout: bool,
+) {
+    let _ = ctl.send(HostCtl::GitCreateBranch { name, start, checkout });
+}
+
 /// `GuiReq::KeyList`.
 pub(super) fn key_list(ctl: &Sender<HostCtl>) {
     let _ = ctl.send(HostCtl::KeyList);

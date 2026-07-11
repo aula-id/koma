@@ -356,6 +356,16 @@ export type GitStatus = {
 // (every struct `rename_all = "camelCase"`), matched field-for-field so a wire
 // mismatch can't silently read `undefined` at runtime. -----------------------
 
+// One branch entry in a BranchList reply — host `BranchInfo` (git_branch.rs,
+// `rename_all = "camelCase"`) — G4. `kind` is "local" (`refs/heads/…`) or
+// "remote" (`refs/remotes/…`, e.g. `origin/main`); `isCurrent` marks the
+// single branch HEAD currently points at (never true for a remote entry).
+export type BranchInfo = {
+  name: string
+  kind: 'local' | 'remote'
+  isCurrent: boolean
+}
+
 // One ref (branch/tag/HEAD pointer) decorating a commit — host `GitRef`. `kind`
 // classifies it off the FULL ref path host-side (a distinct chip colour per
 // kind); `isHead` marks the single `HEAD -> …` current-branch pointer.
@@ -898,6 +908,15 @@ export type PushEnvelope =
       op: string
       error: string | null
     }
+  // Reply to GuiReq GitBranchList (G4) — every local + remote-tracking branch
+  // for the branch-switcher popover / graph context menu. Carries
+  // `BranchListResult` verbatim (already camelCase) flattened onto the
+  // envelope. ALWAYS a reply so the picker never hangs loading.
+  | {
+      k: 'BranchList'
+      branches: BranchInfo[]
+      error: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1167,6 +1186,16 @@ type KomaState = {
   // itself never carries key material). Named distinctly from the `keyReveal`
   // ACTION below (same-name field+method would collide in this one object type).
   keyRevealResult: KeyReveal | null
+  // The branch-switcher popover (footer/GitPanel) + graph context menu's
+  // authoritative branch list (latest BranchList push) — every local +
+  // remote-tracking branch, current one flagged. REPLACED wholesale on each
+  // push; empty until the first reply lands. Global (not per-session),
+  // mirroring `git`/`keys` (G4).
+  branches: BranchInfo[]
+  // Transient (not host-authoritative) picker-loading flag: `true` from
+  // `refreshBranches()` until the matching `BranchList` reply lands, so the
+  // popover can show a spinner instead of a stale/empty list.
+  branchesLoading: boolean
   // Rust -> JS: apply an authoritative push envelope. Always REPLACES the
   // relevant slice fields — never accumulates/appends.
   // The GitKraken-style commit-graph tab's slice (G2). See GraphSlice.
@@ -1283,6 +1312,18 @@ type KomaState = {
   gitFetch: () => void
   gitPull: () => void
   gitPush: () => void
+  // Branch-switcher popover / graph context menu (G4): re-fetch every local +
+  // remote-tracking branch. Sets `branchesLoading` before firing the req;
+  // cleared by the matching `BranchList` reply.
+  refreshBranches: () => void
+  // Switch (or detach onto) `ref` — a branch name or a sha. SAFE only (never
+  // `--force`); the reply lands as a one-shot GitOp push (toasted either way)
+  // followed by a fresh GitStatus AND a graph refresh (HEAD moved).
+  gitCheckout: (ref: string) => void
+  // Create branch `name` from `start` (`null` = current HEAD), optionally
+  // switching to it immediately (`checkout`). Same reply pattern as
+  // `gitCheckout`.
+  gitCreateBranch: (name: string, start: string | null, checkout: boolean) => void
   // Settings "SSH Keys" section: re-fetch the vault's key list. Fired on the
   // section opening/re-activating.
   refreshKeys: () => void
@@ -1546,6 +1587,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   commitDraft: '',
   keys: initialKeys,
   keyRevealResult: null,
+  branches: [],
+  branchesLoading: false,
 
   push: (env) => {
     switch (env.k) {
@@ -2050,20 +2093,28 @@ export const useKoma = create<KomaState>((set, get) => ({
         // Fetch/pull/push are the only ops that ever set `remoteBusy`; clearing
         // it unconditionally on every OTHER op is a harmless no-op (already null).
         const isRemote = env.op === 'fetch' || env.op === 'pull' || env.op === 'push'
+        // The G4 branch ops (branch-switcher popover / graph context menu):
+        // checkout (switch/detach) and createBranch. Both get a success toast
+        // too — unlike the silent local mutations (stage/unstage/discard/
+        // commit) — since HEAD/the branch list just changed and nothing else
+        // in the UI necessarily reflects that on its own.
+        const isBranchOp = env.op === 'checkout' || env.op === 'createBranch'
         // Surface a failed mutation the same de-duped way the Status case raises
         // a toast: only start a NEW toast when the text actually differs from
         // what's already showing, so a repeated failure (e.g. clicking "Stage
         // All" twice on a locked index) doesn't reset the auto-dismiss timer. A
-        // SUCCESSFUL remote op ALSO gets a toast — a short confirmation using the
-        // host's own `message` if it sent one, else a generic "<op> complete" —
-        // so the sync toolbar's outcome is visible even when nothing else in the
+        // SUCCESSFUL remote/branch op ALSO gets a toast — a short confirmation
+        // using the host's own `message` if it sent one, else a generic "<op>
+        // complete" — so the outcome is visible even when nothing else in the
         // UI changes (e.g. a fetch with nothing new). Local mutations
         // (stage/unstage/discard/commit) stay silent on success, unchanged.
         const text = env.error
           ? `git ${env.op}: ${env.error}`
           : isRemote
             ? (env.message ?? `${env.op} complete`)
-            : null
+            : isBranchOp
+              ? (env.op === 'checkout' ? 'switched branch' : 'branch created')
+              : null
         const kind: 'error' | 'success' = env.error ? 'error' : 'success'
         set((s) => {
           const raise = !!text && text !== s.ui.toast?.text
@@ -2081,10 +2132,24 @@ export const useKoma = create<KomaState>((set, get) => ({
             ...(isRemote ? { remoteBusy: null } : {}),
           }
         })
+        // A successful checkout/createBranch moved HEAD (and possibly the
+        // branch list) — refresh BOTH the footer/panel branch status and the
+        // commit graph (its HEAD ring) so neither is left stale. The host
+        // ALSO auto-follows every GitOp with its own fresh GitStatus push
+        // (mirrors every other mutation); this explicit call just guarantees
+        // it even if that race lands oddly, and always drives the graph
+        // refresh (which the host never pushes unprompted).
+        if (isBranchOp && env.ok) {
+          get().refreshGitStatus()
+          get().refreshGraph()
+        }
         break
       }
       case 'KeyList':
         set(() => ({ keys: env.keys }))
+        break
+      case 'BranchList':
+        set(() => ({ branches: env.branches, branchesLoading: false }))
         break
       case 'KeyReveal':
         set((s) => {
@@ -2302,6 +2367,18 @@ export const useKoma = create<KomaState>((set, get) => ({
   gitPush: () => {
     set(() => ({ remoteBusy: 'push' }))
     get().req({ r: 'GitPush' })
+  },
+  refreshBranches: () => {
+    set(() => ({ branchesLoading: true }))
+    get().req({ r: 'GitBranchList' })
+  },
+  gitCheckout: (ref) => {
+    if (!ref.trim()) return
+    get().req({ r: 'GitCheckout', ref })
+  },
+  gitCreateBranch: (name, start, checkout) => {
+    if (!name.trim()) return
+    get().req({ r: 'GitCreateBranch', name: name.trim(), start, checkout })
   },
   refreshKeys: () => {
     get().req({ r: 'KeyList' })

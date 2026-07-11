@@ -135,7 +135,7 @@ pub(super) struct CommitDiffResult {
 /// error, just wrong data) and any `..`/`...` substring (a valid RANGE syntax like
 /// `<root>..<HEAD>` that makes `git show`/`git diff-tree` emit multiple records and
 /// corrupts the fixed-field-count parse downstream).
-fn valid_commit_ref(s: &str) -> bool {
+pub(super) fn valid_commit_ref(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
         && !s.contains("..")

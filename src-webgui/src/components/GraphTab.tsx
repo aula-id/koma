@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { GitGraph, Loader2, RefreshCw } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import type { GitRef } from '../store/koma'
 import { computeGitGraph } from '../lib/gitGraphLayout'
 import { GraphRow, ROW_H } from './GraphRow'
 import { GraphDetail } from './GraphDetail'
+import { GraphContextMenu, type GraphMenuTarget } from './GraphContextMenu'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
 const OVERSCAN = 8
@@ -42,6 +44,10 @@ export default function GraphTab() {
   const [viewportH, setViewportH] = useState(0)
   const [hoveredSha, setHoveredSha] = useState<string | null>(null)
   const [detailH, setDetailH] = useState(240)
+  // The right-click context menu's position + target (G4): `null` when
+  // closed. Left in local state (not the store) — purely a transient UI
+  // overlay, unlike selectedSha/commits which are host-authoritative.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: GraphMenuTarget } | null>(null)
 
   // Track the scroller's height so the window math has a real viewport (also
   // re-measures when the detail split resizes the list area).
@@ -84,6 +90,13 @@ export default function GraphTab() {
 
   const onSelect = useCallback((sha: string) => selectCommit(sha), [selectCommit])
   const onHover = useCallback((sha: string | null) => setHoveredSha(sha), [])
+  const onRowContextMenu = useCallback((e: ReactMouseEvent, sha: string) => {
+    setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: 'commit', sha } })
+  }, [])
+  const onRefContextMenu = useCallback((e: ReactMouseEvent, name: string, refKind: GitRef['kind']) => {
+    setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: 'ref', name, refKind } })
+  }, [])
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), [])
 
   // Smooth-scroll a freshly-selected row into view when it's off-screen (a parent
   // chip click can jump far). Centres it roughly in the viewport.
@@ -179,6 +192,8 @@ export default function GraphTab() {
                         staggerIndex={i}
                         onSelect={onSelect}
                         onHover={onHover}
+                        onContextMenu={onRowContextMenu}
+                        onRefContextMenu={onRefContextMenu}
                       />
                     </div>
                   )
@@ -214,6 +229,10 @@ export default function GraphTab() {
           </>
         )}
       </div>
+
+      {ctxMenu && (
+        <GraphContextMenu x={ctxMenu.x} y={ctxMenu.y} target={ctxMenu.target} onClose={closeCtxMenu} />
+      )}
     </div>
   )
 }
