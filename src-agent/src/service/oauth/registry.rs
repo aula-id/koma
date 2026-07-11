@@ -99,6 +99,30 @@ pub const CLAUDE_PORT: u16 = 54545;
 pub const CLAUDE_REFRESH_LEAD_SECS: u64 = CODEX_REFRESH_LEAD_SECS;
 pub const CLAUDE_MAX_REFRESH_AGE_SECS: u64 = CODEX_MAX_REFRESH_AGE_SECS;
 
+// --- Koma (koma.run) OAuth ---
+
+/// koma.run's native-client OAuth: RFC 8252 loopback + PKCE S256, no `client_id`
+/// (the client is identified purely by PKCE + loopback redirect) and no `scope`.
+pub const KOMA_AUTHORIZE_URL: &str = "https://koma.run/api/v1/auth/oauth/authorize";
+pub const KOMA_TOKEN_URL: &str = "https://koma.run/api/v1/auth/oauth/token";
+/// Not called yet — no logout/revoke UI wires this flow's connection deletion
+/// through to the server; `AppConfig::oauth_conns` removal is purely local. Kept
+/// for the future logout affordance.
+#[allow(dead_code)]
+pub const KOMA_REVOKE_URL: &str = "https://koma.run/api/v1/auth/oauth/revoke";
+pub const KOMA_REDIRECT: &str = "http://127.0.0.1:51004/cb";
+pub const KOMA_PORT: u16 = 51004;
+
+/// Refresh lead / max-refresh-age windows for koma.run's rotating refresh token.
+/// koma.run access tokens are short-lived (24h, see the token response's
+/// `expires_in`), so a tighter lead than Codex's multi-day one (5 min, matching
+/// xAI's window).
+pub const KOMA_REFRESH_LEAD_SECS: u64 = 300;
+/// koma.run's refresh token itself expires in 30 days (`refresh_expires_in`);
+/// cap silent retries at 20 hours since the last successful refresh, matching
+/// Codex's style of a conservative fraction of that window.
+pub const KOMA_MAX_REFRESH_AGE_SECS: u64 = 20 * 3_600;
+
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
 /// into the chat-request resolution boundary.
 pub struct OAuthProviderMeta {
@@ -123,11 +147,16 @@ pub struct OAuthProviderMeta {
 /// (`app::mode::settings` / `app::mode::onboard`) stays as-is this wave; folding it onto
 /// this same source is a future dedup.
 pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
-    let mut providers: Vec<(&'static str, &'static str, &'static str)> =
-        [OAuthProvider::Codex, OAuthProvider::Kilocode, OAuthProvider::Xai, OAuthProvider::ClaudeAI]
-            .iter()
-            .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
-            .collect();
+    let mut providers: Vec<(&'static str, &'static str, &'static str)> = [
+        OAuthProvider::Codex,
+        OAuthProvider::Kilocode,
+        OAuthProvider::Xai,
+        OAuthProvider::ClaudeAI,
+        OAuthProvider::KomaRun,
+    ]
+    .iter()
+    .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
+    .collect();
     providers.push(("codex_paste", "Codex paste", "paste"));
     providers
 }
@@ -152,6 +181,12 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
         },
         OAuthProvider::ClaudeAI => OAuthProviderMeta {
             chat_endpoint: "https://api.anthropic.com",
+            catalogue_endpoint: "",
+        },
+        // account login; not a model provider yet — placeholders until a future
+        // extension wires koma.run as an actual chat/catalogue backend.
+        OAuthProvider::KomaRun => OAuthProviderMeta {
+            chat_endpoint: "https://koma.run/api/v1",
             catalogue_endpoint: "",
         },
     }

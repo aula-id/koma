@@ -203,6 +203,7 @@ pub(super) fn shadow_oauth_provider(t: &str) -> crate::model::app_config::OAuthP
         "kilocode" => crate::model::app_config::OAuthProvider::Kilocode,
         "xai" => crate::model::app_config::OAuthProvider::Xai,
         "claudeai" => crate::model::app_config::OAuthProvider::ClaudeAI,
+        "komarun" => crate::model::app_config::OAuthProvider::KomaRun,
         _ => crate::model::app_config::OAuthProvider::Codex,
     }
 }

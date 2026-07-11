@@ -227,6 +227,10 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         // xAI is a plain OpenAI-compatible chat endpoint (bearer JWT).
         OAuthProvider::Xai => ApiType::OpenAiCompatible,
         OAuthProvider::ClaudeAI => ApiType::AnthropicCompatible,
+        // Account login only — not a model provider yet (a future extension will
+        // wire koma.run as an actual chat backend). Safe placeholder wire type;
+        // never actually hit today since no ModelEntry references this conn.
+        OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
     };
     let account_id = match conn.provider {
         OAuthProvider::Codex => conn.account_id.clone(),
@@ -238,6 +242,8 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::Xai => String::new(),
         // Claude has no org/account header concept either — keep empty, same as xAI.
         OAuthProvider::ClaudeAI => String::new(),
+        // Koma account login has no org/account header concept either.
+        OAuthProvider::KomaRun => String::new(),
     };
     Some(Resolved {
         model_id: entry.model_id.clone(),

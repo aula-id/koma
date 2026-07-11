@@ -16,6 +16,7 @@ pub mod claude;
 pub mod codex;
 pub mod jwt;
 pub mod kilo;
+pub mod komarun;
 pub mod loopback;
 pub mod manager;
 pub mod pkce;
