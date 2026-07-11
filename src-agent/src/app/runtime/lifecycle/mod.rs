@@ -221,16 +221,46 @@ fn build_startup(
     // With no installed extensions this builds an empty, inert manager and spawns
     // nothing — byte-identical to a build without the extension host.
     let ext = crate::app::ext::ExtHostManager::new(&handle);
+    // Captured for the registration hook below: `Option<Arc<McpManager>>` is
+    // `None` in `--daemon` mode at this point (`run_daemon` builds its — possibly
+    // `Proxy` — manager AFTER `build_startup` returns), so extension tools are
+    // simply not registered for that process yet; see
+    // `app::ext::register::register_contributions`'s docs for the "later wave"
+    // note on routing extension tools through the global MCP daemon's proxy wire.
+    let mcp_for_ext = state.rest.mcp_manager.clone();
     for installed in &state.rest.config.installed_extensions {
         if installed.enabled && installed.kind == "daemon" {
             let mgr = Arc::clone(&ext);
             let installed = installed.clone();
+            let mcp_for_ext = mcp_for_ext.clone();
             handle.spawn_blocking(move || {
-                if let Err(e) = mgr.ensure_started(&installed) {
-                    crate::model::store::append_global_error_log(
-                        "extensions",
-                        &format!("failed to start extension '{}': {e:#}", installed.id),
-                    );
+                match mgr.ensure_started(&installed) {
+                    Ok(()) => {
+                        // Wire `contributes.tools` (extension-owned MCP) now that the
+                        // daemon is live. `contributes.sub_agents` needs no action
+                        // here — `AgentRegistry::load` picks it up on its own; see
+                        // `register_contributions`'s docs. A future install/enable
+                        // command handler should call this too.
+                        if let Err(e) = crate::app::ext::register::register_contributions(
+                            &installed,
+                            mcp_for_ext.as_ref(),
+                            &mgr,
+                        ) {
+                            crate::model::store::append_global_error_log(
+                                "extensions",
+                                &format!(
+                                    "failed to register contributions for '{}': {e:#}",
+                                    installed.id
+                                ),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        crate::model::store::append_global_error_log(
+                            "extensions",
+                            &format!("failed to start extension '{}': {e:#}", installed.id),
+                        );
+                    }
                 }
             });
         }

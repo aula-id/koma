@@ -18,7 +18,7 @@ use crate::ipc::mcp_proto::{McpRequest, McpResponse};
 use crate::model::app_config::McpServerEntry;
 
 use super::util::{namespace_tools, sanitize_server_name};
-use super::{connect_one, McpBackend, McpManager, ServerConn, Snapshot};
+use super::{connect_one, McpBackend, McpManager, ServerConn, Snapshot, ToolSource};
 
 impl McpManager {
     /// Build a LOCAL manager and kick off a background connect for every ENABLED
@@ -40,6 +40,7 @@ impl McpManager {
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
             advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
             advertise_cache_at: Mutex::new(None),
+            ext_manager: Mutex::new(None),
         });
 
         for server in servers {
@@ -91,6 +92,7 @@ impl McpManager {
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
             advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
             advertise_cache_at: Mutex::new(None),
+            ext_manager: Mutex::new(None),
         }))
     }
 
@@ -272,7 +274,7 @@ impl McpManager {
                             // it's cancelled below; insert nothing.
                         } else if snap.tools.iter().any(|t| {
                             t.namespaced.starts_with(&my_full_prefix)
-                                && t.server_uuid != server.uuid
+                                && !matches!(&t.source, ToolSource::McpServer(u) if u == &server.uuid)
                         }) {
                             // Another server already occupies this sanitized prefix.
                             // Advertising these tools would let execute_blocking

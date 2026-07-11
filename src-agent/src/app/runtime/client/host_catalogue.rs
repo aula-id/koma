@@ -122,6 +122,7 @@ pub(super) fn build_host_agents_values() -> (
                 AgentSource::Session => "session",
                 AgentSource::Global => "global",
                 AgentSource::Builtin => "builtin",
+                AgentSource::Extension => "extension",
             }
             .to_string(),
             model_uuid: ag.model_uuid.clone(),

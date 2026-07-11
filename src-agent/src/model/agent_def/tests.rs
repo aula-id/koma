@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::def::{AgentDef, AgentSource};
 use super::parse::{parse_agent, split_frontmatter, validate_agent_name};
-use super::registry::builtin_agents;
+use super::registry::{builtin_agents, merge_extension_sub_agents};
 
 #[test]
 fn parses_full_frontmatter_and_body() {
@@ -191,6 +191,79 @@ fn name_sanitization_rules() {
     // Illegal chars rejected.
     assert!(validate_agent_name("a b").is_err());
     assert!(validate_agent_name("a.b").is_err());
+}
+
+/// Wave B: an installed + enabled extension's `contributes.sub_agents` appears
+/// in the merged registry tagged `AgentSource::Extension`, and disappears again
+/// both on `enabled = false` and on removing the config entry entirely (the
+/// uninstall shape) — all against a temp `ext_root`, never the real `~/.koma`.
+#[test]
+fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
+    use crate::model::app_config::{AppConfig, InstalledExtension};
+
+    let tmp = std::env::temp_dir().join(format!(
+        "koma-agentdef-ext-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let ext_id = "run.koma.example.subagent-test";
+    let ext_dir = tmp.join(ext_id);
+    std::fs::create_dir_all(&ext_dir).expect("create ext dir");
+    let manifest = serde_json::json!({
+        "schema": "koma-extension/v0",
+        "id": ext_id,
+        "name": "Sub Agent Test",
+        "version": "0.0.1",
+        "tier": "free",
+        "kind": "daemon",
+        "runtime": { "exec": "bin/tool", "args": [] },
+        "contributes": {
+            "sub_agents": [
+                { "name": "Reviewer", "description": "Reviews code for style issues." }
+            ]
+        },
+        "requires": []
+    });
+    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string())
+        .expect("write manifest");
+
+    let mut config = AppConfig::default();
+    config.installed_extensions.push(InstalledExtension {
+        id: ext_id.to_string(),
+        version: "0.0.1".to_string(),
+        tier: "free".to_string(),
+        granted: vec![],
+        enabled: true,
+        kind: "daemon".to_string(),
+        exec: "bin/tool".to_string(),
+    });
+
+    // Enabled -> the sub-agent appears, name lowercased, tagged Extension.
+    let mut agents: HashMap<String, AgentDef> = HashMap::new();
+    merge_extension_sub_agents(&config, &tmp, &mut agents);
+    assert!(agents.contains_key("reviewer"), "sub-agent should appear when enabled");
+    assert_eq!(agents["reviewer"].source, AgentSource::Extension);
+    assert_eq!(agents["reviewer"].description, "Reviews code for style issues.");
+    assert_eq!(agents["reviewer"].conditions, "Reviews code for style issues.");
+
+    // Disabled (still installed) -> gone.
+    config.installed_extensions[0].enabled = false;
+    let mut agents_disabled: HashMap<String, AgentDef> = HashMap::new();
+    merge_extension_sub_agents(&config, &tmp, &mut agents_disabled);
+    assert!(
+        !agents_disabled.contains_key("reviewer"),
+        "sub-agent must disappear once its extension is disabled"
+    );
+
+    // Uninstalled (config entry removed entirely) -> also gone.
+    config.remove_extension_by_id(ext_id);
+    let mut agents_uninstalled: HashMap<String, AgentDef> = HashMap::new();
+    merge_extension_sub_agents(&config, &tmp, &mut agents_uninstalled);
+    assert!(
+        !agents_uninstalled.contains_key("reviewer"),
+        "sub-agent must disappear once its extension is uninstalled"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]

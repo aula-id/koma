@@ -444,6 +444,7 @@ pub fn source_label(source: AgentSource) -> &'static str {
     match source {
         AgentSource::Builtin => "built-in",
         AgentSource::Global => "global",
+        AgentSource::Extension => "extension",
         AgentSource::Session => "session",
     }
 }
