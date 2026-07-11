@@ -20,6 +20,7 @@ import {
 import { AccordionSection } from '../AccordionSection'
 import { BranchSwitcher } from '../BranchSwitcher'
 import { GitGraphMini } from '../GitGraphMini'
+import { ConflictBanner } from '../ConflictBanner'
 import { Empty } from './helpers'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
@@ -253,7 +254,7 @@ function FileRow({
 // --porcelain`'s staged/unstaged split. Discard is destructive, gated behind
 // an inline per-row (or section-wide) confirm.
 export function GitPanel() {
-  const [open, setOpen] = useState({ staged: true, unstaged: true, graph: false })
+  const [open, setOpen] = useState({ staged: true, unstaged: true, conflicts: true, graph: false })
   const [filter, setFilter] = useState('')
   // The single armed discard confirm across BOTH the per-row buttons and the
   // section-wide "Discard All Changes" action — a sentinel string for the
@@ -303,12 +304,19 @@ export function GitPanel() {
   const q = filter.trim().toLowerCase()
   const staged = q ? git.staged.filter((e) => e.path.toLowerCase().includes(q)) : git.staged
   const unstaged = q ? git.unstaged.filter((e) => e.path.toLowerCase().includes(q)) : git.unstaged
-  const clean = git.staged.length === 0 && git.unstaged.length === 0
+  const conflicted = q ? git.conflicted.filter((e) => e.path.toLowerCase().includes(q)) : git.conflicted
+  // A conflict (unmerged) file lands in NEITHER staged nor unstaged (see
+  // compute_git_status's separate "u" record handling) — without folding
+  // `conflicted` in here, an active conflict with otherwise-empty staged/
+  // unstaged lists would wrongly render "No changes" and hide the Conflicts
+  // section below.
+  const clean = git.staged.length === 0 && git.unstaged.length === 0 && git.conflicted.length === 0
   const branchLabel = git.detached ? 'detached HEAD' : (git.branch ?? '(unknown)')
   const canCommit = commitDraft.trim().length > 0 && git.staged.length > 0
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <ConflictBanner />
       <div className="flex flex-none items-center gap-1.5 border-b border-koma-border px-3 py-2 font-mono text-[12px] text-koma-fg">
         <GitBranch size={13} className="flex-none opacity-60" />
         <span className="truncate">{branchLabel}</span>
@@ -410,6 +418,21 @@ export function GitPanel() {
         <Empty>No changes</Empty>
       ) : (
         <>
+          {git.conflicted.length > 0 && (
+            <AccordionSection
+              title={`Conflicts (Merge Changes) · ${conflicted.length}`}
+              open={open.conflicts}
+              onToggle={() => setOpen((s) => ({ ...s, conflicts: !s.conflicts }))}
+            >
+              {conflicted.length === 0 ? (
+                <Empty>No matching conflicts</Empty>
+              ) : (
+                conflicted.map((e) => (
+                  <FileRow key={`c:${e.path}`} entry={e} onClick={() => openGitDiffTab(e.path, false)} />
+                ))
+              )}
+            </AccordionSection>
+          )}
           <AccordionSection
             title={staged.length === 0 ? 'Staged Changes' : `Staged Changes · ${staged.length}`}
             open={open.staged}
