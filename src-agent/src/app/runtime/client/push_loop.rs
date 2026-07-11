@@ -22,8 +22,9 @@ use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
-    push_file_diff, push_git_diff, push_git_op, push_git_status, push_key_list, push_key_op,
-    push_key_reveal, push_switching, push_usage_preview,
+    push_commit_detail, push_commit_diff, push_file_diff, push_git_diff, push_git_graph,
+    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal, push_switching,
+    push_usage_preview,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
@@ -199,6 +200,17 @@ pub(super) fn push_loop(
     // from authoritative state immediately after every op — no separate coalescing
     // needed for that follow-up.
     let (git_op_tx, git_op_rx) = std::sync::mpsc::channel::<super::git::GitOpResult>();
+
+    // --- COMMIT GRAPH / COMMIT DETAIL / COMMIT DIFF (GitGraph/GitCommitDetail/GitCommitDiff) ---
+    // Each shells out to git (blocking) — same reasoning as `GitStatus`/`GitDiff` above —
+    // so each runs on a one-shot worker thread; the loop drains completed results
+    // non-blocking and pushes each as its own envelope. No coalescing needed (each is a
+    // self-contained, per-request reply), mirroring `FileDiff`/`GitDiff`.
+    let (git_graph_tx, git_graph_rx) = std::sync::mpsc::channel::<super::git_graph::GitGraphResult>();
+    let (commit_detail_tx, commit_detail_rx) =
+        std::sync::mpsc::channel::<super::git_graph::CommitDetailResult>();
+    let (commit_diff_tx, commit_diff_rx) =
+        std::sync::mpsc::channel::<super::git_graph::CommitDiffResult>();
 
     // --- USAGE PANEL preview fetch (UsagePreview) ---
     // `compute_usage_preview` hits sqlite, blocking, so — same reasoning as `FileDiff`
@@ -437,6 +449,18 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GitPush) => {
                     git_host::spawn_git_push_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
                 }
+                // Commit-graph panel: NEVER touches the daemon (host-local, regardless of
+                // attach state) — spawn the blocking git work off this thread; results are
+                // drained + pushed below at (b-quindec)/(b-sexdec)/(b-septdec).
+                Ok(super::HostCtl::GitGraph { limit, skip }) => {
+                    git_host::spawn_git_graph_attached(git_graph_tx.clone(), current_owned.clone(), limit, skip);
+                }
+                Ok(super::HostCtl::GitCommitDetail { sha }) => {
+                    git_host::spawn_commit_detail_attached(commit_detail_tx.clone(), current_owned.clone(), sha);
+                }
+                Ok(super::HostCtl::GitCommitDiff { sha, path }) => {
+                    git_host::spawn_commit_diff_attached(commit_diff_tx.clone(), current_owned.clone(), sha, path);
+                }
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
                 // off this thread; the result is drained + pushed below at (b-quin).
@@ -579,6 +603,21 @@ pub(super) fn push_loop(
         // first (harmless either order: both are one-shot, self-contained pushes).
         while let Ok(result) = git_op_rx.try_recv() {
             push_git_op(push, result);
+        }
+
+        // --- (b-quindec) commit-graph panel: push any completed off-thread graph fetch ---
+        while let Ok(result) = git_graph_rx.try_recv() {
+            push_git_graph(push, result);
+        }
+
+        // --- (b-sexdec) commit-graph panel: push any completed off-thread detail fetch ---
+        while let Ok(result) = commit_detail_rx.try_recv() {
+            push_commit_detail(push, result);
+        }
+
+        // --- (b-septdec) commit-graph panel: push any completed off-thread commit-diff fetch ---
+        while let Ok(result) = commit_diff_rx.try_recv() {
+            push_commit_diff(push, result);
         }
 
         // --- (b-undec) SSH key vault: push any completed off-thread list fetch ---

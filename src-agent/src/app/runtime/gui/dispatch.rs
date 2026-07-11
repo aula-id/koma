@@ -304,6 +304,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitUnstage { paths } => dispatch_git::git_unstage(&ctx.ctl, paths),
         GuiReq::GitDiscard { paths } => dispatch_git::git_discard(&ctx.ctl, paths),
         GuiReq::GitCommit { message } => dispatch_git::git_commit(&ctx.ctl, message),
+        // GitKraken-style commit-graph panel: host-side graph/detail/diff fetch. Same
+        // reasoning as `GitStatus`/`GitDiff` above.
+        GuiReq::GitGraph { limit, skip } => dispatch_git::git_graph(&ctx.ctl, limit, skip),
+        GuiReq::GitCommitDetail { sha } => dispatch_git::git_commit_detail(&ctx.ctl, sha),
+        GuiReq::GitCommitDiff { sha, path } => dispatch_git::git_commit_diff(&ctx.ctl, sha, path),
         GuiReq::SetGitKey { name } => dispatch_git::set_git_key(&ctx.ctl, name),
         GuiReq::GitFetch => dispatch_git::git_fetch(&ctx.ctl),
         GuiReq::GitPull => dispatch_git::git_pull(&ctx.ctl),

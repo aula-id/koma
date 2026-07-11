@@ -20,6 +20,7 @@
 //! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
 //! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
 //! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
+//! | `git_graph` | host-side commit-graph + commit-detail + commit-diff computation |
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
@@ -45,6 +46,7 @@ mod swapper_keys;
 mod diff;
 mod git;
 mod git_remote;
+mod git_graph;
 mod keys;
 mod git_host;
 mod host;
@@ -354,6 +356,21 @@ pub(super) enum HostCtl {
     /// Host-side GIT COMMIT of whatever is currently staged. Same reasoning + reply
     /// pattern as [`GitStage`](Self::GitStage); see [`git_commit`].
     GitCommit { message: String },
+    /// Host-side COMMIT GRAPH fetch for a GitKraken-style commit-graph panel view
+    /// (`limit` rows starting `skip` back, across every ref). Same reasoning as
+    /// [`GitStatus`](Self::GitStatus): NEVER touches the daemon regardless of attach
+    /// state — the host process already has direct git access. Serviced off-thread
+    /// (git is blocking) in both host states; see [`git_graph::compute_git_graph`].
+    /// Carries no session, same as `GitStatus`.
+    GitGraph { limit: u32, skip: u32 },
+    /// Host-side COMMIT DETAIL fetch for a commit-graph row click (full metadata +
+    /// changed-file list). Same reasoning + routing as
+    /// [`GitGraph`](Self::GitGraph); see [`git_graph::compute_commit_detail`].
+    GitCommitDetail { sha: String },
+    /// Host-side COMMIT DIFF fetch for a commit-detail file-row click (`path` at
+    /// commit `sha` vs its first parent) to open a Monaco diff tab. Same reasoning +
+    /// routing as [`GitGraph`](Self::GitGraph); see [`git_graph::compute_commit_diff`].
+    GitCommitDiff { sha: String, path: String },
     /// UN-ATTACHED GUI Settings-tab fetch (a [`ClientRequest::GetSettings`] serviced by the
     /// swapper, where the ipc `live_req` daemon path is `None`). There is no foreground
     /// session pre-attach, so the swapper answers from the GLOBAL config: the active
