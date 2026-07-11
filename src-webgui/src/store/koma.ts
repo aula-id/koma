@@ -1399,6 +1399,57 @@ type AnalyticsSlice = {
   hasData: boolean
 }
 
+// Persisted layout for the VSCode-style ActivityBar's managed (built-in)
+// icons — drag-reorder + per-icon visibility toggle (Settings "Sidebar"
+// section), keyed by each item's stable `view` id (ActivityBar.ACTIVITY_BAR_ITEMS)
+// so it round-trips through localStorage across reloads. `order` need not list
+// every known id (see `resolveActivityBarOrder`) — a fresh install has an empty
+// order/hidden pair and every item defaults to its ACTIVITY_BAR_ITEMS position,
+// visible. Local-only, never touches the daemon wire.
+export type ActivityBarLayout = {
+  order: string[]
+  hidden: string[]
+}
+
+const ACTIVITY_BAR_STORAGE_KEY = 'koma.activitybar.layout'
+
+function loadActivityBarLayout(): ActivityBarLayout {
+  try {
+    const raw = localStorage.getItem(ACTIVITY_BAR_STORAGE_KEY)
+    if (!raw) return { order: [], hidden: [] }
+    const parsed = JSON.parse(raw)
+    const order = Array.isArray(parsed?.order)
+      ? parsed.order.filter((x: unknown): x is string => typeof x === 'string')
+      : []
+    const hidden = Array.isArray(parsed?.hidden)
+      ? parsed.hidden.filter((x: unknown): x is string => typeof x === 'string')
+      : []
+    return { order, hidden }
+  } catch {
+    return { order: [], hidden: [] }
+  }
+}
+
+function saveActivityBarLayout(layout: ActivityBarLayout) {
+  try {
+    localStorage.setItem(ACTIVITY_BAR_STORAGE_KEY, JSON.stringify(layout))
+  } catch {
+    /* localStorage unavailable (e.g. privacy mode) — layout just won't persist */
+  }
+}
+
+// Merge a persisted (possibly stale/partial) order against the CURRENT full id
+// list, forward-compatibly: known ids keep their saved relative order; any id
+// missing from `savedOrder` (a fresh install, or a newly-added item — e.g. a
+// future extension-contributed icon) is appended at the end, default-visible.
+// Shared by ActivityBar (bar + overflow menu) and SettingsTab (the Sidebar
+// section's toggle list) so both always agree on the effective order.
+export function resolveActivityBarOrder(savedOrder: string[], allIds: string[]): string[] {
+  const known = savedOrder.filter((id) => allIds.includes(id))
+  const missing = allIds.filter((id) => !known.includes(id))
+  return [...known, ...missing]
+}
+
 type KomaState = {
   session: SessionSlice
   hub: HubSlice
@@ -1407,6 +1458,8 @@ type KomaState = {
   config: ConfigSlice
   oauth: OAuthSlice
   store: StoreSlice
+  // Persisted ActivityBar order/visibility layout (see `ActivityBarLayout`).
+  activityBar: ActivityBarLayout
   // Live per-provider model-id catalogue, keyed by the most recent
   // ListModels reply's provider (see ModelForm's provider-select trigger).
   modelList: ModelListEntry[]
@@ -1620,6 +1673,14 @@ type KomaState = {
   // Open (or focus) the singleton Help tab (id 'help'): find-or-create, activate
   // it. No wire request — the Help tab is static content, unlike Settings.
   openHelpTab: () => void
+  // ActivityBar drag-reorder: replace the persisted order wholesale (the caller
+  // — ActivityBar's drop handler — computes the full reordered id list) and
+  // write it through to localStorage.
+  setActivityBarOrder: (order: string[]) => void
+  // ActivityBar / Settings "Sidebar" section: toggle one item's hidden state
+  // (hidden = moved into the "…" overflow menu, never removed) and write the
+  // updated layout through to localStorage.
+  setActivityBarHidden: (view: string, hidden: boolean) => void
   // Open (or focus) a per-agent editor tab: find-or-create keyed by agentId
   // (the agent's name, or `null` for a create — see the Tab union's 'agent'
   // member), activate it. Unlike Settings/Help this is NOT a singleton — a
@@ -1910,6 +1971,11 @@ const initialStore: StoreSlice = {
   pendingOp: null,
 }
 
+// Read once at module load (mirrors how `initialSession`/`initialUi` etc. seed
+// the store) — persisted ActivityBar layout, or an empty pair on a fresh
+// install / storage failure.
+const initialActivityBar: ActivityBarLayout = loadActivityBarLayout()
+
 const initialGit: GitStatus = {
   root: null,
   branch: null,
@@ -2037,6 +2103,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   config: initialConfig,
   oauth: initialOAuth,
   store: initialStore,
+  activityBar: initialActivityBar,
   modelList: initialModelList,
   routeList: initialRouteList,
   settingsValues: null,
@@ -2949,6 +3016,23 @@ export const useKoma = create<KomaState>((set, get) => ({
       const exists = s.ui.tabs.some((t) => t.id === 'help')
       const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: 'help', kind: 'help' }]
       return { ui: { ...s.ui, tabs, activeTabId: 'help' } }
+    })
+  },
+  setActivityBarOrder: (order) => {
+    set((s) => {
+      const next: ActivityBarLayout = { order, hidden: s.activityBar.hidden }
+      saveActivityBarLayout(next)
+      return { activityBar: next }
+    })
+  },
+  setActivityBarHidden: (view, hidden) => {
+    set((s) => {
+      const hiddenSet = new Set(s.activityBar.hidden)
+      if (hidden) hiddenSet.add(view)
+      else hiddenSet.delete(view)
+      const next: ActivityBarLayout = { order: s.activityBar.order, hidden: [...hiddenSet] }
+      saveActivityBarLayout(next)
+      return { activityBar: next }
     })
   },
   openAgentTab: (agentId) => {
