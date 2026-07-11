@@ -323,6 +323,54 @@ fn push_oauth_gui_terminal(state: &mut AppState, phase: &'static str, error: Opt
     }
 }
 
+/// Drain the extension GRANT-BROKER channel (`ext_call_rx`). Each
+/// [`crate::app::ext::ExtCallRequest`] was queued by an extension's socket reader
+/// task — which has no [`AppState`] access — for an `agents.*` `Call`; dispatch it
+/// against the ACTIVE session through the grant broker and answer its `reply`
+/// oneshot with the broker's JSON result. Mirrors `drain_oauth`'s background→event-
+/// loop hand-off, and its take/put-back: the paired sender lives on `AppStateRest`
+/// (plus the manager's clone) for the app's lifetime, so the channel never closes —
+/// take the receiver OUT (freeing `state` for the broker's `&mut AppState`), drain
+/// every ready request, then put it back. Non-blocking (try_recv); loops so a burst
+/// of calls doesn't lag a tick behind.
+pub(super) fn drain_ext_calls(
+    state: &mut AppState,
+    client: &Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+) -> bool {
+    let mut dirty = false;
+    // Always `Some` between ticks; the take/put-back is only to free `state`.
+    let Some(mut rx) = state.rest.ext_call_rx.take() else {
+        return false;
+    };
+    loop {
+        match rx.try_recv() {
+            Ok(req) => {
+                let crate::app::ext::ExtCallRequest {
+                    ext_id,
+                    granted,
+                    method,
+                    params,
+                    reply,
+                } = req;
+                let result = crate::app::ext::broker::handle_ext_call(
+                    state, handle, client, &ext_id, &granted, &method, params,
+                );
+                // The extension's reader task awaits this oneshot; a dropped receiver
+                // (it already timed out) just discards the reply — never a hang.
+                let _ = reply.send(result);
+                dirty = true;
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            // Sender held for the app's lifetime, so this shouldn't happen; stop
+            // draining if it ever does (put the receiver back regardless).
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+        }
+    }
+    state.rest.ext_call_rx = Some(rx);
+    dirty
+}
+
 /// Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),
 /// mirroring the `sec_health_rx` drain just above. Distinct from `warm_rx`:
 /// that channel is REPLACED per warm, so a recompute in flight when a new warm

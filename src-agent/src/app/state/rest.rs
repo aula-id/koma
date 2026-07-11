@@ -10,6 +10,7 @@
 //! `SessionRuntime`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use crate::model::app_config::AppConfig;
 use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
@@ -357,6 +358,37 @@ pub struct AppStateRest {
     /// SENDER half of `awareness_rx`, cloned into each spawned recompute task.
     /// `None` until the first recompute is spawned (see `session_mgmt::spawn_awareness_recompute`).
     pub awareness_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
+    /// SENDER half of the extension grant-broker lane. A clone is handed to
+    /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_call_tx`); each
+    /// extension's socket reader task uses it to forward an `agents.*` `Call` — which
+    /// needs `AppState`/session access the reader task lacks — into the event loop.
+    /// Created once here and held for the app's lifetime (plus the manager's clone),
+    /// so the paired receiver never observes a premature `Disconnected`.
+    pub ext_call_tx: tokio::sync::mpsc::UnboundedSender<crate::app::ext::ExtCallRequest>,
+    /// RECEIVER half of the extension grant-broker lane, drained each tick in
+    /// `service_global` (`drains::drain_ext_calls`): each [`crate::app::ext::ExtCallRequest`]
+    /// is dispatched against the ACTIVE session through the grant broker and its
+    /// oneshot answered with the broker's JSON. `Option` only so the drain can
+    /// take/put-back it (mirroring `oauth_rx`); always `Some` between ticks.
+    pub ext_call_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtCallRequest>>,
+    /// Per-extension registry of the sub-agents THAT extension has spawned,
+    /// keyed by extension id. This is the containment boundary the grant broker
+    /// (`app::ext::broker`) resolves every `agents.status`/`agents.result`/
+    /// `agents.kill` call through: an extension can only ever name an ext-facing
+    /// agent id it was itself handed by `agents.spawn`, which stays bound to the
+    /// STABLE session UUID it was spawned into — never the transient foreground
+    /// index, so a foreground switch can never redirect a poll at a different
+    /// session's (or another extension's, or the user's own) sub-agent. Entries
+    /// accumulate for the app's lifetime; see `ExtAgentRegistry`'s doc for the
+    /// full rationale. `// TODO cleanup on uninstall`: an entry should ideally be
+    /// dropped when its extension is stopped/uninstalled, but `ExtHostManager::stop`
+    /// is called both from a background reader task (frame-too-large kill,
+    /// `wire.rs`) and from `ExtHostManager`'s own methods, neither of which has
+    /// `AppState` access — only `shutdown_runtime` (whole-app teardown) does, and
+    /// it clears every entry there. A per-extension uninstall path with event-loop
+    /// access should clear its own entry the same way.
+    pub ext_agents: HashMap<String, crate::app::ext::ExtAgentRegistry>,
 }
 
 impl Default for AppStateRest {
@@ -372,6 +404,11 @@ impl AppStateRest {
         // event-loop tick into `latest_version`. Holding the sender for the app's
         // lifetime keeps the drain from ever seeing a premature `Disconnected`.
         let (vtx, vrx) = tokio::sync::mpsc::unbounded_channel();
+        // Extension grant-broker lane, created ONCE here: the sender is cloned into
+        // `ExtHostManager` at startup and kept here for the app's lifetime (so the
+        // drain never sees a premature `Disconnected`); the receiver is drained each
+        // tick in `service_global`.
+        let (ext_call_tx, ext_call_rx) = tokio::sync::mpsc::unbounded_channel();
         let first = SessionRuntime::new();
         // Seed the viewed set with the sole session's UUID so the per-tick gates treat
         // it as foreground from tick zero (the local loop re-derives this each tick; the
@@ -453,6 +490,9 @@ impl AppStateRest {
             oauth_pushes: Vec::new(),
             awareness_rx: None,
             awareness_tx: None,
+            ext_call_tx,
+            ext_call_rx: Some(ext_call_rx),
+            ext_agents: HashMap::new(),
         }
     }
 

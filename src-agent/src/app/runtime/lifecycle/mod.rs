@@ -221,6 +221,12 @@ fn build_startup(
     // With no installed extensions this builds an empty, inert manager and spawns
     // nothing — byte-identical to a build without the extension host.
     let ext = crate::app::ext::ExtHostManager::new(&handle);
+    // Wire the grant-broker lane BEFORE any reader task is spawned below, so a
+    // fast-connecting extension's first `agents.*` `Call` can reach the event loop
+    // (a call arriving before this is set is answered "grant broker not initialized"
+    // rather than hanging). The sender is cloned; the receiver stays on `AppStateRest`
+    // for `service_global`'s `drain_ext_calls`.
+    ext.set_ext_call_tx(state.rest.ext_call_tx.clone());
     // Captured for the registration hook below: `Option<Arc<McpManager>>` is
     // `None` in `--daemon` mode at this point (`run_daemon` builds its — possibly
     // `Proxy` — manager AFTER `build_startup` returns), so extension tools are
@@ -483,6 +489,12 @@ fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     // manager (extension host never built) is a no-op.
     if let Some(ext) = state.rest.ext_manager.as_ref() {
         ext.stop_all();
+        // Every extension is stopped, so every extension's grant-broker spawn
+        // registry (`app::ext::broker::ExtAgentRegistry`) is now dangling —
+        // clear it here, the one place a whole-app extension stop has `AppState`
+        // access (see `AppStateRest::ext_agents`'s doc for the per-extension
+        // uninstall gap this doesn't cover).
+        state.rest.ext_agents.clear();
     }
     // TODO sec stop: `state.rest.sec_manager` has the identical stop()-before-runtime-
     // drop shape (same kill_on_drop child, same reason to run before `drop(rt)`) but is
