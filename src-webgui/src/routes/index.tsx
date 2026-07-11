@@ -294,13 +294,14 @@ function DiffFallback() {
 function TabbedMain() {
   const tabs = useKoma((s) => s.ui.tabs)
   const activeTabId = useKoma((s) => s.ui.activeTabId)
+  const sessionId = useKoma((s) => s.session.id)
   const chatActive = activeTabId === 'chat'
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
       <TabBar />
       <div className="relative min-h-0 flex-1">
         <div className={`absolute inset-0 flex items-stretch justify-center ${chatActive ? '' : 'hidden'}`}>
-          <ChatView />
+          {sessionId === null ? <StartScreen /> : <ChatView />}
         </div>
         {tabs.map((t) =>
           t.kind === 'diff' ? (
@@ -347,27 +348,13 @@ function TabbedMain() {
   )
 }
 
-// Three-way gate: ONBOARDING (first-run) > START SCREEN (no session) > CHAT
-// (attached). The swapper/empty state pushes only Hub + Config (never a
-// Snapshot), so `session.id === null` means no attached session; `config` is
-// authoritative for the first-run decision.
-//   - Onboarding: the host's first-run flag when present, else inferred from an
-//     unconfigured config (no provider, or no Main-role model). Gated on
-//     `loaded` so it never flashes against the empty initial slice before the
-//     first Config push.
-//   - Start screen: no session attached but config is usable.
-//   - Chat: a live session id.
+// IndexPage: onboarding takes over the whole view; otherwise always render
+// TabbedMain. The welcome/StartScreen content is shown inside TabbedMain's chat
+// slot when there's no active session (session.id === null), so the tab bar and
+// session-independent tabs (Settings/Help/Agents) stay available on the home screen.
 function IndexPage() {
-  const sessionId = useKoma((s) => s.session.id)
   const needsOnboarding = useNeedsOnboarding()
-  // Settings opens as a tab that works even with NO attached session (the host
-  // answers GetSettings from global config while detached), so honour it over the
-  // StartScreen gate. Every other no-session case still shows the StartScreen;
-  // closing Settings reverts activeTabId to 'chat', dropping back to StartScreen.
-  const settingsActive = useKoma((s) => s.ui.activeTabId === 'settings')
-
   if (needsOnboarding) return <Onboarding />
-  if (sessionId === null && !settingsActive) return <StartScreen />
   return <TabbedMain />
 }
 
