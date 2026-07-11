@@ -1,5 +1,6 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, X } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
+import { useRef, useEffect, useState, useCallback } from 'react'
 
 // Parent directory of a path — used to disambiguate two open tabs that share a
 // basename (VSCode-style dim suffix).
@@ -19,6 +20,79 @@ export function TabBar() {
   const activateTab = useKoma((s) => s.activateTab)
   const closeTab = useKoma((s) => s.closeTab)
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useRef<Map<string, HTMLDivElement | HTMLButtonElement | null>>(new Map())
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+
+  // Check overflow state on mount and whenever tabs change size/content
+  const checkOverflow = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    setCanScrollLeft(el.scrollLeft > 0)
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth)
+  }, [])
+
+  // Scroll the tab strip to reveal the active tab (called after activation)
+  const revealActiveTab = useCallback(() => {
+    const container = containerRef.current
+    const activeTab = tabRefs.current.get(activeTabId)
+    if (!container || !activeTab) return
+
+    const containerRect = container.getBoundingClientRect()
+    const tabRect = activeTab.getBoundingClientRect()
+
+    // If tab is before the visible area, scroll left to show it
+    if (tabRect.left < containerRect.left) {
+      container.scrollLeft += tabRect.left - containerRect.left
+    }
+    // If tab is after the visible area, scroll right to show it
+    else if (tabRect.right > containerRect.right) {
+      container.scrollLeft += tabRect.right - containerRect.right
+    }
+    // Re-check overflow after revealing
+    checkOverflow()
+  }, [activeTabId, checkOverflow])
+
+  // Attach scroll/resize listeners and clean up
+  useEffect(() => {
+    checkOverflow()
+    const el = containerRef.current
+    if (!el) return
+
+    const handleScroll = () => {
+      setCanScrollLeft(el.scrollLeft > 0)
+      setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth)
+    }
+
+    el.addEventListener('scroll', handleScroll)
+    window.addEventListener('resize', checkOverflow)
+    const resizeObserver = new ResizeObserver(checkOverflow)
+    resizeObserver.observe(el)
+
+    // Reveal active tab after initial render + after resize
+    revealActiveTab()
+
+    return () => {
+      el.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('resize', checkOverflow)
+      resizeObserver.disconnect()
+    }
+  }, [checkOverflow, revealActiveTab, tabs.length])
+
+  // Re-reveal when active tab changes
+  useEffect(() => {
+    revealActiveTab()
+  }, [activeTabId, revealActiveTab])
+
+  // Scroll by one viewport width (smooth)
+  const scrollByViewport = (direction: 'left' | 'right') => {
+    const el = containerRef.current
+    if (!el) return
+    const delta = direction === 'left' ? -el.clientWidth : el.clientWidth
+    el.scrollBy({ left: delta, behavior: 'smooth' })
+  }
+
   if (tabs.length <= 1) return null
 
   // Count basenames so a colliding title can show its parent dir.
@@ -28,196 +102,266 @@ export function TabBar() {
   }
 
   return (
-    <div className="flex h-8 flex-none items-stretch overflow-x-auto border-b border-koma-border bg-koma-panel2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {tabs.map((t) => {
-        const active = t.id === activeTabId
-        const base =
-          'group relative flex h-full flex-none select-none items-center gap-1.5 border-r border-koma-border text-[12px] transition-colors'
-        const tone = active
-          ? 'bg-koma-bg text-koma-fg'
-          : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
-        // Active indicator — a top accent line in fg, matching the ActivityBar's
-        // active-view bar.
-        const accent = active ? (
-          <span className="absolute inset-x-0 top-0 h-0.5 bg-koma-fg" />
-        ) : null
+    <div className="flex h-8 flex-none items-stretch border-b border-koma-border bg-koma-panel2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {canScrollLeft && (
+        <button
+          onClick={() => scrollByViewport('left')}
+          aria-label="Scroll tabs left"
+          className="flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 transition-colors hover:bg-koma-hover hover:opacity-100"
+        >
+          <ChevronLeft size={14} />
+        </button>
+      )}
+      <div
+        ref={containerRef}
+        className="flex h-full min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {tabs.map((t) => {
+          const active = t.id === activeTabId
+          const base =
+            'group relative flex h-full flex-none select-none items-center gap-1.5 border-r border-koma-border text-[12px] transition-colors'
+          const tone = active
+            ? 'bg-koma-bg text-koma-fg'
+            : 'text-koma-dim hover:bg-koma-hover hover:text-koma-fg'
+          // Active indicator — a top accent line in fg, matching the ActivityBar's
+          // active-view bar.
+          const accent = active ? (
+            <span className="absolute inset-x-0 top-0 h-0.5 bg-koma-fg" />
+          ) : null
 
-        if (t.kind === 'chat') {
-          return (
-            <button
-              key={t.id}
-              onClick={() => activateTab(t.id)}
-              title="Chat"
-              className={`${base} ${tone} px-3`}
-            >
-              {accent}
-              <MessageSquare size={13} className="flex-none" />
-              <span>chat</span>
-            </button>
-          )
-        }
-
-        // Settings tab: closeable like a diff tab, with the gear icon + fixed title.
-        if (t.kind === 'settings') {
-          return (
-            <div
-              key={t.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => activateTab(t.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-              }}
-              title="Settings"
-              className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-            >
-              {accent}
-              <Settings size={13} className="flex-none opacity-80" />
-              <span className="truncate">Settings</span>
+          if (t.kind === 'chat') {
+            return (
               <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(t.id)
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
                 }}
-                aria-label="Close tab"
-                title="Close"
-                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                }`}
+                onClick={() => activateTab(t.id)}
+                title="Chat"
+                className={`${base} ${tone} px-3`}
               >
-                <X size={12} />
+                {accent}
+                <MessageSquare size={13} className="flex-none" />
+                <span>chat</span>
               </button>
-            </div>
-          )
-        }
+            )
+          }
 
-        // Help tab: closeable like a diff tab, with a help icon + fixed title.
-        // Mirrors the Settings tab block exactly.
-        if (t.kind === 'help') {
+          // Settings tab: closeable like a diff tab, with the gear icon + fixed title.
+          if (t.kind === 'settings') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title="Settings"
+                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <Settings size={13} className="flex-none opacity-80" />
+                <span className="truncate">Settings</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Help tab: closeable like a diff tab, with a help icon + fixed title.
+          // Mirrors the Settings tab block exactly.
+          if (t.kind === 'help') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title="Help"
+                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <CircleHelp size={13} className="flex-none opacity-80" />
+                <span className="truncate">Help</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Commit-graph tab: closeable like a diff tab, GitGraph icon + fixed
+          // title. Mirrors the Settings/Help tab blocks exactly.
+          if (t.kind === 'graph') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title="Commit Graph"
+                className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <GitGraph size={13} className="flex-none opacity-80" />
+                <span className="truncate">Graph</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Agent editor tab: closeable like a diff tab, with a Bot icon + the
+          // agent's current name (or "new agent" while agentId is still null,
+          // i.e. an unsaved create). Label tracks `agentId` live, so a rename
+          // mid-edit (before OR after Save rebinds it — see renameAgentTab)
+          // always shows the current name, never a stale one.
+          if (t.kind === 'agent') {
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title={t.agentId ?? 'new agent'}
+                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <Bot size={13} className="flex-none opacity-80" />
+                <span className="truncate">{t.agentId ?? 'new agent'}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Stream tabs (read-only sub-agent transcript / bash output): closeable like a
+          // diff tab, with a Bot / Terminal icon + the title (agent name / truncated cmd).
+          if (t.kind === 'subagent' || t.kind === 'bash') {
+            const Icon = t.kind === 'subagent' ? Bot : Terminal
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title={t.title}
+                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <Icon size={13} className="flex-none opacity-80" />
+                <span className="truncate">{t.title}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          const dir = (counts.get(t.title) ?? 0) > 1 ? parentDir(t.path) : ''
+          // A div (not a button) so the close × can nest without invalid
+          // button-in-button markup; keyboard-activatable via role/tabIndex.
           return (
             <div
               key={t.id}
+              ref={(el) => {
+                tabRefs.current.set(t.id, el)
+              }}
               role="button"
               tabIndex={0}
               onClick={() => activateTab(t.id)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
               }}
-              title="Help"
-              className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-            >
-              {accent}
-              <CircleHelp size={13} className="flex-none opacity-80" />
-              <span className="truncate">Help</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(t.id)
-                }}
-                aria-label="Close tab"
-                title="Close"
-                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                }`}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )
-        }
-
-        // Commit-graph tab: closeable like a diff tab, GitGraph icon + fixed
-        // title. Mirrors the Settings/Help tab blocks exactly.
-        if (t.kind === 'graph') {
-          return (
-            <div
-              key={t.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => activateTab(t.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-              }}
-              title="Commit Graph"
-              className={`${base} ${tone} cursor-pointer pl-3 pr-1.5`}
-            >
-              {accent}
-              <GitGraph size={13} className="flex-none opacity-80" />
-              <span className="truncate">Graph</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(t.id)
-                }}
-                aria-label="Close tab"
-                title="Close"
-                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                }`}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )
-        }
-
-        // Agent editor tab: closeable like a diff tab, with a Bot icon + the
-        // agent's current name (or "new agent" while agentId is still null,
-        // i.e. an unsaved create). Label tracks `agentId` live, so a rename
-        // mid-edit (before OR after Save rebinds it — see renameAgentTab)
-        // always shows the current name, never a stale one.
-        if (t.kind === 'agent') {
-          return (
-            <div
-              key={t.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => activateTab(t.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-              }}
-              title={t.agentId ?? 'new agent'}
+              title={t.path}
               className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
             >
               {accent}
-              <Bot size={13} className="flex-none opacity-80" />
-              <span className="truncate">{t.agentId ?? 'new agent'}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(t.id)
-                }}
-                aria-label="Close tab"
-                title="Close"
-                className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                  active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-                }`}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )
-        }
-
-        // Stream tabs (read-only sub-agent transcript / bash output): closeable like a
-        // diff tab, with a Bot / Terminal icon + the title (agent name / truncated cmd).
-        if (t.kind === 'subagent' || t.kind === 'bash') {
-          const Icon = t.kind === 'subagent' ? Bot : Terminal
-          return (
-            <div
-              key={t.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => activateTab(t.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-              }}
-              title={t.title}
-              className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-            >
-              {accent}
-              <Icon size={13} className="flex-none opacity-80" />
+              <FileDiff size={13} className="flex-none opacity-80" />
               <span className="truncate">{t.title}</span>
+              {dir && <span className="flex-none truncate text-koma-dim opacity-60">{dir}</span>}
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -233,43 +377,17 @@ export function TabBar() {
               </button>
             </div>
           )
-        }
-
-        const dir = (counts.get(t.title) ?? 0) > 1 ? parentDir(t.path) : ''
-        // A div (not a button) so the close × can nest without invalid
-        // button-in-button markup; keyboard-activatable via role/tabIndex.
-        return (
-          <div
-            key={t.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => activateTab(t.id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
-            }}
-            title={t.path}
-            className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
-          >
-            {accent}
-            <FileDiff size={13} className="flex-none opacity-80" />
-            <span className="truncate">{t.title}</span>
-            {dir && <span className="flex-none truncate text-koma-dim opacity-60">{dir}</span>}
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                closeTab(t.id)
-              }}
-              aria-label="Close tab"
-              title="Close"
-              className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
-                active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
-              }`}
-            >
-              <X size={12} />
-            </button>
-          </div>
-        )
-      })}
+        })}
+      </div>
+      {canScrollRight && (
+        <button
+          onClick={() => scrollByViewport('right')}
+          aria-label="Scroll tabs right"
+          className="flex w-6 flex-none items-center justify-center text-koma-fg opacity-60 transition-colors hover:bg-koma-hover hover:opacity-100"
+        >
+          <ChevronRight size={14} />
+        </button>
+      )}
     </div>
   )
 }
