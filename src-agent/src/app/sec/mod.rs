@@ -203,13 +203,16 @@ impl SecDaemonManager {
             {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
-                    eprintln!("sec: security daemon failed to start: {e}");
+                    crate::model::store::append_global_error_log(
+                        "security",
+                        &format!("security daemon failed to start: {e}"),
+                    );
                     return;
                 }
                 Err(_) => {
-                    eprintln!(
-                        "sec: security daemon handshake timed out after {}s",
-                        CONNECT_TIMEOUT.as_secs()
+                    crate::model::store::append_global_error_log(
+                        "security",
+                        &format!("security daemon handshake timed out after {}s", CONNECT_TIMEOUT.as_secs()),
                     );
                     return;
                 }

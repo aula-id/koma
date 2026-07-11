@@ -182,7 +182,10 @@ fn load_agents_from_dir(
                 agents.insert(agent.name.clone(), agent);
             }
             Err(e) => {
-                eprintln!("Warning: skipped agent {}: {e}", path.display());
+                crate::model::store::append_global_error_log(
+                    "agent registry",
+                    &format!("skipped agent {}: {e}", path.display()),
+                );
             }
         }
     }

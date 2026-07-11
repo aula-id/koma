@@ -119,11 +119,14 @@ impl McpManager {
             McpBackend::Proxy { sock, cache } => {
                 match super::proxy::proxy_request(sock, &McpRequest::Reconnect { servers: servers.to_vec() }) {
                     Ok(McpResponse::Ack) => {}
-                    Ok(other) => eprintln!(
-                        "mcp proxy: reconnect got an unexpected response ({other:?}); \
-                         cache left unchanged"
+                    Ok(other) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: reconnect got an unexpected response ({other:?}); cache left unchanged"),
                     ),
-                    Err(e) => eprintln!("mcp proxy: reconnect to global daemon failed: {e:#}"),
+                    Err(e) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: reconnect to global daemon failed: {e:#}"),
+                    ),
                 }
                 // Refresh the advertise cache so the panel/advertise reflect the new
                 // set once the daemon has applied it. A List failure leaves the old
@@ -133,7 +136,10 @@ impl McpManager {
                         *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
                     }
                     Ok(_) => {}
-                    Err(e) => eprintln!("mcp proxy: post-reconnect List failed: {e:#}"),
+                    Err(e) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: post-reconnect List failed: {e:#}"),
+                    ),
                 }
                 return;
             }
@@ -164,7 +170,10 @@ impl McpManager {
             handle.spawn(async move {
                 for conn in old_conns {
                     if let Err(e) = conn.service.cancel().await {
-                        eprintln!("mcp: teardown of a connection failed: {e}");
+                        crate::model::store::append_global_error_log(
+                            "mcp",
+                            &format!("teardown of a connection failed: {e}"),
+                        );
                     }
                 }
             });
@@ -269,11 +278,14 @@ impl McpManager {
                             // Advertising these tools would let execute_blocking
                             // mis-route by name, so skip this server entirely (tools
                             // dropped, conn cancelled below).
-                            eprintln!(
-                                "mcp: server '{}' sanitizes to prefix '{}' already used by \
-                                 another configured server; skipping its tools to avoid \
-                                 mis-dispatch (rename one of the servers to fix)",
-                                server.name, my_full_prefix
+                            crate::model::store::append_global_error_log(
+                                "mcp",
+                                &format!(
+                                    "server '{}' sanitizes to prefix '{}' already used by \
+                                     another configured server; skipping its tools to avoid \
+                                     mis-dispatch (rename one of the servers to fix)",
+                                    server.name, my_full_prefix
+                                ),
                             );
                         } else {
                             // Keep it: move the service into the snapshot and record
@@ -291,7 +303,10 @@ impl McpManager {
                     // service, whose drop guard aborts it + terminates any stdio child.
                     if let Some(service) = to_discard {
                         if let Err(e) = service.cancel().await {
-                            eprintln!("mcp: teardown of a discarded connection failed: {e}");
+                            crate::model::store::append_global_error_log(
+                                "mcp",
+                                &format!("teardown of a discarded connection failed: {e}"),
+                            );
                         }
                     }
                 }
@@ -299,7 +314,10 @@ impl McpManager {
                     // A failed server = logged status + zero tools. Never a panic or
                     // a hang; the rest of the app proceeds as if this server were
                     // absent.
-                    eprintln!("mcp: server '{}' failed to connect: {e}", server.name);
+                    crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("server '{}' failed to connect: {e}", server.name),
+                    );
                 }
             }
         });

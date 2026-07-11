@@ -513,7 +513,10 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
             // FALLBACK: any ensure/connect failure ⇒ own the connections locally, so
             // this daemon still has working MCP (just not shared).
             Err(e) => {
-                eprintln!("mcp: global daemon unavailable ({e:#}); using local servers");
+                crate::model::store::append_global_error_log(
+                    "mcp",
+                    &format!("global daemon unavailable ({e:#}); using local servers"),
+                );
                 crate::app::mcp::McpManager::connect_all(&handle, &state.rest.config.mcp_servers)
             }
         });

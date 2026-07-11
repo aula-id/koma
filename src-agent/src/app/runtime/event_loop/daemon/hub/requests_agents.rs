@@ -142,7 +142,10 @@ impl DaemonHub {
                 if let Some(orig) = original_name.as_deref() {
                     if orig != name.as_str() {
                         if let Err(e) = delete_agent_file(scope_target, orig) {
-                            eprintln!("Warning: agent rename left old file {orig}: {e}");
+                            crate::model::store::append_global_error_log(
+                                "agent registry",
+                                &format!("agent rename left old file {orig}: {e}"),
+                            );
                         }
                     }
                 }

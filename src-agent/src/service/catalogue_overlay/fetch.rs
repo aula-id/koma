@@ -36,7 +36,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) fn spawn_refresh() {
     std::thread::spawn(|| {
         if let Err(e) = refresh() {
-            eprintln!("koma: catalogue overlay fetch failed: {e}");
+            crate::model::store::append_global_error_log("catalogue overlay", &format!("fetch failed: {e}"));
         }
     });
 }
@@ -71,7 +71,7 @@ fn refresh() -> anyhow::Result<()> {
     let status = resp.status();
 
     if status.as_u16() == 304 {
-        eprintln!("koma: catalogue overlay: not modified");
+        crate::model::store::append_global_error_log("catalogue overlay", "not modified");
         return Ok(());
     }
 
@@ -98,7 +98,7 @@ fn refresh() -> anyhow::Result<()> {
     }
 
     super::set_overlay(table);
-    eprintln!("koma: catalogue overlay: refreshed from {OVERLAY_URL}");
+    crate::model::store::append_global_error_log("catalogue overlay", &format!("refreshed from {OVERLAY_URL}"));
     Ok(())
 }
 

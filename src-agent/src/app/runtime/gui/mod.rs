@@ -350,7 +350,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 WinCmd::Minimize => window.set_minimized(true),
                 WinCmd::ToggleMax => window.set_maximized(!window.is_maximized()),
                 WinCmd::Close => {
-                    eprintln!("[gui] titlebar close -> closing");
+                    crate::model::store::append_global_error_log("gui", "titlebar close -> closing");
                     *control_flow = ControlFlow::Exit;
                 }
                 WinCmd::Resize(dir) => {
@@ -361,7 +361,7 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                eprintln!("[gui] window close requested");
+                crate::model::store::append_global_error_log("gui", "window close requested");
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}

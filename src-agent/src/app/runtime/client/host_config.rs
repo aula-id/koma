@@ -59,7 +59,10 @@ pub(super) fn apply_swapper_config_mutation(
     let mut cfg = crate::model::app_config::AppConfig::load();
     if apply_global_config_req(&mut cfg, req) {
         if let Err(e) = cfg.save() {
-            eprintln!("[gui] pre-session config save failed: {e}");
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("pre-session config save failed: {e}"),
+            );
         }
         let projection = ConfigProjection::from_app_config(&cfg);
         push_config(Some(&projection), push, push_state);
@@ -125,12 +128,18 @@ fn apply_swapper_agent_mutation(req: &ClientRequest) -> bool {
                 def.source = AgentSource::Global;
                 def.file_path = None;
                 if let Err(e) = save_agent(AgentScope::Global, &def) {
-                    eprintln!("[gui] pre-session agent save failed: {e}");
+                    crate::model::store::append_global_error_log(
+                        "gui",
+                        &format!("pre-session agent save failed: {e}"),
+                    );
                 } else if let Some(orig) = original_name.as_deref() {
                     // Rename: drop the OLD global file (same tier) after the new one landed.
                     if orig != name.as_str() {
                         if let Err(e) = delete_agent(AgentScope::Global, orig) {
-                            eprintln!("[gui] pre-session agent rename left old file {orig}: {e}");
+                            crate::model::store::append_global_error_log(
+                                "gui",
+                                &format!("pre-session agent rename left old file {orig}: {e}"),
+                            );
                         }
                     }
                 }
@@ -144,7 +153,10 @@ fn apply_swapper_agent_mutation(req: &ClientRequest) -> bool {
                 registry.get(name).map(|d| d.source) == Some(AgentSource::Builtin);
             if scope == "global" && !is_builtin {
                 if let Err(e) = delete_agent(AgentScope::Global, name) {
-                    eprintln!("[gui] pre-session agent delete failed: {e}");
+                    crate::model::store::append_global_error_log(
+                        "gui",
+                        &format!("pre-session agent delete failed: {e}"),
+                    );
                 }
             }
             true
