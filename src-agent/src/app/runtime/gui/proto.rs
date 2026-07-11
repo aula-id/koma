@@ -308,6 +308,40 @@ pub(super) enum GuiReq {
         start: Option<String>,
         checkout: bool,
     },
+    /// Commit-graph row context menu "Cherry-pick" (G5b — may conflict; the
+    /// follow-up `GitStatus` push's `inProgress`/`conflicted` fields carry that
+    /// state, not this request's reply alone). Forwarded as
+    /// [`HostCtl::GitCherryPick`].
+    GitCherryPick { sha: String },
+    /// Commit-graph row context menu "Revert" (G5b). Same conflict reasoning as
+    /// `GitCherryPick`. Forwarded as [`HostCtl::GitRevert`].
+    GitRevert { sha: String },
+    /// Commit-graph row context menu "Reset branch to here" (G5b). `mode` is
+    /// `"soft"`/`"mixed"`/`"hard"` — `hard` DISCARDS uncommitted changes; the
+    /// React side gates this behind a confirm BEFORE sending it (this request
+    /// itself is not reconfirmed host-side). Forwarded as [`HostCtl::GitReset`].
+    GitReset { sha: String, mode: String },
+    /// Branch-switcher / graph context menu "Merge into current branch" (G5b —
+    /// may conflict, same reasoning as `GitCherryPick`). `ref` is a Rust
+    /// keyword, so the field is `ref_name` (`#[serde(rename = "ref")]` keeps the
+    /// wire key `ref`, same trick as `GitCheckout`). Forwarded as
+    /// [`HostCtl::GitMerge`].
+    GitMerge {
+        #[serde(rename = "ref")]
+        ref_name: String,
+    },
+    /// Plain rebase of the current branch onto `upstream` (G5b — the op a later
+    /// drag-to-rebase UI will call with a resolved upstream). May conflict.
+    /// Forwarded as [`HostCtl::GitRebase`].
+    GitRebase { upstream: String },
+    /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/
+    /// `"rebase"`/`"cherry-pick"`/`"revert"` (echoing `GitStatus.inProgress`).
+    /// Forwarded as [`HostCtl::GitOpAbort`].
+    GitOpAbort { kind: String },
+    /// The conflict banner's Continue button (G5b). Same `kind` values as
+    /// `GitOpAbort`. Forwarded as [`HostCtl::GitOpContinue`] — the host runs it
+    /// with `GIT_EDITOR=true` so it never hangs on an editor prompt.
+    GitOpContinue { kind: String },
     /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
     /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a

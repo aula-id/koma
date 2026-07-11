@@ -22,6 +22,7 @@
 //! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
 //! | `git_graph` | host-side commit-graph + commit-detail + commit-diff computation |
 //! | `git_branch`| host-side branch list + checkout + create-branch computation     |
+//! | `git_destructive` | host-side cherry-pick/revert/reset/merge/rebase/abort/continue (G5b) |
 //! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
 //! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
 //! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
@@ -51,6 +52,7 @@ mod git;
 mod git_remote;
 mod git_graph;
 mod git_branch;
+mod git_destructive;
 mod keys;
 mod git_host;
 mod host;
@@ -439,6 +441,32 @@ pub(super) enum HostCtl {
     /// switches to it immediately. Same reply pattern as
     /// [`GitCheckout`](Self::GitCheckout). See [`git_branch::git_create_branch`].
     GitCreateBranch { name: String, start: Option<String>, checkout: bool },
+    /// Commit-graph row context menu "Cherry-pick" (G5b). May leave the tree
+    /// conflicted — the follow-up `GitStatus` reports that via `inProgress`/
+    /// `conflicted`, not this reply's `error` alone. See
+    /// [`git_destructive::git_cherry_pick`].
+    GitCherryPick { sha: String },
+    /// Commit-graph row context menu "Revert" (G5b). Same conflict reasoning as
+    /// [`GitCherryPick`](Self::GitCherryPick). See [`git_destructive::git_revert`].
+    GitRevert { sha: String },
+    /// Commit-graph row context menu "Reset branch to here" (G5b). `mode` is
+    /// `"soft"`/`"mixed"`/`"hard"` — `hard` is destructive; the React confirm is the
+    /// gate, not this handler. See [`git_destructive::git_reset`].
+    GitReset { sha: String, mode: String },
+    /// Branch-switcher / graph context menu "Merge into current branch" (G5b). May
+    /// conflict, same reasoning as [`GitCherryPick`](Self::GitCherryPick). See
+    /// [`git_destructive::git_merge`].
+    GitMerge { ref_name: String },
+    /// Plain rebase of the current branch onto `upstream` (G5b) — the op a later
+    /// drag-to-rebase UI will call. May conflict. See [`git_destructive::git_rebase`].
+    GitRebase { upstream: String },
+    /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/`"rebase"`/
+    /// `"cherry-pick"`/`"revert"`. See [`git_destructive::git_op_abort`].
+    GitOpAbort { kind: String },
+    /// The conflict banner's Continue button (G5b) — runs with `GIT_EDITOR=true` so
+    /// a `--continue` never hangs on an editor. See
+    /// [`git_destructive::git_op_continue`].
+    GitOpContinue { kind: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

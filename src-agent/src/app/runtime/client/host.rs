@@ -403,6 +403,32 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     checkout,
                 );
             }
+            // Commit-graph interactive/destructive ops (G5b): same host-local
+            // reasoning as `GitCheckout`/`GitCreateBranch` above. Bodies live in
+            // the shared `git_destructive`/`git_host` modules; a mutation's
+            // follow-up `GitStatus` re-push carries the fresh `inProgress`/
+            // `conflicted` state (see `git::compute_git_status`).
+            Ok(HostCtl::GitCherryPick { sha }) => {
+                git_host::spawn_git_cherry_pick(P::clone(push), current.map(str::to_string), sha);
+            }
+            Ok(HostCtl::GitRevert { sha }) => {
+                git_host::spawn_git_revert(P::clone(push), current.map(str::to_string), sha);
+            }
+            Ok(HostCtl::GitReset { sha, mode }) => {
+                git_host::spawn_git_reset(P::clone(push), current.map(str::to_string), sha, mode);
+            }
+            Ok(HostCtl::GitMerge { ref_name }) => {
+                git_host::spawn_git_merge(P::clone(push), current.map(str::to_string), ref_name);
+            }
+            Ok(HostCtl::GitRebase { upstream }) => {
+                git_host::spawn_git_rebase(P::clone(push), current.map(str::to_string), upstream);
+            }
+            Ok(HostCtl::GitOpAbort { kind }) => {
+                git_host::spawn_git_op_abort(P::clone(push), current.map(str::to_string), kind);
+            }
+            Ok(HostCtl::GitOpContinue { kind }) => {
+                git_host::spawn_git_op_continue(P::clone(push), current.map(str::to_string), kind);
+            }
             Ok(HostCtl::KeyList) => {
                 git_host::spawn_key_list(P::clone(push));
             }

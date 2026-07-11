@@ -54,6 +54,15 @@ pub(super) struct GitStatusResult {
     /// [`super::git_remote::assigned_key`] keyed by `root`. Additive field — a `None`
     /// repo (`root` itself `None`) always carries `key_name: None` too.
     pub key_name: Option<String>,
+    /// Which sequencer op (if any) is currently mid-flight — G5b: `"merge"` /
+    /// `"cherry-pick"` / `"revert"` / `"rebase"`, or `None` when the repo is clean.
+    /// Detected via [`detect_in_progress`]; drives the GUI's conflict banner
+    /// (Abort/Continue), which reads this ALONGSIDE `conflicted` below.
+    pub in_progress: Option<String>,
+    /// The porcelain-v2 `u` (unmerged/conflict) records, split OUT of `staged`/
+    /// `unstaged` into their own list — a conflicted file shouldn't masquerade as an
+    /// ordinary staged/unstaged modification. Empty outside a conflict.
+    pub conflicted: Vec<GitFileEntry>,
 }
 
 /// The result of a host-side [`compute_git_diff`], pushed to the GUI as a `GitDiff`
@@ -206,6 +215,8 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         unstaged: Vec::new(),
         error,
         key_name: None,
+        in_progress: None,
+        conflicted: Vec::new(),
     };
 
     let Some(root) = repo_root_for(session) else {
@@ -223,6 +234,7 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
     let mut behind = None;
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
+    let mut conflicted = Vec::new();
 
     // `-z` NUL-terminates every record; a rename/copy record ALSO uses NUL (not tab)
     // between its new path and its original path, so it spans two consecutive fields.
@@ -273,10 +285,12 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
                 }
             }
             // Unmerged/conflict: `<XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`.
+            // Split into its OWN `conflicted` list (G5b) — a conflicted file shouldn't
+            // masquerade as an ordinary staged/unstaged modification.
             "u" => {
                 let cols: Vec<&str> = rest.splitn(10, ' ').collect();
                 if cols.len() == 10 {
-                    unstaged.push(GitFileEntry {
+                    conflicted.push(GitFileEntry {
                         path: cols[9].to_string(),
                         orig_path: None,
                         status: "U".to_string(),
@@ -301,6 +315,7 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
     }
 
     let key_name = assigned_key(&root);
+    let in_progress = detect_in_progress(&root);
 
     GitStatusResult {
         root: Some(root.to_string_lossy().into_owned()),
@@ -312,7 +327,60 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         unstaged,
         error: None,
         key_name,
+        in_progress,
+        conflicted,
     }
+}
+
+/// Detect an in-flight sequencer op for repo `root` (G5b — feeds
+/// [`GitStatusResult::in_progress`]), checked in priority order (first match wins;
+/// in practice at most one is ever true):
+/// - `"merge"` — `git rev-parse -q --verify MERGE_HEAD` succeeds.
+/// - `"cherry-pick"` — `CHERRY_PICK_HEAD` succeeds.
+/// - `"revert"` — `REVERT_HEAD` succeeds.
+/// - `"rebase"` — the rebase state DIRECTORY exists. Resolved via `git rev-parse
+///   --git-path rebase-merge`/`rebase-apply` (NEVER a hardcoded `.git/rebase-*` — a
+///   linked worktree's git-dir lives elsewhere entirely, e.g.
+///   `.git/worktrees/<name>/rebase-merge`) and then checked for existence on disk —
+///   `--git-path` only prints the PATH, it doesn't tell you whether a rebase is
+///   actually in progress. `git-path`'s output may be relative (to `root`, since git
+///   was run with `root` as cwd) or absolute (some git versions / linked worktrees);
+///   `Path::join` handles both correctly (an absolute joinee replaces the base
+///   entirely, exactly the semantics wanted here).
+///
+/// `None` when nothing is in flight.
+fn detect_in_progress(root: &std::path::Path) -> Option<String> {
+    let head_ref_exists = |name: &str| {
+        git_cmd(root, &["rev-parse", "-q", "--verify", name]).is_some_and(|out| out.status.success())
+    };
+    if head_ref_exists("MERGE_HEAD") {
+        return Some("merge".to_string());
+    }
+    if head_ref_exists("CHERRY_PICK_HEAD") {
+        return Some("cherry-pick".to_string());
+    }
+    if head_ref_exists("REVERT_HEAD") {
+        return Some("revert".to_string());
+    }
+
+    let rebase_state_dir_exists = |git_path_arg: &str| -> bool {
+        let Some(out) = git_cmd(root, &["rev-parse", "--git-path", git_path_arg]) else {
+            return false;
+        };
+        if !out.status.success() {
+            return false;
+        }
+        let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if raw.is_empty() {
+            return false;
+        }
+        root.join(raw).is_dir()
+    };
+    if rebase_state_dir_exists("rebase-merge") || rebase_state_dir_exists("rebase-apply") {
+        return Some("rebase".to_string());
+    }
+
+    None
 }
 
 /// Compute a host-side GIT DIFF for `path` (a `GitStatus` file-row's path — ALREADY
