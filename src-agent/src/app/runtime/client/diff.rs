@@ -202,13 +202,15 @@ pub(super) fn compute_file_diff(path: &str, current_session: Option<&str>) -> Fi
     let modified = String::from_utf8_lossy(&modified_bytes).into_owned();
 
     // --- original: `git show HEAD:<repo-relative-path>`, cwd = the file's own repo ---
+    // Routed through [`super::git::git_cmd_env`] (rather than a bare `Command::new`)
+    // so this spawn is serialized behind the same process-global git lock as every
+    // other host git op — an unlocked spawn here could still race a concurrent
+    // `checkout`/`status`/`log` and reintroduce the `.git/index.lock` stall this
+    // module's callers were fixed to avoid.
     let dir = abs.parent().unwrap_or(&abs);
-    let toplevel = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(dir)
-        .output();
+    let toplevel = super::git::git_cmd_env(dir, &["rev-parse", "--show-toplevel"], None);
     let repo_root = match toplevel {
-        Ok(out) if out.status.success() => {
+        Some(out) if out.status.success() => {
             std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
         }
         _ => {
@@ -218,12 +220,13 @@ pub(super) fn compute_file_diff(path: &str, current_session: Option<&str>) -> Fi
     let Ok(rel) = abs.strip_prefix(&repo_root) else {
         return no_git(modified);
     };
-    let show = std::process::Command::new("git")
-        .args(["show", &format!("HEAD:{}", rel.to_string_lossy())])
-        .current_dir(&repo_root)
-        .output();
+    let show = super::git::git_cmd_env(
+        &repo_root,
+        &["show", &format!("HEAD:{}", rel.to_string_lossy())],
+        None,
+    );
     match show {
-        Ok(out) if out.status.success() => {
+        Some(out) if out.status.success() => {
             if out.stdout.len() > FILE_DIFF_SIZE_CAP {
                 return empty(Some("file too large to diff".to_string()), false);
             }

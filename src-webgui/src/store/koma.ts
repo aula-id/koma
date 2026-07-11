@@ -2198,21 +2198,25 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         // A successful HEAD-moving op (checkout/createBranch/cherryPick/revert/
         // reset/merge/rebase/abort/continue) moved HEAD, the branch list, and/or
-        // the in-progress/conflict state — refresh BOTH the footer/panel status
-        // and the commit graph (its HEAD ring) so neither is left stale. The
-        // host ALSO auto-follows every GitOp with its own fresh GitStatus push
-        // (mirrors every other mutation); this explicit call just guarantees it
-        // even if that race lands oddly, and always drives the graph refresh
-        // (which the host never pushes unprompted). A conflicting cherry-pick/
-        // merge/rebase/etc. returns `ok:false` (git's conflict exit IS reported
-        // as a failure here), so this gate skips the graph refresh for it —
-        // that's fine, HEAD hasn't finalized on a conflict, so there's nothing
-        // new for the graph to reflect until `continue` succeeds. The conflict
-        // banner still appears regardless, because the host pushes a fresh
-        // GitStatus unconditionally after every op (see git_host.rs's
-        // spawn_*_attached), independent of this `ok` gate.
+        // the in-progress/conflict state — refresh the commit graph (its HEAD
+        // ring) so it isn't left stale. NO explicit GitStatus refresh here: the
+        // host ALREADY auto-follows every one of these ops with its own fresh
+        // GitStatus push right after the mutation (git_host.rs's
+        // spawn_{checkout,create_branch,cherry_pick,revert,reset,merge,rebase,
+        // op_abort,op_continue}_attached each `push_git_op` then recompute +
+        // send a fresh `GitStatusResult` unconditionally) — firing a SECOND
+        // `GitStatus` request here would just be a redundant full-tree
+        // `git status` scan racing the host's own, doubling status-panel
+        // flicker/load with no benefit. The graph, unlike status, is NEVER
+        // auto-pushed by the host, so it still needs this explicit refresh. A
+        // conflicting cherry-pick/merge/rebase/etc. returns `ok:false` (git's
+        // conflict exit IS reported as a failure here), so this gate skips the
+        // graph refresh for it — that's fine, HEAD hasn't finalized on a
+        // conflict, so there's nothing new for the graph to reflect until
+        // `continue` succeeds. The conflict banner still appears regardless,
+        // because the host pushes a fresh GitStatus unconditionally after
+        // every op, independent of this `ok` gate.
         if (isHeadMovingOp && env.ok) {
-          get().refreshGitStatus()
           get().refreshGraph()
         }
         break

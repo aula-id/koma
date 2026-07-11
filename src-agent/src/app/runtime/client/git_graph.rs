@@ -13,15 +13,7 @@
 //! by [`super::git_host`], exactly like [`super::git::compute_git_status`].
 
 use super::diff::{looks_binary, FILE_DIFF_SIZE_CAP};
-use super::git::{git_cmd_env, git_failure, repo_root_for};
-
-/// Run `git <args>` with `dir` as cwd, no extra env — thin wrapper over
-/// [`git_cmd_env`], mirroring [`super::git`]'s own private `git_cmd` (that one isn't
-/// reachable from here — it's a bare private fn, not `pub(super)` — so this is a
-/// deliberate one-line duplicate, not a new plumbing layer).
-fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
-    git_cmd_env(dir, args, None)
-}
+use super::git::{git_cmd, git_failure, repo_root_for};
 
 /// One ref (branch/tag/HEAD pointer) attached to a commit, parsed out of `%D` (with
 /// `--decorate=full`, so every non-HEAD token is a FULL ref path — `refs/heads/…`,
