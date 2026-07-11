@@ -376,6 +376,11 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitCommitDiff { sha, path }) => {
                 git_host::spawn_commit_diff(P::clone(push), current.map(str::to_string), sha, path);
             }
+            // Bubble/activity chart (GK5a): same host-local reasoning as
+            // `GitStatus`/`GitGraph`.
+            Ok(HostCtl::GitActivity { path, limit }) => {
+                git_host::spawn_git_activity(P::clone(push), current.map(str::to_string), path, limit);
+            }
             Ok(HostCtl::SetGitKey { name }) => {
                 git_host::spawn_set_git_key(P::clone(push), current.map(str::to_string), name);
             }

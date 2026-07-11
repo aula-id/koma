@@ -215,6 +215,11 @@ pub(super) fn push_loop(
     // `GitStatus` reply pattern, since stashing changes the working tree).
     let (stash_list_tx, stash_list_rx) = std::sync::mpsc::channel::<super::git_stash::StashListResult>();
 
+    // --- ACTIVITY (GitActivity, GK5a) --- one-shot worker thread (blocking `git log
+    // --numstat`), like `GitGraph` above — a self-contained per-request reply, no
+    // follow-up `GitStatus` needed (read-only, changes nothing).
+    let (activity_tx, activity_rx) = std::sync::mpsc::channel::<super::git_activity::ActivityResult>();
+
     // --- SSH KEY VAULT (KeyList/KeyGenerate/KeyImport/KeyDelete/KeyReveal) ---
     // Every op shells `ssh-keygen`/touches the filesystem (blocking), same
     // reasoning as the GIT channels above. A mutation (generate/import/delete)
@@ -514,6 +519,9 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::GitCommitDiff { sha, path }) => {
                     git_host::spawn_commit_diff_attached(commit_diff_tx.clone(), current_owned.clone(), sha, path);
                 }
+                Ok(super::HostCtl::GitActivity { path, limit }) => {
+                    git_host::spawn_git_activity_attached(activity_tx.clone(), current_owned.clone(), path, limit);
+                }
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
                 // off this thread; the result is drained + pushed below at (b-quin).
@@ -658,6 +666,7 @@ pub(super) fn push_loop(
             &key_reveal_rx,
             &key_op_rx,
             &stash_list_rx,
+            &activity_rx,
         );
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

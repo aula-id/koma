@@ -12,8 +12,9 @@
 use std::sync::mpsc::Receiver;
 
 use super::push_proto_git::{
-    push_branch_list, push_commit_detail, push_commit_diff, push_git_diff, push_git_graph,
-    push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal, push_stash_list,
+    push_activity, push_branch_list, push_commit_detail, push_commit_diff, push_git_diff,
+    push_git_graph, push_git_op, push_git_status, push_key_list, push_key_op, push_key_reveal,
+    push_stash_list,
 };
 
 /// Drain every completed GIT / SSH-key-vault off-thread reply and push each as its
@@ -33,6 +34,7 @@ pub(super) fn drain_git_replies(
     key_reveal_rx: &Receiver<super::keys::KeyRevealResult>,
     key_op_rx: &Receiver<super::keys::KeyOpResult>,
     stash_list_rx: &Receiver<super::git_stash::StashListResult>,
+    activity_rx: &Receiver<super::git_activity::ActivityResult>,
 ) {
     // --- (b-sex) GIT panel: push any completed off-thread status fetch ---
     while let Ok(result) = git_status_rx.try_recv() {
@@ -94,5 +96,10 @@ pub(super) fn drain_git_replies(
     // --- (b-quattuordec) stash indicator: push any completed off-thread list fetch ---
     while let Ok(result) = stash_list_rx.try_recv() {
         push_stash_list(push, result);
+    }
+
+    // --- (b-novendec) activity chart (GK5a): push any completed off-thread fetch ---
+    while let Ok(result) = activity_rx.try_recv() {
+        push_activity(push, result);
     }
 }
