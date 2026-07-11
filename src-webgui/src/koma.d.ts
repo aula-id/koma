@@ -232,12 +232,15 @@ declare global {
         modelUuid: string | null
         tools: string[]
         prompt: string
+        // Client-side monotonically-increasing seq for stale-reply protection;
+        // echoed in the confirmatory AgentsValues/AgentOp push.
+        reqSeq?: number
       }
     // Delete an agent. Unlike SetAgent's edit path, `scope` here is used
     // VERBATIM as the tier to delete from — "session" needs a live session
     // dir (errors otherwise), anything else deletes from global. Builtins are
     // delete-rejected daemon-side. Reply lands as a fresh AgentsValues push.
-    | { r: 'DeleteAgent'; scope: 'global' | 'session'; name: string }
+    | { r: 'DeleteAgent'; scope: 'global' | 'session'; name: string; reqSeq?: number }
     // OAuth login screen: fetch the current connections + available login
     // providers. Dual-routed like GetSettings/GetAgents — safe to send with NO
     // session attached (the host answers from ~/.koma/config.json + the

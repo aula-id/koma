@@ -348,6 +348,9 @@ pub(super) enum PushEnvelope {
     /// ALWAYS a reply so the dashboard's loading state can never hang.
     #[serde(rename_all = "camelCase")]
     AgentsValues {
+        /// Request-sequence echoed from the agent mutation for stale-reply protection.
+        /// 0 = no correlation (read-only fetch or host-built fallback).
+        req_seq: u64,
         agents: Vec<crate::ipc::proto::AgentEntry>,
         catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot>,
         catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
@@ -434,6 +437,17 @@ pub(super) enum PushEnvelope {
     /// `GitOp`/`GitStatus`. Carries [`super::keys::KeyOpResult`] verbatim (already
     /// camelCase).
     KeyOp(super::keys::KeyOpResult),
+    /// One-shot daemon agent create/edit/delete result, re-pushed to the GUI so
+    /// failed agent mutations surface as error toasts (the attached daemon path
+    /// sends `DaemonEvent::AgentOp` for failures, which is otherwise silently
+    /// consumed by the shadow). On success the AUTHORITATIVE reply is always a
+    /// fresh `AgentsValues` push (re-pushed by the existing intercept below), so
+    /// this envelope only carries `ok: false` with a human-readable `error` — the
+    /// GUI uses it to clear its saving state and show the failure toast. `req_seq`
+    /// echoes the client request sequence for stale-reply protection (0 = no
+    /// correlation, used by the generic `DaemonEvent::Error` fallback).
+    #[serde(rename_all = "camelCase")]
+    AgentOp { ok: bool, error: Option<String>, req_seq: u64 },
     /// One-shot host-computed BRANCH LIST answering a `GitBranchList` request
     /// from the branch-switcher popover or the graph context menu (G4): every
     /// local + remote-tracking branch, current one flagged. Computed ENTIRELY
@@ -597,6 +611,7 @@ pub(super) fn push_settings_values(
 /// lands the SAME envelope the attached path produces.
 pub(super) fn push_agents_values(
     push: &dyn Fn(String),
+    req_seq: u64,
     agents: Vec<crate::ipc::proto::AgentEntry>,
     catalogue_models: Vec<crate::ipc::proto::CatalogueModelSnapshot>,
     catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot>,
@@ -605,6 +620,7 @@ pub(super) fn push_agents_values(
     super::render::emit(
         push,
         &PushEnvelope::AgentsValues {
+            req_seq,
             agents,
             catalogue_models,
             catalogue_providers,

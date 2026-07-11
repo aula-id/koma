@@ -559,12 +559,14 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             model_uuid,
             tools,
             prompt,
+            req_seq,
         } => {
             forward_config_req(
                 &ctx.req,
                 &ctx.ctl,
                 ClientRequest::SetAgent {
                     original_name,
+                    req_seq,
                     scope,
                     name,
                     description,
@@ -576,8 +578,8 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             );
         }
         // /agents delete: same routing.
-        GuiReq::DeleteAgent { scope, name } => {
-            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteAgent { scope, name });
+        GuiReq::DeleteAgent { scope, name, req_seq } => {
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteAgent { scope, name, req_seq });
         }
         // OAuth screen open/refresh: dual-routed like GetSettings/GetAgents — the attached
         // daemon (or the un-attached host) answers with an `OAuthState` reply the host

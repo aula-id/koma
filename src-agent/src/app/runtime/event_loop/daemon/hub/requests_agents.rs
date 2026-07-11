@@ -49,6 +49,7 @@ impl DaemonHub {
         // clean no-op guard rather than a panic.
         let ClientRequest::SetAgent {
             original_name,
+            req_seq,
             scope,
             name,
             description,
@@ -95,7 +96,11 @@ impl DaemonHub {
             (true, None) => {
                 self.send_to(
                     idx,
-                    DaemonEvent::Error("no active session for a session-scoped agent".into()),
+                    DaemonEvent::AgentOp {
+                        ok: false,
+                        error: Some("no active session for a session-scoped agent".into()),
+                        req_seq,
+                    },
                 );
                 return;
             }
@@ -152,9 +157,16 @@ impl DaemonHub {
                 if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                     sess.rebuild_system();
                 }
-                self.send_agents_values(idx, state);
+                self.send_agents_values(idx, state, req_seq);
             }
-            Err(e) => self.send_to(idx, DaemonEvent::Error(format!("{e:#}"))),
+            Err(e) => self.send_to(
+                idx,
+                DaemonEvent::AgentOp {
+                    ok: false,
+                    error: Some(format!("{e:#}")),
+                    req_seq,
+                },
+            ),
         }
     }
 
@@ -171,6 +183,7 @@ impl DaemonHub {
         state: &mut AppState,
         scope: String,
         name: String,
+        req_seq: u64,
     ) {
         use crate::model::agent_def::{
             delete_agent as delete_agent_file, load_registry, AgentScope, AgentSource,
@@ -183,7 +196,11 @@ impl DaemonHub {
         if registry.get(&name).map(|d| d.source) == Some(AgentSource::Builtin) {
             self.send_to(
                 idx,
-                DaemonEvent::Error("cannot delete a built-in agent".into()),
+                DaemonEvent::AgentOp {
+                    ok: false,
+                    error: Some("cannot delete a built-in agent".into()),
+                    req_seq,
+                },
             );
             return;
         }
@@ -193,7 +210,11 @@ impl DaemonHub {
             ("session", None) => {
                 self.send_to(
                     idx,
-                    DaemonEvent::Error("no active session for a session-scoped agent".into()),
+                    DaemonEvent::AgentOp {
+                        ok: false,
+                        error: Some("no active session for a session-scoped agent".into()),
+                        req_seq,
+                    },
                 );
                 return;
             }
@@ -205,9 +226,16 @@ impl DaemonHub {
                 if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                     sess.rebuild_system();
                 }
-                self.send_agents_values(idx, state);
+                self.send_agents_values(idx, state, req_seq);
             }
-            Err(e) => self.send_to(idx, DaemonEvent::Error(format!("{e:#}"))),
+            Err(e) => self.send_to(
+                idx,
+                DaemonEvent::AgentOp {
+                    ok: false,
+                    error: Some(format!("{e:#}")),
+                    req_seq,
+                },
+            ),
         }
     }
 }

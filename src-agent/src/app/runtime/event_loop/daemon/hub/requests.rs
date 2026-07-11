@@ -590,8 +590,8 @@ impl DaemonHub {
             }
 
             // GUI /agents delete (a built-in is not deletable → error).
-            ClientRequest::DeleteAgent { scope, name } => {
-                self.delete_agent(idx, state, scope, name);
+            ClientRequest::DeleteAgent { scope, name, req_seq } => {
+                self.delete_agent(idx, state, scope, name, req_seq);
             }
 
             ClientRequest::GetOAuthState

@@ -98,6 +98,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     // re-push it as an `AgentsValues` envelope BEFORE folding (a non-visual fold no-op,
     // keeping the seq gap-free), same as the SettingsValues intercept above.
     if let DaemonEvent::AgentsValues {
+        req_seq,
         agents,
         catalogue_models,
         catalogue_providers,
@@ -105,10 +106,26 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     } = &frame.event
     {
         let env = PushEnvelope::AgentsValues {
+            req_seq: *req_seq,
             agents: agents.clone(),
             catalogue_models: catalogue_models.clone(),
             catalogue_providers: catalogue_providers.clone(),
             available_tools: available_tools.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Daemon agent-mutation result (SetAgent/DeleteAgent from requests_agents.rs):
+    // re-push as an `AgentOp` envelope BEFORE folding (a non-visual fold no-op,
+    // keeping the seq gap-free). The authoritative success reply is `AgentsValues`,
+    // so this is only sent on failure — the GUI surfaces the error as a toast and
+    // clears saving state.
+    if let DaemonEvent::AgentOp { ok, error, req_seq } = &frame.event {
+        let env = PushEnvelope::AgentOp {
+            ok: *ok,
+            error: error.clone(),
+            req_seq: *req_seq,
         };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
@@ -157,6 +174,17 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             conns: conns.clone(),
             providers: providers.clone(),
         };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    // Generic daemon-to-GUI error: re-push as an AgentOp envelope so the
+    // GUI surfaces it as an error toast and clears any pending saving state.
+    // Any DaemonEvent::Error not handled by a more specific intercept above
+    // reaches here too — better visible than silently consumed by the shadow's
+    // non-visual frame filter. No req_seq (0) means no request correlation.
+    if let DaemonEvent::Error(msg) = &frame.event {
+        let env = PushEnvelope::AgentOp { ok: false, error: Some(msg.clone()), req_seq: 0 };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
         }

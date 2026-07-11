@@ -365,6 +365,10 @@ pub enum ClientRequest {
     /// re-pushes a fresh [`DaemonEvent::AgentsValues`] as the reply. gui-gated.
     SetAgent {
         original_name: Option<String>,
+        /// Request-sequence number echoed in the reply for stale-reply protection
+        /// (GUI agent-save lifecycle). 0 = no correlation.
+        #[serde(default)]
+        req_seq: u64,
         scope: String,
         name: String,
         description: String,
@@ -380,7 +384,14 @@ pub enum ClientRequest {
     /// shadowed a built-in simply re-exposes the built-in on the next load. The daemon
     /// rebuilds the foreground session's roster and re-pushes a fresh
     /// [`DaemonEvent::AgentsValues`] as the reply. gui-gated.
-    DeleteAgent { scope: String, name: String },
+    DeleteAgent {
+        scope: String,
+        name: String,
+        /// Request-sequence number echoed in the reply for stale-reply protection.
+        /// 0 = no correlation.
+        #[serde(default)]
+        req_seq: u64,
+    },
 
     // ─── GUI OAuth surface (Codex / Kilo Code / xAI login) ───────────────────
     /// Fetch the current OAuth state (idle): the persisted connections + the available
@@ -545,10 +556,25 @@ pub enum DaemonEvent {
     /// when there is no foreground session) so the dashboard never hangs. The GUI host
     /// re-pushes it as an `AgentsValues` envelope; the TUI shadow ignores it.
     AgentsValues {
+        /// Request-sequence number echoed from [`ClientRequest::SetAgent`] /
+        /// [`ClientRequest::DeleteAgent`] for stale-reply protection. 0 = no correlation.
+        #[serde(default)]
+        req_seq: u64,
         agents: Vec<AgentEntry>,
         catalogue_models: Vec<CatalogueModelSnapshot>,
         catalogue_providers: Vec<CatalogueProviderSnapshot>,
         available_tools: Vec<String>,
+    },
+    /// One-shot result of a daemon-side SetAgent/DeleteAgent (attached path).
+    /// On success the authoritative reply is always a fresh [`AgentsValues`] push,
+    /// so this only carries failures. `req_seq` echoes the request sequence for
+    /// stale-reply protection; 0 = no correlation.
+    AgentOp {
+        ok: bool,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        req_seq: u64,
     },
     /// The streaming GUI OAuth surface's authoritative state, for the webview's OAuth
     /// screen. Sent as the one-shot reply to a [`ClientRequest::GetOAuthState`] /

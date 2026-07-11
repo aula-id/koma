@@ -800,6 +800,7 @@ export type PushEnvelope =
   // nothing to offer beyond whatever an existing agent already carries.
   | {
       k: 'AgentsValues'
+      reqSeq: number // 0 = no correlation (read-only fetch / host-built fallback)
       agents: {
         name: string
         description: string
@@ -991,6 +992,12 @@ export type PushEnvelope =
       path: string | null
       error: string | null
     }
+  // Result of a daemon-side SetAgent/DeleteAgent operation (attached path).
+  // `ok: false` + `error` surfaces the failure as a toast and clears the
+  // AgentTab's saving state. On success the authoritative reply is always a
+  // fresh `AgentsValues` push, so this envelope only carries failures — the
+  // AgentsValues push handler below is what the AgentTab watches for success.
+  | { k: 'AgentOp'; ok: boolean; error: string | null; reqSeq: number }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1234,6 +1241,15 @@ type KomaState = {
   // first reply lands (the panel shows a loading row); REPLACED wholesale on
   // each reply. The panel re-requests it every time it's shown.
   usagePreview: UsagePreview | null
+  // Agent-tab saving lifecycle tracker — set right before a SetAgent request,
+  // cleared on the confirmatory push. `seq` prevents stale-reply races.
+  // `null` when no save is in flight.
+  agentSaving: {
+    tabId: string
+    seq: number
+    originalName: string | null
+    newName: string
+  } | null
   // Session ids with a KillSession/DeleteSession req in flight (ResumePalette
   // / StartScreen row kill/delete confirm) — renders that row non-interactive
   // + spinning instead of its trailing action. Kind-scoped (see `DyingMark`)
@@ -1562,6 +1578,27 @@ type KomaState = {
   // gate then falls back to StartScreen immediately instead of waiting on a
   // push that isn't coming.
   detachSession: () => void
+  // Agent-tab saving lifecycle tracker — set right before a SetAgent request,
+  // cleared on the matching confirmatory push (AgentsValues success with the
+  // new name visible, or AgentOp error). `seq` monotonically increases per
+  // save so a stale reply cannot clear a newer request. `null` when no save
+  // is in flight.
+  agentSaving: {
+    tabId: string
+    seq: number
+    originalName: string | null
+    newName: string
+  } | null
+  // Set agentSaving to track a pending save (called right before the SetAgent
+  // request is sent). `tabId` is the agent tab's client-local id, `originalName`
+  // is the pre-edit name (null for create), `newName` is the trimmed final name.
+  // Returns the assigned seq so the caller can pass it in the GuiReq.
+  setAgentSaving: (tabId: string, originalName: string | null, newName: string) => number
+  // Clear agentSaving (called on confirmation — AgentsValues success that
+  // includes the saved agent, or AgentOp error toast). Takes the expected
+  // `seq` to guard against stale clears; an undefined or mismatched seq is
+  // a no-op.
+  clearAgentSaving: (seq?: number) => void
 }
 
 const initialSession: SessionSlice = {
@@ -1789,6 +1826,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   repos: [],
   activeRepoRoot: null,
   stashes: [],
+  agentSaving: null,
 
   push: (env) => {
     switch (env.k) {
@@ -2123,6 +2161,33 @@ export const useKoma = create<KomaState>((set, get) => ({
           }
           return { agents, catalogueModels, catalogueProviders, availableTools, ui: { ...s.ui, tabs, activeTabId } }
         })
+        // After updating agents, check if a pending agent save was confirmed
+        // by the new list. This avoids premature rename/rebind: the tab's
+        // `agentId` stays unchanged until the authoritative AgentsValues push
+        // confirms the save landed. The seq check prevents a stale reply from
+        // clearing a newer save request.
+        const saving = get().agentSaving
+        // reqSeq MUST match the current agentSaving.seq or this is a stale
+        // reply. reqSeq === 0 (uncorrelated fallback from a read-only fetch
+        // or host-built reply) never clears a pending save — the proper
+        // SetAgent/DeleteAgent path always carries the real seq.
+        if (saving && env.reqSeq === saving.seq) {
+          const saved = get().agents.find((a) => a.name === saving.newName)
+          if (saved) {
+            get().clearAgentSaving(saving.seq)
+            // Rename the agent tab so re-clicking its row in the sidebar
+            // focuses this same tab instead of opening a duplicate.
+            get().renameAgentTab(saving.originalName, saving.newName)
+            // Toast a SUCCESS confirmation — the daemon's save succeeded.
+            const text = saving.originalName && saving.originalName !== saving.newName
+              ? `renamed to ${saving.newName}`
+              : 'agent saved'
+            const toastSeq = get().ui.toastSeq + 1
+            set((s) => ({
+              ui: { ...s.ui, toastSeq, toast: { id: toastSeq, text, kind: 'success' } },
+            }))
+          }
+        }
         break
       }
       case 'OAuthState': {
@@ -2408,6 +2473,15 @@ export const useKoma = create<KomaState>((set, get) => ({
         if (isStashOp) {
           get().refreshStashes()
         }
+        // A successful commit, fetch, pull, or push changes graph-visible refs
+        // (new commits on HEAD, updated remote-tracking refs, or both) — refresh
+        // the commit graph so it isn't left stale. Uses the existing serialized
+        // refreshGraph() which guards against duplicate in-flight requests.
+        // These ops are separate from HEAD-moving ops (checkout/merge/rebase etc.)
+        // which are handled above, and from stash ops (no graph impact).
+        if (env.ok && (env.op === 'commit' || env.op === 'fetch' || env.op === 'pull' || env.op === 'push')) {
+          get().refreshGraph()
+        }
         break
       }
       case 'KeyList':
@@ -2471,6 +2545,31 @@ export const useKoma = create<KomaState>((set, get) => ({
             : {}
         })
         break
+      case 'AgentOp': {
+        // Daemon SetAgent/DeleteAgent result — surface the error as a toast
+        // and clear the pending saving state. Success is authoritative via
+        // AgentsValues, so only failures use this envelope.
+        // reqSeq MUST match the current agentSaving.seq or this is a stale
+        // reply (a prior request that landed after a newer one was issued).
+        // reqSeq === 0 (uncorrelated fallback) never clears a pending save
+        // — the new DaemonEvent::AgentOp from requests_agents.rs always
+        // carries the proper seq, so only that path can clear.
+        const saving = get().agentSaving
+        if (!saving || env.reqSeq !== saving.seq) break
+        if (!env.ok && env.error) {
+          const text = `agent: ${env.error}`
+          set((s) => {
+            const raise = text !== s.ui.toast?.text
+            const seq = raise ? s.ui.toastSeq + 1 : s.ui.toastSeq
+            return raise
+              ? { ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } }, agentSaving: null }
+              : { agentSaving: null }
+          })
+        } else {
+          set(() => ({ agentSaving: null }))
+        }
+        break
+      }
     }
   },
 
@@ -2855,5 +2954,22 @@ export const useKoma = create<KomaState>((set, get) => ({
     // to stop streaming whatever the dead session's stream tab was targeting
     // (mirrors the Snapshot handler's `switched` branch).
     get().syncStreamView()
+  },
+  // Track a pending agent-save request so the AgentTab can show a spinner,
+  // disable the Save button, and receive success/error feedback without
+  // premature rename/rebind. `seq` monotonically increases per save so the
+  // confirming push (AgentsValues or AgentOp) can reject a stale reply by
+  // comparing against `get().agentSaving.seq`.
+  setAgentSaving: (tabId, originalName, newName) => {
+    const current = get().agentSaving
+    const seq = (current?.seq ?? 0) + 1
+    set(() => ({ agentSaving: { tabId, seq, originalName, newName } }))
+    return seq
+  },
+  clearAgentSaving: (seq) => {
+    set((s) => {
+      if (seq !== undefined && s.agentSaving?.seq !== seq) return {} // stale, don't clear
+      return { agentSaving: null }
+    })
   },
 }))

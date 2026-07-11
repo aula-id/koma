@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Trash2, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { Tab } from '../store/koma'
+import { BrailleSpinner } from './BrailleSpinner'
 import { Chips, Field, Select, TextInput } from './panels/form'
 
 type AgentTabProps = {
@@ -20,7 +21,8 @@ export default function AgentTab({ tab }: AgentTabProps) {
   const catalogueModels = useKoma((s) => s.catalogueModels)
   const catalogueProviders = useKoma((s) => s.catalogueProviders)
   const availableTools = useKoma((s) => s.availableTools)
-  const renameAgentTab = useKoma((s) => s.renameAgentTab)
+  const agentSaving = useKoma((s) => s.agentSaving)
+  const setAgentSaving = useKoma((s) => s.setAgentSaving)
   const theme = useKoma((s) => s.config.theme)
   const palettes = useKoma((s) => s.config.palettes)
 
@@ -37,6 +39,15 @@ export default function AgentTab({ tab }: AgentTabProps) {
   const [prompt, setPrompt] = useState(existing?.prompt ?? '')
   const [scope, setScope] = useState<'global' | 'session'>('session')
   const [armedDelete, setArmedDelete] = useState(false)
+  // Local validation error messages. Cleared when the field value changes
+  // (inline in the onChange handler) and re-computed on save if still invalid.
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [descError, setDescError] = useState<string | null>(null)
+
+  // Whether THIS tab's save is in flight — derived from the store's agentSaving
+  // tracker by matching on the client-local tab id (not agentId), so a different
+  // tab's save never disables this one.
+  const isSaving = agentSaving?.tabId === tab.id
 
   // Re-hydrate ONLY when the tab's identity (agentId) actually changes — a
   // genuine switch to a different agent, or the rebind after a successful
@@ -46,8 +57,8 @@ export default function AgentTab({ tab }: AgentTabProps) {
   //
   // `hydratedFor` is a ONE-SHOT marker per identity: it's set the FIRST time
   // this effect sees a given agentId, whether or not the matching entry has
-  // arrived yet. Without that, an identity change right after an optimistic
-  // rebind (the entry isn't in `agents` yet — this tab's own SetAgent reply
+  // arrived yet. Without that, an identity change right after a save
+  // (the entry isn't in `agents` yet — this tab's own SetAgent reply
   // hasn't landed as a push) would leave the marker unadvanced, so the SAME
   // effect re-fires on every later `agents` update until the entry finally
   // shows up — at which point it would unconditionally overwrite whatever the
@@ -106,8 +117,21 @@ export default function AgentTab({ tab }: AgentTabProps) {
     return [...availableTools, ...extra].map((t) => ({ value: t, label: t }))
   }, [availableTools, tools])
 
+  // Derived validation: the name field must be non-empty after trimming.
+  const trimmedName = name.trim()
+  const trimmedDesc = description.trim()
+  const canSave = !isSaving && trimmedName.length > 0 && trimmedDesc.length > 0
+
   const save = () => {
-    if (!description.trim()) return
+    // Client-side validation (visible inline via the error state below).
+    const nOk = trimmedName.length > 0
+    const dOk = trimmedDesc.length > 0
+    if (!nOk) setNameError('Name is required')
+    else setNameError(null)
+    if (!dOk) setDescError('Description is required')
+    else setDescError(null)
+    if (!nOk || !dOk) return
+
     // This save commits the currently-typed state, so any "typed since" flag
     // is moot going forward — clear it before the identity-changing rebind
     // below so the one-shot hydration effect is free to (harmlessly) settle
@@ -124,23 +148,24 @@ export default function AgentTab({ tab }: AgentTabProps) {
       : existing?.source === 'global'
         ? 'global'
         : 'session'
-    const trimmedName = name.trim()
+
+    // Track this save request BEFORE firing so the store can correlate the
+    // confirming AgentsValues/AgentOp push. NO premature renameAgentTab here:
+    // the tab's agentId stays unchanged until the authoritative push confirms
+    // the save landed, preventing stale/raced rebinds.
+    const seq = setAgentSaving(tab.id, agentId, trimmedName)
     req({
       r: 'SetAgent',
       originalName: agentId,
       scope: effectiveScope,
       name: trimmedName,
-      description: description.trim(),
+      description: trimmedDesc,
       conditions,
       modelUuid: modelUuid || null,
       tools,
       prompt,
+      reqSeq: seq,
     })
-    // Optimistic rebind — no dedicated ack exists, just a fresh AgentsValues
-    // push. Keeps this tab pointed at the (possibly just-created, possibly
-    // just-renamed) agent so a later click on its row in AgentsPanel focuses
-    // this same tab instead of opening a duplicate.
-    if (trimmedName) renameAgentTab(agentId, trimmedName)
   }
 
   const confirmDelete = () => {
@@ -150,6 +175,17 @@ export default function AgentTab({ tab }: AgentTabProps) {
     // No local close needed — the next AgentsValues push will no longer list
     // this agent, and the store's push handler closes the tab for us.
   }
+
+  // Shared styling for the validation error message chip — same visual as
+  // the "delete forever?" chip in the footer.
+  const errorChip = (msg: string) => (
+    <span
+      className="mt-0.5 inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium"
+      style={{ color: errorTint, backgroundColor: `color-mix(in srgb, ${errorTint} 16%, transparent)` }}
+    >
+      {msg}
+    </span>
+  )
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col bg-koma-bg text-koma-fg">
@@ -173,9 +209,11 @@ export default function AgentTab({ tab }: AgentTabProps) {
               onChange={(e) => {
                 dirty.current = true
                 setName(e.target.value)
+                if (nameError) setNameError(null)
               }}
               placeholder="e.g. code-reviewer"
             />
+            {nameError && errorChip(nameError)}
           </Field>
 
           <Field label="Description">
@@ -184,9 +222,11 @@ export default function AgentTab({ tab }: AgentTabProps) {
               onChange={(e) => {
                 dirty.current = true
                 setDescription(e.target.value)
+                if (descError) setDescError(null)
               }}
               placeholder="required — shown in the delegation picker"
             />
+            {descError && errorChip(descError)}
           </Field>
 
           <Field label="Conditions">
@@ -241,12 +281,11 @@ export default function AgentTab({ tab }: AgentTabProps) {
           ) : (
             <Field label="Scope">
               {/* `existing` is briefly undefined right after a create-save's
-                  optimistic rebind (the confirming AgentsValues push hasn't
-                  landed yet) — fall back to the scope the user actually
-                  picked in the create form rather than defaulting to
-                  "Session" and flashing the wrong tier for a moment. Once
-                  `existing` resolves this switches to the authoritative
-                  value (self-corrects either way). */}
+                  confirming push (the AgentsValues push hasn't landed yet) —
+                  fall back to the scope the user actually picked in the create
+                  form rather than defaulting to "Session" and flashing the wrong
+                  tier for a moment. Once `existing` resolves this switches to
+                  the authoritative value (self-corrects either way). */}
               <span className="text-[12px] text-koma-fg opacity-60">
                 {existing
                   ? existing.source === 'global'
@@ -294,8 +333,9 @@ export default function AgentTab({ tab }: AgentTabProps) {
               delete forever?
               <button
                 onClick={confirmDelete}
+                disabled={isSaving}
                 aria-label="Confirm delete"
-                className="flex items-center gap-1 rounded px-1.5 font-semibold opacity-90 transition-opacity hover:opacity-100"
+                className="flex items-center gap-1 rounded px-1.5 font-semibold opacity-90 transition-opacity hover:opacity-100 disabled:opacity-40"
                 style={{ color: errorTint }}
               >
                 <Check size={13} className="flex-none" />
@@ -313,7 +353,8 @@ export default function AgentTab({ tab }: AgentTabProps) {
           ) : (
             <button
               onClick={() => setArmedDelete(true)}
-              className="flex items-center gap-1.5 rounded px-2.5 py-1 text-[12px] opacity-80 transition-opacity hover:opacity-100"
+              disabled={isSaving}
+              className="flex items-center gap-1.5 rounded px-2.5 py-1 text-[12px] opacity-80 transition-opacity hover:opacity-100 disabled:opacity-40"
               style={{ color: errorTint }}
             >
               <Trash2 size={13} className="flex-none" />
@@ -322,10 +363,17 @@ export default function AgentTab({ tab }: AgentTabProps) {
           ))}
         <button
           onClick={save}
-          disabled={!description.trim()}
-          className="rounded border border-koma-border px-3 py-1.5 text-[12px] font-medium text-koma-fg transition-colors enabled:hover:bg-koma-hover disabled:opacity-40"
+          disabled={!canSave}
+          className="flex items-center gap-1.5 rounded border border-koma-border px-3 py-1.5 text-[12px] font-medium text-koma-fg transition-colors enabled:hover:bg-koma-hover disabled:opacity-40"
         >
-          Save
+          {isSaving ? (
+            <>
+              <BrailleSpinner size={12} />
+              Saving
+            </>
+          ) : (
+            'Save'
+          )}
         </button>
       </div>
     </div>
