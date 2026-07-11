@@ -7,7 +7,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { GitGraph, Loader2, RefreshCw } from 'lucide-react'
+import { GitGraph, Loader2, RefreshCw, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { GitRef } from '../store/koma'
 import { computeGitGraph } from '../lib/gitGraphLayout'
@@ -55,6 +55,7 @@ export default function GraphTab() {
   const refreshGraph = useKoma((s) => s.refreshGraph)
   const loadMoreGraph = useKoma((s) => s.loadMoreGraph)
   const selectCommit = useKoma((s) => s.selectCommit)
+  const clearSelection = useKoma((s) => s.clearSelection)
   const gitRebase = useKoma((s) => s.gitRebase)
   const graphMode = useKoma((s) => s.graph.graphMode)
   // Whether THIS tab is the one currently showing (routes/index.tsx toggles
@@ -484,23 +485,39 @@ export default function GraphTab() {
               old bottom split, mirroring GitKraken's own commit-detail
               placement. `min-w-0` (on top of the fixed inline width) keeps
               it a well-behaved flex child; its own `overflow-y-auto` scrolls
-              independently of the graph column. */}
-          <div
-            onMouseDown={startDetailResize}
-            className="w-[5px] flex-none cursor-ew-resize border-l border-koma-border hover:bg-koma-grip"
-          />
-          <div
-            style={{ width: detailW }}
-            className="flex min-h-0 min-w-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel2"
-          >
-            {selectedSha ? (
-              <GraphDetail />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center px-4 text-center text-[12px] text-koma-dim opacity-50">
-                Select a commit
+              independently of the graph column. Only rendered while a commit
+              is selected — closable via the header's X button, which calls
+              clearSelection; the center column's own flex-1 then reflows to
+              fill the freed width automatically. */}
+          {selectedSha && (
+            <>
+              {/* resize grip */}
+              <div
+                onMouseDown={startDetailResize}
+                className="w-[5px] flex-none cursor-ew-resize border-l border-koma-border hover:bg-koma-grip"
+              />
+              <div
+                style={{ width: detailW }}
+                className="flex min-h-0 min-w-0 flex-none flex-col overflow-y-auto border-l border-koma-border bg-koma-panel2"
+              >
+                <div className="flex flex-none items-center justify-between border-b border-koma-border px-3 py-1.5">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-koma-dim">Commit Detail</span>
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    title="Close detail"
+                    aria-label="Close detail"
+                    className="flex h-5 w-5 items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <GraphDetail />
+                </div>
               </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
       )}
 

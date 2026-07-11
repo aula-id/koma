@@ -9,7 +9,7 @@ const LEFT_MARGIN = 132 // author-label gutter
 const RIGHT_MARGIN = 20
 const LANE_H = 30 // one author lane
 const TOP_PAD = 14
-const BAR_STRIP_H = 46 // add(up)/del(down) timeline strip
+const BAR_STRIP_MIN = 90 // add(up)/del(down) timeline strip — floor when many authors/short container
 const AXIS_H = 22 // x-axis date tick labels
 const BOTTOM_PAD = 6
 const MIN_R = 3
@@ -67,24 +67,49 @@ export default function GraphBubble() {
   // ---- Responsive width (never divide by 0) ----
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
+  // ---- Responsive height (never let the histogram see a 0 before the
+  // ResizeObserver settles) — non-zero default, same lesson as GraphTab's
+  // viewportH: the container can be measured while still display:none (this
+  // component only mounts in bubble mode, but its GraphTab parent may itself
+  // be the hidden tab), so a raw ResizeObserver alone can miss the reveal.
+  const [viewportH, setViewportH] = useState(() =>
+    typeof window !== 'undefined' ? window.innerHeight : 800,
+  )
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const ro = new ResizeObserver(() => {
       if (el.clientWidth > 0) setWidth(el.clientWidth)
+      if (el.clientHeight > 0) setViewportH(el.clientHeight)
     })
     ro.observe(el)
     if (el.clientWidth > 0) setWidth(el.clientWidth)
+    if (el.clientHeight > 0) setViewportH(el.clientHeight)
     // Belt-and-suspenders: the very first synchronous read above can race the
     // initial paint (same lesson as GraphTab's viewportH measurement).
     const raf = requestAnimationFrame(() => {
       if (el.clientWidth > 0) setWidth(el.clientWidth)
+      if (el.clientHeight > 0) setViewportH(el.clientHeight)
     })
     return () => {
       ro.disconnect()
       cancelAnimationFrame(raf)
     }
   }, [])
+
+  // Re-measure height when the graph tab actually becomes the visible one —
+  // mirrors GraphTab's own isActiveTab re-measure effect (WebKitGTK
+  // frequently misses the ResizeObserver firing on a display:none -> visible
+  // flip).
+  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'graph')
+  useEffect(() => {
+    if (!isActiveTab) return
+    const raf = requestAnimationFrame(() => {
+      const el = containerRef.current
+      if (el && el.clientHeight > 0) setViewportH(el.clientHeight)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [isActiveTab])
 
   // ---- Path-filter control (GK5b Part 3) ----
   const [pathInput, setPathInput] = useState(activePath ?? '')
@@ -108,7 +133,14 @@ export default function GraphBubble() {
 
   const chartW = Math.max(0, width - LEFT_MARGIN - RIGHT_MARGIN)
   const lanesH = authors.length * LANE_H
-  const svgH = TOP_PAD + lanesH + BAR_STRIP_H + AXIS_H + BOTTOM_PAD
+  // Author lanes stay fixed at the top; the add/del histogram absorbs
+  // whatever vertical space the container has beyond the fixed chrome
+  // (lanes + axis + padding), down to a minimum floor — so the chart fills
+  // the (tall, flex-1) body container instead of leaving dead empty space
+  // below a fixed-height strip.
+  const contentMinH = TOP_PAD + lanesH + BAR_STRIP_MIN + AXIS_H + BOTTOM_PAD
+  const svgH = Math.max(contentMinH, viewportH)
+  const barStripH = svgH - TOP_PAD - lanesH - AXIS_H - BOTTOM_PAD
 
   const timestamps = useMemo(() => commits.map((c) => Date.parse(c.date)).filter((t) => !Number.isNaN(t)), [commits])
   const minTs = timestamps.length > 0 ? Math.min(...timestamps) : 0
@@ -125,7 +157,7 @@ export default function GraphBubble() {
   )
 
   const barStripTop = TOP_PAD + lanesH
-  const barBaseline = barStripTop + BAR_STRIP_H / 2
+  const barBaseline = barStripTop + barStripH / 2
 
   const [hover, setHover] = useState<HoverState | null>(null)
   const showTooltip = (e: ReactMouseEvent, commit: ActivityCommit) =>
@@ -276,7 +308,7 @@ export default function GraphBubble() {
               const ts = Date.parse(c.date)
               if (Number.isNaN(ts)) return null
               const cx = xScale(ts)
-              const halfH = BAR_STRIP_H / 2 - 2
+              const halfH = barStripH / 2 - 2
               const addH = (c.added / maxAbsLines) * halfH
               const delH = (c.deleted / maxAbsLines) * halfH
               return (
@@ -310,7 +342,7 @@ export default function GraphBubble() {
             {/* X-axis date ticks */}
             {ticks.map((t, i) => {
               const cx = xScale(t.ts)
-              const y = barStripTop + BAR_STRIP_H + AXIS_H / 2 + 4
+              const y = barStripTop + barStripH + AXIS_H / 2 + 4
               return (
                 <text
                   key={i}
