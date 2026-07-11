@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Circle, CircleDot, Loader2 } from 'lucide-react'
+import { Circle, CircleDot } from 'lucide-react'
 import { Field, TextInput, Chips, Select, Combobox } from '../form'
 import { FormActions } from '../helpers'
 import { useKoma } from '../../../store/koma'
 import type { Role, Model, RouteEntry } from '../../../types/config'
+import { BrailleSpinner } from '../../BrailleSpinner'
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
   { value: 'main', label: 'main' },
@@ -179,7 +180,7 @@ export function ModelForm({
 
                 return routesLoading ? (
                   <div className="flex items-center gap-2 px-2 py-1 text-[11px] text-koma-fg opacity-50">
-                    <Loader2 size={12} className="flex-none animate-spin" />
+                    <BrailleSpinner size={12} />
                     Loading routes…
                   </div>
                 ) : uniqueRoutes.length > 0 ? (

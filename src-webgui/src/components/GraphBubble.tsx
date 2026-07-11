@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { ChartScatter, Filter, Loader2, X } from 'lucide-react'
+import { ChartScatter, Filter, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { ActivityCommit } from '../store/koma'
 import { aggregateAuthors, authorSparklines, buildTimeTicks, linearScale, radiusScale } from '../lib/bubbleScales'
 import { AuthorAvatar } from './AuthorAvatar'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // ---- Render geometry --------------------------------------------------
 const LEFT_MARGIN = 132 // author-label gutter
@@ -180,7 +181,7 @@ export default function GraphBubble() {
               <X size={12} />
             </button>
           )}
-          {loading && <Loader2 size={12} className="flex-none animate-spin text-koma-dim opacity-70" />}
+          {loading && <BrailleSpinner size={12} className="text-koma-dim opacity-70" />}
         </div>
       </div>
 
@@ -198,7 +199,7 @@ export default function GraphBubble() {
           </div>
         ) : loading && commits.length === 0 ? (
           <div className="flex h-full w-full items-center justify-center">
-            <Loader2 size={20} className="animate-spin text-koma-dim opacity-70" />
+            <BrailleSpinner size={20} className="text-koma-dim opacity-70" />
           </div>
         ) : (
           <svg width={Math.max(width, LEFT_MARGIN + RIGHT_MARGIN + 1)} height={svgH} className="block">

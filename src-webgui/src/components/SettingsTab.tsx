@@ -4,7 +4,6 @@ import {
   Copy,
   Eye,
   KeyRound,
-  Loader2,
   Palette as PaletteIcon,
   Plus,
   SlidersHorizontal,
@@ -13,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useKoma, type PaletteInfo } from '../store/koma'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // VSCode-style Settings page, rendered as a tab over the main content column
 // (see routes/index.tsx TabbedMain). A left nav rail scrolls the content pane to
@@ -264,7 +264,7 @@ function SessionSettings() {
   if (!values) {
     return (
       <div className="flex items-center gap-2 py-6 text-[12px] text-koma-fg opacity-45">
-        <Loader2 size={14} className="animate-spin opacity-70" />
+        <BrailleSpinner size={14} className="opacity-70" />
         Loading session settings…
       </div>
     )

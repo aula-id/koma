@@ -1,9 +1,9 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
-import { Loader2 } from 'lucide-react'
 import type { Tab } from '../store/koma'
 import { luminance } from '../lib/luminance'
+import { BrailleSpinner } from './BrailleSpinner'
 
 // ---- Monaco language contributions (Monarch tokenizers ONLY) ----------------
 // editor.api ships ZERO languages. Each basic-languages `.contribution` import
@@ -238,7 +238,7 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
         <Centered>{diff.error}</Centered>
         {tab.loading && (
           <div className="pointer-events-none absolute right-2 top-2 text-koma-dim">
-            <Loader2 size={14} className="animate-spin opacity-70" />
+            <BrailleSpinner size={14} className="opacity-70" />
           </div>
         )}
       </div>
@@ -249,7 +249,7 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
         <Centered>binary file — no preview</Centered>
         {tab.loading && (
           <div className="pointer-events-none absolute right-2 top-2 text-koma-dim">
-            <Loader2 size={14} className="animate-spin opacity-70" />
+            <BrailleSpinner size={14} className="opacity-70" />
           </div>
         )}
       </div>
@@ -257,7 +257,7 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
   if (!diff) {
     return (
       <div className="flex h-full w-full items-center justify-center text-koma-dim">
-        <Loader2 size={18} className="animate-spin opacity-70" />
+        <BrailleSpinner size={18} className="opacity-70" />
       </div>
     )
   }
@@ -273,7 +273,7 @@ export default function DiffTab({ tab }: { tab: DiffTabModel }) {
       )}
       {tab.loading && (
         <div className="pointer-events-none absolute right-2 top-2 text-koma-dim">
-          <Loader2 size={14} className="animate-spin opacity-70" />
+          <BrailleSpinner size={14} className="opacity-70" />
         </div>
       )}
     </div>

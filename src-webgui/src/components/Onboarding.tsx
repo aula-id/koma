@@ -4,7 +4,6 @@ import {
   ArrowRight,
   Check,
   ChevronRight,
-  Loader2,
   Lock,
   Palette,
   Plug,
@@ -16,6 +15,7 @@ import { useKoma } from '../store/koma'
 import { ProviderForm, PREDEFINED, type ProviderSavePayload } from './panels/connector/ProviderForm'
 import { ModelForm } from './panels/connector/ModelForm'
 import type { Model } from '../types/config'
+import { BrailleSpinner } from './BrailleSpinner'
 
 let seq = 0
 const nid = (p: string) => {
@@ -308,7 +308,7 @@ export function Onboarding() {
                 </span>
                 {komaFreePending ? (
                   <span className="flex items-center gap-1.5 text-[11.5px] text-koma-fg opacity-60">
-                    <Loader2 size={11} className="flex-none animate-spin" />
+                    <BrailleSpinner size={11} />
                     Setting up…
                   </span>
                 ) : komaFreeError ? (

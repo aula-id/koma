@@ -1,3 +1,4 @@
+import { RefreshCw } from 'lucide-react'
 import { ExplorePanel } from './panels/ExplorePanel'
 import { GitPanel } from './panels/GitPanel'
 import { McpPanel } from './panels/McpPanel'
@@ -31,6 +32,8 @@ export function Sidebar({ width, view }: SidebarProps) {
   // nothing to filter by, so the toggle is hidden entirely (UsagePanel's own
   // effect forces the scope back to "all" when this goes false).
   const hasSession = useKoma((s) => s.session.id !== null)
+  const refreshGitStatus = useKoma((s) => s.refreshGitStatus)
+  const refreshRepos = useKoma((s) => s.refreshRepos)
 
   return (
     <div
@@ -50,6 +53,20 @@ export function Sidebar({ width, view }: SidebarProps) {
               onChange={setUsageScope}
             />
           </div>
+        )}
+        {view === 'git' && (
+          <button
+            type="button"
+            onClick={() => {
+              refreshGitStatus()
+              refreshRepos()
+            }}
+            title="Refresh"
+            aria-label="Refresh source control"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100"
+          >
+            <RefreshCw size={12} />
+          </button>
         )}
       </div>
       <div className="relative min-h-0 flex-1">
