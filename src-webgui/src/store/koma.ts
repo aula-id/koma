@@ -1661,6 +1661,10 @@ type KomaState = {
   push: (env: PushEnvelope) => void
   // JS -> Rust: typed request helper, tags the envelope { t: 'req', ...g }.
   req: (g: GuiReq) => void
+  // Open `url` in the SYSTEM browser (never inside the webview) — fires the
+  // host-local OpenExternal req. No reply, no store mutation. Used by the
+  // Settings "Account" section's "Manage account on koma.run" link.
+  openExternal: (url: string) => void
   openOmniSearch: () => void
   closeOmniSearch: () => void
   // Queue a workspace path for the Composer to insert into its draft text.
@@ -3011,6 +3015,10 @@ export const useKoma = create<KomaState>((set, get) => ({
     } catch {
       /* ipc unavailable */
     }
+  },
+
+  openExternal: (url) => {
+    get().req({ r: 'OpenExternal', url })
   },
 
   openOmniSearch: () => set((s) => ({ ui: { ...s.ui, omnisearchOpen: true } })),

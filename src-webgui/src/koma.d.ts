@@ -281,6 +281,11 @@ declare global {
     // GetOAuthState/DeleteAgent — works with NO session attached. Reply lands
     // as a fresh OAuthState push (phase 'idle', conns updated).
     | { r: 'DeleteOAuthConn'; uuid: string }
+    // Open `url` in the SYSTEM browser (never inside the webview) — e.g. the
+    // Settings "Account" section's "Manage account on koma.run" link. Pure
+    // host-local side effect (spawns the OS opener, fire-and-forget): no
+    // session/attach needed, no reply, no push.
+    | { r: 'OpenExternal'; url: string }
     // Extension STORE (koma.run marketplace). Browse/detail hit the PUBLIC store
     // endpoints; install/uninstall mutate the live daemon (managers + config), so
     // the whole family is forwarded to the attached daemon. Replies land as the

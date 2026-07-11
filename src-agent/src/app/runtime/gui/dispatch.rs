@@ -660,6 +660,14 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 HostCtl::DeleteOAuthConn { uuid },
             );
         }
+        // Open a URL in the SYSTEM browser (Settings "Account" section's "Manage account on
+        // koma.run" link). HOST-LOCAL, unconditional, fire-and-forget: `open_in_browser`
+        // spawns the OS opener and detaches immediately (never blocks this thread), so it's
+        // called inline here rather than routed through `HostCtl`/a background thread. No
+        // reply, no push — nothing for the webview to await.
+        GuiReq::OpenExternal { url } => {
+            let _ = crate::service::oauth::browser::open_in_browser(&url);
+        }
         // Extension STORE browse/detail/installed-list: HOST-LOCAL — ALWAYS routed to the
         // host-relay thread, never the daemon, regardless of attach state, same reasoning
         // as `GitStatus`/`FileDiff`. koma.run browse/detail is a PUBLIC (no-auth) network
