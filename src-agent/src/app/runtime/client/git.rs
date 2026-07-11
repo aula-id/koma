@@ -119,14 +119,32 @@ fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
 /// [`git_cmd_env`] with no extra env var — every LOCAL git op (status/diff/stage/
 /// unstage/discard/commit) goes through this; only [`super::git_remote`]'s
 /// fetch/pull/push need the `extra` slot (a `GIT_SSH_COMMAND` override).
-fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
+pub(super) fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output> {
     git_cmd_env(dir, args, None)
 }
+
+/// Process-global choke point serializing EVERY host `git` subprocess spawned via
+/// [`git_cmd_env`]. A `git checkout` rewrites the working tree and holds
+/// `.git/index.lock` for its duration; a linked worktree shares its `.git` with every
+/// other worktree/session off the same repo, so an unserialized `git status`/`git log`
+/// racing that checkout can collide on the lock file and stall — exactly the GUI
+/// branch-switch freeze this guards against. Held only around the subprocess's own
+/// exec+wait (see [`git_cmd_env`]), never longer, and only on WORKER threads (never the
+/// UI thread), so this purely ORDERS git ops relative to each other — it does not block
+/// the GUI. `const Mutex::new` in a `static` needs no `Lazy`/`OnceLock` wrapper on
+/// modern Rust.
+static GIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// [`git_cmd`]'s general form: same `GIT_TERMINAL_PROMPT=0` guard, plus an optional
 /// extra `(name, value)` env var. `pub(super)` so the sibling [`super::git_remote`]
 /// module can inject `GIT_SSH_COMMAND` for a repo's assigned key without duplicating
-/// the `Command` plumbing (or losing the terminal-prompt guard).
+/// the `Command` plumbing (or losing the terminal-prompt guard). This is the SINGLE
+/// leaf that actually spawns a `git` process for every host git op (status/diff/stage/
+/// unstage/discard/commit/branch/remote/graph/destructive) — every caller in `client/`
+/// funnels through here (directly or via a thin same-signature wrapper), which is what
+/// makes the [`GIT_LOCK`] below an effective, single choke point rather than one of
+/// several. Never called re-entrantly while already holding [`GIT_LOCK`] (this fn is a
+/// leaf — it spawns one subprocess and returns — so no nested acquire is possible).
 pub(super) fn git_cmd_env(
     dir: &std::path::Path,
     args: &[&str],
@@ -137,6 +155,11 @@ pub(super) fn git_cmd_env(
     if let Some((k, v)) = extra {
         cmd.env(k, v);
     }
+    // Poison-safe acquire: a panicked holder must not permanently brick every future
+    // git op (a bricked lock here would freeze the WHOLE git panel, worse than the bug
+    // being fixed). Held only for the scope of this call — the guard drops (and the
+    // lock releases) as soon as `cmd.output()` returns, right before this fn returns.
+    let _guard = GIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     cmd.output().ok()
 }
 
