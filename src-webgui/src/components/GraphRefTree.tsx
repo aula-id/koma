@@ -11,7 +11,7 @@ import { remoteShortName } from '../lib/gitRefs'
 // when that ref's commit isn't in the currently-loaded graph page. A hover
 // "checkout" affordance (local/remote only — checking out a tag detaches
 // HEAD, so tags never get one) reuses GitChangesShared's `RowAction` atom,
-// the exact same subtle row-hover button GraphChanges' file rows use.
+// the same subtle row-hover button the sidebar Source Control panel uses.
 function RefRow({
   b,
   icon,
@@ -55,9 +55,10 @@ type Props = {
   scrollToSha: (sha: string) => void
 }
 
-// The graph tab's left-sidebar LOCAL/REMOTE/TAGS ref-tree (GK4b), rendered
-// below `<GraphChanges/>` in the same scrollable stack (see GraphTab's
-// sidebar column). Reuses the global `branches` slice (GitBranchList — G4 +
+// The graph tab's left-sidebar LOCAL/REMOTE/TAGS ref-tree (GK4b) — now the
+// sole occupant of that sidebar column (see GraphTab's sidebar column; the
+// GK3 Changes accordion was removed so working-tree changes live only in
+// the sidebar Source Control panel). Reuses the global `branches` slice (GitBranchList — G4 +
 // GK4a's tag addition) as the AUTHORITATIVE full ref list, rather than
 // re-deriving refs from the loaded commit page: every branch/tag exists
 // whether or not its tip commit happens to be inside the currently-loaded

@@ -17,7 +17,6 @@ import { GraphContextMenu, type GraphMenuTarget } from './GraphContextMenu'
 import { ConflictBanner } from './ConflictBanner'
 import { RebaseDropConfirm } from './RebaseDropConfirm'
 import { GraphBreadcrumb, GraphBubblePlaceholder } from './GraphBreadcrumb'
-import { GraphChanges } from './GraphChanges'
 import { GraphRefTree } from './GraphRefTree'
 
 // Rows outside the viewport rendered as a buffer above/below (smooth fast scroll).
@@ -29,7 +28,8 @@ const LOAD_MORE_PX = 400
 const DETAIL_W_MIN = 240
 const DETAIL_W_MAX = 560
 const DETAIL_W_DEFAULT = 320
-// Left sidebar (GK3: Changes accordion, GK4b: ref-tree below it)
+// Left sidebar (GK4b: ref-tree; the GK3 Changes accordion was removed —
+// working-tree changes live only in the sidebar Source Control panel now)
 // resizable-width clamp (px).
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 420
@@ -325,15 +325,15 @@ export default function GraphTab() {
 
       {graphMode === 'rail' && (
         <div className="flex min-h-0 flex-1">
-          {/* LEFT sidebar (GK3 Changes + GK4b ref-tree): a scrollable
-              vertical stack — each section is its own AccordionSection
-              (flex-fills when open, collapses to just its header when
-              closed), so they stack without any further restructuring. */}
+          {/* LEFT sidebar (GK4b ref-tree only — the GK3 Changes accordion
+              was removed to avoid duplicating the sidebar Source Control
+              panel): a scrollable vertical stack of AccordionSections
+              (LOCAL/REMOTE/TAGS), each flex-filling when open and collapsing
+              to just its header when closed. */}
           <div
             style={{ width: sidebarW }}
             className="flex min-h-0 flex-none flex-col overflow-y-auto border-r border-koma-border"
           >
-            <GraphChanges />
             <GraphRefTree scrollToSha={scrollToSha} />
           </div>
           <div
