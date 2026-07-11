@@ -5,12 +5,15 @@ import {
   Eye,
   KeyRound,
   Palette as PaletteIcon,
+  PanelLeft,
   Plus,
   SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react'
-import { useKoma, type PaletteInfo } from '../store/koma'
+import type { LucideIcon } from 'lucide-react'
+import { useKoma, resolveActivityBarOrder, type PaletteInfo } from '../store/koma'
+import { ACTIVITY_BAR_ITEMS } from './ActivityBar'
 import { Field, Segmented, TextInput, Toggle } from './panels/form'
 import { BrailleSpinner } from './BrailleSpinner'
 
@@ -22,7 +25,11 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'appearance' | 'session' | 'sshKeys'
+type SectionId = 'appearance' | 'session' | 'activityBar' | 'sshKeys'
+
+// Top-to-bottom order of the sections below — shared by `sectionRef` and the
+// scroll-spy so adding/reordering a section only needs a change here.
+const SECTION_ORDER: SectionId[] = ['appearance', 'session', 'activityBar', 'sshKeys']
 
 export default function SettingsTab() {
   const req = useKoma((s) => s.req)
@@ -33,11 +40,18 @@ export default function SettingsTab() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const appearanceRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<HTMLDivElement>(null)
+  const activityBarRef = useRef<HTMLDivElement>(null)
   const sshKeysRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState<SectionId>('appearance')
 
   const sectionRef = (id: SectionId) =>
-    id === 'appearance' ? appearanceRef : id === 'session' ? sessionRef : sshKeysRef
+    id === 'appearance'
+      ? appearanceRef
+      : id === 'session'
+        ? sessionRef
+        : id === 'activityBar'
+          ? activityBarRef
+          : sshKeysRef
 
   // Nav click → smooth-scroll the pane to the section header.
   const goto = (id: SectionId) => {
@@ -46,20 +60,21 @@ export default function SettingsTab() {
   }
 
   // Scroll spy: highlight the nav item whose section is at the top of the pane.
-  // Uses viewport rects (robust against layout offsets) — a section wins once
-  // its header crosses ~80px below the pane's top edge; SSH Keys (the last
-  // section) beats Session, which beats Appearance (the default).
+  // Uses viewport rects (robust against layout offsets) — walking sections
+  // top-to-bottom and keeping the LAST one whose header has crossed ~80px below
+  // the pane's top edge means a later section always beats an earlier one.
   const onScroll = () => {
     const pane = scrollRef.current
-    const sess = sessionRef.current
-    const keys = sshKeysRef.current
-    if (!pane || !sess || !keys) return
+    if (!pane) return
     const paneTop = pane.getBoundingClientRect().top
-    const sessDelta = sess.getBoundingClientRect().top - paneTop
-    const keysDelta = keys.getBoundingClientRect().top - paneTop
-    if (keysDelta < 80) setActive('sshKeys')
-    else if (sessDelta < 80) setActive('session')
-    else setActive('appearance')
+    let current: SectionId = 'appearance'
+    for (const id of SECTION_ORDER) {
+      const el = sectionRef(id).current
+      if (!el) continue
+      const delta = el.getBoundingClientRect().top - paneTop
+      if (delta < 80) current = id
+    }
+    setActive(current)
   }
 
   return (
@@ -79,6 +94,12 @@ export default function SettingsTab() {
           label="Session"
           active={active === 'session'}
           onClick={() => goto('session')}
+        />
+        <NavItem
+          icon={<PanelLeft size={15} />}
+          label="Sidebar"
+          active={active === 'activityBar'}
+          onClick={() => goto('activityBar')}
         />
         <NavItem
           icon={<KeyRound size={15} />}
@@ -103,6 +124,14 @@ export default function SettingsTab() {
           <section ref={sessionRef} className="mt-12">
             <SectionHeader title="Session" desc="Preferences for the current session." />
             <SessionSettings />
+          </section>
+
+          <section ref={activityBarRef} className="mt-12">
+            <SectionHeader
+              title="Sidebar"
+              desc="Show or hide activity-bar icons. Hidden icons move into the “…” overflow menu instead of disappearing — drag an icon on the activity bar itself to reorder it."
+            />
+            <ActivityBarSettings />
           </section>
 
           <section ref={sshKeysRef} className="mt-12">
@@ -388,6 +417,67 @@ function SettingRow({
         {desc && <div className="mt-0.5 text-[11.5px] leading-snug text-koma-fg opacity-45">{desc}</div>}
       </div>
       <div className="flex-none">{children}</div>
+    </div>
+  )
+}
+
+// ── Sidebar (ActivityBar layout) ─────────────────────────────────────────────
+// Per-icon visibility toggles for the built-in activity-bar items
+// (ACTIVITY_BAR_ITEMS, shared with ActivityBar.tsx). Reordering itself only
+// happens by dragging on the bar; this list just mirrors the effective order
+// so the toggle a user reaches for is where they'd expect it after a drag.
+// Toggling here writes through the same `activityBar` store slice the bar
+// reads (setActivityBarHidden), persisted to localStorage — no host round trip.
+
+function ActivityBarSettings() {
+  const order = useKoma((s) => s.activityBar.order)
+  const hidden = useKoma((s) => s.activityBar.hidden)
+  const setActivityBarHidden = useKoma((s) => s.setActivityBarHidden)
+
+  const allIds = ACTIVITY_BAR_ITEMS.map((i) => i.view)
+  const effectiveOrder = resolveActivityBarOrder(order, allIds)
+  const itemByView = new Map<string, (typeof ACTIVITY_BAR_ITEMS)[number]>(
+    ACTIVITY_BAR_ITEMS.map((i) => [i.view, i]),
+  )
+  const hiddenSet = new Set(hidden)
+
+  return (
+    <div className="flex flex-col">
+      {effectiveOrder.map((view) => {
+        const item = itemByView.get(view)
+        if (!item) return null
+        return (
+          <ActivityBarRow
+            key={view}
+            icon={item.icon}
+            label={item.label}
+            visible={!hiddenSet.has(view)}
+            onToggle={(v) => setActivityBarHidden(view, !v)}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function ActivityBarRow({
+  icon: Icon,
+  label,
+  visible,
+  onToggle,
+}: {
+  icon: LucideIcon
+  label: string
+  visible: boolean
+  onToggle: (v: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-6 border-b border-koma-border py-3">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <Icon size={15} className="flex-none text-koma-fg opacity-60" />
+        <span className="truncate text-[13px] text-koma-fg">{label}</span>
+      </div>
+      <Toggle on={visible} onChange={onToggle} />
     </div>
   )
 }
