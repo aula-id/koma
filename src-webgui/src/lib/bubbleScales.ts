@@ -81,6 +81,39 @@ export function aggregateAuthors(commits: ActivityCommit[]): AuthorAgg[] {
   )
 }
 
+// Per-author commit-count buckets across the whole commit time range.
+// Keyed identically to aggregateAuthors (email||author||'?') so a card can
+// look its author up by AuthorAgg.key. Returns [] semantics via an empty Map
+// when there are no date-parseable commits.
+export function authorSparklines(commits: ActivityCommit[], bucketCount: number): Map<string, number[]> {
+  const map = new Map<string, number[]>()
+  if (bucketCount <= 0) return map
+  const stamped = commits
+    .map((c) => ({ c, t: Date.parse(c.date) }))
+    .filter((x) => !Number.isNaN(x.t))
+  if (stamped.length === 0) return map
+  let min = Infinity
+  let max = -Infinity
+  for (const { t } of stamped) {
+    if (t < min) min = t
+    if (t > max) max = t
+  }
+  const span = max - min || 1
+  for (const { c, t } of stamped) {
+    const key = c.email.trim() || c.author.trim() || '?'
+    let arr = map.get(key)
+    if (!arr) {
+      arr = new Array(bucketCount).fill(0)
+      map.set(key, arr)
+    }
+    let idx = Math.floor(((t - min) / span) * bucketCount)
+    if (idx >= bucketCount) idx = bucketCount - 1
+    if (idx < 0) idx = 0
+    arr[idx] += 1
+  }
+  return map
+}
+
 export type TimeTick = { ts: number; label: string }
 
 // `count` evenly-spaced date ticks across [minTs, maxTs] (inclusive of both

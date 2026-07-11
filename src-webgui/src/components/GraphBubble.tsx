@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { ChartScatter, Filter, Loader2, X } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { ActivityCommit } from '../store/koma'
-import { aggregateAuthors, buildTimeTicks, linearScale, radiusScale } from '../lib/bubbleScales'
+import { aggregateAuthors, authorSparklines, buildTimeTicks, linearScale, radiusScale } from '../lib/bubbleScales'
+import { AuthorAvatar } from './AuthorAvatar'
 
 // ---- Render geometry --------------------------------------------------
 const LEFT_MARGIN = 132 // author-label gutter
 const RIGHT_MARGIN = 20
 const LANE_H = 30 // one author lane
 const TOP_PAD = 14
-const BAR_STRIP_MIN = 90 // add(up)/del(down) timeline strip — floor when many authors/short container
+const BAR_STRIP_H = 46 // add(up)/del(down) timeline strip
 const AXIS_H = 22 // x-axis date tick labels
 const BOTTOM_PAD = 6
 const MIN_R = 3
@@ -67,49 +68,24 @@ export default function GraphBubble() {
   // ---- Responsive width (never divide by 0) ----
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
-  // ---- Responsive height (never let the histogram see a 0 before the
-  // ResizeObserver settles) — non-zero default, same lesson as GraphTab's
-  // viewportH: the container can be measured while still display:none (this
-  // component only mounts in bubble mode, but its GraphTab parent may itself
-  // be the hidden tab), so a raw ResizeObserver alone can miss the reveal.
-  const [viewportH, setViewportH] = useState(() =>
-    typeof window !== 'undefined' ? window.innerHeight : 800,
-  )
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const ro = new ResizeObserver(() => {
       if (el.clientWidth > 0) setWidth(el.clientWidth)
-      if (el.clientHeight > 0) setViewportH(el.clientHeight)
     })
     ro.observe(el)
     if (el.clientWidth > 0) setWidth(el.clientWidth)
-    if (el.clientHeight > 0) setViewportH(el.clientHeight)
     // Belt-and-suspenders: the very first synchronous read above can race the
     // initial paint (same lesson as GraphTab's viewportH measurement).
     const raf = requestAnimationFrame(() => {
       if (el.clientWidth > 0) setWidth(el.clientWidth)
-      if (el.clientHeight > 0) setViewportH(el.clientHeight)
     })
     return () => {
       ro.disconnect()
       cancelAnimationFrame(raf)
     }
   }, [])
-
-  // Re-measure height when the graph tab actually becomes the visible one —
-  // mirrors GraphTab's own isActiveTab re-measure effect (WebKitGTK
-  // frequently misses the ResizeObserver firing on a display:none -> visible
-  // flip).
-  const isActiveTab = useKoma((s) => s.ui.activeTabId === 'graph')
-  useEffect(() => {
-    if (!isActiveTab) return
-    const raf = requestAnimationFrame(() => {
-      const el = containerRef.current
-      if (el && el.clientHeight > 0) setViewportH(el.clientHeight)
-    })
-    return () => cancelAnimationFrame(raf)
-  }, [isActiveTab])
 
   // ---- Path-filter control (GK5b Part 3) ----
   const [pathInput, setPathInput] = useState(activePath ?? '')
@@ -130,17 +106,17 @@ export default function GraphBubble() {
     authors.forEach((a, i) => m.set(a.key, i))
     return m
   }, [authors])
+  const sparklines = useMemo(() => authorSparklines(commits, 28), [commits])
+  const sparkMax = useMemo(() => {
+    let m = 0
+    for (const arr of sparklines.values()) for (const v of arr) if (v > m) m = v
+    return m
+  }, [sparklines])
 
   const chartW = Math.max(0, width - LEFT_MARGIN - RIGHT_MARGIN)
   const lanesH = authors.length * LANE_H
-  // Author lanes stay fixed at the top; the add/del histogram absorbs
-  // whatever vertical space the container has beyond the fixed chrome
-  // (lanes + axis + padding), down to a minimum floor — so the chart fills
-  // the (tall, flex-1) body container instead of leaving dead empty space
-  // below a fixed-height strip.
-  const contentMinH = TOP_PAD + lanesH + BAR_STRIP_MIN + AXIS_H + BOTTOM_PAD
-  const svgH = Math.max(contentMinH, viewportH)
-  const barStripH = svgH - TOP_PAD - lanesH - AXIS_H - BOTTOM_PAD
+  const svgH = TOP_PAD + lanesH + BAR_STRIP_H + AXIS_H + BOTTOM_PAD
+  const barStripH = BAR_STRIP_H
 
   const timestamps = useMemo(() => commits.map((c) => Date.parse(c.date)).filter((t) => !Number.isNaN(t)), [commits])
   const minTs = timestamps.length > 0 ? Math.min(...timestamps) : 0
@@ -170,23 +146,8 @@ export default function GraphBubble() {
     <div className="flex h-full w-full min-w-0 flex-col">
       {/* Header: legend + path-narrowing filter (GK5b Part 3) */}
       <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[11px]">
-        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto">
-          {authors.map((a) => (
-            <span key={a.key} className="flex flex-none items-center gap-1 whitespace-nowrap" title={a.email}>
-              <span
-                className="h-2.5 w-2.5 flex-none rounded-full"
-                style={{ backgroundColor: a.color }}
-              />
-              <span className="text-koma-fg opacity-80">{a.name || a.email || 'unknown'}</span>
-              <span className="font-mono opacity-70">
-                <span className="text-koma-success">+{a.totalAdded}</span>{' '}
-                <span className="text-koma-error">-{a.totalDeleted}</span>
-              </span>
-            </span>
-          ))}
-          {authors.length === 0 && !loading && (
-            <span className="text-koma-dim opacity-60">No authors yet</span>
-          )}
+        <div className="min-w-0 flex-1 text-[11px] text-koma-dim opacity-70">
+          {authors.length} contributor{authors.length === 1 ? '' : 's'}
         </div>
         <div className="flex flex-none items-center gap-1">
           <Filter size={12} className="flex-none text-koma-dim opacity-60" />
@@ -357,6 +318,64 @@ export default function GraphBubble() {
               )
             })}
           </svg>
+        )}
+
+        {authors.length > 0 && (
+          <div className="border-t border-koma-border px-3 py-2.5">
+            <div className="mb-2 text-[11px] uppercase tracking-wide text-koma-dim opacity-60">
+              Contributions
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {authors.map((a) => {
+                const spark = sparklines.get(a.key) ?? []
+                const total = a.totalAdded + a.totalDeleted
+                const addPct = total > 0 ? (a.totalAdded / total) * 100 : 0
+                const delPct = total > 0 ? (a.totalDeleted / total) * 100 : 0
+                return (
+                  <div
+                    key={a.key}
+                    className="rounded border border-koma-border bg-koma-panel px-2.5 py-2 transition hover:bg-koma-hover"
+                  >
+                    {/* header: avatar + name/email + commit count */}
+                    <div className="flex items-center gap-2">
+                      <AuthorAvatar name={a.name} email={a.email} size={26} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[12px] text-koma-fg">{a.name || a.email || 'unknown'}</div>
+                        {a.email && <div className="truncate text-[10px] text-koma-dim opacity-70">{a.email}</div>}
+                      </div>
+                      <div className="flex-none text-right text-[11px] text-koma-dim">
+                        {a.commitCount.toLocaleString()} commit{a.commitCount === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                    {/* +/- totals */}
+                    <div className="mt-1.5 flex items-center gap-2 font-mono text-[11px]">
+                      <span className="text-koma-success">+{a.totalAdded.toLocaleString()}</span>
+                      <span className="text-koma-error">-{a.totalDeleted.toLocaleString()}</span>
+                    </div>
+                    {/* proportional add/del bar */}
+                    <div className="mt-1 flex h-1.5 w-full overflow-hidden rounded-full bg-koma-bg">
+                      <div className="h-full bg-koma-success" style={{ width: `${addPct}%` }} />
+                      <div className="h-full bg-koma-error" style={{ width: `${delPct}%` }} />
+                    </div>
+                    {/* activity sparkline (commit count over time, author-colored) */}
+                    <div className="mt-2 flex h-5 items-end gap-px" title="commit activity over time">
+                      {spark.map((v, i) => (
+                        <div
+                          key={i}
+                          className="flex-1 rounded-sm"
+                          style={{
+                            height: `${sparkMax > 0 ? Math.max(v > 0 ? 12 : 4, (v / sparkMax) * 100) : 4}%`,
+                            backgroundColor: v > 0 ? a.color : 'var(--color-koma-border)',
+                            opacity: v > 0 ? 0.9 : 0.4,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         )}
 
         {hover && (
