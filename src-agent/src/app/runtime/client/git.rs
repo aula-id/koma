@@ -165,10 +165,9 @@ pub(super) fn git_cmd_env(
 
 /// Resolve the git repository root for `session`, probing EVERY one of its configured
 /// workdirs in order (mirroring how [`super::diff::resolve_diff_path`] tries each root)
-/// via `git rev-parse --show-toplevel`, returning the first that succeeds. Falls back to
-/// the host process's own cwd when the session has no workdirs, none of them resolve, or
-/// there's no session at all (the StartScreen case). `None` when nothing — not even the
-/// cwd fallback — is inside a git repository.
+/// via `git rev-parse --show-toplevel`, returning the first that succeeds. `None` when
+/// the session has no workdirs, none of them resolve, or there's no session at all (the
+/// StartScreen case) — deliberately does NOT fall back to the host process's own cwd.
 pub(super) fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf> {
     let toplevel = |dir: &std::path::Path| -> Option<std::path::PathBuf> {
         match git_cmd(dir, &["rev-parse", "--show-toplevel"]) {
@@ -185,7 +184,7 @@ pub(super) fn repo_root_for(session: Option<&str>) -> Option<std::path::PathBuf>
             return Some(root);
         }
     }
-    toplevel(&std::env::current_dir().ok()?)
+    None
 }
 
 /// Split an ordinary/renamed-or-copied `<XY>` pair into the `staged` (index/`X`) and
