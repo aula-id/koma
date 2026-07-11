@@ -1,0 +1,28 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.upper-tool-oneshot",
+  "name": "Upper Tool",
+  "version": "0.0.0",
+  "description": "A minimal oneshot extension that contributes a single upper tool.",
+  "tier": "free",
+  "kind": "oneshot",
+  "runtime": {
+    "exec": "upper-tool-oneshot",
+    "args": []
+  },
+  "contributes": {
+    "tools": [
+      {
+        "name": "upper",
+        "description": "uppercase the given text",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" }
+          }
+        }
+      }
+    ]
+  },
+  "requires": []
+}
