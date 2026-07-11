@@ -58,6 +58,7 @@ mod git_activity;
 mod git_branch;
 mod git_destructive;
 mod git_stash;
+mod git_repos;
 mod keys;
 mod git_host;
 mod git_host_mut;
@@ -420,6 +421,16 @@ pub(super) enum HostCtl {
     /// fetch every local + remote-tracking branch. Host-local, never the daemon,
     /// like [`GitStatus`](Self::GitStatus); see [`git_branch::git_branch_list`].
     GitBranchList,
+    /// Source Control multi-repo picker opened: discover every git repo across the
+    /// session's workdirs. Host-local, never the daemon, like
+    /// [`GitBranchList`](Self::GitBranchList); see [`git_repos::discover_repos`].
+    /// Reply lands as a `RepoList` push.
+    GitRepos,
+    /// Source Control repo picker changed: set the session's ACTIVE repo to `root`
+    /// (an absolute toplevel path from a prior `RepoList`). Host-local, never the
+    /// daemon, like [`SetGitKey`](Self::SetGitKey) — no reply of its own; the worker
+    /// pushes a follow-up [`GitStatus`](Self::GitStatus) for the newly-active repo.
+    SetActiveRepo { root: String },
     /// Branch-switcher pick / graph "Checkout" (SAFE only, never `--force`): switch
     /// (or detach onto) `ref_name` (a branch or a sha). Same reply pattern as
     /// [`GitStage`](Self::GitStage) — React also fires a client-local

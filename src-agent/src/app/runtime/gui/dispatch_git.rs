@@ -78,6 +78,16 @@ pub(super) fn git_branch_list(ctl: &Sender<HostCtl>) {
     let _ = ctl.send(HostCtl::GitBranchList);
 }
 
+/// `GuiReq::GitRepos` (multi-repo picker).
+pub(super) fn git_repos(ctl: &Sender<HostCtl>) {
+    let _ = ctl.send(HostCtl::GitRepos);
+}
+
+/// `GuiReq::SetActiveRepo` (multi-repo picker).
+pub(super) fn set_active_repo(ctl: &Sender<HostCtl>, root: String) {
+    let _ = ctl.send(HostCtl::SetActiveRepo { root });
+}
+
 /// `GuiReq::GitCheckout` (G4).
 pub(super) fn git_checkout(ctl: &Sender<HostCtl>, ref_name: String) {
     let _ = ctl.send(HostCtl::GitCheckout { ref_name });

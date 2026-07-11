@@ -448,6 +448,14 @@ pub(super) enum PushEnvelope {
     /// reply so the indicator never hangs. Carries
     /// [`super::git_stash::StashListResult`] verbatim (already camelCase).
     StashList(super::git_stash::StashListResult),
+    /// One-shot host-computed REPO LIST answering a `GitRepos` request from the
+    /// Source Control multi-repo picker: every git repo discovered across the
+    /// session's workdirs, plus which one is currently active. Computed ENTIRELY
+    /// host-side (never forwarded to the daemon) — like `GitStatus`, ALWAYS a
+    /// reply so the picker never hangs (an empty list is a valid "no repos" state).
+    /// Carries [`super::git_repos::RepoListResult`] verbatim (already camelCase);
+    /// mirrors `BranchList`'s newtype/flatten shape (`{k:"RepoList", repos, active}`).
+    RepoList(super::git_repos::RepoListResult),
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every

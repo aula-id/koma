@@ -410,6 +410,14 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitBranchList) => {
                 git_host::spawn_git_branch_list(P::clone(push), current.map(str::to_string));
             }
+            // Source Control multi-repo picker (discover + set-active): same host-local
+            // reasoning as `GitBranchList`/`SetGitKey` above.
+            Ok(HostCtl::GitRepos) => {
+                git_host::spawn_git_repos(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::SetActiveRepo { root }) => {
+                git_host::spawn_set_active_repo(P::clone(push), current.map(str::to_string), root);
+            }
             Ok(HostCtl::GitCheckout { ref_name }) => {
                 git_host::spawn_git_checkout(P::clone(push), current.map(str::to_string), ref_name);
             }

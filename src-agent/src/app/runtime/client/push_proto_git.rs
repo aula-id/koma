@@ -86,6 +86,13 @@ pub(super) fn push_branch_list(push: &dyn Fn(String), result: super::git_branch:
     super::render::emit(push, &PushEnvelope::BranchList(result));
 }
 
+/// Emit a one-shot `RepoList` envelope for the Source Control multi-repo picker,
+/// carrying a host-computed [`super::git_repos::RepoListResult`] verbatim — mirrors
+/// `push_branch_list`.
+pub(super) fn push_repo_list(push: &dyn Fn(String), result: super::git_repos::RepoListResult) {
+    super::render::emit(push, &PushEnvelope::RepoList(result));
+}
+
 /// Emit a one-shot `StashList` envelope for the Source Control toolbar's stash
 /// count/indicator (GK4a), carrying a host-computed
 /// [`super::git_stash::StashListResult`] verbatim. Shared by the UN-ATTACHED
