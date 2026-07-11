@@ -343,6 +343,10 @@ pub(super) fn serialize_and_push(
         palette.accent.hash(&mut h);
         palette.dim.hash(&mut h);
         palette.panel.hash(&mut h);
+        palette.warn.hash(&mut h);
+        palette.success.hash(&mut h);
+        palette.info.hash(&mut h);
+        palette.error.hash(&mut h);
         messages.len().hash(&mut h);
         for m in &messages {
             m.role.hash(&mut h);
