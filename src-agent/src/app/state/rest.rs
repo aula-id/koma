@@ -115,6 +115,11 @@ pub struct AppStateRest {
     /// when the daemon is not installed — behaviour is byte-identical to a build
     /// without the security daemon).
     pub sec_manager: Option<std::sync::Arc<crate::app::sec::SecDaemonManager>>,
+    /// The extension host manager, built once at startup. Owns every running
+    /// extension's child process + duplex unix-socket connection, keyed by extension
+    /// id. `None` until startup builds it (stays an empty, inert manager when no
+    /// extensions are installed). Boot auto-starts each enabled daemon-kind extension.
+    pub ext_manager: Option<std::sync::Arc<crate::app::ext::ExtHostManager>>,
     /// Token koma mints and hands the security daemon child at spawn.
     pub sec_token: String,
     /// Runtime flag: `true` when the user has enabled the security daemon from the
@@ -407,6 +412,7 @@ impl AppStateRest {
             config: AppConfig::default(),
             mcp_manager: None,
             sec_manager: None,
+            ext_manager: None,
             sec_token: String::new(),
             security_enabled: false,
             yolo_armed: false,

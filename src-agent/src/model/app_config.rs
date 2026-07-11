@@ -40,6 +40,13 @@ fn default_palette() -> String {
     "dark".to_string()
 }
 
+/// serde default for boolean fields that should be `true` when absent from an
+/// older config (e.g. [`InstalledExtension::enabled`]): a freshly-installed
+/// extension is enabled unless explicitly disabled.
+fn default_true() -> bool {
+    true
+}
+
 /// Mint a fresh random UUID (v4) as a `String`. Used as the serde default for
 /// the `uuid` field of [`ProviderConn`] / [`ModelEntry`] / [`McpServerEntry`] so
 /// entries read from an old config file without a uuid get a stable identity on
@@ -405,6 +412,48 @@ pub struct McpServerEntry {
     pub url: String,
 }
 
+/// One installed extension's persisted registry entry.
+///
+/// Written by the install path ([`crate::app::ext::install`]) after a signed
+/// package is verified and unpacked into `~/.koma/extensions/<id>/`, and read at
+/// boot to auto-start enabled daemon-kind extensions. Deliberately a FLAT, string-
+/// typed projection of the extension's manifest (not the manifest itself): `tier`,
+/// `kind`, and `granted` store the serde WIRE strings (`"free"`/`"paid"`,
+/// `"daemon"`/`"oneshot"`, `"agents:read"`, …) rather than the
+/// [`koma_extension`](koma_extension::protocol) enums, so persistence never couples
+/// to the wire crate's serde shape (no cross-crate serde cycle) and an unknown
+/// future variant degrades to an opaque string instead of failing the whole config
+/// load.
+///
+/// Every field carries `#[serde(default)]` (with `enabled` defaulting to `true`) so
+/// an older `config.json` — or a partially-written entry — loads cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InstalledExtension {
+    /// Reverse-DNS manifest id, e.g. `"run.koma.example.echo-tool-daemon"`. The key
+    /// for every registry op and the on-disk `extensions/<id>/` directory name.
+    pub id: String,
+    /// Manifest version string.
+    pub version: String,
+    /// Manifest tier as a wire string: `"free"` | `"paid"`.
+    pub tier: String,
+    /// Grants koma has extended to this extension, as wire strings (e.g.
+    /// `"agents:read"`). Echoed from the manifest `requires` for now; real
+    /// grant enforcement is a later wave.
+    #[serde(default)]
+    pub granted: Vec<String>,
+    /// When false, the extension is skipped at boot (not auto-started). Defaults to
+    /// `true` so a freshly-installed extension is live.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Manifest kind as a wire string: `"daemon"` | `"oneshot"`.
+    #[serde(default)]
+    pub kind: String,
+    /// Manifest `runtime.exec`, relative to the package root (e.g.
+    /// `"bin/echo-tool-daemon"`). Resolved against `extensions/<id>/` at spawn.
+    #[serde(default)]
+    pub exec: String,
+}
+
 /// Global user-facing configuration (theme + accent + provider/model catalogue).
 ///
 /// All fields carry `#[serde(default)]` so the struct round-trips cleanly
@@ -442,6 +491,11 @@ pub struct AppConfig {
     /// missing/corrupt file) and persisted on the next `save()` — never cleared.
     #[serde(default = "new_uuid")]
     pub install_id: String,
+    /// Installed extensions (the on-disk registry). Empty by default; old config
+    /// files (no such key) load with an empty vec, so behaviour is unchanged until
+    /// an extension is installed. Read at boot to auto-start enabled daemons.
+    #[serde(default)]
+    pub installed_extensions: Vec<InstalledExtension>,
 }
 
 impl Default for AppConfig {
@@ -458,6 +512,7 @@ impl Default for AppConfig {
             // path, so the koma-free `X-Koma` header is never empty; it is
             // persisted on the first `save()` and read back stably thereafter.
             install_id: new_uuid(),
+            installed_extensions: Vec::new(),
         }
     }
 }
@@ -567,6 +622,33 @@ impl AppConfig {
     /// Remove the MCP server with `uuid` (no-op if none matches).
     pub fn remove_mcp_server_by_uuid(&mut self, uuid: &str) {
         self.mcp_servers.retain(|s| s.uuid != uuid);
+    }
+
+    /// Upsert an installed extension by `id`: replace the entry whose id matches,
+    /// else append. Mirrors [`Self::upsert_mcp_server`] but keyed by the extension's
+    /// reverse-DNS id (not a uuid). The caller persists via [`Self::save`] afterwards.
+    // Registry building block for the install/uninstall command wiring (a later wave);
+    // dead until then, like `seed_from_settings`.
+    #[allow(dead_code)]
+    pub fn upsert_extension(&mut self, ext: InstalledExtension) {
+        match self.installed_extensions.iter_mut().find(|e| e.id == ext.id) {
+            Some(slot) => *slot = ext,
+            None => self.installed_extensions.push(ext),
+        }
+    }
+
+    /// Remove the installed extension with `id` (no-op if none matches). Used by the
+    /// uninstall path to purge the registry entry (the on-disk `extensions/<id>/`
+    /// dir is removed separately, mirroring the internet/security uninstall shape).
+    #[allow(dead_code)]
+    pub fn remove_extension_by_id(&mut self, id: &str) {
+        self.installed_extensions.retain(|e| e.id != id);
+    }
+
+    /// The installed extension with `id`, if any. Mirrors the `*_by_uuid` lookups.
+    #[allow(dead_code)]
+    pub fn extension_by_id(&self, id: &str) -> Option<&InstalledExtension> {
+        self.installed_extensions.iter().find(|e| e.id == id)
     }
 
     /// Set the `enabled` flag on the MCP server with `uuid`; returns whether one matched.

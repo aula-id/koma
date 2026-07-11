@@ -213,6 +213,30 @@ fn build_startup(
     state.rest.sec_token = sec_token;
     state.rest.sec_manager = Some(sec);
 
+    // Build the extension host manager and auto-start every ENABLED daemon-kind
+    // extension recorded in the config registry. Best-effort: each start is offloaded
+    // onto the blocking pool (`ensure_started` blocks on its handshake, so running it on
+    // the main thread would stall a slow/hung extension into boot) and any failure is
+    // logged to `~/.koma/error.log` — never eprintln/println (this is TUI-owning code).
+    // With no installed extensions this builds an empty, inert manager and spawns
+    // nothing — byte-identical to a build without the extension host.
+    let ext = crate::app::ext::ExtHostManager::new(&handle);
+    for installed in &state.rest.config.installed_extensions {
+        if installed.enabled && installed.kind == "daemon" {
+            let mgr = Arc::clone(&ext);
+            let installed = installed.clone();
+            handle.spawn_blocking(move || {
+                if let Err(e) = mgr.ensure_started(&installed) {
+                    crate::model::store::append_global_error_log(
+                        "extensions",
+                        &format!("failed to start extension '{}': {e:#}", installed.id),
+                    );
+                }
+            });
+        }
+    }
+    state.rest.ext_manager = Some(ext);
+
     // Capture the process launch directory for the harness workspace check (WC).
     // This folder is always an allowed workspace regardless of the allow-list.
     if let Ok(cwd) = std::env::current_dir() {
@@ -419,6 +443,23 @@ fn install_daemon_session(
 /// makes a post-drop send a safe no-op (no panic, no deadlock). A crash that skips
 /// this is covered by PID-liveness staleness in `store::is_locked`.
 fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
+    // Stop every running extension BEFORE the runtime drops. `ExtHostManager::stop`
+    // (called per-extension by `stop_all`) takes the child out of its entry and drops
+    // it locally; with `kill_on_drop(true)` that drop needs a LIVE runtime to actually
+    // reap the process, so this must run while `rt` is still alive, not after. It also
+    // unlinks every extension's `.sock` file (routed through the same `stop()` the
+    // single-extension path uses), closing the leaked-socket gap on every shutdown
+    // path (TUI `run` and the headless `run_daemon`, both of which call this). A `None`
+    // manager (extension host never built) is a no-op.
+    if let Some(ext) = state.rest.ext_manager.as_ref() {
+        ext.stop_all();
+    }
+    // TODO sec stop: `state.rest.sec_manager` has the identical stop()-before-runtime-
+    // drop shape (same kill_on_drop child, same reason to run before `drop(rt)`) but is
+    // NOT wired here yet. Left as a follow-up rather than risk the security daemon's
+    // shutdown behavior in this pass — confirm first that calling `stop()`
+    // unconditionally on every TUI + daemon shutdown path doesn't regress anything the
+    // `/security` panel relies on.
     for s in &mut state.rest.sessions {
         if let Some(p) = s.held_lock.take() {
             crate::model::store::remove_lock(&p);

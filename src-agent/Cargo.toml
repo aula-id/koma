@@ -29,6 +29,16 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
+# Extension host: signed-zip verification + the shared wire protocol crate.
+# `zip` (deflate only — the pack.sh zips are deflate-compressed) unpacks an
+# installed extension; `ed25519-dalek` verifies the release signature over the
+# package's SHA-256 digest. `koma-extension` is a PATH dep on the sibling SDK
+# crate (its own detached workspace — the root `exclude` doesn't block a path
+# dep on the package) so the manifest/handshake wire types are shared verbatim,
+# never re-declared here.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ed25519-dalek = "2"
+koma-extension = { path = "../src-extension" }
 # Preemptive image downscaling at send time (see `data_url_for` in
 # dto/openrouter/request.rs): oversized attachments are decoded, resized, and
 # re-encoded before they hit the upstream chat API (previously no cap existed,
