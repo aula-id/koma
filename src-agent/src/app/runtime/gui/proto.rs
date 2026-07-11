@@ -624,6 +624,12 @@ pub(super) enum GuiReq {
     /// removes it from the on-disk config + evicts the cache — then re-pushes a fresh
     /// `OAuthState`, so a connection is removable pre-session too.
     DeleteOAuthConn { uuid: String },
+    /// Open `url` in the SYSTEM browser (never inside the webview) — e.g. the Settings
+    /// "Account" section's "Manage account on koma.run" link. HOST-LOCAL, unconditional
+    /// (no session/attach needed): just spawns the OS opener via
+    /// `service::oauth::browser::open_in_browser` and returns — fire-and-forget, no reply,
+    /// no push.
+    OpenExternal { url: String },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────
     // Browse/detail/installed-list are HOST-LOCAL — routed UNCONDITIONALLY to the

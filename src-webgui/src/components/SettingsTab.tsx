@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Check,
   Copy,
+  ExternalLink,
   Eye,
   KeyRound,
   Palette as PaletteIcon,
@@ -9,6 +10,7 @@ import {
   Plus,
   SlidersHorizontal,
   Trash2,
+  UserCircle,
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -25,11 +27,13 @@ import { BrailleSpinner } from './BrailleSpinner'
 // credential machinery). Every colour is a theme token (var(--koma-*) via the
 // koma-* Tailwind classes) so it tracks the live palette.
 
-type SectionId = 'appearance' | 'session' | 'activityBar' | 'sshKeys'
+type SectionId = 'account' | 'appearance' | 'session' | 'activityBar' | 'sshKeys'
 
 // Top-to-bottom order of the sections below — shared by `sectionRef` and the
-// scroll-spy so adding/reordering a section only needs a change here.
-const SECTION_ORDER: SectionId[] = ['appearance', 'session', 'activityBar', 'sshKeys']
+// scroll-spy so adding/reordering a section only needs a change here. Account
+// leads — it's the most prominent (koma.run sign-in is otherwise buried in the
+// Connector panel's OAuth list).
+const SECTION_ORDER: SectionId[] = ['account', 'appearance', 'session', 'activityBar', 'sshKeys']
 
 export default function SettingsTab() {
   const req = useKoma((s) => s.req)
@@ -38,20 +42,23 @@ export default function SettingsTab() {
   const themes = useKoma((s) => s.config.themes)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const accountRef = useRef<HTMLDivElement>(null)
   const appearanceRef = useRef<HTMLDivElement>(null)
   const sessionRef = useRef<HTMLDivElement>(null)
   const activityBarRef = useRef<HTMLDivElement>(null)
   const sshKeysRef = useRef<HTMLDivElement>(null)
-  const [active, setActive] = useState<SectionId>('appearance')
+  const [active, setActive] = useState<SectionId>('account')
 
   const sectionRef = (id: SectionId) =>
-    id === 'appearance'
-      ? appearanceRef
-      : id === 'session'
-        ? sessionRef
-        : id === 'activityBar'
-          ? activityBarRef
-          : sshKeysRef
+    id === 'account'
+      ? accountRef
+      : id === 'appearance'
+        ? appearanceRef
+        : id === 'session'
+          ? sessionRef
+          : id === 'activityBar'
+            ? activityBarRef
+            : sshKeysRef
 
   // Nav click → smooth-scroll the pane to the section header.
   const goto = (id: SectionId) => {
@@ -67,7 +74,7 @@ export default function SettingsTab() {
     const pane = scrollRef.current
     if (!pane) return
     const paneTop = pane.getBoundingClientRect().top
-    let current: SectionId = 'appearance'
+    let current: SectionId = 'account'
     for (const id of SECTION_ORDER) {
       const el = sectionRef(id).current
       if (!el) continue
@@ -83,6 +90,12 @@ export default function SettingsTab() {
         <div className="px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
           Settings
         </div>
+        <NavItem
+          icon={<UserCircle size={15} />}
+          label="Account"
+          active={active === 'account'}
+          onClick={() => goto('account')}
+        />
         <NavItem
           icon={<PaletteIcon size={15} />}
           label="Appearance"
@@ -111,7 +124,12 @@ export default function SettingsTab() {
 
       <div ref={scrollRef} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-8 py-6">
-          <section ref={appearanceRef}>
+          <section ref={accountRef}>
+            <SectionHeader title="Account" desc="Sign in with koma.run — unlocks the extension store." />
+            <AccountSettings />
+          </section>
+
+          <section ref={appearanceRef} className="mt-12">
             <SectionHeader title="Appearance" desc="Pick a colour theme — it applies instantly across the whole app." />
             <PaletteGrid
               palettes={palettes}
@@ -179,6 +197,129 @@ function SectionHeader({ title, desc }: { title: string; desc: string }) {
     <div className="mb-4 border-b border-koma-border pb-2">
       <h2 className="text-[15px] font-semibold text-koma-fg">{title}</h2>
       <p className="mt-0.5 text-[12px] text-koma-fg opacity-45">{desc}</p>
+    </div>
+  )
+}
+
+// ── Account (koma.run) ───────────────────────────────────────────────────────
+// Surfaces the koma.run account sign-in that otherwise only lives buried in
+// the Connector panel's OAuth provider list — same OAuth wire (`oauth` slice,
+// StartOAuth/CancelOAuth/DeleteOAuthConn/GetOAuthState), scoped to just the
+// "komarun" provider (wire id for `OAuthProvider::KomaRun`, label "Koma"). No
+// in-app profile/dashboard — sign-in state + a hyperlink out to koma.run.
+
+const KOMARUN_PROVIDER = 'komarun'
+const KOMARUN_DASHBOARD_URL = 'https://koma.run/dashboard'
+
+function AccountSettings() {
+  const req = useKoma((s) => s.req)
+  const openExternal = useKoma((s) => s.openExternal)
+  const conns = useKoma((s) => s.oauth.conns)
+  const phase = useKoma((s) => s.oauth.phase)
+  const oauthUrl = useKoma((s) => s.oauth.url)
+
+  // Refresh on mount so the section reflects current state whether it was
+  // populated already (e.g. Connector panel was opened earlier this session)
+  // or not.
+  useEffect(() => {
+    req({ r: 'GetOAuthState' })
+  }, [req])
+
+  const conn = conns.find((c) => c.provider === KOMARUN_PROVIDER) ?? null
+
+  // The `oauth` slice is a single global flow (one at a time) shared with the
+  // Connector panel's OAuthConnect — track locally whether THIS section is
+  // the one that started it, so a flow started elsewhere (a different
+  // provider) never makes this section render an in-flight status that isn't
+  // actually its own.
+  const [started, setStarted] = useState(false)
+  useEffect(() => {
+    if (phase === 'success' || phase === 'idle' || phase === 'failed') setStarted(false)
+  }, [phase])
+
+  const inFlight = started && (phase === 'starting' || phase === 'waiting_url')
+
+  const signIn = () => {
+    setStarted(true)
+    req({ r: 'StartOAuth', provider: KOMARUN_PROVIDER })
+  }
+  const cancel = () => {
+    req({ r: 'CancelOAuth' })
+    setStarted(false)
+  }
+  const signOut = () => {
+    if (conn) req({ r: 'DeleteOAuthConn', uuid: conn.uuid })
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {inFlight ? (
+        <div className="flex flex-col gap-2 rounded border border-koma-border bg-koma-panel2 px-3 py-2.5">
+          <div className="flex items-center gap-2 text-[12.5px] text-koma-fg">
+            <BrailleSpinner size={13} className="opacity-70" />
+            Opening your browser… complete sign-in there.
+          </div>
+          {oauthUrl && (
+            <div className="truncate font-mono text-[11px] text-koma-fg opacity-50">{oauthUrl}</div>
+          )}
+          <div>
+            <button
+              type="button"
+              onClick={cancel}
+              className="rounded px-2 py-1 text-[12px] text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : conn ? (
+        <div className="flex items-center justify-between gap-3 rounded border border-koma-border bg-koma-panel2 px-3 py-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="h-2 w-2 flex-none rounded-full bg-koma-success" title="Connected" />
+            <div className="min-w-0">
+              <div className="truncate text-[13px] text-koma-fg">
+                Signed in as {conn.email || conn.name || 'koma.run account'}
+              </div>
+              <div className="text-[11px] text-koma-fg opacity-45">Connected</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={signOut}
+            className="flex-none rounded border border-koma-border px-2.5 py-1 text-[12px] text-koma-fg opacity-80 hover:bg-koma-hover hover:opacity-100"
+          >
+            Sign out
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3 rounded border border-koma-border bg-koma-panel2 px-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] text-koma-fg">Not signed in to koma.run</div>
+            <div className="mt-0.5 text-[11.5px] leading-snug text-koma-fg opacity-45">
+              A koma.run account unlocks the extension store.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={signIn}
+            className="flex-none rounded bg-koma-accent px-3 py-1.5 text-[12px] font-semibold text-koma-bg"
+          >
+            Sign in to koma.run
+          </button>
+        </div>
+      )}
+
+      <a
+        href={KOMARUN_DASHBOARD_URL}
+        onClick={(e) => {
+          e.preventDefault()
+          openExternal(KOMARUN_DASHBOARD_URL)
+        }}
+        className="flex w-fit items-center gap-1 text-[12px] text-koma-accent opacity-80 hover:opacity-100 hover:underline"
+      >
+        Manage account on koma.run
+        <ExternalLink size={12} />
+      </a>
     </div>
   )
 }
