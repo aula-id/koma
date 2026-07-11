@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { Activity, Archive, ArchiveRestore, ArrowUp, ChartScatter, GitBranch, RefreshCw } from 'lucide-react'
+import { Activity, Archive, ArchiveRestore, ArrowUp, GitBranch, RefreshCw } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
 
@@ -146,18 +146,6 @@ export function GraphBreadcrumb() {
           Bubble
         </button>
       </div>
-    </div>
-  )
-}
-
-// GK5 will replace this with the real activity/bubble view. Exported so
-// GraphTab can render it directly without an extra prop-drilled placeholder.
-export function GraphBubblePlaceholder() {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-koma-dim">
-      <ChartScatter size={28} className="opacity-50" />
-      <span className="text-[13px] font-medium opacity-80">Activity view</span>
-      <span className="text-[11px] opacity-50">Coming soon</span>
     </div>
   )
 }

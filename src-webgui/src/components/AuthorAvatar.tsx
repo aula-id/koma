@@ -1,14 +1,4 @@
-import { LANE_COLORS } from '../lib/gitGraphLayout'
-
-// Small, deliberately-deterministic string hash (djb2-ish) — only used to
-// pick a stable palette index, never for anything security-sensitive.
-function hashStr(s: string): number {
-  let h = 0
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) | 0
-  }
-  return Math.abs(h)
-}
+import { authorColor } from '../lib/authorColor'
 
 // 1-2 letter initials off the author's NAME ("Jane Doe" -> "JD", "jane" ->
 // "J"), falling back to the email's local-part (before `@`) when the name is
@@ -32,14 +22,11 @@ type Props = {
 // network request, no Gravatar: rendering an image fetched off an arbitrary
 // author email would be an image-injection vector (and a privacy leak of the
 // viewer's IP to whoever owns that email), so this is initials-only by
-// design. The background colour is picked deterministically off a hash of
-// the author's email (falling back to the name) into the graph's own
-// `LANE_COLORS` palette (gitGraphLayout.ts) — that palette was already
-// chosen to read on both the light and dark koma themes, so a bespoke
-// avatar palette would just be a second copy of the same set of hues.
+// design. The background colour comes from the shared `authorColor` helper
+// (lib/authorColor.ts) — the SAME mapping GraphBubble's bubble/legend colours
+// use (GK5b), so an author's avatar and their bubbles always match.
 export function AuthorAvatar({ name, email, size = DEFAULT_SIZE }: Props) {
-  const key = email.trim() || name.trim() || '?'
-  const color = LANE_COLORS[hashStr(key) % LANE_COLORS.length]
+  const color = authorColor(name, email)
   const label = initialsOf(name, email)
   return (
     <span
