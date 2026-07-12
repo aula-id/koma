@@ -9,6 +9,7 @@ import {
   Package,
   Blocks,
   AlertCircle,
+  X,
 } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import type { StoreItem, StoreDetail } from '../store/koma'
@@ -51,6 +52,47 @@ function TierBadge({ tier }: { tier: string }) {
     >
       {tier || 'free'}
     </span>
+  )
+}
+
+// The store's notice banner, shared by the grid and the detail view: a
+// browse/detail fetch `error`, or the last install/uninstall `opResult`
+// (success confirmation or failure message). `error` takes priority since a
+// fetch failure is the more disruptive state. Dismissible — clears both.
+function StoreNotice({
+  error,
+  opResult,
+  onDismiss,
+}: {
+  error: string | null
+  opResult: { ok: boolean; message: string } | null
+  onDismiss: () => void
+}) {
+  if (!error && !opResult) return null
+  const isError = !!error || opResult?.ok === false
+  const message = error ?? opResult?.message ?? ''
+  return (
+    <div
+      className={`flex items-start gap-2 rounded-md border px-3 py-2 text-[12px] ${
+        isError
+          ? 'border-koma-error/40 bg-koma-error/10 text-koma-error'
+          : 'border-koma-success/40 bg-koma-success/10 text-koma-success'
+      }`}
+    >
+      {isError ? (
+        <AlertCircle size={14} className="mt-px flex-none" />
+      ) : (
+        <Check size={14} className="mt-px flex-none" />
+      )}
+      <span className="min-w-0 flex-1">{message}</span>
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="flex-none opacity-60 transition hover:opacity-100"
+      >
+        <X size={13} />
+      </button>
+    </div>
   )
 }
 
@@ -174,16 +216,22 @@ function DetailView({
   detail,
   installed,
   pending,
+  error,
+  opResult,
   onBack,
   onInstall,
   onUninstall,
+  onDismissNotice,
 }: {
   detail: StoreDetail
   installed: boolean
   pending: boolean
+  error: string | null
+  opResult: { ok: boolean; message: string } | null
   onBack: () => void
   onInstall: () => void
   onUninstall: () => void
+  onDismissNotice: () => void
 }) {
   const provides = contributeLines(detail.contributes)
   return (
@@ -195,6 +243,9 @@ function DetailView({
         <ArrowLeft size={14} />
         Back to store
       </button>
+
+      {/* Install/uninstall outcome (or a leftover fetch error) for THIS extension. */}
+      <StoreNotice error={error} opResult={opResult} onDismiss={onDismissNotice} />
 
       <div className="flex items-start gap-3">
         <div className="mt-0.5 flex-none text-koma-dim">
@@ -279,6 +330,7 @@ export default function StoreTab() {
   const installed = useKoma((s) => s.store.installed)
   const busy = useKoma((s) => s.store.busy)
   const error = useKoma((s) => s.store.error)
+  const opResult = useKoma((s) => s.store.opResult)
   const pendingOp = useKoma((s) => s.store.pendingOp)
   const browseStore = useKoma((s) => s.browseStore)
   const openStoreDetail = useKoma((s) => s.openStoreDetail)
@@ -286,6 +338,7 @@ export default function StoreTab() {
   const installExtension = useKoma((s) => s.installExtension)
   const uninstallExtension = useKoma((s) => s.uninstallExtension)
   const refreshInstalled = useKoma((s) => s.refreshInstalled)
+  const clearStoreNotice = useKoma((s) => s.clearStoreNotice)
 
   const [query, setQuery] = useState('')
 
@@ -339,9 +392,12 @@ export default function StoreTab() {
             detail={detail}
             installed={installedIds.has(detail.id)}
             pending={pendingOp === detail.id}
+            error={error}
+            opResult={opResult}
             onBack={closeStoreDetail}
             onInstall={() => installExtension(detail.id)}
             onUninstall={() => uninstallExtension(detail.id)}
+            onDismissNotice={clearStoreNotice}
           />
         ) : busy && catalogue.length === 0 ? (
           <div className="flex h-full items-center justify-center text-koma-dim">
@@ -349,13 +405,8 @@ export default function StoreTab() {
           </div>
         ) : (
           <div className="flex flex-col gap-6 p-4">
-            {/* Error banner (network / op failure). */}
-            {error && (
-              <div className="flex items-start gap-2 rounded-md border border-koma-border bg-koma-panel px-3 py-2 text-[12px] text-koma-fg">
-                <AlertCircle size={14} className="mt-px flex-none text-koma-dim" />
-                <span>{error}</span>
-              </div>
-            )}
+            {/* Notice banner: browse fetch error, or the last install/uninstall outcome. */}
+            <StoreNotice error={error} opResult={opResult} onDismiss={clearStoreNotice} />
 
             {/* Installed section. */}
             {installed.length > 0 && (
