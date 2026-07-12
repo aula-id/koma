@@ -3917,6 +3917,13 @@ export const useKoma = create<KomaState>((set, get) => ({
     const id = crypto.randomUUID()
     set({ mcpStatusBusy: true, mcpStatusRequestId: id })
     get().req({ r: 'GetMcpStatus', requestId: id })
+    // Safety net: if no reply arrives (e.g. no session attached), clear the
+    // busy flag after 5 s so the spinner doesn't spin forever.
+    setTimeout(() => {
+      if (get().mcpStatusRequestId === id) {
+        set({ mcpStatusBusy: false, mcpStatusRequestId: null })
+      }
+    }, 5_000)
   },
   markDying: (id, kind) =>
     set((s) =>
