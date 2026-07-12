@@ -1511,6 +1511,12 @@ type KomaState = {
   // first reply lands (the panel shows a loading row); REPLACED wholesale on
   // each reply. The panel re-requests it every time it's shown.
   usagePreview: UsagePreview | null
+  // True from the moment a UsagePreview req fires (mount, scope/session
+  // change, or the Sidebar header's manual refresh button) until the
+  // matching reply is applied — drives the refresh button's spinner. A
+  // dropped stale/mismatched reply (see the 'UsagePreview' push case)
+  // leaves this true, since the request it answers isn't the current one.
+  usagePreviewBusy: boolean
   // Agent-tab saving lifecycle tracker — set right before a SetAgent request,
   // cleared on the confirmatory push. `seq` prevents stale-reply races.
   // `null` when no save is in flight.
@@ -1885,6 +1891,11 @@ type KomaState = {
   // The Sidebar Usage-panel header's all/session segmented control: switch
   // scope. UsagePanel re-requests on the resulting change.
   setUsageScope: (scope: 'all' | 'session') => void
+  // Manual re-fetch trigger for the Sidebar Usage-panel header's refresh
+  // button — fires the same UsagePreview req UsagePanel's mount/scope-change
+  // effect uses, for the CURRENT usageScope + attached session. Safe to call
+  // repeatedly (e.g. spam-clicking the button).
+  refreshUsagePreview: () => void
   // Mark a session id "dying" right after firing its KillSession ('kill') or
   // DeleteSession ('delete') req (ResumePalette/StartScreen confirm).
   // Idempotent — marking the same id+kind twice (or a race) never duplicates
@@ -2153,6 +2164,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   settingsValues: null,
   effortOptions: null,
   usagePreview: null,
+  usagePreviewBusy: false,
   dyingSessions: [],
   agents: [],
   catalogueModels: [],
@@ -2656,6 +2668,7 @@ export const useKoma = create<KomaState>((set, get) => ({
               days: env.days,
               topModels: env.topModels,
             },
+            usagePreviewBusy: false,
           }
         })
         break
@@ -3562,6 +3575,18 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   focusPlanSection: () => set((s) => ({ ui: { ...s.ui, focusPlanTick: s.ui.focusPlanTick + 1 } })),
   setUsageScope: (scope) => set((s) => ({ ui: { ...s.ui, usageScope: scope } })),
+  refreshUsagePreview: () => {
+    const s = get()
+    // Clear any stale preview first so the loading row shows instead of
+    // rendering the OTHER scope's (or a since-switched session's) numbers
+    // while the fresh reply is in flight — mirrors UsagePanel's own effect.
+    set({ usagePreview: null, usagePreviewBusy: true })
+    s.req({
+      r: 'UsagePreview',
+      scope: s.ui.usageScope,
+      sessionId: s.ui.usageScope === 'session' ? (s.session.id ?? undefined) : undefined,
+    })
+  },
   markDying: (id, kind) =>
     set((s) =>
       s.dyingSessions.some((d) => d.id === id && d.kind === kind)

@@ -25,12 +25,12 @@ function fmtTokens(n: number): string {
 // changes. Pinned bottom footer opens the singleton Analytics tab (mirrors
 // AgentsPanel's "+ Add agent" footer).
 export function UsagePanel() {
-  const req = useKoma((s) => s.req)
   const preview = useKoma((s) => s.usagePreview)
   const scope = useKoma((s) => s.ui.usageScope)
   const sessionId = useKoma((s) => s.session.id)
   const setUsageScope = useKoma((s) => s.setUsageScope)
   const openAnalyticsTab = useKoma((s) => s.openAnalyticsTab)
+  const refreshUsagePreview = useKoma((s) => s.refreshUsagePreview)
 
   // Welcome-screen rule: there's no session to filter "session" scope by, so
   // force back to "all" the instant the session goes away (e.g. detaching back
@@ -41,16 +41,8 @@ export function UsagePanel() {
   }, [sessionId, scope, setUsageScope])
 
   useEffect(() => {
-    // Clear any stale preview first so the loading row shows instead of
-    // rendering the OTHER scope's (or a since-switched session's) numbers
-    // while the fresh reply is in flight.
-    useKoma.setState({ usagePreview: null })
-    req({
-      r: 'UsagePreview',
-      scope,
-      sessionId: scope === 'session' ? (sessionId ?? undefined) : undefined,
-    })
-  }, [req, scope, sessionId])
+    refreshUsagePreview()
+  }, [refreshUsagePreview, scope, sessionId])
 
   if (!preview) {
     return (
