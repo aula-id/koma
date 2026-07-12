@@ -1,6 +1,7 @@
-import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, X, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, Code2, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { fileKey } from '../store/coding'
 
 // Parent directory of a path — used to disambiguate two open tabs that share a
 // basename (VSCode-style dim suffix).
@@ -19,6 +20,7 @@ export function TabBar() {
   const activeTabId = useKoma((s) => s.ui.activeTabId)
   const activateTab = useKoma((s) => s.activateTab)
   const closeTab = useKoma((s) => s.closeTab)
+  const codingFiles = useKoma((s) => s.coding.files)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement | HTMLButtonElement | null>>(new Map())
@@ -358,6 +360,47 @@ export function TabBar() {
                 {accent}
                 <Puzzle size={13} className="flex-none opacity-80" />
                 <span className="truncate">{t.title}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(t.id)
+                  }}
+                  aria-label="Close tab"
+                  title="Close"
+                  className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
+                    active ? 'opacity-70' : 'opacity-0 group-hover:opacity-70'
+                  }`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )
+          }
+
+          // Coding panel file editor tab: Code2 icon + title, dirty ● prefix.
+          if (t.kind === 'codingFile') {
+            const dirty = !!codingFiles[fileKey(t.root, t.path)]?.dirty
+            return (
+              <div
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current.set(t.id, el)
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateTab(t.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') activateTab(t.id)
+                }}
+                title={t.path}
+                className={`${base} ${tone} max-w-[220px] cursor-pointer pl-3 pr-1.5`}
+              >
+                {accent}
+                <Code2 size={13} className="flex-none opacity-80" />
+                <span className="truncate">
+                  {dirty ? '● ' : ''}
+                  {t.title}
+                </span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation()

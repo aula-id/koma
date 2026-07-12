@@ -274,6 +274,9 @@ const AnalyticsTab = lazy(() => import('../components/AnalyticsTab'))
 // opened from the ActivityBar.
 const StoreTab = lazy(() => import('../components/StoreTab'))
 
+// Coding panel Monaco editor — lazy so its chunk only loads when a file is opened.
+const CodeEditorTab = lazy(() => import('../components/CodeEditorTab'))
+
 function DiffFallback() {
   return (
     <div className="flex h-full w-full items-center justify-center text-koma-dim">
@@ -366,6 +369,12 @@ function TabbedMain() {
                 title={t.title}
                 className="h-full w-full border-0"
               />
+            </div>
+          ) : t.kind === 'codingFile' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <CodeEditorTab tab={t} />
+              </Suspense>
             </div>
           ) : null,
         )}

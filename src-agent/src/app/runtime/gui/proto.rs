@@ -730,4 +730,59 @@ pub(super) enum GuiReq {
         path: Option<String>,
         limit: u32,
     },
+
+    // ─── Coding panel: workspace file operations ─────────────────────────────
+    // Serviced ENTIRELY host-side (the host process has direct filesystem access),
+    // so every request here is routed UNCONDITIONALLY to the host-relay thread via
+    // the matching `HostCtl::File*` variant, regardless of attach state.
+    /// Coding panel: list a directory's immediate children.
+    FileTree {
+        root: String,
+        path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: read a text file's content.
+    FileRead {
+        root: String,
+        path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: save a text file. `expected_fingerprint` must match the disk
+    /// state from the most recent FileRead; mismatch = conflict.
+    FileSave {
+        root: String,
+        path: String,
+        content: String,
+        #[serde(rename = "expectedFingerprint")]
+        expected_fingerprint: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: create a new file or directory.
+    FileCreate {
+        root: String,
+        path: String,
+        kind: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: rename/move within the same workspace root (v1).
+    FileRename {
+        root: String,
+        #[serde(rename = "oldPath")]
+        old_path: String,
+        #[serde(rename = "newPath")]
+        new_path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    /// Coding panel: delete a file or directory (recursive for dirs).
+    FileDelete {
+        root: String,
+        path: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 }

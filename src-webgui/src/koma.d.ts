@@ -460,6 +460,41 @@ declare global {
     // null means the whole branch. Reply lands as the Activity push envelope
     // (matches the Rust GuiReq::GitActivity { path, limit }).
     | { r: 'GitActivity'; path: string | null; limit: number }
+    // ─── Coding panel: workspace file operations ──────────────────────────
+    // List a directory's immediate children. `root` is one of the session's
+    // configured workspace roots (absolute path); `path` is relative to root
+    // (empty string = root itself). Reply lands as FileTree push.
+    | { r: 'FileTree'; root: string; path: string; requestId: string }
+    // Read a text file's content. Reply lands as FileRead push.
+    | { r: 'FileRead'; root: string; path: string; requestId: string }
+    // Save a text file. `expectedFingerprint` must match the disk state from
+    // the most recent FileRead; mismatch = conflict (stale save rejected).
+    // Reply lands as FileSave push.
+    | { r: 'FileSave'; root: string; path: string; content: string; expectedFingerprint: string; requestId: string }
+    // Create a new file or directory. `kind` is "file" or "dir". Reply lands
+    // as FileCreate push.
+    | { r: 'FileCreate'; root: string; path: string; kind: 'file' | 'dir'; requestId: string }
+    // Rename/move a file or directory. Both paths are relative to `root`.
+    // v1: within the same root only. Reply lands as FileRename push.
+    | { r: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string }
+    // Delete a file or directory (recursive for dirs). Reply lands as FileDelete push.
+    | { r: 'FileDelete'; root: string; path: string; requestId: string }
+
+  // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────
+  // Every reply echoes the relevant root/path/requestId for stale-reply rejection.
+  type FileTreeEntry = {
+    name: string
+    path: string       // relative to root
+    isDir: boolean
+  }
+
+  type CodingPush =
+    | { k: 'FileTree'; root: string; path: string; requestId: string; entries: FileTreeEntry[]; error: string | null }
+    | { k: 'FileRead'; root: string; path: string; requestId: string; content: string | null; fingerprint: string; binary: boolean; tooLarge: boolean; error: string | null }
+    | { k: 'FileSave'; root: string; path: string; requestId: string; fingerprint: string; error: string | null }
+    | { k: 'FileCreate'; root: string; path: string; requestId: string; error: string | null }
+    | { k: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string; error: string | null }
+    | { k: 'FileDelete'; root: string; path: string; requestId: string; error: string | null }
 
   interface KomaClient {
     // Rust -> JS: host calls this via evaluate_script with a JSON-encoded

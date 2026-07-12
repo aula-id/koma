@@ -743,6 +743,59 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // Bubble/activity chart (GK5a): host-side, ALWAYS routed to the host-relay
         // thread — never the daemon — same reasoning as `GitStatus`/`GitGraph`.
         GuiReq::GitActivity { path, limit } => dispatch_git::git_activity(&ctx.ctl, path, limit),
+
+        // Coding panel workspace file ops: serviced ENTIRELY host-side (direct fs
+        // access), same reasoning + routing as `GitStatus`/`FileDiff`.
+        GuiReq::FileTree { root, path, request_id } => {
+            let _ = ctx.ctl.send(HostCtl::FileTree { root, path, request_id });
+        }
+        GuiReq::FileRead { root, path, request_id } => {
+            let _ = ctx.ctl.send(HostCtl::FileRead { root, path, request_id });
+        }
+        GuiReq::FileSave {
+            root,
+            path,
+            content,
+            expected_fingerprint,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileSave {
+                root,
+                path,
+                content,
+                expected_fingerprint,
+                request_id,
+            });
+        }
+        GuiReq::FileCreate {
+            root,
+            path,
+            kind,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileCreate {
+                root,
+                path,
+                kind,
+                request_id,
+            });
+        }
+        GuiReq::FileRename {
+            root,
+            old_path,
+            new_path,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileRename {
+                root,
+                old_path,
+                new_path,
+                request_id,
+            });
+        }
+        GuiReq::FileDelete { root, path, request_id } => {
+            let _ = ctx.ctl.send(HostCtl::FileDelete { root, path, request_id });
+        }
     }
 }
 

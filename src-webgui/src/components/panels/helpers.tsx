@@ -78,7 +78,7 @@ export function Row({ leading, title, subtitle, right, confirmLabel, armed, onEd
   )
 }
 
-export function Empty({ children }: { children: string }) {
+export function Empty({ children }: { children: ReactNode }) {
   return <div className="px-5 py-1.5 text-[12px] text-koma-fg opacity-35">{children}</div>
 }
 

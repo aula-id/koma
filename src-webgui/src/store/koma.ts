@@ -1,5 +1,23 @@
 import { create } from 'zustand'
 import type { McpServer, Provider, Model, ModelListEntry, RouteEntry } from '../types/config'
+import {
+  initialCoding,
+  fileKey,
+  mintRequestId,
+  baseName as codingBaseName,
+  emptyFileState,
+  reduceFileTree,
+  reduceFileRead,
+  reduceFileSave,
+  reduceFileCreate,
+  reduceFileRename,
+  reduceFileDelete,
+  type CodingSlice,
+  type FileTreeEntry,
+} from './coding'
+
+export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
+export { fileKey, initialCoding } from './coding'
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
@@ -733,6 +751,9 @@ export type Tab =
   // `koma://extension/${extId}/index.html`, a SEPARATE origin from the host
   // chrome (the extension's own page manages its own state).
   | { id: string; kind: 'extension'; extId: string; panelId: string; title: string }
+  // Coding panel file editor tab. `root` is the absolute workspace root;
+  // `path` is relative to root. Stable id `coding:${root}:${path}`.
+  | { id: string; kind: 'codingFile'; root: string; path: string; title: string }
 
 export type PushEnvelope =
   | {
@@ -1164,6 +1185,57 @@ export type PushEnvelope =
   // fresh `AgentsValues` push, so this envelope only carries failures — the
   // AgentsValues push handler below is what the AgentTab watches for success.
   | { k: 'AgentOp'; ok: boolean; error: string | null; reqSeq: number }
+  // Coding panel workspace file operations (see GuiReq FileTree/FileRead/…).
+  // Every reply echoes root/path/requestId for stale-reply rejection.
+  | {
+      k: 'FileTree'
+      root: string
+      path: string
+      requestId: string
+      entries: FileTreeEntry[]
+      error: string | null
+    }
+  | {
+      k: 'FileRead'
+      root: string
+      path: string
+      requestId: string
+      content: string | null
+      fingerprint: string
+      binary: boolean
+      tooLarge: boolean
+      error: string | null
+    }
+  | {
+      k: 'FileSave'
+      root: string
+      path: string
+      requestId: string
+      fingerprint: string
+      error: string | null
+    }
+  | {
+      k: 'FileCreate'
+      root: string
+      path: string
+      requestId: string
+      error: string | null
+    }
+  | {
+      k: 'FileRename'
+      root: string
+      oldPath: string
+      newPath: string
+      requestId: string
+      error: string | null
+    }
+  | {
+      k: 'FileDelete'
+      root: string
+      path: string
+      requestId: string
+      error: string | null
+    }
 
 // GuiReq (JS -> Rust request payloads) is a global ambient type declared in
 // koma.d.ts alongside the rest of the window bridge contract.
@@ -1606,6 +1678,8 @@ type KomaState = {
   activity: ActivitySlice
   // The Analytics dashboard tab's slice. See AnalyticsSlice.
   analytics: AnalyticsSlice
+  // Coding panel slice — workspace roots, lazy dir listings, open file docs.
+  coding: CodingSlice
   // Open (or focus) the singleton commit-graph tab (id 'graph'). The GraphTab
   // itself fires refreshGraph on mount, so opening is enough. Mirrors
   // openSettingsTab's dedupe + activate shape.
@@ -1924,6 +1998,17 @@ type KomaState = {
   // `seq` to guard against stale clears; an undefined or mismatched seq is
   // a no-op.
   clearAgentSaving: (seq?: number) => void
+  // ─── Coding panel ──────────────────────────────────────────────────────
+  setActiveCodingRoot: (root: string | null) => void
+  openCodingFile: (root: string, path: string) => void
+  saveCodingFile: (root: string, path: string) => void
+  revertCodingFile: (root: string, path: string) => void
+  updateCodingContent: (root: string, path: string, content: string) => void
+  createCodingItem: (root: string, path: string, kind: 'file' | 'dir') => void
+  renameCodingItem: (root: string, oldPath: string, newPath: string) => void
+  deleteCodingItem: (root: string, path: string) => void
+  refreshCodingDir: (root: string, path: string) => void
+  clearCodingConflict: (root: string, path: string) => void
 }
 
 const initialSession: SessionSlice = {
@@ -2174,6 +2259,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   graph: initialGraph,
   activity: initialActivity,
   analytics: initialAnalytics,
+  coding: initialCoding,
   remoteBusy: null,
   commitDraft: '',
   keys: initialKeys,
@@ -2270,6 +2356,12 @@ export const useKoma = create<KomaState>((set, get) => ({
                       : {}),
                   },
                   graph: { ...initialGraph, graphMode: s.graph.graphMode },
+                  // Coding panel is session/workdir-scoped — drop open docs + tree
+                  // cache so session A's files never render under session B.
+                  coding: {
+                    ...initialCoding,
+                    _sessionGen: s.coding._sessionGen + 1,
+                  },
                   repos: [],
                   activeRepoRoot: null,
                 }
@@ -3020,6 +3112,109 @@ export const useKoma = create<KomaState>((set, get) => ({
             : {}
         })
         break
+      case 'FileTree':
+        set((s) => ({ coding: reduceFileTree(s.coding, env) }))
+        break
+      case 'FileRead':
+        set((s) => ({ coding: reduceFileRead(s.coding, env) }))
+        break
+      case 'FileSave':
+        set((s) => ({ coding: reduceFileSave(s.coding, env) }))
+        break
+      case 'FileCreate':
+        set((s) => {
+          const coding = reduceFileCreate(s.coding, env)
+          if (env.error) {
+            const seq = s.ui.toastSeq + 1
+            return {
+              coding,
+              ui: {
+                ...s.ui,
+                toastSeq: seq,
+                toast: { id: seq, text: env.error, kind: 'error' },
+              },
+            }
+          }
+          queueMicrotask(() => {
+            const parent = env.path.includes('/')
+              ? env.path.slice(0, env.path.lastIndexOf('/'))
+              : ''
+            get().refreshCodingDir(env.root, parent)
+          })
+          return { coding }
+        })
+        break
+      case 'FileRename':
+        set((s) => {
+          const coding = reduceFileRename(s.coding, env)
+          if (env.error) {
+            const seq = s.ui.toastSeq + 1
+            return {
+              coding,
+              ui: {
+                ...s.ui,
+                toastSeq: seq,
+                toast: { id: seq, text: env.error, kind: 'error' },
+              },
+            }
+          }
+          const oldId = `coding:${env.root}:${env.oldPath}`
+          const newId = `coding:${env.root}:${env.newPath}`
+          const tabs = s.ui.tabs.map((t) =>
+            t.kind === 'codingFile' && t.id === oldId
+              ? {
+                  ...t,
+                  id: newId,
+                  path: env.newPath,
+                  title: codingBaseName(env.newPath),
+                }
+              : t,
+          )
+          const activeTabId = s.ui.activeTabId === oldId ? newId : s.ui.activeTabId
+          queueMicrotask(() => {
+            const parents = new Set([
+              env.oldPath.includes('/')
+                ? env.oldPath.slice(0, env.oldPath.lastIndexOf('/'))
+                : '',
+              env.newPath.includes('/')
+                ? env.newPath.slice(0, env.newPath.lastIndexOf('/'))
+                : '',
+            ])
+            for (const p of parents) get().refreshCodingDir(env.root, p)
+          })
+          return { coding, ui: { ...s.ui, tabs, activeTabId } }
+        })
+        break
+      case 'FileDelete':
+        set((s) => {
+          const coding = reduceFileDelete(s.coding, env)
+          if (env.error) {
+            const seq = s.ui.toastSeq + 1
+            return {
+              coding,
+              ui: {
+                ...s.ui,
+                toastSeq: seq,
+                toast: { id: seq, text: env.error, kind: 'error' },
+              },
+            }
+          }
+          const delId = `coding:${env.root}:${env.path}`
+          const idx = s.ui.tabs.findIndex((t) => t.id === delId)
+          const tabs = s.ui.tabs.filter((t) => t.id !== delId)
+          const activeTabId =
+            s.ui.activeTabId === delId
+              ? s.ui.tabs[Math.max(0, idx - 1)]?.id ?? 'chat'
+              : s.ui.activeTabId
+          queueMicrotask(() => {
+            const parent = env.path.includes('/')
+              ? env.path.slice(0, env.path.lastIndexOf('/'))
+              : ''
+            get().refreshCodingDir(env.root, parent)
+          })
+          return { coding, ui: { ...s.ui, tabs, activeTabId } }
+        })
+        break
       case 'AgentOp': {
         // Daemon SetAgent/DeleteAgent result — surface the error as a toast
         // and clear the pending saving state. Success is authoritative via
@@ -3483,6 +3678,14 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   closeTab: (id) => {
     if (id === 'chat') return
+    // Dirty codingFile tabs confirm before discard.
+    {
+      const closing = get().ui.tabs.find((t) => t.id === id)
+      if (closing && closing.kind === 'codingFile') {
+        const f = get().coding.files[fileKey(closing.root, closing.path)]
+        if (f?.dirty && !window.confirm('Unsaved changes. Close anyway?')) return
+      }
+    }
     const closedAnalytics = id === 'analytics'
     set((s) => {
       const idx = s.ui.tabs.findIndex((t) => t.id === id)
@@ -3648,6 +3851,112 @@ export const useKoma = create<KomaState>((set, get) => ({
     set((s) => {
       if (seq !== undefined && s.agentSaving?.seq !== seq) return {} // stale, don't clear
       return { agentSaving: null }
+    })
+  },
+  setActiveCodingRoot: (root) => set((s) => ({ coding: { ...s.coding, activeRoot: root } })),
+  openCodingFile: (root, path) => {
+    const id = `coding:${root}:${path}`
+    const key = fileKey(root, path)
+    const requestId = mintRequestId()
+    set((s) => {
+      const exists = s.ui.tabs.some((t) => t.id === id)
+      const tabs: Tab[] = exists
+        ? s.ui.tabs
+        : [...s.ui.tabs, { id, kind: 'codingFile', root, path, title: codingBaseName(path) }]
+      const prev = s.coding.files[key]
+      return {
+        ui: { ...s.ui, tabs, activeTabId: id },
+        coding: {
+          ...s.coding,
+          _readReq: { ...s.coding._readReq, [key]: requestId },
+          files: {
+            ...s.coding.files,
+            [key]: emptyFileState({
+              content: prev?.content ?? null,
+              savedContent: prev?.savedContent ?? null,
+              fingerprint: prev?.fingerprint ?? '',
+              dirty: prev?.dirty ?? false,
+              loading: true,
+            }),
+          },
+        },
+      }
+    })
+    get().req({ r: 'FileRead', root, path, requestId })
+  },
+  saveCodingFile: (root, path) => {
+    const key = fileKey(root, path)
+    const file = get().coding.files[key]
+    if (!file || file.content == null || file.saving) return
+    const requestId = mintRequestId()
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        files: { ...s.coding.files, [key]: { ...file, saving: true, conflict: false, error: null } },
+      },
+    }))
+    get().req({
+      r: 'FileSave',
+      root,
+      path,
+      content: file.content,
+      expectedFingerprint: file.fingerprint,
+      requestId,
+    })
+  },
+  revertCodingFile: (root, path) => {
+    get().openCodingFile(root, path)
+  },
+  updateCodingContent: (root, path, content) => {
+    const key = fileKey(root, path)
+    set((s) => {
+      const prev = s.coding.files[key]
+      if (!prev) return s
+      const dirty = content !== (prev.savedContent ?? '')
+      if (prev.content === content && prev.dirty === dirty) return s
+      return {
+        coding: {
+          ...s.coding,
+          files: { ...s.coding.files, [key]: { ...prev, content, dirty, conflict: false } },
+        },
+      }
+    })
+  },
+  createCodingItem: (root, path, kind) => {
+    get().req({ r: 'FileCreate', root, path, kind, requestId: mintRequestId() })
+  },
+  renameCodingItem: (root, oldPath, newPath) => {
+    get().req({ r: 'FileRename', root, oldPath, newPath, requestId: mintRequestId() })
+  },
+  deleteCodingItem: (root, path) => {
+    get().req({ r: 'FileDelete', root, path, requestId: mintRequestId() })
+  },
+  refreshCodingDir: (root, path) => {
+    const key = fileKey(root, path)
+    const requestId = mintRequestId()
+    set((s) => ({
+      coding: {
+        ...s.coding,
+        _treeReq: { ...s.coding._treeReq, [key]: requestId },
+        dirs: {
+          ...s.coding.dirs,
+          [key]: { entries: s.coding.dirs[key]?.entries ?? [], loading: true, error: null },
+        },
+      },
+    }))
+    get().req({ r: 'FileTree', root, path, requestId })
+  },
+  clearCodingConflict: (root, path) => {
+    const key = fileKey(root, path)
+    set((s) => {
+      const prev = s.coding.files[key]
+      if (!prev) return s
+      return {
+        coding: {
+          ...s.coding,
+          files: { ...s.coding.files, [key]: { ...prev, conflict: false, error: null } },
+        },
+      }
     })
   },
 }))

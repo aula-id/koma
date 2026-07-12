@@ -375,3 +375,13 @@ pub(super) struct PushAnalyticsModel {
     pub(super) tokens_out: u64,
     pub(super) calls: u64,
 }
+
+/// One entry in a Coding panel directory listing.
+#[derive(serde::Serialize)]
+pub(super) struct PushFileTreeEntry {
+    pub name: String,
+    pub path: String,
+    /// Whether this entry is a directory.
+    #[serde(rename = "isDir")]
+    pub is_dir: bool,
+}

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle } from 'lucide-react'
+import { Files, GitBranch, Blocks, Plug, Bot, ChartColumn, CircleHelp, Settings, MoreHorizontal, Puzzle, Code2 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { SidebarView } from './Sidebar'
 import { useKoma, resolveActivityBarOrder } from '../store/koma'
@@ -39,6 +39,7 @@ const iconBtn =
 export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
   { view: 'explore', icon: Files, label: 'Explore' },
   { view: 'git', icon: GitBranch, label: 'Source Control' },
+  { view: 'coding', icon: Code2, label: 'Coding' },
   { view: 'mcp', icon: Blocks, label: 'MCP' },
   { view: 'connector', icon: Plug, label: 'Connector' },
   { view: 'agents', icon: Bot, label: 'Agents' },
