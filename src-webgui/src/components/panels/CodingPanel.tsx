@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   File,
@@ -10,9 +11,17 @@ import {
   Pencil,
   RefreshCw,
   Trash2,
+  X,
 } from 'lucide-react'
 import { useKoma } from '../../store/koma'
-import { baseName, fileKey, parentDirPath, type FileTreeEntry } from '../../store/coding'
+import {
+  baseName,
+  fileKey,
+  isPathOrDescendant,
+  parentDirPath,
+  remapPath,
+  type FileTreeEntry,
+} from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty, IconBtn } from './helpers'
 
@@ -27,17 +36,131 @@ function rootLabel(root: string): string {
   return parts[parts.length - 1] || root
 }
 
+function cleanName(raw: string): string | null {
+  const cleaned = raw.trim().replace(/^\/+|\/+$/g, '')
+  if (!cleaned || cleaned.includes('..') || cleaned.includes('/')) return null
+  return cleaned
+}
+
+type Draft =
+  | { kind: 'create'; dirPath: string; item: 'file' | 'dir' }
+  | { kind: 'rename'; path: string }
+  | { kind: 'delete'; path: string; isDir: boolean }
+
 type TreeNodeProps = {
   root: string
   entry: FileTreeEntry
   depth: number
   expanded: Set<string>
+  draft: Draft | null
   onToggle: (path: string) => void
   onOpenFile: (path: string) => void
   onRefresh: (path: string) => void
-  onCreate: (dirPath: string, kind: 'file' | 'dir') => void
-  onRename: (path: string) => void
-  onDelete: (path: string, isDir: boolean) => void
+  onStartCreate: (dirPath: string, item: 'file' | 'dir') => void
+  onStartRename: (path: string) => void
+  onStartDelete: (path: string, isDir: boolean) => void
+  onCancelDraft: () => void
+  onSubmitCreate: (dirPath: string, item: 'file' | 'dir', name: string) => void
+  onSubmitRename: (path: string, name: string) => void
+  onConfirmDelete: (path: string) => void
+}
+
+function InlineNameInput({
+  initial,
+  placeholder,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string
+  placeholder: string
+  onSubmit: (value: string) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState(initial)
+  const ref = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    ref.current?.focus()
+    ref.current?.select()
+  }, [])
+
+  const commit = () => {
+    const v = value.trim()
+    if (!v) {
+      onCancel()
+      return
+    }
+    onSubmit(v)
+  }
+
+  return (
+    <form
+      className="flex min-w-0 flex-1 items-center gap-1"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault()
+        commit()
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <input
+        ref={ref}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+        onBlur={() => {
+          // Prefer explicit cancel/submit buttons; blur just cancels empty drafts.
+          if (!value.trim()) onCancel()
+        }}
+        className="h-5 min-w-0 flex-1 rounded border border-koma-border bg-koma-bg px-1.5 text-[12px] text-koma-fg outline-none focus:border-koma-fg/40"
+      />
+      <IconBtn label="Confirm" tone="emerald" onClick={commit}>
+        <Check size={12} />
+      </IconBtn>
+      <IconBtn label="Cancel" tone="red" onClick={onCancel}>
+        <X size={12} />
+      </IconBtn>
+    </form>
+  )
+}
+
+function CreateDraftRow({
+  depth,
+  item,
+  onSubmit,
+  onCancel,
+}: {
+  depth: number
+  item: 'file' | 'dir'
+  onSubmit: (name: string) => void
+  onCancel: () => void
+}) {
+  const pad = 8 + depth * 12
+  return (
+    <div
+      className="flex h-7 min-w-0 items-center gap-1 pr-1 text-[12px] text-koma-fg"
+      style={{ paddingLeft: pad }}
+    >
+      <span className="w-5 flex-none" />
+      {item === 'dir' ? (
+        <Folder size={13} className="flex-none text-koma-accent opacity-80" />
+      ) : (
+        <File size={13} className="flex-none opacity-70" />
+      )}
+      <InlineNameInput
+        initial=""
+        placeholder={item === 'dir' ? 'folder name' : 'file name'}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />
+    </div>
+  )
 }
 
 function TreeNode({
@@ -45,20 +168,67 @@ function TreeNode({
   entry,
   depth,
   expanded,
+  draft,
   onToggle,
   onOpenFile,
   onRefresh,
-  onCreate,
-  onRename,
-  onDelete,
+  onStartCreate,
+  onStartRename,
+  onStartDelete,
+  onCancelDraft,
+  onSubmitCreate,
+  onSubmitRename,
+  onConfirmDelete,
 }: TreeNodeProps) {
   const key = fileKey(root, entry.path)
   const dirState = useKoma((s) => (entry.isDir ? s.coding.dirs[key] : null))
-  const fileState = useKoma((s) => (!entry.isDir ? s.coding.files[key] : null))
-  const dirty = !!fileState?.dirty
-  const isNew = dirty && fileState?.savedContent === null
+  const dirty = useKoma((s) => (!entry.isDir ? !!s.coding.files[key]?.dirty : false))
+  const isNew = useKoma((s) => {
+    if (entry.isDir) return false
+    const f = s.coding.files[key]
+    return !!f?.dirty && f.savedContent === null
+  })
   const isOpen = entry.isDir && expanded.has(entry.path)
   const pad = 8 + depth * 12
+  const renaming = draft?.kind === 'rename' && draft.path === entry.path
+  const deleting = draft?.kind === 'delete' && draft.path === entry.path
+  const createHere =
+    draft?.kind === 'create' && draft.dirPath === entry.path && entry.isDir ? draft : null
+
+  if (deleting) {
+    return (
+      <div
+        className="flex min-h-[28px] w-full items-center gap-2 bg-koma-error/15 px-2 text-[12px] font-medium text-koma-error"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="min-w-0 flex-1 truncate">
+          delete {entry.isDir ? 'folder' : 'file'}?
+        </span>
+        <span className="flex flex-none items-center gap-1">
+          <span aria-hidden="true" className="text-koma-error/60">|</span>
+          <button
+            type="button"
+            autoFocus
+            className="rounded px-1.5 py-0.5 text-koma-success hover:bg-koma-success/15"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onConfirmDelete(entry.path) }}
+          >
+            yes
+          </button>
+          <span aria-hidden="true" className="text-koma-error/60">|</span>
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 text-koma-error hover:bg-koma-error/15"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onCancelDraft() }}
+          >
+            no
+          </button>
+        </span>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -79,56 +249,90 @@ function TreeNode({
           <span className="w-5 flex-none" />
         )}
 
-        <button
-          type="button"
-          onClick={() => (entry.isDir ? onToggle(entry.path) : onOpenFile(entry.path))}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-          title={entry.path || entry.name}
-        >
-          {entry.isDir ? (
-            isOpen ? (
-              <FolderOpen size={13} className="flex-none text-koma-accent opacity-80" />
-            ) : (
+        {renaming ? (
+          <>
+            {entry.isDir ? (
               <Folder size={13} className="flex-none text-koma-accent opacity-80" />
-            )
-          ) : (
-            <File size={13} className="flex-none opacity-70" />
-          )}
-          <span className="min-w-0 truncate">
+            ) : (
+              <File size={13} className="flex-none opacity-70" />
+            )}
+            <InlineNameInput
+              initial={entry.name}
+              placeholder="new name"
+              onSubmit={(name) => onSubmitRename(entry.path, name)}
+              onCancel={onCancelDraft}
+            />
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => (entry.isDir ? onToggle(entry.path) : onOpenFile(entry.path))}
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              title={entry.path || entry.name}
+            >
+              {entry.isDir ? (
+                isOpen ? (
+                  <FolderOpen size={13} className="flex-none text-koma-accent opacity-80" />
+                ) : (
+                  <Folder size={13} className="flex-none text-koma-accent opacity-80" />
+                )
+              ) : (
+                <File size={13} className="flex-none opacity-70" />
+              )}
+              <span className="min-w-0 truncate">{entry.name}</span>
+            </button>
+
+            {!draft ? <div className="flex flex-none items-center opacity-0 group-hover:opacity-100">
+              {entry.isDir && (
+                <>
+                  <IconBtn label="New file" faded onClick={() => onStartCreate(entry.path, 'file')}>
+                    <FilePlus size={12} />
+                  </IconBtn>
+                  <IconBtn label="New folder" faded onClick={() => onStartCreate(entry.path, 'dir')}>
+                    <FolderPlus size={12} />
+                  </IconBtn>
+                  <IconBtn label="Refresh" faded onClick={() => onRefresh(entry.path)}>
+                    <RefreshCw size={12} />
+                  </IconBtn>
+                </>
+              )}
+              <IconBtn label="Rename" faded onClick={() => onStartRename(entry.path)}>
+                <Pencil size={12} />
+              </IconBtn>
+              <IconBtn
+                label="Delete"
+                tone="red"
+                faded
+                onClick={() => onStartDelete(entry.path, entry.isDir)}
+              >
+                <Trash2 size={12} />
+              </IconBtn>
+            </div> : null}
+
             {dirty ? (
-              <span className={`mr-1 font-mono text-[11px] font-semibold ${isNew ? 'text-koma-success' : 'text-koma-accent'}`}>
+              <span
+                className={`flex-none font-mono text-[11px] font-semibold ${
+                  isNew ? 'text-koma-success' : 'text-koma-accent'
+                }`}
+              >
                 {isNew ? 'A' : 'M'}
               </span>
             ) : null}
-            {entry.name}
-          </span>
-        </button>
-
-        <div className="flex flex-none items-center opacity-0 group-hover:opacity-100">
-          {entry.isDir && (
-            <>
-              <IconBtn label="New file" faded onClick={() => onCreate(entry.path, 'file')}>
-                <FilePlus size={12} />
-              </IconBtn>
-              <IconBtn label="New folder" faded onClick={() => onCreate(entry.path, 'dir')}>
-                <FolderPlus size={12} />
-              </IconBtn>
-              <IconBtn label="Refresh" faded onClick={() => onRefresh(entry.path)}>
-                <RefreshCw size={12} />
-              </IconBtn>
-            </>
-          )}
-          <IconBtn label="Rename" faded onClick={() => onRename(entry.path)}>
-            <Pencil size={12} />
-          </IconBtn>
-          <IconBtn label="Delete" tone="red" faded onClick={() => onDelete(entry.path, entry.isDir)}>
-            <Trash2 size={12} />
-          </IconBtn>
-        </div>
+          </>
+        )}
       </div>
 
       {entry.isDir && isOpen && (
         <div>
+          {createHere ? (
+            <CreateDraftRow
+              depth={depth + 1}
+              item={createHere.item}
+              onSubmit={(name) => onSubmitCreate(entry.path, createHere.item, name)}
+              onCancel={onCancelDraft}
+            />
+          ) : null}
           {dirState?.loading && !dirState.entries.length ? (
             <div
               className="flex h-7 items-center gap-2 text-[11px] text-koma-dim"
@@ -149,15 +353,20 @@ function TreeNode({
                 entry={child}
                 depth={depth + 1}
                 expanded={expanded}
+                draft={draft}
                 onToggle={onToggle}
                 onOpenFile={onOpenFile}
                 onRefresh={onRefresh}
-                onCreate={onCreate}
-                onRename={onRename}
-                onDelete={onDelete}
+                onStartCreate={onStartCreate}
+                onStartRename={onStartRename}
+                onStartDelete={onStartDelete}
+                onCancelDraft={onCancelDraft}
+                onSubmitCreate={onSubmitCreate}
+                onSubmitRename={onSubmitRename}
+                onConfirmDelete={onConfirmDelete}
               />
             ))
-          ) : dirState && !dirState.loading ? (
+          ) : dirState && !dirState.loading && !createHere ? (
             <div
               className="px-2 py-1 text-[11px] text-koma-dim opacity-60"
               style={{ paddingLeft: pad + 20 }}
@@ -185,6 +394,7 @@ export function CodingPanel() {
   const req = useKoma((s) => s.req)
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
+  const [draft, setDraft] = useState<Draft | null>(null)
 
   useEffect(() => {
     req({ r: 'GetSettings' })
@@ -201,14 +411,29 @@ export function CodingPanel() {
   }, [workdir, activeRoot, setActiveCodingRoot])
 
   useEffect(() => {
+    if (!draft) return
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setDraft(null)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [draft])
+
+  useEffect(() => {
     if (!activeRoot) return
     refreshCodingDir(activeRoot, '')
     setExpanded(new Set(['']))
+    setDraft(null)
   }, [activeRoot, refreshCodingDir])
 
   const rootKey = activeRoot ? fileKey(activeRoot, '') : null
   const rootDir = rootKey ? dirs[rootKey] : null
   const roots = useMemo(() => workdir.slice(), [workdir])
+  const rootCreate =
+    draft?.kind === 'create' && draft.dirPath === '' ? draft : null
 
   const onToggle = (path: string) => {
     if (!activeRoot) return
@@ -237,34 +462,67 @@ export function CodingPanel() {
     refreshCodingDir(activeRoot, path)
   }
 
-  const onCreate = (dirPath: string, kind: 'file' | 'dir') => {
+  const onStartCreate = (dirPath: string, item: 'file' | 'dir') => {
     if (!activeRoot) return
-    const label = kind === 'file' ? 'New file name' : 'New folder name'
-    const name = window.prompt(label)
-    if (!name || !name.trim()) return
-    const cleaned = name.trim().replace(/^\/+|\/+$/g, '')
-    if (!cleaned || cleaned.includes('..')) return
-    createCodingItem(activeRoot, joinPath(dirPath, cleaned), kind)
     setExpanded((prev) => new Set(prev).add(dirPath))
+    const k = fileKey(activeRoot, dirPath)
+    if (dirPath && !useKoma.getState().coding.dirs[k]) {
+      refreshCodingDir(activeRoot, dirPath)
+    }
+    setDraft({ kind: 'create', dirPath, item })
   }
 
-  const onRename = (path: string) => {
-    if (!activeRoot) return
-    const current = baseName(path)
-    const next = window.prompt('Rename to', current)
-    if (!next || !next.trim() || next.trim() === current) return
-    const cleaned = next.trim().replace(/^\/+|\/+$/g, '')
-    if (!cleaned || cleaned.includes('..') || cleaned.includes('/')) return
-    renameCodingItem(activeRoot, path, joinPath(parentDirPath(path), cleaned))
+  const onStartRename = (path: string) => {
+    setDraft({ kind: 'rename', path })
   }
 
-  const onDelete = (path: string, isDir: boolean) => {
+  const onStartDelete = (path: string, isDir: boolean) => {
+    setDraft({ kind: 'delete', path, isDir })
+  }
+
+  const onCancelDraft = () => setDraft(null)
+
+  const onSubmitCreate = (dirPath: string, item: 'file' | 'dir', name: string) => {
     if (!activeRoot) return
-    const label = isDir
-      ? `Delete folder "${baseName(path)}" and all its contents?`
-      : `Delete file "${baseName(path)}"?`
-    if (!window.confirm(label)) return
+    const cleaned = cleanName(name)
+    if (!cleaned) return
+    createCodingItem(activeRoot, joinPath(dirPath, cleaned), item)
+    setExpanded((prev) => new Set(prev).add(dirPath))
+    setDraft(null)
+  }
+
+  const onSubmitRename = (path: string, name: string) => {
+    if (!activeRoot) return
+    const cleaned = cleanName(name)
+    if (!cleaned || cleaned === baseName(path)) {
+      setDraft(null)
+      return
+    }
+    const newPath = joinPath(parentDirPath(path), cleaned)
+    renameCodingItem(activeRoot, path, newPath)
+    // Keep expanded UI state coherent for a renamed directory and its children.
+    setExpanded((prev) => {
+      const next = new Set<string>()
+      for (const p of prev) {
+        const mapped = remapPath(p, path, newPath)
+        next.add(mapped ?? p)
+      }
+      return next
+    })
+    setDraft(null)
+  }
+
+  const onConfirmDelete = (path: string) => {
+    if (!activeRoot) return
     deleteCodingItem(activeRoot, path)
+    setExpanded((prev) => {
+      const next = new Set<string>()
+      for (const p of prev) {
+        if (!isPathOrDescendant(p, path)) next.add(p)
+      }
+      return next
+    })
+    setDraft(null)
   }
 
   if (roots.length === 0) {
@@ -276,6 +534,7 @@ export function CodingPanel() {
       <div className="flex flex-none items-center gap-1 border-b border-koma-border px-2 py-1.5">
         <select
           value={activeRoot ?? roots[0] ?? ''}
+          disabled={!!draft}
           onChange={(e) => setActiveCodingRoot(e.target.value)}
           className="min-w-0 flex-1 truncate rounded border border-koma-border bg-koma-bg px-1.5 py-1 text-[11px] text-koma-fg outline-none focus:border-koma-fg/40"
           title={activeRoot ?? ''}
@@ -286,45 +545,64 @@ export function CodingPanel() {
             </option>
           ))}
         </select>
-        <IconBtn label="Refresh root" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
-          <RefreshCw size={12} />
-        </IconBtn>
-        <IconBtn label="New file in root" onClick={() => activeRoot && onCreate('', 'file')}>
-          <FilePlus size={12} />
-        </IconBtn>
-        <IconBtn label="New folder in root" onClick={() => activeRoot && onCreate('', 'dir')}>
-          <FolderPlus size={12} />
-        </IconBtn>
+        {!draft ? <>
+          <IconBtn label="Refresh root" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
+            <RefreshCw size={12} />
+          </IconBtn>
+          <IconBtn label="New file in root" onClick={() => activeRoot && onStartCreate('', 'file')}>
+            <FilePlus size={12} />
+          </IconBtn>
+          <IconBtn label="New folder in root" onClick={() => activeRoot && onStartCreate('', 'dir')}>
+            <FolderPlus size={12} />
+          </IconBtn>
+        </> : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
         {!activeRoot ? (
           <Empty>Select a workspace root</Empty>
-        ) : rootDir?.loading && !rootDir.entries.length ? (
+        ) : rootDir?.loading && !rootDir.entries.length && !rootCreate ? (
           <div className="flex items-center gap-2 px-3 py-3 text-[12px] text-koma-dim">
             <BrailleSpinner size={13} />
             <span>Loading…</span>
           </div>
         ) : rootDir?.error ? (
           <div className="px-3 py-3 text-[12px] text-koma-error">{rootDir.error}</div>
-        ) : rootDir?.entries?.length ? (
-          rootDir.entries.map((entry) => (
-            <TreeNode
-              key={fileKey(activeRoot, entry.path)}
-              root={activeRoot}
-              entry={entry}
-              depth={0}
-              expanded={expanded}
-              onToggle={onToggle}
-              onOpenFile={onOpenFile}
-              onRefresh={onRefresh}
-              onCreate={onCreate}
-              onRename={onRename}
-              onDelete={onDelete}
-            />
-          ))
         ) : (
-          <Empty>Empty workspace</Empty>
+          <>
+            {rootCreate ? (
+              <CreateDraftRow
+                depth={0}
+                item={rootCreate.item}
+                onSubmit={(name) => onSubmitCreate('', rootCreate.item, name)}
+                onCancel={onCancelDraft}
+              />
+            ) : null}
+            {rootDir?.entries?.length ? (
+              rootDir.entries.map((entry) => (
+                <TreeNode
+                  key={fileKey(activeRoot, entry.path)}
+                  root={activeRoot}
+                  entry={entry}
+                  depth={0}
+                  expanded={expanded}
+                  draft={draft}
+                  onToggle={onToggle}
+                  onOpenFile={onOpenFile}
+                  onRefresh={onRefresh}
+                  onStartCreate={onStartCreate}
+                  onStartRename={onStartRename}
+                  onStartDelete={onStartDelete}
+                  onCancelDraft={onCancelDraft}
+                  onSubmitCreate={onSubmitCreate}
+                  onSubmitRename={onSubmitRename}
+                  onConfirmDelete={onConfirmDelete}
+                />
+              ))
+            ) : !rootCreate ? (
+              <Empty>Empty workspace</Empty>
+            ) : null}
+          </>
         )}
       </div>
     </div>

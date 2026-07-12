@@ -19,6 +19,7 @@ export function IconBtn({
   const hover = tone === 'emerald' ? 'hover:!text-emerald-500' : tone === 'red' ? 'hover:!text-red-500' : ''
   return (
     <button
+      type="button"
       onClick={onClick}
       aria-label={label}
       title={label}

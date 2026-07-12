@@ -262,6 +262,21 @@ export function reduceFileSave(coding: CodingSlice, env: FileSavePush): CodingSl
   }
 }
 
+/** True when `path` is `prefix` itself or a path under `prefix/`. */
+export function isPathOrDescendant(path: string, prefix: string): boolean {
+  if (prefix === '') return true
+  return path === prefix || path.startsWith(prefix + '/')
+}
+
+/** Remap a path that lives at/under `oldPath` onto `newPath`. */
+export function remapPath(path: string, oldPath: string, newPath: string): string | null {
+  if (path === oldPath) return newPath
+  if (oldPath !== '' && path.startsWith(oldPath + '/')) {
+    return newPath + path.slice(oldPath.length)
+  }
+  return null
+}
+
 /** After create/rename/delete success, drop cached dir listings under the parent so a refresh reloads. */
 export function invalidateDir(coding: CodingSlice, root: string, path: string): CodingSlice {
   const parent = parentDirPath(path)
@@ -271,6 +286,74 @@ export function invalidateDir(coding: CodingSlice, root: string, path: string): 
   return { ...coding, dirs: rest }
 }
 
+/** Drop dir/file/req caches for `path` and every descendant under the same root. */
+export function dropPathAndDescendants(coding: CodingSlice, root: string, path: string): CodingSlice {
+  const rootPrefix = root + ':'
+  const keepKey = (k: string): boolean => {
+    if (!k.startsWith(rootPrefix)) return true
+    const rel = k.slice(rootPrefix.length)
+    return !isPathOrDescendant(rel, path)
+  }
+  const dirs: Record<string, DirState> = {}
+  for (const [k, v] of Object.entries(coding.dirs)) {
+    if (keepKey(k)) dirs[k] = v
+  }
+  const files: Record<string, CodingFileState> = {}
+  for (const [k, v] of Object.entries(coding.files)) {
+    if (keepKey(k)) files[k] = v
+  }
+  const _readReq: Record<string, string> = {}
+  for (const [k, v] of Object.entries(coding._readReq)) {
+    if (keepKey(k)) _readReq[k] = v
+  }
+  const _treeReq: Record<string, string> = {}
+  for (const [k, v] of Object.entries(coding._treeReq)) {
+    if (keepKey(k)) _treeReq[k] = v
+  }
+  return { ...coding, dirs, files, _readReq, _treeReq }
+}
+
+/**
+ * Remap dir/file/req caches from `oldPath` onto `newPath` (including descendants),
+ * then invalidate both parents so the tree reloads.
+ */
+export function remapPathAndDescendants(
+  coding: CodingSlice,
+  root: string,
+  oldPath: string,
+  newPath: string,
+): CodingSlice {
+  const rootPrefix = root + ':'
+  const remapRecord = <T,>(rec: Record<string, T>): Record<string, T> => {
+    const out: Record<string, T> = {}
+    for (const [k, v] of Object.entries(rec)) {
+      if (!k.startsWith(rootPrefix)) {
+        out[k] = v
+        continue
+      }
+      const rel = k.slice(rootPrefix.length)
+      const mapped = remapPath(rel, oldPath, newPath)
+      if (mapped == null) {
+        out[k] = v
+        continue
+      }
+      out[fileKey(root, mapped)] = v
+    }
+    return out
+  }
+
+  let next: CodingSlice = {
+    ...coding,
+    dirs: remapRecord(coding.dirs),
+    files: remapRecord(coding.files),
+    _readReq: remapRecord(coding._readReq),
+    _treeReq: remapRecord(coding._treeReq),
+  }
+  next = invalidateDir(next, root, oldPath)
+  next = invalidateDir(next, root, newPath)
+  return next
+}
+
 export function reduceFileCreate(coding: CodingSlice, env: FileCreatePush): CodingSlice {
   if (env.error) return coding
   return invalidateDir(coding, env.root, env.path)
@@ -278,35 +361,12 @@ export function reduceFileCreate(coding: CodingSlice, env: FileCreatePush): Codi
 
 export function reduceFileRename(coding: CodingSlice, env: FileRenamePush): CodingSlice {
   if (env.error) return coding
-  let next = invalidateDir(coding, env.root, env.oldPath)
-  next = invalidateDir(next, env.root, env.newPath)
-  // Move open file state if present.
-  const oldKey = fileKey(env.root, env.oldPath)
-  const newKey = fileKey(env.root, env.newPath)
-  if (next.files[oldKey]) {
-    const { [oldKey]: moved, ...files } = next.files
-    next = { ...next, files: { ...files, [newKey]: moved } }
-  }
-  return next
+  return remapPathAndDescendants(coding, env.root, env.oldPath, env.newPath)
 }
 
 export function reduceFileDelete(coding: CodingSlice, env: FileDeletePush): CodingSlice {
   if (env.error) return coding
-  let next = invalidateDir(coding, env.root, env.path)
-  const key = fileKey(env.root, env.path)
-  if (next.files[key]) {
-    const { [key]: _drop, ...files } = next.files
-    void _drop
-    next = { ...next, files }
-  }
-  // Also drop any dir cache under this path prefix.
-  const prefix = `${env.root}:${env.path}`
-  const dirs: Record<string, DirState> = {}
-  for (const [k, v] of Object.entries(next.dirs)) {
-    if (k === prefix || k.startsWith(prefix + '/') || k.startsWith(prefix + ':')) continue
-    // keys are root:path — path may be empty.
-    if (k.startsWith(env.root + ':' + env.path + '/')) continue
-    dirs[k] = v
-  }
-  return { ...next, dirs }
+  let next = dropPathAndDescendants(coding, env.root, env.path)
+  next = invalidateDir(next, env.root, env.path)
+  return next
 }
