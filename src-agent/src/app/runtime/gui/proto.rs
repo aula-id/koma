@@ -794,4 +794,11 @@ pub(super) enum GuiReq {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+
+    // ─── Frontend error logging ───────────────────────────────────────────────
+    /// Write an error message to the global error log (`~/.koma/error.log`).
+    /// Used by the web frontend to log runtime errors that only occur in the
+    /// built/running app (not in dev mode with full error messages). Host-local,
+    /// unconditional — no reply, no attach needed.
+    WriteErrorLog { message: String },
 }

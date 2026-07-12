@@ -805,6 +805,10 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::FileDelete { root, path, request_id } => {
             let _ = ctx.ctl.send(HostCtl::FileDelete { root, path, request_id });
         }
+        // Write error log: host-local, unconditional, fire-and-forget.
+        GuiReq::WriteErrorLog { message } => {
+            crate::model::store::append_global_error_log("frontend", &message);
+        }
     }
 }
 

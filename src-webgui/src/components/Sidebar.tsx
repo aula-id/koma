@@ -11,6 +11,7 @@ import { UsagePanel } from './panels/UsagePanel'
 import { StorePanel } from './panels/StorePanel'
 import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
+import { ErrorBoundary } from './ErrorBoundary'
 
 export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'agents' | 'usage' | 'store'
 
@@ -118,7 +119,11 @@ export function Sidebar({ width, view }: SidebarProps) {
       <div className="relative min-h-0 flex-1">
         {view === 'explore' && <ExplorePanel />}
         {view === 'git' && <GitPanel />}
-        {view === 'coding' && <CodingPanel />}
+        {view === 'coding' && (
+          <ErrorBoundary>
+            <CodingPanel />
+          </ErrorBoundary>
+        )}
         {view === 'mcp' && <McpPanel />}
         {view === 'connector' && <ConnectorPanel />}
         {view === 'agents' && <AgentsPanel />}

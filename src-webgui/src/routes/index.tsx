@@ -77,10 +77,22 @@ function RootLayout() {
 
   // Wire the JS <-> Rust bridge: expose window.__komaClient.push so the host
   // can feed the koma store, then announce readiness so it sends the first
-  // push (Hub if swapper else Snapshot).
+  // push (Hub if swapper else Snapshot). Also expose window.komaIpc for
+  // fire-and-forget IPC calls (e.g., error logging).
   useEffect(() => {
     window.__komaClient = {
       push: (j) => useKoma.getState().push(JSON.parse(j)),
+    }
+    // komaIpc is for fire-and-forget requests that don't need a reply
+    window.komaIpc = (g) => {
+      const ipc = window.ipc
+      if (ipc && typeof ipc.postMessage === 'function') {
+        try {
+          ipc.postMessage(JSON.stringify({ t: 'req', ...g }))
+        } catch {
+          // ignore IPC errors for fire-and-forget calls
+        }
+      }
     }
     useKoma.getState().req({ r: 'Ready' })
     // Also kick off an initial git-status fetch so the chat footer's branch
@@ -89,6 +101,7 @@ function RootLayout() {
     useKoma.getState().req({ r: 'GitStatus' })
     return () => {
       window.__komaClient = undefined
+      window.komaIpc = undefined
     }
   }, [])
 
