@@ -482,6 +482,10 @@ declare global {
     | { r: 'FileRename'; root: string; oldPath: string; newPath: string; requestId: string }
     // Delete a file or directory (recursive for dirs). Reply lands as FileDelete push.
     | { r: 'FileDelete'; root: string; path: string; requestId: string }
+    // Write an error message to the global error log (`~/.koma/error.log`). Used by
+    // the React error boundary to log runtime errors that only occur in the built
+    // app (not in dev mode). No reply, no session needed.
+    | { r: 'WriteErrorLog'; message: string }
 
   // ─── Coding push envelope shapes (Rust → JS) ────────────────────────────
   // Every reply echoes the relevant root/path/requestId for stale-reply rejection.
@@ -509,6 +513,7 @@ declare global {
     __komaOS?: string
     __komaClient?: KomaClient
     ipc?: { postMessage(msg: string): void }
+    komaIpc?: (req: GuiReq) => void
   }
 }
 
