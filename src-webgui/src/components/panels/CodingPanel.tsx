@@ -380,6 +380,7 @@ function TreeNode({
 
 // Sidebar panel for the Coding view: workspace root picker + lazy file tree.
 export function CodingPanel() {
+  const sessionId = useKoma((s) => s.session.id)
   const workdir = useKoma((s) => s.settingsValues?.workdir ?? [])
   const activeRoot = useKoma((s) => s.coding.activeRoot)
   const dirs = useKoma((s) => s.coding.dirs)
@@ -393,6 +394,15 @@ export function CodingPanel() {
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
   const [draft, setDraft] = useState<Draft | null>(null)
+
+  // No session attached yet — the home screen, before any workdir exists.
+  if (sessionId === null) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <Empty>Open a project to use Coding</Empty>
+      </div>
+    )
+  }
 
   useEffect(() => {
     req({ r: 'GetSettings' })
