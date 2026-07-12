@@ -269,6 +269,11 @@ pub struct Settings {
     /// tee-to-disk) to preserve command logs. Defaults to true.
     #[serde(default = "default_bash_saving")]
     pub bash_saving: bool,
+    /// Whether the GUI Coding panel auto-saves dirty editor tabs after a short
+    /// debounce. Defaults to false (explicit save only); old `settings.json`
+    /// files without this field load cleanly via the serde default.
+    #[serde(default = "default_coding_autosave")]
+    pub coding_autosave: bool,
     /// Internet-access tier for this session. `Simple` (default) keeps
     /// `web_fetch`/`web_search` on the lightweight in-process raw-HTTP path.
     /// `Full` upgrades `web_fetch` to the opt-in scrapion browser backend
@@ -355,6 +360,10 @@ fn default_bash_saving() -> bool {
     true
 }
 
+fn default_coding_autosave() -> bool {
+    false
+}
+
 fn default_internet_mode() -> InternetMode {
     InternetMode::Simple
 }
@@ -382,6 +391,7 @@ impl Default for Settings {
             short_send_tail_n: default_short_send_tail_n(),
             sliding_cache: default_sliding_cache(),
             bash_saving: true,
+            coding_autosave: default_coding_autosave(),
             internet_mode: InternetMode::Simple,
             session_models: Vec::new(),
             git_ssh_key: None,

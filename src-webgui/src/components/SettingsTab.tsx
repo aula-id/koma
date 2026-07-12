@@ -419,6 +419,7 @@ function SessionSettings() {
   const [shortSend, setShortSend] = useState(true)
   const [slidingCache, setSlidingCache] = useState(false)
   const [bashSaving, setBashSaving] = useState(true)
+  const [codingAutosave, setCodingAutosave] = useState(false)
   const [internet, setInternet] = useState<'simple' | 'full'>('simple')
 
   useEffect(() => {
@@ -428,6 +429,7 @@ function SessionSettings() {
     setShortSend(values.shortSend)
     setSlidingCache(values.slidingCache)
     setBashSaving(values.bashSaving)
+    setCodingAutosave(values.codingAutosave)
     setInternet(values.internetMode === 'full' ? 'full' : 'simple')
   }, [values])
 
@@ -468,6 +470,10 @@ function SessionSettings() {
   const setBash = (v: boolean) => {
     setBashSaving(v)
     req({ r: 'SetPrefs', bashSaving: v })
+  }
+  const setCodingAuto = (v: boolean) => {
+    setCodingAutosave(v)
+    req({ r: 'SetPrefs', codingAutosave: v })
   }
   const setNet = (v: 'simple' | 'full') => {
     setInternet(v)
@@ -518,6 +524,10 @@ function SessionSettings() {
 
       <SettingRow label="Bash shorts" desc="Filter and tee bash / git output to disk to preserve command logs.">
         <Toggle on={bashSaving} onChange={setBash} />
+      </SettingRow>
+
+      <SettingRow label="Coding autosave" desc="Debounced auto-save for Coding panel editor tabs (750ms after edits stop).">
+        <Toggle on={codingAutosave} onChange={setCodingAuto} />
       </SettingRow>
 
       <SettingRow label="Internet mode" desc="Full upgrades web_fetch to the browser backend (renders JS, higher token use).">

@@ -95,6 +95,7 @@ export type SettingsValues = {
   shortSend: boolean
   slidingCache: boolean
   bashSaving: boolean
+  codingAutosave: boolean
   internetMode: string
   palette: string
   // The foreground session's stored `/effort` value ("" = model default), for
@@ -941,6 +942,7 @@ export type PushEnvelope =
       shortSend: boolean
       slidingCache: boolean
       bashSaving: boolean
+      codingAutosave: boolean
       internetMode: string
       palette: string
       effort: string
@@ -1961,9 +1963,11 @@ type KomaState = {
   // from openStreamTab / activateTab / closeTab / session-switch (the four paths that
   // can change which tab is active).
   syncStreamView: () => void
-  // Close a diff tab (never 'chat'). If it was the active tab, activate the
+  // Close a tab (never 'chat'). If it was the active tab, activate the
   // adjacent (left) tab — tabs[0] is always the chat tab, so a fallback exists.
-  closeTab: (id: string) => void
+  // Dirty codingFile tabs are a no-op unless `force: true` (the floating dirty-
+  // close popover collects the confirmation first).
+  closeTab: (id: string, opts?: { force?: boolean }) => void
   // Activate a tab. Re-focusing a diff tab RE-REQUESTS its FileDiff for
   // freshness (contents may have changed since it was opened) while keeping the
   // stale diff on screen so the editor doesn't flash.
@@ -2559,6 +2563,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             shortSend: env.shortSend,
             slidingCache: env.slidingCache,
             bashSaving: env.bashSaving,
+            codingAutosave: !!env.codingAutosave,
             internetMode: env.internetMode,
             palette: env.palette,
             effort: env.effort ?? '',
@@ -3745,14 +3750,15 @@ export const useKoma = create<KomaState>((set, get) => ({
     // the daemon needs the session to disambiguate (agent 0 / bash 1 exist in every session).
     get().req({ r: 'SetStreamView', subagent, bash, session: get().session.id })
   },
-  closeTab: (id) => {
+  closeTab: (id, opts) => {
     if (id === 'chat') return
-    // Dirty codingFile tabs confirm before discard.
+    // Dirty codingFile tabs confirm before discard unless the caller already
+    // collected an explicit force (floating dirty-close popover).
     {
       const closing = get().ui.tabs.find((t) => t.id === id)
-      if (closing && closing.kind === 'codingFile') {
+      if (closing && closing.kind === 'codingFile' && !opts?.force) {
         const f = get().coding.files[fileKey(closing.root, closing.path)]
-        if (f?.dirty && !window.confirm('Unsaved changes. Close anyway?')) return
+        if (f?.dirty) return
       }
     }
     const closedAnalytics = id === 'analytics'

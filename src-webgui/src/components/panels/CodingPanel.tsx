@@ -206,7 +206,6 @@ function TreeNode({
           delete {entry.isDir ? 'folder' : 'file'}?
         </span>
         <span className="flex flex-none items-center gap-1">
-          <span aria-hidden="true" className="text-koma-error/60">|</span>
           <button
             type="button"
             autoFocus
@@ -216,7 +215,6 @@ function TreeNode({
           >
             yes
           </button>
-          <span aria-hidden="true" className="text-koma-error/60">|</span>
           <button
             type="button"
             className="rounded px-1.5 py-0.5 text-koma-error hover:bg-koma-error/15"
@@ -531,7 +529,7 @@ export function CodingPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-none items-center gap-1 border-b border-koma-border px-2 py-1.5">
+      <div className="flex flex-none items-center gap-1 px-2 py-1.5">
         <select
           value={activeRoot ?? roots[0] ?? ''}
           disabled={!!draft}

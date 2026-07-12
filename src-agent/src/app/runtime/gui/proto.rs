@@ -537,6 +537,8 @@ pub(super) enum GuiReq {
         sliding_cache: Option<bool>,
         #[serde(default, rename = "bashSaving")]
         bash_saving: Option<bool>,
+        #[serde(default, rename = "codingAutosave")]
+        coding_autosave: Option<bool>,
         #[serde(default, rename = "internetMode")]
         internet_mode: Option<String>,
         #[serde(default)]

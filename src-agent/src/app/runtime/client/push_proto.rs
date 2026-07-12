@@ -364,6 +364,7 @@ pub(super) enum PushEnvelope {
         short_send: bool,
         sliding_cache: bool,
         bash_saving: bool,
+        coding_autosave: bool,
         internet_mode: String,
         palette: String,
         /// The foreground session's stored `/effort` value (`""` = model
@@ -760,6 +761,7 @@ pub(super) fn push_settings_values(
     short_send: bool,
     sliding_cache: bool,
     bash_saving: bool,
+    coding_autosave: bool,
     internet_mode: String,
     palette: String,
     effort: String,
@@ -772,6 +774,7 @@ pub(super) fn push_settings_values(
             short_send,
             sliding_cache,
             bash_saving,
+            coding_autosave,
             internet_mode,
             palette,
             effort,

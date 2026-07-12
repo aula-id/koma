@@ -252,7 +252,7 @@ File tabs use the `codingFile` kind with a path-derived stable ID:
 - `root` is the absolute workspace root (from configured `workdir[]`)
 - Clicking the same file focuses the existing tab instead of opening a duplicate
 - Dirty indicator shown in TabBar via `●` prefix on title
-- Close with unsaved changes requires confirmation via `window.confirm`
+- Close with unsaved changes requires a floating dirty-close popover (not `window.confirm`).
 - Tab id uses both root and path: `file:<root>:<path>`
 
 ## Modified Tab Union
@@ -319,7 +319,8 @@ FileDelete { root: String, path: String, request_id: String },
 - `target/`, `node_modules/`, `.git/`, `.koma/` excluded from tree listings.
 - Delete requires explicit user confirmation in the UI.
 - No automatic staging or committing — Git operations remain in the Source Control panel.
-- Save is explicit user action only (Ctrl/Cmd+S or save button). No auto-save.
+- Save is explicit by default (Ctrl/Cmd+S or Save button). Optional per-session
+  `coding_autosave` enables a 750ms debounced auto-save in the GUI Coding panel.
 
 ## Build Verification
 

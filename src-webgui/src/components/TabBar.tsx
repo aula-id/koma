@@ -1,7 +1,8 @@
 import { MessageSquare, FileDiff, Settings, CircleHelp, Bot, Terminal, GitGraph, BarChart3, Blocks, Puzzle, Code2, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useKoma } from '../store/koma'
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, type MouseEvent as ReactMouseEvent } from 'react'
 import { fileKey } from '../store/coding'
+import { DirtyCloseConfirm } from './DirtyCloseConfirm'
 
 // Parent directory of a path — used to disambiguate two open tabs that share a
 // basename (VSCode-style dim suffix).
@@ -21,11 +22,70 @@ export function TabBar() {
   const activateTab = useKoma((s) => s.activateTab)
   const closeTab = useKoma((s) => s.closeTab)
   const codingFiles = useKoma((s) => s.coding.files)
+  const codingAutosave = useKoma((s) => !!s.settingsValues?.codingAutosave)
+  const saveCodingFile = useKoma((s) => s.saveCodingFile)
+  const [dirtyClose, setDirtyClose] = useState<{
+    id: string
+    title: string
+  } | null>(null)
+  const [awaitingAutosaveClose, setAwaitingAutosaveClose] = useState<{
+    id: string
+    title: string
+  } | null>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement | HTMLButtonElement | null>>(new Map())
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
+
+  const requestClose = useCallback(
+    (id: string, title: string, e: ReactMouseEvent) => {
+      const tab = tabs.find((t) => t.id === id)
+      if (tab?.kind === 'codingFile') {
+        const fs = codingFiles[fileKey(tab.root, tab.path)]
+        if (fs?.dirty) {
+          e.stopPropagation()
+          if (codingAutosave && !fs.conflict && !fs.error && !fs.binary && !fs.tooLarge) {
+            // Trigger a save and defer close until it completes.
+            setAwaitingAutosaveClose({ id, title })
+            if (!fs.saving) saveCodingFile(tab.root, tab.path)
+          } else {
+            setDirtyClose({ id, title })
+          }
+          return
+        }
+      }
+      e.stopPropagation()
+      closeTab(id)
+    },
+    [tabs, codingFiles, codingAutosave, closeTab, saveCodingFile],
+  )
+
+  // When awaiting autosave-close, watch the file state:
+  // - dirty cleared → close the tab.
+  // - error/conflict appeared → show the discard popover instead.
+  useEffect(() => {
+    if (!awaitingAutosaveClose) return
+    const tab = tabs.find((t) => t.id === awaitingAutosaveClose.id)
+    if (!tab || tab.kind !== 'codingFile') {
+      setAwaitingAutosaveClose(null)
+      return
+    }
+    const fs = codingFiles[fileKey(tab.root, tab.path)]
+    if (!fs) { setAwaitingAutosaveClose(null); return }
+    if (fs.error || fs.conflict) {
+      // Save failed — fall back to the discard confirmation.
+      setAwaitingAutosaveClose(null)
+      setDirtyClose({ id: awaitingAutosaveClose.id, title: awaitingAutosaveClose.title })
+      return
+    }
+    if (!fs.dirty && !fs.saving) {
+      // Save succeeded — close the tab.
+      const id = awaitingAutosaveClose.id
+      setAwaitingAutosaveClose(null)
+      closeTab(id, { force: true })
+    }
+  }, [awaitingAutosaveClose, tabs, codingFiles, closeTab])
 
   // Check overflow state on mount and whenever tabs change size/content
   const checkOverflow = useCallback(() => {
@@ -408,10 +468,7 @@ export function TabBar() {
                   {t.title}
                 </span>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    closeTab(t.id)
-                  }}
+                  onClick={(e) => requestClose(t.id, t.title, e)}
                   aria-label="Close tab"
                   title="Close"
                   className={`ml-0.5 flex h-4 w-4 flex-none items-center justify-center rounded transition hover:bg-koma-hover hover:!opacity-100 ${
@@ -551,6 +608,18 @@ export function TabBar() {
         >
           <ChevronRight size={14} />
         </button>
+      )}
+      {dirtyClose && (
+        <DirtyCloseConfirm
+          anchor={tabRefs.current.get(dirtyClose.id) ?? null}
+          title={dirtyClose.title}
+          onConfirm={() => {
+            const id = dirtyClose.id
+            setDirtyClose(null)
+            closeTab(id, { force: true })
+          }}
+          onCancel={() => setDirtyClose(null)}
+        />
       )}
     </div>
   )

@@ -208,6 +208,7 @@ declare global {
         shortSend?: boolean
         slidingCache?: boolean
         bashSaving?: boolean
+        codingAutosave?: boolean
         internetMode?: string
         workdir?: string[]
       }
