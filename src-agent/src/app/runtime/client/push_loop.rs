@@ -647,6 +647,23 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::ExtNoSession { id }) => {
                     push_ext_no_session(push, id);
                 }
+                Ok(ctl @ super::HostCtl::FileTree { .. })
+                | Ok(ctl @ super::HostCtl::FileRead { .. })
+                | Ok(ctl @ super::HostCtl::FileSave { .. })
+                | Ok(ctl @ super::HostCtl::FileCreate { .. })
+                | Ok(ctl @ super::HostCtl::FileRename { .. })
+                | Ok(ctl @ super::HostCtl::FileDelete { .. }) => {
+                    let workdirs = current_owned
+                        .as_deref()
+                        .and_then(super::diff::session_workdirs_for)
+                        .unwrap_or_default();
+                    super::file_ops::handle_file_ctl(
+                        &ctl,
+                        push,
+                        &workdirs,
+                        current_owned.as_deref(),
+                    );
+                }
                 Err(TryRecvError::Empty) => break,
                 // The ipc side hung up (window gone) — leave the host.
                 Err(TryRecvError::Disconnected) => return HostTransition::Exit,

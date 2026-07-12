@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react'
 import { BrailleSpinner } from './BrailleSpinner'
 import { ExplorePanel } from './panels/ExplorePanel'
 import { GitPanel } from './panels/GitPanel'
+import { CodingPanel } from './panels/CodingPanel'
 import { McpPanel } from './panels/McpPanel'
 import { ConnectorPanel } from './panels/ConnectorPanel'
 import { AgentsPanel } from './panels/AgentsPanel'
@@ -11,7 +12,7 @@ import { StorePanel } from './panels/StorePanel'
 import { Segmented } from './panels/form'
 import { useKoma } from '../store/koma'
 
-export type SidebarView = 'explore' | 'git' | 'mcp' | 'connector' | 'agents' | 'usage' | 'store'
+export type SidebarView = 'explore' | 'git' | 'coding' | 'mcp' | 'connector' | 'agents' | 'usage' | 'store'
 
 type SidebarProps = {
   width: number
@@ -21,6 +22,7 @@ type SidebarProps = {
 const TITLES: Record<SidebarView, string> = {
   explore: 'Explorer',
   git: 'Source Control',
+  coding: 'Coding',
   mcp: 'MCP Servers',
   connector: 'Connector',
   agents: 'Agents',
@@ -102,6 +104,7 @@ export function Sidebar({ width, view }: SidebarProps) {
       <div className="relative min-h-0 flex-1">
         {view === 'explore' && <ExplorePanel />}
         {view === 'git' && <GitPanel />}
+        {view === 'coding' && <CodingPanel />}
         {view === 'mcp' && <McpPanel />}
         {view === 'connector' && <ConnectorPanel />}
         {view === 'agents' && <AgentsPanel />}

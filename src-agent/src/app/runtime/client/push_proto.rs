@@ -16,9 +16,9 @@
 
 pub(super) use super::push_rows::{
     PushAnalyticsModel, PushAnalyticsSeriesPoint, PushAttachment, PushBashJob, PushCooking,
-    PushFileChange, PushHistory, PushMcpServer, PushModel, PushMsg, PushPalette, PushPaletteInfo,
-    PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent, PushToolCall,
-    PushUsageDay, PushUsageModel,
+    PushFileChange, PushFileTreeEntry, PushHistory, PushMcpServer, PushModel, PushMsg, PushPalette,
+    PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent,
+    PushToolCall, PushUsageDay, PushUsageModel,
 };
 
 
@@ -538,6 +538,63 @@ pub(super) enum PushEnvelope {
     /// Carries [`super::git_repos::RepoListResult`] verbatim (already camelCase);
     /// mirrors `BranchList`'s newtype/flatten shape (`{k:"RepoList", repos, active}`).
     RepoList(super::git_repos::RepoListResult),
+
+    // ─── Coding panel (workspace file ops) ────────────────────────────────────
+    /// Coding panel: directory listing reply.
+    #[serde(rename_all = "camelCase")]
+    FileTree {
+        root: String,
+        path: String,
+        request_id: String,
+        entries: Vec<super::push_rows::PushFileTreeEntry>,
+        error: Option<String>,
+    },
+    /// Coding panel: file read reply.
+    #[serde(rename_all = "camelCase")]
+    FileRead {
+        root: String,
+        path: String,
+        request_id: String,
+        content: Option<String>,
+        fingerprint: String,
+        binary: bool,
+        too_large: bool,
+        error: Option<String>,
+    },
+    /// Coding panel: file save reply.
+    #[serde(rename_all = "camelCase")]
+    FileSave {
+        root: String,
+        path: String,
+        request_id: String,
+        fingerprint: String,
+        error: Option<String>,
+    },
+    /// Coding panel: file create reply.
+    #[serde(rename_all = "camelCase")]
+    FileCreate {
+        root: String,
+        path: String,
+        request_id: String,
+        error: Option<String>,
+    },
+    /// Coding panel: file rename reply.
+    #[serde(rename_all = "camelCase")]
+    FileRename {
+        root: String,
+        old_path: String,
+        new_path: String,
+        request_id: String,
+        error: Option<String>,
+    },
+    /// Coding panel: file delete reply.
+    #[serde(rename_all = "camelCase")]
+    FileDelete {
+        root: String,
+        path: String,
+        request_id: String,
+        error: Option<String>,
+    },
 }
 
 /// Push a swap-START [`PushEnvelope::Switching`] for target session `to`. Called at every

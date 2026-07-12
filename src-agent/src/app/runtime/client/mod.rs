@@ -40,6 +40,7 @@
 //! | `push_intercept` | one-shot `DaemonEvent` -> `PushEnvelope` re-push checks for `push_loop` |
 //! | `push_loop` | The headless attached fold loop (`push_loop`, `PushState`, `HostTransition`) |
 //! | `git_drain` | `push_loop`'s GIT/SSH-key-vault off-thread reply drain (`drain_git_replies`) |
+//! | `file_ops`  | host-side Coding panel file tree/read/save/create/rename/delete  |
 
 #![allow(unused_imports)]
 #![allow(dead_code)]
@@ -52,6 +53,7 @@ mod bridge;
 mod swapper;
 mod swapper_keys;
 mod diff;
+mod file_ops;
 mod git;
 mod git_remote;
 mod git_graph;
@@ -256,6 +258,7 @@ pub(in crate::app::runtime) struct StreamView {
 /// client-thread. `SubmitInput` does NOT ride this channel — it goes straight to the
 /// live daemon via the shared `live_req` sender — so this carries only the
 /// session-lifecycle intents the client-thread owns.
+#[derive(Clone)]
 pub(super) enum HostCtl {
     /// The webview page booted / reloaded: re-push the full authoritative state.
     Ready,
@@ -545,6 +548,29 @@ pub(super) enum HostCtl {
     /// instead of silently dropping the request. `// TODO: global ext manager for
     /// pre-session install`.
     ExtNoSession { id: String },
+    /// Coding panel: list a directory's immediate children.
+    FileTree { root: String, path: String, request_id: String },
+    /// Coding panel: read a text file.
+    FileRead { root: String, path: String, request_id: String },
+    /// Coding panel: save a text file with stale-fingerprint protection.
+    FileSave {
+        root: String,
+        path: String,
+        content: String,
+        expected_fingerprint: String,
+        request_id: String,
+    },
+    /// Coding panel: create a new file or directory.
+    FileCreate { root: String, path: String, kind: String, request_id: String },
+    /// Coding panel: rename within the same workspace root.
+    FileRename {
+        root: String,
+        old_path: String,
+        new_path: String,
+        request_id: String,
+    },
+    /// Coding panel: delete a file or directory.
+    FileDelete { root: String, path: String, request_id: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.

@@ -349,6 +349,26 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     push_file_diff(&push2, result);
                 });
             }
+            Ok(ctl @ HostCtl::FileTree { .. })
+            | Ok(ctl @ HostCtl::FileRead { .. })
+            | Ok(ctl @ HostCtl::FileSave { .. })
+            | Ok(ctl @ HostCtl::FileCreate { .. })
+            | Ok(ctl @ HostCtl::FileRename { .. })
+            | Ok(ctl @ HostCtl::FileDelete { .. }) => {
+                let push2 = P::clone(push);
+                let workdirs = current
+                    .and_then(super::diff::session_workdirs_for)
+                    .unwrap_or_default();
+                let session = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    super::file_ops::handle_file_ctl(
+                        &ctl,
+                        &push2,
+                        &workdirs,
+                        session.as_deref(),
+                    );
+                });
+            }
             // Explore GIT panel + Settings SSH-key vault, all opened/mutated while
             // detached (StartScreen / swapper): git/fs/`ssh-keygen` are blocking, so
             // each runs on a plain OS thread rather than the async runtime, and NEVER
