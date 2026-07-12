@@ -142,6 +142,7 @@ pub(super) fn apply_frame(
         | DaemonEvent::StoreItemDetail { .. }
         | DaemonEvent::InstalledExtensions { .. }
         | DaemonEvent::ExtensionOpResult { .. } => false,
+        | DaemonEvent::McpStatus { .. } => false,
     }
 }
 

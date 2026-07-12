@@ -510,7 +510,12 @@ impl DaemonHub {
                 self.interrupt(idx, state, client, handle);
             }
 
-            // GUI Ctrl+R composer parity: resend the last user turn via the SAME
+            // MCP status refresh: reply with live per-server tool counts + errors.
+            ClientRequest::GetMcpStatus { request_id } => {
+                self.get_mcp_status(idx, state, request_id);
+            }
+
+            // GUI get-effort-options reply.
             // `Action::Resend` the TUI's Ctrl+R runs (pop trailing assistant
             // messages + re-stream). `handle_resend` has its own busy/no-session/
             // nothing-to-resend guards and reports a no-op via the status line.
@@ -715,6 +720,55 @@ impl DaemonHub {
             internet_mode: s.internet_mode.as_str().to_string(),
             palette: state.rest.config.palette.clone(),
             effort: s.effort.clone(),
+        };
+        self.send_to(idx, event);
+    }
+
+    /// Reply with a one-shot [`DaemonEvent::McpStatus`] built from the configured
+    /// MCP server list and the live [`McpManager`]'s status + errors. When no
+    /// manager is installed, sends a status with `global_error` set so the frontend
+    /// shows an availability error instead of an indefinite spinner.
+    fn get_mcp_status(&mut self, idx: usize, state: &AppState, request_id: String) {
+        let mgr = state.rest.mcp_manager.as_ref();
+        let configured = &state.rest.config.mcp_servers;
+
+        let (status_map, error_map) = match mgr {
+            Some(mgr) => {
+                let status = mgr.server_status_cached();
+                let errors = mgr.server_errors();
+                (status, errors)
+            }
+            None => {
+                // No manager — send an availability error rather than empty status.
+                let event = crate::ipc::proto::DaemonEvent::McpStatus {
+                    request_id,
+                    servers: Vec::new(),
+                    global_error: Some("MCP manager not available (no session attached)".into()),
+                };
+                self.send_to(idx, event);
+                return;
+            }
+        };
+
+        let servers: Vec<crate::ipc::proto::McpStatusServer> = configured
+            .iter()
+            .map(|srv| {
+                let tool_count = status_map.get(&srv.uuid).copied().unwrap_or(0);
+                let connected = status_map.contains_key(&srv.uuid);
+                let error = error_map.get(&srv.uuid).cloned();
+                crate::ipc::proto::McpStatusServer {
+                    id: srv.uuid.clone(),
+                    connected,
+                    tool_count,
+                    error,
+                }
+            })
+            .collect();
+
+        let event = crate::ipc::proto::DaemonEvent::McpStatus {
+            request_id,
+            servers,
+            global_error: None,
         };
         self.send_to(idx, event);
     }

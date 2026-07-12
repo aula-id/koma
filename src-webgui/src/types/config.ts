@@ -21,6 +21,9 @@ export type McpServer = {
   url: string
   /** Live tool count from the daemon (0 = connecting/connected-with-no-tools). */
   toolCount: number
+  /** True when the daemon has a live connection to this server. Absent until the first
+   *  McpStatus push sets it. Undefined → status unknown / not yet checked. */
+  connected?: boolean
   /** Human-readable error when the server failed to connect. Absent = OK or connecting. */
   error?: string
 }

@@ -232,4 +232,24 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             push(json);
         }
     }
+    // One-shot MCP status reply: re-push as a `McpStatus` envelope BEFORE folding
+    // (a non-visual fold no-op, keeping the seq gap-free).
+    if let DaemonEvent::McpStatus { request_id, servers, global_error } = &frame.event {
+        let env = PushEnvelope::McpStatus {
+            request_id: request_id.clone(),
+            servers: servers
+                .iter()
+                .map(|s| super::push_proto::PushMcpStatusServer {
+                    id: s.id.clone(),
+                    connected: s.connected,
+                    tool_count: s.tool_count,
+                    error: s.error.clone(),
+                })
+                .collect(),
+            global_error: global_error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
 }

@@ -186,6 +186,10 @@ enum McpBackend {
     Proxy {
         sock: PathBuf,
         cache: Mutex<(Vec<ToolDef>, Vec<String>)>,
+        /// Last-known per-server error strings from the Status endpoint, cached
+        /// alongside the tool counts in `status_cache`. Populated by the
+        /// `server_status_cached` background refresh.
+        proxy_errors: Mutex<std::collections::HashMap<String, String>>,
     },
 }
 
@@ -310,7 +314,7 @@ impl McpManager {
         // Empty cache: cold-start window — fetch live INLINE so the tools are on the
         // wire this turn instead of a turn later.
         if empty {
-            if let McpBackend::Proxy { sock, cache } = &self.backend {
+            if let McpBackend::Proxy { sock, cache, .. } = &self.backend {
                 match proxy_request(sock, &McpRequest::List) {
                     Ok(McpResponse::Tools { defs, names }) => {
                         *cache.lock().unwrap_or_else(|p| p.into_inner()) =
@@ -348,7 +352,7 @@ impl McpManager {
         {
             let mgr = Arc::clone(self);
             std::thread::spawn(move || {
-                if let McpBackend::Proxy { sock, cache } = &mgr.backend {
+                if let McpBackend::Proxy { sock, cache, .. } = &mgr.backend {
                     match proxy_request(sock, &McpRequest::List) {
                         Ok(McpResponse::Tools { defs, names }) => {
                             *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
@@ -400,7 +404,9 @@ impl McpManager {
             // any connect/decode failure (or an unexpected reply) reads as an EMPTY map
             // so the `/mcp` panel degrades to "no live status" rather than erroring.
             McpBackend::Proxy { sock, .. } => match proxy_request(sock, &McpRequest::Status) {
-                Ok(McpResponse::Status(map)) => map,
+                Ok(McpResponse::Status { servers, .. }) => {
+                    servers.into_iter().map(|(k, v)| (k, v.tool_count)).collect()
+                }
                 _ => std::collections::HashMap::new(),
             },
         }
@@ -450,10 +456,33 @@ impl McpManager {
                 }
                 // Proxy: blocking daemon round-trip, so refresh off-thread and serve
                 // the stale value now; the next call picks up the fresh one.
+                // Also refreshes the proxy_errors cache from the structured Status reply.
                 McpBackend::Proxy { .. } => {
                     let mgr = Arc::clone(self);
                     std::thread::spawn(move || {
-                        let fresh = mgr.server_status();
+                        let (fresh, errors) = match &mgr.backend {
+                            McpBackend::Proxy { sock, proxy_errors, .. } => {
+                                match proxy_request(sock, &McpRequest::Status) {
+                                    Ok(McpResponse::Status { servers, .. }) => {
+                                        let counts: std::collections::HashMap<String, usize> = servers
+                                            .iter()
+                                            .map(|(k, v)| (k.clone(), v.tool_count))
+                                            .collect();
+                                        let errs: std::collections::HashMap<String, String> = servers
+                                            .into_iter()
+                                            .filter_map(|(k, v)| v.error.map(|e| (k, e)))
+                                            .collect();
+                                        if let Ok(mut ec) = proxy_errors.lock() {
+                                            *ec = errs;
+                                        }
+                                        (counts, ())
+                                    }
+                                    _ => (std::collections::HashMap::new(), ()),
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                        let _ = errors; // drop the () sentinel
                         *mgr.status_cache.lock().unwrap_or_else(|p| p.into_inner()) =
                             (Some(std::time::Instant::now()), fresh);
                         mgr.status_refreshing.store(false, Ordering::Release);
@@ -478,7 +507,9 @@ impl McpManager {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
                 snap.errors.clone()
             }
-            McpBackend::Proxy { .. } => std::collections::HashMap::new(),
+            McpBackend::Proxy { proxy_errors, .. } => {
+                proxy_errors.lock().unwrap_or_else(|p| p.into_inner()).clone()
+            }
         }
     }
 

@@ -163,6 +163,13 @@ pub(super) enum GuiReq {
     DeleteMcpServer { uuid: String },
     /// Toggle an MCP server's enabled flag by uuid (McpPanel list switch).
     EnableMcpServer { uuid: String, enabled: bool },
+    /// Request live MCP server connection status for the sidebar panel. Answered with
+    /// a one-shot `McpStatus` push envelope (routed through the attached daemon).
+    /// `requestId` is echoed back so the frontend can discard stale replies.
+    GetMcpStatus {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
     /// Upsert a provider (Connector ProviderForm). `uuid` is absent for a new provider.
     SetProvider {
         #[serde(default)]

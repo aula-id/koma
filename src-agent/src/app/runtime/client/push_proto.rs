@@ -17,8 +17,8 @@
 pub(super) use super::push_rows::{
     PushAnalyticsModel, PushAnalyticsSeriesPoint, PushAttachment, PushBashJob, PushCooking,
     PushFileChange, PushFileTreeEntry, PushHistory, PushMcpServer, PushModel, PushMsg, PushPalette,
-    PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent,
-    PushToolCall, PushUsageDay, PushUsageModel,
+    PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent, PushToolCall,
+    PushUsageDay, PushUsageModel, PushMcpStatusServer,
 };
 
 
@@ -517,6 +517,19 @@ pub(super) enum PushEnvelope {
     /// correlation, used by the generic `DaemonEvent::Error` fallback).
     #[serde(rename_all = "camelCase")]
     AgentOp { ok: bool, error: Option<String>, req_seq: u64 },
+    /// One-shot reply to a `GetMcpStatus` request — per-server live connection state
+    /// (tool counts + errors) plus an optional top-level availability error. Echoes
+    /// `requestId` so the frontend store can discard a stale reply. This is a
+    /// dedicated runtime-status envelope — it does NOT ride `Config` and does not
+    /// resend providers/models/palette. The frontend merges its fields into
+    /// `config.mcp` by server id.
+    #[serde(rename_all = "camelCase")]
+    McpStatus {
+        request_id: String,
+        servers: Vec<PushMcpStatusServer>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        global_error: Option<String>,
+    },
     /// One-shot host-computed BRANCH LIST answering a `GitBranchList` request
     /// from the branch-switcher popover or the graph context menu (G4): every
     /// local + remote-tracking branch, current one flagged. Computed ENTIRELY

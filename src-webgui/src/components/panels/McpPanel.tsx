@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { McpListView } from './mcp/McpListView'
 import { McpEditView } from './mcp/McpEditView'
@@ -30,9 +30,16 @@ const SLIDE = { type: 'tween', duration: 0.22, ease: 'easeOut' } as const
 export function McpPanel() {
   const servers = useKoma((s) => s.config.mcp)
   const req = useKoma((s) => s.req)
+  const refreshMcpStatus = useKoma((s) => s.refreshMcpStatus)
   const [draft, setDraft] = useState<McpServer | null>(null)
   const [isNew, setIsNew] = useState(false)
   const [armed, setArmed] = useState<string | null>(null)
+
+  // Refresh live connection status each time the MCP sidebar is opened.
+  useEffect(() => {
+    refreshMcpStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const openAdd = () => {
     setDraft(blankServer())

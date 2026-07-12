@@ -1189,6 +1189,16 @@ export type PushEnvelope =
   // fresh `AgentsValues` push, so this envelope only carries failures — the
   // AgentsValues push handler below is what the AgentTab watches for success.
   | { k: 'AgentOp'; ok: boolean; error: string | null; reqSeq: number }
+  // One-shot MCP runtime status reply: per-server connection state (tool counts
+  // + errors) with optional top-level availability error. Echoes `requestId` so
+  // the store can discard a stale reply. The frontend merges `servers` into
+  // `config.mcp` by id — this does NOT replace the whole config slice.
+  | {
+      k: 'McpStatus'
+      requestId: string
+      servers: { id: string; connected: boolean; toolCount: number; error?: string }[]
+      globalError?: string
+    }
   // Coding panel workspace file operations (see GuiReq FileTree/FileRead/…).
   // Every reply echoes root/path/requestId for stale-reply rejection.
   | {
@@ -1601,6 +1611,14 @@ type KomaState = {
   // dropped stale/mismatched reply (see the 'UsagePreview' push case)
   // leaves this true, since the request it answers isn't the current one.
   usagePreviewBusy: boolean
+  // MCP sidebar status refresh lifecycle: set the moment a GetMcpStatus fires
+  // (mount or manual refresh) and cleared when a matching McpStatus reply
+  // lands. Drives the refresh button spinner. A stale/discarded reply leaves
+  // this true.
+  mcpStatusBusy: boolean
+  // The requestId of the currently in-flight GetMcpStatus. Used to discard
+  // stale replies (when the requestId in the reply doesn't match this).
+  mcpStatusRequestId: string | null
   // Agent-tab saving lifecycle tracker — set right before a SetAgent request,
   // cleared on the confirmatory push. `seq` prevents stale-reply races.
   // `null` when no save is in flight.
@@ -1984,6 +2002,10 @@ type KomaState = {
   // effect uses, for the CURRENT usageScope + attached session. Safe to call
   // repeatedly (e.g. spam-clicking the button).
   refreshUsagePreview: () => void
+  // Fire a GetMcpStatus request and mark the MCP status as busy. The
+  // requestId is minted here and echoed back by the McpStatus reply for
+  // stale-reply protection. Safe to call repeatedly (e.g. spam-clicking).
+  refreshMcpStatus: () => void
   // Mark a session id "dying" right after firing its KillSession ('kill') or
   // DeleteSession ('delete') req (ResumePalette/StartScreen confirm).
   // Idempotent — marking the same id+kind twice (or a race) never duplicates
@@ -2264,6 +2286,8 @@ export const useKoma = create<KomaState>((set, get) => ({
   effortOptions: null,
   usagePreview: null,
   usagePreviewBusy: false,
+  mcpStatusBusy: false,
+  mcpStatusRequestId: null,
   dyingSessions: [],
   agents: [],
   catalogueModels: [],
@@ -2520,6 +2544,30 @@ export const useKoma = create<KomaState>((set, get) => ({
           ...(env.palette ? { palette: env.palette } : {}),
         }))
         break
+      case 'McpStatus': {
+        // Drop stale replies: only apply if the requestId matches the current in-flight.
+        const current = get().mcpStatusRequestId
+        if (current !== env.requestId) break
+        set((s) => {
+          // Merge runtime status into config.mcp by server id.
+          const serverMap = new Map(env.servers.map((sv) => [sv.id, sv]))
+          const mcp = s.config.mcp.map((srv) => {
+            const rt = serverMap.get(srv.id)
+            if (!rt) return srv
+            return {
+              ...srv,
+              toolCount: rt.toolCount,
+              connected: rt.connected,
+              error: rt.error,
+            }
+          })
+          return {
+            config: { ...s.config, mcp },
+            mcpStatusBusy: false,
+          }
+        })
+        break
+      }
       case 'ModelList':
         set(() => ({ modelList: env.models }))
         break
@@ -3864,6 +3912,11 @@ export const useKoma = create<KomaState>((set, get) => ({
       scope: s.ui.usageScope,
       sessionId: s.ui.usageScope === 'session' ? (s.session.id ?? undefined) : undefined,
     })
+  },
+  refreshMcpStatus: () => {
+    const id = crypto.randomUUID()
+    set({ mcpStatusBusy: true, mcpStatusRequestId: id })
+    get().req({ r: 'GetMcpStatus', requestId: id })
   },
   markDying: (id, kind) =>
     set((s) =>

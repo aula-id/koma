@@ -61,6 +61,8 @@ declare global {
       }
     | { r: 'DeleteMcpServer'; uuid: string }
     | { r: 'EnableMcpServer'; uuid: string; enabled: boolean }
+    // MCP status refresh — request live per-server connection state.
+    | { r: 'GetMcpStatus'; requestId: string }
     // Provider CRUD (flat). `uuid` is the daemon config uuid on edit, `null`
     // for a new provider.
     | { r: 'SetProvider'; uuid: string | null; name: string; endpoint: string; apiKey: string }

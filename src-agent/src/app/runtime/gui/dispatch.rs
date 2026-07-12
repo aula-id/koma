@@ -196,6 +196,13 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 ClientRequest::EnableMcpServer { uuid, enabled },
             );
         }
+        GuiReq::GetMcpStatus { request_id } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::GetMcpStatus { request_id });
+                }
+            }
+        }
         GuiReq::SetProvider {
             uuid,
             name,

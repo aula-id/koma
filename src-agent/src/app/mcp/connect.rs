@@ -87,6 +87,7 @@ impl McpManager {
             backend: McpBackend::Proxy {
                 sock,
                 cache: Mutex::new((defs, names)),
+                proxy_errors: Mutex::new(std::collections::HashMap::new()),
             },
             status_cache: Mutex::new((None, std::collections::HashMap::new())),
             status_refreshing: std::sync::atomic::AtomicBool::new(false),
@@ -118,7 +119,7 @@ impl McpManager {
         // usable) — a failed live-reconnect is never worse than the prior state.
         let (handle, snapshot) = match &self.backend {
             McpBackend::Local { handle, snapshot } => (handle, snapshot),
-            McpBackend::Proxy { sock, cache } => {
+            McpBackend::Proxy { sock, cache, .. } => {
                 match super::proxy::proxy_request(sock, &McpRequest::Reconnect { servers: servers.to_vec() }) {
                     Ok(McpResponse::Ack) => {}
                     Ok(other) => crate::model::store::append_global_error_log(

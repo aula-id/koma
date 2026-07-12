@@ -278,10 +278,7 @@ pub(super) fn push_loop(
             // Cache the config off any prebuffered full snapshot (normally none — Hello
             // is first, so the attach Snapshot lands in the live drain — but stay safe).
             if let DaemonEvent::Snapshot(snap) = &frame.event {
-                let mut proj = ConfigProjection::from_global(&snap.global);
-                if let Some(mgr) = &shadow.rest.mcp_manager {
-                    proj.set_mcp_status(mgr.server_status_cached(), mgr.server_errors());
-                }
+                let proj = ConfigProjection::from_global(&snap.global);
                 current_config = Some(proj);
             }
             apply_frame(
@@ -691,10 +688,7 @@ pub(super) fn push_loop(
                     // `Config` envelope can be (re)emitted below (a config edit forces a
                     // full snapshot — see `ipc::snapshot::diff`).
                     if let DaemonEvent::Snapshot(snap) = &frame.event {
-                        let mut proj = ConfigProjection::from_global(&snap.global);
-                        if let Some(mgr) = &shadow.rest.mcp_manager {
-                            proj.set_mcp_status(mgr.server_status_cached(), mgr.server_errors());
-                        }
+                        let proj = ConfigProjection::from_global(&snap.global);
                         current_config = Some(proj);
                     }
                     apply_frame(
