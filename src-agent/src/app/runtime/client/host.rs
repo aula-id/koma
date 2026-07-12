@@ -288,6 +288,13 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
     // (re)emits every swapper entry.
     push_swapper_config(push, push_state);
 
+    // The host-local OAuth login flow's abort handle, if one is currently in flight
+    // (`HostCtl::StartOAuth` below) — mirrors `AppStateRest::oauth_task` on the daemon
+    // side. Local to this swapper invocation: a fresh `host_swapper` call (re-entering
+    // the hub after an attach) naturally starts with none in flight, same as a fresh
+    // daemon session.
+    let mut oauth_task: Option<tokio::task::AbortHandle> = None;
+
     loop {
         match ctl_rx.recv() {
             // Page reloaded (`Ready`) OR the ResumePalette opened (`RefreshHub`):
@@ -573,6 +580,143 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // attached-only; this read populates the screen pre-session. Cheap, synchronous (a
             // config load), so it runs inline.
             Ok(HostCtl::GetOAuthState) => {
+                let (conns, providers) = build_host_oauth_state();
+                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+            }
+            // GUI OAuth login START while detached (the home-screen / pre-session Settings
+            // "Sign in" buttons): there is no attached daemon to run the flow, so run it
+            // HOST-side instead of silently dropping the request (the prior bug this wave
+            // fixes). Resolve the wire `provider` string the SAME way the daemon does
+            // (`OAuthProvider::from_wire_id`); an unknown string pushes an immediate
+            // `failed` rather than hanging. Supersede any flow already in flight — abort
+            // its task first, mirroring `handle_oauth_start`'s supersede — before spawning
+            // the new one via the SAME `service::oauth::flow::run_flow` dispatcher the
+            // daemon's `Action::OAuthStart` spawns, so this is not a second copy of the
+            // five provider flows.
+            //
+            // Two tasks, mirroring the daemon's spawn + tick-drain split: the FLOW task
+            // (`run_flow`) is the one whose abort handle is stored for `CancelOAuth` —
+            // aborting it stops an in-progress browser-wait/device-poll immediately, same
+            // as the daemon's `oauth_task.abort()`. The DRAIN task awaits each `OAuthEvent`
+            // and turns it into an `OAuthState` push (`waiting_url`/`waiting_code`, then a
+            // terminal `success` — persisting the connection to the GLOBAL config first —
+            // or `failed`); it ends on its own once the flow task's `tx` is dropped
+            // (aborted or finished), so only the flow task's handle needs tracking here.
+            Ok(HostCtl::StartOAuth { provider }) => {
+                if let Some(h) = oauth_task.take() {
+                    h.abort();
+                }
+                match crate::model::app_config::OAuthProvider::from_wire_id(&provider) {
+                    Some(p) => {
+                        let (tx, mut orx) = tokio::sync::mpsc::unbounded_channel();
+                        let flow_join = handle.spawn(crate::service::oauth::flow::run_flow(p, tx));
+                        oauth_task = Some(flow_join.abort_handle());
+
+                        let push2 = P::clone(push);
+                        handle.spawn(async move {
+                            while let Some(ev) = orx.recv().await {
+                                match ev {
+                                    crate::service::oauth::OAuthEvent::CodexUrl { url } => {
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "waiting_url".to_string(),
+                                            Some(url),
+                                            None,
+                                            None,
+                                            None,
+                                            conns,
+                                            providers,
+                                        );
+                                    }
+                                    crate::service::oauth::OAuthEvent::KiloCode {
+                                        user_code,
+                                        verification_url,
+                                    } => {
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "waiting_code".to_string(),
+                                            None,
+                                            Some(user_code),
+                                            Some(verification_url),
+                                            None,
+                                            conns,
+                                            providers,
+                                        );
+                                    }
+                                    crate::service::oauth::OAuthEvent::Success { conn } => {
+                                        // Seed the token-refresh cache (fire-and-forget,
+                                        // mirrors the daemon's `drain_oauth`), then persist
+                                        // the connection to the GLOBAL config — there is no
+                                        // in-memory `AppConfig` pre-session, so re-load
+                                        // fresh rather than risk clobbering a concurrent
+                                        // swapper-side config mutation with a stale copy.
+                                        crate::service::oauth::manager::seed(&conn).await;
+                                        let mut cfg = crate::model::app_config::AppConfig::load();
+                                        cfg.oauth_conns.push(conn);
+                                        if let Err(e) = cfg.save() {
+                                            crate::model::store::append_global_error_log(
+                                                "gui",
+                                                &format!(
+                                                    "pre-session oauth login saved but config write failed: {e}"
+                                                ),
+                                            );
+                                        }
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "success".to_string(),
+                                            None,
+                                            None,
+                                            None,
+                                            None,
+                                            conns,
+                                            providers,
+                                        );
+                                        break;
+                                    }
+                                    crate::service::oauth::OAuthEvent::Failed { error } => {
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "failed".to_string(),
+                                            None,
+                                            None,
+                                            None,
+                                            Some(error),
+                                            conns,
+                                            providers,
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    None => {
+                        let (conns, providers) = build_host_oauth_state();
+                        push_oauth_state(
+                            push,
+                            "failed".to_string(),
+                            None,
+                            None,
+                            None,
+                            Some(format!("unknown oauth provider: {provider}")),
+                            conns,
+                            providers,
+                        );
+                    }
+                }
+            }
+            // GUI OAuth login CANCEL while detached: abort whatever host-local flow
+            // `StartOAuth` above started (a no-op if none is in flight — `take()` on
+            // `None`), then re-push a fresh "idle" `OAuthState` so the Cancel button
+            // always lands somewhere instead of leaving the wait screen stranded.
+            Ok(HostCtl::CancelOAuth) => {
+                if let Some(h) = oauth_task.take() {
+                    h.abort();
+                }
                 let (conns, providers) = build_host_oauth_state();
                 push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
             }

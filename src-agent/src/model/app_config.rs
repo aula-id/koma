@@ -158,6 +158,26 @@ impl OAuthProvider {
         }
     }
 
+    /// The exact inverse of [`Self::wire_id`]: resolve a `StartOAuth` wire string
+    /// (`"codex"` / `"kilocode"` / `"xai"` / `"claudeai"` / `"komarun"`) back to its
+    /// [`OAuthProvider`]. `None` for anything else, INCLUDING `"codex_paste"` — that
+    /// token selects the paste-token input screen, not a real flow-driving provider,
+    /// so it is deliberately not an `OAuthProvider` variant (see
+    /// [`Self::flow_kind`]'s doc). Shared by every `StartOAuth` caller that needs the
+    /// mapping (the daemon's `hub::requests_oauth::start_oauth` and the GUI host-
+    /// relay's detached `HostCtl::StartOAuth` handler) so the wire contract has one
+    /// source of truth instead of two hand-written `match`es drifting apart.
+    pub fn from_wire_id(id: &str) -> Option<Self> {
+        match id {
+            "codex" => Some(OAuthProvider::Codex),
+            "kilocode" => Some(OAuthProvider::Kilocode),
+            "xai" => Some(OAuthProvider::Xai),
+            "claudeai" => Some(OAuthProvider::ClaudeAI),
+            "komarun" => Some(OAuthProvider::KomaRun),
+            _ => None,
+        }
+    }
+
     /// The login flow SHAPE, for the data-driven GUI provider list: `"pkce"` (Codex's
     /// browser loopback authorization-code grant) or `"device"` (Kilo Code's device-code
     /// grant). The Codex paste-token option is NOT an `OAuthProvider` variant (it reuses
@@ -781,5 +801,37 @@ pub(crate) fn upsert_model_entry(list: &mut Vec<ModelEntry>, mut entry: ModelEnt
     match list.iter_mut().find(|m| m.uuid == entry.uuid) {
         Some(slot) => *slot = entry,
         None => list.push(entry),
+    }
+}
+
+#[cfg(test)]
+mod oauth_provider_wire_tests {
+    use super::OAuthProvider;
+
+    /// [`OAuthProvider::from_wire_id`] must be the exact inverse of [`OAuthProvider::wire_id`]
+    /// for every real variant — this is the one mapping BOTH the daemon's attached
+    /// `StartOAuth` handler and the GUI host-relay's detached path resolve a wire string
+    /// through, so a drift here silently breaks one side or the other.
+    #[test]
+    fn from_wire_id_round_trips_every_variant() {
+        for p in [
+            OAuthProvider::Codex,
+            OAuthProvider::Kilocode,
+            OAuthProvider::Xai,
+            OAuthProvider::ClaudeAI,
+            OAuthProvider::KomaRun,
+        ] {
+            assert_eq!(OAuthProvider::from_wire_id(p.wire_id()), Some(p));
+        }
+    }
+
+    /// `"codex_paste"` selects the paste-token input screen, not a real flow-driving
+    /// provider — it must resolve to `None` so callers route it to the paste path
+    /// instead of mistaking it for (or falling back to) a real provider.
+    #[test]
+    fn from_wire_id_rejects_codex_paste_and_unknown() {
+        assert_eq!(OAuthProvider::from_wire_id("codex_paste"), None);
+        assert_eq!(OAuthProvider::from_wire_id("not_a_provider"), None);
+        assert_eq!(OAuthProvider::from_wire_id(""), None);
     }
 }

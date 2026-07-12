@@ -411,6 +411,18 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::DeleteOAuthConn { uuid }) => {
                     let _ = req_tx.send(ClientRequest::DeleteOAuthConn { uuid });
                 }
+                // GUI OAuth start/cancel raced in while attached (same race window as
+                // `GetOAuthState`/`DeleteOAuthConn` above — the ipc handler routes these to
+                // the daemon via `live_req` normally, so this only lands here on an
+                // attach-state flip). Forward the equivalent daemon request rather than
+                // running the host-local flow while a session IS attached — the daemon
+                // owns the flow in that case, exactly as before this wave.
+                Ok(super::HostCtl::StartOAuth { provider }) => {
+                    let _ = req_tx.send(ClientRequest::StartOAuth { provider });
+                }
+                Ok(super::HostCtl::CancelOAuth) => {
+                    let _ = req_tx.send(ClientRequest::CancelOAuth);
+                }
                 // FILE CHANGED diff fetch: NEVER touches the daemon (host-side only,
                 // regardless of attach state) — spawn the blocking git+fs work off this
                 // thread; the result is drained + pushed below at (b-quat).

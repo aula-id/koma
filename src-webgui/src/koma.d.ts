@@ -263,19 +263,22 @@ declare global {
     | { r: 'GetOAuthState' }
     // Start a login flow. `provider` is the wire id of one of the CURRENT
     // `OAuthState.providers` entries (data-driven — today "codex" (PKCE
-    // browser), "kilocode" (device code), or "codex_paste" (manual token), but
-    // never hardcode this list client-side). ATTACHED-ONLY: with no session
-    // attached this is silently dropped host-side before ever reaching a
-    // daemon — no reply, no error, no state change. Progress streams back as
-    // further OAuthState pushes (phase transitions).
+    // browser), "kilocode" (device code), "xai" (device code), "claudeai"
+    // (PKCE browser), "komarun" (PKCE browser), or "codex_paste" (manual
+    // token), but never hardcode this list client-side). Dual-routed like
+    // GetOAuthState/DeleteOAuthConn — works with NO session attached (the host
+    // runs the flow itself); the attached daemon path is unchanged. Progress
+    // streams back as further OAuthState pushes (phase transitions).
     | { r: 'StartOAuth'; provider: string }
     // Complete the "paste token" flow (phase 'paste') with a raw access
-    // `token`. Attached-only, same silent-drop-if-unattached semantics as
-    // StartOAuth. An empty/whitespace token is rejected daemon-side (re-surfaces
-    // phase 'paste') — never crashes, just re-prompts.
+    // `token`. Attached-only — the paste screen only ever follows an
+    // in-session `StartOAuth('codex_paste')`. An empty/whitespace token is
+    // rejected daemon-side (re-surfaces phase 'paste') — never crashes, just
+    // re-prompts.
     | { r: 'SubmitOAuthPaste'; token: string }
-    // Cancel an in-flight login flow, back to phase 'idle'. Attached-only,
-    // same silent-drop-if-unattached semantics as StartOAuth.
+    // Cancel an in-flight login flow, back to phase 'idle'. Dual-routed like
+    // StartOAuth — works with NO session attached (aborts the host-local flow,
+    // a no-op if none is in flight).
     | { r: 'CancelOAuth' }
     // Delete a persisted OAuth connection by uuid. Dual-routed like
     // GetOAuthState/DeleteAgent — works with NO session attached. Reply lands
