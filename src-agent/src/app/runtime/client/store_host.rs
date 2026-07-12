@@ -191,9 +191,15 @@ fn fetch_catalogue(
     let url = reqwest::Url::parse_with_params(STORE_API_BASE, &pairs)
         .map_err(|e| format!("bad store url: {e}"))?;
 
-    let resp = reqwest::blocking::get(url).map_err(|e| format!("store request failed: {e}"))?;
+    let resp = reqwest::blocking::get(url).map_err(|e| {
+        let msg = format!("store request failed: {e}");
+        store::append_global_error_log("ext browse", &msg);
+        msg
+    })?;
     if !resp.status().is_success() {
-        return Err(format!("store returned HTTP {}", resp.status().as_u16()));
+        let code = resp.status().as_u16();
+        store::append_global_error_log("ext browse", &format!("store returned HTTP {code}"));
+        return Err(format!("store returned HTTP {code}"));
     }
     let body: serde_json::Value = resp
         .json()
@@ -209,9 +215,15 @@ fn fetch_catalogue(
 /// `GET /extensions/{id}` → the mapped detail, BLOCKING (see [`fetch_catalogue`]).
 fn fetch_detail(id: &str) -> Result<StoreDetailWire, String> {
     let url = format!("{STORE_API_BASE}/{id}");
-    let resp = reqwest::blocking::get(&url).map_err(|e| format!("store request failed: {e}"))?;
+    let resp = reqwest::blocking::get(&url).map_err(|e| {
+        let msg = format!("store request failed: {e}");
+        store::append_global_error_log("ext browse", &format!("{id}: {msg}"));
+        msg
+    })?;
     if !resp.status().is_success() {
-        return Err(format!("store returned HTTP {}", resp.status().as_u16()));
+        let code = resp.status().as_u16();
+        store::append_global_error_log("ext browse", &format!("{id}: store returned HTTP {code}"));
+        return Err(format!("store returned HTTP {code}"));
     }
     let body: serde_json::Value = resp
         .json()

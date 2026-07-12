@@ -131,6 +131,10 @@ impl DaemonHub {
         let client_id = self.clients[idx].id;
 
         let Some(platform) = detect_platform() else {
+            store::append_global_error_log(
+                "ext install",
+                &format!("no platform for extension {id} (unsupported host os/arch)"),
+            );
             self.send_to(
                 idx,
                 DaemonEvent::ExtensionOpResult {
@@ -151,6 +155,10 @@ impl DaemonHub {
             .iter()
             .find(|c| c.provider == OAuthProvider::KomaRun)
         else {
+            store::append_global_error_log(
+                "ext install",
+                &format!("no koma.run OAuth connection for extension {id} (platform {platform})"),
+            );
             self.send_to(
                 idx,
                 DaemonEvent::ExtensionOpResult {
@@ -170,6 +178,12 @@ impl DaemonHub {
             // connection is gone / unrecoverable — treat as a sign-in failure.
             let (bearer, _account) = crate::service::oauth::manager::fresh_key(&oauth_uuid, "").await;
             if bearer.trim().is_empty() {
+                store::append_global_error_log(
+                    "ext install",
+                    &format!(
+                        "koma.run bearer empty/expired for extension {id} (platform {platform})"
+                    ),
+                );
                 let _ = tx.send(StoreReply::InstallFailed {
                     client_id,
                     id,
@@ -417,6 +431,10 @@ impl DaemonHub {
                 self.send_installed_extensions(idx, state);
             }
             Err(e) => {
+                store::append_global_error_log(
+                    "ext install",
+                    &format!("verify/unpack failed for extension {id}: {e:#}"),
+                );
                 self.send_to(
                     idx,
                     DaemonEvent::ExtensionOpResult {
@@ -645,7 +663,14 @@ async fn fetch_install_artifact(
         .bearer_auth(bearer)
         .send()
         .await
-        .map_err(|e| format!("download request failed: {e}"))?;
+        .map_err(|e| {
+            let msg = format!("download request failed: {e}");
+            store::append_global_error_log(
+                "ext download",
+                &format!("{id} (platform {platform}): {msg}"),
+            );
+            msg
+        })?;
     let status = resp.status();
 
     if status.is_redirection() {
@@ -655,7 +680,14 @@ async fn fetch_install_artifact(
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string())
-            .ok_or_else(|| "download redirect missing Location header".to_string())?;
+            .ok_or_else(|| {
+                let msg = "download redirect missing Location header".to_string();
+                store::append_global_error_log(
+                    "ext download",
+                    &format!("{id} (platform {platform}): {msg}"),
+                );
+                msg
+            })?;
         let body = resp.text().await.unwrap_or_default();
         let (sha256, signature) = parse_integrity_json(&body);
 
@@ -666,10 +698,14 @@ async fn fetch_install_artifact(
             .await
             .map_err(|e| format!("signed download failed: {e}"))?;
         if !zresp.status().is_success() {
-            return Err(format!(
-                "signed download returned HTTP {}",
-                zresp.status().as_u16()
-            ));
+            let signed_status = zresp.status().as_u16();
+            store::append_global_error_log(
+                "ext download",
+                &format!(
+                    "{id} (platform {platform}): signed download returned HTTP {signed_status}"
+                ),
+            );
+            return Err(format!("signed download returned HTTP {signed_status}"));
         }
         let bytes = zresp
             .bytes()
@@ -688,13 +724,19 @@ async fn fetch_install_artifact(
             .to_vec();
         Ok((bytes, sha256, signature))
     } else {
-        Err(match status.as_u16() {
+        let code = status.as_u16();
+        let msg = match code {
             401 => "koma.run rejected the session — sign in again".to_string(),
             402 => "this extension needs an active koma.run entitlement".to_string(),
             404 => "extension not found for this version/platform".to_string(),
             429 => "koma.run is rate limiting — try again shortly".to_string(),
             other => format!("download failed (HTTP {other})"),
-        })
+        };
+        store::append_global_error_log(
+            "ext download",
+            &format!("{id} (platform {platform}): HTTP {code}: {msg}"),
+        );
+        Err(msg)
     }
 }
 
