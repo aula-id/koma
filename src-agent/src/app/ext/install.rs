@@ -30,14 +30,13 @@ use koma_extension::protocol::ExtensionManifest;
 use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
-/// PLACEHOLDER — replace with the real koma release signing pubkey.
+/// koma extension-signing public key (Ed25519, 32-byte raw, base64). Verify-only.
+/// The private key is held offline (deploy secret), never in the repo.
 ///
-/// Base64-encoded 32-byte Ed25519 public key. This is a throwaway key whose private
-/// half is NOT published, so the signed install path fails closed (rejects every real
-/// package) until the genuine koma.run release key is dropped in here. Tests drive the
-/// real verify pipeline through [`install_from_zip_to`] with their own generated key,
-/// so they are unaffected by this placeholder.
-pub const KOMA_EXT_SIGNING_PUBKEY: &str = "OLltXeGC47vZNM2UZyqjMqnIbxPowEbXay3TNRekySs=";
+/// Used to verify the integrity and signature of signed extension packages.
+/// Tests drive the real verify pipeline through [`install_from_zip_to`] with their
+/// own generated keypair, so they are unaffected by this pinned production key.
+pub const KOMA_EXT_SIGNING_PUBKEY: &str = "ZIMbgD12NrqrT7q0wA8B5/i76rI/DvdGkPgSU2K35Uc=";
 
 /// Verify a signed extension zip and unpack it into `extensions/<id>/`, returning the
 /// registry entry. Does NOT persist `config.json` (the caller upserts + saves).
