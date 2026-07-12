@@ -54,7 +54,9 @@ function TreeNode({
 }: TreeNodeProps) {
   const key = fileKey(root, entry.path)
   const dirState = useKoma((s) => (entry.isDir ? s.coding.dirs[key] : null))
-  const dirty = useKoma((s) => (!entry.isDir ? !!s.coding.files[key]?.dirty : false))
+  const fileState = useKoma((s) => (!entry.isDir ? s.coding.files[key] : null))
+  const dirty = !!fileState?.dirty
+  const isNew = dirty && fileState?.savedContent === null
   const isOpen = entry.isDir && expanded.has(entry.path)
   const pad = 8 + depth * 12
 
@@ -93,7 +95,11 @@ function TreeNode({
             <File size={13} className="flex-none opacity-70" />
           )}
           <span className="min-w-0 truncate">
-            {dirty ? <span className="mr-1 text-koma-accent">●</span> : null}
+            {dirty ? (
+              <span className={`mr-1 font-mono text-[11px] font-semibold ${isNew ? 'text-koma-success' : 'text-koma-accent'}`}>
+                {isNew ? 'A' : 'M'}
+              </span>
+            ) : null}
             {entry.name}
           </span>
         </button>

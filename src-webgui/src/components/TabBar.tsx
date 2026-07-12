@@ -377,9 +377,11 @@ export function TabBar() {
             )
           }
 
-          // Coding panel file editor tab: Code2 icon + title, dirty ● prefix.
+          // Coding panel file editor tab: Code2 icon + title, dirty letter badge.
           if (t.kind === 'codingFile') {
-            const dirty = !!codingFiles[fileKey(t.root, t.path)]?.dirty
+            const fs = codingFiles[fileKey(t.root, t.path)]
+            const dirty = !!fs?.dirty
+            const isNew = dirty && fs?.savedContent === null
             return (
               <div
                 key={t.id}
@@ -398,7 +400,11 @@ export function TabBar() {
                 {accent}
                 <Code2 size={13} className="flex-none opacity-80" />
                 <span className="truncate">
-                  {dirty ? '● ' : ''}
+                  {dirty ? (
+                    <span className={`mr-0.5 font-mono text-[10px] font-semibold ${isNew ? 'text-koma-success' : 'text-koma-accent'}`}>
+                      {isNew ? 'A' : 'M'}
+                    </span>
+                  ) : null}
                   {t.title}
                 </span>
                 <button
