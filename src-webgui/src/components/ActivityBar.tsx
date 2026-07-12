@@ -38,8 +38,8 @@ const iconBtn =
 // needs on the ActivityBar side.
 export const ACTIVITY_BAR_ITEMS: ActivityBarItem[] = [
   { view: 'explore', icon: Files, label: 'Explore' },
-  { view: 'git', icon: GitBranch, label: 'Source Control' },
   { view: 'coding', icon: Code2, label: 'Coding' },
+  { view: 'git', icon: GitBranch, label: 'Source Control' },
   { view: 'mcp', icon: Blocks, label: 'MCP' },
   { view: 'connector', icon: Plug, label: 'Connector' },
   { view: 'agents', icon: Bot, label: 'Agents' },
