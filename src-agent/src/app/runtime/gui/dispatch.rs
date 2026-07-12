@@ -535,6 +535,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             short_send,
             sliding_cache,
             bash_saving,
+            coding_autosave,
             internet_mode,
             workdir,
         } => {
@@ -544,6 +545,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                         short_send,
                         sliding_cache,
                         bash_saving,
+                        coding_autosave,
                         internet_mode,
                         workdir,
                     });

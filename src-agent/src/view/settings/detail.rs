@@ -148,6 +148,11 @@ pub(super) fn draw_field_list(
                 let v = if st.bash_saving { "on" } else { "off" };
                 vec![Span::styled(v, Style::default().fg(palette.accent))]
             }
+            SettingField::CodingAutosave => {
+                // Boolean toggle: on/off (GUI Coding panel debounced auto-save).
+                let v = if st.coding_autosave { "on" } else { "off" };
+                vec![Span::styled(v, Style::default().fg(palette.accent))]
+            }
             SettingField::InternetMode => {
                 // Enum toggle: simple (in-process DDG) vs full (scrapion subprocess).
                 let v = st.internet_mode.as_str();

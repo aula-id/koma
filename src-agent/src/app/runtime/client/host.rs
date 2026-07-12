@@ -571,6 +571,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     d.short_send_enabled,
                     d.sliding_cache,
                     d.bash_saving,
+                    d.coding_autosave,
                     d.internet_mode.as_str().to_string(),
                     cfg.palette,
                     String::new(),

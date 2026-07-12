@@ -46,6 +46,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         short_send_enabled: s.short_send_enabled,
         sliding_cache: s.sliding_cache,
         bash_saving: s.bash_saving,
+        coding_autosave: s.coding_autosave,
         internet_mode: shadow_internet_mode(&s.internet_mode),
         cwd: std::path::PathBuf::from(s.cwd),
         list_editing: s.list_editing,

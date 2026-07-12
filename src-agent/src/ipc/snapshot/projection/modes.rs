@@ -209,6 +209,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         short_send_enabled: st.short_send_enabled,
         sliding_cache: st.sliding_cache,
         bash_saving: st.bash_saving,
+        coding_autosave: st.coding_autosave,
         internet_mode: st.internet_mode.as_str().to_string(),
         cwd: st.cwd.display().to_string(),
         list_editing: st.list_editing,

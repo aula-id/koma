@@ -48,6 +48,8 @@ pub struct SettingsSnapshot {
     pub short_send_enabled: bool,
     pub sliding_cache: bool,
     pub bash_saving: bool,
+    #[serde(default)]
+    pub coding_autosave: bool,
     pub internet_mode: String,
     pub cwd: String,
     pub list_editing: bool,

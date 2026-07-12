@@ -213,6 +213,7 @@ impl DaemonHub {
         short_send: Option<bool>,
         sliding_cache: Option<bool>,
         bash_saving: Option<bool>,
+        coding_autosave: Option<bool>,
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
     ) {
@@ -252,6 +253,9 @@ impl DaemonHub {
             }
             if let Some(v) = bash_saving {
                 sess.settings.bash_saving = v;
+            }
+            if let Some(v) = coding_autosave {
+                sess.settings.coding_autosave = v;
             }
             if let Some(m) = internet_target {
                 sess.settings.internet_mode = m;

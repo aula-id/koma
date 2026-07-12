@@ -314,6 +314,7 @@ pub enum ClientRequest {
         short_send: Option<bool>,
         sliding_cache: Option<bool>,
         bash_saving: Option<bool>,
+        coding_autosave: Option<bool>,
         internet_mode: Option<String>,
         workdir: Option<Vec<String>>,
     },
@@ -544,6 +545,7 @@ pub enum DaemonEvent {
         short_send: bool,
         sliding_cache: bool,
         bash_saving: bool,
+        coding_autosave: bool,
         internet_mode: String,
         palette: String,
         /// The foreground session's stored `/effort` value (`""` = model

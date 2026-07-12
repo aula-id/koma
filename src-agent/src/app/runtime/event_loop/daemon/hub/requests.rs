@@ -452,10 +452,20 @@ impl DaemonHub {
                 short_send,
                 sliding_cache,
                 bash_saving,
+                coding_autosave,
                 internet_mode,
                 workdir,
             } => {
-                self.set_session_prefs(idx, state, short_send, sliding_cache, bash_saving, internet_mode, workdir);
+                self.set_session_prefs(
+                    idx,
+                    state,
+                    short_send,
+                    sliding_cache,
+                    bash_saving,
+                    coding_autosave,
+                    internet_mode,
+                    workdir,
+                );
             }
 
             // GUI composer EFFORT picker pick: persist the chosen effort level with the
@@ -701,6 +711,7 @@ impl DaemonHub {
             short_send: s.short_send_enabled,
             sliding_cache: s.sliding_cache,
             bash_saving: s.bash_saving,
+            coding_autosave: s.coding_autosave,
             internet_mode: s.internet_mode.as_str().to_string(),
             palette: state.rest.config.palette.clone(),
             effort: s.effort.clone(),

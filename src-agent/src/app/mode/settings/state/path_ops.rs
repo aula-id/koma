@@ -37,6 +37,7 @@ impl SettingsState {
             | SettingField::ShortSendEnabled
             | SettingField::SlidingCache
             | SettingField::BashSaving
+            | SettingField::CodingAutosave
             | SettingField::InternetMode => None,
         }
     }
