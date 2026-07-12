@@ -60,8 +60,24 @@ export function McpListView({
                 <button
                   onClick={() => onToggleEnable(s.id, !s.enabled)}
                   aria-label={s.enabled ? 'Disable' : 'Enable'}
-                  title={s.enabled ? 'Disable' : 'Enable'}
-                  className={`h-2 w-2 flex-none rounded-full transition-opacity hover:opacity-70 ${s.enabled ? 'bg-emerald-500' : 'bg-koma-fg/25'}`}
+                  title={
+                    !s.enabled
+                      ? 'Disabled'
+                      : s.error
+                        ? `Error: ${s.error}`
+                        : s.toolCount > 0
+                          ? `Connected (${s.toolCount} tools)`
+                          : 'Connecting…'
+                  }
+                  className={`h-2 w-2 flex-none rounded-full transition-opacity hover:opacity-70 ${
+                    !s.enabled
+                      ? 'bg-koma-fg/25'
+                      : s.error
+                        ? 'bg-amber-500'
+                        : s.toolCount > 0
+                          ? 'bg-emerald-500'
+                          : 'bg-emerald-500/50'
+                  }`}
                 />
                 <button onClick={() => onEdit(s)} className="min-w-0 flex-1 text-left">
                   <div className="flex items-center gap-2">
@@ -74,6 +90,11 @@ export function McpListView({
                       {s.transport}
                     </span>
                   </div>
+                  {s.enabled && s.error && (
+                    <div className="mt-0.5 truncate text-[11px] text-amber-500/80" title={s.error}>
+                      {s.error}
+                    </div>
+                  )}
                 </button>
                 <button
                   onClick={() => onEdit(s)}

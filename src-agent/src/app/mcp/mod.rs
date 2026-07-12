@@ -150,19 +150,12 @@ struct ServerConn {
 /// threads.
 #[derive(Default)]
 struct Snapshot {
-    /// Live connections keyed by server uuid. A server that failed to connect has
-    /// no entry here.
     conns: HashMap<String, ServerConn>,
-    /// All discovered tools across all connected servers, in connection order.
     tools: Vec<DiscoveredTool>,
-    /// Monotonic config generation. Bumped by every [`McpManager::reconnect`] under
-    /// the snapshot lock. A background connect task captures the generation BEFORE
-    /// its `connect_one` await and re-checks it AFTER (under the lock, before
-    /// inserting): if a `reconnect` bumped the generation while the connect was in
-    /// flight, the task's result belongs to a torn-down config and is discarded.
-    /// This stops a slow in-flight connect from an OLD generation reappearing in
-    /// the snapshot ~20s after the user deleted that server (and from a reused uuid
-    /// double-inserting).
+    /// Per-server error strings, keyed by server uuid. Set by `spawn_connect` on
+    /// failure; cleared on `reconnect`. Exposed via `server_errors()` so the GUI
+    /// can show why a green-dot server has no tools.
+    errors: HashMap<String, String>,
     generation: u64,
 }
 
@@ -474,6 +467,19 @@ impl McpManager {
             .unwrap_or_else(|p| p.into_inner())
             .1
             .clone()
+    }
+
+    /// Per-server error strings, keyed by server uuid. Only populated for servers
+    /// whose `spawn_connect` task failed. Read by the GUI to show a human-readable
+    /// failure reason next to a connected-but-failing server.
+    pub fn server_errors(&self) -> std::collections::HashMap<String, String> {
+        match &self.backend {
+            McpBackend::Local { snapshot, .. } => {
+                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                snap.errors.clone()
+            }
+            McpBackend::Proxy { .. } => std::collections::HashMap::new(),
+        }
     }
 
     /// Execute a namespaced MCP tool call and return its flattened text result.

@@ -40,21 +40,13 @@ pub(super) struct ConfigProjection {
     models: Vec<crate::model::app_config::ModelEntry>,
     session_models: Vec<crate::model::app_config::ModelEntry>,
     mcp_servers: Vec<crate::model::app_config::McpServerEntry>,
-    /// OAuth-backed connection UUID catalogue (Codex/Kilo/xAI/ClaudeAI logins), mirrored
-    /// alongside `providers` so the `needs_onboarding` gate below can recognize a
-    /// Main-role model bound to an OAuth connection as usable, matching the real
-    /// `resolve_role` resolver (which checks both catalogues). UUIDs only — never the
-    /// full `OAuthConn` (which carries plaintext tokens).
     oauth_conn_uuids: Vec<String>,
-    /// Active palette (theme) roles, carried on the Config push so the empty/swapper
-    /// state — which gets no `Snapshot` — still repaints to `config.json`'s theme.
     palette: PushPalette,
-    /// The active palette (theme) registry KEY (`config.palette` — e.g. `"vscode"`), so the
-    /// GUI can highlight the active card in the Settings Appearance grid + the onboarding
-    /// theme picker. Distinct from `palette` (the resolved colours); this is the name a
-    /// `SetTheme` round-trips. Rides `Config` (re-pushed on every theme change) so the
-    /// active highlight tracks live with no client-side state.
     palette_name: String,
+    /// Live per-server tool counts from `McpManager::server_status_cached()`.
+    mcp_status: std::collections::HashMap<String, usize>,
+    /// Per-server error strings from `McpManager::server_errors()`.
+    mcp_errors: std::collections::HashMap<String, String>,
 }
 
 impl ConfigProjection {
@@ -68,6 +60,8 @@ impl ConfigProjection {
             oauth_conn_uuids: g.oauth_conn_uuids.clone(),
             palette: palette_from_global(g),
             palette_name: g.palette.clone(),
+            mcp_status: std::collections::HashMap::new(),
+            mcp_errors: std::collections::HashMap::new(),
         }
     }
 
@@ -86,7 +80,21 @@ impl ConfigProjection {
             oauth_conn_uuids: cfg.oauth_conns.iter().map(|c| c.uuid.clone()).collect(),
             palette: push_palette_from_config(cfg),
             palette_name: cfg.palette.clone(),
+            mcp_status: std::collections::HashMap::new(),
+            mcp_errors: std::collections::HashMap::new(),
         }
+    }
+
+    /// Inject live MCP server status (tool counts + error strings) from the
+    /// `McpManager`. Called by the push loop after each `from_global` to
+    /// overlay runtime connection state onto the config projection.
+    pub(super) fn set_mcp_status(
+        &mut self,
+        status: std::collections::HashMap<String, usize>,
+        errors: std::collections::HashMap<String, String>,
+    ) {
+        self.mcp_status = status;
+        self.mcp_errors = errors;
     }
 }
 
@@ -265,7 +273,6 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
                 McpTransport::Http => "http",
             },
             command: s.command.clone(),
-            // Render the daemon's array/pair forms back into the panel's STRING forms.
             args: s.args.join(" "),
             env: s
                 .env
@@ -274,6 +281,8 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
                 .collect::<Vec<_>>()
                 .join(", "),
             url: s.url.clone(),
+            tool_count: cfg.mcp_status.get(&s.uuid).copied().unwrap_or(0),
+            error: cfg.mcp_errors.get(&s.uuid).cloned(),
         })
         .collect();
 

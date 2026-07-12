@@ -17,6 +17,7 @@ function blankServer(): McpServer {
     args: '',
     env: '',
     url: '',
+    toolCount: 0,
   }
 }
 
