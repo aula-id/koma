@@ -302,7 +302,7 @@ pub(super) fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult
 
     let totals = usage::range_totals_scoped(since, session);
     let buckets = usage::spend_buckets_scoped(since, BucketSize::Day, 0, tz, session);
-    let top_models = usage::top_models_in_range_scoped(since, 3, session);
+    let top_models = usage::top_models_in_range_scoped(since, 11, session);
 
     // Normalize to exactly 7 daily buckets (oldest -> newest, today last), zero-filled
     // for any day the ledger has no rows for.

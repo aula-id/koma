@@ -124,7 +124,7 @@ export function UsagePanel() {
             <div className="mb-1 text-[10px] uppercase tracking-wide text-koma-fg opacity-45">
               Top models
             </div>
-            {preview.topModels.map((m) => (
+            {preview.topModels.slice(0, 10).map((m) => (
               <div key={m.modelId} className="flex items-center gap-2 py-1">
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-koma-fg opacity-80">
                   {m.modelId}
@@ -134,6 +134,14 @@ export function UsagePanel() {
                 </span>
               </div>
             ))}
+            {preview.topModels.length > 10 && (
+              <button
+                onClick={openAnalyticsTab}
+                className="mt-0.5 text-[11px] text-koma-fg opacity-50 underline-offset-2 transition-opacity hover:opacity-80 hover:underline"
+              >
+                See more
+              </button>
+            )}
           </div>
         )}
       </div>
