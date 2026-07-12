@@ -1272,6 +1272,15 @@ type StoreSlice = {
   // Per-extension in-flight install/uninstall id (so ONLY that card shows its
   // button spinner, not the whole grid). Cleared on its ExtensionOpResult.
   pendingOp: string | null
+  // Which op `pendingOp` is (so the ExtensionOpResult handler can word the
+  // `opResult` confirmation as "Installed x" vs "Uninstalled x"). Cleared
+  // alongside `pendingOp`.
+  pendingOpKind: 'install' | 'uninstall' | null
+  // Last install/uninstall outcome — read by the notice banner in BOTH the
+  // grid and the detail view (unlike `error`, which is browse/detail-fetch-only).
+  // Cleared on navigation (browseStore/openStoreDetail/closeStoreDetail), on the
+  // next op start, or an explicit dismiss (clearStoreNotice).
+  opResult: { ok: boolean; message: string } | null
 }
 
 // Local-only UI state (never pushed by the host, never sent upstream) — the
@@ -1628,6 +1637,9 @@ type KomaState = {
   // Fetch the local installed registry (ListInstalledExtensions → the
   // InstalledExtensions push). Fired on StoreTab mount.
   refreshInstalled: () => void
+  // Dismiss the store notice banner (browse/detail `error` + install/uninstall
+  // `opResult`) without navigating. Wired to the banner's close button.
+  clearStoreNotice: () => void
   // Open (or focus) one extension-contributed panel tab (id
   // `ext:${extId}:${panelId}`) — the ActivityBar's merged extension items call
   // this on click. No wire fetch: the tab renders a `koma://extension/...`
@@ -1999,6 +2011,8 @@ const initialStore: StoreSlice = {
   busy: false,
   error: null,
   pendingOp: null,
+  pendingOpKind: null,
+  opResult: null,
 }
 
 // Read once at module load (mirrors how `initialSession`/`initialUi` etc. seed
@@ -2596,16 +2610,28 @@ export const useKoma = create<KomaState>((set, get) => ({
         break
       // Install/uninstall result: clear that card's pendingOp (if it's still the
       // one in flight — guard against a stale reply for a superseded op) and
-      // surface any error. The authoritative registry refresh is the following
-      // InstalledExtensions push.
+      // build the `opResult` notice (success confirmation, or the failure
+      // message) read by both the grid and detail banners. The authoritative
+      // registry refresh is the following InstalledExtensions push.
       case 'ExtensionOpResult':
-        set((s) => ({
-          store: {
-            ...s.store,
-            pendingOp: s.store.pendingOp === env.id ? null : s.store.pendingOp,
-            error: env.ok ? null : env.error,
-          },
-        }))
+        set((s) => {
+          const stillPending = s.store.pendingOp === env.id
+          const label =
+            (s.store.detail && s.store.detail.id === env.id && s.store.detail.name) ||
+            s.store.catalogue.find((c) => c.id === env.id)?.name ||
+            env.id
+          const verb = s.store.pendingOpKind === 'uninstall' ? 'Uninstall' : 'Install'
+          return {
+            store: {
+              ...s.store,
+              pendingOp: stillPending ? null : s.store.pendingOp,
+              pendingOpKind: stillPending ? null : s.store.pendingOpKind,
+              opResult: env.ok
+                ? { ok: true, message: `${verb}ed ${label}.` }
+                : { ok: false, message: env.error ?? `Failed to ${verb.toLowerCase()} ${label}.` },
+            },
+          }
+        })
         break
       case 'UsagePreview':
         set((s) => {
@@ -3223,28 +3249,31 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   browseStore: (query, category) => {
     // Return to the grid (clear any open detail) and mark it loading.
-    set((s) => ({ store: { ...s.store, busy: true, error: null, detail: null } }))
+    set((s) => ({ store: { ...s.store, busy: true, error: null, opResult: null, detail: null } }))
     get().req({ r: 'StoreBrowse', query, category })
   },
   openStoreDetail: (id) => {
     // Grid→detail: null the previous detail so the pane shows a spinner rather
     // than a stale extension while the fetch is in flight.
-    set((s) => ({ store: { ...s.store, busy: true, error: null, detail: null } }))
+    set((s) => ({ store: { ...s.store, busy: true, error: null, opResult: null, detail: null } }))
     get().req({ r: 'StoreDetail', id })
   },
   closeStoreDetail: () => {
-    set((s) => ({ store: { ...s.store, detail: null, error: null } }))
+    set((s) => ({ store: { ...s.store, detail: null, error: null, opResult: null } }))
   },
   installExtension: (id, version) => {
-    set((s) => ({ store: { ...s.store, pendingOp: id, error: null } }))
+    set((s) => ({ store: { ...s.store, pendingOp: id, pendingOpKind: 'install', error: null, opResult: null } }))
     get().req({ r: 'InstallExtension', id, version })
   },
   uninstallExtension: (id) => {
-    set((s) => ({ store: { ...s.store, pendingOp: id, error: null } }))
+    set((s) => ({ store: { ...s.store, pendingOp: id, pendingOpKind: 'uninstall', error: null, opResult: null } }))
     get().req({ r: 'UninstallExtension', id })
   },
   refreshInstalled: () => {
     get().req({ r: 'ListInstalledExtensions' })
+  },
+  clearStoreNotice: () => {
+    set((s) => ({ store: { ...s.store, error: null, opResult: null } }))
   },
   openExtensionTab: (extId, panelId, title) => {
     const id = `ext:${extId}:${panelId}`
