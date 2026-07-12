@@ -6,12 +6,14 @@ import {
   mintRequestId,
   baseName as codingBaseName,
   emptyFileState,
+  isPathOrDescendant as codingIsPathOrDescendant,
   reduceFileTree,
   reduceFileRead,
   reduceFileSave,
   reduceFileCreate,
   reduceFileRename,
   reduceFileDelete,
+  remapPath as codingRemapPath,
   type CodingSlice,
   type FileTreeEntry,
 } from './coding'
@@ -1547,8 +1549,16 @@ function saveActivityBarLayout(layout: ActivityBarLayout) {
 // Shared by ActivityBar (bar + overflow menu) and SettingsTab (the Sidebar
 // section's toggle list) so both always agree on the effective order.
 export function resolveActivityBarOrder(savedOrder: string[], allIds: string[]): string[] {
+  // Enforce the canonical ACTIVITY_BAR_ITEMS order for all known built-in ids.
+  // Extension ids (ext:*) keep their saved relative order and are appended after
+  // built-ins.  This ensures the default layout is respected even when a stale
+  // order is persisted in localStorage.
+  const canonicalIndex = new Map(allIds.map((id, i) => [id, i]))
   const known = savedOrder.filter((id) => allIds.includes(id))
   const missing = allIds.filter((id) => !known.includes(id))
+  // Sort known items by their canonical position in allIds (ACTIVITY_BAR_ITEMS
+  // order), so the authoritative layout always wins over a stale save.
+  known.sort((a, b) => (canonicalIndex.get(a) ?? 0) - (canonicalIndex.get(b) ?? 0))
   return [...known, ...missing]
 }
 
@@ -3158,19 +3168,21 @@ export const useKoma = create<KomaState>((set, get) => ({
               },
             }
           }
-          const oldId = `coding:${env.root}:${env.oldPath}`
-          const newId = `coding:${env.root}:${env.newPath}`
-          const tabs = s.ui.tabs.map((t) =>
-            t.kind === 'codingFile' && t.id === oldId
-              ? {
-                  ...t,
-                  id: newId,
-                  path: env.newPath,
-                  title: codingBaseName(env.newPath),
-                }
-              : t,
-          )
-          const activeTabId = s.ui.activeTabId === oldId ? newId : s.ui.activeTabId
+          // Remap codingFile tabs for the renamed path and every descendant.
+          let activeTabId = s.ui.activeTabId
+          const tabs = s.ui.tabs.map((t) => {
+            if (t.kind !== 'codingFile' || t.root !== env.root) return t
+            const mapped = codingRemapPath(t.path, env.oldPath, env.newPath)
+            if (mapped == null) return t
+            const newId = `coding:${env.root}:${mapped}`
+            if (s.ui.activeTabId === t.id) activeTabId = newId
+            return {
+              ...t,
+              id: newId,
+              path: mapped,
+              title: codingBaseName(mapped),
+            }
+          })
           queueMicrotask(() => {
             const parents = new Set([
               env.oldPath.includes('/')
@@ -3199,13 +3211,35 @@ export const useKoma = create<KomaState>((set, get) => ({
               },
             }
           }
-          const delId = `coding:${env.root}:${env.path}`
-          const idx = s.ui.tabs.findIndex((t) => t.id === delId)
-          const tabs = s.ui.tabs.filter((t) => t.id !== delId)
-          const activeTabId =
-            s.ui.activeTabId === delId
-              ? s.ui.tabs[Math.max(0, idx - 1)]?.id ?? 'chat'
-              : s.ui.activeTabId
+          // Close codingFile tabs for the deleted path and every descendant.
+          const closed = new Set<string>()
+          const tabs = s.ui.tabs.filter((t) => {
+            if (t.kind !== 'codingFile' || t.root !== env.root) return true
+            if (!codingIsPathOrDescendant(t.path, env.path)) return true
+            closed.add(t.id)
+            return false
+          })
+          let activeTabId = s.ui.activeTabId
+          if (closed.has(s.ui.activeTabId)) {
+            // Prefer the previous surviving tab; fall back to chat.
+            const idx = s.ui.tabs.findIndex((t) => t.id === s.ui.activeTabId)
+            let pick: string | null = null
+            for (let i = idx - 1; i >= 0; i--) {
+              if (!closed.has(s.ui.tabs[i].id)) {
+                pick = s.ui.tabs[i].id
+                break
+              }
+            }
+            if (!pick) {
+              for (let i = idx + 1; i < s.ui.tabs.length; i++) {
+                if (!closed.has(s.ui.tabs[i].id)) {
+                  pick = s.ui.tabs[i].id
+                  break
+                }
+              }
+            }
+            activeTabId = pick ?? 'chat'
+          }
           queueMicrotask(() => {
             const parent = env.path.includes('/')
               ? env.path.slice(0, env.path.lastIndexOf('/'))
@@ -3244,10 +3278,45 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
 
   req: (g) => {
+    // Coding panel ops have no other UI feedback path when the host bridge is
+    // missing or throws — surface a toast rather than silently spinning. Do
+    // NOT treat a successful postMessage as delivery success; only missing/
+    // throwing ipc is reported here.
+    const isCodingReq =
+      g.r === 'FileTree' ||
+      g.r === 'FileRead' ||
+      g.r === 'FileSave' ||
+      g.r === 'FileCreate' ||
+      g.r === 'FileRename' ||
+      g.r === 'FileDelete'
+    const ipc = window.ipc
+    if (!ipc || typeof ipc.postMessage !== 'function') {
+      if (isCodingReq) {
+        const text = 'IPC unavailable — coding request was not sent'
+        set((s) => {
+          if (s.ui.toast?.text === text) return s
+          const seq = s.ui.toastSeq + 1
+          return {
+            ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
+          }
+        })
+      }
+      return
+    }
     try {
-      window.ipc?.postMessage(JSON.stringify({ t: 'req', ...g }))
-    } catch {
-      /* ipc unavailable */
+      ipc.postMessage(JSON.stringify({ t: 'req', ...g }))
+    } catch (e) {
+      if (isCodingReq) {
+        const msg = e instanceof Error ? e.message : String(e)
+        const text = `IPC error — coding request failed: ${msg}`
+        set((s) => {
+          if (s.ui.toast?.text === text) return s
+          const seq = s.ui.toastSeq + 1
+          return {
+            ui: { ...s.ui, toastSeq: seq, toast: { id: seq, text, kind: 'error' } },
+          }
+        })
+      }
     }
   },
 
