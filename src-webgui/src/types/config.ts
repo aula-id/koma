@@ -19,6 +19,10 @@ export type McpServer = {
   args: string
   env: string
   url: string
+  /** Live tool count from the daemon (0 = connecting/connected-with-no-tools). */
+  toolCount: number
+  /** Human-readable error when the server failed to connect. Absent = OK or connecting. */
+  error?: string
 }
 
 // `hasKey` is a presence flag, NOT the key itself — the daemon never sends the

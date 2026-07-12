@@ -155,6 +155,7 @@ impl McpManager {
         let old_conns: Vec<ServerConn> = {
             let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
             snap.tools.clear();
+            snap.errors.clear();
             // Bump the generation under the SAME lock that clears conns+tools, so any
             // connect task spawned for the OLD config (which captured the previous
             // generation before its await) sees a mismatch when it re-locks to insert
@@ -296,6 +297,7 @@ impl McpManager {
                             let service = to_discard.take().expect("service present");
                             snap.conns
                                 .insert(server.uuid.clone(), ServerConn { service, peer });
+                            snap.errors.remove(&server.uuid);
                             snap.tools.extend(discovered);
                         }
                     }
@@ -313,13 +315,15 @@ impl McpManager {
                     }
                 }
                 Err(e) => {
-                    // A failed server = logged status + zero tools. Never a panic or
-                    // a hang; the rest of the app proceeds as if this server were
-                    // absent.
-                    crate::model::store::append_global_error_log(
-                        "mcp",
-                        &format!("server '{}' failed to connect: {e}", server.name),
-                    );
+                    let msg = format!("server '{}' failed to connect: {e}", server.name);
+                    crate::model::store::append_global_error_log("mcp", &msg);
+                    // Retain the error so the GUI can display it.
+                    if let McpBackend::Local { snapshot, .. } = &mgr.backend {
+                        let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                        if snap.generation == gen_at_start {
+                            snap.errors.insert(server.uuid, msg);
+                        }
+                    }
                 }
             }
         });
