@@ -14,6 +14,7 @@
 pub mod browser;
 pub mod claude;
 pub mod codex;
+pub mod flow;
 pub mod jwt;
 pub mod kilo;
 pub mod komarun;

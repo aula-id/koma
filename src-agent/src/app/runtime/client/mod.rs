@@ -372,6 +372,22 @@ pub(super) enum HostCtl {
     /// fresh `idle` `OAuthState`. Reachable pre-session (the login FLOW itself stays
     /// attached-only). The `uuid` is the connection to drop.
     DeleteOAuthConn { uuid: String },
+    /// UN-ATTACHED GUI OAuth login START (the home-screen / Settings-pre-session "Sign
+    /// in to koma.run" etc. button): there is no attached daemon to run the flow on, so
+    /// the swapper runs it HOST-side — the exact same `service::oauth::flow::run_flow`
+    /// dispatcher the attached `Action::OAuthStart` spawns, just with the host's push
+    /// sink standing in for the daemon's per-client `OAuthState` reply. `provider` is the
+    /// wire string (`"codex"`/`"kilocode"`/`"xai"`/`"claudeai"`/`"komarun"`), resolved via
+    /// [`crate::model::app_config::OAuthProvider::from_wire_id`]. Progress streams back as
+    /// `waiting_url`/`waiting_code` `OAuthState` pushes, ending in `success` (after the
+    /// connection is appended to the GLOBAL config + persisted) or `failed`. Superseding a
+    /// flow already in flight aborts it first, mirroring `handle_oauth_start`'s supersede.
+    StartOAuth { provider: String },
+    /// UN-ATTACHED GUI OAuth login CANCEL: abort whatever host-local flow
+    /// [`StartOAuth`](Self::StartOAuth) started (a no-op if none is in flight) and
+    /// re-push a fresh `idle` `OAuthState` so the Cancel button always lands somewhere
+    /// rather than leaving the wait screen stranded.
+    CancelOAuth,
     /// Activity-bar "Usage" panel fetch: compute a LAST-7-DAYS preview straight off the
     /// global `~/.koma/usage.sqlite` ledger. Like [`FileDiff`](Self::FileDiff) this NEVER
     /// touches the daemon in either host state. Serviced off-thread; see

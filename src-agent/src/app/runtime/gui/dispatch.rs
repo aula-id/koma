@@ -623,17 +623,21 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 HostCtl::GetOAuthState,
             );
         }
-        // OAuth login start: attached-only (the flow runs on the daemon's runtime). No
-        // session attached → silent no-op (same pattern as `Interrupt`); the screen stays
-        // in its current state until an attach lands.
+        // OAuth login start: dual-routed like `GetOAuthState`/`DeleteOAuthConn` — the
+        // attached daemon runs the flow on ITS runtime as before; un-attached (the
+        // WELCOME/home screen, no session) the host now runs the SAME flow on its own
+        // runtime (`HostCtl::StartOAuth`) instead of silently dropping the request, so
+        // koma.run/provider sign-in works with no session attached.
         GuiReq::StartOAuth { provider } => {
-            if let Ok(g) = ctx.req.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::StartOAuth { provider });
-                }
-            }
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::StartOAuth { provider: provider.clone() },
+                HostCtl::StartOAuth { provider },
+            );
         }
-        // OAuth paste-token completion: attached-only, like `StartOAuth`.
+        // OAuth paste-token completion: attached-only still — the paste screen only ever
+        // follows an in-session `StartOAuth("codex_paste")`, which stays attached-only.
         GuiReq::SubmitOAuthPaste { token } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
@@ -641,13 +645,16 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 }
             }
         }
-        // OAuth cancel: attached-only, like `StartOAuth`.
+        // OAuth cancel: dual-routed like `StartOAuth` — un-attached, abort whatever
+        // host-local flow is in flight (a no-op if none) so the Cancel button in the
+        // Account section never dangles pre-session either.
         GuiReq::CancelOAuth => {
-            if let Ok(g) = ctx.req.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::CancelOAuth);
-                }
-            }
+            forward_or_host(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::CancelOAuth,
+                HostCtl::CancelOAuth,
+            );
         }
         // OAuth connection delete: dual-routed like `GetOAuthState` — the attached daemon
         // deletes + evicts + re-pushes, or (un-attached) the host does the same host-side, so

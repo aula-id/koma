@@ -607,17 +607,21 @@ pub(super) enum GuiReq {
     /// the host answers from `~/.koma/config.json` + the provider registry — so the screen
     /// populates in BOTH host states and never hangs.
     GetOAuthState,
-    /// Start a login flow. `provider` is `"codex"` / `"kilocode"` / `"xai"` / `"codex_paste"`.
-    /// Forwarded as [`ClientRequest::StartOAuth`], attached-only (like `Interrupt` — the flow
-    /// runs on the daemon's runtime; un-attached login is not supported this wave). The daemon
-    /// streams progress back as `OAuthState` pushes the host re-pushes as `OAuthState`
-    /// envelopes.
+    /// Start a login flow. `provider` is `"codex"` / `"kilocode"` / `"xai"` / `"claudeai"` /
+    /// `"komarun"` / `"codex_paste"`. Dual-routed like `GetOAuthState` via [`forward_or_host`]
+    /// — the attached daemon runs the flow on ITS runtime (unchanged); un-attached (the
+    /// WELCOME/home screen) the host now runs the SAME flow on ITS OWN runtime
+    /// (`HostCtl::StartOAuth`), so koma.run/provider sign-in works with no session attached.
+    /// Either side streams progress back as `OAuthState` pushes (`waiting_url`/`waiting_code`
+    /// → `success`/`failed`).
     StartOAuth { provider: String },
     /// Complete the Codex paste-token flow with a raw access `token`. Forwarded as
-    /// [`ClientRequest::SubmitOAuthPaste`], attached-only.
+    /// [`ClientRequest::SubmitOAuthPaste`], attached-only — the paste screen only ever
+    /// follows an in-session `StartOAuth("codex_paste")`.
     SubmitOAuthPaste { token: String },
-    /// Cancel an in-flight login flow. Forwarded as [`ClientRequest::CancelOAuth`],
-    /// attached-only.
+    /// Cancel an in-flight login flow. Dual-routed like `StartOAuth` via [`forward_or_host`]
+    /// — un-attached, aborts whatever host-local flow is in flight (a no-op if none) so the
+    /// Cancel button in the Account section never dangles pre-session either.
     CancelOAuth,
     /// Delete a persisted OAuth connection by `uuid`. Dual-routed like `GetOAuthState` via
     /// [`forward_or_host`] — the attached daemon deletes + evicts, or (un-attached) the host
