@@ -65,18 +65,20 @@ export function McpListView({
                       ? 'Disabled'
                       : s.error
                         ? `Error: ${s.error}`
-                        : s.toolCount > 0
-                          ? `Connected (${s.toolCount} tools)`
-                          : 'Connecting…'
+                        : s.connected
+                          ? s.toolCount > 0
+                            ? `Connected (${s.toolCount} tools)`
+                            : 'Connected (0 tools)'
+                          : 'Checking…'
                   }
                   className={`h-2 w-2 flex-none rounded-full transition-opacity hover:opacity-70 ${
                     !s.enabled
                       ? 'bg-koma-fg/25'
                       : s.error
                         ? 'bg-amber-500'
-                        : s.toolCount > 0
+                        : s.connected
                           ? 'bg-emerald-500'
-                          : 'bg-emerald-500/50'
+                          : 'bg-amber-500/50'
                   }`}
                 />
                 <button onClick={() => onEdit(s)} className="min-w-0 flex-1 text-left">

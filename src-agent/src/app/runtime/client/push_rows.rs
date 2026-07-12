@@ -304,11 +304,28 @@ pub(super) struct PushMcpServer {
     pub(super) args: String,
     pub(super) env: String,
     pub(super) url: String,
-    /// Live tool count from `McpManager::server_status_cached()`. `0` = connected
-    /// with no tools or still connecting; the frontend distinguishes via `error`.
+    /// STATIC config-field tool count (from the Config envelope; no longer live).
+    /// Runtime status (connected, live tool count, errors) now comes from the
+    /// dedicated `McpStatus` push envelope instead.
     pub(super) tool_count: usize,
     /// Human-readable error string when the server's background connect failed.
     /// `None` = connected (or still connecting). Shown as an amber/red indicator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) error: Option<String>,
+}
+
+/// One MCP server row in a [`PushEnvelope::McpStatus`] reply — live connection status
+/// from `McpManager::server_status_cached()` and `server_errors()`. `id` is the server
+/// config uuid; `connected` is true when a live connection exists; `toolCount` is the
+/// discovered tool count (0 when connected with no tools, or when not connected);
+/// `error` is the human-readable connection error if any.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PushMcpStatusServer {
+    pub(super) id: String,
+    pub(super) connected: bool,
+    pub(super) tool_count: usize,
+    /// Optional — omitted from JSON when None.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) error: Option<String>,
 }

@@ -133,6 +133,9 @@ pub enum ClientRequest {
     /// Toggle the `enabled` flag on the MCP server with `uuid` (the list-row switch),
     /// persist, and live-reconnect the manager.
     EnableMcpServer { uuid: String, enabled: bool },
+    /// Request live MCP server connection status. Answered with a one-shot
+    /// `DaemonEvent::McpStatus` frame (never folded — re-pushed by push_intercept).
+    GetMcpStatus { request_id: String },
     /// Upsert a provider (Connector ProviderForm). `uuid` is `None` for a new provider
     /// (minted OpenAI-compatible) or `Some` to edit by uuid (preserving its wire type).
     SetProvider {
@@ -669,6 +672,34 @@ pub enum DaemonEvent {
         ok: bool,
         error: Option<String>,
     },
+    /// One-shot reply to a [`ClientRequest::GetMcpStatus`]: per-server connection state
+    /// (tool counts + errors) plus an optional top-level availability error. The GUI
+    /// host re-pushes this as a `McpStatus` envelope via `push_intercept`.
+    McpStatus {
+        /// Echoed from the request for stale-reply protection.
+        request_id: String,
+        /// Per-server status rows keyed by server uuid. Only connected or errored
+        /// servers appear; disabled and still-connecting servers are absent.
+        servers: Vec<McpStatusServer>,
+        /// Top-level error when the MCP manager is unavailable (no session, proxy
+        /// transport failure). `None` when the status was retrieved successfully.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        global_error: Option<String>,
+    },
+}
+
+/// One row in a [`DaemonEvent::McpStatus`] reply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpStatusServer {
+    /// Server config uuid.
+    pub id: String,
+    /// True when the server has a live connection.
+    pub connected: bool,
+    /// Discovered tool count (0 when connected with no tools, or when not connected).
+    pub tool_count: usize,
+    /// Human-readable error string when the server failed to connect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // ─── mode discriminant ───────────────────────────────────────────────────────

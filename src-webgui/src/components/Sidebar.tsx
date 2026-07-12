@@ -42,11 +42,13 @@ export function Sidebar({ width, view }: SidebarProps) {
   const refreshRepos = useKoma((s) => s.refreshRepos)
   const refreshGraph = useKoma((s) => s.refreshGraph)
   const refreshUsagePreview = useKoma((s) => s.refreshUsagePreview)
+  const refreshMcpStatus = useKoma((s) => s.refreshMcpStatus)
   // Set true the instant a UsagePreview req fires (mount, scope/session
   // change, or this button) and cleared when the matching reply is applied
   // (see the 'UsagePreview' push case in the store) — drives the button's
   // spinner for the actual fetch lifecycle, not a fixed timeout.
   const usagePreviewBusy = useKoma((s) => s.usagePreviewBusy)
+  const mcpStatusBusy = useKoma((s) => s.mcpStatusBusy)
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = () => {
@@ -98,6 +100,18 @@ export function Sidebar({ width, view }: SidebarProps) {
             className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
           >
             {refreshing ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
+          </button>
+        )}
+        {view === 'mcp' && (
+          <button
+            type="button"
+            onClick={refreshMcpStatus}
+            disabled={mcpStatusBusy}
+            title="Refresh"
+            aria-label="Refresh MCP status"
+            className="flex h-5 w-5 flex-none items-center justify-center rounded normal-case text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
+          >
+            {mcpStatusBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
           </button>
         )}
       </div>
