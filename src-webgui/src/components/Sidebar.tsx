@@ -39,6 +39,12 @@ export function Sidebar({ width, view }: SidebarProps) {
   const refreshGitStatus = useKoma((s) => s.refreshGitStatus)
   const refreshRepos = useKoma((s) => s.refreshRepos)
   const refreshGraph = useKoma((s) => s.refreshGraph)
+  const refreshUsagePreview = useKoma((s) => s.refreshUsagePreview)
+  // Set true the instant a UsagePreview req fires (mount, scope/session
+  // change, or this button) and cleared when the matching reply is applied
+  // (see the 'UsagePreview' push case in the store) — drives the button's
+  // spinner for the actual fetch lifecycle, not a fixed timeout.
+  const usagePreviewBusy = useKoma((s) => s.usagePreviewBusy)
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = () => {
@@ -56,16 +62,28 @@ export function Sidebar({ width, view }: SidebarProps) {
     >
       <div className="flex h-[35px] flex-none items-center justify-between gap-2 px-5 text-[11px] uppercase tracking-wider text-koma-fg whitespace-nowrap">
         <span className="opacity-60">{TITLES[view]}</span>
-        {view === 'usage' && hasSession && (
-          <div className="normal-case tracking-normal">
-            <Segmented
-              value={usageScope}
-              options={[
-                { value: 'all', label: 'all' },
-                { value: 'session', label: 'session' },
-              ]}
-              onChange={setUsageScope}
-            />
+        {view === 'usage' && (
+          <div className="flex items-center gap-1.5 normal-case tracking-normal">
+            {hasSession && (
+              <Segmented
+                value={usageScope}
+                options={[
+                  { value: 'all', label: 'all' },
+                  { value: 'session', label: 'session' },
+                ]}
+                onChange={setUsageScope}
+              />
+            )}
+            <button
+              type="button"
+              onClick={refreshUsagePreview}
+              disabled={usagePreviewBusy}
+              title="Refresh"
+              aria-label="Refresh usage"
+              className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-fg opacity-60 hover:bg-koma-hover hover:opacity-100 disabled:cursor-wait"
+            >
+              {usagePreviewBusy ? <BrailleSpinner size={12} /> : <RefreshCw size={12} />}
+            </button>
           </div>
         )}
         {view === 'git' && (
