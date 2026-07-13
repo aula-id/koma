@@ -653,9 +653,26 @@ export type InstalledExt = {
   kind: string
   enabled: boolean
   granted: string[]
-  // This extension's contributed panels (empty for one that contributes none).
-  // Drives the merged extension activity-bar items in ActivityBar.tsx.
   panels: ExtPanel[]
+}
+
+// Full detail of one locally-installed extension — registry fields PLUS on-disk
+// manifest contributions (tools/models/panels/sub-agents). The reply to
+// `GetInstalledExtensionDetail`.
+export type InstalledExtDetail = {
+  id: string
+  name: string
+  version: string
+  description: string
+  tier: string
+  kind: string
+  enabled: boolean
+  granted: string[]
+  requires: string[]
+  panels: ExtPanel[]
+  tools: { name: string; description: string }[]
+  models: { id: string; displayName: string }[]
+  subAgents: { name: string; description: string }[]
 }
 
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
@@ -731,6 +748,9 @@ export type Tab =
   // closing an unsaved tab discards silently (no local draft is ever
   // persisted to the store).
   | { id: string; kind: 'agent'; agentId: string | null }
+  // Installed-extension detail tab (Tab-B) — full manifest projection for one
+  // locally-installed extension. Deduped by `extId`; closeable like a diff tab.
+  | { id: string; kind: 'installedExtension'; extId: string; title: string }
   // The singleton GitKraken-style commit-graph tab (id 'graph'), opened from the
   // Source Control panel header. Deduped by the fixed id; closeable like a diff
   // tab. Content (commits/selection/detail) lives in the `graph` store slice, not
@@ -1022,6 +1042,9 @@ export type PushEnvelope =
   // Reply to ListInstalledExtensions + the re-push after a successful install/
   // uninstall — the local registry for the "Installed" section.
   | { k: 'InstalledExtensions'; items: InstalledExt[] }
+  // Reply to GetInstalledExtensionDetail — full detail of one installed extension.
+  // `id` echoes the requested extension id for stale-reply protection.
+  | { k: 'InstalledExtensionDetail'; id: string; detail: InstalledExtDetail | null; error: string | null }
   // Result of an install/uninstall op (echoes `id` to clear that card's pending
   // spinner). On success the authoritative registry reply is the following
   // InstalledExtensions push; `ok:false` + `error` surfaces a failure.
@@ -1353,6 +1376,18 @@ type StoreSlice = {
   catalogue: StoreItem[]
   detail: StoreDetail | null
   installed: InstalledExt[]
+  // Full detail for the currently-open installed-extension detail tab (Tab-B).
+  // `null` when no installed-ext tab is open or while loading; REPLACED on each
+  // InstalledExtensionDetail push.
+  installedDetail: InstalledExtDetail | null
+  // Independent loading/error state for the currently-open installed-extension
+  // detail tab. These must not share the marketplace's busy/error state.
+  installedDetailLoading: boolean
+  installedDetailError: string | null
+  // Requested extension id for the currently in-flight
+  // GetInstalledExtensionDetail request. Stale replies whose id doesn't match
+  // are silently dropped.
+  installedDetailRequestId: string | null
   busy: boolean
   error: string | null
   // Per-extension in-flight install/uninstall id (so ONLY that card shows its
@@ -1738,6 +1773,9 @@ type KomaState = {
   openStoreDetail: (id: string) => void
   // Back to the catalogue grid from a detail view (local only — no request).
   closeStoreDetail: () => void
+  // Open (or focus) the installed-extension detail tab (Tab-B) for `id`: find-
+  // or-create keyed by `extId`, fire GetInstalledExtensionDetail, and activate it.
+  openInstalledExtensionTab: (id: string) => void
   // Install one extension by id (optional version). Marks that card's pendingOp,
   // fires InstallExtension; the ExtensionOpResult clears it + surfaces any error,
   // and the following InstalledExtensions push refreshes the registry.
@@ -2140,6 +2178,10 @@ const initialStore: StoreSlice = {
   catalogue: [],
   detail: null,
   installed: [],
+  installedDetail: null,
+  installedDetailRequestId: null,
+  installedDetailLoading: false,
+  installedDetailError: null,
   busy: false,
   error: null,
   pendingOp: null,
@@ -2770,10 +2812,63 @@ export const useKoma = create<KomaState>((set, get) => ({
         }))
         break
       // Installed-registry reply (list / post-op re-push): REPLACE `installed`.
-      // Never touches busy/error — an install op's spinner is cleared by its
-      // ExtensionOpResult, which arrives just before this.
+      // Also remove any installedExtension tabs whose extId is no longer in the registry,
+      // and clear local detail/loading/error if the current detail id was removed.
       case 'InstalledExtensions':
-        set((s) => ({ store: { ...s.store, installed: env.items } }))
+        set((s) => {
+          const liveIds = new Set(env.items.map((e) => e.id))
+          let tabs = s.ui.tabs
+          let activeTabId = s.ui.activeTabId
+          const staleTabIds = new Set(
+            tabs.filter((t) => t.kind === 'installedExtension' && !liveIds.has(t.extId)).map((t) => t.id)
+          )
+          if (staleTabIds.size > 0) {
+            tabs = tabs.filter((t) => !staleTabIds.has(t.id))
+            if (staleTabIds.has(activeTabId)) {
+              // Close via existing close-tab fallback: select left neighbor.
+              const idx = s.ui.tabs.findIndex((t) => t.id === activeTabId)
+              activeTabId = idx > 0 ? s.ui.tabs[idx - 1].id : 'chat'
+            }
+          }
+          const detailRemoved =
+            (s.store.installedDetail !== null && !liveIds.has(s.store.installedDetail.id)) ||
+            (s.store.installedDetailRequestId !== null && !liveIds.has(s.store.installedDetailRequestId))
+          return {
+            store: {
+              ...s.store,
+              installed: env.items,
+              installedDetail: detailRemoved ? null : s.store.installedDetail,
+              installedDetailRequestId: detailRemoved ? null : s.store.installedDetailRequestId,
+              installedDetailLoading: detailRemoved ? false : s.store.installedDetailLoading,
+              installedDetailError: detailRemoved ? null : s.store.installedDetailError,
+            },
+            ui: { ...s.ui, tabs, activeTabId },
+          }
+        })
+        break
+      case 'InstalledExtensionDetail':
+        set((s) => {
+          // Drop stale replies: only apply when the envelope's id matches the current request.
+          if (env.id !== s.store.installedDetailRequestId) return s
+          const detail = env.detail
+          const tabs = detail
+            ? s.ui.tabs.map((t) =>
+                t.kind === 'installedExtension' && t.extId === env.id
+                  ? { ...t, title: detail.name || detail.id }
+                  : t,
+              )
+            : s.ui.tabs
+          return {
+            store: {
+              ...s.store,
+              installedDetail: env.detail,
+              installedDetailRequestId: null,
+              installedDetailLoading: false,
+              installedDetailError: env.error,
+            },
+            ui: { ...s.ui, tabs },
+          }
+        })
         break
       // Install/uninstall result: clear that card's pendingOp (if it's still the
       // one in flight — guard against a stale reply for a superseded op) and
@@ -3591,6 +3686,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   closeStoreDetail: () => {
     set((s) => ({ store: { ...s.store, detail: null, error: null, opResult: null } }))
   },
+  openInstalledExtensionTab: (id: string) => { const tabId = `installed-ext:${id}`; set((s) => { const exists = s.ui.tabs.some((t) => t.kind === 'installedExtension' && t.extId === id); const tabs: Tab[] = exists ? s.ui.tabs : [...s.ui.tabs, { id: tabId, kind: 'installedExtension' as const, extId: id, title: id }]; return { ui: { ...s.ui, tabs, activeTabId: tabId }, store: { ...s.store, installedDetail: null, installedDetailRequestId: id, installedDetailLoading: true, installedDetailError: null, opResult: null } } }); get().req({ r: 'GetInstalledExtensionDetail', id }) },
   installExtension: (id, version) => {
     set((s) => ({ store: { ...s.store, pendingOp: id, pendingOpKind: 'install', error: null, opResult: null } }))
     get().req({ r: 'InstallExtension', id, version })
@@ -3893,6 +3989,11 @@ export const useKoma = create<KomaState>((set, get) => ({
     // as-is (a browse is user-initiated) so re-focus doesn't re-hit the network.
     if (tab.kind === 'store') {
       get().refreshInstalled()
+    }
+    // Re-focusing an installed-extension detail tab refreshes its detail.
+    if (tab.kind === 'installedExtension') {
+      set((s) => ({ store: { ...s.store, installedDetailRequestId: tab.extId, installedDetailLoading: true, installedDetailError: null } }))
+      get().req({ r: 'GetInstalledExtensionDetail', id: tab.extId })
     }
     // Sync the stream view to the now-active tab: a stream tab → stream its target;
     // any other tab (chat/diff/settings) → clear the view. The host/daemon dedupe an

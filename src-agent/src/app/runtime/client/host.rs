@@ -514,6 +514,9 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::ListInstalledExtensions) => {
                 store_host::spawn_list_installed(P::clone(push));
             }
+            Ok(HostCtl::GetInstalledExtensionDetail { id }) => {
+                store_host::spawn_get_installed_detail(P::clone(push), id);
+            }
             // Install/uninstall arrived with no session attached (always true in the
             // swapper): push the graceful failure rather than silently dropping it.
             Ok(HostCtl::ExtNoSession { id }) => {

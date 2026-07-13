@@ -673,6 +673,9 @@ pub(super) enum GuiReq {
     UninstallExtension { id: String },
     /// Fetch the locally-installed registry. Routed as `HostCtl::ListInstalledExtensions`.
     ListInstalledExtensions,
+    /// Fetch full detail of one locally-installed extension. Routed as
+    /// `HostCtl::GetInstalledExtensionDetail`.
+    GetInstalledExtensionDetail { id: String },
 
     // ─── GUI SSH key vault (Settings "SSH Keys" submenu, wave 4a) ────────────────
     // A GUI-only, MANUAL, user-owned key vault (`<~/.koma>/keys/`) — completely

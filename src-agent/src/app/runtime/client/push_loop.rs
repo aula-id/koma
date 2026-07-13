@@ -266,6 +266,11 @@ pub(super) fn push_loop(
     )>();
     let (installed_ext_tx, installed_ext_rx) =
         std::sync::mpsc::channel::<Vec<crate::ipc::proto::InstalledExtWire>>();
+    let (installed_detail_tx, installed_detail_rx) = std::sync::mpsc::channel::<(
+        String,
+        Option<crate::ipc::proto::InstalledExtensionDetailWire>,
+        Option<String>,
+    )>();
 
     // Fold the handshake's prebuffered frames first, through the SAME `apply_frame`
     // path (seq seeding stays gap-free). The select/swapper/new latches can't fire
@@ -641,6 +646,9 @@ pub(super) fn push_loop(
                 Ok(super::HostCtl::ListInstalledExtensions) => {
                     store_host::spawn_list_installed_attached(installed_ext_tx.clone());
                 }
+                Ok(super::HostCtl::GetInstalledExtensionDetail { id }) => {
+                    store_host::spawn_get_installed_detail_attached(installed_detail_tx.clone(), id);
+                }
                 // Install/uninstall raced in with no daemon attached (in practice this
                 // can't happen here — an ATTACHED push_loop always has a live `req_tx`
                 // — but the arm must exist for the match to stay exhaustive; push the
@@ -804,6 +812,9 @@ pub(super) fn push_loop(
         }
         while let Ok(items) = installed_ext_rx.try_recv() {
             push_installed_extensions(push, items);
+        }
+        while let Ok((id, detail, error)) = installed_detail_rx.try_recv() {
+            super::push_proto::push_installed_ext_detail(push, id, detail, error);
         }
 
         // --- (b-ter) mirror the staged-attachment markers for the ipc Submit append ---

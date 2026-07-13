@@ -116,3 +116,56 @@ pub struct PanelWire {
     pub title: String,
     pub icon: String,
 }
+
+/// Full detail of a locally-installed extension — the registry entry PLUS the
+/// on-disk `manifest.json` contributions (tools, models, panels, sub-agents),
+/// projected to camelCase for the GUI's installed-extension detail tab.
+/// Reads ONLY the local filesystem (no network); missing/unreadable manifests
+/// degrade to empty contribution lists (never fail the whole projection).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledExtensionDetailWire {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub tier: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub granted: Vec<String>,
+    /// Manifest-declared requires (converted to wire strings), not runtime/registry secrets.
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub panels: Vec<PanelWire>,
+    #[serde(default)]
+    pub tools: Vec<InstalledToolWire>,
+    #[serde(default)]
+    pub models: Vec<InstalledModelWire>,
+    #[serde(default)]
+    pub sub_agents: Vec<InstalledSubAgentWire>,
+}
+
+/// One contributed tool from an installed extension's manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledToolWire {
+    pub name: String,
+    pub description: String,
+}
+
+/// One contributed model from an installed extension's manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledModelWire {
+    pub id: String,
+    pub display_name: String,
+}
+
+/// One contributed sub-agent from an installed extension's manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledSubAgentWire {
+    pub name: String,
+    pub description: String,
+}

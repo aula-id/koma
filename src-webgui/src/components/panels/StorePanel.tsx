@@ -10,6 +10,7 @@ import { useKoma } from '../../store/koma'
 export function StorePanel() {
   const installed = useKoma((s) => s.store.installed)
   const openStoreTab = useKoma((s) => s.openStoreTab)
+  const openInstalledExtensionTab = useKoma((s) => s.openInstalledExtensionTab)
   const refreshInstalled = useKoma((s) => s.refreshInstalled)
 
   useEffect(() => {
@@ -39,7 +40,7 @@ export function StorePanel() {
           {installed.map((ext) => (
             <li key={ext.id}>
               <button
-                onClick={openStoreTab}
+                onClick={() => openInstalledExtensionTab(ext.id)}
                 title={ext.id}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-koma-hover"
               >

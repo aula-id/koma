@@ -540,6 +540,11 @@ pub(super) enum HostCtl {
     /// [`StoreBrowse`](Self::StoreBrowse) (a config read, not a daemon call); see
     /// `store_host::installed_extensions`.
     ListInstalledExtensions,
+    /// Fetch full detail of one locally-installed extension: registry fields +
+    /// on-disk manifest contributions (tools/models/panels/sub-agents). Same
+    /// host-local reasoning as [`ListInstalledExtensions`] — see
+    /// `store_host::get_installed_detail`.
+    GetInstalledExtensionDetail { id: String },
     /// Graceful PRE-SESSION install/uninstall failure: `GuiReq::InstallExtension`/
     /// `UninstallExtension` arrived with NO attached daemon (the ipc `live_req` slot is
     /// `None` — the home screen / swapper). Install/uninstall mutate live daemon

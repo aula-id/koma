@@ -699,6 +699,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::ListInstalledExtensions => {
             let _ = ctx.ctl.send(HostCtl::ListInstalledExtensions);
         }
+        GuiReq::GetInstalledExtensionDetail { id } => {
+            let _ = ctx.ctl.send(HostCtl::GetInstalledExtensionDetail { id });
+        }
         // Install/uninstall MUTATE live daemon runtime state (`ext_manager`/
         // `mcp_manager` + `AppConfig`), so — unlike browse/detail above — these stay
         // DAEMON-forwarded, attached-only. With NO attached daemon (the home screen /

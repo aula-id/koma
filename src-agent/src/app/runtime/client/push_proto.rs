@@ -448,6 +448,15 @@ pub(super) enum PushEnvelope {
         ok: bool,
         error: Option<String>,
     },
+    /// Full detail of one locally-installed extension — the reply to
+    /// `GetInstalledExtensionDetail`. `detail` is `null` when the extension is not
+    /// in the registry. `id` echoes the requested extension id for stale-reply protection.
+    #[serde(rename_all = "camelCase")]
+    InstalledExtensionDetail {
+        id: String,
+        detail: Option<crate::ipc::proto::InstalledExtensionDetailWire>,
+        error: Option<String>,
+    },
     /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
     /// foreground session's current model. `state` is `"loading"` (a catalogue
     /// fetch was just armed or is already in flight — `options` empty),
@@ -852,6 +861,18 @@ pub(super) fn push_installed_extensions(
     items: Vec<crate::ipc::proto::InstalledExtWire>,
 ) {
     super::render::emit(push, &PushEnvelope::InstalledExtensions { items });
+}
+
+/// Emit a one-shot `InstalledExtensionDetail` envelope for the GUI installed-extension
+/// detail tab. Shared the same way as [`push_store_catalogue`] — see
+/// `store_host::get_installed_detail`.
+pub(super) fn push_installed_ext_detail(
+    push: &dyn Fn(String),
+    id: String,
+    detail: Option<crate::ipc::proto::InstalledExtensionDetailWire>,
+    error: Option<String>,
+) {
+    super::render::emit(push, &PushEnvelope::InstalledExtensionDetail { id, detail, error });
 }
 
 /// Emit a one-shot `ExtensionOpResult` envelope for the graceful PRE-SESSION install/
