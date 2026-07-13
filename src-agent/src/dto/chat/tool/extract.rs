@@ -261,8 +261,13 @@ pub(super) fn parse_function_param_call(inner: &str) -> Option<(String, String)>
 ///    `</parameter>` close tags.
 /// 5. Collapse 3+ consecutive newlines to 2, and trim trailing whitespace.
 pub fn strip_tool_call_tags(content: &str) -> String {
+    // Some summarizer models emit the bare plural <tool_calls>/</tool_calls> tags
+    // (no inner payload) — distinct from the singular <tool_call> wrapper
+    // that carries a JSON/harmony body. Handle both.
     const OPEN: &str = "<tool_call>";
     const CLOSE: &str = "</tool_call>";
+    const PLURAL_OPEN: &str = "<tool_calls>";
+    const PLURAL_CLOSE: &str = "</tool_calls>";
 
     // Work on a String copy so we can use replace_range without byte-boundary
     // panics — find() on &str always returns valid char boundaries.
@@ -278,19 +283,25 @@ pub fn strip_tool_call_tags(content: &str) -> String {
         s.replace_range(open_pos..close_end, "");
     }
 
-    // Step 2: If a lone <tool_call> remains (open with no matching close),
-    // truncate from that point to the end of the string.
-    if let Some(open_pos) = s.find(OPEN) {
+    // Step 1b: Remove all <tool_calls>...</tool_calls> spans (plural form).
+    while let Some(open_pos) = s.find(PLURAL_OPEN) {
+        let after_open = open_pos + PLURAL_OPEN.len();
+        let Some(rel_close) = s[after_open..].find(PLURAL_CLOSE) else { break };
+        let close_end = after_open + rel_close + PLURAL_CLOSE.len();
+        s.replace_range(open_pos..close_end, "");
+    }
+
+    // Step 2: If a lone <tool_call> or <tool_calls> remains (open with no
+    // matching close), truncate from that point to the end of the string.
+    if let Some(open_pos) = s.find(OPEN).or_else(|| s.find(PLURAL_OPEN)) {
         s.truncate(open_pos);
     }
 
-    // Step 3: Remove any remaining orphan </tool_call> (and, defensively, any
-    // stray <tool_call> that somehow survived).
-    while let Some(pos) = s.find(CLOSE) {
-        s.replace_range(pos..pos + CLOSE.len(), "");
-    }
-    while let Some(pos) = s.find(OPEN) {
-        s.replace_range(pos..pos + OPEN.len(), "");
+    // Step 3: Remove any remaining orphan close/open tags.
+    for tag in [CLOSE, PLURAL_CLOSE, OPEN, PLURAL_OPEN] {
+        while let Some(pos) = s.find(tag) {
+            s.replace_range(pos..pos + tag.len(), "");
+        }
     }
 
     // Step 4: Remove orphan harmony tags.
@@ -512,5 +523,29 @@ mod tests {
     fn strip_leaves_prose_intact() {
         let content = "No tags here.";
         assert_eq!(strip_tool_call_tags(content), "No tags here.");
+    }
+
+    #[test]
+    fn strip_removes_plural_tool_calls_tags() {
+        let content = "[summary of earlier conversation]\n<tool_calls>\n</tool_calls>";
+        let stripped = strip_tool_call_tags(content);
+        assert!(!stripped.contains("<tool_calls>"));
+        assert!(!stripped.contains("</tool_calls>"));
+        assert!(stripped.contains("[summary of earlier conversation]"));
+    }
+
+    #[test]
+    fn strip_removes_orphan_plural_open_tag() {
+        let content = "Some text\n<tool_calls>\ntrailing";
+        let stripped = strip_tool_call_tags(content);
+        assert!(!stripped.contains("<tool_calls>"));
+    }
+
+    #[test]
+    fn strip_removes_orphan_plural_close_tag() {
+        let content = "Some text\n</tool_calls>\nmore";
+        let stripped = strip_tool_call_tags(content);
+        assert!(!stripped.contains("</tool_calls>"));
+        assert!(stripped.contains("Some text"));
     }
 }
