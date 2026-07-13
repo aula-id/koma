@@ -24,6 +24,7 @@ import {
 } from '../../store/coding'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { Empty, IconBtn } from './helpers'
+import { Select } from './form'
 
 function joinPath(dir: string, name: string): string {
   if (!dir) return name
@@ -543,19 +544,14 @@ export function CodingPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-none items-center gap-1 px-2 py-1.5">
-        <select
-          value={activeRoot ?? roots[0] ?? ''}
-          disabled={!!draft}
-          onChange={(e) => setActiveCodingRoot(e.target.value)}
-          className="min-w-0 flex-1 truncate rounded border border-koma-border bg-koma-bg px-1.5 py-1 text-[11px] text-koma-fg outline-none focus:border-koma-fg/40"
-          title={activeRoot ?? ''}
-        >
-          {roots.map((r) => (
-            <option key={r} value={r}>
-              {rootLabel(r)}
-            </option>
-          ))}
-        </select>
+        <div className="min-w-0 flex-1" title={activeRoot ?? ''}>
+          <Select
+            value={activeRoot ?? roots[0] ?? ''}
+            options={roots.map((r) => ({ value: r, label: rootLabel(r) }))}
+            onChange={(root) => setActiveCodingRoot(root)}
+            disabled={!!draft}
+          />
+        </div>
         {!draft ? <>
           <IconBtn label="Refresh root" onClick={() => activeRoot && refreshCodingDir(activeRoot, '')}>
             <RefreshCw size={12} />

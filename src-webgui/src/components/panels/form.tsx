@@ -155,19 +155,24 @@ export function Select<T extends string>({
   options,
   onChange,
   placeholder,
+  disabled,
 }: {
   value: T | ''
   options: { value: T; label: string }[]
   onChange: (v: T) => void
   placeholder?: string
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const rect = useAnchorRect(open, ref)
+  // Empty options always disable; caller-supplied `disabled` layers on top
+  // (e.g. Coding root picker while a create/rename/delete draft is active).
+  const isDisabled = !!disabled || options.length === 0
+  const rect = useAnchorRect(open && !isDisabled, ref)
 
   useEffect(() => {
-    if (!open) return
+    if (!open || isDisabled) return
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node
       if (ref.current?.contains(t) || menuRef.current?.contains(t)) return
@@ -182,7 +187,13 @@ export function Select<T extends string>({
       window.removeEventListener('mousedown', onDoc)
       window.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, isDisabled])
+
+  // Close the menu if the control becomes disabled while open (e.g. a draft
+  // starts while the Coding root menu is visible).
+  useEffect(() => {
+    if (isDisabled && open) setOpen(false)
+  }, [isDisabled, open])
 
   const selected = options.find((o) => o.value === value)
   const pick = (v: T) => {
@@ -195,8 +206,11 @@ export function Select<T extends string>({
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        disabled={options.length === 0}
+        onClick={() => {
+          if (isDisabled) return
+          setOpen((o) => !o)
+        }}
+        disabled={isDisabled}
         className="flex h-7 w-full items-center justify-between rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg disabled:opacity-40"
       >
         <span className={`truncate ${selected ? '' : 'opacity-40'}`}>
@@ -205,6 +219,7 @@ export function Select<T extends string>({
         <ChevronDown size={13} className="flex-none opacity-60" />
       </button>
       {open &&
+        !isDisabled &&
         rect &&
         options.length > 0 &&
         createPortal(
