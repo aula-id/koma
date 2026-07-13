@@ -22,6 +22,7 @@ import { BranchSwitcher } from '../BranchSwitcher'
 import { GitGraphMini } from '../GitGraphMini'
 import { ConflictBanner } from '../ConflictBanner'
 import { Empty } from './helpers'
+import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
@@ -337,18 +338,13 @@ export function GitPanel() {
       {repos.length > 1 && (
         <div className="flex items-center gap-1.5 border-b border-koma-border px-2 py-1">
           <FolderGit2 size={12} className="flex-none text-koma-dim opacity-60" />
-          <select
-            value={activeRepoRoot ?? git.root ?? ''}
-            onChange={(e) => setActiveRepo(e.target.value)}
-            title="Active repository"
-            className="min-w-0 flex-1 truncate rounded border border-koma-border bg-koma-bg px-1 py-0.5 text-[11px] text-koma-fg focus:outline-none focus:ring-1 focus:ring-koma-accent"
-          >
-            {repos.map((r) => (
-              <option key={r.root} value={r.root}>
-                {r.name}
-              </option>
-            ))}
-          </select>
+          <div className="min-w-0 flex-1" title="Active repository">
+            <Select
+              value={activeRepoRoot ?? git.root ?? ''}
+              options={repos.map((r) => ({ value: r.root, label: r.name }))}
+              onChange={(root) => setActiveRepo(root)}
+            />
+          </div>
         </div>
       )}
       <ConflictBanner />
@@ -408,19 +404,16 @@ export function GitPanel() {
         </SyncButton>
         <span className="flex-1" />
         <KeyRound size={12} className="flex-none text-koma-dim opacity-60" />
-        <select
-          value={git.keyName ?? ''}
-          onChange={(e) => setGitKey(e.target.value || null)}
-          title="SSH key used for fetch/pull/push"
-          className="min-w-0 max-w-[130px] flex-none truncate rounded border border-koma-border bg-koma-bg px-1 py-0.5 font-mono text-[11px] text-koma-fg focus:outline-none focus:ring-1 focus:ring-koma-accent"
-        >
-          <option value="">Default (system ssh)</option>
-          {keys.map((k) => (
-            <option key={k.name} value={k.name}>
-              {k.name}
-            </option>
-          ))}
-        </select>
+        <div className="min-w-0 max-w-[130px] flex-none" title="SSH key used for fetch/pull/push">
+          <Select
+            value={git.keyName ?? ''}
+            options={[
+              { value: '', label: 'Default (system ssh)' },
+              ...keys.map((k) => ({ value: k.name, label: k.name })),
+            ]}
+            onChange={(name) => setGitKey(name || null)}
+          />
+        </div>
       </div>
       <div className="flex flex-none flex-col gap-1.5 border-b border-koma-border px-3 py-2">
         <textarea
