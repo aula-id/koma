@@ -155,11 +155,11 @@ pub(super) fn finish_tool_round(
 
     // Refresh the session's todo mirror (#PLAN section) from whichever backing
     // file is CURRENTLY the source of truth: `plan_todos.md` while in Plan mode
-    // (already kept live by the `todowrite`/`plan_ready` interceptions in
+    // (already kept live by the `checklist`/`plan_ready` interceptions in
     // `approval.rs`, so this is a cheap no-op re-read there), else the
-    // per-directory `memory/TODO.md` the generic (non-intercepted) `todowrite`
+    // per-directory `memory/TODO.md` the generic (non-intercepted) `checklist`
     // tool writes to in every OTHER mode. Read every round (cheap, mirrors the
-    // `file_changes` refresh just above) so an execution-phase `todowrite` —
+    // `file_changes` refresh just above) so an execution-phase `checklist` —
     // which isn't intercepted and never touches `rt.plan_todos` at its call
     // site — is reflected the instant this round finishes, in Auto/Normal/Yolo
     // just as much as Plan.

@@ -276,7 +276,7 @@ export type FileChangeEntry = {
 // `PlanTodoSnapshot` (render.rs `PushPlanTodo`, `rename_all = "camelCase"`).
 // The two locked workflow rails ("serve plan to user"/"save plan to file &
 // prompt approval") ride this too now, flagged via `locked` (TUI parity: the
-// rails show right after `plan_enter`, before the model's first `todowrite`).
+// rails show right after `plan_enter`, before the model's first `checklist`).
 // Empty array = not in Plan mode, or no plan yet.
 export type PlanTodoEntry = {
   content: string

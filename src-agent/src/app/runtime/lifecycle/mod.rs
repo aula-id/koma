@@ -421,8 +421,8 @@ fn install_daemon_session(
     // Rehydrate the session's CURRENT todo checklist — mirrors `file_changes`'s
     // load-time refresh so a reattached/resumed session's GUI Explore "PLAN"
     // section is correct from the very first snapshot, not just after the next
-    // todowrite/plan_ready. Mode-aware: `plan_todos.md` while in Plan mode, else
-    // the per-directory `memory/TODO.md` (the regular working list `todowrite`
+    // checklist/plan_ready. Mode-aware: `plan_todos.md` while in Plan mode, else
+    // the per-directory `memory/TODO.md` (the regular working list `checklist`
     // writes to outside Plan mode) — same selection `/todo` itself uses, so the
     // GUI shows execution-phase todos too, not just mid-plan ones.
     runtime.plan_todos = runtime

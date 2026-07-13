@@ -1,4 +1,4 @@
-//! `todowrite` tool: lets the model create and update the session's task list.
+//! `checklist` tool: lets the model create and update the session's task list.
 //!
 //! Writes to `memory/TODO.md` in the session directory, using the markdown
 //! checkbox format that the `/todo` overlay parses. The model provides the
@@ -8,16 +8,16 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use super::{Tool, ToolCtx};
 
-/// The `todowrite` tool: update the session's task list.
-pub struct TodoWrite;
+/// The `checklist` tool: update the session's task list.
+pub struct Checklist;
 
-impl Tool for TodoWrite {
+impl Tool for Checklist {
     fn name(&self) -> &'static str {
-        "todowrite"
+        "checklist"
     }
 
     fn description(&self) -> &'static str {
-        include_str!("todowrite.txt")
+        include_str!("checklist.txt")
     }
 
     fn parameters(&self) -> Value {

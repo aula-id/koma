@@ -223,7 +223,7 @@ pub fn render_todo_overlay(
     if items.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "(no todos — model can add with todowrite tool)",
+                "(no todos — model can add with checklist tool)",
                 Style::default().fg(palette.dim),
             )),
             inner.inner(Margin { horizontal: 1, vertical: 0 }),

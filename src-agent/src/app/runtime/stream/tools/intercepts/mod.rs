@@ -41,7 +41,7 @@ pub(super) use guard::{
 };
 pub(super) use plan::{
     build_convo_context, intercept_plan_enter, intercept_plan_readonly_gate, intercept_plan_ready,
-    intercept_todowrite_plan,
+    intercept_checklist_plan,
 };
 pub(super) use task::{intercept_task, intercept_task_kill, intercept_task_output};
 

@@ -87,7 +87,7 @@ fn tool_signature_inner(name: &str, v: &serde_json::Value) -> Option<String> {
                 None => agent,
             })
         }
-        "todowrite" => v
+        "checklist" => v
             .get("todos")
             .and_then(|x| x.as_array())
             .map(|a| format!("{} todos", a.len())),
