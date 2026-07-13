@@ -315,6 +315,10 @@ declare global {
     // Fetch the locally-installed extension registry. Reply lands as
     // InstalledExtensions.
     | { r: 'ListInstalledExtensions' }
+    // Fetch full detail of one locally-installed extension: registry fields +
+    // on-disk manifest contributions (tools/models/panels/sub-agents). Reply
+    // lands as InstalledExtensionDetail.
+    | { r: 'GetInstalledExtensionDetail'; id: string }
     // Source Control "GIT" panel opened / refreshed: fetch a host-computed git
     // status (branch, ahead/behind, staged + unstaged file lists) for the
     // foreground session's repo. Serviced ENTIRELY host-side — works

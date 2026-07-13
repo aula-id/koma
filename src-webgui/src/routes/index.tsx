@@ -286,6 +286,7 @@ const AnalyticsTab = lazy(() => import('../components/AnalyticsTab'))
 // Extension STORE tab — lazy so its chunk only loads when the store is first
 // opened from the ActivityBar.
 const StoreTab = lazy(() => import('../components/StoreTab'))
+const InstalledExtensionTab = lazy(() => import('../components/InstalledExtensionTab'))
 
 // Coding panel Monaco editor — lazy so its chunk only loads when a file is opened.
 const CodeEditorTab = lazy(() => import('../components/CodeEditorTab'))
@@ -365,6 +366,12 @@ function TabbedMain() {
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
               <Suspense fallback={<DiffFallback />}>
                 <StoreTab />
+              </Suspense>
+            </div>
+          ) : t.kind === 'installedExtension' ? (
+            <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
+              <Suspense fallback={<DiffFallback />}>
+                <InstalledExtensionTab extId={t.extId} />
               </Suspense>
             </div>
           ) : t.kind === 'extension' ? (

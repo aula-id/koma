@@ -23,7 +23,8 @@
 use std::sync::mpsc::Sender;
 
 use crate::ipc::proto::{
-    InstalledExtWire, PanelWire, StoreContributesWire, StoreDetailWire, StoreItemWire,
+    InstalledExtensionDetailWire, InstalledExtWire, InstalledModelWire, InstalledSubAgentWire,
+    InstalledToolWire, PanelWire, StoreContributesWire, StoreDetailWire, StoreItemWire,
 };
 use crate::model::app_config::AppConfig;
 use crate::model::store;
@@ -67,6 +68,18 @@ pub(super) fn spawn_list_installed(push: impl Fn(String) + Send + 'static) {
     });
 }
 
+/// `HostCtl::GetInstalledExtensionDetail` while detached.
+pub(super) fn spawn_get_installed_detail(push: impl Fn(String) + Send + 'static, id: String) {
+    let id2 = id.clone();
+    std::thread::spawn(move || {
+        let (detail, error) = match get_installed_detail(&id2) {
+            Ok(d) => (Some(d), None),
+            Err(e) => (None, Some(e)),
+        };
+        super::push_proto::push_installed_ext_detail(&push, id2, detail, error);
+    });
+}
+
 // ─── ATTACHED (push_loop): reply over an mpsc channel, drained by the fold loop ───
 
 /// `HostCtl::StoreBrowse` while attached.
@@ -105,6 +118,21 @@ pub(super) fn spawn_list_installed_attached(tx: Sender<Vec<InstalledExtWire>>) {
     });
 }
 
+/// `HostCtl::GetInstalledExtensionDetail` while attached.
+pub(super) fn spawn_get_installed_detail_attached(
+    tx: Sender<(String, Option<InstalledExtensionDetailWire>, Option<String>)>,
+    id: String,
+) {
+    let id2 = id.clone();
+    std::thread::spawn(move || {
+        let (detail, error) = match get_installed_detail(&id2) {
+            Ok(d) => (Some(d), None),
+            Err(e) => (None, Some(e)),
+        };
+        let _ = tx.send((id2, detail, error));
+    });
+}
+
 // ─── shared blocking computation ───
 
 /// Read the locally-installed extension registry straight off `~/.koma/config.json` — the
@@ -125,6 +153,84 @@ fn installed_extensions() -> Vec<InstalledExtWire> {
             panels: read_ext_panels(&e.id),
         })
         .collect()
+}
+
+/// Read full detail for one installed extension: registry fields + on-disk
+/// manifest contributions. Returns `Err` when the extension is not in the
+/// registry (missing/unknown id).
+fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String> {
+    let cfg = AppConfig::load();
+    let entry = cfg
+        .installed_extensions
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| format!("extension '{id}' is not installed"))?;
+
+    // Read the manifest for contributions + name + description + requires.
+    // A missing/unreadable/unparsable manifest is now an explicit error for the
+    // detail path (not a silent degradation like the best-effort list panels).
+    let manifest = read_manifest(id)?;
+    let name = manifest.name.clone();
+    let description = manifest.description.clone();
+    let requires: Vec<String> = manifest
+        .requires
+        .iter()
+        .map(|grant| match grant {
+            koma_extension::protocol::Grant::AgentsRead => "agents:read".to_string(),
+            koma_extension::protocol::Grant::AgentsOrchestrate => "agents:orchestrate".to_string(),
+        })
+        .collect();
+    let panels = manifest.contributes.panels.iter().map(|p| PanelWire {
+            id: p.id.clone(),
+            title: p.title.clone(),
+            icon: p.icon.clone(),
+        }).collect();
+    let tools = manifest.contributes.tools.iter().map(|t| InstalledToolWire {
+            name: t.name.clone(),
+            description: t.description.clone(),
+        }).collect();
+    let models = manifest.contributes.models.iter().map(|mdl| InstalledModelWire {
+            id: mdl.id.clone(),
+            display_name: mdl.display_name.clone(),
+        }).collect();
+    let sub_agents = manifest.contributes.sub_agents.iter().map(|a| InstalledSubAgentWire {
+            name: a.name.clone(),
+            description: a.description.clone(),
+        }).collect();
+
+    Ok(InstalledExtensionDetailWire {
+        id: entry.id.clone(),
+        name,
+        version: entry.version.clone(),
+        description,
+        tier: entry.tier.clone(),
+        kind: entry.kind.clone(),
+        enabled: entry.enabled,
+        granted: entry.granted.clone(),
+        requires,
+        panels,
+        tools,
+        models,
+        sub_agents,
+    })
+}
+
+/// Read and parse `manifest.json` for extension `id`. Returns `Err` with a
+/// descriptive message on any failure (extensions dir error, missing manifest,
+/// unreadable manifest, invalid JSON/schema) — the caller surfaces these as
+/// explicit errors rather than silently degrading.
+fn read_manifest(id: &str) -> Result<koma_extension::protocol::ExtensionManifest, String> {
+    let dir = store::extensions_dir()
+        .map_err(|e| format!("extensions directory error: {e}"))?;
+    let path = dir.join(id).join("manifest.json");
+    if !path.exists() {
+        return Err(format!("missing manifest for extension '{id}'"));
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("unreadable manifest for extension '{id}': {e}"))?;
+    let manifest: koma_extension::protocol::ExtensionManifest = serde_json::from_str(&raw)
+        .map_err(|e| format!("invalid manifest for extension '{id}': {e}"))?;
+    Ok(manifest)
 }
 
 /// Read `contributes.panels` straight off `extensions_dir()/<id>/manifest.json` — the
