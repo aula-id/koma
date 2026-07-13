@@ -241,7 +241,7 @@ pub(super) fn handle_deny_plan(
     state.rest.fg_mut().approval_reason = None;
     answer_plan_ready(state, crate::tool::plan::plan_denied_text().to_string());
     // Mode stays Plan — deny means "keep discussing", so the plan checklist is
-    // DELIBERATELY preserved (the model revises it in place via todowrite). It is
+    // DELIBERATELY preserved (the model revises it in place via checklist). It is
     // cleared only on a real exit from Plan (approve / mode-switch), in
     // `set_agent_mode`'s leaving-plan branch.
     process_tools(state, fgi, client, handle);

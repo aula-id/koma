@@ -88,14 +88,14 @@ pub fn spawn_subagent(
     // by the main advertise fold (`tool_allowed_in_plan`), then strip two tools
     // that whitelist alone would let through: `seqthink` (main-agent-only — a
     // sub-agent has no user to ask "enter plan mode" on its behalf) and
-    // `todowrite` (its plan-mode interception lives in the main event loop's
-    // `process_tools`; a sub-agent that ran the generic `TodoWrite::run` instead
+    // `checklist` (its plan-mode interception lives in the main event loop's
+    // `process_tools`; a sub-agent that ran the generic `Checklist::run` instead
     // would write the real per-directory `memory/TODO.md`, breaking plan-mode
     // read-only). This only ever NARROWS whatever the agent declared.
     let mut tools = agent.effective_tools();
     if mode == AgentMode::Plan {
         tools.retain(|n| {
-            crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "todowrite")
+            crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "checklist")
         });
     }
     let convo = context::build_seed(agent, awareness, memory_md, task);

@@ -58,7 +58,7 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
 /// active, even if it slipped past the advertise fold. `git_operator` is allowed
 /// here at the tool-name level only; per-subcommand read-only filtering is a
 /// separate check, [`plan_git_subcommand_allowed`], since Plan may run READ git
-/// but not `commit`/`push`/`checkout`/etc. `todowrite` is allowed so the model can
+/// but not `commit`/`push`/`checkout`/etc. `checklist` is allowed so the model can
 /// maintain the plan checklist; while Plan is active it is FULLY INTERCEPTED (see
 /// `process_tools`) to write the session-scoped `plan_todos.md` + auto-managed
 /// rails, never the per-directory workspace `TODO.md`.
@@ -67,7 +67,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
         "read" | "grep" | "glob" | "dir_list" | "dir_cache_update" | "recall"
         | "web_search" | "web_fetch" | "pong" | "cd" | "git_cred"
         | "task" | "task_output" | "task_kill" | "bash_output" | "bash_kill"
-        | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "todowrite")
+        | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "checklist")
 }
 
 /// True when `subcmd` (the first element of a `git_operator` call's `args`
@@ -185,7 +185,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
-        Box::new(todo::TodoWrite),
+        Box::new(todo::Checklist),
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),
         Box::new(internet::WebDownload),

@@ -421,7 +421,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         // 3a-todo. Passive todo refresh: for every session whose mode is Todo,
         //     re-read memory/TODO.md periodically (same 500ms cadence as the TUI).
         //     This keeps the daemon's in-memory state current when the agent writes
-        //     todos via todowrite while the user has /open in a thin-client.
+        //     todos via checklist while the user has /open in a thin-client.
         for s in state.rest.sessions.iter_mut() {
             if s.closed { continue; }
             if let crate::app::mode::Mode::Todo(t) = &mut s.mode {

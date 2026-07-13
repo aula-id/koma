@@ -1,4 +1,4 @@
-//! Plan-mode interceptor blocks (`plan_enter`, `plan_ready`, `todowrite` while
+//! Plan-mode interceptor blocks (`plan_enter`, `plan_ready`, `checklist` while
 //! in Plan, and the Plan read-only enforcement gate), plus the shared
 //! `build_convo_context` preamble — split out of `intercepts.rs` for file size
 //! (pure code motion, no behaviour change; see the parent module doc for the
@@ -42,7 +42,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_enter(
         } else {
             state.rest.set_agent_mode(AgentMode::Plan);
             "entered plan mode - tools are read-only; explore, structure your \
-             reasoning with seqthink, build the checklist with todowrite, and \
+             reasoning with seqthink, build the checklist with checklist, and \
              call plan_ready with highlights + the full plan when confident"
                 .to_string()
         }
@@ -222,7 +222,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_ready(
     InterceptFlow::Return
 }
 
-pub(in crate::app::runtime::stream::tools) fn intercept_todowrite_plan(
+pub(in crate::app::runtime::stream::tools) fn intercept_checklist_plan(
     state: &mut AppState,
     sess_idx: usize,
     call: &ToolCall,
@@ -240,7 +240,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_todowrite_plan(
         .map(|s| s.plan_todos_path());
     let result = match plan_todos_path {
         Some(path) => {
-            // Rails are ALWAYS reset to Pending on an active todowrite — a
+            // Rails are ALWAYS reset to Pending on an active checklist — a
             // model call means planning is still in progress, so
             // "serve"/"save" cannot legitimately be done yet. This also
             // un-sticks the rails after a plan_ready → deny → re-plan cycle
@@ -303,7 +303,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_todowrite_plan(
             let saved = todo::save_todos_to(&path, &merged);
             if saved.is_ok() {
                 // Refresh the in-memory mirror so the GUI Explore "PLAN"
-                // section reflects this todowrite immediately (the
+                // section reflects this checklist immediately (the
                 // projection filters the locked rails back out on the wire).
                 state.rest.sessions[sess_idx].plan_todos = merged;
             }

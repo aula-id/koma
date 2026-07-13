@@ -292,14 +292,14 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
-        // Intercept `todowrite` WHILE IN PLAN MODE before the generic dispatch path
+        // Intercept `checklist` WHILE IN PLAN MODE before the generic dispatch path
         // (mirrors the `plan_ready` full interception): the model manages the plan
         // checklist, but the two locked rails are auto-appended and the per-directory
-        // `memory/TODO.md` is NOT touched. Outside Plan mode `todowrite` is left
+        // `memory/TODO.md` is NOT touched. Outside Plan mode `checklist` is left
         // UNTOUCHED — it falls through to its normal writer. Session-scoped: this
         // resolves THIS call's session (`sess_idx`), never a foreground assumption.
-        if mode == AgentMode::Plan && call.function.name == "todowrite" {
-            match intercepts::intercept_todowrite_plan(state, sess_idx, &call) {
+        if mode == AgentMode::Plan && call.function.name == "checklist" {
+            match intercepts::intercept_checklist_plan(state, sess_idx, &call) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,
                 InterceptFlow::Fallthrough => {}

@@ -46,7 +46,7 @@ export function UsageFooter() {
   const planDone = visiblePlan.filter((t) => t.status === 'completed').length
   // "PLAN 3/7" once a checklist exists (locked rails excluded from the count);
   // plain "PLAN" before the model has written one yet (mode flips to plan
-  // before the first todowrite lands).
+  // before the first checklist call lands).
   const planLabel = visiblePlan.length > 0 ? `PLAN ${planDone}/${visiblePlan.length}` : 'PLAN'
 
   return (

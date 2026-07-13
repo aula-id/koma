@@ -404,7 +404,7 @@ pub(super) fn serialize_and_push(
             c.path.hash(&mut h);
             c.status.hash(&mut h);
         }
-        // Fold the plan-todo checklist in so a todowrite/plan_ready/mode-flip
+        // Fold the plan-todo checklist in so a checklist/plan_ready/mode-flip
         // update re-emits the Snapshot.
         plan_todos.len().hash(&mut h);
         for t in &plan_todos {

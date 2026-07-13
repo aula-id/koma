@@ -621,7 +621,7 @@ impl AppStateRest {
                     // it immediately so an approved plan that carries into
                     // execution keeps showing its checklist instead of the GUI
                     // Explore "PLAN" section going blank until the model's next
-                    // `todowrite`. Empty when that file doesn't exist yet.
+                    // `checklist`. Empty when that file doesn't exist yet.
                     plan_todos_after = Some(crate::app::mode::todo::load_current_todos(sess, false));
                 }
                 sess.rebuild_system();

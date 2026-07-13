@@ -67,7 +67,7 @@ pub struct SessionSnapshot {
     /// outside it or when no plan is in progress). The two locked workflow rails
     /// now ride the wire too (flagged via `PlanTodoSnapshot::locked`) so the GUI
     /// shows the TUI-parity rails right after `plan_enter`, before the model's
-    /// first `todowrite` lands. Projected so the native-React GUI's Explore
+    /// first `checklist` lands. Projected so the native-React GUI's Explore
     /// "PLAN" section renders live; the TUI ignores it (its `/todo` overlay
     /// reads `plan_todos.md` directly). `#[serde(default, skip_serializing_if)]`
     /// keeps the no-plan case + version-skewed peers wire-free.

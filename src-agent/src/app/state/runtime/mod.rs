@@ -367,7 +367,7 @@ pub struct SessionRuntime {
     /// THIS session's Plan-mode todo checklist, mirroring `plan_todos.md` on disk
     /// (empty outside Plan mode / when no plan is in progress). Refreshed
     /// in-memory at every mutation site — `set_agent_mode`'s enter/leave-Plan rail
-    /// seed/clear, the `todowrite` interception, and `plan_ready`'s rail-completion
+    /// seed/clear, the `checklist` interception, and `plan_ready`'s rail-completion
     /// write — and on session load (mirrors `file_changes`'s refresh pattern).
     /// INCLUDES the two locked workflow rails ("serve plan to user"/"save plan to
     /// file & prompt approval") — they are filtered out at the snapshot projection
