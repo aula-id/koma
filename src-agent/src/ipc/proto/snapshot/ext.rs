@@ -88,6 +88,9 @@ pub struct StoreDetailWire {
 #[allow(dead_code)]
 pub struct InstalledExtWire {
     pub id: String,
+    /// Human-readable name from the installed manifest, when available.
+    #[serde(default)]
+    pub name: String,
     pub version: String,
     /// `"free"` | `"paid"`.
     pub tier: String,
@@ -144,6 +147,12 @@ pub struct InstalledExtensionDetailWire {
     pub models: Vec<InstalledModelWire>,
     #[serde(default)]
     pub sub_agents: Vec<InstalledSubAgentWire>,
+    /// Best-effort online store enrichment for this extension. `None` on the
+    /// initial local-only response; populated by a second push after the store
+    /// API responds. The GUI merges this into the displayed detail without
+    /// disturbing the local data ownership of installed version/permissions.
+    #[serde(default)]
+    pub store_detail: Option<StoreDetailWire>,
 }
 
 /// One contributed tool from an installed extension's manifest.

@@ -18,6 +18,22 @@ function renderApp() {
   )
 }
 
+// Chromium ignores autocomplete="off" on <body>. Force it on every
+// input/textarea so browser autofill suggestions don't appear.
+if (typeof MutationObserver !== 'undefined') {
+  const disableAutocomplete = (nodes: Node[]) => {
+    for (const n of nodes) {
+      if (n instanceof HTMLElement && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA')) {
+        n.setAttribute('autocomplete', 'off')
+      }
+    }
+  }
+  const observer = new MutationObserver((mutations) => {
+    for (const m of mutations) disableAutocomplete(Array.from(m.addedNodes))
+  })
+  observer.observe(document.documentElement, { childList: true, subtree: true })
+}
+
 if (typeof document !== 'undefined' && document.fonts) {
   const fonts = ['400', '500', '700'].map((w) => document.fonts.load(`${w} 12px KomaMono`))
   Promise.all(fonts)

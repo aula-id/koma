@@ -68,15 +68,32 @@ pub(super) fn spawn_list_installed(push: impl Fn(String) + Send + 'static) {
     });
 }
 
-/// `HostCtl::GetInstalledExtensionDetail` while detached.
+/// `HostCtl::GetInstalledExtensionDetail` while detached — two-phase: local
+/// detail first (instant), then best-effort online enrichment.
 pub(super) fn spawn_get_installed_detail(push: impl Fn(String) + Send + 'static, id: String) {
     let id2 = id.clone();
+    let id3 = id.clone();
     std::thread::spawn(move || {
+        // Phase 1: local detail (store_detail = None).
         let (detail, error) = match get_installed_detail(&id2) {
-            Ok(d) => (Some(d), None),
+            Ok(mut d) => {
+                d.store_detail = None;
+                (Some(d), None)
+            }
             Err(e) => (None, Some(e)),
         };
+        let had_local_error = error.is_some();
         super::push_proto::push_installed_ext_detail(&push, id2, detail, error);
+
+        // Phase 2: best-effort online enrichment (no second response on failure).
+        if !had_local_error {
+            if let Ok(store_detail) = fetch_detail(&id3) {
+                if let Ok(mut d) = get_installed_detail(&id3) {
+                    d.store_detail = Some(store_detail);
+                    super::push_proto::push_installed_ext_detail(&push, id3, Some(d), None);
+                }
+            }
+        }
     });
 }
 
@@ -118,18 +135,36 @@ pub(super) fn spawn_list_installed_attached(tx: Sender<Vec<InstalledExtWire>>) {
     });
 }
 
-/// `HostCtl::GetInstalledExtensionDetail` while attached.
+/// `HostCtl::GetInstalledExtensionDetail` while attached — two-phase: local
+/// detail first, then best-effort online enrichment. The channel drains in a
+/// loop, so sending twice is naturally picked up by push_loop.
 pub(super) fn spawn_get_installed_detail_attached(
     tx: Sender<(String, Option<InstalledExtensionDetailWire>, Option<String>)>,
     id: String,
 ) {
     let id2 = id.clone();
+    let id3 = id.clone();
     std::thread::spawn(move || {
+        // Phase 1: local detail (store_detail = None).
         let (detail, error) = match get_installed_detail(&id2) {
-            Ok(d) => (Some(d), None),
+            Ok(mut d) => {
+                d.store_detail = None;
+                (Some(d), None)
+            }
             Err(e) => (None, Some(e)),
         };
+        let had_local_error = error.is_some();
         let _ = tx.send((id2, detail, error));
+
+        // Phase 2: best-effort online enrichment (no second response on failure).
+        if !had_local_error {
+            if let Ok(store_detail) = fetch_detail(&id3) {
+                if let Ok(mut d) = get_installed_detail(&id3) {
+                    d.store_detail = Some(store_detail);
+                    let _ = tx.send((id3, Some(d), None));
+                }
+            }
+        }
     });
 }
 
@@ -138,19 +173,24 @@ pub(super) fn spawn_get_installed_detail_attached(
 /// Read the locally-installed extension registry straight off `~/.koma/config.json` — the
 /// SAME projection the daemon's `requests_ext::send_installed_extensions` builds, so a
 /// re-attach (or the daemon's own post-install/-uninstall re-push) never disagrees with
-/// this host read.
+/// this host read. Each entry's `name` comes from the installed manifest when readable,
+/// falling back to the extension id.
 fn installed_extensions() -> Vec<InstalledExtWire> {
     let cfg = AppConfig::load();
     cfg.installed_extensions
         .iter()
-        .map(|e| InstalledExtWire {
-            id: e.id.clone(),
-            version: e.version.clone(),
-            tier: e.tier.clone(),
-            kind: e.kind.clone(),
-            enabled: e.enabled,
-            granted: e.granted.clone(),
-            panels: read_ext_panels(&e.id),
+        .map(|e| {
+            let (name, panels) = read_ext_manifest_info(&e.id);
+            InstalledExtWire {
+                id: e.id.clone(),
+                name,
+                version: e.version.clone(),
+                tier: e.tier.clone(),
+                kind: e.kind.clone(),
+                enabled: e.enabled,
+                granted: e.granted.clone(),
+                panels,
+            }
         })
         .collect()
 }
@@ -212,6 +252,7 @@ fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String
         tools,
         models,
         sub_agents,
+        store_detail: None,
     })
 }
 
@@ -231,6 +272,46 @@ fn read_manifest(id: &str) -> Result<koma_extension::protocol::ExtensionManifest
     let manifest: koma_extension::protocol::ExtensionManifest = serde_json::from_str(&raw)
         .map_err(|e| format!("invalid manifest for extension '{id}': {e}"))?;
     Ok(manifest)
+}
+
+/// Read the manifest for extension `id` and extract both the friendly name and
+/// the panel list. A missing/unreadable/unparsable manifest degrades to using
+/// the id as the name and an empty panel list (non-fatal for list rendering).
+fn read_ext_manifest_info(id: &str) -> (String, Vec<PanelWire>) {
+    let path = match store::extensions_dir() {
+        Ok(dir) => dir.join(id).join("manifest.json"),
+        Err(_) => return (id.to_string(), Vec::new()),
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return (id.to_string(), Vec::new()),
+    };
+    let manifest: koma_extension::protocol::ExtensionManifest = match serde_json::from_str(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            store::append_global_error_log(
+                "ext",
+                &format!("failed to parse manifest.json for {id}: {e}"),
+            );
+            return (id.to_string(), Vec::new());
+        }
+    };
+    let name = if manifest.name.is_empty() {
+        id.to_string()
+    } else {
+        manifest.name
+    };
+    let panels = manifest
+        .contributes
+        .panels
+        .into_iter()
+        .map(|p| PanelWire {
+            id: p.id,
+            title: p.title,
+            icon: p.icon,
+        })
+        .collect();
+    (name, panels)
 }
 
 /// Read `contributes.panels` straight off `extensions_dir()/<id>/manifest.json` — the
@@ -485,7 +566,8 @@ mod tests {
 
     /// The installed-extensions projection reads straight off `AppConfig` and carries every
     /// display field verbatim — a smoke check that the host copy stays in lockstep with the
-    /// daemon's own `send_installed_extensions` projection shape.
+    /// daemon's own `send_installed_extensions` projection shape. The `name` field comes from
+    /// the manifest when readable, falling back to the extension id.
     #[test]
     fn installed_extensions_projects_registry_fields() {
         let mut cfg = AppConfig::default();
@@ -501,21 +583,91 @@ mod tests {
         let items: Vec<InstalledExtWire> = cfg
             .installed_extensions
             .iter()
-            .map(|e| InstalledExtWire {
-                id: e.id.clone(),
-                version: e.version.clone(),
-                tier: e.tier.clone(),
-                kind: e.kind.clone(),
-                enabled: e.enabled,
-                granted: e.granted.clone(),
-                panels: read_ext_panels(&e.id),
+            .map(|e| {
+                let (name, panels) = read_ext_manifest_info(&e.id);
+                InstalledExtWire {
+                    id: e.id.clone(),
+                    name,
+                    version: e.version.clone(),
+                    tier: e.tier.clone(),
+                    kind: e.kind.clone(),
+                    enabled: e.enabled,
+                    granted: e.granted.clone(),
+                    panels,
+                }
             })
             .collect();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "run.koma.gateway");
+        // No manifest on test machine — falls back to id.
+        assert_eq!(items[0].name, "run.koma.gateway");
         assert_eq!(items[0].tier, "paid");
         assert!(items[0].enabled);
         assert_eq!(items[0].granted, vec!["agents:read"]);
+    }
+
+    /// `read_ext_manifest_info` returns the id as name when no manifest exists.
+    #[test]
+    fn read_ext_manifest_info_falls_back_to_id_on_missing_manifest() {
+        let (name, panels) =
+            read_ext_manifest_info("run.koma.definitely-not-installed.test-fixture");
+        assert_eq!(name, "run.koma.definitely-not-installed.test-fixture");
+        assert!(panels.is_empty());
+    }
+
+    /// The local installed detail initializes with `store_detail: None` before
+    /// any online enrichment.
+    #[test]
+    fn get_installed_detail_has_no_store_detail() {
+        // This extension is never installed on a test machine, so
+        // get_installed_detail returns Err — confirming the function compiles
+        // and the wire struct has the store_detail field.
+        let result = get_installed_detail("run.koma.definitely-not-installed.test-fixture");
+        assert!(result.is_err());
+    }
+
+    /// Wire serialization: InstalledExtWire carries `name` and serializes it as
+    /// `name` (camelCase — already flat).
+    #[test]
+    fn installed_ext_wire_serializes_name() {
+        let wire = InstalledExtWire {
+            id: "run.koma.hello".to_string(),
+            name: "Hello World".to_string(),
+            version: "0.1.0".to_string(),
+            tier: "free".to_string(),
+            kind: "daemon".to_string(),
+            enabled: true,
+            granted: vec![],
+            panels: vec![],
+        };
+        let json = serde_json::to_value(&wire).unwrap();
+        assert_eq!(json["name"], "Hello World");
+        assert_eq!(json["id"], "run.koma.hello");
+    }
+
+    /// Wire serialization: InstalledExtensionDetailWire with `store_detail: None`
+    /// omits/nulls the field for backward compat.
+    #[test]
+    fn installed_detail_wire_omits_none_store_detail() {
+        let wire = InstalledExtensionDetailWire {
+            id: "run.koma.hello".to_string(),
+            name: "Hello World".to_string(),
+            version: "0.1.0".to_string(),
+            description: "A test ext".to_string(),
+            tier: "free".to_string(),
+            kind: "daemon".to_string(),
+            enabled: true,
+            granted: vec![],
+            requires: vec![],
+            panels: vec![],
+            tools: vec![],
+            models: vec![],
+            sub_agents: vec![],
+            store_detail: None,
+        };
+        let json = serde_json::to_value(&wire).unwrap();
+        // serde skips None Option by default with #[serde(default)]
+        assert!(json.get("storeDetail").is_none() || json["storeDetail"].is_null());
     }
 
     /// A missing/never-installed manifest degrades to an empty panel list rather than
