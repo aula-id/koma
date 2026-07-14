@@ -217,15 +217,17 @@ pub fn to_wire_with_images(
                 // practice those paths never carry attachments.
                 WireContent::Parts(attachment_parts(&m.content, &m.attachments, image_ctx))
             } else {
-                // Strip a leading SHELL_MARK (`!`-shell entry) OR BASH_NUDGE_MARK
-                // (bg-bash completion nudge) so the model reads the clean text; the
-                // invisible mark is a transcript-render device only. A no-op for any
-                // other message. Compute the stripped slice FIRST (borrows end), then
-                // fall back to the owned content.
+                // Strip a leading SHELL_MARK (`!`-shell entry), BASH_NUDGE_MARK
+                // (bg-bash completion nudge), or EXT_PROMPT_MARK (extension-prompt
+                // injection) so the model reads the clean text; the invisible mark is
+                // a transcript-render device only. A no-op for any other message.
+                // Compute the stripped slice FIRST (borrows end), then fall back to
+                // the owned content.
                 let stripped = m
                     .content
                     .strip_prefix(crate::dto::chat::SHELL_MARK)
                     .or_else(|| m.content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK))
+                    .or_else(|| m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
                     .map(str::to_string);
                 let text = stripped.unwrap_or(m.content);
                 // Escape whitelisted reasoning tags on the WIRE COPY ONLY (never

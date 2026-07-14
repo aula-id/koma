@@ -47,6 +47,7 @@ use koma_extension::protocol::Grant;
 use crate::app::runtime::{spawn_or_queue, SpawnOutcome};
 use crate::app::state::{AppState, SessionRuntime};
 use crate::app::subagent::SubAgentStatus;
+use crate::model::app_config::ModelRole;
 use crate::model::store;
 use crate::service::openrouter::OpenRouterClient;
 
@@ -402,15 +403,34 @@ pub fn handle_ext_call(
         "agents.kill" => {
             let _ = reply.send(broker_kill(state, &ext_id, &params));
         }
-        // WAVE-3 STUB: implemented in W6/W7. Gate + routing + by-value reply land now.
-        "sessions.list"
-        | "sessions.create"
-        | "sessions.switch"
-        | "sessions.spawn_into"
-        | "chat.prompt"
-        | "models.invoke"
-        | "context.set"
-        | "context.clear" => {
+        "chat.prompt" => {
+            // Resolve the ACTIVE session (the same fallback `agents.spawn` uses), then
+            // BUFFER the prompt — never inject from here (that risks corrupting an
+            // in-flight turn's tool_call/tool_result ordering). The event-loop
+            // `deferred` drain injects the buffer as one synthetic user turn when the
+            // session next goes idle. Synchronous reply either way.
+            let v = match active_session_idx(state) {
+                Some(sess_idx) => broker_chat_prompt(state, &ext_id, sess_idx, &params),
+                None => json!({ "error": "no active session" }),
+            };
+            let _ = reply.send(v);
+        }
+        "models.invoke" => {
+            // Validates + resolves ON the loop, then either replies a sync error
+            // inline OR moves `reply` into a spawned one-shot task (25s < the 30s
+            // reader cap) that answers on completion — so the model call never
+            // blocks the event loop. OWNS the reply from here.
+            broker_models_invoke(state, handle, client, &params, reply);
+        }
+        "context.set" => {
+            let _ = reply.send(broker_context_set(state, &ext_id, &params));
+        }
+        "context.clear" => {
+            let _ = reply.send(broker_context_clear(state, &ext_id));
+        }
+        // WAVE-3 STUB: the `sessions.*` family lands in W7. Gate + routing + by-value
+        // reply already here; only the bodies are owed.
+        "sessions.list" | "sessions.create" | "sessions.switch" | "sessions.spawn_into" => {
             let _ = reply.send(json!({ "error": "not implemented" }));
         }
         // Unreachable: method_permitted already rejected anything else above.
@@ -738,6 +758,199 @@ fn parse_ext_agent_id(params: &Value) -> Option<u64> {
     }
 }
 
+/// `chat.prompt { text }` → BUFFER `text` into the ACTIVE session's
+/// [`pending_ext_prompts`](crate::app::state::SessionRuntime::pending_ext_prompts)
+/// for the event loop to inject as one synthetic user turn when the session next
+/// goes idle. NEVER injects here (that would risk corrupting an in-flight turn's
+/// tool_call/tool_result ordering) — buffer-only, synchronous reply.
+///
+/// Validation, IN ORDER: `text` trimmed non-empty; `text.len() <= 16384` (16KB);
+/// a prompt IDENTICAL to the buffer's LAST entry is a consecutive-duplicate and is
+/// dropped (reports the unchanged queue length, no growth — checked BEFORE the cap
+/// so a repeat never trips it); a buffer already at the cap of 5 rejects further
+/// prompts. Otherwise `(ext_id, text)` is pushed. Reply `{ "queued": <len> }` on
+/// accept/dedupe, else `{ "error": ... }`.
+fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, params: &Value) -> Value {
+    let text = params
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if text.is_empty() {
+        return json!({ "error": "chat.prompt requires a non-empty 'text'" });
+    }
+    if text.len() > 16_384 {
+        return json!({ "error": "prompt exceeds 16KB" });
+    }
+    let buf = &mut state.rest.sessions[sess_idx].pending_ext_prompts;
+    // Consecutive-duplicate dedupe FIRST (before the cap): an extension resending the
+    // same text as the last buffered prompt gets the unchanged length back with no
+    // append, so it can neither fill the buffer with duplicates nor trip the cap on a
+    // repeat. Compared against the LAST entry only, matching "consecutive".
+    if buf.last().map(|(_, t)| t.as_str() == text).unwrap_or(false) {
+        return json!({ "queued": buf.len() });
+    }
+    if buf.len() >= 5 {
+        return json!({ "error": "prompt queue full (5)" });
+    }
+    buf.push((ext_id.to_string(), text.to_string()));
+    json!({ "queued": buf.len() })
+}
+
+/// `models.invoke { role?, system?, prompt }` → a ONE-SHOT completion against the
+/// resolved model for `role` (default `"main"`), run OFF the event loop.
+///
+/// Validated + resolved SYNCHRONOUSLY on the loop: `prompt` non-empty and
+/// `<= 32768` bytes; `role` one of `main`/`awareness`/`safeguard`/`compactor`/
+/// `planner` (unknown → error); [`Settings`](crate::model::settings::Settings)
+/// cloned from the FOREGROUND session (else default); the route resolved via
+/// [`resolve_role_dispatch`](crate::app::resolve::resolve_role_dispatch) (koma-free
+/// backs Main/Awareness/Safeguard/Compactor; Planner has no fallback → `None` is an
+/// error), gated on [`Resolved::is_routable`](crate::app::resolve::Resolved::is_routable)
+/// / [`is_usable`](crate::app::resolve::Resolved::is_usable); a client must exist.
+/// Any of these fail → a sync `{"error": ...}` reply and NO task is spawned.
+///
+/// Once validated, an owned `Resolved` + an `Arc` clone of the client + the reply
+/// oneshot MOVE into a spawned task (the `spawn_awareness_recompute` pattern) that
+/// runs `complete_with` under a 25s `tokio::time::timeout` — 25s deliberately
+/// UNDERCUTS the reader task's 30s `EXT_CALL_TIMEOUT` so the extension always
+/// receives a value rather than a transport timeout. Reply `{ "output": <text>,
+/// "model": <id> }` on success, `{ "error": "model call failed: <e>" }` on a call
+/// error, or `{ "error": "model call timed out" }`. The event loop never blocks.
+fn broker_models_invoke(
+    state: &AppState,
+    handle: &tokio::runtime::Handle,
+    client: &Option<Arc<OpenRouterClient>>,
+    params: &Value,
+    reply: tokio::sync::oneshot::Sender<Value>,
+) {
+    let prompt = params.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    if prompt.trim().is_empty() {
+        let _ = reply.send(json!({ "error": "models.invoke requires a non-empty 'prompt'" }));
+        return;
+    }
+    if prompt.len() > 32_768 {
+        let _ = reply.send(json!({ "error": "prompt exceeds 32KB" }));
+        return;
+    }
+    // role: default "main"; an unrecognised value is an error (never silently Main).
+    let role_str = params
+        .get("role")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main");
+    let role = match role_str {
+        "main" => ModelRole::Main,
+        "awareness" => ModelRole::Awareness,
+        "safeguard" => ModelRole::Safeguard,
+        "compactor" => ModelRole::Compactor,
+        "planner" => ModelRole::Planner,
+        _ => {
+            let _ = reply.send(json!({ "error": "unknown role" }));
+            return;
+        }
+    };
+    // Optional system prompt (absent / blank → no System message prepended).
+    let system = params
+        .get("system")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // Settings from the FOREGROUND session (else default) — mirrors how the
+    // stream/awareness snapshots obtain a `Settings` before a resolve.
+    let settings = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.settings.clone())
+        .unwrap_or_default();
+
+    // Resolve the requested role to a concrete dispatch route.
+    let route = match crate::app::resolve::resolve_role_dispatch(&state.rest.config, &settings, role)
+    {
+        Some(r) => r,
+        None => {
+            let _ = reply.send(json!({ "error": format!("no usable route for role {role_str}") }));
+            return;
+        }
+    };
+    if !route.is_routable() {
+        let _ = reply.send(json!({
+            "error": format!("role {role_str} route is not dispatchable (Anthropic-compatible not wired)")
+        }));
+        return;
+    }
+    if !route.is_usable() {
+        let _ = reply.send(json!({ "error": format!("role {role_str} route has no usable auth") }));
+        return;
+    }
+    let Some(client_arc) = client.as_ref() else {
+        let _ = reply.send(json!({ "error": "no llm client" }));
+        return;
+    };
+
+    // Owned move-ins for the 'static task (it holds NO borrow of `state`): the
+    // resolved route, an `Arc` clone of the client, the owned prompt, and the reply
+    // oneshot. The model id is snapshotted for the success reply.
+    let client_task = Arc::clone(client_arc);
+    let model_id = route.model_id.clone();
+    let prompt_owned = prompt.to_string();
+    handle.spawn(async move {
+        let mut messages: Vec<crate::dto::chat::ChatMessage> = Vec::new();
+        if let Some(sys) = system {
+            messages.push(crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::System, sys));
+        }
+        messages.push(crate::dto::chat::ChatMessage::new(
+            crate::dto::chat::Role::User,
+            prompt_owned,
+        ));
+        // 25s < the 30s reader cap: the extension always gets a value back.
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            client_task.complete_with(route.conn(), &route.model_id, route.provider(), messages),
+        )
+        .await;
+        let v = match out {
+            Ok(Ok(s)) => json!({ "output": s, "model": model_id }),
+            Ok(Err(e)) => json!({ "error": format!("model call failed: {e}") }),
+            Err(_) => json!({ "error": "model call timed out" }),
+        };
+        let _ = reply.send(v);
+    });
+}
+
+/// `context.set { text }` → PUBLISH `text` as this extension's persistent context
+/// blob, keyed by the CALLER's `ext_id` (so an extension can only ever read/replace
+/// its OWN entry, never another's). The blob rides the System-prompt VOLATILE TAIL
+/// on every turn (see `stream::run::append_ext_context`), AFTER the cache split, so
+/// it survives compaction without busting the cached head. `text.len() > 8192`
+/// (8KB) is rejected; an empty/whitespace `text` REMOVES the entry (publishing
+/// "nothing" is a clear). Reply `{ "ok": true }` on any accepted set/remove.
+fn broker_context_set(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    if text.len() > 8_192 {
+        return json!({ "error": "context exceeds 8KB" });
+    }
+    if text.trim().is_empty() {
+        state.rest.ext_context.remove(ext_id);
+    } else {
+        state.rest.ext_context.insert(ext_id.to_string(), text.to_string());
+    }
+    json!({ "ok": true })
+}
+
+/// `context.clear {}` → REMOVE this extension's published context blob (keyed by the
+/// caller's `ext_id`; other extensions' blobs are untouched). Idempotent — clearing
+/// an absent entry still replies `{ "ok": true }`.
+fn broker_context_clear(state: &mut AppState, ext_id: &str) -> Value {
+    state.rest.ext_context.remove(ext_id);
+    json!({ "ok": true })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -940,10 +1153,12 @@ mod tests {
     }
 
     /// Drive [`handle_ext_call`] for one method and return the JSON it replies on
-    /// the request's oneshot. Every arm in this wave replies INLINE (no task spawn),
-    /// so the oneshot is already fulfilled by the time `handle_ext_call` returns and
-    /// `try_recv` never races — this restores the old `-> Value` test ergonomics
-    /// after the by-value / async-ready signature change, with identical semantics.
+    /// the request's oneshot. Every arm THESE TESTS exercise replies INLINE (no task
+    /// spawn) — `models.invoke` only moves the reply into a spawned task once a
+    /// client AND a resolvable route exist, which no fixture here provides, so the
+    /// oneshot is always fulfilled by the time `handle_ext_call` returns and
+    /// `try_recv` never races — restoring the old `-> Value` test ergonomics after
+    /// the by-value / async-ready signature change, with identical semantics.
     fn call_broker(
         state: &mut AppState,
         handle: &tokio::runtime::Handle,
@@ -1435,5 +1650,186 @@ mod tests {
             .expect("session B location resolves");
         assert_eq!(found_b, ext_id_b);
         assert!(!notify_b);
+    }
+
+    /// W6 chat.prompt: BUFFERS into the active session's `pending_ext_prompts`
+    /// (never injects here). Blank rejected; consecutive-dup returns the unchanged
+    /// length without growth; cap 5 (the 6th distinct errors); >16KB rejected; each
+    /// buffered entry carries the CALLER's ext id.
+    #[test]
+    fn chat_prompt_buffers_with_cap_dedupe_and_size_limit() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+        let prompt = |state: &mut AppState, text: &str| {
+            call_broker(
+                state,
+                rt.handle(),
+                &client,
+                "test.ext",
+                &[Grant::ChatPrompt],
+                "chat.prompt",
+                json!({ "text": text }),
+            )
+        };
+
+        // Blank text → rejected, nothing buffered.
+        let blank = prompt(&mut state, "   ");
+        assert!(blank.get("error").is_some(), "blank text must be rejected, got {blank}");
+        assert!(state.rest.sessions[0].pending_ext_prompts.is_empty());
+
+        // First accepted → queued: 1. Consecutive dup → still 1, NO growth.
+        assert_eq!(prompt(&mut state, "one"), json!({ "queued": 1 }));
+        assert_eq!(prompt(&mut state, "one"), json!({ "queued": 1 }));
+        assert_eq!(state.rest.sessions[0].pending_ext_prompts.len(), 1);
+
+        // Fill to the cap of 5 with distinct texts.
+        assert_eq!(prompt(&mut state, "two"), json!({ "queued": 2 }));
+        assert_eq!(prompt(&mut state, "three"), json!({ "queued": 3 }));
+        assert_eq!(prompt(&mut state, "four"), json!({ "queued": 4 }));
+        assert_eq!(prompt(&mut state, "five"), json!({ "queued": 5 }));
+
+        // 6th distinct → cap error; buffer stays at 5.
+        let full = prompt(&mut state, "six");
+        assert!(
+            full.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("queue full")),
+            "the 6th distinct prompt must hit the cap, got {full}"
+        );
+        assert_eq!(state.rest.sessions[0].pending_ext_prompts.len(), 5);
+        assert!(
+            state.rest.sessions[0].pending_ext_prompts.iter().all(|(id, _)| id == "test.ext"),
+            "every buffered entry must carry the caller's ext id"
+        );
+
+        // >16KB → rejected (independent of the cap), on a fresh session.
+        let mut fresh = fixture_state();
+        let big = "x".repeat(16_385);
+        let toobig = call_broker(
+            &mut fresh,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::ChatPrompt],
+            "chat.prompt",
+            json!({ "text": big }),
+        );
+        assert!(
+            toobig.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("16KB")),
+            "a >16KB prompt must be rejected, got {toobig}"
+        );
+        assert!(fresh.rest.sessions[0].pending_ext_prompts.is_empty());
+    }
+
+    /// W6 context.set / context.clear: keyed by the CALLER's ext id, 8KB
+    /// boundary-exact (8192 ok, 8193 err), blank text clears, two ext ids fully
+    /// isolated, and clear is idempotent.
+    #[test]
+    fn context_set_clear_isolation_and_size_boundary() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+        let set = |state: &mut AppState, ext: &str, text: String| {
+            call_broker(
+                state,
+                rt.handle(),
+                &client,
+                ext,
+                &[Grant::ContextPublish],
+                "context.set",
+                json!({ "text": text }),
+            )
+        };
+
+        // 8192 bytes EXACTLY → OK (boundary).
+        assert_eq!(set(&mut state, "a.ext", "x".repeat(8192)), json!({ "ok": true }));
+        assert_eq!(state.rest.ext_context.get("a.ext").map(String::len), Some(8192));
+
+        // 8193 bytes → rejected; the prior blob is UNCHANGED.
+        let toobig = set(&mut state, "a.ext", "y".repeat(8193));
+        assert!(
+            toobig.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("8KB")),
+            "8193 bytes must be rejected, got {toobig}"
+        );
+        assert_eq!(state.rest.ext_context.get("a.ext").map(String::len), Some(8192));
+
+        // A DIFFERENT ext writes its OWN blob — a.ext's is untouched (isolation).
+        assert_eq!(set(&mut state, "b.ext", "b-data".to_string()), json!({ "ok": true }));
+        assert_eq!(state.rest.ext_context.get("a.ext").map(String::len), Some(8192));
+        assert_eq!(state.rest.ext_context.get("b.ext").map(String::as_str), Some("b-data"));
+
+        // Blank text CLEARS the caller's OWN entry only.
+        assert_eq!(set(&mut state, "a.ext", "   ".to_string()), json!({ "ok": true }));
+        assert!(state.rest.ext_context.get("a.ext").is_none());
+        assert_eq!(state.rest.ext_context.get("b.ext").map(String::as_str), Some("b-data"));
+
+        // context.clear removes the caller's entry, leaving others intact.
+        let cleared = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "b.ext",
+            &[Grant::ContextPublish],
+            "context.clear",
+            json!({}),
+        );
+        assert_eq!(cleared, json!({ "ok": true }));
+        assert!(state.rest.ext_context.get("b.ext").is_none());
+
+        // Clearing an already-absent entry is idempotent — still ok.
+        let again = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "b.ext",
+            &[Grant::ContextPublish],
+            "context.clear",
+            json!({}),
+        );
+        assert_eq!(again, json!({ "ok": true }));
+    }
+
+    /// W6 models.invoke SYNC validation (the network path is untested, matching the
+    /// awareness stance): unknown role, empty prompt, >32KB, and no-client all reply
+    /// INLINE before any task is spawned.
+    #[test]
+    fn models_invoke_sync_validation_errors() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+        let invoke = |state: &mut AppState, params: Value| {
+            call_broker(
+                state,
+                rt.handle(),
+                &client,
+                "test.ext",
+                &[Grant::ModelsInvoke],
+                "models.invoke",
+                params,
+            )
+        };
+
+        // Unknown role → error.
+        let bad_role = invoke(&mut state, json!({ "role": "wizard", "prompt": "hi" }));
+        assert!(
+            bad_role.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown role")),
+            "an unknown role must error, got {bad_role}"
+        );
+
+        // Empty prompt → error.
+        let empty = invoke(&mut state, json!({ "prompt": "   " }));
+        assert!(empty.get("error").is_some(), "an empty prompt must error, got {empty}");
+
+        // >32KB prompt → error.
+        let big = invoke(&mut state, json!({ "prompt": "x".repeat(32_769) }));
+        assert!(big.get("error").is_some(), "a >32KB prompt must error, got {big}");
+
+        // Valid role + prompt but NO client (the fixture has none) → "no llm client".
+        // role=main resolves to koma-free (routable + usable), so validation reaches
+        // the client check rather than short-circuiting on the route.
+        let no_client = invoke(&mut state, json!({ "role": "main", "prompt": "hi" }));
+        assert!(
+            no_client.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("no llm client")),
+            "a missing client must error, got {no_client}"
+        );
     }
 }
