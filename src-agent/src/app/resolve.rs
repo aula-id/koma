@@ -881,3 +881,9 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
 #[cfg(test)]
 #[path = "resolve_test.rs"]
 mod tests;
+
+// W13: additional regression suite for the ext-preferred slug-binding seam — pure addition,
+// SEPARATE sibling module from `tests` above (never touches it).
+#[cfg(test)]
+#[path = "resolve_binding_test.rs"]
+mod resolve_binding_test;

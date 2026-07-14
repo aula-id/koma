@@ -1160,3 +1160,9 @@ mod ext_oauth_tests {
         assert_eq!(conn.expires_at, 0);
     }
 }
+
+// W13: additional regression suite — pure addition, sibling file, never touches the
+// `ext_oauth_tests` module above.
+#[cfg(test)]
+#[path = "requests_oauth_test.rs"]
+mod requests_oauth_test;

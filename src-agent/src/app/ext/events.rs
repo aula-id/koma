@@ -219,3 +219,9 @@ mod tests {
         );
     }
 }
+
+// W13: additional regression suite — pure addition, sibling file, never touches the `tests`
+// module above.
+#[cfg(test)]
+#[path = "events_test.rs"]
+mod events_test;
