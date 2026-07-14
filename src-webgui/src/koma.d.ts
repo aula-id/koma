@@ -319,6 +319,19 @@ declare global {
     // on-disk manifest contributions (tools/models/panels/sub-agents). Reply
     // lands as InstalledExtensionDetail.
     | { r: 'GetInstalledExtensionDetail'; id: string }
+    // A GUI extension PANEL's request to its backing extension daemon (W9
+    // panel bridge). The panel iframe (`koma://extension/<extId>/…`) posts a
+    // `{koma:'panel', v:1, kind:'msg', reqId, payload}` message; the
+    // panelBridge listener (lib/panelBridge.ts) attributes it via the
+    // registry (never trusts `extId`/`panelId` from message content) and
+    // forwards it here. The host relays it to the attached daemon as
+    // ClientRequest::ExtPanelMsg, which auto-starts the extension + invokes
+    // its `panel.msg` and answers OUT-OF-BAND with an ExtPanelReply push the
+    // host re-pushes (matches the Rust GuiReq::ExtPanelMsg). `reqId`
+    // correlates the reply; `payload` is extension-defined. Attached-only —
+    // with no attached daemon the panelBridge listener itself replies
+    // locally instead of sending this.
+    | { r: 'ExtPanelMsg'; extId: string; panelId: string; reqId?: string; payload: unknown }
     // Source Control "GIT" panel opened / refreshed: fetch a host-computed git
     // status (branch, ahead/behind, staged + unstaged file lists) for the
     // foreground session's repo. Serviced ENTIRELY host-side — works
