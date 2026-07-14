@@ -131,6 +131,32 @@ pub struct SubAgent {
     pub usage_cost: f64,
 }
 
+/// Per-call spawn overrides a caller may supply to steer a SINGLE delegation
+/// onto a different model/effort than its [`crate::model::agent_def::AgentDef`]
+/// declares, without mutating the registry entry itself.
+///
+/// `None` fields mean "use the agent definition's own value" — every
+/// non-extension spawn path (the model-callable `task` tool, `/task`, and the
+/// queued→running promotion via `try_start_pending`) passes `None` for the
+/// WHOLE struct (no overrides at all), so those paths see zero behavior
+/// change. Only `agents.spawn`'s optional `model`/`effort` params (see
+/// `app::ext::broker::broker_spawn`) ever construct a `Some`.
+///
+/// Applied in [`spawn::spawn_subagent`]: a `Some(model)` REPLACES the agent's
+/// `model` slug (and clears `model_uuid`/`provider_uuid`, so the slug re-resolves
+/// fresh through [`crate::app::resolve::resolve_agent`]'s step 1c rather than
+/// falling back to a now-stale registered entry); a `Some(effort)` REPLACES the
+/// agent's `effort`. Neither mutates the registry's [`crate::model::agent_def::AgentDef`]
+/// — the override is applied to a throwaway clone used only for THIS spawn's
+/// route resolution.
+#[derive(Debug, Clone, Default)]
+pub struct SpawnOverrides {
+    /// Overrides the agent's `model` slug for this spawn only.
+    pub model: Option<String>,
+    /// Overrides the agent's `effort` for this spawn only.
+    pub effort: Option<String>,
+}
+
 /// A delegation that has been ACCEPTED but not yet started because all
 /// [`MAX_SUBAGENTS`] slots are occupied. It waits at the back of
 /// [`AppStateRest::pending_subagents`](crate::app::state::AppStateRest::pending_subagents)
@@ -144,6 +170,11 @@ pub struct SubAgent {
 /// `pending_subagent_calls` at enqueue time, so a parked main turn waits for the
 /// queued delegation just as it waits for a running one — its result fills when
 /// the queued agent eventually runs and finishes.
+///
+/// `PendingSubagent` is NEVER persisted to disk (unlike the running [`SubAgent`]
+/// list — see `bg_persist::persist_subagents`, which only serializes `subagents`)
+/// — it carries no `Serialize`/`Deserialize` derive at all, so `overrides` needs
+/// no `#[serde(default)]` back-compat guard.
 #[derive(Debug, Clone)]
 pub struct PendingSubagent {
     /// Stable id pre-allocated at enqueue time; the spawned [`SubAgent`] takes it.
@@ -160,4 +191,8 @@ pub struct PendingSubagent {
     /// detached (fires the completion nudge, never parks) once `try_start_pending`
     /// promotes it. `false` for a blocking delegation or a `/task` enqueue.
     pub detached: bool,
+    /// Carries any per-call spawn overrides (model/effort) across the
+    /// queued→running promotion, so a queued `agents.spawn` override survives
+    /// the wait for a free slot exactly like `detached` does.
+    pub overrides: Option<SpawnOverrides>,
 }

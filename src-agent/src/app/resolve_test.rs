@@ -347,3 +347,302 @@ fn session_reassigned_main_wins_over_leftover_global_koma_free_main() {
     assert_eq!(resolved.endpoint, "https://real.example");
     assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
 }
+
+// ---------------------------------------------------------------------------
+// Wave 4: find_model_entry_by_slug + resolve_agent step 1c (slug reference) +
+// spawn-override resolution.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_model_entry_by_slug_matches_by_model_id_name_uuid_case_insensitive() {
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-1".to_string(),
+        name: "prov".to_string(),
+        endpoint: "https://example.com".to_string(),
+        api_key: "key".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-uuid-1".to_string(),
+        name: "My Model".to_string(),
+        model_id: "vendor/model-a".to_string(),
+        provider_uuid: "prov-1".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let by_id = find_model_entry_by_slug(&config, &settings, "VENDOR/Model-A", None)
+        .expect("matches by model_id, case-insensitive");
+    assert_eq!(by_id.uuid, "model-uuid-1");
+
+    let by_name = find_model_entry_by_slug(&config, &settings, "my model", None)
+        .expect("matches by name, case-insensitive");
+    assert_eq!(by_name.uuid, "model-uuid-1");
+
+    let by_uuid = find_model_entry_by_slug(&config, &settings, "MODEL-UUID-1", None)
+        .expect("matches by uuid, case-insensitive");
+    assert_eq!(by_uuid.uuid, "model-uuid-1");
+}
+
+#[test]
+fn find_model_entry_by_slug_session_models_win_over_global() {
+    let mut config = AppConfig::default();
+    config.models.push(ModelEntry {
+        uuid: "global-uuid".to_string(),
+        name: "Global".to_string(),
+        model_id: "shared/slug".to_string(),
+        provider_uuid: "prov-global".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings {
+        session_models: vec![ModelEntry {
+            uuid: "session-uuid".to_string(),
+            name: "Session".to_string(),
+            model_id: "shared/slug".to_string(),
+            provider_uuid: "prov-session".to_string(),
+            ..ModelEntry::default()
+        }],
+        ..Default::default()
+    };
+
+    let hit = find_model_entry_by_slug(&config, &settings, "shared/slug", None).expect("matches");
+    assert_eq!(hit.uuid, "session-uuid", "session_models must win over config.models on the same slug");
+}
+
+#[test]
+fn find_model_entry_by_slug_miss_returns_none() {
+    let config = AppConfig::default();
+    let settings = Settings::default();
+    assert!(find_model_entry_by_slug(&config, &settings, "nonexistent/slug", None).is_none());
+}
+
+#[test]
+fn find_model_entry_by_slug_preferred_provider_wins_over_earlier_general_match() {
+    let mut config = AppConfig::default();
+    // Two entries sharing the same slug on DIFFERENT providers; the earlier
+    // (insertion-order) general-scan match is "other", but a preferred set
+    // steers the lookup to "wanted" instead — the seam a later wave uses to
+    // prefer an extension's OWN registered provider.
+    config.models.push(ModelEntry {
+        uuid: "other-uuid".to_string(),
+        name: "Other".to_string(),
+        model_id: "shared/slug".to_string(),
+        provider_uuid: "prov-other".to_string(),
+        ..ModelEntry::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "wanted-uuid".to_string(),
+        name: "Wanted".to_string(),
+        model_id: "shared/slug".to_string(),
+        provider_uuid: "prov-wanted".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let mut preferred = std::collections::HashSet::new();
+    preferred.insert("prov-wanted".to_string());
+
+    let hit = find_model_entry_by_slug(&config, &settings, "shared/slug", Some(&preferred))
+        .expect("matches");
+    assert_eq!(hit.uuid, "wanted-uuid", "a preferred provider_uuid must win over the earlier general match");
+
+    // Without the preference, the FIRST general match (insertion order) wins.
+    let unpreferred =
+        find_model_entry_by_slug(&config, &settings, "shared/slug", None).expect("matches");
+    assert_eq!(unpreferred.uuid, "other-uuid");
+}
+
+#[test]
+fn resolve_agent_step_1c_resolves_slug_reference_with_no_provider_uuid() {
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-1".to_string(),
+        name: "prov".to_string(),
+        endpoint: "https://slug.example".to_string(),
+        api_key: "slug-key".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-uuid-1".to_string(),
+        name: "Slug Model".to_string(),
+        model_id: "vendor/slug-model".to_string(),
+        provider_uuid: "prov-1".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let agent = AgentDef {
+        model: Some("vendor/slug-model".to_string()),
+        ..AgentDef::default()
+    };
+
+    let resolved = resolve_agent(&config, &settings, &agent).expect("resolves via slug");
+    assert_eq!(resolved.model_id, "vendor/slug-model");
+    assert_eq!(resolved.endpoint, "https://slug.example");
+    assert_eq!(resolved.api_key, "slug-key");
+}
+
+#[test]
+fn resolve_agent_slug_miss_falls_to_main_and_agent_model_resolves_is_false() {
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-main".to_string(),
+        name: "main-provider".to_string(),
+        endpoint: "https://main.example".to_string(),
+        api_key: "key-main".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-main".to_string(),
+        name: "Main".to_string(),
+        model_id: "main/model".to_string(),
+        provider_uuid: "prov-main".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let agent = AgentDef {
+        model: Some("nonexistent/slug".to_string()),
+        ..AgentDef::default()
+    };
+
+    let resolved = resolve_agent(&config, &settings, &agent).expect("falls to Main");
+    assert_eq!(resolved.model_id, "main/model", "unresolved slug falls to Main");
+
+    assert!(
+        agent_declares_model(&agent),
+        "agent declares a model (even though it won't resolve)"
+    );
+    assert!(
+        !agent_model_resolves(&config, &settings, &agent),
+        "an unresolvable slug must report false so the caller's toast fires"
+    );
+}
+
+/// Mirrors [`crate::app::subagent::spawn::spawn_subagent`]'s override-application
+/// (clone the def, replace `model`, clear `model_uuid`/`provider_uuid`) so the
+/// resolution behavior an override produces is tested at the `resolve_agent`
+/// level without standing up the full spawn/state plumbing.
+#[test]
+fn spawn_override_model_replaces_agent_model_at_resolution() {
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-a".to_string(),
+        name: "prov-a".to_string(),
+        endpoint: "https://a.example".to_string(),
+        api_key: "key-a".to_string(),
+        ..ProviderConn::default()
+    });
+    config.providers.push(ProviderConn {
+        uuid: "prov-b".to_string(),
+        name: "prov-b".to_string(),
+        endpoint: "https://b.example".to_string(),
+        api_key: "key-b".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-a".to_string(),
+        name: "Model A".to_string(),
+        model_id: "vendor/model-a".to_string(),
+        provider_uuid: "prov-a".to_string(),
+        ..ModelEntry::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-b".to_string(),
+        name: "Model B".to_string(),
+        model_id: "vendor/model-b".to_string(),
+        provider_uuid: "prov-b".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let agent = AgentDef {
+        model: Some("vendor/model-a".to_string()),
+        ..AgentDef::default()
+    };
+
+    let mut overridden = agent.clone();
+    overridden.model = Some("vendor/model-b".to_string());
+    overridden.model_uuid = None;
+    overridden.provider_uuid = None;
+
+    let resolved =
+        resolve_agent(&config, &settings, &overridden).expect("resolves via override slug");
+    assert_eq!(resolved.model_id, "vendor/model-b", "override model wins over the agent's own");
+    assert_eq!(resolved.endpoint, "https://b.example");
+}
+
+#[test]
+fn spawn_override_effort_only_leaves_model_untouched() {
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-a".to_string(),
+        name: "prov-a".to_string(),
+        endpoint: "https://a.example".to_string(),
+        api_key: "key-a".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-a".to_string(),
+        name: "Model A".to_string(),
+        model_id: "vendor/model-a".to_string(),
+        provider_uuid: "prov-a".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let agent = AgentDef {
+        model: Some("vendor/model-a".to_string()),
+        ..AgentDef::default()
+    };
+
+    // Only `effort` overridden — model left as the agent's own.
+    let mut overridden = agent.clone();
+    overridden.effort = Some("max".to_string());
+
+    let resolved = resolve_agent(&config, &settings, &overridden).expect("resolves");
+    assert_eq!(resolved.model_id, "vendor/model-a", "model untouched by an effort-only override");
+    assert_eq!(resolved.effort, "max", "effort replaced by the override");
+}
+
+/// Mirrors `spawn_task_with_id`'s mismatch-warning check-clone: an override
+/// slug that names nothing registered must fall to Main AND make the
+/// `agent_declares_model && !agent_model_resolves` warning predicate true.
+#[test]
+fn spawn_override_garbage_slug_falls_to_main_and_warns() {
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-main".to_string(),
+        name: "main-provider".to_string(),
+        endpoint: "https://main.example".to_string(),
+        api_key: "key-main".to_string(),
+        ..ProviderConn::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-main".to_string(),
+        name: "Main".to_string(),
+        model_id: "main/model".to_string(),
+        provider_uuid: "prov-main".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    // Agent declares no model of its own; only the (garbage) override supplies one.
+    let agent = AgentDef::default();
+    let mut check_agent = agent.clone();
+    check_agent.model = Some("totally/bogus-slug".to_string());
+    check_agent.model_uuid = None;
+    check_agent.provider_uuid = None;
+
+    let resolved = resolve_agent(&config, &settings, &check_agent).expect("falls to Main");
+    assert_eq!(resolved.model_id, "main/model");
+
+    assert!(agent_declares_model(&check_agent), "override slug counts as a declared model");
+    assert!(
+        !agent_model_resolves(&config, &settings, &check_agent),
+        "a garbage override slug must fail to resolve so the mismatch warning fires"
+    );
+}

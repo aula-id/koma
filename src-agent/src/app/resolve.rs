@@ -56,6 +56,8 @@
 //! keeps calling `resolve_role` + [`Resolved::is_usable`] directly and is
 //! unaffected; see that function's doc comment for the full list.
 
+use std::collections::HashSet;
+
 use crate::app::state::AgentMode;
 use crate::config::DEFAULT_BASE_URL;
 use crate::model::agent_def::AgentDef;
@@ -162,6 +164,60 @@ fn find_model_entry<'a>(
         .iter()
         .find(|e| e.uuid == uuid)
         .or_else(|| config.models.iter().find(|e| e.uuid == uuid))
+}
+
+/// Whether `entry` matches `slug`, tried against `model_id`, `name`, and
+/// `uuid` — case-insensitively (ASCII). This is deliberately permissive: an
+/// agent/extension author may name a model by any of the three identities a
+/// user would recognise it by in the catalogue UI.
+fn slug_matches(entry: &ModelEntry, slug: &str) -> bool {
+    entry.model_id.eq_ignore_ascii_case(slug)
+        || entry.name.eq_ignore_ascii_case(slug)
+        || entry.uuid.eq_ignore_ascii_case(slug)
+}
+
+/// Find a registered [`ModelEntry`] by SLUG (matched against `model_id`,
+/// `name`, or `uuid`, case-insensitively), checking `settings.session_models`
+/// first (per-session overrides win), then the global `config.models`. This is
+/// the spawn-time counterpart to [`find_model_entry`] (which matches by uuid
+/// only): a manifest-declared `SubAgentDef::model` or an `agents.spawn`
+/// override's `model` is a human-typed SLUG, not a registered uuid, so it needs
+/// the broader match.
+///
+/// `preferred_provider_uuids`, when `Some`, is consulted FIRST: entries whose
+/// `provider_uuid` is a member of the set are searched (across both
+/// catalogues, session-first) before falling back to the unrestricted scan
+/// below. This is a seam for a LATER wave: an extension-contributed sub-agent
+/// resolving its own `model:` slug should prefer a model/provider that same
+/// extension registered (once `models.register` lands) over an unrelated
+/// global entry that happens to share the slug. Every CURRENT caller passes
+/// `None` — no ext-scoped preference exists yet.
+pub(crate) fn find_model_entry_by_slug<'a>(
+    config: &'a AppConfig,
+    settings: &'a Settings,
+    slug: &str,
+    preferred_provider_uuids: Option<&HashSet<String>>,
+) -> Option<&'a ModelEntry> {
+    if let Some(preferred) = preferred_provider_uuids {
+        let hit = settings
+            .session_models
+            .iter()
+            .find(|e| slug_matches(e, slug) && preferred.contains(&e.provider_uuid))
+            .or_else(|| {
+                config
+                    .models
+                    .iter()
+                    .find(|e| slug_matches(e, slug) && preferred.contains(&e.provider_uuid))
+            });
+        if hit.is_some() {
+            return hit;
+        }
+    }
+    settings
+        .session_models
+        .iter()
+        .find(|e| slug_matches(e, slug))
+        .or_else(|| config.models.iter().find(|e| slug_matches(e, slug)))
 }
 
 /// Build a [`Resolved`] from an assigned [`ModelEntry`] by resolving its
@@ -601,13 +657,20 @@ pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMo
 /// A sub-agent carries its OWN model + provider on the definition, independent of
 /// the runtime role catalogue:
 ///
-/// 1. If the agent names a `model` AND its `provider_uuid` resolves to a known
-///    provider connection, dispatch against THAT provider (endpoint + key + wire
-///    type), pinning the agent's legacy `provider` routing slug as the upstream
-///    route. This is the explicit-assignment path and always wins.
-/// 2. Otherwise — the agent has no model, or its `provider_uuid` is absent /
-///    dangling — inherit the fully-resolved Main route so the sub-agent runs on
-///    whatever provider the user has actually configured (never silently dark).
+/// 1. If the agent names a `model_uuid` that resolves to a registered
+///    [`ModelEntry`], dispatch via that entry's own provider connection.
+/// 1b. Else, if the agent names a legacy `model` AND its `provider_uuid`
+///    resolves to a known provider connection, dispatch against THAT provider
+///    (endpoint + key + wire type), pinning the agent's legacy `provider`
+///    routing slug as the upstream route. This is the explicit-assignment path.
+/// 1c. Else, if the agent names a `model` slug with NO `provider_uuid` (the
+///    shape an extension-contributed sub-agent's manifest `model:` field or an
+///    `agents.spawn` override produces), look the slug up by model_id/name/uuid
+///    against the registered catalogues (see [`find_model_entry_by_slug`]) and
+///    dispatch there.
+/// 2. Otherwise — none of the above resolved — inherit the fully-resolved Main
+///    route so the sub-agent runs on whatever provider the user has actually
+///    configured (never silently dark).
 ///
 /// In BOTH cases the agent's own reasoning `effort` overrides the route's effort
 /// when set (an agent declares its own thinking budget); an unset effort keeps the
@@ -641,9 +704,14 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
     }
     // 2. Legacy explicit model + resolvable provider connection.
     if let Some(model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
-        let _ = model_id;
         if let Some(uuid) = agent.provider_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
             if config.providers.iter().any(|p| p.uuid == uuid) {
+                return true;
+            }
+        } else if let Some(entry) = find_model_entry_by_slug(config, settings, model_id, None) {
+            // 3. Slug reference (model set, no provider_uuid) → resolvable via
+            //    find_model_entry_by_slug, mirroring resolve_agent's step 1c.
+            if from_entry(config, settings, entry, ModelRole::Main).is_some() {
                 return true;
             }
         }
@@ -697,6 +765,22 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
         }
         // A named model whose provider is absent/dangling falls through to Main —
         // better to run on the configured Main provider than to go dark.
+    }
+
+    // 1c. Slug reference: `model` set, but no `provider_uuid` (the shape an
+    //     extension-contributed sub-agent's manifest `model:` field produces, and
+    //     what an `agents.spawn` override's `model` param carries). Look the slug
+    //     up against the registered catalogues (session_models first) by
+    //     model_id/name/uuid and dispatch there — resolved fresh at SPAWN time,
+    //     never baked in at registry-merge time. A miss falls through to Main.
+    if agent.provider_uuid.is_none() {
+        if let Some(slug) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
+            if let Some(entry) = find_model_entry_by_slug(config, settings, slug, None) {
+                if let Some(resolved) = from_entry(config, settings, entry, ModelRole::Main) {
+                    return Some(with_effort(resolved));
+                }
+            }
+        }
     }
 
     // 2. No usable model/provider → inherit the Main route.
