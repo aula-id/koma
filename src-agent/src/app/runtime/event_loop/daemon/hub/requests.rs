@@ -321,6 +321,22 @@ impl DaemonHub {
                 self.new_session(idx, state, client, handle);
             }
 
+            // FIRE-AND-FORGET cross-daemon sub-agent spawn (extension `sessions.spawn_into`,
+            // W7): ANOTHER session-daemon's grant broker connected this daemon's keyed socket
+            // and sent this. Spawn into THIS daemon's own foreground/first-live session via the
+            // SAME `spawn_or_queue` path the model's `task` tool uses, then Ack (accepted/queued)
+            // or Error. The connection never Attaches, so it is never streamed a snapshot — the
+            // same connectionless contract the `Status` discovery probe relies on. See
+            // `spawn_agent`.
+            ClientRequest::SpawnAgent {
+                agent,
+                task,
+                model,
+                effort,
+            } => {
+                self.spawn_agent(idx, state, client, handle, agent, task, model, effort);
+            }
+
             // Quit (close) a single session by stable UUID (daemon stage 10). Resolve
             // the id (reject an unknown one with an Error + no-op, critique #5), then
             // TOMBSTONE that session: `close()` aborts its in-flight stream + sub-

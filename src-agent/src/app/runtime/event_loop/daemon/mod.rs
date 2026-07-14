@@ -380,6 +380,16 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
 
+        // 3a-pre4. Extension `sessions.switch` hand-off (W7): the grant broker set
+        //     `state.rest.ext_switch_pending = Some(uuid)` when a `sessions.switch` targeted a
+        //     session THIS daemon does not own (a live LOCAL target took the in-daemon
+        //     `handle_live_switch` path instead and never set this). Mirror `/new`: broadcast a
+        //     one-shot `DaemonEvent::AttachSession { session_id }` to the ATTACHED clients so
+        //     they attach that session's OTHER daemon, leaving this daemon's own mode untouched.
+        //     Consume the flag here, right after `drain_new_pending`, so it rides the same
+        //     control-frame seam BEFORE `stream_deltas`.
+        hub.drain_ext_switch_pending(state);
+
         // 3a. Daemon-side `should_quit` sweep: `should_quit` means "quit the app",
         //     the same intent the LOCAL standalone TUI honours by breaking `run_loop`
         //     immediately (`event_loop/mod.rs`). The daemon has no loop-break of its

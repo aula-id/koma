@@ -29,7 +29,9 @@ mod plan_decision;
 pub(in crate::app::runtime) mod quit;
 mod rewind;
 mod security;
-mod session;
+// `pub(in crate::app::runtime)` so `runtime` can re-export `session::handle_live_switch` for
+// the extension grant broker's `sessions.switch` (W7); the module's own items stay `pub`.
+pub(in crate::app::runtime) mod session;
 mod settings;
 
 // Re-export the pwd-explicit fresh-session creator. Daemon-per-session no longer creates
