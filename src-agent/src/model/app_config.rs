@@ -267,6 +267,58 @@ pub struct OAuthConn {
     /// token was minted for. `None` for every native conn (see [`Self::ext_id`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,
+    /// W12: the chat-completions endpoint an ext-backed token resolves to (captured at
+    /// login from the extension manifest's `OAuthProviderDef.chat_endpoint`). Present
+    /// only when the extension declared this provider as a MODEL provider (not
+    /// account-login-only). `None` for every native conn and every account-login-only
+    /// ext conn. Flat `Option` with `skip_serializing_if` so a native conn's on-disk
+    /// JSON stays BYTE-IDENTICAL (the field is simply absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_endpoint: Option<String>,
+    /// W12: the wire protocol that endpoint speaks, NORMALIZED at storage time to one of
+    /// `"openai"` / `"anthropic"` (an unrecognised or absent manifest `api_type` stores
+    /// `None`, which makes the conn account-login-only — `models.register` refuses it and
+    /// resolution treats a referencing entry as dangling). `None` for every native conn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_type: Option<String>,
+    /// W12: the token endpoint koma POSTs a generic OAuth2 `refresh_token` grant to when an
+    /// ext-backed token nears expiry (from the manifest's `OAuthRefreshDef.token_url`).
+    /// `None` = koma never refreshes this conn itself (the extension owns the lifecycle, or
+    /// the token never expires). `None` for every native conn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token_url: Option<String>,
+    /// W12: the `client_id` sent with the ext token-refresh grant, when the manifest
+    /// declared one (some token endpoints require it; others identify the client by the
+    /// refresh token alone). `None` for every native conn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_client_id: Option<String>,
+}
+
+impl OAuthConn {
+    /// W12: this ext-backed conn's chat route parts IFF it is a usable MODEL provider — a
+    /// non-empty stored `chat_endpoint` AND a recognised `api_type`
+    /// (`"openai"` → [`ApiType::OpenAiCompatible`], `"anthropic"` →
+    /// [`ApiType::AnthropicCompatible`], the two wire types the native OAuth arms produce).
+    /// `None` for an account-login-only ext conn (no endpoint / unrecognised or absent
+    /// api_type) and for every native conn (whose W12 meta fields are always `None`).
+    ///
+    /// The SINGLE source of truth for "is this ext conn a model provider": the resolution
+    /// boundary ([`crate::app::resolve`]) builds the route from this, and the
+    /// `models.register` broker verb gates on it, so the two can never disagree about which
+    /// conns can serve a registered model.
+    pub fn ext_model_route(&self) -> Option<(&str, ApiType)> {
+        let endpoint = self
+            .chat_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        let api_type = match self.api_type.as_deref().map(str::trim) {
+            Some("openai") => ApiType::OpenAiCompatible,
+            Some("anthropic") => ApiType::AnthropicCompatible,
+            _ => return None,
+        };
+        Some((endpoint, api_type))
+    }
 }
 
 /// Runtime role slot a model can be assigned to. Each role is GLOBALLY exclusive
@@ -900,15 +952,23 @@ mod oauth_conn_serde_tests {
         assert_eq!(conn.provider, OAuthProvider::Codex);
         assert!(conn.ext_id.is_none());
         assert!(conn.provider_id.is_none());
+        // W12: the four data-driven-resolution fields also default to None on a native
+        // conn, so they too are omitted from the on-disk JSON.
+        assert!(conn.chat_endpoint.is_none());
+        assert!(conn.api_type.is_none());
+        assert!(conn.refresh_token_url.is_none());
+        assert!(conn.refresh_client_id.is_none());
+        // A native conn is never a model provider (no chat_endpoint/api_type meta).
+        assert!(conn.ext_model_route().is_none());
         let reser = serde_json::to_string(&conn).expect("serializes");
         assert_eq!(
             reser, NATIVE_CONN_JSON,
-            "a native OAuthConn must round-trip byte-identically after W11"
+            "a native OAuthConn must round-trip byte-identically after W11/W12"
         );
     }
 
     /// An EXT-backed conn serializes with the `"extension"` provider tag plus the two
-    /// ext fields, and round-trips back to an equal value.
+    /// ext fields and the W12 model-provider meta, and round-trips back to an equal value.
     #[test]
     fn ext_conn_roundtrips() {
         let conn = OAuthConn {
@@ -919,17 +979,58 @@ mod oauth_conn_serde_tests {
             email: "demo@example.com".to_string(),
             ext_id: Some("run.koma.example.oauth-demo-daemon".to_string()),
             provider_id: Some("demo".to_string()),
+            // W12 model-provider meta.
+            chat_endpoint: Some("https://api.demo.test/v1".to_string()),
+            api_type: Some("openai".to_string()),
+            refresh_token_url: Some("https://demo.test/token".to_string()),
+            refresh_client_id: Some("cid".to_string()),
             ..Default::default()
         };
         let v = serde_json::to_value(&conn).expect("serializes");
         assert_eq!(v["provider"], "extension");
         assert_eq!(v["ext_id"], "run.koma.example.oauth-demo-daemon");
         assert_eq!(v["provider_id"], "demo");
+        assert_eq!(v["chat_endpoint"], "https://api.demo.test/v1");
+        assert_eq!(v["api_type"], "openai");
+        assert_eq!(v["refresh_token_url"], "https://demo.test/token");
+        assert_eq!(v["refresh_client_id"], "cid");
 
         let back: OAuthConn = serde_json::from_value(v).expect("ext conn roundtrips");
         assert_eq!(back.provider, OAuthProvider::Extension);
         assert_eq!(back.ext_id.as_deref(), Some("run.koma.example.oauth-demo-daemon"));
         assert_eq!(back.provider_id.as_deref(), Some("demo"));
         assert_eq!(back.access_token, "demo-at");
+        assert_eq!(back.chat_endpoint.as_deref(), Some("https://api.demo.test/v1"));
+        assert_eq!(back.api_type.as_deref(), Some("openai"));
+        assert_eq!(back.refresh_token_url.as_deref(), Some("https://demo.test/token"));
+    }
+
+    /// [`OAuthConn::ext_model_route`] accepts a conn with both a chat endpoint and a
+    /// recognised api_type, mapping the wire string to the dispatch [`ApiType`]; it rejects
+    /// a conn missing either half (account-login-only) or carrying an unrecognised api_type.
+    #[test]
+    fn ext_model_route_gates_on_endpoint_and_api_type() {
+        use super::ApiType;
+        let with = |endpoint: Option<&str>, api_type: Option<&str>| OAuthConn {
+            provider: OAuthProvider::Extension,
+            chat_endpoint: endpoint.map(str::to_string),
+            api_type: api_type.map(str::to_string),
+            ..Default::default()
+        };
+        // openai → OpenAiCompatible.
+        assert_eq!(
+            with(Some("https://x.test/v1"), Some("openai")).ext_model_route(),
+            Some(("https://x.test/v1", ApiType::OpenAiCompatible))
+        );
+        // anthropic → AnthropicCompatible.
+        assert_eq!(
+            with(Some("https://x.test"), Some("anthropic")).ext_model_route(),
+            Some(("https://x.test", ApiType::AnthropicCompatible))
+        );
+        // Missing endpoint, missing api_type, or unrecognised api_type → account-login-only.
+        assert!(with(None, Some("openai")).ext_model_route().is_none());
+        assert!(with(Some("https://x.test"), None).ext_model_route().is_none());
+        assert!(with(Some("   "), Some("openai")).ext_model_route().is_none());
+        assert!(with(Some("https://x.test"), Some("openai_compatible")).ext_model_route().is_none());
     }
 }

@@ -322,9 +322,13 @@ pub fn to_conn(tokens: TokenResponse) -> OAuthConn {
         org_id: String::new(),
         email,
         plan: String::new(),
-        // Native flow — never extension-backed (W11 fields stay None; omitted from JSON).
+        // Native flow — never extension-backed (W11/W12 ext fields stay None; omitted from JSON).
         ext_id: None,
         provider_id: None,
+        chat_endpoint: None,
+        api_type: None,
+        refresh_token_url: None,
+        refresh_client_id: None,
     }
 }
 

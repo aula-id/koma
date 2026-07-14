@@ -62,6 +62,47 @@ use std::io::Read;
 /// begin→poll loop at 5 minutes overall (then `failed: timed out`). Reply to
 /// `begin`/`poll` promptly — do the real network waiting on your own thread and let
 /// `poll` report progress, exactly like the DEADLOCK RULE above.
+///
+/// # Registering models (W12 — `models.register` / `models.unregister`)
+///
+/// Once your user has connected one of your OAuth providers, you can register the models
+/// that account can serve into koma's global catalogue. Unlike the `oauth.*` methods above
+/// (which koma INVOKES on you), these are ext→koma CALLS you make with [`Koma::call`] — so,
+/// per the DEADLOCK RULE, make them from your driver/worker thread (e.g. right after a
+/// successful `oauth.poll`), never from inside `on_invoke`/`on_event`.
+///
+/// Your manifest must declare the model provider's `chat_endpoint` + `api_type` on its
+/// `OAuthProviderDef` (`api_type` must be `"openai"` or `"anthropic"` — the two wire
+/// protocols koma dispatches; an account-login-only provider omits them and `models.register`
+/// then refuses with `"provider is account-login only"`), and your extension must hold the
+/// `models:contribute` grant (registering models an OAuth account serves almost always means
+/// requiring BOTH `oauth:contribute` and `models:contribute`).
+///
+/// - `models.register { "models": [ { "id": "<model id>", "name": "<display name>" }, … ] }`
+///   → registers each model, SERVED BY your connected account. `id` and `name` are non-empty
+///   and ≤ 200 chars; at most 100 models per call. Re-registering a model you already
+///   registered UPDATES its display name IN PLACE and keeps its stable koma uuid (so a
+///   sub-agent already bound to it keeps resolving). Reply:
+///   `{ "registered": <n>, "uuids": [ "<uuid>", … ] }` (the stable per-model uuids). Errors:
+///   `{ "error": "no connected oauth account for this extension" }` (connect first) or
+///   `{ "error": "provider is account-login only" }` (declare `chat_endpoint`+`api_type`).
+/// - `models.unregister { "ids"?: [ "<id-or-uuid>", … ] }` → removes models you registered.
+///   Omit `ids` to remove ALL of yours; pass `ids` (each matching a `model_id` OR a returned
+///   uuid) to remove a subset. You can only ever remove YOUR OWN models — koma enforces an
+///   ownership wall, so another extension's or the user's own models are untouchable. Reply:
+///   `{ "removed": <n> }`.
+///
+/// ## The binding guarantee
+///
+/// Declare the model slugs your sub-agents use in your manifest `contributes.sub_agents`
+/// (each `SubAgentDef.model`). After your user connects your provider and you
+/// `models.register`, those sub-agents run on YOUR registered models: koma binds an
+/// extension-authored sub-agent's `model:` slug to a model served by that SAME extension's
+/// OAuth connection FIRST (matched uuid-deterministically), so a same-named model elsewhere
+/// in the user's catalogue can NEVER hijack your sub-agent's route. If you have not connected
+/// / registered yet, the slug resolves by the normal catalogue rules (and ultimately falls
+/// back to the user's Main model), so your sub-agents still run — just not on your models
+/// until the account is live.
 pub trait Extension {
     fn manifest(&self) -> ExtensionManifest;
 

@@ -646,3 +646,194 @@ fn spawn_override_garbage_slug_falls_to_main_and_warns() {
         "a garbage override slug must fail to resolve so the mismatch warning fires"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Wave 12: data-driven extension-backed provider resolution + ext-scoped
+// deterministic sub-agent model binding.
+// ---------------------------------------------------------------------------
+
+/// An ext-backed [`OAuthConn`] carrying the W12 model-provider meta (`ext_id` +
+/// `chat_endpoint` + `api_type`), so a `ModelEntry` pointing at it resolves as a real
+/// provider.
+fn ext_model_conn(uuid: &str, ext_id: &str, endpoint: &str, api_type: &str) -> OAuthConn {
+    OAuthConn {
+        uuid: uuid.to_string(),
+        provider: OAuthProvider::Extension,
+        access_token: "ext-bearer".to_string(),
+        ext_id: Some(ext_id.to_string()),
+        provider_id: Some("prov".to_string()),
+        chat_endpoint: Some(endpoint.to_string()),
+        api_type: Some(api_type.to_string()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn ext_conn_with_meta_resolves_data_driven_openai() {
+    // A ModelEntry served by an ext conn whose manifest declared an OpenAI-compatible chat
+    // endpoint resolves to that endpoint + bearer, wire type OpenAiCompatible, threading the
+    // conn uuid as oauth_uuid for the send-time refresh hook.
+    let mut config = AppConfig::default();
+    config
+        .oauth_conns
+        .push(ext_model_conn("ext-conn", "my.ext", "https://api.ext.test/v1", "openai"));
+    config.models.push(ModelEntry {
+        uuid: "ext-model".to_string(),
+        name: "Ext Model".to_string(),
+        model_id: "ext/model".to_string(),
+        provider_uuid: "ext-conn".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("ext conn resolves");
+    assert_eq!(resolved.endpoint, "https://api.ext.test/v1");
+    assert_eq!(resolved.api_key, "ext-bearer");
+    assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
+    assert_eq!(resolved.account_id, "", "ext conns carry no account/org header");
+    assert_eq!(resolved.oauth_uuid, "ext-conn", "conn uuid threads through for refresh");
+    // The Conn projection carries the same identity to the call boundary.
+    let conn = resolved.conn();
+    assert_eq!(conn.endpoint, "https://api.ext.test/v1");
+    assert_eq!(conn.oauth_uuid, "ext-conn");
+    assert!(matches!(conn.api_type, ApiType::OpenAiCompatible));
+}
+
+#[test]
+fn ext_conn_with_meta_resolves_data_driven_anthropic() {
+    // The "anthropic" wire maps to AnthropicCompatible.
+    let mut config = AppConfig::default();
+    config
+        .oauth_conns
+        .push(ext_model_conn("ext-conn", "my.ext", "https://api.ext.test", "anthropic"));
+    config.models.push(ModelEntry {
+        uuid: "ext-model".to_string(),
+        name: "Ext Model".to_string(),
+        model_id: "ext/model".to_string(),
+        provider_uuid: "ext-conn".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    let resolved = from_entry(&config, &settings, &config.models[0], ModelRole::Main)
+        .expect("ext conn resolves");
+    assert_eq!(resolved.endpoint, "https://api.ext.test");
+    assert_eq!(resolved.api_type, ApiType::AnthropicCompatible);
+    assert_eq!(resolved.oauth_uuid, "ext-conn");
+}
+
+#[test]
+fn ext_conn_without_meta_is_not_a_model_provider() {
+    // An ext conn with NO chat_endpoint/api_type (account-login-only) is inert: from_entry
+    // returns None (the W11 "not a model provider yet" behavior), so a referencing entry is
+    // treated as dangling and resolve_role falls to the legacy fallback rather than routing a
+    // broken empty-endpoint ext route.
+    let mut config = AppConfig::default();
+    config.oauth_conns.push(OAuthConn {
+        uuid: "ext-login-only".to_string(),
+        provider: OAuthProvider::Extension,
+        access_token: "ext-bearer".to_string(),
+        ext_id: Some("my.ext".to_string()),
+        provider_id: Some("prov".to_string()),
+        // No chat_endpoint / api_type → account-login-only.
+        ..Default::default()
+    });
+    let entry = ModelEntry {
+        uuid: "ext-model".to_string(),
+        name: "Ext Model".to_string(),
+        model_id: "ext/model".to_string(),
+        provider_uuid: "ext-login-only".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    };
+    config.models.push(entry.clone());
+    let settings = Settings::default();
+
+    // Direct: from_entry refuses the meta-less ext conn.
+    assert!(
+        from_entry(&config, &settings, &entry, ModelRole::Main).is_none(),
+        "a meta-less ext conn is not a model provider (W11 inert stance preserved)"
+    );
+    // Via resolve_role: the dangling entry falls through to the legacy Main fallback (empty
+    // settings → DEFAULT_BASE_URL), never the ext conn's (empty) endpoint or its bearer.
+    let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("falls to legacy Main");
+    assert_ne!(resolved.oauth_uuid, "ext-login-only", "the meta-less ext conn must not route");
+    assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
+}
+
+#[test]
+fn ext_agent_binds_to_its_own_model_over_same_named_global() {
+    // Deterministic ext-scoped binding: a GLOBAL entry and an EXT-OWNED entry share the slug
+    // "fast" (by name). An AgentDef authored by the extension (ext_id set) binds to the
+    // extension's OWN entry (served by its oauth conn) FIRST — uuid-deterministic, so the
+    // same-named global entry (inserted FIRST) can't hijack it. A non-ext agent gets the
+    // general first-match (the global). An ext agent whose extension owns no matching
+    // provider falls through to the general pass.
+    let mut config = AppConfig::default();
+    // The extension's connected model-provider conn.
+    config
+        .oauth_conns
+        .push(ext_model_conn("ext-conn", "my.ext", "https://api.ext.test/v1", "openai"));
+    // A real user provider for the global entry.
+    config.providers.push(ProviderConn {
+        uuid: "prov-x".to_string(),
+        name: "X".to_string(),
+        endpoint: "https://x.example".to_string(),
+        api_key: "x-key".to_string(),
+        ..ProviderConn::default()
+    });
+    // GLOBAL "fast" FIRST (so it is the first general match), then the EXT-owned "fast".
+    config.models.push(ModelEntry {
+        uuid: "global-fast".to_string(),
+        name: "fast".to_string(),
+        model_id: "global/fast-model".to_string(),
+        provider_uuid: "prov-x".to_string(),
+        ..ModelEntry::default()
+    });
+    config.models.push(ModelEntry {
+        uuid: "ext-fast".to_string(),
+        name: "fast".to_string(),
+        model_id: "ext/fast-model".to_string(),
+        provider_uuid: "ext-conn".to_string(),
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+
+    // Ext-authored agent → binds to the EXT entry (its own provider), NOT the earlier global.
+    let ext_agent = AgentDef {
+        ext_id: Some("my.ext".to_string()),
+        model: Some("fast".to_string()),
+        ..AgentDef::default()
+    };
+    let resolved = resolve_agent(&config, &settings, &ext_agent).expect("resolves");
+    assert_eq!(resolved.model_id, "ext/fast-model", "ext agent binds to its OWN 'fast'");
+    assert_eq!(resolved.endpoint, "https://api.ext.test/v1");
+    assert_eq!(resolved.oauth_uuid, "ext-conn");
+    assert!(
+        agent_model_resolves(&config, &settings, &ext_agent),
+        "the ext binding resolves (no spurious mismatch warning)"
+    );
+
+    // Non-ext agent → general first-match (the global "fast").
+    let plain_agent = AgentDef {
+        model: Some("fast".to_string()),
+        ..AgentDef::default()
+    };
+    let plain = resolve_agent(&config, &settings, &plain_agent).expect("resolves");
+    assert_eq!(plain.model_id, "global/fast-model", "a non-ext agent takes the general match");
+    assert_eq!(plain.endpoint, "https://x.example");
+
+    // Ext agent whose extension owns NO conn → empty preferred set → general pass (the global).
+    let orphan_agent = AgentDef {
+        ext_id: Some("other.ext".to_string()),
+        model: Some("fast".to_string()),
+        ..AgentDef::default()
+    };
+    let orphan = resolve_agent(&config, &settings, &orphan_agent).expect("resolves");
+    assert_eq!(
+        orphan.model_id, "global/fast-model",
+        "preferred-set present but no match falls to the general pass"
+    );
+}
