@@ -159,6 +159,22 @@ pub struct ExtCallRequest {
     pub reply: tokio::sync::oneshot::Sender<Value>,
 }
 
+/// An ext→koma fire-and-forget `Notify` awaiting dispatch on the event loop.
+///
+/// Built by the extension's [`reader_task`](super::wire::reader_task) (which has
+/// no [`AppState`] access) and pushed onto `AppStateRest::ext_notify_tx`, drained
+/// each tick by the event loop. Unlike [`ExtCallRequest`] there is no `reply` —
+/// `Notify` never expects one (e.g. `panel.push`, routed to the panel bridge in a
+/// later wave).
+pub struct ExtNotify {
+    /// The calling extension's id.
+    pub ext_id: String,
+    /// The notify name (e.g. `"panel.push"`).
+    pub name: String,
+    /// Notify params.
+    pub params: Value,
+}
+
 /// Outcome of the grant gate for one `agents.*` method against a granted set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GateDecision {
