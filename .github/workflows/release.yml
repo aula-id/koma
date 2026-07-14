@@ -7,13 +7,15 @@ name: release
 # Linux raw binaries stay TUI-only (no `gui` feature) so they never hard-link
 # webkitgtk at load time and keep working on GTK-less servers. Darwin raw
 # binaries are built `--features gui` (wry uses the always-present system
-# WebKit), so `koma gui` works straight from the released binary.
+# WebKit), so `koma gui` works straight from the released binary. The raw
+# koma-windows-x64.exe (built in windows-package below) is likewise
+# default-features/TUI-only, mirroring the Linux raw-asset philosophy.
 #
 # The linux-packages / windows-package jobs additionally publish desktop
 # installers under STABLE, VERSIONLESS names (hard-linked from the homepage via
 # /releases/latest/download/): koma-x64.deb, koma-arm64.deb, koma-x64.AppImage,
-# koma-arm64.AppImage, koma-x64.msi, plus the raw koma-windows-x64.exe. These
-# are NOT referenced by install.sh.
+# koma-arm64.AppImage, koma-x64.msi (this one IS gui-featured), plus the raw
+# koma-windows-x64.exe. These are NOT referenced by install.sh.
 on:
   push:
     tags:
@@ -210,6 +212,12 @@ jobs:
   # downloads the WiX toolset itself, so no separate WiX install step is needed.
   # Rename/glob steps use `shell: bash` (Git Bash ships on the windows runner) to
   # avoid mixing PowerShell and bash dialects.
+  #
+  # The raw exe is built default-features (TUI-only), mirroring the
+  # koma-linux-* raw assets philosophy — it must never carry `gui`, so it's
+  # built and staged out FIRST, before the gui-featured build below can
+  # overwrite target/release/koma.exe. The .msi stays the gui-featured
+  # product build.
   # ---------------------------------------------------------------------------
   windows-package:
     name: package windows x64 (msi + exe)
@@ -217,11 +225,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -235,16 +238,28 @@ jobs:
             target
           key: windows-packages-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cargo-packager
-        run: cargo install cargo-packager --version 0.11.8 --locked
-
-      - name: Build release binary (gui)
-        run: cargo build --release -p agent --features gui
+      # Lean default-features build first (TUI-only, no gui feature). Staged
+      # out immediately so the gui build below can't contaminate it.
+      - name: Build release binary (default features)
+        run: cargo build --release -p agent
 
       # Raw unpackaged binary, published alongside the installer.
       - name: Stage raw exe
         shell: bash
         run: cp target/release/koma.exe koma-windows-x64.exe
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      # gui-featured build for the .msi installer; this overwrites
+      # target/release/koma.exe, but the raw exe was already copied out above.
+      - name: Build release binary (gui)
+        run: cargo build --release -p agent --features gui
 
       - name: Package msi (wix)
         run: cargo packager --release --formats wix --verbose
