@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  cargo-packager WiX fragment for koma.
+
+  Wired in via [package.metadata.packager.wix] in src-agent/Cargo.toml:
+    fragment-paths       = ["../packaging/windows/path-and-shortcut.wxs"]
+    component-group-refs = ["KomaPathAndShortcut"]
+
+  cargo-packager's own built-in main.wxs template already ships a Desktop
+  shortcut and a Start Menu shortcut, but both launch "[!Path]" bare - i.e.
+  plain `koma.exe` with no arguments, which starts the ratatui TUI, not the
+  GUI. It also declares a "PATH Environment Variable" *Feature* (Id
+  "Environment"), but that feature only gates whether the exe file itself
+  gets installed - it never actually writes an Environment table entry, so
+  INSTALLDIR is never added to PATH. This fragment fills both gaps:
+
+    - KomaPathEnvComponent: adds [INSTALLDIR] to the current *user's* PATH
+      (HKCU-scoped, System="no") so `koma` is runnable from any shell after
+      install, without requiring elevation for the env var propagation.
+    - KomaGuiShortcutComponent: an additional Start Menu shortcut
+      ("koma GUI") that explicitly passes `gui` as an argument, launching
+      `koma gui` instead of the bare CLI/TUI binary.
+
+  Both DirectoryRef targets (INSTALLDIR, ApplicationProgramsFolder) and the
+  "ProductIcon" Icon Id are declared by cargo-packager's own generated
+  main.wxs; DirectoryRef/Icon references across separate candle.exe
+  compilation units resolve at light.exe link time, so no re-declaration is
+  needed here. Note: "ProductIcon" only exists when the packager config's
+  `icons` list resolves to at least one file (it does - see Cargo.toml).
+
+  `$(var.Win64)` is intentionally NOT used here: it is a `<?define?>`
+  preprocessor symbol local to main.wxs's own candle.exe pass (each .wxs
+  fragment is compiled as its own separate candle.exe invocation with only
+  `-dSourceDir` passed on the command line), so it is undefined when this
+  file is compiled on its own.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+
+    <!-- User-scope PATH entry: avoids requiring elevation for env propagation. -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="KomaPathEnvComponent" Guid="3B8ABF3F-F2CD-4F42-B266-8288F394A14A">
+        <RegistryValue Root="HKCU" Key="Software\koma" Name="PathAdded" Type="integer" Value="1" KeyPath="yes" />
+        <Environment Id="KomaPath" Name="PATH" Value="[INSTALLDIR]" Permanent="no" Part="last" Action="set" System="no" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Extra Start Menu shortcut that launches the GUI explicitly. -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="KomaGuiShortcutComponent" Guid="C60C5DC4-86D5-479F-AA05-67989139FE96">
+        <Shortcut Id="KomaGuiShortcut"
+                  Name="koma GUI"
+                  Description="Launch the koma desktop GUI"
+                  Target="[INSTALLDIR]koma.exe"
+                  Arguments="gui"
+                  Icon="ProductIcon"
+                  WorkingDirectory="INSTALLDIR" />
+        <RemoveFolder Id="KomaGuiShortcutRemoveFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\koma" Name="GuiShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <ComponentGroup Id="KomaPathAndShortcut">
+      <ComponentRef Id="KomaPathEnvComponent" />
+      <ComponentRef Id="KomaGuiShortcutComponent" />
+    </ComponentGroup>
+
+  </Fragment>
+</Wix>
