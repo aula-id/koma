@@ -51,7 +51,8 @@ use crate::app::runtime::{
 use crate::app::state::{AppState, SessionRuntime, EXT_TURN_BUDGET};
 use crate::app::subagent::SubAgentStatus;
 use crate::ipc::proto::{ClientRequest, SessionStatus};
-use crate::model::app_config::{new_uuid, AppConfig, ModelEntry, ModelRole};
+use crate::model::app_config::{new_uuid, ApiType, AppConfig, ModelEntry, ModelRole, ProviderConn};
+use crate::model::settings::Settings;
 use crate::model::session_registry::RegRow;
 use crate::model::store;
 use crate::service::openrouter::OpenRouterClient;
@@ -67,6 +68,14 @@ const MAX_REGISTER_MODELS: usize = 100;
 /// W12 `models.register` per-field length cap: each model's `id` / `name` must be non-empty
 /// and no longer than this.
 const MAX_MODEL_FIELD_LEN: usize = 200;
+
+/// W12b `providers.register` name cap: a key-backed provider's `name` must be non-empty and no
+/// longer than this (shares the field-length ceiling with model ids/names).
+const MAX_PROVIDER_NAME_LEN: usize = 200;
+
+/// W12b `providers.register` key cap: the injected `api_key` must be non-empty and no longer
+/// than this (a static bearer token / API key — a generous ceiling that still bounds abuse).
+const MAX_PROVIDER_KEY_LEN: usize = 4096;
 
 /// One extension's PRIVATE registry of the sub-agents IT spawned, keyed by an
 /// ext-facing id unique to THIS extension. This is the containment fix for a
@@ -263,6 +272,11 @@ fn required_grant(method: &str) -> Option<Grant> {
         // (EXACT-MATCH, like every family below — `models:invoke` never confers it and vice
         // versa; they gate different verbs).
         "models.register" | "models.unregister" => Some(Grant::ModelsContribute),
+        // W12b: registering/unregistering the extension's OWN key-backed providers reuses the
+        // SAME `models:contribute` grant — an extension that may contribute models may also
+        // contribute the gateways that serve them (both grow the extension's OWN catalogue;
+        // there is no separate `providers:contribute` scope).
+        "providers.register" | "providers.unregister" => Some(Grant::ModelsContribute),
         "context.set" | "context.clear" => Some(Grant::ContextPublish),
         _ => None,
     }
@@ -314,7 +328,8 @@ pub(crate) fn method_permitted(method: &str, granted: &[Grant]) -> GateDecision 
 /// `sessions.bogus`) flows to the broker and comes back as
 /// [`GateDecision::UnknownMethod`], never the wire stub.
 pub(crate) fn is_broker_method(method: &str) -> bool {
-    const PREFIXES: [&str; 5] = ["agents.", "sessions.", "chat.", "models.", "context."];
+    const PREFIXES: [&str; 6] =
+        ["agents.", "sessions.", "chat.", "models.", "providers.", "context."];
     PREFIXES.iter().any(|p| method.starts_with(p))
 }
 
@@ -466,6 +481,14 @@ pub fn handle_ext_call(
         }
         "models.unregister" => {
             let _ = reply.send(broker_models_unregister(state, &ext_id, &params));
+        }
+        "providers.register" => {
+            // W12b: inject a key-backed provider (a first-party gateway the extension owns) into
+            // the GLOBAL catalogue. Cheap config mutation + save, MUST run on the loop.
+            let _ = reply.send(broker_providers_register(state, &ext_id, &params));
+        }
+        "providers.unregister" => {
+            let _ = reply.send(broker_providers_unregister(state, &ext_id, &params));
         }
         "context.set" => {
             let _ = reply.send(broker_context_set(state, &ext_id, &params));
@@ -1014,24 +1037,29 @@ fn broker_models_invoke(
     });
 }
 
-/// W12: `models.register { models: [{ id, name }] }` → register the extension's OWN models
-/// into the GLOBAL catalogue (`config.models`), each served by the extension's connected
-/// OAuth account. SYNC on the loop (cheap config mutation + save).
+/// W12/W12b: `models.register { models: [{ id, name, default? }], provider? }` → register the
+/// extension's OWN models into the GLOBAL catalogue (`config.models`), each served by a
+/// caller-owned ANCHOR. SYNC on the loop (cheap config mutation + save).
 ///
-/// The models are served by the MOST RECENT (last-connected) OAuth conn owned by this
-/// extension that is a usable model provider (carries a `chat_endpoint` + a recognised
-/// `api_type` — see [`crate::model::app_config::OAuthConn::ext_model_route`]). No such conn
-/// at all → `{"error":"no connected oauth account for this extension"}`; a conn exists but
-/// none is a model provider → `{"error":"provider is account-login only"}`.
+/// The anchor (W12b generalization — see [`pick_ext_anchor`]) is a caller-owned KEY-BACKED
+/// [`ProviderConn`] (from `providers.register`) OR a caller-owned OAuth conn that is a usable
+/// model provider. An explicit `{ "provider": "<uuid>" }` selects it (must be caller-owned,
+/// else `{"error":"provider not owned by this extension"}`); absent, exactly one eligible
+/// anchor is used, multiple → `{"error":"multiple providers; specify provider uuid"}`, zero →
+/// the W12 `no-conn` / `account-login-only` errors.
 ///
 /// Dedupe is by `(provider_uuid, model_id)`: a re-register of the same model UPDATES its
 /// display `name` IN PLACE while KEEPING its uuid (the stability contract — an ext sub-agent
 /// bound to that uuid keeps resolving). A new pair mints a fresh ROLE-LESS [`ModelEntry`]
-/// (`provider_uuid` = the conn uuid, so resolution binds it straight to that conn). Caps: at
-/// most [`MAX_REGISTER_MODELS`] per call, each `id`/`name` non-empty and ≤
+/// (`provider_uuid` = the anchor uuid, so resolution binds it straight to that anchor). Caps:
+/// at most [`MAX_REGISTER_MODELS`] per call, each `id`/`name` non-empty and ≤
 /// [`MAX_MODEL_FIELD_LEN`]; an invalid batch is rejected ATOMICALLY (nothing registered).
-/// Reply `{ "registered": n, "uuids": [...] }` (the stable uuids, including updated-in-place
-/// ones), then persist `config.json`.
+///
+/// W12b: at most ONE model per call may carry `"default": true` (else
+/// `{"error":"multiple defaults in one call"}`); it is recorded as the extension's preferred
+/// model and, when Main is currently unset / only the koma-free placeholder, VACUUM-FILLS the
+/// Main role (see [`try_vacuum_fill_main`]). Reply `{ "registered": n, "uuids": [...] }` (plus
+/// `"defaultUuid"` when a default was flagged), then persist `config.json`.
 ///
 /// Thin wrapper over the PURE [`apply_models_register`] (which owns the validation + catalogue
 /// mutation, unit-tested without touching `~/.koma/config.json`): persists only on a
@@ -1040,6 +1068,53 @@ fn broker_models_invoke(
 fn broker_models_register(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
     let reply = apply_models_register(&mut state.rest.config, ext_id, params);
     if reply.get("registered").is_some() {
+        // W12b: when this call marked a preferred (`default: true`) model, VACUUM-FILL the
+        // Main role with it iff Main is currently unset OR only the keyless koma-free
+        // placeholder — NEVER overriding a real user choice (first vacuum-fill wins; a later
+        // extension only hints via the additive `recommendedBy` wire flag). The foreground
+        // session's settings supply the session-override half of the "is Main set?" check.
+        if let Some(default_uuid) = reply
+            .get("defaultUuid")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            let settings = state
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.clone())
+                .unwrap_or_default();
+            if let Some(name) = try_vacuum_fill_main(&mut state.rest.config, &settings, &default_uuid)
+            {
+                // The new Main was assigned GLOBALLY. Clear any koma-free placeholder
+                // session-local Main override on the foreground session so /free doesn't SHADOW
+                // it (the toast would otherwise lie). Snapshot the koma-free provider uuids
+                // before the mutable session borrow.
+                let koma_free_uuids: HashSet<String> = state
+                    .rest
+                    .config
+                    .providers
+                    .iter()
+                    .filter(|p| p.api_type == ApiType::KomaFree)
+                    .map(|p| p.uuid.clone())
+                    .collect();
+                if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                    let before = sess.settings.session_models.len();
+                    sess.settings.session_models.retain(|e| {
+                        !(e.effective_roles().contains(&ModelRole::Main)
+                            && koma_free_uuids.contains(&e.provider_uuid))
+                    });
+                    if sess.settings.session_models.len() != before {
+                        let _ = sess.save();
+                    }
+                }
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast_info(format!("model {name} set by extension {ext_id}"));
+            }
+        }
         if let Err(e) = state.rest.config.save() {
             store::append_global_error_log(
                 "ext models",
@@ -1063,9 +1138,10 @@ fn apply_models_register(config: &mut AppConfig, ext_id: &str, params: &Value) -
     if models.len() > MAX_REGISTER_MODELS {
         return json!({ "error": format!("too many models (max {MAX_REGISTER_MODELS})") });
     }
-    // Validate + collect (id, name) up front — a bad entry rejects the WHOLE batch (atomic:
-    // nothing is registered unless every entry is valid).
-    let mut parsed: Vec<(String, String)> = Vec::with_capacity(models.len());
+    // Validate + collect (id, name, is_default) up front — a bad entry rejects the WHOLE batch
+    // (atomic: nothing is registered unless every entry is valid).
+    let mut parsed: Vec<(String, String, bool)> = Vec::with_capacity(models.len());
+    let mut default_count = 0usize;
     for m in models {
         let id = m.get("id").and_then(Value::as_str).unwrap_or("").trim();
         let name = m.get("name").and_then(Value::as_str).unwrap_or("").trim();
@@ -1075,51 +1151,147 @@ fn apply_models_register(config: &mut AppConfig, ext_id: &str, params: &Value) -
         if id.len() > MAX_MODEL_FIELD_LEN || name.len() > MAX_MODEL_FIELD_LEN {
             return json!({ "error": format!("model id/name too long (max {MAX_MODEL_FIELD_LEN})") });
         }
-        parsed.push((id.to_string(), name.to_string()));
+        // W12b: at most ONE entry per call may flag itself the extension's preferred default.
+        let is_default = m.get("default").and_then(Value::as_bool).unwrap_or(false);
+        if is_default {
+            default_count += 1;
+        }
+        parsed.push((id.to_string(), name.to_string(), is_default));
+    }
+    if default_count > 1 {
+        return json!({ "error": "multiple defaults in one call" });
     }
 
-    // Pick the conn the models are served by. Owned uuid, so the immutable borrow of `config`
-    // ends before the mutation below.
-    let Some(conn_uuid) = pick_ext_provider_conn(config, ext_id) else {
-        // Distinguish "no account connected" from "connected but account-login-only".
-        let has_conn = config
-            .oauth_conns
-            .iter()
-            .any(|c| c.ext_id.as_deref() == Some(ext_id));
-        return if has_conn {
-            json!({ "error": "provider is account-login only" })
-        } else {
-            json!({ "error": "no connected oauth account for this extension" })
-        };
+    // Pick the ANCHOR the models are served by — a caller-owned key-backed provider OR oauth
+    // conn (W12b generalization). Owned uuid, so the immutable borrow of `config` ends before
+    // the mutation below.
+    let anchor_uuid = match pick_ext_anchor(config, ext_id, params) {
+        Ok(u) => u,
+        Err(e) => return e,
     };
 
     // Register each model: dedupe by (provider_uuid, model_id) — update the name in place
-    // (KEEP uuid, the stability contract), else mint a fresh role-less entry.
+    // (KEEP uuid, the stability contract), else mint a fresh role-less entry. Track the uuid
+    // of the entry flagged `default: true` (if any) so the caller can vacuum-fill Main.
     let mut uuids: Vec<String> = Vec::with_capacity(parsed.len());
-    for (id, name) in parsed {
-        if let Some(existing) = config
+    let mut default_uuid: Option<String> = None;
+    for (id, name, is_default) in parsed {
+        let uuid = if let Some(existing) = config
             .models
             .iter_mut()
-            .find(|e| e.provider_uuid == conn_uuid && e.model_id == id)
+            .find(|e| e.provider_uuid == anchor_uuid && e.model_id == id)
         {
             existing.name = name;
-            uuids.push(existing.uuid.clone());
+            existing.uuid.clone()
         } else {
             let entry = ModelEntry {
                 uuid: new_uuid(),
                 name,
                 model_id: id,
-                provider_uuid: conn_uuid.clone(),
+                provider_uuid: anchor_uuid.clone(),
                 route: None,
                 roles: Vec::new(),
                 role: None,
                 source_uuid: None,
             };
-            uuids.push(entry.uuid.clone());
+            let u = entry.uuid.clone();
             config.models.push(entry);
+            u
+        };
+        if is_default {
+            default_uuid = Some(uuid.clone());
         }
+        uuids.push(uuid);
     }
-    json!({ "registered": uuids.len(), "uuids": uuids })
+
+    // W12b: record the extension's PREFERRED model (persisted — drives vacuum-fill Main + the
+    // `recommendedBy` picker hint) and echo its uuid so the persisting wrapper can vacuum-fill.
+    // Only when THIS call explicitly flagged one.
+    let mut reply = json!({ "registered": uuids.len(), "uuids": uuids });
+    if let Some(du) = default_uuid {
+        config.ext_preferred_models.insert(ext_id.to_string(), du.clone());
+        reply["defaultUuid"] = json!(du);
+    }
+    reply
+}
+
+/// W12b: pick the ANCHOR uuid a `models.register` call serves its models from — generalizing
+/// W12's oauth-only [`pick_ext_provider_conn`] to ALSO consider the extension's key-backed
+/// [`ProviderConn`]s (injected via `providers.register`). Returns the anchor uuid (used as the
+/// registered models' `provider_uuid`), or an error [`Value`] the caller replies verbatim.
+///
+/// An explicit `{ "provider": "<uuid>" }` param must be CALLER-OWNED — a key-backed provider
+/// with `ext_id == ext_id`, or an oauth conn with `ext_id == ext_id` that is a usable model
+/// provider (has [`OAuthConn::ext_model_route`]). An owned-but-account-login-only conn →
+/// `"provider is account-login only"`; anything else → `"provider not owned by this extension"`.
+///
+/// Absent, the eligible anchors are gathered (all key-backed ext providers ∪ all ext oauth
+/// conns that are model providers): exactly one → use it; more than one →
+/// `"multiple providers; specify provider uuid"`; zero → the SAME two W12 errors as before
+/// (`"provider is account-login only"` when the ext has an account-login-only conn but no
+/// usable anchor, else `"no connected oauth account for this extension"`).
+fn pick_ext_anchor(config: &AppConfig, ext_id: &str, params: &Value) -> Result<String, Value> {
+    // Explicit provider uuid: must be caller-owned AND a usable anchor.
+    if let Some(req) = params
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        // A key-backed provider owned by this extension is always usable.
+        if config
+            .providers
+            .iter()
+            .any(|p| p.uuid == req && p.ext_id.as_deref() == Some(ext_id))
+        {
+            return Ok(req.to_string());
+        }
+        // An oauth conn owned by this extension is usable only when it carries model-provider
+        // meta (endpoint + api_type); otherwise it is account-login-only.
+        if let Some(conn) = config
+            .oauth_conns
+            .iter()
+            .find(|c| c.uuid == req && c.ext_id.as_deref() == Some(ext_id))
+        {
+            return if conn.ext_model_route().is_some() {
+                Ok(req.to_string())
+            } else {
+                Err(json!({ "error": "provider is account-login only" }))
+            };
+        }
+        return Err(json!({ "error": "provider not owned by this extension" }));
+    }
+
+    // No explicit provider: gather every eligible anchor this extension owns.
+    let mut anchors: Vec<String> = config
+        .providers
+        .iter()
+        .filter(|p| p.ext_id.as_deref() == Some(ext_id))
+        .map(|p| p.uuid.clone())
+        .collect();
+    anchors.extend(
+        config
+            .oauth_conns
+            .iter()
+            .filter(|c| c.ext_id.as_deref() == Some(ext_id) && c.ext_model_route().is_some())
+            .map(|c| c.uuid.clone()),
+    );
+    match anchors.len() {
+        1 => Ok(anchors.remove(0)),
+        0 => {
+            // Distinguish "connected but account-login-only" from "nothing connected at all".
+            let has_conn = config
+                .oauth_conns
+                .iter()
+                .any(|c| c.ext_id.as_deref() == Some(ext_id));
+            if has_conn {
+                Err(json!({ "error": "provider is account-login only" }))
+            } else {
+                Err(json!({ "error": "no connected oauth account for this extension" }))
+            }
+        }
+        _ => Err(json!({ "error": "multiple providers; specify provider uuid" })),
+    }
 }
 
 /// W12: `models.unregister { ids?: [String] }` → remove entries from `config.models` this
@@ -1149,12 +1321,21 @@ fn broker_models_unregister(state: &mut AppState, ext_id: &str, params: &Value) 
 /// PURE core of [`broker_models_unregister`]: apply the removal to `config.models` and return
 /// the reply JSON. Does NOT persist (the wrapper saves). See [`broker_models_unregister`].
 fn apply_models_unregister(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
-    // The provider_uuids owned by THIS extension (its oauth conns) — the ownership wall.
+    // The provider_uuids owned by THIS extension — its oauth conns (W11/W12) AND its key-backed
+    // providers (W12b) — the ownership wall. A model served by either kind of ext-owned anchor
+    // is the extension's own; a model on any other provider is never touched.
     let owned: HashSet<String> = config
         .oauth_conns
         .iter()
         .filter(|c| c.ext_id.as_deref() == Some(ext_id))
         .map(|c| c.uuid.clone())
+        .chain(
+            config
+                .providers
+                .iter()
+                .filter(|p| p.ext_id.as_deref() == Some(ext_id))
+                .map(|p| p.uuid.clone()),
+        )
         .collect();
     if owned.is_empty() {
         return json!({ "removed": 0 });
@@ -1188,19 +1369,215 @@ fn apply_models_unregister(config: &mut AppConfig, ext_id: &str, params: &Value)
     json!({ "removed": before - config.models.len() })
 }
 
-/// W12: the OAuth-conn uuid `models.register` serves an extension's models from — the MOST
-/// RECENT (last-appended; conns are pushed on login) conn owned by `ext_id` that is a usable
-/// model provider (both a `chat_endpoint` and a recognised `api_type`, via
-/// [`crate::model::app_config::OAuthConn::ext_model_route`]). `None` when the extension has
-/// no conn at all, or none of its conns is a model provider (all account-login-only). The
-/// returned uuid becomes the registered models' `provider_uuid`.
-fn pick_ext_provider_conn(config: &AppConfig, ext_id: &str) -> Option<String> {
-    config
-        .oauth_conns
+// ─── W12b providers.register / providers.unregister + vacuum-fill ───────────────
+
+/// W12b: `providers.register { name, endpoint, api_type, key }` → inject a KEY-BACKED provider
+/// (a first-party gateway the extension owns) into the GLOBAL catalogue (`config.providers`),
+/// stamped with the caller's `ext_id`. SYNC on the loop (cheap config mutation + save).
+///
+/// Validation: `name` non-empty ≤ [`MAX_PROVIDER_NAME_LEN`]; `endpoint` parses as an http(s)
+/// URL (via the `url` crate); `api_type` ∈ {`"openai"`, `"anthropic"`} (the same normalize
+/// semantics as W12's [`OAuthConn::ext_model_route`] — `"openai"` → [`ApiType::OpenAiCompatible`],
+/// `"anthropic"` → [`ApiType::AnthropicCompatible`]); `key` non-empty ≤ [`MAX_PROVIDER_KEY_LEN`].
+///
+/// KEY-ROTATION CONTRACT: dedupe is per (caller `ext_id`, `name`) — a re-register of the same
+/// name UPDATES the existing provider's `endpoint` / `api_key` / `api_type` IN PLACE while
+/// KEEPING its uuid (so a registered model bound to that provider keeps resolving, and a caller
+/// can rotate a leaked key without re-registering its models). Else a fresh [`ProviderConn`]
+/// with a v4 uuid is minted. Reply `{ "uuid": <stable uuid> }`.
+///
+/// Thin wrapper over the PURE [`apply_providers_register`]: persists only on success.
+fn broker_providers_register(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let reply = apply_providers_register(&mut state.rest.config, ext_id, params);
+    if reply.get("uuid").is_some() {
+        if let Err(e) = state.rest.config.save() {
+            store::append_global_error_log(
+                "ext providers",
+                &format!("[{ext_id}] providers.register save failed: {e:#}"),
+            );
+        }
+    }
+    reply
+}
+
+/// PURE core of [`broker_providers_register`]: validate + apply. Does NOT persist. See that
+/// function for the full contract.
+fn apply_providers_register(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("").trim();
+    if name.is_empty() {
+        return json!({ "error": "providers.register requires a non-empty 'name'" });
+    }
+    if name.len() > MAX_PROVIDER_NAME_LEN {
+        return json!({ "error": format!("provider name too long (max {MAX_PROVIDER_NAME_LEN})") });
+    }
+    let endpoint = params.get("endpoint").and_then(Value::as_str).unwrap_or("").trim();
+    if !is_http_url(endpoint) {
+        return json!({ "error": "endpoint must be a valid http(s) URL" });
+    }
+    let api_type = match normalize_provider_api_type(params.get("api_type").and_then(Value::as_str)) {
+        Some(t) => t,
+        None => return json!({ "error": "api_type must be 'openai' or 'anthropic'" }),
+    };
+    let key = params.get("key").and_then(Value::as_str).unwrap_or("").trim();
+    if key.is_empty() {
+        return json!({ "error": "providers.register requires a non-empty 'key'" });
+    }
+    if key.len() > MAX_PROVIDER_KEY_LEN {
+        return json!({ "error": format!("key too long (max {MAX_PROVIDER_KEY_LEN})") });
+    }
+
+    // Dedupe per (caller ext_id, name): update in place keeping the uuid (key-rotation), else mint.
+    if let Some(existing) = config
+        .providers
+        .iter_mut()
+        .find(|p| p.ext_id.as_deref() == Some(ext_id) && p.name == name)
+    {
+        existing.endpoint = endpoint.to_string();
+        existing.api_key = key.to_string();
+        existing.api_type = api_type;
+        return json!({ "uuid": existing.uuid.clone() });
+    }
+    let uuid = new_uuid();
+    config.providers.push(ProviderConn {
+        uuid: uuid.clone(),
+        name: name.to_string(),
+        api_type,
+        endpoint: endpoint.to_string(),
+        api_key: key.to_string(),
+        ext_id: Some(ext_id.to_string()),
+    });
+    json!({ "uuid": uuid })
+}
+
+/// W12b: `providers.unregister { ids?: [String] }` → remove KEY-BACKED providers this extension
+/// OWNS (the ownership wall — an extension can never unregister another extension's or the
+/// user's own providers). `ids` absent → remove ALL of the caller's; present → remove only the
+/// caller-owned providers whose `uuid` OR `name` matches one of `ids` (case-insensitively).
+///
+/// Removing a provider ALSO removes every model whose `provider_uuid` pointed at it (orphan
+/// prevention — the SAME [`AppConfig::remove_models_by_providers`] sweep the uninstall purge
+/// uses). Reply `{ "removed": n }` (providers removed), persisting only when something changed.
+fn broker_providers_unregister(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let reply = apply_providers_unregister(&mut state.rest.config, ext_id, params);
+    if reply.get("removed").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+        if let Err(e) = state.rest.config.save() {
+            store::append_global_error_log(
+                "ext providers",
+                &format!("[{ext_id}] providers.unregister save failed: {e:#}"),
+            );
+        }
+    }
+    reply
+}
+
+/// PURE core of [`broker_providers_unregister`]: apply the removal + orphan-model sweep. Does
+/// NOT persist. See that function for the full contract.
+fn apply_providers_unregister(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
+    // Optional id filter (uuid OR name, case-insensitive). Absent → remove all owned.
+    let id_filter: Option<Vec<String>> = params.get("ids").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    });
+
+    // The caller-owned providers to remove (uuids), honouring the id filter.
+    let dead: HashSet<String> = config
+        .providers
         .iter()
-        .rev()
-        .find(|c| c.ext_id.as_deref() == Some(ext_id) && c.ext_model_route().is_some())
-        .map(|c| c.uuid.clone())
+        .filter(|p| p.ext_id.as_deref() == Some(ext_id))
+        .filter(|p| match &id_filter {
+            None => true,
+            Some(ids) => ids
+                .iter()
+                .any(|id| id.eq_ignore_ascii_case(&p.uuid) || id.eq_ignore_ascii_case(&p.name)),
+        })
+        .map(|p| p.uuid.clone())
+        .collect();
+    if dead.is_empty() {
+        return json!({ "removed": 0 });
+    }
+    // Orphan prevention: drop models served by a removed provider FIRST (shared sweep), then
+    // the providers themselves.
+    config.remove_models_by_providers(&dead);
+    config.providers.retain(|p| !dead.contains(&p.uuid));
+    json!({ "removed": dead.len() })
+}
+
+/// W12b: whether `endpoint` is a well-formed http(s) URL — the endpoint gate for
+/// `providers.register`. Uses the `url` crate (already a dependency) and additionally requires
+/// an http/https scheme (a `file:`/`data:`/etc. URL parses but is never a chat endpoint).
+fn is_http_url(endpoint: &str) -> bool {
+    match url::Url::parse(endpoint) {
+        Ok(u) => matches!(u.scheme(), "http" | "https"),
+        Err(_) => false,
+    }
+}
+
+/// W12b: normalize a `providers.register` `api_type` wire string to a static-key [`ApiType`],
+/// reusing W12's `"openai"` / `"anthropic"` vocabulary (see [`OAuthConn::ext_model_route`]).
+/// `None` for anything unrecognised (or absent) so the caller rejects it — koma-free / Codex
+/// wire types are never user-injectable through this verb.
+fn normalize_provider_api_type(raw: Option<&str>) -> Option<ApiType> {
+    match raw.map(str::trim) {
+        Some("openai") => Some(ApiType::OpenAiCompatible),
+        Some("anthropic") => Some(ApiType::AnthropicCompatible),
+        _ => None,
+    }
+}
+
+/// W12b: whether the Main role is currently UNSET for VACUUM-FILL purposes — NO REAL model
+/// holds Main in EITHER scope (the global catalogue `config.models` OR the session override
+/// layer `settings.session_models`). A "real" holder is one backed by a non-koma-free provider;
+/// the keyless koma-free placeholder (`ApiType::KomaFree`, the `/free` toggle's mark and the
+/// onboarding default) is NOT a deliberate provider choice and counts as unset.
+///
+/// Requiring BOTH scopes to be free/unset is load-bearing: a session temporarily toggled to
+/// `/free` must NOT let an extension steal a real GLOBAL Main the user configured — only when
+/// there is genuinely no real Main anywhere does the extension's default fill in. Mirrors
+/// `commands::free::koma_free_main_idx`'s koma-free detector applied per scope.
+fn main_is_unset_or_free(config: &AppConfig, settings: &Settings) -> bool {
+    let is_koma_free = |e: &ModelEntry| {
+        config
+            .providers
+            .iter()
+            .any(|p| p.uuid == e.provider_uuid && p.api_type == ApiType::KomaFree)
+    };
+    // A REAL Main holder: holds Main AND is not koma-free-backed.
+    let has_real_main = |models: &[ModelEntry]| {
+        models
+            .iter()
+            .any(|e| e.effective_roles().contains(&ModelRole::Main) && !is_koma_free(e))
+    };
+    !has_real_main(&config.models) && !has_real_main(&settings.session_models)
+}
+
+/// W12b: VACUUM-FILL the Main role with the extension's preferred model `preferred_uuid` — but
+/// ONLY when [`main_is_unset_or_free`] (Main unassigned / only the koma-free placeholder). This
+/// is the "first vacuum-fill wins" gate: once a real model holds Main, a later extension's
+/// default never fights it (it only surfaces the `recommendedBy` picker hint). Assigns Main via
+/// the SAME `AppConfig::upsert_model` path the settings UI's `set_model` uses (per-role steal
+/// by uuid), keeping the entry's existing model_id/name/provider_uuid and ADDING the Main role.
+/// Returns `Some(model_name)` when it assigned (so the caller toasts), `None` otherwise.
+fn try_vacuum_fill_main(
+    config: &mut AppConfig,
+    settings: &Settings,
+    preferred_uuid: &str,
+) -> Option<String> {
+    if !main_is_unset_or_free(config, settings) {
+        return None;
+    }
+    // The preferred model must still exist in the global catalogue (it was just registered).
+    let mut entry = config.models.iter().find(|m| m.uuid == preferred_uuid)?.clone();
+    let name = entry.name.clone();
+    if !entry.roles.contains(&ModelRole::Main) {
+        entry.roles.push(ModelRole::Main);
+    }
+    // Canonical Main-assignment path: per-role steal by uuid (same as the settings UI).
+    config.upsert_model(entry);
+    Some(name)
 }
 
 /// `context.set { text }` → PUBLISH `text` as this extension's persistent context
@@ -1560,9 +1937,14 @@ mod tests {
             ),
             (&["chat.prompt"], ChatPrompt),
             (&["models.invoke"], ModelsInvoke),
-            // W12: models.register/unregister need `models:contribute`, DISTINCT from
-            // `models:invoke` despite sharing the `models.` prefix (exact-verb gate).
-            (&["models.register", "models.unregister"], ModelsContribute),
+            // W12/W12b: models.register/unregister AND providers.register/unregister all need
+            // `models:contribute`, DISTINCT from `models:invoke` despite sharing prefixes
+            // (exact-verb gate). An extension that may contribute models may also contribute
+            // the key-backed gateways that serve them.
+            (
+                &["models.register", "models.unregister", "providers.register", "providers.unregister"],
+                ModelsContribute,
+            ),
             (&["context.set", "context.clear"], ContextPublish),
         ];
 
@@ -1631,6 +2013,26 @@ mod tests {
             method_permitted("models.bogus", &[ModelsContribute]),
             GateDecision::UnknownMethod
         );
+
+        // W12b: providers.register/unregister share the `models:contribute` grant with the
+        // models.* contribution verbs, and stay exact-verb gated (no prefix leak).
+        assert_eq!(
+            method_permitted("providers.register", &[ModelsContribute]),
+            GateDecision::Allow
+        );
+        assert_eq!(
+            method_permitted("providers.unregister", &[ModelsContribute]),
+            GateDecision::Allow
+        );
+        assert_eq!(
+            method_permitted("providers.register", &[ModelsInvoke]),
+            GateDecision::Deny(ModelsContribute),
+            "models:invoke must NOT unlock providers.register"
+        );
+        assert_eq!(
+            method_permitted("providers.bogus", &[ModelsContribute]),
+            GateDecision::UnknownMethod
+        );
     }
 
     /// `parse_grants` maps known wire strings and drops unknown ones (fail-closed).
@@ -1688,6 +2090,7 @@ mod tests {
             "sessions.list",
             "chat.prompt",
             "models.invoke",
+            "providers.register",
             "context.set",
         ] {
             assert!(is_broker_method(m), "{m} must route to the broker");
@@ -2925,5 +3328,349 @@ mod tests {
             reached.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("at least one model")),
             "a granted models.register reaches its handler, got {reached}"
         );
+    }
+
+    // ─── W12b providers.register / providers.unregister + anchor generalization + vacuum-fill ─
+    //
+    // Exercised through the PURE cores (`apply_providers_*`, `apply_models_register`,
+    // `try_vacuum_fill_main`, `main_is_unset_or_free`) so no test writes `~/.koma/config.json`;
+    // the persisting wrappers save only on a real change. The grant gate is proven end-to-end in
+    // `grant_gate_truth_table`.
+
+    /// A KEY-BACKED ext provider owned by `ext_id`.
+    fn ext_key_provider(uuid: &str, ext_id: &str, name: &str) -> ProviderConn {
+        ProviderConn {
+            uuid: uuid.to_string(),
+            name: name.to_string(),
+            api_type: ApiType::OpenAiCompatible,
+            endpoint: "https://gw.test/v1".to_string(),
+            api_key: "k".to_string(),
+            ext_id: Some(ext_id.to_string()),
+        }
+    }
+
+    /// providers.register mints a key-backed provider stamped with `ext_id`; a re-register of the
+    /// same (ext, name) ROTATES key/endpoint/api_type in place KEEPING the uuid (the key-rotation
+    /// contract — bound models keep resolving).
+    #[test]
+    fn providers_register_mints_and_rotates_keeping_uuid() {
+        let mut config = AppConfig::default();
+        let out = apply_providers_register(
+            &mut config,
+            "my.ext",
+            &json!({ "name": "Gateway", "endpoint": "https://api.gw.test/v1", "api_type": "openai", "key": "sk-1" }),
+        );
+        let uuid = out["uuid"].as_str().expect("uuid replied").to_string();
+        assert_eq!(config.providers.len(), 1);
+        let p = &config.providers[0];
+        assert_eq!(p.ext_id.as_deref(), Some("my.ext"), "stamped with the caller's ext id");
+        assert_eq!(p.api_type, ApiType::OpenAiCompatible);
+        assert_eq!(p.api_key, "sk-1");
+
+        // Re-register the same name → rotate key + endpoint + api_type, SAME uuid, no new entry.
+        let out2 = apply_providers_register(
+            &mut config,
+            "my.ext",
+            &json!({ "name": "Gateway", "endpoint": "https://api.gw.test/v2", "api_type": "anthropic", "key": "sk-2" }),
+        );
+        assert_eq!(out2["uuid"].as_str(), Some(uuid.as_str()), "key-rotation keeps the uuid");
+        assert_eq!(config.providers.len(), 1, "no new entry on rotation");
+        let p = &config.providers[0];
+        assert_eq!(p.api_key, "sk-2");
+        assert_eq!(p.endpoint, "https://api.gw.test/v2");
+        assert_eq!(p.api_type, ApiType::AnthropicCompatible);
+    }
+
+    /// providers.register rejects every invalid field (empty name, non-URL / non-http endpoint,
+    /// bad api_type, empty key) and mutates nothing.
+    #[test]
+    fn providers_register_rejects_bad_input() {
+        let mut config = AppConfig::default();
+        let mut bad = |p: Value| apply_providers_register(&mut config, "my.ext", &p);
+        assert!(bad(json!({ "name": "  ", "endpoint": "https://x.test", "api_type": "openai", "key": "k" })).get("error").is_some());
+        assert!(bad(json!({ "name": "G", "endpoint": "not a url", "api_type": "openai", "key": "k" })).get("error").is_some());
+        assert!(bad(json!({ "name": "G", "endpoint": "ftp://x.test", "api_type": "openai", "key": "k" })).get("error").is_some(), "non-http scheme rejected");
+        assert!(bad(json!({ "name": "G", "endpoint": "https://x.test", "api_type": "codex", "key": "k" })).get("error").is_some(), "koma-free/codex wire types not injectable");
+        assert!(bad(json!({ "name": "G", "endpoint": "https://x.test", "api_type": "openai", "key": "  " })).get("error").is_some());
+        assert!(config.providers.is_empty(), "no invalid provider is ever stored");
+    }
+
+    /// providers.unregister enforces the ownership wall (never another ext's / a native
+    /// provider), honours the id filter (uuid OR name, case-insensitive), and SWEEPS orphaned
+    /// models.
+    #[test]
+    fn providers_unregister_ownership_wall_and_orphan_sweep() {
+        let mut config = AppConfig::default();
+        config.providers.push(ext_key_provider("p-a1", "ext.a", "A1"));
+        config.providers.push(ext_key_provider("p-a2", "ext.a", "A2"));
+        config.providers.push(ext_key_provider("p-b", "ext.b", "B"));
+        config.providers.push(ProviderConn {
+            uuid: "p-native".to_string(),
+            name: "native".to_string(),
+            ..Default::default()
+        });
+        for (u, prov) in [("m-a1", "p-a1"), ("m-a2", "p-a2"), ("m-b", "p-b"), ("m-native", "p-native")] {
+            config.models.push(ModelEntry {
+                uuid: u.to_string(),
+                provider_uuid: prov.to_string(),
+                ..Default::default()
+            });
+        }
+
+        // ext A can never remove B's or native providers (ownership wall).
+        let blocked = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["p-b", "p-native"] }));
+        assert_eq!(blocked["removed"], json!(0));
+        assert_eq!(config.providers.len(), 4);
+
+        // ext A remove by NAME (case-insensitive) → removes A1 + its orphaned model only.
+        let by_name = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["a1"] }));
+        assert_eq!(by_name["removed"], json!(1));
+        assert!(config.providers.iter().all(|p| p.uuid != "p-a1"));
+        assert!(config.models.iter().all(|m| m.provider_uuid != "p-a1"), "orphaned model swept");
+        assert!(config.models.iter().any(|m| m.uuid == "m-a2"), "A2's model survives");
+
+        // ext A remove ALL (ids absent) → removes A2 + its model; B + native untouched.
+        let all_a = apply_providers_unregister(&mut config, "ext.a", &json!({}));
+        assert_eq!(all_a["removed"], json!(1));
+        assert!(config.providers.iter().all(|p| p.ext_id.as_deref() != Some("ext.a")));
+        assert!(config.providers.iter().any(|p| p.uuid == "p-b"), "B untouched");
+        assert!(config.providers.iter().any(|p| p.uuid == "p-native"), "native untouched");
+        assert!(config.models.iter().any(|m| m.uuid == "m-native"), "native model untouched");
+    }
+
+    /// models.register anchors on a KEY-BACKED ext provider when that's the ext's only anchor
+    /// (no oauth conn needed anymore — the W12b generalization).
+    #[test]
+    fn models_register_anchors_on_key_backed_provider() {
+        let mut config = AppConfig::default();
+        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        let out = apply_models_register(&mut config, "my.ext", &json!({ "models": [{ "id": "m1", "name": "M1" }] }));
+        assert_eq!(out["registered"], json!(1));
+        assert_eq!(config.models.len(), 1);
+        assert_eq!(config.models[0].provider_uuid, "p-a", "served by the key-backed provider");
+    }
+
+    /// The explicit `{ provider }` param must be caller-owned; an account-login-only conn is
+    /// rejected; two eligible anchors without a provider param are ambiguous.
+    #[test]
+    fn models_register_provider_param_and_ambiguity() {
+        let mut config = AppConfig::default();
+        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        config.oauth_conns.push(ext_conn("c-a", "my.ext", true)); // second usable anchor
+        config.oauth_conns.push(ext_conn("c-login", "my.ext", false)); // account-login-only
+
+        // Two eligible anchors + no provider param → ambiguous.
+        let ambiguous = apply_models_register(&mut config, "my.ext", &json!({ "models": [{ "id": "m", "name": "M" }] }));
+        assert!(
+            ambiguous.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("multiple providers")),
+            "got {ambiguous}"
+        );
+
+        // Explicit provider not owned → rejected.
+        let not_owned = apply_models_register(&mut config, "my.ext", &json!({ "provider": "someone-else", "models": [{ "id": "m", "name": "M" }] }));
+        assert!(
+            not_owned.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("not owned")),
+            "got {not_owned}"
+        );
+
+        // Explicit account-login-only conn → rejected.
+        let login_only = apply_models_register(&mut config, "my.ext", &json!({ "provider": "c-login", "models": [{ "id": "m", "name": "M" }] }));
+        assert!(
+            login_only.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("account-login only")),
+            "got {login_only}"
+        );
+
+        // Explicit owned key-backed provider → registers there.
+        let ok = apply_models_register(&mut config, "my.ext", &json!({ "provider": "p-a", "models": [{ "id": "m", "name": "M" }] }));
+        assert_eq!(ok["registered"], json!(1));
+        assert_eq!(config.models.iter().find(|m| m.model_id == "m").unwrap().provider_uuid, "p-a");
+    }
+
+    /// `default: true` records the ext's preferred model + echoes `defaultUuid`; more than one
+    /// default in a single call is rejected ATOMICALLY (nothing registered).
+    #[test]
+    fn models_register_default_records_preferred() {
+        let mut config = AppConfig::default();
+        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+
+        let two = apply_models_register(&mut config, "my.ext", &json!({ "models": [
+            { "id": "a", "name": "A", "default": true },
+            { "id": "b", "name": "B", "default": true },
+        ] }));
+        assert!(
+            two.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("multiple defaults")),
+            "got {two}"
+        );
+        assert!(config.models.is_empty(), "a multi-default batch registers nothing");
+
+        let out = apply_models_register(&mut config, "my.ext", &json!({ "models": [
+            { "id": "a", "name": "A" },
+            { "id": "b", "name": "B", "default": true },
+        ] }));
+        assert_eq!(out["registered"], json!(2));
+        let du = out["defaultUuid"].as_str().expect("defaultUuid echoed");
+        assert_eq!(config.ext_preferred_models.get("my.ext").map(String::as_str), Some(du));
+        assert_eq!(config.models.iter().find(|m| m.model_id == "b").unwrap().uuid, du, "the flagged entry's uuid");
+    }
+
+    /// VACUUM-FILL: when Main is unset the preferred model is assigned Main (returns its name); a
+    /// koma-free placeholder Main also counts as unset (fill wins + steals Main); a REAL user Main
+    /// is untouched.
+    #[test]
+    fn vacuum_fill_only_when_main_unset_or_free() {
+        let settings = Settings::default();
+
+        // Case 1: Main unset → fill.
+        let mut config = AppConfig::default();
+        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        config.models.push(ModelEntry {
+            uuid: "m-pref".to_string(),
+            name: "Big".to_string(),
+            provider_uuid: "p-a".to_string(),
+            ..Default::default()
+        });
+        assert!(main_is_unset_or_free(&config, &settings));
+        assert_eq!(try_vacuum_fill_main(&mut config, &settings, "m-pref").as_deref(), Some("Big"));
+        assert!(
+            config.models.iter().find(|m| m.uuid == "m-pref").unwrap().effective_roles().contains(&ModelRole::Main),
+            "Main assigned"
+        );
+
+        // Case 2: a REAL user Main already set → NOT filled.
+        let mut c2 = AppConfig::default();
+        c2.providers.push(ProviderConn {
+            uuid: "p-real".to_string(),
+            name: "real".to_string(),
+            api_type: ApiType::OpenAiCompatible,
+            endpoint: "https://x/v1".to_string(),
+            api_key: "sk".to_string(),
+            ext_id: None,
+        });
+        c2.models.push(ModelEntry {
+            uuid: "m-user".to_string(),
+            provider_uuid: "p-real".to_string(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        c2.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        c2.models.push(ModelEntry {
+            uuid: "m-pref".to_string(),
+            name: "Big".to_string(),
+            provider_uuid: "p-a".to_string(),
+            ..Default::default()
+        });
+        assert!(!main_is_unset_or_free(&c2, &settings), "a real Main is set");
+        assert_eq!(try_vacuum_fill_main(&mut c2, &settings, "m-pref"), None);
+        assert!(
+            c2.models.iter().find(|m| m.uuid == "m-user").unwrap().effective_roles().contains(&ModelRole::Main),
+            "user Main kept"
+        );
+
+        // Case 3: koma-free placeholder Main counts as unset → fill (steals Main from placeholder).
+        let mut c3 = AppConfig::default();
+        c3.providers.push(ProviderConn {
+            uuid: "koma".to_string(),
+            name: "koma free".to_string(),
+            api_type: ApiType::KomaFree,
+            endpoint: "https://kf/v1".to_string(),
+            api_key: String::new(),
+            ext_id: None,
+        });
+        c3.models.push(ModelEntry {
+            uuid: "kf".to_string(),
+            provider_uuid: "koma".to_string(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        c3.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        c3.models.push(ModelEntry {
+            uuid: "m-pref".to_string(),
+            name: "Big".to_string(),
+            provider_uuid: "p-a".to_string(),
+            ..Default::default()
+        });
+        assert!(main_is_unset_or_free(&c3, &settings), "koma-free placeholder counts as unset");
+        assert_eq!(try_vacuum_fill_main(&mut c3, &settings, "m-pref").as_deref(), Some("Big"));
+        assert!(c3.models.iter().find(|m| m.uuid == "m-pref").unwrap().effective_roles().contains(&ModelRole::Main));
+        assert!(
+            !c3.models.iter().find(|m| m.uuid == "kf").unwrap().effective_roles().contains(&ModelRole::Main),
+            "placeholder lost Main (per-role steal)"
+        );
+
+        // Case 4 (hardening): a session TEMPORARILY on /free (a session-local koma-free Main
+        // override) must NOT let an extension steal a REAL global Main the user configured —
+        // both scopes must be free/unset before a fill.
+        let mut c4 = AppConfig::default();
+        c4.providers.push(ProviderConn {
+            uuid: "koma".to_string(),
+            name: "koma free".to_string(),
+            api_type: ApiType::KomaFree,
+            endpoint: "https://kf/v1".to_string(),
+            api_key: String::new(),
+            ext_id: None,
+        });
+        c4.providers.push(ProviderConn {
+            uuid: "p-real".to_string(),
+            name: "real".to_string(),
+            api_type: ApiType::OpenAiCompatible,
+            endpoint: "https://x/v1".to_string(),
+            api_key: "sk".to_string(),
+            ext_id: None,
+        });
+        c4.models.push(ModelEntry {
+            uuid: "m-global".to_string(),
+            provider_uuid: "p-real".to_string(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        c4.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        c4.models.push(ModelEntry {
+            uuid: "m-pref".to_string(),
+            name: "Big".to_string(),
+            provider_uuid: "p-a".to_string(),
+            ..Default::default()
+        });
+        let mut free_settings = Settings::default();
+        free_settings.session_models.push(ModelEntry {
+            uuid: "s-kf".to_string(),
+            provider_uuid: "koma".to_string(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        assert!(
+            !main_is_unset_or_free(&c4, &free_settings),
+            "a session on /free must NOT expose a real global Main to a steal"
+        );
+        assert_eq!(try_vacuum_fill_main(&mut c4, &free_settings, "m-pref"), None);
+        assert!(
+            c4.models.iter().find(|m| m.uuid == "m-global").unwrap().effective_roles().contains(&ModelRole::Main),
+            "the real global Main is kept"
+        );
+    }
+
+    /// TWO extensions registering defaults do not fight: the first vacuum-fills Main; the second
+    /// finds Main already a real choice and only records its preference (drives the picker hint).
+    #[test]
+    fn two_exts_defaults_first_vacuum_wins() {
+        let mut config = AppConfig::default();
+        config.providers.push(ext_key_provider("p-a", "ext.a", "A"));
+        config.providers.push(ext_key_provider("p-b", "ext.b", "B"));
+        let settings = Settings::default();
+
+        // ext A registers a default → vacuum-fill Main (simulate the wrapper: apply then fill).
+        let a = apply_models_register(&mut config, "ext.a", &json!({ "models": [{ "id": "am", "name": "Amodel", "default": true }] }));
+        let a_uuid = a["defaultUuid"].as_str().unwrap().to_string();
+        assert_eq!(try_vacuum_fill_main(&mut config, &settings, &a_uuid).as_deref(), Some("Amodel"));
+
+        // ext B registers a default → Main is now A's (a real provider) → NO fill.
+        let b = apply_models_register(&mut config, "ext.b", &json!({ "models": [{ "id": "bm", "name": "Bmodel", "default": true }] }));
+        let b_uuid = b["defaultUuid"].as_str().unwrap().to_string();
+        assert_eq!(try_vacuum_fill_main(&mut config, &settings, &b_uuid), None, "second ext must not fight");
+
+        // Main still A's; BOTH preferences recorded (B's drives the `recommendedBy` hint).
+        let main = config.models.iter().find(|m| m.effective_roles().contains(&ModelRole::Main)).unwrap();
+        assert_eq!(main.model_id, "am");
+        assert_eq!(config.ext_preferred_models.get("ext.a").map(String::as_str), Some(a_uuid.as_str()));
+        assert_eq!(config.ext_preferred_models.get("ext.b").map(String::as_str), Some(b_uuid.as_str()));
     }
 }

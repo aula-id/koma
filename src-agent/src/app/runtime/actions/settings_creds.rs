@@ -103,6 +103,8 @@ pub(super) fn handle_save_creds(
             api_type: ApiType::OpenAiCompatible,
             endpoint: endpoint.clone(),
             api_key: api_key.clone(),
+            // First-run provider is the user's own key, never extension-managed.
+            ext_id: None,
         });
         state.rest.config.models.push(ModelEntry {
             uuid: uuid::Uuid::new_v4().to_string(),

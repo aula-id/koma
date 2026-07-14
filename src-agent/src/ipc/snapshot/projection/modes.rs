@@ -224,6 +224,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         oauth_flow: oauth_flow_snapshot(&st.oauth_flow),
         prov_sel: st.prov_sel,
         prov_delete_armed: st.prov_delete_armed,
+        prov_msg: st.prov_msg.clone(),
         prov_modal: st.prov_modal.as_ref().map(|m| ProviderModalSnapshot {
             name: m.name.clone(),
             endpoint: m.endpoint.clone(),
@@ -251,6 +252,7 @@ pub fn provider_draft_snapshot(p: &ProviderDraft) -> ProviderDraftSnapshot {
         endpoint: p.endpoint.clone(),
         api_type: api_type_token(p.api_type).to_string(),
         api_key: p.api_key.clone(),
+        ext_id: p.ext_id.clone(),
     }
 }
 

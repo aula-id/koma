@@ -223,6 +223,7 @@ fn reassigned_main_on_real_provider_wins_over_koma_free_entry() {
         api_type: ApiType::KomaFree,
         endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
         api_key: String::new(),
+        ext_id: None,
     });
     config.providers.push(ProviderConn {
         uuid: "prov-real".to_string(),
@@ -311,6 +312,7 @@ fn session_reassigned_main_wins_over_leftover_global_koma_free_main() {
         api_type: ApiType::KomaFree,
         endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
         api_key: String::new(),
+        ext_id: None,
     });
     config.providers.push(ProviderConn {
         uuid: "prov-real".to_string(),

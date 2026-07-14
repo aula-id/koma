@@ -365,6 +365,18 @@ pub struct ProviderConn {
     pub endpoint: String,
     #[serde(default)]
     pub api_key: String,
+    /// W12b: for a KEY-BACKED provider injected by an extension via the `providers.register`
+    /// broker verb (a first-party gateway the extension owns), the id of the owning extension.
+    /// `None` for every user-authored / native provider (the settings modal, `/free`, first-run
+    /// onboarding, the koma-free mint). The ownership tag the host-enforced delete guard checks
+    /// (a user cannot delete an ext-managed provider — only uninstall removes it) and the
+    /// uninstall purge sweeps by. `skip_serializing_if = "Option::is_none"` keeps a native
+    /// provider's on-disk JSON BYTE-IDENTICAL to the pre-W12b shape (the field is simply
+    /// absent), and `default` lets an older config without the key load cleanly. Never affects
+    /// resolution: `app::resolve::from_entry` keys purely on `provider_uuid`, so an ext-owned
+    /// key-backed provider flows through the identical native `config.providers` route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ext_id: Option<String>,
 }
 
 /// One model entry in the global catalogue. References its serving provider by
@@ -563,6 +575,23 @@ pub struct InstalledExtension {
     pub exec: String,
 }
 
+/// W12b: the outcome of [`AppConfig::purge_extension`] — how many catalogue entries an
+/// uninstall removed, and whether the removal reset the GLOBAL Main role (so the uninstall
+/// handler can surface the "main model reset" toast). Purely a report; the mutation already
+/// happened on the `config`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExtPurge {
+    /// Key-backed `providers` (ext-owned) removed.
+    pub providers_removed: usize,
+    /// `models` removed because their `provider_uuid` pointed at a dead ext anchor.
+    pub models_removed: usize,
+    /// `oauth_conns` (ext-owned) removed.
+    pub conns_removed: usize,
+    /// A removed model held the GLOBAL Main role → Main is now unassigned (self-heals to
+    /// koma-free at dispatch). The caller toasts the reset.
+    pub main_reset: bool,
+}
+
 /// Global user-facing configuration (theme + accent + provider/model catalogue).
 ///
 /// All fields carry `#[serde(default)]` so the struct round-trips cleanly
@@ -605,6 +634,17 @@ pub struct AppConfig {
     /// an extension is installed. Read at boot to auto-start enabled daemons.
     #[serde(default)]
     pub installed_extensions: Vec<InstalledExtension>,
+    /// W12b: each extension's PREFERRED (recommended-default) model, keyed by extension id →
+    /// the `ModelEntry::uuid` it marked `default: true` in a `models.register` call. Drives two
+    /// things: the one-shot VACUUM-FILL of the Main role (when Main is unset / only the keyless
+    /// koma-free placeholder, the first extension's preferred model is auto-assigned Main), and
+    /// the additive `recommendedBy` hint on the model wire projection so the GUI picker can flag
+    /// an extension-recommended model even when Main is already a real user choice. A `BTreeMap`
+    /// for deterministic on-disk ordering. `skip_serializing_if = "BTreeMap::is_empty"` keeps a
+    /// zero-extension config's JSON BYTE-IDENTICAL (the key is simply absent), and `default`
+    /// loads an older config without it cleanly. Cleared for an extension on uninstall.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ext_preferred_models: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppConfig {
@@ -622,6 +662,7 @@ impl Default for AppConfig {
             // persisted on the first `save()` and read back stably thereafter.
             install_id: new_uuid(),
             installed_extensions: Vec::new(),
+            ext_preferred_models: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -704,6 +745,8 @@ impl AppConfig {
             api_type: ApiType::OpenAiCompatible,
             endpoint,
             api_key,
+            // A user-authored provider (the GUI Connector form) is never ext-managed.
+            ext_id: None,
         });
     }
 
@@ -760,6 +803,71 @@ impl AppConfig {
         self.installed_extensions.iter().find(|e| e.id == id)
     }
 
+    /// Remove every model whose `provider_uuid` is in `dead` (orphan prevention when the
+    /// serving provider/conn is removed), returning the count removed. The SINGLE sweep shared
+    /// by the `providers.unregister` broker verb and [`Self::purge_extension`], so a removed
+    /// anchor never leaves a model pointing at a vanished provider.
+    pub(crate) fn remove_models_by_providers(
+        &mut self,
+        dead: &std::collections::HashSet<String>,
+    ) -> usize {
+        let before = self.models.len();
+        self.models.retain(|m| !dead.contains(&m.provider_uuid));
+        before - self.models.len()
+    }
+
+    /// W12b: purge every trace of extension `ext_id` from the global catalogue, on-loop, as one
+    /// PURE mutation (the caller persists via [`Self::save`] afterwards). Removes:
+    /// - `providers` whose `ext_id == Some(ext_id)` (W12b key-backed gateways),
+    /// - `models` whose `provider_uuid` pointed at ANY of those providers OR at one of this
+    ///   extension's `oauth_conns` (orphan prevention — the same [`Self::remove_models_by_providers`]
+    ///   sweep `providers.unregister` uses),
+    /// - `oauth_conns` whose `ext_id == Some(ext_id)` (W11/W12 delegated tokens),
+    /// - the extension's `ext_preferred_models` record.
+    ///
+    /// Order matters: the dead-anchor set (providers ∪ conns) is captured, and the Main-reset
+    /// flag computed, BEFORE any removal — so [`ExtPurge::main_reset`] reports whether a model
+    /// that held the GLOBAL Main role referenced a now-dead anchor (the caller surfaces the
+    /// "main model reset" toast off it; resolution self-heals to koma-free exactly as it does
+    /// for any other dangling Main provider). Returns the counts + that flag. Never touches
+    /// per-session `session_models` (those live in `AppState`, not `config`).
+    pub fn purge_extension(&mut self, ext_id: &str) -> ExtPurge {
+        use std::collections::HashSet;
+        // Dead anchors: this extension's key-backed providers ∪ its oauth conns.
+        let mut dead: HashSet<String> = self
+            .providers
+            .iter()
+            .filter(|p| p.ext_id.as_deref() == Some(ext_id))
+            .map(|p| p.uuid.clone())
+            .collect();
+        dead.extend(
+            self.oauth_conns
+                .iter()
+                .filter(|c| c.ext_id.as_deref() == Some(ext_id))
+                .map(|c| c.uuid.clone()),
+        );
+        // Did a model holding the GLOBAL Main role reference a dead anchor? (Compute before the
+        // sweep removes it.) Session-local Main overrides self-heal at dispatch (koma-free), same
+        // as any dangling provider — see `resolve::main_fallback_reason`.
+        let main_reset = self.models.iter().any(|m| {
+            dead.contains(&m.provider_uuid) && m.effective_roles().contains(&ModelRole::Main)
+        });
+        let models_removed = self.remove_models_by_providers(&dead);
+        let before_providers = self.providers.len();
+        self.providers.retain(|p| p.ext_id.as_deref() != Some(ext_id));
+        let providers_removed = before_providers - self.providers.len();
+        let before_conns = self.oauth_conns.len();
+        self.oauth_conns.retain(|c| c.ext_id.as_deref() != Some(ext_id));
+        let conns_removed = before_conns - self.oauth_conns.len();
+        self.ext_preferred_models.remove(ext_id);
+        ExtPurge {
+            providers_removed,
+            models_removed,
+            conns_removed,
+            main_reset,
+        }
+    }
+
     /// Set the `enabled` flag on the MCP server with `uuid`; returns whether one matched.
     pub fn set_mcp_enabled_by_uuid(&mut self, uuid: &str, enabled: bool) -> bool {
         match self.mcp_servers.iter_mut().find(|s| s.uuid == uuid) {
@@ -806,6 +914,8 @@ impl AppConfig {
             api_type: ApiType::OpenAiCompatible,
             endpoint: crate::config::DEFAULT_BASE_URL.to_string(),
             api_key: settings.api_key.clone(),
+            // A migration-seeded provider is native (user's own key).
+            ext_id: None,
         });
         self.models.push(ModelEntry {
             uuid: new_uuid(),
@@ -1032,5 +1142,149 @@ mod oauth_conn_serde_tests {
         assert!(with(Some("https://x.test"), None).ext_model_route().is_none());
         assert!(with(Some("   "), Some("openai")).ext_model_route().is_none());
         assert!(with(Some("https://x.test"), Some("openai_compatible")).ext_model_route().is_none());
+    }
+}
+
+#[cfg(test)]
+mod provider_conn_serde_tests {
+    use super::{ApiType, ProviderConn};
+
+    /// A NATIVE ProviderConn exactly as pre-W12b `config.json` wrote it — no `ext_id` key,
+    /// field order matching the struct declaration (which is the order `serde_json` emits).
+    const NATIVE_PROVIDER_JSON: &str = concat!(
+        r#"{"uuid":"33333333-3333-3333-3333-333333333333","name":"OpenRouter","#,
+        r#""api_type":"open_ai_compatible","endpoint":"https://openrouter.ai/api/v1","#,
+        r#""api_key":"sk-abc"}"#
+    );
+
+    /// SERDE-COMPAT PROOF: a pre-W12b native provider deserializes cleanly (the new `ext_id`
+    /// field defaults to `None`) AND re-serializes BYTE-IDENTICALLY — `skip_serializing_if =
+    /// "Option::is_none"` means a native provider never emits the key. Existing `config.json`
+    /// files round-trip unchanged (the W11/W12 `OAuthConn` discipline, applied to providers).
+    #[test]
+    fn native_provider_roundtrips_byte_stable() {
+        let p: ProviderConn = serde_json::from_str(NATIVE_PROVIDER_JSON).expect("pre-W12b provider parses");
+        assert_eq!(p.api_type, ApiType::OpenAiCompatible);
+        assert!(p.ext_id.is_none(), "a native provider carries no ext_id");
+        let reser = serde_json::to_string(&p).expect("serializes");
+        assert_eq!(
+            reser, NATIVE_PROVIDER_JSON,
+            "a native ProviderConn must round-trip byte-identically after W12b"
+        );
+    }
+
+    /// An EXT-owned (key-backed) provider serializes WITH the `ext_id` key and round-trips.
+    #[test]
+    fn ext_provider_roundtrips() {
+        let p = ProviderConn {
+            uuid: "44444444-4444-4444-4444-444444444444".to_string(),
+            name: "Demo Gateway".to_string(),
+            api_type: ApiType::AnthropicCompatible,
+            endpoint: "https://api.demo.test/v1".to_string(),
+            api_key: "demo-key".to_string(),
+            ext_id: Some("run.koma.example.gateway".to_string()),
+        };
+        let v = serde_json::to_value(&p).expect("serializes");
+        assert_eq!(v["ext_id"], "run.koma.example.gateway");
+        let back: ProviderConn = serde_json::from_value(v).expect("ext provider roundtrips");
+        assert_eq!(back.ext_id.as_deref(), Some("run.koma.example.gateway"));
+        assert_eq!(back.api_type, ApiType::AnthropicCompatible);
+        assert_eq!(back, p);
+    }
+}
+
+#[cfg(test)]
+mod ext_purge_tests {
+    use super::*;
+
+    /// A key-backed ext provider owned by `ext_id`.
+    fn ext_provider(uuid: &str, ext_id: &str) -> ProviderConn {
+        ProviderConn {
+            uuid: uuid.to_string(),
+            name: "gw".to_string(),
+            api_type: ApiType::OpenAiCompatible,
+            endpoint: "https://gw.test/v1".to_string(),
+            api_key: "k".to_string(),
+            ext_id: Some(ext_id.to_string()),
+        }
+    }
+
+    /// `purge_extension` removes the extension's providers + oauth conns + orphaned models +
+    /// preferred record, leaves EVERY other owner's entries untouched, and reports `main_reset`
+    /// only when a removed model held the global Main role.
+    #[test]
+    fn purge_removes_ext_entries_and_reports_main_reset() {
+        let mut config = AppConfig::default();
+        // ext A: one key-backed provider + one oauth conn, two models (one holds Main).
+        config.providers.push(ext_provider("prov-a", "ext.a"));
+        config.oauth_conns.push(OAuthConn {
+            uuid: "conn-a".to_string(),
+            provider: OAuthProvider::Extension,
+            ext_id: Some("ext.a".to_string()),
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m-a-main".to_string(),
+            model_id: "big".to_string(),
+            provider_uuid: "prov-a".to_string(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m-a-conn".to_string(),
+            model_id: "small".to_string(),
+            provider_uuid: "conn-a".to_string(),
+            ..Default::default()
+        });
+        config.ext_preferred_models.insert("ext.a".to_string(), "m-a-main".to_string());
+        // ext B + a native provider/model that must SURVIVE the purge of A.
+        config.providers.push(ext_provider("prov-b", "ext.b"));
+        config.providers.push(ProviderConn {
+            uuid: "prov-native".to_string(),
+            name: "native".to_string(),
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m-native".to_string(),
+            provider_uuid: "prov-native".to_string(),
+            ..Default::default()
+        });
+        config.ext_preferred_models.insert("ext.b".to_string(), "m-b".to_string());
+
+        let report = config.purge_extension("ext.a");
+        assert_eq!(report.providers_removed, 1);
+        assert_eq!(report.conns_removed, 1);
+        assert_eq!(report.models_removed, 2, "both of A's models (provider + conn backed) are swept");
+        assert!(report.main_reset, "a removed model held the global Main role");
+
+        // A is gone; B + native survive.
+        assert!(config.providers.iter().all(|p| p.uuid != "prov-a"));
+        assert!(config.oauth_conns.is_empty());
+        assert!(config.models.iter().all(|m| m.provider_uuid != "prov-a" && m.provider_uuid != "conn-a"));
+        assert!(config.providers.iter().any(|p| p.uuid == "prov-b"), "another extension is untouched");
+        assert!(config.providers.iter().any(|p| p.uuid == "prov-native"), "a native provider is untouched");
+        assert!(config.models.iter().any(|m| m.uuid == "m-native"), "a native model is untouched");
+        assert_eq!(config.ext_preferred_models.get("ext.a"), None, "A's preferred record is cleared");
+        assert_eq!(
+            config.ext_preferred_models.get("ext.b").map(String::as_str),
+            Some("m-b"),
+            "another extension's preferred record is untouched"
+        );
+    }
+
+    /// Purging an extension whose models hold NO runtime role leaves `main_reset` false.
+    #[test]
+    fn purge_without_main_holder_does_not_flag_reset() {
+        let mut config = AppConfig::default();
+        config.providers.push(ext_provider("prov-a", "ext.a"));
+        config.models.push(ModelEntry {
+            uuid: "m1".to_string(),
+            provider_uuid: "prov-a".to_string(),
+            ..Default::default()
+        });
+        let report = config.purge_extension("ext.a");
+        assert_eq!(report.providers_removed, 1);
+        assert_eq!(report.models_removed, 1);
+        assert!(!report.main_reset, "no removed model held Main");
     }
 }

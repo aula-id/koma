@@ -16,6 +16,7 @@ impl SettingsState {
     pub fn prov_up(&mut self) {
         self.prov_sel = self.prov_sel.saturating_sub(1);
         self.prov_delete_armed = false;
+        self.prov_msg = None;
     }
 
     /// Move selection down in the providers list (max index = providers.len()
@@ -23,6 +24,7 @@ impl SettingsState {
     pub fn prov_down(&mut self) {
         self.prov_sel = (self.prov_sel + 1).min(self.providers.len());
         self.prov_delete_armed = false;
+        self.prov_msg = None;
     }
 
     /// `true` when the `[+ add]` button row is highlighted.
@@ -32,8 +34,25 @@ impl SettingsState {
 
     /// First Ctrl+X arms the delete; second Ctrl+X confirms it.
     /// Has no effect when the add-button row is selected.
+    ///
+    /// W12b HOST-ENFORCED GUARD: an EXTENSION-managed provider (`ProviderDraft::ext_id`
+    /// set) can never be deleted here — it is refused with a footer message directing the
+    /// user to uninstall the owning extension instead. This mirrors the daemon-side reject
+    /// (`delete_provider` / `apply_global_config_req`) so no editing surface can orphan an
+    /// extension's key-backed gateway; the settings save also re-attaches any ext provider a
+    /// draft omitted, so even a stale draft can't drop one.
     pub fn prov_arm_or_delete(&mut self) {
         if self.prov_on_add_button() {
+            return;
+        }
+        // Refuse deleting an extension-managed provider (only uninstall removes it).
+        if let Some(ext) = self
+            .providers
+            .get(self.prov_sel)
+            .and_then(|p| p.ext_id.as_deref())
+        {
+            self.prov_msg = Some(format!("managed by extension {ext} — uninstall to remove"));
+            self.prov_delete_armed = false;
             return;
         }
         if self.prov_delete_armed {
@@ -55,6 +74,7 @@ impl SettingsState {
     /// Cancel the armed-delete state (any key other than Ctrl+X).
     pub fn prov_disarm(&mut self) {
         self.prov_delete_armed = false;
+        self.prov_msg = None;
     }
 
     /// Open the add-provider modal with a blank draft.
@@ -80,6 +100,8 @@ impl SettingsState {
                 endpoint,
                 api_type: m.api_type,
                 api_key,
+                // A user-created provider is never extension-managed.
+                ext_id: None,
             });
             // Select the newly added entry (last real index).
             self.prov_sel = self.providers.len().saturating_sub(1);

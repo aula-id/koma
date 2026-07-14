@@ -61,6 +61,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
                 endpoint: p.endpoint,
                 api_type: shadow_api_type(&p.api_type),
                 api_key: p.api_key,
+                ext_id: p.ext_id,
             })
             .collect(),
         oauth_drafts: s
@@ -73,6 +74,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         oauth_flow: shadow_oauth_flow(s.oauth_flow),
         prov_sel: s.prov_sel,
         prov_delete_armed: s.prov_delete_armed,
+        prov_msg: s.prov_msg,
         prov_modal: s.prov_modal.map(|m| ProviderModal {
             name: m.name,
             endpoint: m.endpoint,
