@@ -273,13 +273,19 @@ fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Resul
         });
     }
 
-    // TODO(windows-port, phase B2: creation_flags DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP)
-    // Windows has no `pre_exec`/`setsid` equivalent; until the Windows daemon-spawn
-    // port lands, the child inherits our console/process group instead of being
-    // fully detached — conservative placeholder, not a silent behavior change on unix.
+    // Windows has no `pre_exec`/`setsid`. Detach via creation flags instead:
+    // DETACHED_PROCESS gives the daemon no console (headless — a closing terminal can't
+    // SIGHUP it), and CREATE_NEW_PROCESS_GROUP roots it in its own process group so a
+    // Ctrl+C/Ctrl+Break delivered to OUR group never reaches it. stdio is already
+    // null'd above, matching the unix `/dev/null` redirect. Best-effort like `setsid`:
+    // even if a flag is ignored the daemon still runs, just less isolated.
     #[cfg(windows)]
     {
-        // no-op: real detachment lands with the Windows port (see TODO above).
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
     let child = cmd.spawn().context("failed to spawn `koma --daemon`")?;
@@ -574,8 +580,14 @@ pub(super) fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
         return Ok(());
     };
 
-    // SIGTERM (graceful at the OS level), then wait.
+    // Graceful terminate, then wait. Unix: SIGTERM. Windows has no SIGTERM, so re-send
+    // the QuitDaemon IPC message to the session's pipe (the daemon latches the SAME
+    // shutdown flag SIGTERM flips); best-effort — the Kill fallback below covers a
+    // wedged/attached daemon that rejects or ignores it.
+    #[cfg(unix)]
     send_signal(pid, StopSignal::Term);
+    #[cfg(windows)]
+    send_shutdown_request(&sock);
     if wait_until_dead(session_id, SIGNAL_GRACE) {
         unlink_daemon_files(session_id);
         if !quiet {
@@ -713,12 +725,44 @@ pub(super) fn send_signal(pid: u32, sig: StopSignal) {
     }
 }
 
-/// TODO(windows-port, phase B2: Job Object / TerminateProcess). Windows has no
-/// `kill(2)`; a real implementation needs `OpenProcess`/`TerminateProcess` (or a
-/// Job Object for tree-kill). Conservative no-op stub so this compiles for now —
-/// callers already treat every signal as best-effort and re-check liveness after.
+/// Windows `send_signal`. There is no `kill(2)`, so only the two expressible-from-a-
+/// bare-pid outcomes live here:
+/// - [`StopSignal::Kill`] → `OpenProcess(PROCESS_TERMINATE)` + `TerminateProcess` (the
+///   `SIGKILL` analogue), via [`crate::model::proc_win::terminate_process`].
+/// - [`StopSignal::Term`] → a DELIBERATE no-op. A graceful terminate on Windows is an IPC
+///   message (`QuitDaemon` / `McpRequest::Shutdown`) that needs the daemon's PIPE PATH
+///   (not just a pid) and is protocol-specific, so it is sent by [`send_shutdown_request`]
+///   (session) / `mcp::send_mcp_shutdown_request` (mcp) at the call sites that hold the
+///   path. From a bare pid there is nothing graceful to do; the caller escalates to
+///   `Kill` if the daemon does not stop (the legacy-daemon sweep, which has no live
+///   Windows target, relies on exactly this no-op).
 #[cfg(windows)]
-pub(super) fn send_signal(_pid: u32, _sig: StopSignal) {}
+pub(super) fn send_signal(pid: u32, sig: StopSignal) {
+    match sig {
+        StopSignal::Kill => crate::model::proc_win::terminate_process(pid),
+        StopSignal::Term => {}
+    }
+}
+
+/// Windows graceful session-daemon stop: connect the session's named pipe and send the
+/// SAME [`ClientRequest::QuitDaemon`] a controller sends. The daemon latches the SAME
+/// shutdown flag a unix `SIGTERM` flips, then tears down normally (release locks, drop
+/// runtime, release the pipe). Windows has no `SIGTERM`, so this IS the graceful stop;
+/// [`stop_session_daemon`]'s Kill fallback ([`send_signal`] → `TerminateProcess`, made
+/// tree-safe by the daemon's Job Object) covers a wedged or client-attached daemon that
+/// rejects the request.
+///
+/// Best-effort + FIRE-AND-FORGET: any connect/send error just returns (the caller
+/// escalates). It intentionally does NOT read the reply — [`SyncIpcStream`] has no read
+/// timeout on Windows, so a blocking drain could hang the CLI against a wedged daemon;
+/// the written frame is enough for the daemon to observe the request, and liveness is
+/// re-checked by [`wait_until_dead`] right after.
+#[cfg(windows)]
+pub(super) fn send_shutdown_request(sock: &Path) {
+    if let Ok(mut stream) = SyncIpcStream::connect(sock) {
+        let _ = send_request(&mut stream, &ClientRequest::QuitDaemon);
+    }
+}
 
 /// Poll the bind-as-oracle liveness of the SESSION-daemon for `session_id` until it stops
 /// accepting or `timeout` elapses. Returns `true` if it went down within the window,

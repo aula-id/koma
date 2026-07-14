@@ -78,6 +78,13 @@ pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 
+    // Windows has no SIGPIPE; instead arm the kill-on-close Job Object safety net NOW —
+    // before `connect_all` spawns any MCP stdio child below — so every child auto-joins
+    // the job and a hard `TerminateProcess` of this daemon tears the whole tree down. Not
+    // needed on unix (dropping the runtime terminates the stdio children there).
+    #[cfg(windows)]
+    super::signals::install_killtree_job();
+
     // Ensure the config dirs exist (so the socket's parent `~/.koma` is present for
     // bind, and any config read has its dir). Mirrors what build_startup does for the
     // session path.
@@ -255,7 +262,7 @@ const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 async fn accept_loop(
     listener: crate::ipc::IpcListener,
     manager: Arc<McpManager>,
-    shutting_down: &std::sync::atomic::AtomicBool,
+    shutting_down: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     use std::sync::atomic::Ordering;
 
@@ -268,8 +275,14 @@ async fn accept_loop(
         match tokio::time::timeout(ACCEPT_POLL, listener.accept()).await {
             Ok(Ok((stream, _addr))) => {
                 let mgr = Arc::clone(&manager);
+                // Clone the shutdown flag into the connection task so a
+                // `McpRequest::Shutdown` (the Windows graceful-stop verb) can latch it —
+                // the accept loop observes the same flag next tick and tears down. On unix
+                // the flag is only ever set by a signal / the reaper; the connection task
+                // simply carries it.
+                let flag = Arc::clone(shutting_down);
                 tokio::spawn(async move {
-                    connection_loop(stream, mgr).await;
+                    connection_loop(stream, mgr, flag).await;
                 });
             }
             // Timed out waiting for a connection — re-check the shutdown flag and retry.
@@ -291,7 +304,11 @@ async fn accept_loop(
 /// non-split [`tokio::net::UnixStream`] is borrowed `&mut` for the read then the write
 /// within each cycle — no split into independent halves is needed (unlike the session
 /// daemon, which pushes unsolicited frames).
-async fn connection_loop(mut stream: crate::ipc::IpcStream, manager: Arc<McpManager>) {
+async fn connection_loop(
+    mut stream: crate::ipc::IpcStream,
+    manager: Arc<McpManager>,
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
+) {
     let mut reader = FrameReader::new();
     loop {
         // Read one request frame. EOF / decode error / any read error ends the
@@ -310,7 +327,7 @@ async fn connection_loop(mut stream: crate::ipc::IpcStream, manager: Arc<McpMana
             }
         };
 
-        let resp = handle_request(req, &manager).await;
+        let resp = handle_request(req, &manager, &shutting_down).await;
         if respond(&mut stream, &resp).await.is_err() {
             return; // dead socket (EPIPE etc.) — drop the connection
         }
@@ -339,7 +356,13 @@ async fn respond(stream: &mut crate::ipc::IpcStream, resp: &McpResponse) -> std:
 ///   the model sees a tool error as a tool result, exactly like the in-process path.
 /// - `Reconnect` → apply the new server set (background) and `Ack`.
 /// - `Status` → per-server tool-count map.
-async fn handle_request(req: McpRequest, manager: &Arc<McpManager>) -> McpResponse {
+/// - `Shutdown` → latch `shutting_down` (the Windows graceful-stop path) and `Ack`; the
+///   accept loop observes the flag next tick and the normal teardown runs.
+async fn handle_request(
+    req: McpRequest,
+    manager: &Arc<McpManager>,
+    shutting_down: &std::sync::atomic::AtomicBool,
+) -> McpResponse {
     match req {
         McpRequest::List => McpResponse::Tools {
             defs: manager.tool_defs(),
@@ -405,6 +428,15 @@ async fn handle_request(req: McpRequest, manager: &Arc<McpManager>) -> McpRespon
                 })
                 .collect();
             McpResponse::Status { servers, global_error: None }
+        }
+
+        // Windows graceful-stop verb: latch the SAME flag a signal / the idle reaper
+        // sets, so the accept loop returns next tick and the runtime is dropped (killing
+        // every MCP child). Ack receipt — the caller fire-and-forgets, so it may not read
+        // this, but the flag is already set. Unix never sends this (it uses SIGTERM).
+        McpRequest::Shutdown => {
+            shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
+            McpResponse::Ack
         }
     }
 }

@@ -83,17 +83,24 @@ rfd = { version = "0.15", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Windows named-pipe IPC backend (src/ipc/win.rs): the DACL hardening for the daemon
-# pipe needs raw Win32 — SECURITY_ATTRIBUTES + ConvertStringSecurityDescriptorToSecurity
-# DescriptorW (SDDL) + LocalFree. Only the three feature modules those symbols live in
-# are enabled (Authorization pulls Security; Foundation carries LocalFree/BOOL/HLOCAL),
-# keeping the surface minimal. 0.59 is already in the tree (transitive), so this adds no
-# new windows-sys version.
+# Windows named-pipe IPC backend (src/ipc/win.rs) + the phase-B2 process-lifecycle port:
+#   - Foundation: SECURITY_ATTRIBUTES, LocalFree/BOOL/HLOCAL, CloseHandle/GetLastError,
+#     STILL_ACTIVE + ERROR_ACCESS_DENIED (pid-liveness).
+#   - Security + Security_Authorization: the daemon-pipe DACL hardening
+#     (ConvertStringSecurityDescriptorToSecurityDescriptorW / SDDL).
+#   - System_Threading: DETACHED_PROCESS/CREATE_NEW_PROCESS_GROUP/CREATE_NO_WINDOW
+#     (detached daemon spawn + taskkill windowless), OpenProcess/TerminateProcess/
+#     GetExitCodeProcess/GetCurrentProcess (pid-liveness + kill), and the IO_COUNTERS the
+#     JobObjects extended-limit struct embeds.
+#   - System_JobObjects: the kill-on-close Job Object tree-kill safety net.
+# 0.59 is already in the tree (transitive), so this adds no new windows-sys version.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

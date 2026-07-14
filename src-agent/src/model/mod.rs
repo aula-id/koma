@@ -17,6 +17,10 @@ pub mod attachment;
 pub mod conversation;
 pub mod memory;
 pub mod msglog;
+/// Windows-only process liveness/termination helpers (phase B2), shared by
+/// `session_lock` and `app::runtime::manage`. Absent on unix (which uses `kill(2)`).
+#[cfg(windows)]
+pub mod proc_win;
 pub mod session;
 pub mod session_lock;
 pub mod session_registry;
