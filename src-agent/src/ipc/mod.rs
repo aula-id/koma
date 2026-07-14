@@ -19,8 +19,7 @@
 //! transport is additive and does not touch the TUI path.
 
 /// Platform IPC transport aliases. On unix these are the tokio unix-domain-socket
-/// types; a Windows named-pipe backend will provide the same shapes behind
-/// `#[cfg(windows)]` later.
+/// types; on windows the [`win`] named-pipe backend provides the same shapes.
 #[cfg(unix)]
 pub type IpcListener = tokio::net::UnixListener;
 #[cfg(unix)]
@@ -28,6 +27,38 @@ pub type IpcStream = tokio::net::UnixStream;
 /// Blocking (std) counterpart used by the sync management/probe clients.
 #[cfg(unix)]
 pub type SyncIpcStream = std::os::unix::net::UnixStream;
+
+/// Owned read/write halves of a split [`IpcStream`]. On unix the tokio unix-socket
+/// owned halves (`into_split`); on windows the `tokio::io::split` halves of the
+/// named-pipe stream. Consumed by the per-client connection tasks (daemon + client
+/// bridge + ext host) that read and write the same stream from independent tasks.
+#[cfg(unix)]
+pub type IpcReadHalf = tokio::net::unix::OwnedReadHalf;
+#[cfg(unix)]
+pub type IpcWriteHalf = tokio::net::unix::OwnedWriteHalf;
+
+/// Split an [`IpcStream`] into independent owned read/write halves. On unix this is
+/// exactly `UnixStream::into_split()`; on windows it is `tokio::io::split`. A single
+/// cross-platform shim so the read/write-task code stays identical on both.
+#[cfg(unix)]
+pub fn split_stream(stream: IpcStream) -> (IpcReadHalf, IpcWriteHalf) {
+    stream.into_split()
+}
+
+// Windows named-pipe backend: the same IpcListener/IpcStream/SyncIpcStream shapes over
+// `tokio::net::windows::named_pipe`, DACL-hardened. See [`win`].
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+pub use win::{IpcListener, IpcStream, SyncIpcStream};
+#[cfg(windows)]
+pub type IpcReadHalf = tokio::io::ReadHalf<IpcStream>;
+#[cfg(windows)]
+pub type IpcWriteHalf = tokio::io::WriteHalf<IpcStream>;
+#[cfg(windows)]
+pub fn split_stream(stream: IpcStream) -> (IpcReadHalf, IpcWriteHalf) {
+    tokio::io::split(stream)
+}
 
 pub mod client;
 pub mod conn;

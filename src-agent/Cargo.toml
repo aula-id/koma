@@ -83,6 +83,19 @@ rfd = { version = "0.15", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Windows named-pipe IPC backend (src/ipc/win.rs): the DACL hardening for the daemon
+# pipe needs raw Win32 — SECURITY_ATTRIBUTES + ConvertStringSecurityDescriptorToSecurity
+# DescriptorW (SDDL) + LocalFree. Only the three feature modules those symbols live in
+# are enabled (Authorization pulls Security; Foundation carries LocalFree/BOOL/HLOCAL),
+# keeping the surface minimal. 0.59 is already in the tree (transitive), so this adds no
+# new windows-sys version.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
     "std",

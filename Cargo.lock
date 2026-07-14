@@ -46,6 +46,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "windows-sys 0.59.0",
  "wry",
  "zip",
 ]

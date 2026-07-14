@@ -137,6 +137,10 @@ pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
     // MCP child). Then unlink the socket + pidfile so the next spawn binds fresh.
     // (A second SIGTERM during this window hard-exits via the signal task instead.)
     drop(rt);
+    // Unix-only: unlink the socket file. A Windows named pipe is released when the
+    // runtime dropped above (its owning handles), so there is nothing to remove. The
+    // pidfile is a real file on both platforms.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&sock_path);
     let _ = std::fs::remove_file(&pid_path);
 

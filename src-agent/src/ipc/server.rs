@@ -34,15 +34,23 @@ use crate::model::store;
 /// 3. Bind and return the listener. Holding it is what makes this process the live
 ///    daemon.
 pub fn bind(path: &Path) -> std::io::Result<IpcListener> {
-    // 1. ~/.koma (or whatever parent the path has) must exist before bind.
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // 2. Remove a stale socket file; ignore "not found" (nothing to clean up).
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+    // Steps 1-2 are unix-domain-SOCKET concerns only. A Windows named pipe is not a
+    // filesystem object: its `\\.\pipe` "parent" cannot be `create_dir_all`'d (that
+    // would make bind fail on every call), and it leaves no stale file to unlink (a
+    // pipe is released when its owner dies; `first_pipe_instance(true)` inside
+    // `IpcListener::bind` is itself the bind-as-oracle). So gate them to unix.
+    #[cfg(unix)]
+    {
+        // 1. ~/.koma (or whatever parent the path has) must exist before bind.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // 2. Remove a stale socket file; ignore "not found" (nothing to clean up).
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
     }
     // 3. Bind fresh — this is the liveness oracle.
     IpcListener::bind(path)

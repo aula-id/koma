@@ -25,12 +25,21 @@ use super::frame::FrameReader;
 use super::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 use super::server;
 use super::IpcStream;
+#[cfg(unix)]
 use crate::model::store;
 
 /// Dedicated socket path for the self-test, kept distinct from the real daemon
 /// socket so running the test never disturbs a live daemon.
+#[cfg(unix)]
 fn selftest_sock_path() -> Result<PathBuf> {
     Ok(store::base_dir()?.join("ipc-selftest.sock"))
+}
+
+/// Windows twin: a dedicated named pipe (`\\.\pipe\koma-ipc-selftest`) so the self-test
+/// never collides with a real daemon pipe.
+#[cfg(windows)]
+fn selftest_sock_path() -> Result<PathBuf> {
+    Ok(PathBuf::from(r"\\.\pipe\koma-ipc-selftest"))
 }
 
 /// Run the IPC self-test to completion. Prints `koma ipc-selftest: OK` and exits
@@ -135,7 +144,9 @@ async fn roundtrip() -> Result<()> {
         .context("join server task")?
         .context("server task error")?;
 
-    // Clean up the socket file regardless (best-effort).
+    // Clean up the socket file regardless (best-effort). Unix-only: a Windows named
+    // pipe is not a filesystem object and vanishes when its last handle drops.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&path);
 
     // Final byte-equality assertions across the wire.

@@ -14,8 +14,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{mpsc, oneshot};
+
+use crate::ipc::{IpcReadHalf, IpcWriteHalf};
 
 use koma_extension::protocol::{ExtMsg, KomaMsg, PROTOCOL_VERSION};
 
@@ -107,8 +108,8 @@ pub(super) async fn read_capped_line<R: tokio::io::AsyncRead + Unpin>(
 /// past the `Hello` line are not lost), and the write half for the writer task.
 pub(super) struct Handshaked {
     pub(super) child: tokio::process::Child,
-    pub(super) reader: BufReader<OwnedReadHalf>,
-    pub(super) write_half: OwnedWriteHalf,
+    pub(super) reader: BufReader<IpcReadHalf>,
+    pub(super) write_half: IpcWriteHalf,
 }
 
 /// Bind `sock_path`, spawn the extension child (env `KOMA_EXT_SOCKET` +
@@ -176,7 +177,7 @@ pub(super) async fn connect_and_handshake(
         }
     };
 
-    let (read_half, mut write_half) = stream.into_split();
+    let (read_half, mut write_half) = crate::ipc::split_stream(stream);
     let mut reader = BufReader::new(read_half);
 
     // Read the first line = the Hello frame, capped so a runaway/hostile child can't
@@ -288,7 +289,7 @@ fn send_result_frame(writer: &mpsc::UnboundedSender<String>, id: u64, result: se
 }
 
 /// Serialize `msg` as one newline-delimited JSON frame and write+flush it to `w`.
-async fn send_frame<T: serde::Serialize>(w: &mut OwnedWriteHalf, msg: &T) -> std::io::Result<()> {
+async fn send_frame<T: serde::Serialize>(w: &mut IpcWriteHalf, msg: &T) -> std::io::Result<()> {
     let mut line = serde_json::to_string(msg).unwrap_or_default();
     line.push('\n');
     w.write_all(line.as_bytes()).await?;
@@ -299,7 +300,7 @@ async fn send_frame<T: serde::Serialize>(w: &mut OwnedWriteHalf, msg: &T) -> std
 /// (each already newline-terminated) to it. Exits when the channel closes (the
 /// manager dropped the `writer` on stop) or on the first write error (child gone),
 /// shutting the write half on the way out so the child observes EOF.
-pub(super) async fn writer_task(mut write_half: OwnedWriteHalf, mut rx: mpsc::UnboundedReceiver<String>) {
+pub(super) async fn writer_task(mut write_half: IpcWriteHalf, mut rx: mpsc::UnboundedReceiver<String>) {
     while let Some(frame) = rx.recv().await {
         if write_half.write_all(frame.as_bytes()).await.is_err() {
             break;
@@ -332,7 +333,7 @@ pub(super) async fn writer_task(mut write_half: OwnedWriteHalf, mut rx: mpsc::Un
 /// the extension is `stop()`-ed (killing the child) immediately rather than left to
 /// keep flooding a connection nobody will finish reading.
 pub(super) async fn reader_task(
-    mut reader: BufReader<OwnedReadHalf>,
+    mut reader: BufReader<IpcReadHalf>,
     pending: PendingMap,
     writer: mpsc::UnboundedSender<String>,
     mgr: Arc<ExtHostManager>,
