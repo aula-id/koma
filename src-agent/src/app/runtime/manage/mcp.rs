@@ -134,6 +134,9 @@ pub(super) fn read_mcp_pidfile() -> Option<u32> {
 ///
 /// `pub(super)` — called from `manage::commands::cmd_kill`.
 pub(super) fn unlink_mcp_daemon_files() {
+    // Unix-only: the socket is a filesystem object. A Windows named pipe is released
+    // when its owning process dies, so there is no socket file to unlink here.
+    #[cfg(unix)]
     if let Ok(sock) = store::mcp_daemon_sock_path() {
         let _ = std::fs::remove_file(sock);
     }

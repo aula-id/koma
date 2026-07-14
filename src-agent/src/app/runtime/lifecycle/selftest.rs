@@ -67,9 +67,13 @@ fn daemon_selftest_inner() -> Result<()> {
         .build()?;
     let handle = rt.handle().clone();
 
-    // Dedicated socket so the test never disturbs a live daemon. `UnixListener::bind`
-    // needs a tokio reactor, so enter the runtime context for the bind + spawn.
+    // Dedicated endpoint so the test never disturbs a live daemon. The bind needs a
+    // tokio reactor, so enter the runtime context for the bind + spawn below. Unix uses
+    // a socket file; windows uses a dedicated named pipe (not a filesystem object).
+    #[cfg(unix)]
     let sock_path = crate::model::store::base_dir()?.join("daemon-selftest.sock");
+    #[cfg(windows)]
+    let sock_path = std::path::PathBuf::from(r"\\.\pipe\koma-daemon-selftest");
     let (mut hub, req_tx) = DaemonHub::new();
     {
         let _enter = handle.enter();
@@ -193,7 +197,9 @@ fn daemon_selftest_inner() -> Result<()> {
         Ok(()) | Err(RecvTimeoutError::Disconnected)
     );
 
-    // Clean up the socket regardless (best-effort).
+    // Clean up the socket regardless (best-effort). Unix-only: a Windows named pipe is
+    // not a filesystem object and is released when its handles drop.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&sock_path);
 
     result?;

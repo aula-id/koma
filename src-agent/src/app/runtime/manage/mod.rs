@@ -306,6 +306,10 @@ pub(super) fn probe_or_clear(path: &Path) -> Result<bool> {
             std::io::ErrorKind::ConnectionRefused => {
                 // Stale socket from a crashed daemon: remove it so the spawn's bind
                 // doesn't trip over `AddrInUse`. Best-effort (it may have just gone).
+                // Unix-only — a Windows named pipe has no stale file to unlink (a dead
+                // daemon's pipe is already gone, surfacing as `NotFound` below, not
+                // `ConnectionRefused`).
+                #[cfg(unix)]
                 let _ = std::fs::remove_file(path);
                 Ok(false)
             }
@@ -485,6 +489,9 @@ pub(super) fn read_pidfile(session_id: &str) -> Option<u32> {
 /// Each removal ignores a missing file; any other IO error is swallowed — these are
 /// cleanup, never a hard failure.
 fn unlink_daemon_files(session_id: &str) {
+    // Unix-only: the socket is a filesystem object. A Windows named pipe is released
+    // when its owning process dies, so there is no socket file to unlink here.
+    #[cfg(unix)]
     if let Ok(sock) = store::daemon_sock_path(session_id) {
         let _ = std::fs::remove_file(sock);
     }

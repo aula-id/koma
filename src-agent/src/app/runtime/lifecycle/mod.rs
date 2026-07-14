@@ -655,6 +655,10 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // remove the socket + pidfile so the next spawn binds fresh. (A second SIGTERM
     // during this window hard-exits via the signal task instead of reaching here.)
     shutdown_runtime(&mut state, rt);
+    // Unix-only: a unix socket is a filesystem object to unlink; a Windows named pipe
+    // is released when the runtime (its owning handles) drops above, so there is no
+    // socket file to remove. The pidfile is a real file on both platforms.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&sock_path);
     let _ = std::fs::remove_file(&pid_path);
 
