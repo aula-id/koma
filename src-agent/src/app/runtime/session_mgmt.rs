@@ -36,7 +36,7 @@ pub(crate) fn reconcile_session_lock(state: &mut AppState) {
 /// skip and never to Chat's double-Esc composer-clear / rewind. On timeout the drain
 /// still receives a terminal [`WarmEvent::WarmAwareness`] (`summary: None`), so a
 /// splash flips Loading→Chat instead of hanging.
-const WARM_AWARENESS_TIMEOUT_SECS: u64 = 20;
+const WARM_AWARENESS_TIMEOUT_SECS: u64 = 60;
 
 /// Warm a newly-activated session WITH the animated loading splash (the splash
 /// variant: startup, /new, picker-select, creds-confirm). Thin wrapper over
