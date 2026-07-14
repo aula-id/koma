@@ -44,6 +44,7 @@ fn lock_path(session_dir: &Path) -> PathBuf {
 /// - any other errno (e.g. `EINVAL`, which signal 0 won't produce) → treat as DEAD so a surprising kernel reply can never wedge a session as permanently locked.
 ///
 /// Our own PID is alive by definition (kept as a fast path / belt-and-suspenders).
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
@@ -61,6 +62,16 @@ fn pid_alive(pid: u32) -> bool {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::EPERM)
     )
+}
+
+/// Windows liveness via [`crate::model::proc_win::pid_alive`] (`OpenProcess` +
+/// `GetExitCodeProcess`) — the real check that replaces the phase-A2 always-alive stub.
+/// It is still biased toward ALIVE on ambiguity, so — like the old stub — it never
+/// STEALS a lock it cannot verify, but it now correctly reports a crashed owner's PID as
+/// dead so a stale lock is swept instead of wedging the session forever.
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    crate::model::proc_win::pid_alive(pid)
 }
 
 /// Write our PID into the session's lock file, overwriting any existing one.

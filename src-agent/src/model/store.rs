@@ -139,20 +139,35 @@ pub fn extensions_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("extensions"))
 }
 
-/// Path to a per-extension host socket: `~/.koma/run/ext-<id>.sock`.
+/// Path to a per-extension host socket: `~/.koma/run/ext-<id>.sock` (unix) or the
+/// named pipe `\\.\pipe\koma-ext-<id>` (windows).
 ///
-/// koma binds this unix socket BEFORE spawning a daemon-kind extension, hands the
-/// path to the child via `KOMA_EXT_SOCKET`, and accepts the child's inbound
-/// connection on it (the child sends `Hello`, koma replies `Welcome`). Lives beside
-/// the per-session daemon sockets under [`run_dir`]. The `id` is validated at install
-/// time; the `/`→`_` fold here is belt-and-suspenders so a stray separator can never
-/// escape the run dir when composing the filename.
+/// koma binds this endpoint BEFORE spawning a daemon-kind extension, hands the path to
+/// the child via `KOMA_EXT_SOCKET`, and accepts the child's inbound connection on it
+/// (the child sends `Hello`, koma replies `Welcome`). On unix it lives beside the
+/// per-session daemon sockets under [`run_dir`]; on windows a named pipe is not a
+/// filesystem object, so it lives in the pipe namespace instead. The `id` is validated
+/// at install time; the `/`→`_` (and `\`→`_`) fold here is belt-and-suspenders so a
+/// stray separator can never escape the run dir / break the pipe name.
+#[cfg(unix)]
 pub fn ext_sock_path(id: &str) -> Result<PathBuf> {
     let safe: String = id
         .chars()
         .map(|c| if c == '/' || c == '\\' { '_' } else { c })
         .collect();
     Ok(run_dir()?.join(format!("ext-{safe}.sock")))
+}
+
+/// Windows twin of [`ext_sock_path`] — the per-extension host named pipe
+/// `\\.\pipe\koma-ext-<id>`. See the unix variant for the contract; the same `id`
+/// sanitization (fold `/` and `\` to `_`) keeps the pipe name well-formed.
+#[cfg(windows)]
+pub fn ext_sock_path(id: &str) -> Result<PathBuf> {
+    let safe: String = id
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    Ok(PathBuf::from(format!(r"\\.\pipe\koma-ext-{safe}")))
 }
 
 /// Create `~/.koma/`, `~/.simple-coder/sessions/`, `~/.koma/run/`, and
@@ -357,8 +372,71 @@ pub fn registry_path() -> Result<PathBuf> {
 /// (whoever binds it IS the live daemon for `session_id`) and the rendezvous point its
 /// thin TUI client connects to. The client mints `session_id` and passes it to the
 /// daemon via `--session`, so both agree on the key. Lives under [`run_dir`].
+#[cfg(unix)]
 pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
     Ok(run_dir()?.join(format!("{session_id}.sock")))
+}
+
+/// Windows twin of [`daemon_sock_path`] — the per-session daemon named pipe
+/// `\\.\pipe\koma-<session_id>`. A named pipe is not a filesystem object (no
+/// [`run_dir`] file), and whoever creates the first instance IS the live daemon for
+/// `session_id` (bind-as-oracle, same as the unix socket). Session ids are UUIDs, so no
+/// sanitization is needed for the pipe name.
+#[cfg(windows)]
+pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
+    Ok(PathBuf::from(format!(r"\\.\pipe\koma-{session_id}")))
+}
+
+/// Enumerate this user's koma named-pipe SESSION endpoints from the Windows pipe
+/// namespace, returning each pipe's `<session_id>` suffix — the same id
+/// [`daemon_sock_path`] embeds after `koma-`.
+///
+/// A named pipe is not a filesystem object, so [`run_dir`] has nothing to scan on
+/// Windows — every unix discovery/cleanup site walks `run/*.sock` FILES, which
+/// simply don't exist here. The pipe namespace itself IS enumerable instead:
+/// `read_dir(r"\\.\pipe\")` yields one entry per pipe with a live server instance,
+/// and each entry's `file_name()` is the pipe's bare name (no `\\.\pipe\` prefix).
+/// This is the Windows twin of that `run_dir` scan for every site that needs
+/// session ids: [`super::super::app::runtime::manage`]'s `list_session_sockets`,
+/// the MCP daemon's idle reaper, and `cmd_clean`'s orphan-pidfile sweep.
+///
+/// Filters out every RESERVED (non-session) `koma-*` pipe this codebase also
+/// binds, so callers never mistake one for a session: the singleton MCP daemon
+/// (`koma-mcp`, [`mcp_daemon_sock_path`]), any per-extension host pipe
+/// (`koma-ext-<id>`, [`ext_sock_path`]), and the two self-test pipes
+/// (`koma-ipc-selftest`, `koma-daemon-selftest`). Any OTHER `koma-`-prefixed name
+/// is assumed to be a session id minted by [`daemon_sock_path`].
+///
+/// Best-effort: enumerating the pipe namespace can transiently fail; an error
+/// degrades to an empty `Vec` rather than propagating, mirroring the "unreadable
+/// dir ⇒ nothing found" contract the unix `run_dir` scans already have.
+#[cfg(windows)]
+pub fn list_koma_session_pipes() -> Vec<String> {
+    const PREFIX: &str = "koma-";
+    // Exact non-session pipe names (checked with the shared `koma-` prefix still on).
+    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-ipc-selftest", "koma-daemon-selftest"];
+    // Non-session pipe name PREFIXES (also checked before stripping `koma-`), so a
+    // whole family — every extension host — is excluded without listing each id.
+    const RESERVED_PREFIX: &[&str] = &["koma-ext-"];
+
+    let entries = match std::fs::read_dir(r"\\.\pipe\") {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(PREFIX) {
+            continue; // not a koma pipe at all
+        }
+        if RESERVED_EXACT.contains(&name) || RESERVED_PREFIX.iter().any(|p| name.starts_with(p)) {
+            continue; // a known non-session koma pipe
+        }
+        out.push(name[PREFIX.len()..].to_string());
+    }
+    out
 }
 
 /// Path to a SESSION-daemon's PID file: `~/.koma/run/<session_id>.pid`.
@@ -389,8 +467,17 @@ pub fn write_daemon_pid(session_id: &str) -> Result<()> {
 /// directly under [`base_dir`] (`~/.koma`), not keyed by any session. Whoever binds
 /// this socket IS the live MCP daemon (bind-as-oracle, same rule as the session
 /// sockets); the session-daemon MCP proxy (next commit) connects here.
+#[cfg(unix)]
 pub fn mcp_daemon_sock_path() -> Result<PathBuf> {
     Ok(base_dir()?.join("mcp.sock"))
+}
+
+/// Windows twin of [`mcp_daemon_sock_path`] — the singleton MCP daemon named pipe
+/// `\\.\pipe\koma-mcp`. Not a filesystem object, so it is not under [`base_dir`]; whoever
+/// creates the first instance IS the live MCP daemon (bind-as-oracle).
+#[cfg(windows)]
+pub fn mcp_daemon_sock_path() -> Result<PathBuf> {
+    Ok(PathBuf::from(r"\\.\pipe\koma-mcp"))
 }
 
 /// Path to the GLOBAL MCP daemon's PID file: `~/.koma/mcp.pid`.

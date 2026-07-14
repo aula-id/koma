@@ -202,9 +202,16 @@ pub(super) fn cmd_clean() -> Result<()> {
         if *alive {
             continue;
         }
+        // Unix: the socket is a real file under run_dir — unlink it. Windows: a
+        // named pipe is not a filesystem object (it vanishes with its last handle,
+        // and `path` here is a pipe-namespace path, not a run_dir file), so there is
+        // no stale socket FILE to remove — only the pidfile below applies there.
+        #[cfg(unix)]
         if std::fs::remove_file(path).is_ok() {
             removed.push(path.display().to_string());
         }
+        #[cfg(windows)]
+        let _ = path;
         if let Ok(pid) = store::daemon_pid_path(id) {
             if std::fs::remove_file(&pid).is_ok() {
                 removed.push(pid.display().to_string());
@@ -276,7 +283,13 @@ pub(super) fn sweep_stale_files() {
             if alive {
                 continue;
             }
+            // Unix: unlink the stale socket file. Windows: no stale socket FILE
+            // exists to remove (see the `cmd_clean` comment above) — just drop the
+            // (pipe-namespace) path unused.
+            #[cfg(unix)]
             let _ = std::fs::remove_file(&path);
+            #[cfg(windows)]
+            let _ = path;
             if let Ok(pid) = store::daemon_pid_path(&id) {
                 let _ = std::fs::remove_file(pid);
             }
@@ -307,13 +320,32 @@ fn orphan_pidfiles() -> Result<Vec<(String, std::path::PathBuf)>> {
         let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        // Only an orphan if there is no corresponding socket file.
-        let sock_gone = store::daemon_sock_path(id)
-            .map(|s| !s.exists())
-            .unwrap_or(true);
-        if sock_gone {
+        // Only an orphan if there is no corresponding socket endpoint.
+        if sock_gone_for(id) {
             out.push((id.to_string(), path));
         }
     }
     Ok(out)
+}
+
+/// Whether `id`'s session-daemon endpoint no longer exists — the "is this pidfile
+/// an orphan" half of [`orphan_pidfiles`] (NOT a liveness check: a present-but-dead
+/// endpoint is still "not gone" here; [`super::list_session_sockets`]'s
+/// connect-probe is what decides liveness elsewhere).
+///
+/// Unix: the socket is a real file under run_dir, so a plain `exists()` answers it.
+/// Windows: `daemon_sock_path(id).exists()` would lie — a named pipe is not a
+/// filesystem object, so `exists()` on its pipe-namespace path is meaningless here
+/// — the real answer is whether `koma-<id>` currently appears in the pipe
+/// namespace, via [`store::list_koma_session_pipes`].
+#[cfg(unix)]
+fn sock_gone_for(id: &str) -> bool {
+    store::daemon_sock_path(id)
+        .map(|s| !s.exists())
+        .unwrap_or(true)
+}
+
+#[cfg(windows)]
+fn sock_gone_for(id: &str) -> bool {
+    !store::list_koma_session_pipes().iter().any(|pipe_id| pipe_id == id)
 }

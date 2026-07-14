@@ -86,6 +86,14 @@ pub enum McpRequest {
     /// Per-server connection state, for the `/mcp` panel. Answered with
     /// [`McpResponse::Status`].
     Status,
+    /// Ask the daemon to shut down GRACEFULLY (phase B2, Windows port). There is no
+    /// `SIGTERM` on Windows, so `koma daemon kill` sends this to the mcp pipe instead:
+    /// the daemon's request handler flips the SAME `shutting_down` flag a unix signal /
+    /// the idle reaper set, the accept loop returns, and the normal teardown drops the
+    /// runtime (terminating every MCP child) + releases the pipe. Answered with
+    /// [`McpResponse::Ack`]. Unix keeps using `SIGTERM` and never sends this — the variant
+    /// is purely additive.
+    Shutdown,
 }
 
 /// The global MCP daemon's reply to an [`McpRequest`].

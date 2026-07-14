@@ -9,12 +9,12 @@
 //! resolving unchanged. `probe_status` has no external caller today, so no
 //! re-export is needed for it.
 
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
 use crate::ipc::frame::FrameReader;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus};
+use crate::ipc::SyncIpcStream;
 
 /// Read timeout on the discovery probe socket. Short, because a discovery sweep may
 /// run synchronously in front of the picker and must stay snappy; a daemon that does
@@ -30,7 +30,7 @@ const PROBE_MAX_FRAMES: usize = 16;
 
 /// Probe ONE session-daemon socket for its [`SessionStatus`] WITHOUT attaching.
 ///
-/// Opens a fresh blocking [`UnixStream`] (runtime-free — discovery may run before any
+/// Opens a fresh blocking [`SyncIpcStream`] (runtime-free — discovery may run before any
 /// tokio runtime exists), sets a short read timeout ([`PROBE_TIMEOUT`]) so a wedged
 /// daemon can never hang the sweep, writes a single [`ClientRequest::Status`] frame
 /// using the SAME 4-byte-big-endian-length + JSON codec the rest of the wire speaks
@@ -46,7 +46,7 @@ const PROBE_MAX_FRAMES: usize = 16;
 #[allow(dead_code)] // consumed by the hub swapper in the next commit
 pub fn probe_status(sock_path: &Path) -> Option<SessionStatus> {
     // Connect (blocking). Anything refused / missing ⇒ not probeable.
-    let mut stream = UnixStream::connect(sock_path).ok()?;
+    let mut stream = SyncIpcStream::connect(sock_path).ok()?;
     // Bound every read so a daemon that accepts but never answers can't hang us. The
     // write side is naturally bounded (the Status frame is tiny); a missing write
     // timeout can't wedge a sweep, but set it too for symmetry with the read budget.
@@ -158,7 +158,7 @@ pub enum SpawnIntoReply {
 pub fn spawn_into_session(sock_path: &Path, req: &ClientRequest) -> std::io::Result<SpawnIntoReply> {
     // Connect (blocking). A refused / missing socket propagates its ErrorKind verbatim so the
     // caller can distinguish "not live" from an incompatible/unavailable daemon.
-    let mut stream = UnixStream::connect(sock_path)?;
+    let mut stream = SyncIpcStream::connect(sock_path)?;
     stream.set_read_timeout(Some(PROBE_TIMEOUT))?;
     let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
 

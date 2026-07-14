@@ -16,7 +16,7 @@
 //! `UnboundedSender<usize>` (the job id) so the event loop can surface a toast.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -270,9 +270,7 @@ pub fn spawn_bash_job(
     thread::spawn(move || {
         // Spawn the child, capturing stdout + stderr separately so each can be
         // streamed by its own reader thread.
-        let mut child = match Command::new("sh")
-            .arg("-c")
-            .arg(&command)
+        let mut child = match crate::tool::shell::os_shell_command(&command)
             .current_dir(&cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -385,12 +383,50 @@ pub fn kill_bash_job(job: &BashJob) {
     // worker thread's `wait()` then unblocks and the reader pipes hit EOF.
     let pid = job.shared.pid.lock().ok().and_then(|g| *g);
     if let Some(pid) = pid {
-        // SAFETY: `kill(2)` with a pid we spawned and a standard signal number.
-        // A failure (e.g. the child already reaped) is ignored — best effort.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGTERM);
-        }
+        kill_child(pid);
     }
+}
+
+/// Best-effort terminate of a spawned child by pid.
+///
+/// SAFETY (unix): `kill(2)` with a pid we spawned and a standard signal number.
+/// A failure (e.g. the child already reaped) is ignored — best effort.
+#[cfg(unix)]
+fn kill_child(pid: u32) {
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+/// Best-effort terminate of a spawned background-bash child by pid (Windows).
+///
+/// Uses `taskkill /T /F /PID` — a TREE kill — rather than a bare `TerminateProcess`.
+/// Rationale: on Windows the job's direct child is `cmd.exe /C <command>` (see
+/// [`crate::tool::shell::os_shell_command`]), so terminating just that pid would ORPHAN
+/// the real work `cmd.exe` spawned and leave `bash_kill` ineffective; `/T` reaps the
+/// whole descendant tree so the job actually stops, and `/F` forces it (console apps
+/// routinely ignore the graceful WM_CLOSE). This is the ONE place a targeted whole-tree
+/// stop is needed — the daemon's Job Object only tree-kills on daemon DEATH. It is
+/// deliberately MORE thorough than the unix arm (a single `SIGTERM` to the direct child),
+/// never less, and touches no unix behaviour.
+///
+/// Spawned with `CREATE_NO_WINDOW` (no console flash) and null stdio; fire-and-forget +
+/// best-effort like the unix `libc::kill` — `taskkill` is near-instant, and a spawn
+/// failure (already-exited pid, `taskkill` absent) is ignored.
+#[cfg(windows)]
+fn kill_child(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    let pid_arg = pid.to_string();
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", pid_arg.as_str()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 #[cfg(test)]

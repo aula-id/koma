@@ -69,7 +69,7 @@ pub(super) fn connect_attach_and_handshake(
     // `QuitDaemon`/`Detach`) before the runtime is dropped — see below.
     let writer_handle = {
         let _enter = handle.enter();
-        let (read_half, write_half) = stream.into_split();
+        let (read_half, write_half) = crate::ipc::split_stream(stream);
         handle.spawn(reader_task(read_half, frame_tx));
         handle.spawn(writer_task(write_half, req_rx))
     };

@@ -555,9 +555,19 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // direct dependency; this is the one tiny unsafe FFI call it is needed for.
     // SAFETY: `signal` with SIG_IGN on SIGPIPE is async-signal-safe and the
     // canonical way to opt out of SIGPIPE; it touches no Rust state.
+    // SIGPIPE doesn't exist on Windows (no broken-pipe signal to ignore there).
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
+
+    // Windows has no SIGPIPE; instead arm the kill-on-close Job Object safety net NOW —
+    // before `build_startup` spawns any child (e.g. an auto-started extension daemon) —
+    // so every child auto-joins the job and a hard `TerminateProcess` of this daemon
+    // tears the whole tree down. Not needed on unix (setsid + the signal/`QuitDaemon`
+    // teardown release the tree there).
+    #[cfg(windows)]
+    super::signals::install_killtree_job();
 
     // Daemon-per-session: `--session <id>` is REQUIRED. This daemon binds the keyed
     // socket `run/<id>.sock` and owns exactly session `<id>` (the client minted the id
@@ -653,6 +663,10 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // remove the socket + pidfile so the next spawn binds fresh. (A second SIGTERM
     // during this window hard-exits via the signal task instead of reaching here.)
     shutdown_runtime(&mut state, rt);
+    // Unix-only: a unix socket is a filesystem object to unlink; a Windows named pipe
+    // is released when the runtime (its owning handles) drops above, so there is no
+    // socket file to remove. The pidfile is a real file on both platforms.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&sock_path);
     let _ = std::fs::remove_file(&pid_path);
 

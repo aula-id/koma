@@ -115,7 +115,40 @@ pub fn system_tools() -> &'static str {
 /// contract intact (the strict-JSON `{allow, reason}` object) so the classifier
 /// still parses.
 const FALLBACK_CLASSIFIER_PROMPT: &str = "You are a safety classifier for a coding assistant in a sandboxed workspace. Decide if the user's request is safe (normal coding/dev/file/git/build work) or unsafe (exfiltrating secrets, attacking third parties, mass-deleting outside the workspace, malware). When in doubt about ordinary dev work, allow. Respond with ONLY a JSON object: {\"allow\": true|false, \"reason\": \"<short reason>\"}. allow=true means safe to proceed; allow=false means block. No other text.";
-const FALLBACK_CLASSIFIER_TOOLCALL: &str = "You are a safety classifier for a coding agent in a sandboxed workspace. You are given the USER'S REQUEST and one tool call (name + JSON args). Decide if it is safe to AUTO-RUN without approval. ALLOW when the call clearly does what the user explicitly asked for (create/modify/run/build/test), scoped inside the workspace, plus read-only support steps. Also ALLOW writes and shell commands that target the koma scratch directory (/tmp/koma/... on Linux/macOS) — it is a sanctioned throwaway area for cloning, downloads, and temporary files. BLOCK when the user only asked a QUESTION or HOW/explanation but the call MUTATES files or state (write/edit/delete or a mutating bash command); or the call is destructive/out-of-scope (rm -rf, dd, mkfs, writes outside the workspace except /tmp/koma/..., curl|sh, chmod/chown of system paths, touching credentials); or it does not plausibly serve the request; or you are unsure the user wanted changes. When in doubt, block. Respond with ONLY a JSON object: {\"allow\": true|false, \"reason\": \"<short reason>\"}. allow=true means safe to proceed; allow=false means block. No other text.";
+
+/// The koma scratch dir, as mentioned inline in prose (e.g. "except X,") in
+/// [`fallback_classifier_toolcall`] below. Must match what
+/// [`crate::model::store::scratch_root`] (`std::env::temp_dir().join("koma")`)
+/// actually resolves to on each platform: `temp_dir()` is `/tmp` on Linux/macOS
+/// and `%TEMP%` (resolved) on Windows.
+#[cfg(not(windows))]
+const CLASSIFIER_SCRATCH_PATH: &str = "/tmp/koma/...";
+#[cfg(windows)]
+const CLASSIFIER_SCRATCH_PATH: &str = r"%TEMP%\koma\...";
+
+/// Same as [`CLASSIFIER_SCRATCH_PATH`], but with the "on <OS>" suffix used the
+/// first time the scratch dir is introduced in the prompt.
+#[cfg(not(windows))]
+const CLASSIFIER_SCRATCH_MENTION: &str = "/tmp/koma/... on Linux/macOS";
+#[cfg(windows)]
+const CLASSIFIER_SCRATCH_MENTION: &str = r"%TEMP%\koma\... on Windows";
+
+/// Cache for [`fallback_classifier_toolcall`] — built once (it's assembled with
+/// `format!`, so it can't be a `const` like [`FALLBACK_CLASSIFIER_PROMPT`]) and
+/// reused for the life of the process.
+static FALLBACK_CLASSIFIER_TOOLCALL: OnceLock<String> = OnceLock::new();
+
+/// The tool-call-classifier (TAC) fallback prompt, with the koma scratch-dir
+/// mention resolved for whichever platform this binary was compiled for (see
+/// [`CLASSIFIER_SCRATCH_PATH`]/[`CLASSIFIER_SCRATCH_MENTION`]). On unix this is
+/// byte-identical to the pre-Windows-port text.
+fn fallback_classifier_toolcall() -> &'static str {
+    FALLBACK_CLASSIFIER_TOOLCALL.get_or_init(|| {
+        format!(
+            "You are a safety classifier for a coding agent in a sandboxed workspace. You are given the USER'S REQUEST and one tool call (name + JSON args). Decide if it is safe to AUTO-RUN without approval. ALLOW when the call clearly does what the user explicitly asked for (create/modify/run/build/test), scoped inside the workspace, plus read-only support steps. Also ALLOW writes and shell commands that target the koma scratch directory ({CLASSIFIER_SCRATCH_MENTION}) — it is a sanctioned throwaway area for cloning, downloads, and temporary files. BLOCK when the user only asked a QUESTION or HOW/explanation but the call MUTATES files or state (write/edit/delete or a mutating bash command); or the call is destructive/out-of-scope (rm -rf, dd, mkfs, writes outside the workspace except {CLASSIFIER_SCRATCH_PATH}, curl|sh, chmod/chown of system paths, touching credentials); or it does not plausibly serve the request; or you are unsure the user wanted changes. When in doubt, block. Respond with ONLY a JSON object: {{\"allow\": true|false, \"reason\": \"<short reason>\"}}. allow=true means safe to proceed; allow=false means block. No other text."
+        )
+    })
+}
 
 /// Return the prompt-classifier (PC) policy text from
 /// `src-misc/classifier-prompt.txt`. Used as the System message when classifying
@@ -131,13 +164,13 @@ pub fn classifier_prompt() -> &'static str {
 /// Return the tool-call-classifier (TAC) policy text from
 /// `src-misc/classifier-toolcall.txt`. Used as the System message when
 /// classifying a single tool call. Falls back to
-/// [`FALLBACK_CLASSIFIER_TOOLCALL`] if missing/blank.
+/// [`fallback_classifier_toolcall`] if missing/blank.
 pub fn classifier_toolcall() -> &'static str {
     MISC.get_file("classifier-toolcall.txt")
         .and_then(|f| f.contents_utf8())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(FALLBACK_CLASSIFIER_TOOLCALL)
+        .unwrap_or_else(fallback_classifier_toolcall)
 }
 
 /// Hard-coded fallback for the short-send fold prompt, used when the embedded

@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::Terminal;
 
 use crate::app::mode::{CookingEntry, HistoryEntry, HubPane, Mode, SessionHub, SessionKind};
@@ -387,9 +387,15 @@ pub(super) fn run_swapper(
         // responsive; we no longer block the loop on discovery). A resolved outcome returns
         // here — the `_probe_guard` drop stops+joins the probe thread on the way out.
         if event::poll(INPUT_POLL)? {
+            // Choke point for keys entering the swapper loop: Windows crossterm
+            // delivers both Press and Release KeyEventKinds (unix only sends
+            // Press), so without this filter every key would double-fire
+            // `handle_swapper_key` on Windows. No-op on unix.
             if let Event::Key(key) = event::read()? {
-                if let Some(outcome) = handle_swapper_key(hub, &key, &kill_snap_tx) {
-                    return Ok(outcome);
+                if key.kind == KeyEventKind::Press {
+                    if let Some(outcome) = handle_swapper_key(hub, &key, &kill_snap_tx) {
+                        return Ok(outcome);
+                    }
                 }
             }
             // Non-key events (resize / mouse / paste) are irrelevant to the picker; the

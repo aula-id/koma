@@ -30,6 +30,159 @@ pub(crate) enum ShellExit {
     Early,
 }
 
+/// Build a [`Command`] that runs `command` through the platform's shell: unix
+/// `sh -c <command>` (exactly as every caller ran it before this helper existed);
+/// Windows prefers a Git-Bash-compatible `bash -c <command>` (same quoting/
+/// globbing/`&&`/pipe semantics as unix `sh -c`) when Git for Windows is
+/// discoverable (see [`find_git_bash`]), falling back to `cmd /C <command>`
+/// only when no bash is found.
+///
+/// This is the ONE place every "run an arbitrary shell command string" call site
+/// in the crate should go through, so the unix behavior never drifts between
+/// them and the Windows Git-Bash-vs-cmd decision is made in exactly one spot.
+#[cfg(unix)]
+pub(crate) fn os_shell_command(command: &str) -> Command {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command);
+    cmd
+}
+
+#[cfg(windows)]
+pub(crate) fn os_shell_command(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    let mut cmd = match find_git_bash() {
+        // Plain `-c`, NOT a login shell (`-lc`) — matches unix `sh -c` semantics
+        // exactly (no profile/rc sourcing), so behavior stays as close to unix as
+        // this platform allows.
+        Some(bash) => {
+            let mut c = Command::new(bash);
+            c.arg("-c").arg(command);
+            c
+        }
+        None => {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(command);
+            c
+        }
+    };
+    // No console flash when the daemon/gui spawns a shell headlessly.
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Cached result of [`find_git_bash`] — the discovery probes below (spawning
+/// `git`, shelling out to `reg query`, stat-ing known install paths) are cheap
+/// but not free, and every `bash`/`!`-shortcut/tool call funnels through
+/// [`os_shell_command`], so this is looked up once per process.
+#[cfg(windows)]
+static GIT_BASH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Locate a Git-for-Windows `bash.exe`, trying (in order):
+///
+/// 1. `git --exec-path` — spawns `git.exe` off `%PATH%`; its stdout looks like
+///    `<git-root>/mingw64/libexec/git-core`, so we walk up three parents to
+///    `<git-root>` and check `<git-root>\bin\bash.exe` then `<git-root>\usr\bin\bash.exe`.
+/// 2. The registry key `HKLM\SOFTWARE\GitForWindows` value `InstallPath`,
+///    read via a `reg query` subprocess (not a registry crate — this is the
+///    only lookup that needs one, so a subprocess is cheaper than a new dep).
+///    Output is parsed defensively (line containing `REG_SZ`, value after it).
+/// 3. Known install locations: `C:\Program Files\Git\bin\bash.exe`,
+///    `C:\Program Files (x86)\Git\bin\bash.exe`,
+///    `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`.
+///
+/// Deliberately NEVER resolves a bare `bash` off `%PATH%` — on stock Windows
+/// `C:\Windows\System32\bash.exe` is the WSL launcher, not a real shell (it
+/// either drops into a Linux subsystem with a different filesystem view or
+/// errors if WSL isn't installed); silently running commands through it would
+/// be actively wrong. Every candidate above is resolved to a real Git-for-Windows
+/// bash.exe by construction, so that trap is avoided entirely.
+#[cfg(windows)]
+fn find_git_bash() -> Option<PathBuf> {
+    GIT_BASH
+        .get_or_init(|| {
+            find_git_bash_via_exec_path()
+                .or_else(find_git_bash_via_registry)
+                .or_else(find_git_bash_via_known_paths)
+        })
+        .clone()
+}
+
+/// Check the two locations a Git-for-Windows root can hold `bash.exe`:
+/// `<root>\bin\bash.exe` (a shim) and `<root>\usr\bin\bash.exe` (the real MSYS2
+/// bash). Returns the first that actually exists on disk.
+#[cfg(windows)]
+fn bash_candidates(git_root: &Path) -> Option<PathBuf> {
+    for rel in ["bin\\bash.exe", "usr\\bin\\bash.exe"] {
+        let candidate = git_root.join(rel);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Strategy 1: ask `git` itself where it lives via `git --exec-path`, whose
+/// stdout is `<git-root>/mingw64/libexec/git-core` (or `mingw32` on a 32-bit
+/// install) — walk up three parents to `<git-root>`.
+#[cfg(windows)]
+fn find_git_bash_via_exec_path() -> Option<PathBuf> {
+    let output = Command::new("git").arg("--exec-path").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let exec_path = String::from_utf8_lossy(&output.stdout);
+    let exec_path = exec_path.trim();
+    if exec_path.is_empty() {
+        return None;
+    }
+    // <exec_path> = <git-root>/<mingw64-or-32>/libexec/git-core
+    let git_root = Path::new(exec_path).parent()?.parent()?.parent()?;
+    bash_candidates(git_root)
+}
+
+/// Strategy 2: the machine-wide install marker Git for Windows writes to the
+/// registry. Shelled out via `reg query` (not a registry crate — this is the
+/// only spot that needs one) and parsed defensively: scan every line for
+/// `REG_SZ` and take whatever follows it as the install path.
+#[cfg(windows)]
+fn find_git_bash_via_registry() -> Option<PathBuf> {
+    let output = Command::new("reg")
+        .args(["query", r"HKLM\SOFTWARE\GitForWindows", "/v", "InstallPath"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some(idx) = line.find("REG_SZ") {
+            let value = line[idx + "REG_SZ".len()..].trim();
+            if !value.is_empty() {
+                if let Some(bash) = bash_candidates(Path::new(value)) {
+                    return Some(bash);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Strategy 3: fixed locations Git for Windows commonly installs to, checked
+/// last as a plain existence probe (no subprocess involved).
+#[cfg(windows)]
+fn find_git_bash_via_known_paths() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"),
+        PathBuf::from(r"C:\Program Files (x86)\Git\bin\bash.exe"),
+    ];
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(Path::new(&local_app_data).join(r"Programs\Git\bin\bash.exe"));
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
 /// Spawn `command` via `sh -c` in `cwd`, capture stdout+stderr, strip ANSI, and
 /// return the combined output alongside its exit status. Bounded by `timeout_ms`
 /// (the child keeps running on a drain thread past the timeout, but the caller is
@@ -37,9 +190,7 @@ pub(crate) enum ShellExit {
 /// TTY); never panics.
 pub(crate) fn capture_raw(command: &str, cwd: &Path, timeout_ms: u64) -> (String, ShellExit) {
     // Spawn the child, capturing stdout + stderr.
-    let child = match Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let child = match os_shell_command(command)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -58,7 +58,7 @@ pub use mcp::ensure_mcp_daemon_running;
 pub use probe::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -69,6 +69,7 @@ use anyhow::{anyhow, Context, Result};
 use crate::cli::DaemonSub;
 use crate::ipc::frame::FrameReader;
 use crate::ipc::proto::{ClientRequest, DaemonFrame};
+use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
 /// How long to wait for a freshly-spawned daemon's socket to start accepting before
@@ -155,7 +156,7 @@ pub fn daemon_alive(session_id: &str) -> bool {
     let Ok(path) = store::daemon_sock_path(session_id) else {
         return false;
     };
-    UnixStream::connect(&path).is_ok()
+    SyncIpcStream::connect(&path).is_ok()
 }
 
 /// Whether ANY session-daemon is currently alive, by probing every `*.sock` in the run
@@ -172,7 +173,7 @@ pub fn any_daemon_alive() -> bool {
 /// specific path). `true` only on a successful connect; any error (refused / not-found /
 /// permissions) reads as not-live.
 fn sock_path_alive(path: &Path) -> bool {
-    UnixStream::connect(path).is_ok()
+    SyncIpcStream::connect(path).is_ok()
 }
 
 /// Enumerate the session sockets under [`store::run_dir`], returning each `*.sock`
@@ -185,6 +186,7 @@ fn sock_path_alive(path: &Path) -> bool {
 /// sessions) without consulting any pidfile for liveness.
 ///
 /// `pub(super)` — called from `manage::commands::{cmd_clean, sweep_stale_files}`.
+#[cfg(unix)]
 pub(super) fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, bool)>> {
     let dir = store::run_dir()?;
     let mut out = Vec::new();
@@ -203,6 +205,33 @@ pub(super) fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, 
         };
         let alive = sock_path_alive(&path);
         out.push((id.to_string(), path, alive));
+    }
+    Ok(out)
+}
+
+/// Windows twin of the unix [`list_session_sockets`] above.
+///
+/// There is no `run_dir` to scan for `*.sock` files here (a named pipe is not a
+/// filesystem object), so session ids instead come from
+/// [`store::list_koma_session_pipes`] — the pipe-namespace enumeration. Each id's
+/// pipe path is rebuilt via [`store::daemon_sock_path`] and probed with the SAME
+/// bind-as-oracle connect-probe ([`sock_path_alive`]) the unix arm uses, so a
+/// dead-but-still-visible pipe name (a wedged/crashed daemon whose pipe handle
+/// hasn't fully released) is verified exactly like a stale unix socket file is —
+/// presence in the namespace is only a CANDIDATE, never assumed alive on its own.
+/// Returns the same `(session_id, path, alive)` shape as the unix arm, so every
+/// downstream consumer (`live_session_sockets`, `any_daemon_alive`,
+/// `list_live_sessions`, the `cmd_status`/`kill`/`restart`/`clean` verbs) needs no
+/// platform split of its own.
+#[cfg(windows)]
+pub(super) fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, bool)>> {
+    let mut out = Vec::new();
+    for id in store::list_koma_session_pipes() {
+        let Ok(path) = store::daemon_sock_path(&id) else {
+            continue;
+        };
+        let alive = sock_path_alive(&path);
+        out.push((id, path, alive));
     }
     Ok(out)
 }
@@ -264,11 +293,27 @@ fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Resul
     // into its own session; it touches no Rust state and only runs in the forked child
     // between fork and exec. A failure is ignored (best-effort detach) — the daemon
     // still runs; it just shares our process group, which the SIGHUP handler tolerates.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
+    }
+
+    // Windows has no `pre_exec`/`setsid`. Detach via creation flags instead:
+    // DETACHED_PROCESS gives the daemon no console (headless — a closing terminal can't
+    // SIGHUP it), and CREATE_NEW_PROCESS_GROUP roots it in its own process group so a
+    // Ctrl+C/Ctrl+Break delivered to OUR group never reaches it. stdio is already
+    // null'd above, matching the unix `/dev/null` redirect. Best-effort like `setsid`:
+    // even if a flag is ignored the daemon still runs, just less isolated.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
     let child = cmd.spawn().context("failed to spawn `koma --daemon`")?;
@@ -289,12 +334,16 @@ fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Resul
 ///
 /// `pub(super)` — called from `manage::mcp::ensure_mcp_daemon_running`.
 pub(super) fn probe_or_clear(path: &Path) -> Result<bool> {
-    match UnixStream::connect(path) {
+    match SyncIpcStream::connect(path) {
         Ok(_stream) => Ok(true), // a daemon is already live (probe stream dropped)
         Err(e) => match e.kind() {
             std::io::ErrorKind::ConnectionRefused => {
                 // Stale socket from a crashed daemon: remove it so the spawn's bind
                 // doesn't trip over `AddrInUse`. Best-effort (it may have just gone).
+                // Unix-only — a Windows named pipe has no stale file to unlink (a dead
+                // daemon's pipe is already gone, surfacing as `NotFound` below, not
+                // `ConnectionRefused`).
+                #[cfg(unix)]
                 let _ = std::fs::remove_file(path);
                 Ok(false)
             }
@@ -340,7 +389,7 @@ pub fn ensure_daemon_running(session_id: &str, resume: bool, workdir: Option<&Pa
     spawn_and_wait_until_alive(session_id, &path, resume, workdir)
 }
 
-/// Spawn-or-attach: return a connected blocking [`UnixStream`] to a LIVE daemon,
+/// Spawn-or-attach: return a connected blocking [`SyncIpcStream`] to a LIVE daemon,
 /// spawning one first if none is up.
 ///
 /// The blocking-stream variant of [`ensure_daemon_running`], used by `koma daemon
@@ -360,18 +409,18 @@ pub fn ensure_daemon_running(session_id: &str, resume: bool, workdir: Option<&Pa
 ///
 /// `session_id` keys the socket + the spawned daemon's `--session`, so this confirms a
 /// live session-daemon for exactly that session.
-pub fn ensure_daemon_and_connect(session_id: &str) -> Result<UnixStream> {
+pub fn ensure_daemon_and_connect(session_id: &str) -> Result<SyncIpcStream> {
     let path = store::daemon_sock_path(session_id)?;
 
     if probe_or_clear(&path)? {
         // Already live — reconnect for the caller (the probe stream was dropped).
-        return UnixStream::connect(&path)
+        return SyncIpcStream::connect(&path)
             .with_context(|| format!("connect to live daemon socket {}", path.display()));
     }
 
     // Nothing live → spawn + wait until it accepts, then connect for the caller.
     spawn_and_wait_until_alive(session_id, &path, false, None)?;
-    UnixStream::connect(&path)
+    SyncIpcStream::connect(&path)
         .with_context(|| format!("connect to spawned daemon socket {}", path.display()))
 }
 
@@ -392,7 +441,7 @@ fn spawn_and_wait_until_alive(
     let pid = spawn_daemon(session_id, resume, workdir)?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
-        match UnixStream::connect(path) {
+        match SyncIpcStream::connect(path) {
             Ok(_stream) => return Ok(()), // accepting — probe stream dropped
             Err(_) if Instant::now() < deadline => std::thread::sleep(SPAWN_POLL_INTERVAL),
             Err(e) => {
@@ -412,7 +461,7 @@ fn spawn_and_wait_until_alive(
 /// big-endian length + payload — the SAME wire codec as [`crate::ipc::frame`]).
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn send_request(stream: &mut UnixStream, req: &ClientRequest) -> Result<()> {
+pub(super) fn send_request(stream: &mut SyncIpcStream, req: &ClientRequest) -> Result<()> {
     let payload = serde_json::to_vec(req).context("serialise ClientRequest")?;
     let prefix = (payload.len() as u32).to_be_bytes();
     stream.write_all(&prefix).context("write frame prefix")?;
@@ -427,7 +476,7 @@ pub(super) fn send_request(stream: &mut UnixStream, req: &ClientRequest) -> Resu
 /// wait so a wedged daemon can't hang the CLI.
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn recv_frame(stream: &mut UnixStream, reader: &mut FrameReader) -> Result<DaemonFrame> {
+pub(super) fn recv_frame(stream: &mut SyncIpcStream, reader: &mut FrameReader) -> Result<DaemonFrame> {
     loop {
         // A previous read may have buffered a whole frame already.
         if let Some(bytes) = reader.next_frame().context("frame reassembly")? {
@@ -446,8 +495,8 @@ pub(super) fn recv_frame(stream: &mut UnixStream, reader: &mut FrameReader) -> R
 /// timeouts. Returns an error if no daemon is accepting (the bind-as-oracle signal).
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn connect_managed(path: &Path) -> Result<(UnixStream, FrameReader)> {
-    let stream = UnixStream::connect(path)
+pub(super) fn connect_managed(path: &Path) -> Result<(SyncIpcStream, FrameReader)> {
+    let stream = SyncIpcStream::connect(path)
         .with_context(|| format!("connect to daemon socket {}", path.display()))?;
     // Bound every blocking read/write so a stuck daemon can't wedge the CLI.
     stream
@@ -474,6 +523,9 @@ pub(super) fn read_pidfile(session_id: &str) -> Option<u32> {
 /// Each removal ignores a missing file; any other IO error is swallowed — these are
 /// cleanup, never a hard failure.
 fn unlink_daemon_files(session_id: &str) {
+    // Unix-only: the socket is a filesystem object. A Windows named pipe is released
+    // when its owning process dies, so there is no socket file to unlink here.
+    #[cfg(unix)]
     if let Ok(sock) = store::daemon_sock_path(session_id) {
         let _ = std::fs::remove_file(sock);
     }
@@ -556,8 +608,14 @@ pub(super) fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
         return Ok(());
     };
 
-    // SIGTERM (graceful at the OS level), then wait.
-    send_signal(pid, libc::SIGTERM);
+    // Graceful terminate, then wait. Unix: SIGTERM. Windows has no SIGTERM, so re-send
+    // the QuitDaemon IPC message to the session's pipe (the daemon latches the SAME
+    // shutdown flag SIGTERM flips); best-effort — the Kill fallback below covers a
+    // wedged/attached daemon that rejects or ignores it.
+    #[cfg(unix)]
+    send_signal(pid, StopSignal::Term);
+    #[cfg(windows)]
+    send_shutdown_request(&sock);
     if wait_until_dead(session_id, SIGNAL_GRACE) {
         unlink_daemon_files(session_id);
         if !quiet {
@@ -567,7 +625,7 @@ pub(super) fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
     }
 
     // SIGKILL (last resort), then wait.
-    send_signal(pid, libc::SIGKILL);
+    send_signal(pid, StopSignal::Kill);
     let died = wait_until_dead(session_id, SIGNAL_GRACE);
     unlink_daemon_files(session_id);
     if !quiet {
@@ -646,8 +704,7 @@ pub fn migrate_legacy_daemon() {
         .flatten()
         .and_then(|s| s.trim().parse::<u32>().ok())
         .inspect(|&pid| {
-            // SAFETY: kill(2) with a real signal is async-signal-safe; types match libc.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            send_signal(pid, StopSignal::Term);
         });
 
     // Poll up to ~1 s for the socket to disappear (the old daemon's SIGTERM handler
@@ -668,17 +725,70 @@ pub fn migrate_legacy_daemon() {
 
 // ─── signal + wait helpers ───────────────────────────────────────────────────
 
+/// Platform-neutral stop signal for [`send_signal`]. Unix maps each variant to the
+/// matching libc signal number; Windows has no equivalent yet (TODO below).
+pub(super) enum StopSignal {
+    /// Graceful terminate request (unix: `SIGTERM`).
+    Term,
+    /// Forceful kill (unix: `SIGKILL`).
+    Kill,
+}
+
 /// Send `sig` to `pid`, best-effort. A failure (ESRCH = already gone, EPERM = not
 /// ours) is ignored — `kill` re-checks liveness via the socket afterwards, so a
 /// failed signal just means the follow-up `wait_until_dead` decides the outcome.
 ///
 /// `pub(super)` — called from `manage::mcp::stop_mcp_daemon` and
 /// `manage::os::kill_orphan_daemon_processes`.
-pub(super) fn send_signal(pid: u32, sig: libc::c_int) {
+#[cfg(unix)]
+pub(super) fn send_signal(pid: u32, sig: StopSignal) {
+    let sig = match sig {
+        StopSignal::Term => libc::SIGTERM,
+        StopSignal::Kill => libc::SIGKILL,
+    };
     // SAFETY: `kill(2)` with a real signal number has no memory-safety preconditions
     // and the FFI types match libc's signature. We intentionally ignore the result.
     unsafe {
         libc::kill(pid as libc::pid_t, sig);
+    }
+}
+
+/// Windows `send_signal`. There is no `kill(2)`, so only the two expressible-from-a-
+/// bare-pid outcomes live here:
+/// - [`StopSignal::Kill`] → `OpenProcess(PROCESS_TERMINATE)` + `TerminateProcess` (the
+///   `SIGKILL` analogue), via [`crate::model::proc_win::terminate_process`].
+/// - [`StopSignal::Term`] → a DELIBERATE no-op. A graceful terminate on Windows is an IPC
+///   message (`QuitDaemon` / `McpRequest::Shutdown`) that needs the daemon's PIPE PATH
+///   (not just a pid) and is protocol-specific, so it is sent by [`send_shutdown_request`]
+///   (session) / `mcp::send_mcp_shutdown_request` (mcp) at the call sites that hold the
+///   path. From a bare pid there is nothing graceful to do; the caller escalates to
+///   `Kill` if the daemon does not stop (the legacy-daemon sweep, which has no live
+///   Windows target, relies on exactly this no-op).
+#[cfg(windows)]
+pub(super) fn send_signal(pid: u32, sig: StopSignal) {
+    match sig {
+        StopSignal::Kill => crate::model::proc_win::terminate_process(pid),
+        StopSignal::Term => {}
+    }
+}
+
+/// Windows graceful session-daemon stop: connect the session's named pipe and send the
+/// SAME [`ClientRequest::QuitDaemon`] a controller sends. The daemon latches the SAME
+/// shutdown flag a unix `SIGTERM` flips, then tears down normally (release locks, drop
+/// runtime, release the pipe). Windows has no `SIGTERM`, so this IS the graceful stop;
+/// [`stop_session_daemon`]'s Kill fallback ([`send_signal`] → `TerminateProcess`, made
+/// tree-safe by the daemon's Job Object) covers a wedged or client-attached daemon that
+/// rejects the request.
+///
+/// Best-effort + FIRE-AND-FORGET: any connect/send error just returns (the caller
+/// escalates). It intentionally does NOT read the reply — [`SyncIpcStream`] has no read
+/// timeout on Windows, so a blocking drain could hang the CLI against a wedged daemon;
+/// the written frame is enough for the daemon to observe the request, and liveness is
+/// re-checked by [`wait_until_dead`] right after.
+#[cfg(windows)]
+pub(super) fn send_shutdown_request(sock: &Path) {
+    if let Ok(mut stream) = SyncIpcStream::connect(sock) {
+        let _ = send_request(&mut stream, &ClientRequest::QuitDaemon);
     }
 }
 

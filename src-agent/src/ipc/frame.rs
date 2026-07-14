@@ -32,9 +32,9 @@
 use std::io::{self, ErrorKind};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 use super::proto::MAX_FRAME_BYTES;
+use super::IpcStream;
 
 /// Number of bytes in the big-endian u32 length prefix.
 const PREFIX_LEN: usize = 4;
@@ -74,7 +74,7 @@ pub async fn write_frame_to<W: AsyncWrite + Unpin>(sink: &mut W, bytes: &[u8]) -
 /// Write one length-prefixed frame to `stream`. Thin [`UnixStream`] wrapper over
 /// the generic [`write_frame_to`] — the codec is identical; this is the form the
 /// client and self-test use on a non-split stream.
-pub async fn write_frame(stream: &mut UnixStream, bytes: &[u8]) -> io::Result<()> {
+pub async fn write_frame(stream: &mut IpcStream, bytes: &[u8]) -> io::Result<()> {
     write_frame_to(stream, bytes).await
 }
 
@@ -181,7 +181,7 @@ pub async fn read_frame_from<R: AsyncRead + Unpin>(
 /// Read exactly one complete frame from `stream`. Thin [`UnixStream`] wrapper over
 /// the generic [`read_frame_from`] — the reassembly logic is identical; this is
 /// the form the client and self-test use on a non-split stream.
-pub async fn read_frame(stream: &mut UnixStream, reader: &mut FrameReader) -> io::Result<Vec<u8>> {
+pub async fn read_frame(stream: &mut IpcStream, reader: &mut FrameReader) -> io::Result<Vec<u8>> {
     read_frame_from(stream, reader).await
 }
 
