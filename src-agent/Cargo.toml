@@ -50,7 +50,6 @@ koma-extension = { path = "../src-extension" }
 # no avif/tiff/exr/qoi/ico/dds/hdr/pnm/ff (unused, each pulls its own extra deps).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
-libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
@@ -81,6 +80,37 @@ rfd = { version = "0.15", optional = true }
 # build stays lean. Version/feature set mirrors wry's own internal use of
 # this same crate (see wry-0.52.1 Cargo.toml) to avoid duplicate/conflicting
 # objc2 stacks.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows named-pipe IPC backend (src/ipc/win.rs) + the phase-B2 process-lifecycle port:
+#   - Foundation: SECURITY_ATTRIBUTES, LocalFree/BOOL/HLOCAL, CloseHandle/GetLastError,
+#     STILL_ACTIVE + ERROR_ACCESS_DENIED (pid-liveness).
+#   - Security + Security_Authorization: the daemon-pipe DACL hardening
+#     (ConvertStringSecurityDescriptorToSecurityDescriptorW / SDDL).
+#   - System_Threading: DETACHED_PROCESS/CREATE_NEW_PROCESS_GROUP/CREATE_NO_WINDOW
+#     (detached daemon spawn + taskkill windowless), OpenProcess/TerminateProcess/
+#     GetExitCodeProcess/GetCurrentProcess (pid-liveness + kill), and the IO_COUNTERS the
+#     JobObjects extended-limit struct embeds.
+#   - System_JobObjects: the kill-on-close Job Object tree-kill safety net.
+# 0.59 is already in the tree (transitive), so this adds no new windows-sys version.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+] }
+# Clipboard-image paste (controller/input/clipboard.rs): linux/macos shell out to
+# xclip/wl-paste/pngpaste/osascript; windows has no equivalent always-present CLI
+# tool, so we use arboard for real `OpenClipboard`/`GetClipboardData` access.
+# `default-features = false` + explicit `image-data` (the feature that gates
+# `Clipboard::get_image`) keeps this lean; `image-data` pulls arboard's own
+# windows-only `image` dep with the same `png` feature our own `image` dep
+# above already enables, so cargo unifies them — no second PNG encoder needed.
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
     "std",
@@ -108,3 +138,44 @@ gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 [[bin]]
 name = "koma"
 path = "src/main.rs"
+
+# cargo-packager metadata (deb/wix packaging). All keys verified against the
+# cargo-packager `Config` struct (crates/packager/src/config/mod.rs, tag main
+# as of 2026-07): every field is `#[serde(rename_all = "camelCase")]` with
+# `deny_unknown_fields`, but nearly every multi-word field also carries
+# explicit `alias = "kebab-case"` / `alias = "snake_case"` entries, so the
+# kebab-case keys below (product-name, out-dir, fragment-paths, ...) all
+# deserialize correctly - this is NOT just camelCase-tolerant TOML, it's
+# real serde aliasing. Relative paths (icons, fragment-paths, desktop-template)
+# resolve relative to *this* Cargo.toml's directory (src-agent/), because the
+# packager CLI does `set_current_dir(manifest_path.parent())` before reading
+# them (crates/packager/src/cli/mod.rs) - hence the "../" prefixes.
+[package.metadata.packager]
+product-name = "koma"
+identifier = "run.koma.app"
+category = "DeveloperTool"
+# icon.ico is listed explicitly (not just the `icon*.png` glob) because
+# `Config::find_ico()` only auto-picks a `.ico` if one is literally present
+# in the resolved icons list; without it, the Windows MSI/ARP icon and this
+# fragment's Start Menu shortcut icon would silently fall back to a flat PNG
+# instead of the multi-res ICO. The deb hicolor icon generator ignores
+# non-`.png` entries on its own, so listing icon.ico here does not affect it.
+icons = ["../assets/icon.ico", "../assets/icon*.png"]
+# CI runs `cargo packager --release` after `cargo build --release`; binaries and out-dir auto-detect from target/release
+
+[package.metadata.packager.deb]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+section = "utils"
+# cargo-packager's default .desktop Exec line is just the bare binary name
+# (`Exec=koma`, since a GUI launcher `.desktop` entry launches the ratatui
+# TUI with no controlling terminal (Terminal=false) and no way to do
+# anything). Our own template hardcodes `Exec=koma gui` instead.
+desktop-template = "../packaging/linux/koma.desktop.hbs"
+
+[package.metadata.packager.wix]
+fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
+# Must reference the actual ComponentGroup Id declared in the fragment above,
+# or the fragment's components are compiled but never added to the MSI's
+# Feature tree (see main.wxs's `Feature Id="External"`, which only pulls in
+# `{{#each component_group_refs}}` / `{{#each component_refs}}`).
+component-group-refs = ["KomaPathAndShortcut"]

@@ -94,8 +94,9 @@ fn spawn_opener(url: &str) -> std::io::Result<()> {
 
 #[cfg(target_os = "windows")]
 fn spawn_opener(url: &str) -> std::io::Result<()> {
-    Command::new("cmd")
-        .args(["/c", "start", "", url])
+    // cmd /c start splits unquoted URLs at '&'; rundll32 passes argv without shell parsing
+    Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -16,10 +16,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
-use tokio::net::{UnixListener, UnixStream};
-
 use crate::app::runtime::HubInbound;
 use crate::ipc::conn;
+use crate::ipc::{IpcListener, IpcStream};
 use crate::model::store;
 
 /// Bind the daemon's unix-domain listener at `path` (typically
@@ -34,25 +33,33 @@ use crate::model::store;
 ///    socket and the caller would have connected to it instead of binding.)
 /// 3. Bind and return the listener. Holding it is what makes this process the live
 ///    daemon.
-pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
-    // 1. ~/.koma (or whatever parent the path has) must exist before bind.
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // 2. Remove a stale socket file; ignore "not found" (nothing to clean up).
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+pub fn bind(path: &Path) -> std::io::Result<IpcListener> {
+    // Steps 1-2 are unix-domain-SOCKET concerns only. A Windows named pipe is not a
+    // filesystem object: its `\\.\pipe` "parent" cannot be `create_dir_all`'d (that
+    // would make bind fail on every call), and it leaves no stale file to unlink (a
+    // pipe is released when its owner dies; `first_pipe_instance(true)` inside
+    // `IpcListener::bind` is itself the bind-as-oracle). So gate them to unix.
+    #[cfg(unix)]
+    {
+        // 1. ~/.koma (or whatever parent the path has) must exist before bind.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // 2. Remove a stale socket file; ignore "not found" (nothing to clean up).
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
     }
     // 3. Bind fresh — this is the liveness oracle.
-    UnixListener::bind(path)
+    IpcListener::bind(path)
 }
 
 /// Convenience over [`store::daemon_sock_path`] + [`bind`]: resolve a SESSION's keyed
 /// daemon socket path (`run/<session_id>.sock`) and bind it.
 #[allow(dead_code)] // wired in daemon stage 3+ (spawn-or-attach)
-pub fn bind_default(session_id: &str) -> anyhow::Result<UnixListener> {
+pub fn bind_default(session_id: &str) -> anyhow::Result<IpcListener> {
     let path = store::daemon_sock_path(session_id)?;
     Ok(bind(&path)?)
 }
@@ -60,7 +67,7 @@ pub fn bind_default(session_id: &str) -> anyhow::Result<UnixListener> {
 /// Await the next client connection on `listener`, returning just the stream
 /// (the peer's anonymous unix address is not needed — clients are identified by
 /// the [`super::proto::ClientRequest::Attach`] handshake, not their socket addr).
-pub async fn accept(listener: &UnixListener) -> std::io::Result<UnixStream> {
+pub async fn accept(listener: &IpcListener) -> std::io::Result<IpcStream> {
     let (stream, _addr) = listener.accept().await?;
     Ok(stream)
 }
@@ -78,7 +85,7 @@ pub async fn accept(listener: &UnixListener) -> std::io::Result<UnixStream> {
 /// A transient `accept` error (e.g. EMFILE) is logged-by-ignoring and retried —
 /// one bad accept must not tear down the whole daemon's listener. The loop only
 /// ends when the runtime is dropped at shutdown.
-pub async fn accept_loop(listener: UnixListener, hub_tx: Sender<HubInbound>) {
+pub async fn accept_loop(listener: IpcListener, hub_tx: Sender<HubInbound>) {
     let next_id = AtomicU64::new(1);
     loop {
         match listener.accept().await {

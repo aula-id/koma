@@ -10,7 +10,7 @@
 //! `unlink_mcp_daemon_files`, and `read_mcp_pidfile` are bumped to `pub(super)`
 //! HERE since `manage::commands` calls them.
 
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
-use super::{SIGNAL_GRACE, SPAWN_CONNECT_TIMEOUT, SPAWN_POLL_INTERVAL};
+use super::{StopSignal, SIGNAL_GRACE, SPAWN_CONNECT_TIMEOUT, SPAWN_POLL_INTERVAL};
 
 /// Whether the GLOBAL MCP daemon is currently ALIVE, by the same bind-as-oracle rule
 /// as [`super::daemon_alive`]: try to CONNECT to its singleton socket
@@ -34,7 +35,7 @@ pub fn mcp_daemon_alive() -> bool {
     let Ok(path) = store::mcp_daemon_sock_path() else {
         return false;
     };
-    UnixStream::connect(&path).is_ok()
+    SyncIpcStream::connect(&path).is_ok()
 }
 
 /// Spawn a DETACHED `koma --mcp-daemon` child and return its PID.
@@ -59,11 +60,24 @@ fn spawn_mcp_daemon() -> Result<u32> {
     // into its own session; it touches no Rust state and only runs in the forked child
     // between fork and exec. A failure is ignored (best-effort detach) — the daemon
     // still runs; it just shares our process group, which the SIGHUP handler tolerates.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
+    }
+
+    // Windows detach via creation flags — the exact twin of `manage::spawn_daemon`:
+    // DETACHED_PROCESS (no console) + CREATE_NEW_PROCESS_GROUP (own group, immune to our
+    // Ctrl+C/Break). stdio is already null'd above (the `/dev/null` analogue).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
     let child = cmd.spawn().context("failed to spawn `koma --mcp-daemon`")?;
@@ -78,7 +92,7 @@ fn spawn_mcp_and_wait_until_alive(path: &Path) -> Result<()> {
     let pid = spawn_mcp_daemon()?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
-        match UnixStream::connect(path) {
+        match SyncIpcStream::connect(path) {
             Ok(_stream) => return Ok(()), // accepting — probe stream dropped
             Err(_) if Instant::now() < deadline => std::thread::sleep(SPAWN_POLL_INTERVAL),
             Err(e) => {
@@ -124,6 +138,9 @@ pub(super) fn read_mcp_pidfile() -> Option<u32> {
 ///
 /// `pub(super)` — called from `manage::commands::cmd_kill`.
 pub(super) fn unlink_mcp_daemon_files() {
+    // Unix-only: the socket is a filesystem object. A Windows named pipe is released
+    // when its owning process dies, so there is no socket file to unlink here.
+    #[cfg(unix)]
     if let Ok(sock) = store::mcp_daemon_sock_path() {
         let _ = std::fs::remove_file(sock);
     }
@@ -146,6 +163,37 @@ fn mcp_wait_until_dead(timeout: Duration) -> bool {
         }
         std::thread::sleep(SPAWN_POLL_INTERVAL);
     }
+}
+
+/// Windows graceful MCP-daemon stop: connect the singleton mcp pipe and frame-write a
+/// [`crate::ipc::mcp_proto::McpRequest::Shutdown`] — the additive protocol verb whose
+/// daemon-side handler flips the SAME `shutting_down` flag a unix `SIGTERM` / the idle
+/// reaper set, so the accept loop returns and the normal teardown drops the runtime
+/// (terminating every MCP child) + releases the pipe. Windows has no `SIGTERM`, so this
+/// IS the graceful stop; [`stop_mcp_daemon`]'s Kill fallback covers a wedged daemon.
+///
+/// Best-effort + FIRE-AND-FORGET, mirroring [`super::send_shutdown_request`]: it uses the
+/// SAME 4-byte-big-endian-length + JSON frame codec as the rest of the IPC and does NOT
+/// read the reply (Windows [`SyncIpcStream`] has no read timeout — a blocking drain could
+/// hang the CLI). The written frame is enough for the daemon to observe the request;
+/// liveness is re-checked by [`mcp_wait_until_dead`] right after.
+#[cfg(windows)]
+fn send_mcp_shutdown_request() {
+    use std::io::Write;
+
+    let Ok(sock) = store::mcp_daemon_sock_path() else {
+        return;
+    };
+    let Ok(mut stream) = SyncIpcStream::connect(&sock) else {
+        return;
+    };
+    let Ok(payload) = serde_json::to_vec(&crate::ipc::mcp_proto::McpRequest::Shutdown) else {
+        return;
+    };
+    let prefix = (payload.len() as u32).to_be_bytes();
+    let _ = stream.write_all(&prefix);
+    let _ = stream.write_all(&payload);
+    let _ = stream.flush();
 }
 
 /// Stop the GLOBAL MCP daemon (best-effort), for `koma daemon kill`. The MCP daemon
@@ -174,9 +222,14 @@ pub(super) fn stop_mcp_daemon() {
         return;
     };
 
-    // SIGTERM (graceful at the OS level; the signal task runs the orderly teardown),
-    // then wait.
-    super::send_signal(pid, libc::SIGTERM);
+    // Graceful terminate, then wait. Unix: SIGTERM (the signal task runs the orderly
+    // teardown). Windows has no SIGTERM, so send the `McpRequest::Shutdown` IPC message to
+    // the mcp pipe (the daemon flips the SAME `shutting_down` flag a signal / the idle
+    // reaper set); best-effort — the Kill fallback below covers a wedged daemon.
+    #[cfg(unix)]
+    super::send_signal(pid, StopSignal::Term);
+    #[cfg(windows)]
+    send_mcp_shutdown_request();
     if mcp_wait_until_dead(SIGNAL_GRACE) {
         unlink_mcp_daemon_files();
         println!("koma daemon: stopped MCP daemon (SIGTERM to pid {pid})");
@@ -184,7 +237,7 @@ pub(super) fn stop_mcp_daemon() {
     }
 
     // SIGKILL (last resort), then wait.
-    super::send_signal(pid, libc::SIGKILL);
+    super::send_signal(pid, StopSignal::Kill);
     let died = mcp_wait_until_dead(SIGNAL_GRACE);
     unlink_mcp_daemon_files();
     if died {

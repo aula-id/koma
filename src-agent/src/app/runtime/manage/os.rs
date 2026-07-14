@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 #[cfg(target_os = "linux")]
-use super::{SIGNAL_GRACE, SPAWN_POLL_INTERVAL};
+use super::{StopSignal, SIGNAL_GRACE, SPAWN_POLL_INTERVAL};
 
 /// Whether `pid` is still alive, via `kill(pid, 0)` (sends no signal, only validates
 /// the pid). A zero return means the process exists. `ESRCH` means it is gone. `EPERM`
@@ -110,7 +110,7 @@ pub(super) fn kill_orphan_daemon_processes() -> usize {
     }
 
     for &pid in &matched {
-        super::send_signal(pid, libc::SIGTERM);
+        super::send_signal(pid, StopSignal::Term);
     }
 
     // Poll until every matched pid has exited or SIGNAL_GRACE elapses.
@@ -122,7 +122,7 @@ pub(super) fn kill_orphan_daemon_processes() -> usize {
     // Last resort for anything still alive.
     for &pid in &matched {
         if pid_alive(pid) {
-            super::send_signal(pid, libc::SIGKILL);
+            super::send_signal(pid, StopSignal::Kill);
         }
     }
 

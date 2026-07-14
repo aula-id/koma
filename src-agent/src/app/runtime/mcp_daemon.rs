@@ -71,10 +71,19 @@ pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
     // daemon. Ignore SIGPIPE process-wide BEFORE any socket IO so a broken-pipe write
     // returns EPIPE (handled per-write) instead of terminating the process.
     // SAFETY: `signal` with SIG_IGN on SIGPIPE is async-signal-safe and the canonical
-    // way to opt out of SIGPIPE; it touches no Rust state.
+    // way to opt out of SIGPIPE; it touches no Rust state. SIGPIPE doesn't exist on
+    // Windows (no broken-pipe signal to ignore there).
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
+
+    // Windows has no SIGPIPE; instead arm the kill-on-close Job Object safety net NOW —
+    // before `connect_all` spawns any MCP stdio child below — so every child auto-joins
+    // the job and a hard `TerminateProcess` of this daemon tears the whole tree down. Not
+    // needed on unix (dropping the runtime terminates the stdio children there).
+    #[cfg(windows)]
+    super::signals::install_killtree_job();
 
     // Ensure the config dirs exist (so the socket's parent `~/.koma` is present for
     // bind, and any config read has its dir). Mirrors what build_startup does for the
@@ -135,6 +144,10 @@ pub fn run_mcp_daemon(_opts: crate::cli::Opts) -> Result<()> {
     // MCP child). Then unlink the socket + pidfile so the next spawn binds fresh.
     // (A second SIGTERM during this window hard-exits via the signal task instead.)
     drop(rt);
+    // Unix-only: unlink the socket file. A Windows named pipe is released when the
+    // runtime dropped above (its owning handles), so there is nothing to remove. The
+    // pidfile is a real file on both platforms.
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&sock_path);
     let _ = std::fs::remove_file(&pid_path);
 
@@ -214,6 +227,7 @@ async fn reaper_loop(shutting_down: std::sync::Arc<std::sync::atomic::AtomicBool
 /// file existing at all is enough to keep the shared MCP daemon alive (bias toward
 /// staying alive). An unreadable/absent run dir returns `true` (treated as "sessions
 /// may exist") so a transient error never causes a reap.
+#[cfg(unix)]
 fn run_dir_has_socket() -> bool {
     let dir = match store::run_dir() {
         Ok(d) => d,
@@ -235,6 +249,25 @@ fn run_dir_has_socket() -> bool {
     false
 }
 
+/// Windows twin of the unix [`run_dir_has_socket`] above: presence-only check of
+/// the pipe namespace for ANY live session pipe name (`koma-<id>`), via
+/// [`store::list_koma_session_pipes`].
+///
+/// Mirrors the unix arm's discipline exactly — NO connect-probe here either (a
+/// session pipe merely being visible in the namespace is enough to keep the shared
+/// MCP daemon alive, same bias-toward-staying-alive rationale as the unix
+/// file-presence check). The one difference: [`store::list_koma_session_pipes`]
+/// degrades a `read_dir` failure to an empty `Vec`, so unlike the unix arm this
+/// can't distinguish "genuinely no sessions" from "pipe namespace momentarily
+/// unreadable" and would read as `false` either way — but the reaper around this
+/// call already requires an initial grace period PLUS two consecutive empty scans
+/// ([`REAPER_INITIAL_GRACE`], [`REAPER_EMPTY_STREAK_TO_EXIT`]) before it trips, so a
+/// single transient enumeration miss can't cause a false reap.
+#[cfg(windows)]
+fn run_dir_has_socket() -> bool {
+    !store::list_koma_session_pipes().is_empty()
+}
+
 /// How long a single `accept` waits before we re-check the `shutting_down` flag. Short
 /// so a SIGTERM ends the loop promptly even with no clients connecting.
 const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(200);
@@ -247,9 +280,9 @@ const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 /// A transient `accept` error is logged-by-ignoring and retried after a short sleep —
 /// one bad accept must not tear down the daemon's listener.
 async fn accept_loop(
-    listener: tokio::net::UnixListener,
+    listener: crate::ipc::IpcListener,
     manager: Arc<McpManager>,
-    shutting_down: &std::sync::atomic::AtomicBool,
+    shutting_down: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     use std::sync::atomic::Ordering;
 
@@ -262,8 +295,14 @@ async fn accept_loop(
         match tokio::time::timeout(ACCEPT_POLL, listener.accept()).await {
             Ok(Ok((stream, _addr))) => {
                 let mgr = Arc::clone(&manager);
+                // Clone the shutdown flag into the connection task so a
+                // `McpRequest::Shutdown` (the Windows graceful-stop verb) can latch it —
+                // the accept loop observes the same flag next tick and tears down. On unix
+                // the flag is only ever set by a signal / the reaper; the connection task
+                // simply carries it.
+                let flag = Arc::clone(shutting_down);
                 tokio::spawn(async move {
-                    connection_loop(stream, mgr).await;
+                    connection_loop(stream, mgr, flag).await;
                 });
             }
             // Timed out waiting for a connection — re-check the shutdown flag and retry.
@@ -285,7 +324,11 @@ async fn accept_loop(
 /// non-split [`tokio::net::UnixStream`] is borrowed `&mut` for the read then the write
 /// within each cycle — no split into independent halves is needed (unlike the session
 /// daemon, which pushes unsolicited frames).
-async fn connection_loop(mut stream: tokio::net::UnixStream, manager: Arc<McpManager>) {
+async fn connection_loop(
+    mut stream: crate::ipc::IpcStream,
+    manager: Arc<McpManager>,
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
+) {
     let mut reader = FrameReader::new();
     loop {
         // Read one request frame. EOF / decode error / any read error ends the
@@ -304,7 +347,7 @@ async fn connection_loop(mut stream: tokio::net::UnixStream, manager: Arc<McpMan
             }
         };
 
-        let resp = handle_request(req, &manager).await;
+        let resp = handle_request(req, &manager, &shutting_down).await;
         if respond(&mut stream, &resp).await.is_err() {
             return; // dead socket (EPIPE etc.) — drop the connection
         }
@@ -314,7 +357,7 @@ async fn connection_loop(mut stream: tokio::net::UnixStream, manager: Arc<McpMan
 /// Serialise + frame-write one [`McpResponse`]. A serialise failure is a daemon bug,
 /// not a transport fault; it is surfaced as an in-band [`McpResponse::Error`] so the
 /// client still gets a well-formed frame.
-async fn respond(stream: &mut tokio::net::UnixStream, resp: &McpResponse) -> std::io::Result<()> {
+async fn respond(stream: &mut crate::ipc::IpcStream, resp: &McpResponse) -> std::io::Result<()> {
     let bytes = match serde_json::to_vec(resp) {
         Ok(b) => b,
         Err(e) => serde_json::to_vec(&McpResponse::Error(format!("encode failed: {e}")))
@@ -333,7 +376,13 @@ async fn respond(stream: &mut tokio::net::UnixStream, resp: &McpResponse) -> std
 ///   the model sees a tool error as a tool result, exactly like the in-process path.
 /// - `Reconnect` → apply the new server set (background) and `Ack`.
 /// - `Status` → per-server tool-count map.
-async fn handle_request(req: McpRequest, manager: &Arc<McpManager>) -> McpResponse {
+/// - `Shutdown` → latch `shutting_down` (the Windows graceful-stop path) and `Ack`; the
+///   accept loop observes the flag next tick and the normal teardown runs.
+async fn handle_request(
+    req: McpRequest,
+    manager: &Arc<McpManager>,
+    shutting_down: &std::sync::atomic::AtomicBool,
+) -> McpResponse {
     match req {
         McpRequest::List => McpResponse::Tools {
             defs: manager.tool_defs(),
@@ -399,6 +448,15 @@ async fn handle_request(req: McpRequest, manager: &Arc<McpManager>) -> McpRespon
                 })
                 .collect();
             McpResponse::Status { servers, global_error: None }
+        }
+
+        // Windows graceful-stop verb: latch the SAME flag a signal / the idle reaper
+        // sets, so the accept loop returns next tick and the runtime is dropped (killing
+        // every MCP child). Ack receipt — the caller fire-and-forgets, so it may not read
+        // this, but the flag is already set. Unix never sends this (it uses SIGTERM).
+        McpRequest::Shutdown => {
+            shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
+            McpResponse::Ack
         }
     }
 }

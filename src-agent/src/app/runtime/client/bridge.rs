@@ -20,7 +20,7 @@ pub(super) const WRITER_FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
 /// dropping `frame_tx` — the loop's `try_recv` then observes `Disconnected` and exits.
 /// `read_frame_from` enforces [`crate::ipc::proto::MAX_FRAME_BYTES`] on every prefix.
 pub(super) async fn reader_task(
-    mut read_half: tokio::net::unix::OwnedReadHalf,
+    mut read_half: crate::ipc::IpcReadHalf,
     frame_tx: Sender<DaemonFrame>,
 ) {
     let mut reader = FrameReader::new();
@@ -64,7 +64,7 @@ pub(super) async fn reader_task(
 /// dropped until this final flush completes, which is what guarantees the daemon
 /// actually receives `QuitDaemon` instead of being orphaned.
 pub(super) async fn writer_task(
-    mut write_half: tokio::net::unix::OwnedWriteHalf,
+    mut write_half: crate::ipc::IpcWriteHalf,
     req_rx: Receiver<ClientRequest>,
 ) {
     let mut poll = tokio::time::interval(REQ_POLL);

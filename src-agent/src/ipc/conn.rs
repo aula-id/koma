@@ -48,10 +48,8 @@
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::UnixStream;
-
 use crate::app::runtime::HubInbound;
+use crate::ipc::{IpcReadHalf, IpcStream, IpcWriteHalf};
 use crate::ipc::frame::{self, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonFrame};
 
@@ -67,7 +65,7 @@ const FRAME_POLL: Duration = Duration::from_millis(4);
 /// this client with the hub (handing it the frame sender) BEFORE returning, so the
 /// task is enrolled the instant it starts; then spawns the I/O task on the ambient
 /// tokio runtime (the caller runs inside the daemon runtime).
-pub fn spawn(stream: UnixStream, client_id: u64, hub_tx: Sender<HubInbound>) {
+pub fn spawn(stream: IpcStream, client_id: u64, hub_tx: Sender<HubInbound>) {
     // This client's outbound frame channel: the hub holds the sender (enrolled via
     // Register below), this task owns the receiver and writes frames to the socket.
     let (frame_tx, frame_rx) = std::sync::mpsc::channel::<DaemonFrame>();
@@ -85,10 +83,10 @@ pub fn spawn(stream: UnixStream, client_id: u64, hub_tx: Sender<HubInbound>) {
         return;
     }
 
-    // Split into independent halves: a single non-split `UnixStream` can't be
+    // Split into independent halves: a single non-split stream can't be
     // `&mut`-borrowed for read and write at once, and the two tasks must run
     // concurrently. Each half owns its end for the connection's lifetime.
-    let (read_half, write_half) = stream.into_split();
+    let (read_half, write_half) = crate::ipc::split_stream(stream);
 
     // Read task: forward requests, signal Disconnect on EOF/error.
     let read_hub_tx = hub_tx.clone();
@@ -107,7 +105,7 @@ pub fn spawn(stream: UnixStream, client_id: u64, hub_tx: Sender<HubInbound>) {
 /// [`HubInbound::Request`]. On socket EOF / cap violation / decode error, signal
 /// [`HubInbound::Disconnect`] exactly once and end. `read_frame_from` enforces
 /// [`MAX_FRAME_BYTES`](crate::ipc::proto::MAX_FRAME_BYTES) on every length prefix.
-async fn read_loop(mut read_half: OwnedReadHalf, client_id: u64, hub_tx: Sender<HubInbound>) {
+async fn read_loop(mut read_half: IpcReadHalf, client_id: u64, hub_tx: Sender<HubInbound>) {
     use std::ops::ControlFlow;
 
     let mut reader = FrameReader::new();
@@ -156,7 +154,7 @@ async fn read_loop(mut read_half: OwnedReadHalf, client_id: u64, hub_tx: Sender<
 /// (including one nested inside a sub-future captured across this loop's await)
 /// makes the spawned future non-`Send`. Collect-then-write keeps the receiver off
 /// every await point while still flushing a whole token burst within one tick.
-async fn write_loop(mut write_half: OwnedWriteHalf, frame_rx: Receiver<DaemonFrame>) {
+async fn write_loop(mut write_half: IpcWriteHalf, frame_rx: Receiver<DaemonFrame>) {
     let mut poll = tokio::time::interval(FRAME_POLL);
     loop {
         poll.tick().await;
@@ -188,7 +186,7 @@ async fn write_loop(mut write_half: OwnedWriteHalf, frame_rx: Receiver<DaemonFra
 /// Serialise + write each frame in `batch`. Returns `false` on the first socket
 /// write error (dead client). A frame that can't serialise is a daemon bug, not a
 /// transport fault — skip it rather than killing the connection.
-async fn write_batch(write_half: &mut OwnedWriteHalf, batch: &[DaemonFrame]) -> bool {
+async fn write_batch(write_half: &mut IpcWriteHalf, batch: &[DaemonFrame]) -> bool {
     for frame in batch {
         let bytes = match serde_json::to_vec(frame) {
             Ok(b) => b,
