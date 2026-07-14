@@ -374,7 +374,7 @@ declare global {
     // GitFetch.
     | { r: 'GitPull' }
     // GIT panel Push button. Same reply pattern as GitFetch.
-    | { r: 'GitPush' }
+    | { r: 'GitPush'; mode?: 'automatic' | 'plain' | 'set-upstream' | 'force-with-lease'; root?: string | null }
     // Commit-graph tab: fetch a host-computed paginated commit graph across
     // every ref (GitKraken-style). `limit`/`skip` page it (200 per page); reply
     // lands as the GitGraph push envelope — ALWAYS a reply, serviced entirely
@@ -413,20 +413,20 @@ declare global {
     // (G4): fetch every local + remote-tracking branch. Serviced ENTIRELY
     // host-side — works regardless of attach state. Reply lands as the
     // BranchList push envelope.
-    | { r: 'GitBranchList' }
+    | { r: 'GitBranchList'; requestId?: number | null }
     | { r: 'GitRepos' }
     | { r: 'SetActiveRepo'; root: string }
     // Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     // only, never `--force`): switch (or detach onto) `ref` — a branch name or
     // a sha. Reply lands as a one-shot GitOp push (`op: 'checkout'`),
     // immediately followed by a fresh GitStatus push.
-    | { r: 'GitCheckout'; ref: string }
+    | { r: 'GitCheckout'; ref: string; root?: string | null }
     // Branch-switcher "+ Create new branch" / graph "Create branch here…"
     // (G4 — SAFE only): create branch `name` from `start` (`null` = current
     // HEAD), optionally switching to it immediately (`checkout`). Reply lands
     // as a one-shot GitOp push (`op: 'createBranch'`), immediately followed by
     // a fresh GitStatus push.
-    | { r: 'GitCreateBranch'; name: string; start: string | null; checkout: boolean }
+    | { r: 'GitCreateBranch'; name: string; start: string | null; checkout: boolean; root?: string | null }
     // Commit-graph row context menu "Cherry-pick" (G5c — may conflict; the
     // follow-up GitStatus push's inProgress/conflicted fields carry that
     // state, not this request's reply alone). Reply lands as a one-shot GitOp

@@ -428,7 +428,10 @@ export type GitStatus = {
   // modification. Empty outside a conflict. Mirrors the host's
   // `GitStatusResult.conflicted`.
   conflicted: GitFileEntry[]
+  pushMode: GitPushMode | null
 }
+
+export type GitPushMode = 'automatic' | 'plain' | 'set-upstream' | 'force-with-lease'
 
 // ---- Commit graph (G2) wire types — mirror the host's git_graph.rs DTOs
 // (every struct `rename_all = "camelCase"`), matched field-for-field so a wire
@@ -444,6 +447,7 @@ export type BranchInfo = {
   name: string
   kind: 'local' | 'remote' | 'tag'
   isCurrent: boolean
+  worktreePath?: string
 }
 
 // One repo entry in a RepoList reply — host `RepoEntry` (multi-repo support,
@@ -1091,6 +1095,7 @@ export type PushEnvelope =
       // G5c additions — see GitStatus type comments.
       inProgress: string | null
       conflicted: GitFileEntry[]
+      pushMode: GitPushMode | null
     }
   // Reply to GuiReq GitDiff — a host-computed git diff for one GIT-panel file
   // row, for a Monaco diff tab. `staged` echoes the request (index-vs-HEAD vs
@@ -1202,6 +1207,8 @@ export type PushEnvelope =
       k: 'BranchList'
       branches: BranchInfo[]
       error: string | null
+      root: string | null
+      requestId?: number | null
     }
   // Reply to GuiReq GitRepos (multi-repo support) — every detected repository
   // root in the workspace + which one is currently active. Carries
@@ -1744,6 +1751,8 @@ type KomaState = {
   // `refreshBranches()` until the matching `BranchList` reply lands, so the
   // popover can show a spinner instead of a stale/empty list.
   branchesLoading: boolean
+  // Generation of the latest branch-list request; used to filter out-of-order replies.
+  branchesRequestId: number | null
   // Every detected repository root in the workspace (multi-repo support) —
   // latest RepoList push. REPLACED wholesale on each push; empty until the
   // first reply lands. Global (not per-session), mirroring `branches`.
@@ -1946,7 +1955,7 @@ type KomaState = {
   // present), followed by a fresh GitStatus push that refreshes ahead/behind.
   gitFetch: () => void
   gitPull: () => void
-  gitPush: () => void
+  gitPush: (mode?: GitPushMode) => void
   // Branch-switcher popover / graph context menu (G4): re-fetch every local +
   // remote-tracking branch. Sets `branchesLoading` before firing the req;
   // cleared by the matching `BranchList` reply.
@@ -2229,6 +2238,7 @@ const initialGit: GitStatus = {
   keyName: null,
   inProgress: null,
   conflicted: [],
+  pushMode: null,
 }
 
 const initialGraph: GraphSlice = {
@@ -2331,6 +2341,7 @@ function dedupCommits(commits: GitCommitNode[]): GitCommitNode[] {
 // Mints a stable, client-local id for a new agent editor tab — independent of
 // agentId (see the Tab union's 'agent' member comment for why).
 let agentTabSeq = 0
+let branchListRequestSeq = 0
 function mintAgentTabId(): string {
   agentTabSeq += 1
   return `agent-${agentTabSeq}`
@@ -2369,6 +2380,7 @@ export const useKoma = create<KomaState>((set, get) => ({
   keyRevealResult: null,
   branches: [],
   branchesLoading: false,
+  branchesRequestId: null,
   repos: [],
   activeRepoRoot: null,
   stashes: [],
@@ -3048,8 +3060,10 @@ export const useKoma = create<KomaState>((set, get) => ({
         })
         break
       case 'GitStatus':
-        set(() => ({
-          git: {
+        set((s) => {
+          if (s.activeRepoRoot && env.root !== s.activeRepoRoot) return s
+          return {
+            git: {
             root: env.root,
             branch: env.branch,
             detached: env.detached,
@@ -3061,8 +3075,10 @@ export const useKoma = create<KomaState>((set, get) => ({
             keyName: env.keyName,
             inProgress: env.inProgress,
             conflicted: env.conflicted,
-          },
-        }))
+            pushMode: env.pushMode ?? null,
+            },
+          }
+        })
         break
       case 'GitDiff':
         set((s) => {
@@ -3259,6 +3275,11 @@ export const useKoma = create<KomaState>((set, get) => ({
         // `continue` succeeds. The conflict banner still appears regardless,
         // because the host pushes a fresh GitStatus unconditionally after
         // every op, independent of this `ok` gate.
+        if (isHeadMovingOp) {
+          // Refresh even after failure: checkout may have raced another worktree
+          // or an active-repo change, and the host list is authoritative.
+          get().refreshBranches()
+        }
         if (isHeadMovingOp && env.ok) {
           get().refreshGraph()
         }
@@ -3284,7 +3305,16 @@ export const useKoma = create<KomaState>((set, get) => ({
         set(() => ({ keys: env.keys }))
         break
       case 'BranchList':
-        set(() => ({ branches: env.branches, branchesLoading: false }))
+        // A list can race an active-repository switch. Never let a reply for the
+        // old root repopulate branch controls for the new repository.
+        set((s) => {
+          const expectedRoot = s.activeRepoRoot ?? s.git.root
+          // A stale generation (including one from the same root) must neither
+          // replace data nor clear the loading state for the newer request.
+          if (env.requestId != null && env.requestId !== s.branchesRequestId) return s
+          if (env.root && expectedRoot && env.root !== expectedRoot) return s
+          return { branches: env.branches, branchesLoading: false }
+        })
         break
       case 'RepoList':
         set(() => ({ repos: env.repos, activeRepoRoot: env.active }))
@@ -3865,13 +3895,14 @@ export const useKoma = create<KomaState>((set, get) => ({
     set(() => ({ remoteBusy: 'pull' }))
     get().req({ r: 'GitPull' })
   },
-  gitPush: () => {
+  gitPush: (mode = 'automatic') => {
     set(() => ({ remoteBusy: 'push' }))
-    get().req({ r: 'GitPush' })
+    get().req({ r: 'GitPush', mode, root: get().git.root })
   },
   refreshBranches: () => {
-    set(() => ({ branchesLoading: true }))
-    get().req({ r: 'GitBranchList' })
+    const requestId = ++branchListRequestSeq
+    set(() => ({ branchesLoading: true, branchesRequestId: requestId }))
+    get().req({ r: 'GitBranchList', requestId })
   },
   refreshRepos: () => {
     get().req({ r: 'GitRepos' })
@@ -3881,6 +3912,9 @@ export const useKoma = create<KomaState>((set, get) => ({
       activeRepoRoot: root,
       graph: { ...initialGraph, graphMode: s.graph.graphMode },
       activity: initialActivity,
+      branches: [],
+      branchesLoading: false,
+      branchesRequestId: null,
     }))
     get().req({ r: 'SetActiveRepo', root })
   },
@@ -3895,11 +3929,11 @@ export const useKoma = create<KomaState>((set, get) => ({
   },
   gitCheckout: (ref) => {
     if (!ref.trim()) return
-    get().req({ r: 'GitCheckout', ref })
+    get().req({ r: 'GitCheckout', ref, root: get().git.root })
   },
   gitCreateBranch: (name, start, checkout) => {
     if (!name.trim()) return
-    get().req({ r: 'GitCreateBranch', name: name.trim(), start, checkout })
+    get().req({ r: 'GitCreateBranch', name: name.trim(), start, checkout, root: get().git.root })
   },
   gitCherryPick: (sha) => {
     get().req({ r: 'GitCherryPick', sha })

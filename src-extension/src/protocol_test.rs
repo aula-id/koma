@@ -46,11 +46,18 @@ fn grant_wire_strings_exhaustive_canary() {
     let mut seen_wires: Vec<&'static str> = Vec::new();
     for g in all {
         let expected = wire_of(g);
-        assert!(!expected.is_empty(), "{g:?} must have a non-empty wire string");
+        assert!(
+            !expected.is_empty(),
+            "{g:?} must have a non-empty wire string"
+        );
 
         // The serde-emitted wire string matches the documented mapping exactly.
         let serialized = serde_json::to_string(&g).expect("serializes");
-        assert_eq!(serialized, format!("\"{expected}\""), "{g:?} serde tag must match wire_of");
+        assert_eq!(
+            serialized,
+            format!("\"{expected}\""),
+            "{g:?} serde tag must match wire_of"
+        );
 
         // Distinct from every other variant's wire string so far.
         assert!(
@@ -63,7 +70,11 @@ fn grant_wire_strings_exhaustive_canary() {
         let back: Grant = serde_json::from_str(&serialized).expect("deserializes");
         assert_eq!(back, g, "{g:?} must round-trip through its own wire string");
     }
-    assert_eq!(seen_wires.len(), all.len(), "every variant must have contributed a distinct wire");
+    assert_eq!(
+        seen_wires.len(),
+        all.len(),
+        "every variant must have contributed a distinct wire"
+    );
 }
 
 /// `ExtMsg::Call` round-trips with EVERY combination of its fields present/absent-equivalent
@@ -73,7 +84,11 @@ fn grant_wire_strings_exhaustive_canary() {
 #[test]
 fn ext_msg_call_roundtrips_field_order_and_param_shapes() {
     // Canonical field order (as `to_value` emits it).
-    let msg = ExtMsg::Call { id: 7, method: "agents.spawn".to_string(), params: json!({ "task": "x" }) };
+    let msg = ExtMsg::Call {
+        id: 7,
+        method: "agents.spawn".to_string(),
+        params: json!({ "task": "x" }),
+    };
     let wire = serde_json::to_value(&msg).expect("serializes");
     let back: ExtMsg = serde_json::from_value(wire.clone()).expect("deserializes");
     match back {
@@ -104,8 +119,18 @@ fn ext_msg_call_roundtrips_field_order_and_param_shapes() {
 
     // params as an empty object and as a non-object scalar both round-trip (params is untyped
     // `serde_json::Value` — the wire protocol places no shape constraint on it here).
-    for shape in [json!({}), json!("bare-string"), json!(42), json!(null), json!([1, 2, 3])] {
-        let m = ExtMsg::Call { id: 1, method: "x.y".to_string(), params: shape.clone() };
+    for shape in [
+        json!({}),
+        json!("bare-string"),
+        json!(42),
+        json!(null),
+        json!([1, 2, 3]),
+    ] {
+        let m = ExtMsg::Call {
+            id: 1,
+            method: "x.y".to_string(),
+            params: shape.clone(),
+        };
         let v = serde_json::to_value(&m).expect("serializes");
         let back: ExtMsg = serde_json::from_value(v).expect("deserializes");
         match back {
@@ -122,7 +147,7 @@ fn koma_msg_welcome_roundtrips_optional_permutations_and_field_order() {
     // Empty granted set (a freshly-installed extension with no grants echoed yet).
     let empty = KomaMsg::Welcome {
         protocol: PROTOCOL_VERSION.to_string(),
-        koma_version: "0.2.26".to_string(),
+        koma_version: "0.2.28".to_string(),
         granted: Vec::new(),
     };
     let wire = serde_json::to_value(&empty).expect("serializes");
@@ -136,15 +161,19 @@ fn koma_msg_welcome_roundtrips_optional_permutations_and_field_order() {
     // Multi-grant set, reordered wire (tag last, granted before koma_version/protocol).
     let reordered = json!({
         "granted": ["agents:read", "chat:prompt"],
-        "koma_version": "0.2.26",
+        "koma_version": "0.2.28",
         "protocol": PROTOCOL_VERSION,
         "t": "welcome",
     });
     let back2: KomaMsg = serde_json::from_value(reordered).expect("field order must not matter");
     match back2 {
-        KomaMsg::Welcome { protocol, koma_version, granted } => {
+        KomaMsg::Welcome {
+            protocol,
+            koma_version,
+            granted,
+        } => {
             assert_eq!(protocol, PROTOCOL_VERSION);
-            assert_eq!(koma_version, "0.2.26");
+            assert_eq!(koma_version, "0.2.28");
             assert_eq!(granted, vec![Grant::AgentsRead, Grant::ChatPrompt]);
         }
         other => panic!("expected KomaMsg::Welcome, got {other:?}"),

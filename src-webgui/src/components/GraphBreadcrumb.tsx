@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { Activity, Archive, ArchiveRestore, ArrowUp, GitBranch, RefreshCw } from 'lucide-react'
+import { Activity, Archive, ArchiveRestore, GitBranch, RefreshCw } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { BranchSwitcher } from './BranchSwitcher'
+import { GitPushMenu } from './GitPushMenu'
 
 // A compact icon-only toolbar button (Fetch/Push/Stash/Pop) — mirrors
 // GitPanel's SyncButton idiom, shrunk to fit the breadcrumb's thin bar.
@@ -53,7 +54,6 @@ export function GraphBreadcrumb() {
   const remoteBusy = useKoma((s) => s.remoteBusy)
   const stashes = useKoma((s) => s.stashes)
   const gitFetch = useKoma((s) => s.gitFetch)
-  const gitPush = useKoma((s) => s.gitPush)
   const gitStash = useKoma((s) => s.gitStash)
   const gitStashPop = useKoma((s) => s.gitStashPop)
   const refreshStashes = useKoma((s) => s.refreshStashes)
@@ -86,14 +86,7 @@ export function GraphBreadcrumb() {
         <ToolbarButton title="Fetch" onClick={gitFetch} disabled={!!remoteBusy}>
           <RefreshCw size={12} />
         </ToolbarButton>
-        <ToolbarButton
-          title={(ahead ?? 0) > 0 ? `Push (${ahead} ahead)` : 'Push'}
-          onClick={gitPush}
-          disabled={!!remoteBusy}
-          badge={ahead ?? 0}
-        >
-          <ArrowUp size={12} />
-        </ToolbarButton>
+        <GitPushMenu compact badge={ahead ?? 0} />
         {/* Reuses BranchSwitcher's own self-contained popover (icon variant) —
             same trigger + portal idiom as GitPanel's header, so "Branch"
             here opens the identical branch-switcher rather than a duplicate. */}
