@@ -3,10 +3,16 @@
 //! Covers prompt-caching wire types, provider routing, reasoning config,
 //! tool definitions, and the top-level `ChatRequest` POST body.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use crate::dto::chat::ChatMessage;
+
+// The attachment data-URL derivation + oversized-image downscaling helpers live in
+// the sibling `image` module (file size); re-exported here (rather than just
+// imported) so the existing `crate::dto::openrouter::request::data_url_for` call
+// site (the Codex Responses transport) keeps resolving unchanged.
+pub(crate) use super::image::data_url_for;
 
 // ---------------------------------------------------------------------------
 // Prompt-caching wire layer
@@ -305,20 +311,6 @@ fn attachment_parts(
     parts
 }
 
-/// Read an attachment's on-disk bytes and build its `data:<mime>;base64,<…>` URL,
-/// or `None` when the file can't be read. `rel_path` (`images/NN-name.ext`) is
-/// resolved against the session dir — the bytes are NEVER taken from the message.
-///
-/// `pub(crate)` so the Codex Responses transport (`service::openrouter::codex`)
-/// reuses the exact same data-URL derivation for its `input_image` parts.
-pub(crate) fn data_url_for(session_dir: &Path, att: &crate::dto::chat::Attachment) -> Option<String> {
-    use base64::Engine;
-    let path = session_dir.join(&att.rel_path);
-    let bytes = std::fs::read(&path).ok()?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Some(format!("data:{};base64,{}", att.mime, b64))
-}
-
 /// Build the System message's wire content parts, splitting the stable cached head
 /// from the volatile tail on [`CACHE_SPLIT_MARK`](crate::dto::chat::CACHE_SPLIT_MARK).
 ///
@@ -376,6 +368,15 @@ pub struct ProviderRouting {
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageRequest {
     pub include: bool,
+}
+
+/// OpenAI-standard streaming usage directive. Generic OpenAI-spec servers
+/// (e.g. api.x.ai) only emit the terminal usage chunk when this is present;
+/// they ignore OpenRouter's proprietary `usage:{include:true}`. Sent only to
+/// non-OpenRouter endpoints so we don't duplicate the directive to koma.run.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
 }
 
 /// Reasoning/thinking control for the request, serialised as the top-level
@@ -453,6 +454,13 @@ pub struct ChatRequest {
     /// Usage accounting directive — always sent as `{"include": true}` so the
     /// response (and final streaming chunk) reports token counts + total cost.
     pub usage: UsageRequest,
+    /// OpenAI-standard streaming usage directive. `Some` only for non-OpenRouter-
+    /// dialect endpoints (e.g. api.x.ai) — generic OpenAI-spec servers ignore the
+    /// `usage` field above and only emit the terminal usage chunk when this is
+    /// present. `None` (and omitted from the wire) for OpenRouter/koma-free, which
+    /// already get cost data via `usage:{include:true}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     /// Function-calling tool definitions exposed to the model. `Some` on the
     /// streaming chat path (so the model can request tool calls); omitted via
     /// `skip_serializing_if` on the `/compact` summary call, which uses no tools.

@@ -10,7 +10,7 @@
 pub enum AgentScope {
     /// `<session_dir>/agents/`.
     Session,
-    /// `~/.simple-coder/agents/`.
+    /// `~/.koma/agents/`.
     Global,
 }
 

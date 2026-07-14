@@ -10,6 +10,7 @@
 //! `SessionRuntime`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use crate::model::app_config::AppConfig;
 use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
@@ -115,6 +116,11 @@ pub struct AppStateRest {
     /// when the daemon is not installed — behaviour is byte-identical to a build
     /// without the security daemon).
     pub sec_manager: Option<std::sync::Arc<crate::app::sec::SecDaemonManager>>,
+    /// The extension host manager, built once at startup. Owns every running
+    /// extension's child process + duplex unix-socket connection, keyed by extension
+    /// id. `None` until startup builds it (stays an empty, inert manager when no
+    /// extensions are installed). Boot auto-starts each enabled daemon-kind extension.
+    pub ext_manager: Option<std::sync::Arc<crate::app::ext::ExtHostManager>>,
     /// Token koma mints and hands the security daemon child at spawn.
     pub sec_token: String,
     /// Runtime flag: `true` when the user has enabled the security daemon from the
@@ -325,6 +331,21 @@ pub struct AppStateRest {
     /// flow) can actually stop the in-flight browser/poll loop rather than merely
     /// dropping its receiver. `None` when no flow is in flight.
     pub oauth_task: Option<tokio::task::AbortHandle>,
+    /// The hub connection id of the GUI/push client that initiated the CURRENT OAuth login
+    /// flow (`ClientRequest::StartOAuth`), or `None` for a TUI-driven flow / no flow. While
+    /// `Some`, the OAuth drain (`event_loop::global::drains::drain_oauth`) queues each flow
+    /// transition onto `oauth_pushes` for the daemon hub to deliver to this client as a
+    /// [`crate::ipc::proto::DaemonEvent::OAuthState`]. Cleared on the terminal event
+    /// (success / failure, taken in the drain) and by `CancelOAuth`. The drain's mode-state
+    /// fold + config persist are UNCHANGED — this is a parallel side-channel, so TUI parity
+    /// is preserved (a TUI client renders the flow off its snapshot as before).
+    pub oauth_gui_client: Option<u64>,
+    /// Outbox of GUI OAuth phase pushes queued by `drain_oauth` when a background flow
+    /// transition lands (only while `oauth_gui_client` is `Some`), drained each tick by the
+    /// daemon hub's `drain_oauth_pushes` — which turns each into a seq'd
+    /// [`crate::ipc::proto::DaemonEvent::OAuthState`] to the initiating client. Empty except
+    /// in the ticks a transition lands; never touched by the standalone/TUI loop.
+    pub oauth_pushes: Vec<crate::service::oauth::OAuthPushOut>,
     /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
     /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
     /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
@@ -337,6 +358,37 @@ pub struct AppStateRest {
     /// SENDER half of `awareness_rx`, cloned into each spawned recompute task.
     /// `None` until the first recompute is spawned (see `session_mgmt::spawn_awareness_recompute`).
     pub awareness_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<String>)>>,
+    /// SENDER half of the extension grant-broker lane. A clone is handed to
+    /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_call_tx`); each
+    /// extension's socket reader task uses it to forward an `agents.*` `Call` — which
+    /// needs `AppState`/session access the reader task lacks — into the event loop.
+    /// Created once here and held for the app's lifetime (plus the manager's clone),
+    /// so the paired receiver never observes a premature `Disconnected`.
+    pub ext_call_tx: tokio::sync::mpsc::UnboundedSender<crate::app::ext::ExtCallRequest>,
+    /// RECEIVER half of the extension grant-broker lane, drained each tick in
+    /// `service_global` (`drains::drain_ext_calls`): each [`crate::app::ext::ExtCallRequest`]
+    /// is dispatched against the ACTIVE session through the grant broker and its
+    /// oneshot answered with the broker's JSON. `Option` only so the drain can
+    /// take/put-back it (mirroring `oauth_rx`); always `Some` between ticks.
+    pub ext_call_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtCallRequest>>,
+    /// Per-extension registry of the sub-agents THAT extension has spawned,
+    /// keyed by extension id. This is the containment boundary the grant broker
+    /// (`app::ext::broker`) resolves every `agents.status`/`agents.result`/
+    /// `agents.kill` call through: an extension can only ever name an ext-facing
+    /// agent id it was itself handed by `agents.spawn`, which stays bound to the
+    /// STABLE session UUID it was spawned into — never the transient foreground
+    /// index, so a foreground switch can never redirect a poll at a different
+    /// session's (or another extension's, or the user's own) sub-agent. Entries
+    /// accumulate for the app's lifetime; see `ExtAgentRegistry`'s doc for the
+    /// full rationale. `// TODO cleanup on uninstall`: an entry should ideally be
+    /// dropped when its extension is stopped/uninstalled, but `ExtHostManager::stop`
+    /// is called both from a background reader task (frame-too-large kill,
+    /// `wire.rs`) and from `ExtHostManager`'s own methods, neither of which has
+    /// `AppState` access — only `shutdown_runtime` (whole-app teardown) does, and
+    /// it clears every entry there. A per-extension uninstall path with event-loop
+    /// access should clear its own entry the same way.
+    pub ext_agents: HashMap<String, crate::app::ext::ExtAgentRegistry>,
 }
 
 impl Default for AppStateRest {
@@ -352,6 +404,11 @@ impl AppStateRest {
         // event-loop tick into `latest_version`. Holding the sender for the app's
         // lifetime keeps the drain from ever seeing a premature `Disconnected`.
         let (vtx, vrx) = tokio::sync::mpsc::unbounded_channel();
+        // Extension grant-broker lane, created ONCE here: the sender is cloned into
+        // `ExtHostManager` at startup and kept here for the app's lifetime (so the
+        // drain never sees a premature `Disconnected`); the receiver is drained each
+        // tick in `service_global`.
+        let (ext_call_tx, ext_call_rx) = tokio::sync::mpsc::unbounded_channel();
         let first = SessionRuntime::new();
         // Seed the viewed set with the sole session's UUID so the per-tick gates treat
         // it as foreground from tick zero (the local loop re-derives this each tick; the
@@ -392,6 +449,7 @@ impl AppStateRest {
             config: AppConfig::default(),
             mcp_manager: None,
             sec_manager: None,
+            ext_manager: None,
             sec_token: String::new(),
             security_enabled: false,
             yolo_armed: false,
@@ -428,8 +486,13 @@ impl AppStateRest {
             sec_health_rx: None,
             oauth_rx: None,
             oauth_task: None,
+            oauth_gui_client: None,
+            oauth_pushes: Vec::new(),
             awareness_rx: None,
             awareness_tx: None,
+            ext_call_tx,
+            ext_call_rx: Some(ext_call_rx),
+            ext_agents: HashMap::new(),
         }
     }
 
@@ -442,6 +505,41 @@ impl AppStateRest {
     pub fn fg_mut(&mut self) -> &mut SessionRuntime {
         let i = self.foreground;
         &mut self.sessions[i]
+    }
+
+    /// Snapshot the foreground session's resolved Main-route identity — call
+    /// BEFORE a settings mutation that might reassign the Main role, then pass
+    /// the result to [`Self::reset_effort_if_main_changed`] after the mutation
+    /// to detect (and correct for) an actual model swap.
+    pub fn main_identity_now(&self) -> Option<(String, String, Option<String>)> {
+        self.fg()
+            .session
+            .as_ref()
+            .and_then(|s| crate::app::resolve::main_identity(&self.config, &s.settings))
+    }
+
+    /// BUG FIX: reset the foreground session's `settings.effort` to the
+    /// model-default (unset) value when the resolved Main route CHANGED since
+    /// `before` was captured (via [`Self::main_identity_now`]) — i.e. the Main
+    /// model this session chats with actually swapped, not merely a re-pick of
+    /// the same model or a change to some OTHER role. Different models expose
+    /// different effort scales (see
+    /// `app::runtime::commands::effort::{build_effort_options, preselect_effort}`,
+    /// where an empty string is exactly the value that preselects "default"),
+    /// so a stale effort chosen for the OLD model must never silently carry
+    /// onto the new one. No-ops (skips the write + extra save) when nothing
+    /// changed or `effort` is already the default — safe to call
+    /// unconditionally after any settings mutation that might touch Main.
+    pub fn reset_effort_if_main_changed(&mut self, before: Option<(String, String, Option<String>)>) {
+        let after = self.main_identity_now();
+        if before != after {
+            if let Some(sess) = self.fg_mut().session.as_mut() {
+                if !sess.settings.effort.is_empty() {
+                    sess.settings.effort = String::new();
+                    let _ = sess.save();
+                }
+            }
+        }
     }
 
     /// Single choke-point for changing `agent_mode` — used by both the
@@ -473,6 +571,11 @@ impl AppStateRest {
             self.plan_return_mode = None;
         }
         self.agent_mode = new_mode;
+        // Captured inside the `sess` borrow below and applied to `self.fg_mut()`
+        // afterward (can't touch `self` again while `sess` — itself borrowed FROM
+        // `self.fg_mut()` — is still alive), so the GUI Explore "PLAN" section's
+        // in-memory mirror stays in lockstep with the rail seed/clear on disk.
+        let mut plan_todos_after: Option<Vec<crate::app::mode::todo::TodoItem>> = None;
         if entering_plan || leaving_plan {
             if let Some(sess) = self.fg_mut().session.as_mut() {
                 sess.plan_mode_hint = entering_plan;
@@ -503,17 +606,29 @@ impl AppStateRest {
                         },
                     ];
                     let _ = todo::save_todos_to(&path, &rails);
+                    plan_todos_after = Some(rails);
                 } else if leaving_plan {
-                    // Symmetric with the entry seed: leaving Plan for any non-plan
-                    // mode (plan approved, `/mode`, Shift+Tab) drops the plan
-                    // checklist so it never lingers into the next planning session or
-                    // bleeds into the working `/todo` list. Best-effort remove — a
-                    // missing file (NotFound) is fine. Deny STAYS in Plan, so this
-                    // never fires on "chat more".
+                    // Leaving Plan for any non-plan mode (plan approved, `/mode`,
+                    // Shift+Tab) drops the plan-specific `plan_todos.md` artifact so
+                    // it never lingers into the next planning session. Best-effort
+                    // remove — a missing file (NotFound) is fine. Deny STAYS in
+                    // Plan, so this never fires on "chat more".
                     let _ = std::fs::remove_file(sess.plan_todos_path());
+                    // The mirror itself does NOT clear to empty here: it mirrors
+                    // the session's CURRENT todo list, not Plan-mode membership.
+                    // Leaving Plan means the per-directory `memory/TODO.md` (the
+                    // regular working list) is now the source of truth — read
+                    // it immediately so an approved plan that carries into
+                    // execution keeps showing its checklist instead of the GUI
+                    // Explore "PLAN" section going blank until the model's next
+                    // `checklist`. Empty when that file doesn't exist yet.
+                    plan_todos_after = Some(crate::app::mode::todo::load_current_todos(sess, false));
                 }
                 sess.rebuild_system();
                 let _ = sess.save();
+            }
+            if let Some(todos) = plan_todos_after {
+                self.fg_mut().plan_todos = todos;
             }
         }
     }

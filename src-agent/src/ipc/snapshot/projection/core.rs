@@ -122,6 +122,49 @@ pub fn session_snapshot(
                 }
             })
             .collect(),
+        // Background-bash jobs (identity + raw status; no output) so the GUI sidepanel's
+        // `bash[]` shows them. Reads the LIVE registry the jobs actually land in — the
+        // same `bash_jobs` vec `bash_output`/`bash_kill` mutate — so finished/failed jobs
+        // (which are retained, never removed) are included.
+        bash_jobs: rt
+            .bash_jobs
+            .iter()
+            .map(|j| crate::ipc::proto::BashJobSnapshot {
+                id: j.id,
+                command: j.command.clone(),
+                status: j.snapshot_status(),
+                // Default: no output tail. Populated per-client ONLY for the job a client
+                // is streaming into a stream tab, in the hub's `stream_deltas` post-pass —
+                // never here (this projection is shared by attach/resync + every client).
+                output_tail: None,
+            })
+            .collect(),
+        // Cumulative file-change log (#24) so the GUI Explore "File changed" panel
+        // renders it. Sourced from the in-memory mirror (refreshed at finish_tool_round
+        // + on load from the per-session store).
+        file_changes: rt
+            .file_changes
+            .iter()
+            .map(|c| crate::ipc::proto::FileChangeSnapshot {
+                path: c.path.clone(),
+                status: c.status.clone(),
+            })
+            .collect(),
+        // Plan-mode todo checklist so the GUI Explore "PLAN" section renders it.
+        // The two locked workflow rails ride the wire too (flagged, not dropped)
+        // so the GUI shows TUI-parity rails right after `plan_enter`, before the
+        // model's first `checklist` lands; the GUI dims them + excludes them from
+        // its done/total count. NOTE: this is independent of the `plan_ready`
+        // digest's own `!it.locked` filter elsewhere — that one stays untouched.
+        plan_todos: rt
+            .plan_todos
+            .iter()
+            .map(|it| crate::ipc::proto::PlanTodoSnapshot {
+                content: it.content.clone(),
+                status: it.status.clone(),
+                locked: it.locked,
+            })
+            .collect(),
     }
 }
 
@@ -198,6 +241,26 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
         models_cache: state.rest.models_cache.clone(),
         models_cache_endpoint: state.rest.models_cache_endpoint.clone(),
         models_cache_failed: state.rest.models_cache_failed.clone(),
+        // Authoritative GLOBAL config catalogue for the native-React GUI's Connector +
+        // MCP panels. `session_models` is the foreground session's per-session override
+        // layer (the "local" scope); the rest mirror `AppConfig` directly.
+        providers: state.rest.config.providers.clone(),
+        config_models: state.rest.config.models.clone(),
+        session_models: state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| s.settings.session_models.clone())
+            .unwrap_or_default(),
+        mcp_servers: state.rest.config.mcp_servers.clone(),
+        oauth_conn_uuids: state
+            .rest
+            .config
+            .oauth_conns
+            .iter()
+            .map(|c| c.uuid.clone())
+            .collect(),
         agent_viewer: state.rest.agent_viewer,
         agent_viewer_scroll: state.rest.agent_viewer_scroll,
         agent_viewer_follow: state.rest.agent_viewer_follow,

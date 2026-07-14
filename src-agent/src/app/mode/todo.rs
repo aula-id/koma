@@ -5,7 +5,7 @@
 //! RIGHT pane shows the selected item's full content + status + priority.
 //! The user can navigate the list and press Enter to reset an item to
 //! pending (signalling the model to redo it); the model reads/writes
-//! todos via the `todowrite` tool (writes to `memory/TODO.md`).
+//! todos via the `checklist` tool (writes to `memory/TODO.md`).
 
 use std::time::Instant;
 
@@ -195,6 +195,29 @@ pub fn load_todos_from(path: &std::path::Path) -> Vec<TodoItem> {
         .unwrap_or_default()
 }
 
+/// Load the CURRENT todo list for a session: the session-scoped
+/// `plan_todos.md` (the model's plan checklist + the two locked rails) while
+/// `in_plan`, else the per-directory `memory/TODO.md` (the regular working
+/// list `checklist` writes to outside Plan mode) — the exact backing-file
+/// selection `/todo`'s own overlay uses (see
+/// `app::runtime::commands::todo::load_todos_with_pwd`).
+///
+/// Shared so every mirror of "the session's current todo list" — the GUI
+/// Explore "PLAN" section's `SessionRuntime::plan_todos`, refreshed at session
+/// load, mode transitions, and after every tool round — follows the SAME
+/// source of truth as the TUI overlay, in every mode, not just Plan. Empty
+/// when the relevant file doesn't exist yet.
+pub fn load_current_todos(session: &crate::model::session::Session, in_plan: bool) -> Vec<TodoItem> {
+    if in_plan {
+        load_todos_from(&session.plan_todos_path())
+    } else {
+        crate::model::store::memory_dir(&session.pwd_hash)
+            .ok()
+            .map(|dir| load_todos_from(&dir.join("TODO.md")))
+            .unwrap_or_default()
+    }
+}
+
 /// Write a plan-todo list to an explicit path, atomically (temp file +
 /// rename) so a crash mid-write never leaves a truncated file. Serializes
 /// via [`TodoItem::to_line`].
@@ -213,7 +236,7 @@ pub fn save_todos_to(path: &std::path::Path, items: &[TodoItem]) -> std::io::Res
 /// Working state for the `/todo` task-panel.
 ///
 /// Holds the todo item list + the LIST cursor. No drafts, no sub-modes —
-/// read-only for the user; the model writes via the `todowrite` tool.
+/// read-only for the user; the model writes via the `checklist` tool.
 #[derive(Debug, Clone)]
 pub struct TodoState {
     /// Snapshot of the todo items (one row per item).
@@ -321,7 +344,7 @@ impl TodoState {
     /// no-op if called on one anyway, as a defense-in-depth backstop.
     pub fn reset_to_pending(&mut self) {
         // Re-read from disk first so we don't clobber writes the model made via
-        // todowrite since our last refresh.
+        // checklist since our last refresh.
         self.refresh_from_disk();
         if let Some(item) = self.items.get_mut(self.selected) {
             if item.locked || item.status == TodoStatus::Pending {

@@ -128,14 +128,64 @@ pub fn run_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("run"))
 }
 
-/// Create `~/.simple-coder/sessions/` and `~/.koma/run/` (and their parents) if they
-/// do not exist.
+/// Returns `~/.koma/extensions/` — the on-disk registry root for installed
+/// extensions.
+///
+/// Each installed extension unpacks into `extensions/<id>/` (its `manifest.json`
+/// plus `bin/<exec>`); the install path ([`crate::app::ext::install`]) writes here
+/// and the [`ExtHostManager`](crate::app::ext::ExtHostManager) resolves an
+/// extension's executable relative to `extensions/<id>/`. Created by [`ensure_dirs`].
+pub fn extensions_dir() -> Result<PathBuf> {
+    Ok(base_dir()?.join("extensions"))
+}
+
+/// Path to a per-extension host socket: `~/.koma/run/ext-<id>.sock`.
+///
+/// koma binds this unix socket BEFORE spawning a daemon-kind extension, hands the
+/// path to the child via `KOMA_EXT_SOCKET`, and accepts the child's inbound
+/// connection on it (the child sends `Hello`, koma replies `Welcome`). Lives beside
+/// the per-session daemon sockets under [`run_dir`]. The `id` is validated at install
+/// time; the `/`→`_` fold here is belt-and-suspenders so a stray separator can never
+/// escape the run dir when composing the filename.
+pub fn ext_sock_path(id: &str) -> Result<PathBuf> {
+    let safe: String = id
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    Ok(run_dir()?.join(format!("ext-{safe}.sock")))
+}
+
+/// Create `~/.koma/`, `~/.simple-coder/sessions/`, `~/.koma/run/`, and
+/// `~/.koma/extensions/` (and their parents) if they do not exist.
+///
+/// `~/.koma` and `~/.koma/run` are explicitly chmod'd `0700` on unix: `run/` holds
+/// every session daemon's unix socket AND the extension host's per-extension
+/// `ext-<id>.sock` files, none of which should ever be group/world-accessible on a
+/// shared machine; `~/.koma` itself is the visible root for all of that plus session
+/// creds, so it gets the same treatment. `create_dir_all`'s permissions otherwise
+/// depend on the process umask, which is not something to rely on here.
 pub fn ensure_dirs() -> Result<()> {
+    let base = base_dir()?;
+    std::fs::create_dir_all(&base)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+    }
+
     let sessions = sessions_dir()?;
     std::fs::create_dir_all(&sessions)?;
     // The per-session daemon socket/pid dir; the daemon binds `run/<id>.sock` here.
     let run = run_dir()?;
     std::fs::create_dir_all(&run)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700))?;
+    }
+    // The installed-extension registry root; the install path unpacks `extensions/<id>/`.
+    let extensions = extensions_dir()?;
+    std::fs::create_dir_all(&extensions)?;
     Ok(())
 }
 
@@ -160,7 +210,7 @@ pub fn pwd_hash(workdir: &Path) -> String {
         .to_string()
 }
 
-/// The bucket directory for a working dir: `~/.simple-coder/sessions/<pwd_hash>/`.
+/// The bucket directory for a working dir: `~/.koma/sessions/<pwd_hash>/`.
 /// Shared by every session opened from that directory.
 pub fn pwd_bucket_dir(pwd_hash: &str) -> Result<PathBuf> {
     Ok(sessions_dir()?.join(pwd_hash))
@@ -172,8 +222,10 @@ pub fn worktrees_dir(pwd_hash: &str) -> Result<PathBuf> {
 }
 
 /// Shared per-dir settings path: `<pwd_bucket_dir>/settings.json`. Holds the
-/// [`LocalConfig`](crate::model::settings::LocalConfig) (model setup) common to
-/// all sessions in this working directory.
+/// legacy [`LocalConfig`](crate::model::settings::LocalConfig) (per-dir model
+/// catalogue). NO LONGER WRITTEN: `session_models` is persisted per-session now;
+/// this path is only READ once by the one-time migration in `Session::load` that
+/// seeds a pre-fix session's overrides from the old shared bucket.
 pub fn shared_settings_path(pwd_hash: &str) -> Result<PathBuf> {
     Ok(pwd_bucket_dir(pwd_hash)?.join("settings.json"))
 }
@@ -196,6 +248,53 @@ pub fn memory_dir(pwd_hash: &str) -> Result<PathBuf> {
 /// messages, memory, and agents.
 pub fn session_dir(pwd_hash: &str, uuid: &str) -> Result<PathBuf> {
     Ok(pwd_bucket_dir(pwd_hash)?.join(uuid))
+}
+
+/// Path to a session's append-only error log: `<session_dir>/error.log`.
+pub fn error_log_path(session_dir: &Path) -> PathBuf {
+    session_dir.join("error.log")
+}
+
+/// Best-effort append of one `"[unix:{ts}] {header}\n{body}\n\n"` entry to
+/// `path` (creating `parent` first). Never panics, never propagates — shared
+/// tail of [`append_error_log`] and [`append_global_error_log`].
+fn append_log_entry(parent: &Path, path: &Path, header: &str, body: &str) {
+    use std::io::Write;
+    let _ = std::fs::create_dir_all(parent);
+    // No `chrono` dependency in this crate — use a plain unix-seconds stamp.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!("[unix:{ts}] {header}\n{body}\n\n");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(entry.as_bytes());
+    }
+}
+
+/// Best-effort append to the per-session error log. Never panics, never
+/// propagates — logging must not break a request. `header` is a short label
+/// (e.g. "HTTP 400 from <endpoint>"), `body` the detail (e.g. the raw
+/// upstream response body).
+pub fn append_error_log(session_dir: &Path, header: &str, body: &str) {
+    append_log_entry(session_dir, &error_log_path(session_dir), header, body);
+}
+
+/// Path to the global (session-less) error log: `~/.koma/error.log`, for
+/// startup/background diagnostics that have no session to log into.
+// dead_code: no consumer needs the raw path yet — kept as the sibling of
+// `error_log_path` for a future consumer (e.g. a `/errors` viewer).
+#[allow(dead_code)]
+pub fn global_error_log_path() -> Option<PathBuf> {
+    base_dir().ok().map(|d| d.join("error.log"))
+}
+
+/// Best-effort append to the global error log; mirrors [`append_error_log`]
+/// (never panics, never propagates).
+pub fn append_global_error_log(header: &str, body: &str) {
+    let Ok(dir) = base_dir() else { return };
+    let path = dir.join("error.log");
+    append_log_entry(&dir, &path, header, body);
 }
 
 /// Physically delete a session: remove its on-disk directory tree AND its
@@ -563,7 +662,10 @@ pub fn create_session_in_with_id(workdir: &Path, id: &str) -> Result<Session> {
     // Best-effort: create the per-session scratch dir so it is ready immediately.
     let scratch = scratch_dir(&uuid);
     if let Err(e) = std::fs::create_dir_all(&scratch) {
-        eprintln!("koma: warning: could not create scratch dir {}: {e}", scratch.display());
+        append_global_error_log(
+            "session",
+            &format!("warning: could not create scratch dir {}: {e}", scratch.display()),
+        );
     }
 
     // Pre-create the image-attachment dir so the first paste-ingest has a home.

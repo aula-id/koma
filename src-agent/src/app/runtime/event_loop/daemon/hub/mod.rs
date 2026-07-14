@@ -11,6 +11,13 @@
 
 mod core;
 mod requests;
+mod requests_agents;
+mod requests_config;
+mod requests_ext;
+mod requests_oauth;
+mod requests_read;
+mod requests_session;
+mod requests_turn;
 mod streaming;
 
 pub(crate) use core::HubInbound;

@@ -105,10 +105,10 @@ fn attach_emits_hello_then_snapshot() {
     assert!(matches!(f1.event, DaemonEvent::Snapshot(_)));
 }
 
-/// An observer (second client) is rejected when it sends a mutating request,
-/// and the controller (first client) is acknowledged.
+/// C2: observers may now submit against their own foreground (the single-writer
+/// gate was relaxed). Both controller and observer get an Ack.
 #[test]
-fn observer_mutation_is_rejected_controller_acked() {
+fn observer_mutation_is_allowed_controller_acked() {
     let mut state = AppState::new(Mode::Chat);
     let (mut client, rt) = ctx();
     let h = rt.handle().clone();
@@ -123,7 +123,7 @@ fn observer_mutation_is_rejected_controller_acked() {
     assert!(matches!(ctl_rx.try_recv().expect("controller reply").event, DaemonEvent::Ack));
 
     hub.handle_inbound(HubInbound::Request { client_id: 2, req: ClientRequest::SubmitInput { text: "nope".into() } }, &mut state, &mut client, &h);
-    assert!(matches!(obs_rx.try_recv().expect("observer reply").event, DaemonEvent::Error(_)));
+    assert!(matches!(obs_rx.try_recv().expect("observer reply").event, DaemonEvent::Ack));
 }
 
 /// An unknown session UUID on a UUID-keyed control request is an Error + no-op.

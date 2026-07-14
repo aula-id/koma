@@ -91,7 +91,9 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
 
     let scope = match source {
         AgentSource::Global => DefScope::Global,
-        AgentSource::Session | AgentSource::Builtin => DefScope::Session(&session_dir),
+        AgentSource::Session | AgentSource::Builtin | AgentSource::Extension => {
+            DefScope::Session(&session_dir)
+        }
     };
     let result = save_agent(scope, &def);
 
@@ -117,11 +119,12 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
-            state.rest.fg_mut().status = if source == AgentSource::Builtin {
-                format!("agent override created: {}", def.name)
-            } else {
-                format!("agent updated: {}", def.name)
-            };
+            state.rest.fg_mut().status =
+                if source == AgentSource::Builtin || source == AgentSource::Extension {
+                    format!("agent override created: {}", def.name)
+                } else {
+                    format!("agent updated: {}", def.name)
+                };
         }
         Err(e) => {
             state.rest.fg_mut().status = format!("save failed: {e}");
@@ -155,6 +158,13 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
         AgentSource::Session => DefScope::Session(&session_dir),
         AgentSource::Builtin => {
             state.rest.fg_mut().status = "cannot delete a built-in agent".into();
+            if let Mode::Agents(a) = state.mode_mut() {
+                a.cancel();
+            }
+            return Ok(());
+        }
+        AgentSource::Extension => {
+            state.rest.fg_mut().status = "cannot delete an extension-contributed agent".into();
             if let Mode::Agents(a) = state.mode_mut() {
                 a.cancel();
             }

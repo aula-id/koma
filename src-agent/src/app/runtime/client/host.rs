@@ -1,0 +1,886 @@
+//! GUI host-relay layer — the GUI host IS the daemon client. Split out of
+//! [`super`] (the `client` module) for file size — pure code motion, no
+//! behaviour change.
+//!
+//! The desktop GUI (`crate::app::runtime::gui`) runs a `tao`/GTK event loop on
+//! its main thread and CANNOT host tokio there (`event_loop.run` diverges).
+//! So the daemon connection + the headless fold loop run HERE on a background
+//! client-thread with its own tokio runtime — the daemon->JS direction pushes
+//! JSON envelopes out through the `push` sink (an `EventLoopProxy::send_event`
+//! closure the host supplies), and the JS->daemon direction arrives as
+//! [`super::HostCtl`] control messages + a shared `live_req` the ipc thread
+//! forwards `SubmitInput` through.
+//!
+//! `compute_file_diff`/`compute_usage_preview` (in the sibling [`super::diff`]
+//! module) are called from `host_swapper` below — a cross-sibling call, which
+//! is why they're bumped to `pub(super)` there. Everything in this file uses
+//! fully-qualified `crate::app::runtime::manage::…` paths for the daemon
+//! management calls (this file's `super` is `client`, not `runtime`, so the
+//! old bare `super::manage::…` relative path from `mod.rs` doesn't resolve
+//! here unchanged).
+
+use crate::ipc::proto::ClientRequest;
+use crate::model::store;
+
+use super::connect::{connect_attach_and_handshake, Connection};
+use super::diff::{compute_analytics, compute_file_diff, compute_usage_preview};
+use super::git_host;
+use super::host_catalogue::{
+    build_host_agents_values, build_host_oauth_state, fetch_models_for_provider,
+    fetch_routes_for_provider,
+};
+use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
+use super::project::push_hub;
+use super::push_proto::{
+    push_agents_values, push_ext_no_session, push_file_diff, push_model_list, push_oauth_state,
+    push_route_list, push_analytics, push_settings_values, push_switching, push_usage_preview,
+};
+use super::store_host;
+use super::swapper::build_local_hub;
+use super::{push_loop, render, HostCtl, StreamView};
+
+/// The host-relay run-loop's next step, mirroring [`super::ClientState`] for the headless
+/// GUI host: show the swapper, attach a session, or leave.
+enum HostStep {
+    /// Show the detached session swapper (the hub) and wait for a pick.
+    Swapper,
+    /// Attach to this session UUID and fold its frames into pushes. `workdir` is the
+    /// folder a GUI `[+ new session]` native-picker chose (the new session's working
+    /// dir); `None` for every other attach (existing pick, `--session` boot, daemon
+    /// `/new` hand-off) inherits the host's cwd.
+    Attach {
+        id: String,
+        workdir: Option<std::path::PathBuf>,
+    },
+    /// Leave the host-relay entirely (the window is gone).
+    Done,
+}
+
+/// Headless twin of [`super::attach_session`]: attach + build-skew auto-restart WITHOUT a
+/// terminal spinner (the GUI host owns no TTY). Ensures the daemon is up, connects +
+/// handshakes, and on a CONFIRMED build mismatch restarts the stale daemon via the
+/// SAME silent [`crate::app::runtime::manage::restart_daemon`] machinery (`quiet = true`) — at most
+/// once — then reconnects. A daemon that sends no `Hello` is never restarted on that
+/// absence alone (mirrors [`super::attach_session`]'s loop guard).
+fn attach_session_headless(
+    handle: &tokio::runtime::Handle,
+    session_id: &str,
+    workdir: Option<&std::path::Path>,
+) -> anyhow::Result<Connection> {
+    crate::app::runtime::manage::ensure_daemon_running(session_id, false, workdir).map_err(|e| {
+        anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}")
+    })?;
+
+    let sock_path = store::daemon_sock_path(session_id)?;
+    let my_fingerprint = store::build_fingerprint();
+
+    let mut conn = connect_attach_and_handshake(handle, &sock_path)?;
+    let mut already_restarted = false;
+    while conn
+        .daemon_version
+        .as_deref()
+        .is_some_and(|v| v != my_fingerprint)
+    {
+        if already_restarted {
+            crate::model::store::append_global_error_log(
+                "gui",
+                "daemon still reports a different build after a restart; continuing against it",
+            );
+            break;
+        }
+        already_restarted = true;
+
+        // Tear down the stale connection's bridge before restarting (drop the request
+        // sender so the writer drains + exits; the reader observes the daemon's death
+        // as EOF), then restart SILENTLY (no alt-screen spinner — there is no TTY).
+        drop(conn.req_tx);
+        drop(conn.frame_rx);
+        crate::app::runtime::manage::restart_daemon(session_id, true)
+            .map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))?;
+
+        conn = connect_attach_and_handshake(handle, &sock_path)?;
+    }
+    Ok(conn)
+}
+
+/// Run the host-relay client on a background thread: own a tokio runtime and run the
+/// two-state machine (swapper / attached) that PUSHES the shadow state into the
+/// webview. The `push` sink hands a ready JSON envelope to the main tao thread;
+/// `ctl_rx` carries [`HostCtl`] intents from the ipc handler; `ctl_tx` is a SELF-clone of
+/// that channel's sender, handed to the off-thread session-lifecycle workers (kill / delete)
+/// so they can route a follow-up [`HostCtl::RefreshHub`] back into whichever host state is
+/// active once a daemon is confirmed dead / a session deleted; `live_req` is the shared slot
+/// the ipc handler forwards `SubmitInput` through (updated on every (re)attach).
+///
+/// Holding `ctl_tx` for the relay's whole life means `ctl_rx` never observes `Disconnected`,
+/// so the loop's control channel closes only at PROCESS exit — which is exactly when the GUI
+/// tears down anyway (`tao`'s `event_loop.run` diverges into `process::exit` on window
+/// close), so the relay thread is reaped there rather than via a channel-close signal.
+///
+/// Startup: `--session <id>` attaches straight to that session; otherwise the host
+/// opens cold into the SWAPPER (the hub) so the user picks a live session, a history
+/// session, or `[+ new session]`. A detach (socket close, or the daemon's `OpenSwapper`
+/// hand-off) falls back to the swapper; a failed attach degrades to the swapper rather
+/// than crashing.
+///
+/// W0 scope: the swapper RENDERS the hub and resolves `SelectSession` / `NewSession`
+/// to an attach. The full in-hub key semantics (Ctrl+X nuke, history delete, cursor
+/// nav) are W1 — the client-side keyboard swapper is not driven here.
+pub(in crate::app::runtime) fn run_host_relay(
+    opts: crate::cli::Opts,
+    push: impl Fn(String) + Clone + Send + 'static,
+    ctl_tx: std::sync::mpsc::Sender<HostCtl>,
+    ctl_rx: std::sync::mpsc::Receiver<HostCtl>,
+    live_req: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    live_marks: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: std::sync::Arc<std::sync::Mutex<StreamView>>,
+) {
+    // The client owns no sessions; it needs the config dirs only to resolve sockets.
+    let _ = store::ensure_dirs();
+
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("could not build the host-relay tokio runtime: {e}"),
+            );
+            return;
+        }
+    };
+    let handle = rt.handle().clone();
+
+    let mut push_state = push_loop::PushState::new();
+    // The session the host is (or was) attached to, so the swapper flags the row it
+    // came from as `is_foreground` and a `ToSwapper` fallback remembers it.
+    let mut current_session_id: Option<String> = None;
+
+    // Startup: attach directly to `--session`, else open cold into the swapper.
+    let mut step = match opts.session.clone() {
+        Some(id) => HostStep::Attach { id, workdir: None },
+        None => HostStep::Swapper,
+    };
+
+    loop {
+        step = match step {
+            HostStep::Done => break,
+            HostStep::Swapper => host_swapper(
+                &handle,
+                &push,
+                &ctl_tx,
+                &ctl_rx,
+                &mut push_state,
+                current_session_id.as_deref(),
+            ),
+            HostStep::Attach { id, workdir } => host_attached(
+                &handle,
+                &push,
+                &ctl_tx,
+                &ctl_rx,
+                &live_req,
+                &live_marks,
+                &live_view,
+                &mut push_state,
+                &mut current_session_id,
+                id,
+                workdir,
+            ),
+        };
+    }
+
+    // Drop the runtime LAST so the active connection's reader task is cancelled after
+    // the loop exits.
+    drop(rt);
+}
+
+/// Spawn an OFF-THREAD escalating kill of the session-daemon `id`, then fire a follow-up
+/// [`HostCtl::RefreshHub`] once the daemon is confirmed dead.
+///
+/// The escalating [`crate::app::runtime::manage::kill_session_daemon`] BLOCKS up to the grace budget (it
+/// waits for death via `wait_until_dead` before each signal), so it must never run inline on
+/// the host control loop (the swapper's `recv` or the attached 16ms fold). Running it on a
+/// plain OS thread — then routing the refresh back through the SAME `ctl_tx` the ipc handler
+/// uses — lets whichever host state is active (`host_swapper`'s `RefreshHub` re-push, or
+/// `push_loop`'s off-thread sweep) rebuild the hub AFTER the row is genuinely gone, so a
+/// just-killed daemon can never linger as a COOKING row.
+pub(super) fn spawn_kill_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, id: String) {
+    std::thread::spawn(move || {
+        crate::app::runtime::manage::kill_session_daemon(&id); // blocks until dead (or the budget is spent)
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
+/// Spawn an OFF-THREAD escalating ensure-death of the session-daemon `id`, with NO follow-up
+/// refresh. Used by the `New { kill: true }` switch: the OLD daemon is reaped WHILE the host
+/// attaches a BRAND-NEW session, so the new attach must not wait on the old daemon's corpse
+/// (hence off-thread) and there is no hub to refresh (we land in the new session, not the
+/// hub). The graceful `QuitDaemon` the caller already queued on the live conn is flushed by
+/// teardown; this guarantees the old daemon actually dies even if that graceful quit wedged.
+#[allow(dead_code)]
+pub(super) fn spawn_ensure_dead(id: String) {
+    std::thread::spawn(move || {
+        crate::app::runtime::manage::kill_session_daemon(&id);
+    });
+}
+
+/// Spawn an OFF-THREAD history-only DELETE of session `id` (on-disk dir tree + registry row),
+/// then fire a follow-up [`HostCtl::RefreshHub`].
+///
+/// The webview only ever sends a uuid; the path is resolved HOST-side from
+/// [`store::list_all_sessions`]. Defense in depth: the delete is SKIPPED (leaving just the
+/// refresh) when the uuid is currently LIVE ([`crate::app::runtime::manage::list_live_sessions`]) or its
+/// on-disk lock is held (`meta.locked`) — a live session must never be deleted out from under
+/// its daemon; `store::delete_session`'s sessions-root guard is the final backstop. Off-thread
+/// because `list_live_sessions` connect-probes every socket (blocking).
+pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, id: String) {
+    std::thread::spawn(move || {
+        // Never delete a session that is currently live or whose on-disk lock is held.
+        let live: std::collections::HashSet<String> = crate::app::runtime::manage::list_live_sessions()
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+        if !live.contains(&id) {
+            if let Ok(metas) = store::list_all_sessions() {
+                if let Some(meta) = metas.into_iter().find(|m| m.id == id && !m.locked) {
+                    // Tighten the TOCTOU gap between the live/locked snapshot above and the
+                    // physical remove: re-probe THIS session's daemon liveness (bind-as-oracle
+                    // connect) immediately before deleting and skip if a daemon came up in the
+                    // interim, so a session is never deleted out from under a live daemon.
+                    // (`store::delete_session`'s sessions-root guard stays the final backstop.)
+                    if !crate::app::runtime::manage::daemon_alive(&id) {
+                        let _ = store::delete_session(&meta.path);
+                    }
+                }
+            }
+        }
+        let _ = ctl_tx.send(HostCtl::RefreshHub);
+    });
+}
+
+
+// `fetch_models_for_provider`, `fetch_routes_for_provider`, `build_host_agents_values`,
+// and `build_host_oauth_state` moved to the sibling `host_catalogue` module (file size) —
+// see the `use super::host_catalogue::{...}` import above.
+
+/// The SWAPPER arm: build the hub from cross-daemon discovery, push it, and block for
+/// a control message. A `Ready` (page reload) re-discovers + re-pushes; a
+/// `Select`/`New` resolves to an attach; a closed control channel (window gone) ends
+/// the relay.
+///
+/// W0: no background live-refresh probe and no in-hub keyboard nav (those are W1) — the
+/// hub is a static snapshot until the user picks. React animates any spinner locally.
+fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
+    handle: &tokio::runtime::Handle,
+    push: &P,
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    push_state: &mut push_loop::PushState,
+    current: Option<&str>,
+) -> HostStep {
+    // Build + push the hub (discovery blocks briefly; fine — nothing renders here).
+    let hub = build_local_hub(current);
+    push_state.reset();
+    push_hub(&hub, push, push_state);
+    // The swapper holds no daemon snapshot, so the attached `push_loop`'s Config push
+    // never runs here — the Connector/MCP panels would cold-open EMPTY. Read the loaded
+    // global config directly and push a `Config` envelope so FIRST open shows the real
+    // providers/models/mcp (bug #3/#4). `reset()` above cleared `config_json`, so this
+    // (re)emits every swapper entry.
+    push_swapper_config(push, push_state);
+
+    // The host-local OAuth login flow's abort handle, if one is currently in flight
+    // (`HostCtl::StartOAuth` below) — mirrors `AppStateRest::oauth_task` on the daemon
+    // side. Local to this swapper invocation: a fresh `host_swapper` call (re-entering
+    // the hub after an attach) naturally starts with none in flight, same as a fresh
+    // daemon session.
+    let mut oauth_task: Option<tokio::task::AbortHandle> = None;
+
+    loop {
+        match ctl_rx.recv() {
+            // Page reloaded (`Ready`) OR the ResumePalette opened (`RefreshHub`):
+            // rediscover the live set + re-push the hub. In the swapper the blocking
+            // discovery sweep is fine — nothing renders on this thread here.
+            // (`ToSwapper` — a cancel that lands while already detached — is a harmless
+            // hub re-push here: we are already showing the hub.)
+            Ok(HostCtl::Ready) | Ok(HostCtl::RefreshHub) | Ok(HostCtl::ToSwapper) => {
+                let hub = build_local_hub(current);
+                push_state.reset();
+                push_hub(&hub, push, push_state);
+                // Re-emit config too (a `Ready` reload re-mounts the panels).
+                push_swapper_config(push, push_state);
+            }
+            // Pre-session config mutation (onboarding theme/provider/model): apply it
+            // directly to `~/.koma/config.json` and re-push `Config` so the panels + theme
+            // repaint and `needsOnboarding` clears. Stay in the swapper (no attach).
+            Ok(HostCtl::ConfigMutate(req)) => {
+                apply_swapper_config_mutation(&req, push, push_state);
+            }
+            // UN-ATTACHED live model / route fetch (the GUI Connector picker during
+            // onboarding / in the swapper, where there is no attached daemon to forward a
+            // `ListModels`/`ListRoutes` to). Resolve the provider from the GLOBAL config and
+            // run the network GET OFF this thread — a blocking HTTP call must never stall the
+            // ctl loop — then push the SAME `ModelList`/`RouteList` envelope the attached
+            // daemon path emits. The spawned worker ALWAYS pushes a reply (an EMPTY list on an
+            // unknown provider or any fetch error), so the React picker's spinner can never
+            // hang. A clone of the (Clone) push sink rides into the task so it can reach the
+            // webview after this arm hands control back to the recv loop below.
+            Ok(HostCtl::ListModels { provider }) => {
+                let push2 = P::clone(push);
+                handle.spawn(async move {
+                    let models = fetch_models_for_provider(&provider).await;
+                    push_model_list(&push2, provider, models);
+                });
+            }
+            Ok(HostCtl::ListRoutes { provider, model_id }) => {
+                let push2 = P::clone(push);
+                handle.spawn(async move {
+                    let routes = fetch_routes_for_provider(&provider, &model_id).await;
+                    push_route_list(&push2, provider, model_id, routes);
+                });
+            }
+            // Explore FILE CHANGED panel: host-side diff fetch (git + fs are blocking,
+            // so this runs on a plain OS thread rather than the async runtime). Never
+            // touches the daemon in either host state — see `compute_file_diff`.
+            Ok(HostCtl::FileDiff { path }) => {
+                let push2 = P::clone(push);
+                let cur = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    let result = compute_file_diff(&path, cur.as_deref());
+                    push_file_diff(&push2, result);
+                });
+            }
+            Ok(ctl @ HostCtl::FileTree { .. })
+            | Ok(ctl @ HostCtl::FileRead { .. })
+            | Ok(ctl @ HostCtl::FileSave { .. })
+            | Ok(ctl @ HostCtl::FileCreate { .. })
+            | Ok(ctl @ HostCtl::FileRename { .. })
+            | Ok(ctl @ HostCtl::FileDelete { .. }) => {
+                let push2 = P::clone(push);
+                let workdirs = current
+                    .and_then(super::diff::session_workdirs_for)
+                    .unwrap_or_default();
+                let session = current.map(str::to_string);
+                std::thread::spawn(move || {
+                    super::file_ops::handle_file_ctl(
+                        &ctl,
+                        &push2,
+                        &workdirs,
+                        session.as_deref(),
+                    );
+                });
+            }
+            // Explore GIT panel + Settings SSH-key vault, all opened/mutated while
+            // detached (StartScreen / swapper): git/fs/`ssh-keygen` are blocking, so
+            // each runs on a plain OS thread rather than the async runtime, and NEVER
+            // touches the daemon in either host state. Bodies live in the sibling
+            // `git_host` module (shared with `push_loop`'s attached twin) — see there
+            // for the per-op reasoning (mutations push a `GitOp`/`KeyOp` reply THEN a
+            // follow-up refreshed `GitStatus`/`KeyList`).
+            Ok(HostCtl::GitStatus) => {
+                git_host::spawn_git_status(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitDiff { path, staged }) => {
+                git_host::spawn_git_diff(P::clone(push), current.map(str::to_string), path, staged);
+            }
+            Ok(HostCtl::GitStage { paths }) => {
+                git_host::spawn_git_stage(P::clone(push), current.map(str::to_string), paths);
+            }
+            Ok(HostCtl::GitUnstage { paths }) => {
+                git_host::spawn_git_unstage(P::clone(push), current.map(str::to_string), paths);
+            }
+            Ok(HostCtl::GitDiscard { paths }) => {
+                git_host::spawn_git_discard(P::clone(push), current.map(str::to_string), paths);
+            }
+            Ok(HostCtl::GitCommit { message }) => {
+                git_host::spawn_git_commit(P::clone(push), current.map(str::to_string), message);
+            }
+            // Commit-graph panel: same host-local reasoning as `GitStatus`/`GitDiff`.
+            Ok(HostCtl::GitGraph { limit, skip }) => {
+                git_host::spawn_git_graph(P::clone(push), current.map(str::to_string), limit, skip);
+            }
+            Ok(HostCtl::GitCommitDetail { sha }) => {
+                git_host::spawn_commit_detail(P::clone(push), current.map(str::to_string), sha);
+            }
+            Ok(HostCtl::GitCommitDiff { sha, path }) => {
+                git_host::spawn_commit_diff(P::clone(push), current.map(str::to_string), sha, path);
+            }
+            // Bubble/activity chart (GK5a): same host-local reasoning as
+            // `GitStatus`/`GitGraph`.
+            Ok(HostCtl::GitActivity { path, limit }) => {
+                git_host::spawn_git_activity(P::clone(push), current.map(str::to_string), path, limit);
+            }
+            Ok(HostCtl::SetGitKey { name }) => {
+                git_host::spawn_set_git_key(P::clone(push), current.map(str::to_string), name);
+            }
+            Ok(HostCtl::GitFetch) => {
+                git_host::spawn_git_fetch(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitPull) => {
+                git_host::spawn_git_pull(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitPush) => {
+                git_host::spawn_git_push(P::clone(push), current.map(str::to_string));
+            }
+            // Source Control toolbar stash ops (GK4a): same host-local reasoning
+            // as `GitStatus`/`GitFetch` above. Bodies live in `git_host`.
+            Ok(HostCtl::GitStash) => {
+                git_host::spawn_git_stash(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitStashPop) => {
+                git_host::spawn_git_stash_pop(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::GitStashList) => {
+                git_host::spawn_git_stash_list(P::clone(push), current.map(str::to_string));
+            }
+            // Branch-switcher popover / graph context menu (G4): same host-local
+            // reasoning as `GitStatus`/`GitGraph`. Bodies live in the shared
+            // `git_branch`/`git_host` modules.
+            Ok(HostCtl::GitBranchList) => {
+                git_host::spawn_git_branch_list(P::clone(push), current.map(str::to_string));
+            }
+            // Source Control multi-repo picker (discover + set-active): same host-local
+            // reasoning as `GitBranchList`/`SetGitKey` above.
+            Ok(HostCtl::GitRepos) => {
+                git_host::spawn_git_repos(P::clone(push), current.map(str::to_string));
+            }
+            Ok(HostCtl::SetActiveRepo { root }) => {
+                git_host::spawn_set_active_repo(P::clone(push), current.map(str::to_string), root);
+            }
+            Ok(HostCtl::GitCheckout { ref_name }) => {
+                git_host::spawn_git_checkout(P::clone(push), current.map(str::to_string), ref_name);
+            }
+            Ok(HostCtl::GitCreateBranch { name, start, checkout }) => {
+                git_host::spawn_git_create_branch(
+                    P::clone(push),
+                    current.map(str::to_string),
+                    name,
+                    start,
+                    checkout,
+                );
+            }
+            // Commit-graph interactive/destructive ops (G5b): same host-local
+            // reasoning as `GitCheckout`/`GitCreateBranch` above. Bodies live in
+            // the shared `git_destructive`/`git_host` modules; a mutation's
+            // follow-up `GitStatus` re-push carries the fresh `inProgress`/
+            // `conflicted` state (see `git::compute_git_status`).
+            Ok(HostCtl::GitCherryPick { sha }) => {
+                git_host::spawn_git_cherry_pick(P::clone(push), current.map(str::to_string), sha);
+            }
+            Ok(HostCtl::GitRevert { sha }) => {
+                git_host::spawn_git_revert(P::clone(push), current.map(str::to_string), sha);
+            }
+            Ok(HostCtl::GitReset { sha, mode }) => {
+                git_host::spawn_git_reset(P::clone(push), current.map(str::to_string), sha, mode);
+            }
+            Ok(HostCtl::GitMerge { ref_name }) => {
+                git_host::spawn_git_merge(P::clone(push), current.map(str::to_string), ref_name);
+            }
+            Ok(HostCtl::GitRebase { upstream, branch }) => {
+                git_host::spawn_git_rebase(P::clone(push), current.map(str::to_string), upstream, branch);
+            }
+            Ok(HostCtl::GitOpAbort { kind }) => {
+                git_host::spawn_git_op_abort(P::clone(push), current.map(str::to_string), kind);
+            }
+            Ok(HostCtl::GitOpContinue { kind }) => {
+                git_host::spawn_git_op_continue(P::clone(push), current.map(str::to_string), kind);
+            }
+            Ok(HostCtl::KeyList) => {
+                git_host::spawn_key_list(P::clone(push));
+            }
+            Ok(HostCtl::KeyGenerate { name, comment }) => {
+                git_host::spawn_key_generate(P::clone(push), name, comment);
+            }
+            Ok(HostCtl::KeyImport { name, private_key }) => {
+                git_host::spawn_key_import(P::clone(push), name, private_key);
+            }
+            Ok(HostCtl::KeyDelete { name }) => {
+                git_host::spawn_key_delete(P::clone(push), name);
+            }
+            Ok(HostCtl::KeyReveal { name, private }) => {
+                git_host::spawn_key_reveal(P::clone(push), name, private);
+            }
+            // Extension STORE browse/detail/installed-list opened while detached
+            // (StartScreen / swapper, e.g. the Store tab mounting on the home screen
+            // with no session): koma.run is a PUBLIC endpoint and the installed list is
+            // a local config read, so both NEVER touch the daemon in either host state
+            // — see `store_host`. Bodies live in the sibling `store_host` module
+            // (shared with `push_loop`'s attached twin).
+            Ok(HostCtl::StoreBrowse { query, category }) => {
+                store_host::spawn_store_browse(P::clone(push), query, category);
+            }
+            Ok(HostCtl::StoreDetail { id }) => {
+                store_host::spawn_store_detail(P::clone(push), id);
+            }
+            Ok(HostCtl::ListInstalledExtensions) => {
+                store_host::spawn_list_installed(P::clone(push));
+            }
+            Ok(HostCtl::GetInstalledExtensionDetail { id }) => {
+                store_host::spawn_get_installed_detail(P::clone(push), id);
+            }
+            // Install/uninstall arrived with no session attached (always true in the
+            // swapper): push the graceful failure rather than silently dropping it.
+            Ok(HostCtl::ExtNoSession { id }) => {
+                push_ext_no_session(push, id);
+            }
+            // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
+            // a global file the host reads directly, so this never touches a daemon in
+            // either state — see `compute_usage_preview`. Sqlite I/O is blocking, so it
+            // runs on a plain OS thread like `FileDiff` above. `scope` AND `session` both
+            // ride along unchanged so the reply echoes them (the React panel drops a
+            // reply whose scope OR session id no longer matches what's currently
+            // selected/attached — a stale cross-session reply must never render). A
+            // "session" scope with no session attached (there is none — this is the
+            // swapper) simply queries with `session: None` passed through by the ipc
+            // handler, which only sets `Some(uuid)` when a session IS attached.
+            Ok(HostCtl::UsagePreview { session, scope }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    let result = compute_usage_preview(session.as_deref());
+                    push_usage_preview(&push2, result, scope, session);
+                });
+            }
+            // GUI Analytics tab opened while detached (StartScreen / swapper): the
+            // ledger is a global file the host reads directly, so this never
+            // touches a daemon in either state — see `compute_analytics`. Sqlite
+            // I/O is blocking, so it runs on a plain OS thread like
+            // `UsagePreview` above. All correlation inputs ride along unchanged
+            // so the reply echoes them (the React tab drops a reply whose
+            // reqSeq/scope/session/range/metric no longer matches what's current).
+            Ok(HostCtl::Analytics {
+                req_seq,
+                session,
+                scope,
+                range,
+                metric,
+            }) => {
+                let push2 = P::clone(push);
+                std::thread::spawn(move || {
+                    let result =
+                        compute_analytics(req_seq, scope, session, range, metric);
+                    push_analytics(&push2, result);
+                });
+            }
+            // GUI Settings tab opened while detached (StartScreen / swapper): there is no
+            // foreground session, so answer from the GLOBAL config — the active palette +
+            // `Settings` DEFAULTS (empty name/workdir). ALWAYS a reply so the tab's loading
+            // state clears. Cheap, synchronous (a config load), so it runs inline.
+            Ok(HostCtl::GetSettings) => {
+                let cfg = crate::model::app_config::AppConfig::load();
+                let d = crate::model::settings::Settings::default();
+                push_settings_values(
+                    push,
+                    String::new(),
+                    Vec::new(),
+                    d.short_send_enabled,
+                    d.sliding_cache,
+                    d.bash_saving,
+                    d.coding_autosave,
+                    d.internet_mode.as_str().to_string(),
+                    cfg.palette,
+                    String::new(),
+                );
+            }
+            // GUI /agents dashboard opened while detached (StartScreen / swapper): there is
+            // no foreground session, so answer from `load_registry(None)` (built-in + global
+            // only) + the GLOBAL config catalogue. ALWAYS a reply so the dashboard's loading
+            // state clears. Cheap, synchronous (a registry + config load), so it runs inline.
+            Ok(HostCtl::GetAgents) => {
+                let (agents, catalogue_models, catalogue_providers) = build_host_agents_values();
+                // The tool-picker options: the SAME shared source the daemon + TUI use, so the
+                // un-attached reply offers exactly the same set as the attached one.
+                let available_tools = crate::tool::agent_selectable_tools();
+                push_agents_values(
+                    push,
+                    0, // req_seq — no correlation for host-built fallback
+                    agents,
+                    catalogue_models,
+                    catalogue_providers,
+                    available_tools,
+                );
+            }
+            // GUI OAuth screen opened while detached (StartScreen / swapper): there is no
+            // attached daemon to run a login flow on, so answer from the GLOBAL config — the
+            // persisted connections + the provider catalogue, phase "idle". The login FLOW is
+            // attached-only; this read populates the screen pre-session. Cheap, synchronous (a
+            // config load), so it runs inline.
+            Ok(HostCtl::GetOAuthState) => {
+                let (conns, providers) = build_host_oauth_state();
+                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+            }
+            // GUI OAuth login START while detached (the home-screen / pre-session Settings
+            // "Sign in" buttons): there is no attached daemon to run the flow, so run it
+            // HOST-side instead of silently dropping the request (the prior bug this wave
+            // fixes). Resolve the wire `provider` string the SAME way the daemon does
+            // (`OAuthProvider::from_wire_id`); an unknown string pushes an immediate
+            // `failed` rather than hanging. Supersede any flow already in flight — abort
+            // its task first, mirroring `handle_oauth_start`'s supersede — before spawning
+            // the new one via the SAME `service::oauth::flow::run_flow` dispatcher the
+            // daemon's `Action::OAuthStart` spawns, so this is not a second copy of the
+            // five provider flows.
+            //
+            // Two tasks, mirroring the daemon's spawn + tick-drain split: the FLOW task
+            // (`run_flow`) is the one whose abort handle is stored for `CancelOAuth` —
+            // aborting it stops an in-progress browser-wait/device-poll immediately, same
+            // as the daemon's `oauth_task.abort()`. The DRAIN task awaits each `OAuthEvent`
+            // and turns it into an `OAuthState` push (`waiting_url`/`waiting_code`, then a
+            // terminal `success` — persisting the connection to the GLOBAL config first —
+            // or `failed`); it ends on its own once the flow task's `tx` is dropped
+            // (aborted or finished), so only the flow task's handle needs tracking here.
+            Ok(HostCtl::StartOAuth { provider }) => {
+                if let Some(h) = oauth_task.take() {
+                    h.abort();
+                }
+                match crate::model::app_config::OAuthProvider::from_wire_id(&provider) {
+                    Some(p) => {
+                        let (tx, mut orx) = tokio::sync::mpsc::unbounded_channel();
+                        let flow_join = handle.spawn(crate::service::oauth::flow::run_flow(p, tx));
+                        oauth_task = Some(flow_join.abort_handle());
+
+                        let push2 = P::clone(push);
+                        handle.spawn(async move {
+                            while let Some(ev) = orx.recv().await {
+                                match ev {
+                                    crate::service::oauth::OAuthEvent::CodexUrl { url } => {
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "waiting_url".to_string(),
+                                            Some(url),
+                                            None,
+                                            None,
+                                            None,
+                                            conns,
+                                            providers,
+                                        );
+                                    }
+                                    crate::service::oauth::OAuthEvent::KiloCode {
+                                        user_code,
+                                        verification_url,
+                                    } => {
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "waiting_code".to_string(),
+                                            None,
+                                            Some(user_code),
+                                            Some(verification_url),
+                                            None,
+                                            conns,
+                                            providers,
+                                        );
+                                    }
+                                    crate::service::oauth::OAuthEvent::Success { conn } => {
+                                        // Seed the token-refresh cache (fire-and-forget,
+                                        // mirrors the daemon's `drain_oauth`), then persist
+                                        // the connection to the GLOBAL config — there is no
+                                        // in-memory `AppConfig` pre-session, so re-load
+                                        // fresh rather than risk clobbering a concurrent
+                                        // swapper-side config mutation with a stale copy.
+                                        crate::service::oauth::manager::seed(&conn).await;
+                                        let mut cfg = crate::model::app_config::AppConfig::load();
+                                        cfg.oauth_conns.push(conn);
+                                        if let Err(e) = cfg.save() {
+                                            crate::model::store::append_global_error_log(
+                                                "gui",
+                                                &format!(
+                                                    "pre-session oauth login saved but config write failed: {e}"
+                                                ),
+                                            );
+                                        }
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "success".to_string(),
+                                            None,
+                                            None,
+                                            None,
+                                            None,
+                                            conns,
+                                            providers,
+                                        );
+                                        break;
+                                    }
+                                    crate::service::oauth::OAuthEvent::Failed { error } => {
+                                        let (conns, providers) = build_host_oauth_state();
+                                        push_oauth_state(
+                                            &push2,
+                                            "failed".to_string(),
+                                            None,
+                                            None,
+                                            None,
+                                            Some(error),
+                                            conns,
+                                            providers,
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    None => {
+                        let (conns, providers) = build_host_oauth_state();
+                        push_oauth_state(
+                            push,
+                            "failed".to_string(),
+                            None,
+                            None,
+                            None,
+                            Some(format!("unknown oauth provider: {provider}")),
+                            conns,
+                            providers,
+                        );
+                    }
+                }
+            }
+            // GUI OAuth login CANCEL while detached: abort whatever host-local flow
+            // `StartOAuth` above started (a no-op if none is in flight — `take()` on
+            // `None`), then re-push a fresh "idle" `OAuthState` so the Cancel button
+            // always lands somewhere instead of leaving the wait screen stranded.
+            Ok(HostCtl::CancelOAuth) => {
+                if let Some(h) = oauth_task.take() {
+                    h.abort();
+                }
+                let (conns, providers) = build_host_oauth_state();
+                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+            }
+            // GUI OAuth connection delete while detached: remove it from `~/.koma/config.json`,
+            // persist, evict its token-refresh cache entry OFF-thread (evict is async), then
+            // re-push a fresh "idle" `OAuthState`. Reachable pre-session so a connection is
+            // removable before any session exists.
+            Ok(HostCtl::DeleteOAuthConn { uuid }) => {
+                let mut cfg = crate::model::app_config::AppConfig::load();
+                cfg.oauth_conns.retain(|c| c.uuid != uuid);
+                if let Err(e) = cfg.save() {
+                    crate::model::store::append_global_error_log(
+                        "gui",
+                        &format!("pre-session oauth delete save failed: {e}"),
+                    );
+                }
+                let uuid2 = uuid.clone();
+                handle.spawn(async move {
+                    crate::service::oauth::manager::evict(&uuid2).await;
+                });
+                let (conns, providers) = build_host_oauth_state();
+                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+            }
+            // A hub row's KILL button. In the swapper there is no ATTACHED session, so this
+            // is always a background/live-row kill: escalate the kill OFF this thread (it
+            // blocks up to the grace budget) and let the follow-up `RefreshHub` rebuild the
+            // hub once the daemon is confirmed dead — the killed row can't linger in COOKING.
+            Ok(HostCtl::KillSession(id)) => {
+                spawn_kill_and_refresh(ctl_tx.clone(), id);
+            }
+            // A hub HISTORY row's DELETE button: physically remove that session OFF this
+            // thread (it connect-probes every live socket for the live/locked guard), then
+            // `RefreshHub`. The delete is refused host-side for a live/locked session.
+            Ok(HostCtl::DeleteSession(id)) => {
+                spawn_delete_and_refresh(ctl_tx.clone(), id);
+            }
+            // A hub pick → attach that session; `[+ new session]` → mint + attach. Fire the
+            // swap-START loader signal first (this thread will BLOCK in the attach next, so
+            // this push is the last thing the webview hears until the new Snapshot lands).
+            Ok(HostCtl::Select(id)) => {
+                push_switching(push, &id);
+                return HostStep::Attach { id, workdir: None };
+            }
+            // `[+ new session]`: the GUI picker already ran (this only fires after a folder
+            // was confirmed — a cancel sends nothing), so mint a fresh session and attach
+            // it AT the chosen `workdir`. `None` (empty-state / non-GUI) keeps the host cwd.
+            // `kill` is only meaningful from the ATTACHED chat view (there is no attached
+            // session to reap in the swapper), so it is ignored here — a start-screen new is
+            // always a plain add.
+            Ok(HostCtl::New { workdir, kill: _ }) => {
+                let new_id = uuid::Uuid::new_v4().to_string();
+                push_switching(push, &new_id);
+                return HostStep::Attach { id: new_id, workdir };
+            }
+            // The ipc side hung up (window gone) — leave the host.
+            Err(_) => return HostStep::Done,
+        }
+    }
+}
+
+/// The ATTACHED arm: attach `id` (build-skew safe), publish its request sender for the
+/// ipc `Submit`, fold its frames into pushes via [`push_loop::push_loop`], then tear the
+/// connection down and translate the loop's [`push_loop::HostTransition`] into the next
+/// [`HostStep`]. A failed attach degrades to the swapper rather than crashing.
+#[allow(clippy::too_many_arguments)]
+fn host_attached(
+    handle: &tokio::runtime::Handle,
+    push: &dyn Fn(String),
+    ctl_tx: &std::sync::mpsc::Sender<HostCtl>,
+    ctl_rx: &std::sync::mpsc::Receiver<HostCtl>,
+    live_req: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>>,
+    live_marks: &std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    live_view: &std::sync::Arc<std::sync::Mutex<StreamView>>,
+    push_state: &mut push_loop::PushState,
+    current: &mut Option<String>,
+    id: String,
+    workdir: Option<std::path::PathBuf>,
+) -> HostStep {
+    let mut conn = match attach_session_headless(handle, &id, workdir.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::model::store::append_global_error_log(
+                "gui",
+                &format!("host-relay could not attach session {id}: {e:#}"),
+            );
+            // Degrade to the swapper (fresh discovery) — the user can pick again.
+            return HostStep::Swapper;
+        }
+    };
+    *current = Some(id);
+
+    // Publish this connection's request sender so the ipc handler's `Submit` lands on
+    // the CURRENT daemon; take the handshake's prebuffered frames for the fold.
+    if let Ok(mut g) = live_req.lock() {
+        *g = Some(conn.req_tx.clone());
+    }
+    let prebuffered = std::mem::take(&mut conn.prebuffered);
+    push_state.reset();
+
+    // Enter the runtime context ONLY for the fold loop (a reconstructed shadow
+    // sub-agent mints an inert AbortHandle, which needs a runtime in scope) — SCOPED
+    // so the guard drops before `teardown_connection`'s `block_on`.
+    let transition = {
+        let _rt_ctx = handle.enter();
+        push_loop::push_loop(
+            push,
+            &conn.frame_rx,
+            &conn.req_tx,
+            prebuffered,
+            ctl_tx,
+            ctl_rx,
+            push_state,
+            current.as_deref(),
+            live_marks,
+            live_view,
+        )
+    };
+
+    // Retract the live sender + clear the staged-marker mirror before teardown so a
+    // late `Submit` can't race a half-torn-down connection or append stale markers,
+    // then flush the polite `Detach`.
+    if let Ok(mut g) = live_req.lock() {
+        *g = None;
+    }
+    if let Ok(mut m) = live_marks.lock() {
+        m.clear();
+    }
+    // Reset the stream view so the NEXT attach starts with no stream tab open (the new
+    // daemon's fresh HubClient starts with none too) — a stale sub-agent/bash id from the
+    // session we're leaving must never bleed into the next session's fold.
+    if let Ok(mut v) = live_view.lock() {
+        *v = StreamView::default();
+    }
+    super::teardown_connection(handle, conn);
+
+    match transition {
+        // Carry any GUI-picker workdir (a hub `New` while attached) into the next attach;
+        // a daemon `/new` hand-off / a `Select` carries `None` (inherit the host cwd).
+        push_loop::HostTransition::Attach { id, workdir } => HostStep::Attach { id, workdir },
+        push_loop::HostTransition::ToSwapper => HostStep::Swapper,
+        push_loop::HostTransition::Exit => HostStep::Done,
+    }
+}

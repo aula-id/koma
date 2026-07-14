@@ -10,14 +10,22 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::app::mode::{Mode, QuitConfirmState};
+use crate::app::mode::{Mode, QuitConfirmState, SessionHub, SessionKind};
 use crate::app::state::AppState;
 use crate::dto::chat::Role;
-use crate::ipc::proto::{ClientRequest, DaemonFrame, KeyWire};
+use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, KeyWire};
 use crate::view;
 
 use super::input::{handle_quit_confirm_key, local_echo, send_overlay_cancel, QuitConfirmKey};
 use super::shadow::{apply_frame, reconcile_work_clock};
+use super::push_proto::{
+    push_file_diff, push_switching, push_usage_preview, PushAttachment, PushBashJob,
+    PushCooking, PushEnvelope, PushFileChange, PushHistory, PushMcpServer, PushModel, PushMsg,
+    PushPalette, PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute,
+    PushSubAgent, PushToolCall,
+};
+use super::project::{push_hub, serialize_and_push};
+use super::project_config::{push_config, ConfigProjection};
 
 /// Local TTL for a toast reconstructed from a [`StateDelta::Toast`]. The daemon's
 /// toast `Instant` is daemon-local and never crosses the wire (see `ipc::snapshot`);
@@ -101,6 +109,15 @@ pub(super) fn render_loop(
     // While true, every frame except a fresh Snapshot is dropped: a gap was seen and
     // a Resync was sent, so the shadow is stale until the full snapshot rebuilds it.
     let mut awaiting_resync = false;
+
+    // GUI-live palette sync (see `crate::app::runtime::gui::run_gui`, which sets
+    // `KOMA_GUI=1` on the pty child it spawns): when running under the GUI host,
+    // emit a private OSC 5380 carrying the current palette's canvas bg whenever it
+    // changes, so the webview can repaint its window gutter to match live. Checked
+    // once here (env doesn't change mid-run); `last_gui_bg` diffs so the OSC is only
+    // emitted on an actual palette change, not every ~60fps frame.
+    let gui_mode = std::env::var("KOMA_GUI").is_ok();
+    let mut last_gui_theme: Option<(ratatui::style::Color, ratatui::style::Color)> = None;
 
     // Apply any frames the pre-render handshake pulled off the wire while hunting for
     // `Hello` (task #142) BEFORE the live drain, through the SAME `apply_frame` path so
@@ -230,6 +247,37 @@ pub(super) fn render_loop(
         // unchanged frame flushes ~nothing; painting every frame is what lets the
         // local animations advance smoothly without any dirty-tracking.
         terminal.draw(|f| view::draw(f, &shadow))?;
+
+        // --- (c-ter) GUI-live palette sync: emit OSC 5380 on bg change ---
+        // Runs AFTER `terminal.draw` returns (it flushes its own frame diff first),
+        // so the private OSC never interleaves with ratatui's output. Gated on
+        // `KOMA_GUI` (set only by `run_gui`'s pty spawn), so a normal terminal never
+        // sees this escape. Diffed against `last_gui_bg` so it's only emitted when
+        // `/settings` actually changes the palette, not every ~60fps frame.
+        if gui_mode {
+            let pal = crate::view::theme::palette(&shadow.rest.config);
+            let bg = pal.bg;
+            let fg = pal.fg;
+            if last_gui_theme != Some((bg, fg)) {
+                last_gui_theme = Some((bg, fg));
+                let bg_hex = match bg {
+                    ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    _ => "#000000".to_string(),
+                };
+                let fg_hex = match fg {
+                    ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    _ => "#c8d3f5".to_string(),
+                };
+                // Private OSC 5380: tell the GUI host our canvas bg + titlebar fg so it
+                // repaints the window gutter and titlebar text/buttons to match. Payload
+                // is `#rrggbb,#rrggbb` (bg first, fg second). Emitted only when the
+                // palette changes; gated on KOMA_GUI so normal terminals never see it.
+                // ST-terminated (ESC backslash).
+                let mut out = stdout();
+                let _ = write!(out, "\x1b]5380;{bg_hex},{fg_hex}\x1b\\");
+                let _ = out.flush();
+            }
+        }
 
         // --- (c-bis) forward the agents editor wrap width to the daemon ---
         // The shadow's agents editor publishes its wrap_w via interior mutability
@@ -449,4 +497,14 @@ pub(super) fn client_select_dump(
     execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     terminal.clear()?;
     Ok(())
+}
+
+
+
+/// Serialise `env` and hand it to `push`, dropping it silently on the (never-
+/// expected) serialisation error rather than panicking mid-frame.
+pub(super) fn emit(push: &dyn Fn(String), env: &PushEnvelope) {
+    if let Ok(json) = serde_json::to_string(env) {
+        push(json);
+    }
 }

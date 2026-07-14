@@ -63,9 +63,13 @@ impl Tool for Edit {
             content.replacen(old, new, 1)
         };
 
+        // Baseline pre-image BEFORE the rewrite ("virtual git", first-touch-wins).
+        super::capture_baseline(ctx, &path);
         std::fs::write(&path, replaced.as_bytes())
             .with_context(|| format!("writing file '{rel}'"))?;
         super::super::dircache::reindex(ctx.workspaces.clone(), ctx.dir_cache.clone());
+        // edit is guarded above to only touch an existing file → always a modify.
+        super::record_change(ctx, &path, "modified");
 
         let n = if replace_all { count } else { 1 };
         Ok(format!("edited {rel} ({n} replacement(s))"))

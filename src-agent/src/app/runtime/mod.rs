@@ -32,6 +32,10 @@ mod lifecycle;
 mod mcp_daemon;
 mod signals;
 mod session_mgmt;
+// Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
+pub(crate) mod bg_persist;
+#[cfg(feature = "gui")]
+pub mod gui;
 
 // Re-export the sync-loop <-> per-client-task bridge message so the per-client
 // connection task in `crate::ipc::conn` (outside this module tree) can name it.
@@ -70,6 +74,12 @@ pub(crate) use session_mgmt::{
     build_client, reconcile_session_lock, spawn_awareness_recompute, warm_session,
     warm_session_background,
 };
+
+// Re-export the sub-agent spawn primitive + its outcome at the `runtime` level so
+// the extension grant broker (`crate::app::ext::broker`, outside this module tree)
+// can drive the SAME `task`-tool spawn path. `stream` stays private; only these two
+// items are exposed.
+pub(crate) use stream::{spawn_or_queue, SpawnOutcome};
 
 pub(super) type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 

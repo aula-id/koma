@@ -1,0 +1,407 @@
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { ChartScatter, Filter, X } from 'lucide-react'
+import { useKoma } from '../store/koma'
+import type { ActivityCommit } from '../store/koma'
+import { aggregateAuthors, authorSparklines, buildTimeTicks, linearScale, radiusScale } from '../lib/bubbleScales'
+import { AuthorAvatar } from './AuthorAvatar'
+import { BrailleSpinner } from './BrailleSpinner'
+
+// ---- Render geometry --------------------------------------------------
+const LEFT_MARGIN = 132 // author-label gutter
+const RIGHT_MARGIN = 20
+const LANE_H = 30 // one author lane
+const TOP_PAD = 14
+const BAR_STRIP_H = 46 // add(up)/del(down) timeline strip
+const AXIS_H = 22 // x-axis date tick labels
+const BOTTOM_PAD = 6
+const MIN_R = 3
+const MAX_R = 15
+const RADIUS_K = 0.85
+const X_TICK_COUNT = 6
+const DEFAULT_WIDTH = 800 // never let width math see a 0 before ResizeObserver settles
+
+// 1-2 letter fallback truncation for a lane's author-name label (the gutter is
+// narrow — a full name would overflow into the chart). Not the same helper as
+// AuthorAvatar's initials (that's a badge, this is a text label).
+function truncateName(name: string, email: string): string {
+  const src = name.trim() || email.trim() || 'unknown'
+  return src.length > 18 ? `${src.slice(0, 17)}…` : src
+}
+
+function formatDate(iso: string): string {
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return iso
+  return new Date(t).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+type HoverState = { x: number; y: number; commit: ActivityCommit }
+
+// GK5b: the commit-graph tab's Bubble-mode activity chart (GitLens-style
+// visual history) — authors on the Y axis (one lane each, busiest on top),
+// time on the X axis, one bubble per commit sized by lines-changed and
+// coloured per author, with an additions/deletions bar timeline underneath.
+// Hand-rolled SVG (no charting library in this repo). Only ever mounted while
+// `graphMode === 'bubble'` (GraphTab's conditional render), so its own mount
+// effect is the right place to (re)fetch the activity series.
+export default function GraphBubble() {
+  const commits = useKoma((s) => s.activity.commits)
+  const loading = useKoma((s) => s.activity.loading)
+  const error = useKoma((s) => s.activity.error)
+  const activePath = useKoma((s) => s.activity.path)
+  const refreshActivity = useKoma((s) => s.refreshActivity)
+  const sessionId = useKoma((s) => s.session.id)
+  const activeRepoRoot = useKoma((s) => s.activeRepoRoot)
+
+  // Fetch (or re-fetch) the CURRENT path filter on mount, and again whenever
+  // `sessionId` changes — this component only mounts while bubble mode is
+  // showing, so re-opening the tab always reloads, but it can also stay
+  // mounted ACROSS a session switch, so `sessionId` re-fires this to drop the
+  // OLD session's activity series. Also keyed on `activeRepoRoot` so
+  // switching the active repo (multi-repo support) refetches too.
+  // Deliberately reads `activity.path`'s value at mount/switch time rather
+  // than reacting to it (a live dependency would loop: refreshActivity sets
+  // `path`, which would re-trigger this effect). `activePath` stays OUT of
+  // the deps on purpose — path changes are driven by the explicit filter
+  // submit, not this effect.
+  useEffect(() => {
+    refreshActivity(activePath)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshActivity, sessionId, activeRepoRoot])
+
+  // ---- Responsive width (never divide by 0) ----
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [width, setWidth] = useState(DEFAULT_WIDTH)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 0) setWidth(el.clientWidth)
+    })
+    ro.observe(el)
+    if (el.clientWidth > 0) setWidth(el.clientWidth)
+    // Belt-and-suspenders: the very first synchronous read above can race the
+    // initial paint (same lesson as GraphTab's viewportH measurement).
+    const raf = requestAnimationFrame(() => {
+      if (el.clientWidth > 0) setWidth(el.clientWidth)
+    })
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(raf)
+    }
+  }, [])
+
+  // ---- Path-filter control (GK5b Part 3) ----
+  const [pathInput, setPathInput] = useState(activePath ?? '')
+  const submitPathFilter = () => {
+    const trimmed = pathInput.trim()
+    refreshActivity(trimmed.length > 0 ? trimmed : null)
+  }
+  const clearPathFilter = () => {
+    setPathInput('')
+    refreshActivity(null)
+  }
+
+  // ---- Aggregation + scales (recomputed only when the commit series or
+  // measured width changes) ----
+  const authors = useMemo(() => aggregateAuthors(commits), [commits])
+  const laneIndex = useMemo(() => {
+    const m = new Map<string, number>()
+    authors.forEach((a, i) => m.set(a.key, i))
+    return m
+  }, [authors])
+  const sparklines = useMemo(() => authorSparklines(commits, 28), [commits])
+  const sparkMax = useMemo(() => {
+    let m = 0
+    for (const arr of sparklines.values()) for (const v of arr) if (v > m) m = v
+    return m
+  }, [sparklines])
+
+  const chartW = Math.max(0, width - LEFT_MARGIN - RIGHT_MARGIN)
+  const lanesH = authors.length * LANE_H
+  const svgH = TOP_PAD + lanesH + BAR_STRIP_H + AXIS_H + BOTTOM_PAD
+  const barStripH = BAR_STRIP_H
+
+  const timestamps = useMemo(() => commits.map((c) => Date.parse(c.date)).filter((t) => !Number.isNaN(t)), [commits])
+  const minTs = timestamps.length > 0 ? Math.min(...timestamps) : 0
+  const maxTs = timestamps.length > 0 ? Math.max(...timestamps) : 0
+  const xScale = useMemo(
+    () => linearScale(minTs, maxTs, LEFT_MARGIN + 4, LEFT_MARGIN + chartW - 4),
+    [minTs, maxTs, chartW],
+  )
+  const ticks = useMemo(() => buildTimeTicks(minTs, maxTs, X_TICK_COUNT), [minTs, maxTs])
+
+  const maxAbsLines = useMemo(
+    () => Math.max(1, ...commits.map((c) => Math.max(c.added, c.deleted))),
+    [commits],
+  )
+
+  const barStripTop = TOP_PAD + lanesH
+  const barBaseline = barStripTop + barStripH / 2
+
+  const [hover, setHover] = useState<HoverState | null>(null)
+  const showTooltip = (e: ReactMouseEvent, commit: ActivityCommit) =>
+    setHover({ x: e.clientX, y: e.clientY, commit })
+  const hideTooltip = () => setHover(null)
+
+  const empty = !loading && (error != null || commits.length === 0)
+
+  return (
+    <div className="flex h-full w-full min-w-0 flex-col">
+      {/* Header: legend + path-narrowing filter (GK5b Part 3) */}
+      <div className="flex flex-none items-center gap-2 border-b border-koma-border px-3 py-1.5 text-[11px]">
+        <div className="min-w-0 flex-1 text-[11px] text-koma-dim opacity-70">
+          {authors.length} contributor{authors.length === 1 ? '' : 's'}
+        </div>
+        <div className="flex flex-none items-center gap-1">
+          <Filter size={12} className="flex-none text-koma-dim opacity-60" />
+          <input
+            type="text"
+            value={pathInput}
+            onChange={(e) => setPathInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitPathFilter()
+            }}
+            placeholder="filter by path…"
+            className="w-40 rounded border border-koma-border bg-koma-bg px-1.5 py-0.5 text-[11px] text-koma-fg outline-none focus:border-koma-accent"
+          />
+          {activePath && (
+            <button
+              type="button"
+              onClick={clearPathFilter}
+              title="Clear path filter (show whole branch)"
+              aria-label="Clear path filter"
+              className="flex h-5 w-5 flex-none items-center justify-center rounded text-koma-dim hover:bg-koma-hover hover:text-koma-fg"
+            >
+              <X size={12} />
+            </button>
+          )}
+          {loading && <BrailleSpinner size={12} className="text-koma-dim opacity-70" />}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div ref={containerRef} className="relative min-h-0 flex-1 overflow-auto">
+        {empty ? (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-koma-dim">
+            <ChartScatter size={28} className="opacity-50" />
+            <span className="text-[13px] font-medium opacity-80">
+              {error ?? 'No activity to display.'}
+            </span>
+            {activePath && !error && (
+              <span className="text-[11px] opacity-50">Filtered to “{activePath}” — try clearing the filter.</span>
+            )}
+          </div>
+        ) : loading && commits.length === 0 ? (
+          <div className="flex h-full w-full items-center justify-center">
+            <BrailleSpinner size={20} className="text-koma-dim opacity-70" />
+          </div>
+        ) : (
+          <svg width={Math.max(width, LEFT_MARGIN + RIGHT_MARGIN + 1)} height={svgH} className="block">
+            {/* Author lanes: label + faint separator line */}
+            {authors.map((a, i) => {
+              const cy = TOP_PAD + i * LANE_H + LANE_H / 2
+              return (
+                <g key={a.key}>
+                  <line
+                    x1={0}
+                    y1={TOP_PAD + i * LANE_H + LANE_H}
+                    x2={width}
+                    y2={TOP_PAD + i * LANE_H + LANE_H}
+                    stroke="var(--color-koma-border)"
+                    strokeWidth={1}
+                    opacity={0.4}
+                  />
+                  <circle cx={10} cy={cy} r={3.5} fill={a.color} />
+                  <text
+                    x={20}
+                    y={cy}
+                    dominantBaseline="middle"
+                    className="fill-koma-fg"
+                    style={{ fontSize: 11, opacity: 0.85 }}
+                  >
+                    {truncateName(a.name, a.email)}
+                  </text>
+                </g>
+              )
+            })}
+
+            {/* Bubbles: one per commit, cx = time, cy = author lane, r = lines changed */}
+            {commits.map((c) => {
+              const lane = laneIndex.get(c.email.trim() || c.author.trim() || '?')
+              if (lane === undefined) return null
+              const ts = Date.parse(c.date)
+              if (Number.isNaN(ts)) return null
+              const cx = xScale(ts)
+              const cy = TOP_PAD + lane * LANE_H + LANE_H / 2
+              const r = radiusScale(c.added + c.deleted, RADIUS_K, MIN_R, MAX_R)
+              const fill = authors[lane]?.color ?? '#888'
+              return (
+                <circle
+                  key={c.sha}
+                  cx={cx}
+                  cy={cy}
+                  r={r}
+                  fill={fill}
+                  fillOpacity={0.55}
+                  stroke={fill}
+                  strokeOpacity={0.9}
+                  strokeWidth={1}
+                  className="cursor-pointer"
+                  onMouseEnter={(e) => showTooltip(e, c)}
+                  onMouseMove={(e) => showTooltip(e, c)}
+                  onMouseLeave={hideTooltip}
+                >
+                  <title>
+                    {c.sha.slice(0, 7)} · {c.author} · +{c.added} -{c.deleted} · {formatDate(c.date)}
+                  </title>
+                </circle>
+              )
+            })}
+
+            {/* Add/del bar timeline strip: added drawn up (success), deleted down (error) */}
+            <line
+              x1={0}
+              y1={barBaseline}
+              x2={width}
+              y2={barBaseline}
+              stroke="var(--color-koma-border)"
+              strokeWidth={1}
+              opacity={0.5}
+            />
+            {commits.map((c) => {
+              const ts = Date.parse(c.date)
+              if (Number.isNaN(ts)) return null
+              const cx = xScale(ts)
+              const halfH = barStripH / 2 - 2
+              const addH = (c.added / maxAbsLines) * halfH
+              const delH = (c.deleted / maxAbsLines) * halfH
+              return (
+                <g key={`bar:${c.sha}`}>
+                  {addH > 0 && (
+                    <line
+                      x1={cx}
+                      y1={barBaseline}
+                      x2={cx}
+                      y2={barBaseline - addH}
+                      className="stroke-koma-success"
+                      strokeWidth={1.5}
+                      opacity={0.85}
+                    />
+                  )}
+                  {delH > 0 && (
+                    <line
+                      x1={cx}
+                      y1={barBaseline}
+                      x2={cx}
+                      y2={barBaseline + delH}
+                      className="stroke-koma-error"
+                      strokeWidth={1.5}
+                      opacity={0.85}
+                    />
+                  )}
+                </g>
+              )
+            })}
+
+            {/* X-axis date ticks */}
+            {ticks.map((t, i) => {
+              const cx = xScale(t.ts)
+              const y = barStripTop + barStripH + AXIS_H / 2 + 4
+              return (
+                <text
+                  key={i}
+                  x={cx}
+                  y={y}
+                  textAnchor={i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle'}
+                  className="fill-koma-dim"
+                  style={{ fontSize: 10, opacity: 0.7 }}
+                >
+                  {t.label}
+                </text>
+              )
+            })}
+          </svg>
+        )}
+
+        {authors.length > 0 && (
+          <div className="border-t border-koma-border px-3 py-2.5">
+            <div className="mb-2 text-[11px] uppercase tracking-wide text-koma-dim opacity-60">
+              Contributions
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {authors.map((a) => {
+                const spark = sparklines.get(a.key) ?? []
+                const total = a.totalAdded + a.totalDeleted
+                const addPct = total > 0 ? (a.totalAdded / total) * 100 : 0
+                const delPct = total > 0 ? (a.totalDeleted / total) * 100 : 0
+                return (
+                  <div
+                    key={a.key}
+                    className="rounded border border-koma-border bg-koma-panel px-2.5 py-2 transition hover:bg-koma-hover"
+                  >
+                    {/* header: avatar + name/email + commit count */}
+                    <div className="flex items-center gap-2">
+                      <AuthorAvatar name={a.name} email={a.email} size={26} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[12px] text-koma-fg">{a.name || a.email || 'unknown'}</div>
+                        {a.email && <div className="truncate text-[10px] text-koma-dim opacity-70">{a.email}</div>}
+                      </div>
+                      <div className="flex-none text-right text-[11px] text-koma-dim">
+                        {a.commitCount.toLocaleString()} commit{a.commitCount === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                    {/* +/- totals */}
+                    <div className="mt-1.5 flex items-center gap-2 font-mono text-[11px]">
+                      <span className="text-koma-success">+{a.totalAdded.toLocaleString()}</span>
+                      <span className="text-koma-error">-{a.totalDeleted.toLocaleString()}</span>
+                    </div>
+                    {/* proportional add/del bar */}
+                    <div className="mt-1 flex h-1.5 w-full overflow-hidden rounded-full bg-koma-bg">
+                      <div className="h-full bg-koma-success" style={{ width: `${addPct}%` }} />
+                      <div className="h-full bg-koma-error" style={{ width: `${delPct}%` }} />
+                    </div>
+                    {/* activity sparkline (commit count over time, author-colored) */}
+                    <div className="mt-2 flex h-5 items-end gap-px" title="commit activity over time">
+                      {spark.map((v, i) => (
+                        <div
+                          key={i}
+                          className="flex-1 rounded-sm"
+                          style={{
+                            height: `${sparkMax > 0 ? Math.max(v > 0 ? 12 : 4, (v / sparkMax) * 100) : 4}%`,
+                            backgroundColor: v > 0 ? a.color : 'var(--color-koma-border)',
+                            opacity: v > 0 ? 0.9 : 0.4,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {hover && (
+          <div
+            style={{ position: 'fixed', left: hover.x + 14, top: hover.y + 14, zIndex: 50 }}
+            className="pointer-events-none rounded border border-koma-border bg-koma-panel px-2 py-1 text-[11px] text-koma-fg shadow-lg"
+          >
+            <div className="font-mono text-koma-dim">{hover.commit.sha.slice(0, 7)}</div>
+            <div className="max-w-[220px] truncate">{hover.commit.author}</div>
+            <div>
+              <span className="text-koma-success">+{hover.commit.added}</span>{' '}
+              <span className="text-koma-error">-{hover.commit.deleted}</span>
+            </div>
+            <div className="text-koma-dim opacity-70">{formatDate(hover.commit.date)}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

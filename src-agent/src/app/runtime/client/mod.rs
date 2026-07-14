@@ -17,6 +17,30 @@
 //! | `shadow`    | `apply_frame`, `apply_snapshot`, `apply_delta`, seq-gap, clock  |
 //! | `input`     | `local_echo`, `QuitConfirmKey`, quit overlay keys               |
 //! | `bridge`    | `reader_task`, `writer_task`, transport consts                  |
+//! | `diff`      | host-side file-diff + usage-preview computation (GUI panels)    |
+//! | `git`       | host-side git-status + git-diff computation (GUI GIT panel)     |
+//! | `git_remote`| host-side git remote sync (fetch/pull/push) + key assignment    |
+//! | `git_graph` | host-side commit-graph + commit-detail + commit-diff computation |
+//! | `git_activity` | host-side per-commit activity (author/date/lines-changed) computation (GK5a) |
+//! | `git_branch`| host-side branch list + checkout + create-branch computation     |
+//! | `git_destructive` | host-side cherry-pick/revert/reset/merge/rebase/abort/continue (G5b) |
+//! | `git_stash` | host-side stash push/pop/list (GK4a)                              |
+//! | `keys`      | host-side SSH key vault (GUI Settings "SSH Keys" section)       |
+//! | `git_host`  | off-thread GIT/key `HostCtl` bodies shared by `host` + `push_loop` |
+//! | `git_host_mut` | `git_host`'s G5b destructive spawn flavors, split out for size |
+//! | `store_host` | off-thread extension-STORE browse/detail/installed-list `HostCtl` bodies shared by `host` + `push_loop` |
+//! | `host`      | GUI host-relay layer (`run_host_relay`, the swapper/attached FSM) |
+//! | `host_catalogue` | un-attached model/route/agents/oauth catalogue builders for `host` |
+//! | `host_config` | Pre-session (swapper) config-apply helpers for `host`           |
+//! | `push_proto`| GUI push-envelope DTOs (`PushEnvelope` + the one-shot non-git `push_*` fns) |
+//! | `push_proto_git` | GIT/SSH-key-vault one-shot `push_*` fns (split out of `push_proto`) |
+//! | `push_rows` | The `Push*` row/DTO structs `PushEnvelope`'s variants carry       |
+//! | `project`   | GUI snapshot serialization (`serialize_and_push`, `push_hub`, `warm_status_label`) |
+//! | `project_config` | GUI config projection (`ConfigProjection`, `push_config`)          |
+//! | `push_intercept` | one-shot `DaemonEvent` -> `PushEnvelope` re-push checks for `push_loop` |
+//! | `push_loop` | The headless attached fold loop (`push_loop`, `PushState`, `HostTransition`) |
+//! | `git_drain` | `push_loop`'s GIT/SSH-key-vault off-thread reply drain (`drain_git_replies`) |
+//! | `file_ops`  | host-side Coding panel file tree/read/save/create/rename/delete  |
 
 #![allow(unused_imports)]
 #![allow(dead_code)]
@@ -27,6 +51,36 @@ mod shadow;
 mod input;
 mod bridge;
 mod swapper;
+mod swapper_keys;
+mod diff;
+mod file_ops;
+mod git;
+mod git_remote;
+mod git_graph;
+mod git_activity;
+mod git_branch;
+mod git_destructive;
+mod git_stash;
+mod git_repos;
+mod keys;
+mod git_host;
+mod git_host_mut;
+mod store_host;
+mod host;
+mod host_catalogue;
+mod host_config;
+mod push_proto;
+mod push_proto_git;
+mod push_rows;
+mod project;
+mod project_config;
+mod push_intercept;
+mod push_loop;
+mod git_drain;
+
+#[cfg(test)]
+#[path = "analytics_test.rs"]
+mod analytics_test;
 
 use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
@@ -44,6 +98,11 @@ use swapper::{build_local_hub, run_swapper, SwapperOutcome};
 
 use crate::app::runtime::terminal::TerminalGuard;
 
+// Re-exported so `gui::mod`'s existing `super::client::run_host_relay` call site
+// keeps resolving unchanged after `run_host_relay` moved into the sibling `host`
+// module (that call site lives outside `client`, hence the `pub(in ...)` reach).
+pub(in crate::app::runtime) use host::run_host_relay;
+
 /// The client's run-loop state: either ATTACHED to a session-daemon (rendering its frames
 /// and forwarding input) or running the local detached SWAPPER (the `/resume` picker).
 ///
@@ -59,10 +118,9 @@ enum ClientState {
 }
 
 /// Restart the stale session-daemon while showing an animated "reopening" spinner.
-/// The restart (`manage::restart_daemon`) is blocking (~1s), so it runs on a
-/// background thread while THIS (main) thread — which owns the terminal — draws the
-/// spinner each frame until the restart completes, then propagates its result.
-/// Kept fully silent (quiet=true) so nothing bleeds into the alt-screen.
+/// The restart (`manage::restart_daemon`) is blocking (~1s), so it runs on a background
+/// thread while THIS (main) thread — which owns the terminal — draws the spinner each
+/// frame until it completes, then propagates its result. Kept silent (quiet=true).
 fn restart_daemon_animated(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     session_id: &str,
@@ -97,25 +155,14 @@ fn restart_daemon_animated(
 /// Attach to a session-daemon, spawning it if needed, and run the build-skew handshake.
 ///
 /// The single attach primitive used everywhere the client connects: the initial
-/// non-resume attach, a swapper PICK, and a swapper CANCEL-reconnect. It:
-/// 1. ensures the session's daemon is RUNNING ([`super::manage::ensure_daemon_running`],
-///    `resume=false`): for a LIVE session this is a no-op (the daemon is already up); for
-///    a brand-new minted id it spawns a fresh `--daemon --session <id>` (create branch);
-///    for an on-disk history id it spawns one that create-or-LOADs that session;
-/// 2. connects + attaches + runs the `Hello` handshake ([`connect_attach_and_handshake`]);
-/// 3. on a CONFIRMED build-skew mismatch, restarts that one stale daemon (AT MOST ONCE)
-///    via the SAME machinery `koma daemon restart` uses and reconnects.
-///
-/// # Build-skew auto-restart (task #142)
-///
-/// The koma daemon outlives a rebuild, so a freshly-built client can attach to a daemon
-/// still running OLD code and silently render its stale frames (this caused a phantom
-/// `/agents` bug). The client compares its OWN fresh fingerprint
-/// ([`store::build_fingerprint`]) against the daemon's reported `Hello`; on a mismatch it
-/// restarts the stale daemon and reconnects. LOOP GUARD: the restart fires at most once —
-/// if the just-spawned daemon STILL mismatches (it shouldn't, it was built from the current
-/// binary) it warns and renders against it rather than restart-looping. A daemon that sends
-/// no `Hello` (slow / pre-handshake) is never restarted on that absence alone.
+/// non-resume attach, a swapper PICK, and a swapper CANCEL-reconnect. Ensures the
+/// session's daemon is running ([`super::manage::ensure_daemon_running`]), connects +
+/// handshakes ([`connect_attach_and_handshake`]), then on a CONFIRMED build-skew
+/// mismatch (the daemon outlives a rebuild — task #142, this caused a phantom
+/// `/agents` bug) restarts that ONE stale daemon (AT MOST ONCE, via the same
+/// machinery `koma daemon restart` uses) and reconnects — comparing its own fresh
+/// [`store::build_fingerprint`] against the daemon's reported `Hello`. A daemon that
+/// sends no `Hello` (slow / pre-handshake) is never restarted on that absence alone.
 fn attach_session(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     handle: &tokio::runtime::Handle,
@@ -123,7 +170,7 @@ fn attach_session(
 ) -> Result<Connection> {
     // Make sure a daemon owns this session before we connect. No-op when it is already
     // live (the bind-as-oracle probe inside short-circuits); spawns + waits otherwise.
-    super::manage::ensure_daemon_running(session_id, false)
+    super::manage::ensure_daemon_running(session_id, false, None)
         .map_err(|e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"))?;
 
     let sock_path = store::daemon_sock_path(session_id)?;
@@ -137,9 +184,9 @@ fn attach_session(
         .is_some_and(|v| v != my_fingerprint)
     {
         if already_restarted {
-            eprintln!(
-                "koma: daemon still reports a different build after a restart; \
-                 continuing against it"
+            crate::model::store::append_global_error_log(
+                "client",
+                "daemon still reports a different build after a restart; continuing against it",
             );
             break;
         }
@@ -158,18 +205,13 @@ fn attach_session(
     Ok(conn)
 }
 
-/// Tear a live [`Connection`] down cleanly: queue a polite `Detach`, then drop the request
-/// sender and JOIN the writer so the final frame(s) flush before the runtime is touched.
-///
-/// Run on EVERY exit from an [`ClientState::Attached`] — a plain exit, a render error, AND
-/// the detach-then-swap into the swapper — so the source daemon is never left orphaned
-/// (socket open, no controller) and never stuck mid-hub. The `/quit` overlay's `[k]`/`[d]`
-/// paths may have queued their own `Detach` (and a `QuitDaemon` for `[k]`, which kills the
-/// daemon outright) already; this extra `Detach` is then a harmless no-op (the daemon
-/// deregistered this client by id, so a second one matches nobody). Dropping `req_tx` closes the outbound channel, which the
-/// writer observes as `Disconnected`: it drains EVERY remaining queued request to the
-/// socket and returns. We JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`], so a wedged socket
-/// can't hang exit) BEFORE returning, which is what guarantees the shutdown frames land.
+/// Tear a live [`Connection`] down cleanly: queue a polite `Detach`, then drop the
+/// request sender and JOIN the writer so the final frame(s) flush before the runtime
+/// is touched. Run on EVERY exit from [`ClientState::Attached`] (plain exit, render
+/// error, or detach-then-swap) so the source daemon is never left orphaned; a `/quit`
+/// overlay `Detach` already queued makes this a harmless no-op. Dropping `req_tx`
+/// closes the outbound channel — the writer drains every queued request then returns;
+/// we JOIN it (bounded by [`WRITER_FLUSH_TIMEOUT`]) so a wedged socket can't hang exit.
 /// MUST NOT be called while a tokio runtime context is entered (it `block_on`s).
 fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
     let Connection {
@@ -185,6 +227,355 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
     let _ = handle.block_on(async {
         tokio::time::timeout(WRITER_FLUSH_TIMEOUT, writer_handle).await
     });
+}
+
+// ─── host-relay: the GUI host IS the daemon client ───────────────────────────────
+//
+// The desktop GUI (`crate::app::runtime::gui`) runs a `tao`/GTK event loop on its
+// main thread and CANNOT host tokio there (`event_loop.run` diverges). So the daemon
+// connection + the headless fold loop run HERE on a background client-thread with its
+// own tokio runtime — the daemon->JS direction pushes JSON envelopes out through the
+// `push` sink (an `EventLoopProxy::send_event` closure the host supplies), and the
+// JS->daemon direction arrives as [`HostCtl`] control messages + a shared `live_req`
+// the ipc thread forwards `SubmitInput` through.
+
+/// The GUI's read-only STREAM VIEW: which sub-agent / bash job the webview is currently
+/// live-streaming into an Explore stream tab. Shared (`Arc<Mutex<_>>`) between the ipc
+/// thread — which WRITES it when a `SetStreamView` request arrives — and the host-relay
+/// fold ([`render::push_loop`] → [`render::serialize_and_push`]), which READS it every
+/// frame to decide whose transcript / output tail to fold into the push (mirrors the
+/// shared `live_marks`). At most one of the two is `Some` in practice (the active tab).
+/// `Copy` so the fold can snapshot it out of the lock by value each frame.
+#[derive(Clone, Copy, Default)]
+pub(in crate::app::runtime) struct StreamView {
+    /// The id of the sub-agent being streamed, or `None`.
+    pub subagent: Option<usize>,
+    /// The id of the bash job being streamed, or `None`.
+    pub bash: Option<usize>,
+}
+
+/// Control messages from the GUI ipc thread (main tao thread) to the host-relay
+/// client-thread. `SubmitInput` does NOT ride this channel — it goes straight to the
+/// live daemon via the shared `live_req` sender — so this carries only the
+/// session-lifecycle intents the client-thread owns.
+#[derive(Clone)]
+pub(super) enum HostCtl {
+    /// The webview page booted / reloaded: re-push the full authoritative state.
+    Ready,
+    /// Attach to this existing session UUID (a hub `SelectSession` pick).
+    Select(String),
+    /// Mint a fresh session UUID + attach (the hub `[+ new session]` row, or the attached
+    /// chat view's "new session"). `workdir` is the folder the GUI's native picker chose;
+    /// `None` falls back to the host's cwd. `kill` (attached state only) reaps the CURRENT
+    /// session's daemon as part of the switch — mirroring the TUI `/new kill`; `kill: false`
+    /// leaves the old daemon cooking (resumable).
+    New {
+        workdir: Option<std::path::PathBuf>,
+        kill: bool,
+    },
+    /// Kill the session-daemon `id` (a hub row's KILL button, or the attached chat view's
+    /// "kill this session"). Escalating (graceful `QuitDaemon` → SIGTERM → SIGKILL), run OFF
+    /// the control loop. Killing the CURRENTLY-ATTACHED session additionally queues a
+    /// `QuitDaemon` on the live conn + hands back to the swapper; a background kill just
+    /// refreshes the hub once the daemon is confirmed dead.
+    KillSession(String),
+    /// Physically DELETE the history session `id` (on-disk dir tree + registry row) — a hub
+    /// HISTORY row's delete button. The delete is refused (a no-op refresh) if the uuid is
+    /// currently LIVE or its lock is held, never touching a running session.
+    DeleteSession(String),
+    /// Re-run cross-daemon discovery + push a FRESH `Hub` envelope. Fired when the React
+    /// ResumePalette overlay opens (and may re-fire while it stays open). Handled inline in
+    /// `host_swapper`, and OFF the fold thread in `render::push_loop` while attached (the
+    /// blocking sweep must not stall the 16ms loop).
+    RefreshHub,
+    /// Best-effort CANCEL of a session switch (the React loader's Cancel button): bail to
+    /// the hub. An in-flight attach can't be interrupted, so this is queued and acted on
+    /// once the current/target attach lands. In the swapper it is a harmless hub re-push.
+    ToSwapper,
+    /// Apply a config-GLOBAL mutation directly to `~/.koma/config.json` while PRE-SESSION.
+    /// The empty-state/onboarding flow runs in the SWAPPER, which holds NO attached daemon
+    /// to forward a `ClientRequest` to (the ipc `live_req` slot is `None`), so the theme +
+    /// provider + model setters onboarding drives arrive here instead. Carries the SAME
+    /// [`ClientRequest`] the attached path forwards; `host_swapper` applies the
+    /// config-global subset (provider/model/mcp/theme), saves, and re-pushes a fresh
+    /// `Config`. Session-scoped requests are no-ops here — there is no session yet.
+    ConfigMutate(ClientRequest),
+    /// UN-ATTACHED live model-id fetch (the GUI Connector ModelForm's model-id picker while
+    /// onboarding / in the swapper). The swapper resolves `provider` (uuid) from the GLOBAL
+    /// config, runs the `GET {endpoint}/models` OFF-thread, and pushes the SAME `ModelList`
+    /// envelope the attached daemon path produces — ALWAYS a reply so the picker's spinner
+    /// can never hang.
+    ListModels { provider: String },
+    /// UN-ATTACHED twin of [`ListModels`](Self::ListModels) for the ROUTE picker: fetch one
+    /// model's live provider-route list off-thread and push a `RouteList` envelope (echoing
+    /// `provider` + `model_id`). EMPTY routes for a non-OpenRouter provider or any fetch
+    /// error — again ALWAYS a reply so the form falls back to "Auto" instead of hanging.
+    ListRoutes { provider: String, model_id: String },
+    /// Host-side FILE DIFF fetch for the Explore "FILE CHANGED" panel's Monaco diff tab
+    /// (`path` is a `fileChanges` record's path). Unlike [`ListModels`]/[`ListRoutes`], this
+    /// NEVER prefers the attached daemon — the host already has direct filesystem + git
+    /// access. Serviced off-thread in both host states; see [`compute_file_diff`].
+    FileDiff { path: String },
+    /// Host-side GIT STATUS fetch for the Explore "GIT" panel (branch, ahead/behind,
+    /// staged/unstaged file lists). NEVER touches the daemon regardless of attach
+    /// state — the host already has direct git access. Serviced off-thread (git is
+    /// blocking); see [`compute_git_status`]. Carries no session — the receiving
+    /// loop supplies its OWN foreground-session id (`current`/`current_owned`).
+    GitStatus,
+    /// Host-side GIT DIFF fetch for the GIT panel's file-row click (`path` is the
+    /// clicked entry's path; `staged` selects index-vs-HEAD when `true`, worktree-vs-
+    /// index when `false`). Same reasoning + routing as [`GitStatus`](Self::GitStatus);
+    /// see [`compute_git_diff`].
+    GitDiff { path: String, staged: bool },
+    /// Host-side GIT STAGE mutation for the GIT panel's "+" row button / "Stage All"
+    /// (`paths` repo-root-relative). Same reasoning as [`GitStatus`](Self::GitStatus);
+    /// the worker pushes a `GitOp` reply THEN a follow-up `GitStatus` push so the
+    /// panel's lists refresh after the mutation. See [`git_stage`].
+    GitStage { paths: Vec<String> },
+    /// Host-side GIT UNSTAGE mutation ("−" row button / "Unstage All"). Same
+    /// reasoning + reply pattern as [`GitStage`](Self::GitStage); see [`git_unstage`].
+    GitUnstage { paths: Vec<String> },
+    /// Host-side GIT DISCARD mutation (destructive — the React side gates this behind
+    /// a confirm before ever sending it). Same reasoning + reply pattern as
+    /// [`GitStage`](Self::GitStage); see [`git_discard`].
+    GitDiscard { paths: Vec<String> },
+    /// Host-side GIT COMMIT of whatever is currently staged. Same reasoning + reply
+    /// pattern as [`GitStage`](Self::GitStage); see [`git_commit`].
+    GitCommit { message: String },
+    /// Host-side COMMIT GRAPH fetch for a GitKraken-style commit-graph panel view
+    /// (`limit` rows starting `skip` back, across every ref). Same reasoning as
+    /// [`GitStatus`](Self::GitStatus); see [`git_graph::compute_git_graph`].
+    GitGraph { limit: u32, skip: u32 },
+    /// Host-side COMMIT DETAIL fetch for a commit-graph row click (full metadata +
+    /// changed-file list). Same reasoning + routing as
+    /// [`GitGraph`](Self::GitGraph); see [`git_graph::compute_commit_detail`].
+    GitCommitDetail { sha: String },
+    /// Host-side COMMIT DIFF fetch for a commit-detail file-row click (`path` at
+    /// commit `sha` vs its first parent). Same reasoning + routing as
+    /// [`GitGraph`](Self::GitGraph); see [`git_graph::compute_commit_diff`].
+    GitCommitDiff { sha: String, path: String },
+    /// UN-ATTACHED GUI Settings-tab fetch (a [`ClientRequest::GetSettings`] serviced by the
+    /// swapper). There is no foreground session pre-attach, so the swapper answers from the
+    /// GLOBAL config: the active `palette` plus [`crate::model::settings::Settings`]
+    /// DEFAULTS, and an EMPTY `name`/`workdir`. ALWAYS pushes a `SettingsValues` reply so
+    /// the Settings tab's loading state can never hang.
+    GetSettings,
+    /// UN-ATTACHED GUI /agents fetch (a [`ClientRequest::ListAgents`] serviced by the
+    /// swapper / start-screen host). The host answers from `load_registry(None)` (built-in +
+    /// global agents only) + the GLOBAL config catalogue. ALWAYS pushes an `AgentsValues`
+    /// reply (like [`GetSettings`]) so the dashboard's loading state can never hang.
+    GetAgents,
+    /// UN-ATTACHED GUI OAuth-screen fetch (a [`ClientRequest::GetOAuthState`] serviced by the
+    /// swapper / start-screen host). The host answers from `~/.koma/config.json`'s
+    /// `oauth_conns` (TOKENLESS wire projection) + the provider registry. ALWAYS pushes an
+    /// `OAuthState` reply (phase `"idle"`) so the OAuth screen never hangs.
+    GetOAuthState,
+    /// UN-ATTACHED GUI OAuth connection delete: remove the connection from
+    /// `~/.koma/config.json`, persist, evict its token-refresh cache entry, and re-push a
+    /// fresh `idle` `OAuthState`. Reachable pre-session (the login FLOW itself stays
+    /// attached-only). The `uuid` is the connection to drop.
+    DeleteOAuthConn { uuid: String },
+    /// UN-ATTACHED GUI OAuth login START (the home-screen / Settings-pre-session "Sign
+    /// in to koma.run" etc. button): there is no attached daemon to run the flow on, so
+    /// the swapper runs it HOST-side — the exact same `service::oauth::flow::run_flow`
+    /// dispatcher the attached `Action::OAuthStart` spawns, just with the host's push
+    /// sink standing in for the daemon's per-client `OAuthState` reply. `provider` is the
+    /// wire string (`"codex"`/`"kilocode"`/`"xai"`/`"claudeai"`/`"komarun"`), resolved via
+    /// [`crate::model::app_config::OAuthProvider::from_wire_id`]. Progress streams back as
+    /// `waiting_url`/`waiting_code` `OAuthState` pushes, ending in `success` (after the
+    /// connection is appended to the GLOBAL config + persisted) or `failed`. Superseding a
+    /// flow already in flight aborts it first, mirroring `handle_oauth_start`'s supersede.
+    StartOAuth { provider: String },
+    /// UN-ATTACHED GUI OAuth login CANCEL: abort whatever host-local flow
+    /// [`StartOAuth`](Self::StartOAuth) started (a no-op if none is in flight) and
+    /// re-push a fresh `idle` `OAuthState` so the Cancel button always lands somewhere
+    /// rather than leaving the wait screen stranded.
+    CancelOAuth,
+    /// Activity-bar "Usage" panel fetch: compute a LAST-7-DAYS preview straight off the
+    /// global `~/.koma/usage.sqlite` ledger. Like [`FileDiff`](Self::FileDiff) this NEVER
+    /// touches the daemon in either host state. Serviced off-thread; see
+    /// [`compute_usage_preview`]. `session` is `Some(uuid)` for the "session" scope toggle
+    /// or `None` for "all"; `scope` is the literal `"all"`/`"session"` token. BOTH are
+    /// echoed back so the React panel can drop a stale reply (a rapid scope toggle, or the
+    /// foreground session switching mid-flight) instead of rendering the wrong numbers.
+    UsagePreview {
+        session: Option<String>,
+        scope: String,
+    },
+    /// Analytics tab: compute a host-side usage dashboard projection (KPI totals,
+    /// time series, per-model table, main-vs-sub role split) straight off the
+    /// global `~/.koma/usage.sqlite` ledger. Like [`UsagePreview`](Self::UsagePreview)
+    /// this NEVER touches the daemon in either host state. Serviced off-thread;
+    /// see [`compute_analytics`]. Correlation inputs (`req_seq`/`scope`/`session`/
+    /// `range`/`metric`) are all echoed back so the React tab can drop a stale
+    /// reply across rapid filter/session changes.
+    Analytics {
+        req_seq: u64,
+        session: Option<String>,
+        scope: String,
+        range: String,
+        metric: String,
+    },
+    /// Host-side SSH KEY VAULT list fetch for the Settings "SSH Keys" section
+    /// (`<~/.koma>/keys/`). Same reasoning as [`GitStatus`](Self::GitStatus) — a
+    /// GUI-only, manual, user-owned key vault, entirely separate from the model's
+    /// own git credential machinery (`git_cred.rs`/`git_operator.rs`). See
+    /// [`keys::list_keys`].
+    KeyList,
+    /// Host-side SSH KEY GENERATE mutation (a fresh passphrase-less ed25519
+    /// keypair). Same reasoning + reply pattern as [`GitStage`](Self::GitStage) —
+    /// the worker pushes a `KeyOp` reply THEN a follow-up `KeyList` push. See
+    /// [`keys::generate_key`].
+    KeyGenerate { name: String, comment: String },
+    /// Host-side SSH KEY IMPORT mutation (an existing pasted private key). Same
+    /// reasoning + reply pattern as [`KeyGenerate`](Self::KeyGenerate); see
+    /// [`keys::import_key`].
+    KeyImport { name: String, private_key: String },
+    /// Host-side SSH KEY REVEAL fetch ("Copy public key" / "Reveal private key").
+    /// Same reasoning as [`GitDiff`](Self::GitDiff) — ALWAYS a one-shot `KeyReveal`
+    /// reply, never touches the daemon. See [`keys::reveal_key`].
+    KeyReveal { name: String, private: bool },
+    /// Host-side SSH KEY DELETE mutation. Same reasoning + reply pattern as
+    /// [`KeyGenerate`](Self::KeyGenerate); see [`keys::delete_key`].
+    KeyDelete { name: String },
+    /// Source Control panel's key-picker changed: assign (`Some(name)`) or clear
+    /// (`None`, "Default (system ssh)") the foreground session's repo's SSH key for
+    /// remote ops. Same reasoning as [`GitStatus`](Self::GitStatus); see
+    /// [`git_remote::set_current_key`]. Carries no reply of its own — the worker
+    /// pushes a follow-up [`GitStatus`](Self::GitStatus) reflecting the new
+    /// assignment (`GitStatusResult.key_name`).
+    SetGitKey { name: Option<String> },
+    /// Source Control panel's Fetch button: `git fetch --prune`, using the repo's
+    /// assigned key's `GIT_SSH_COMMAND` override if one is set. Same reasoning +
+    /// reply pattern as [`GitStage`](Self::GitStage); see [`git_remote::git_fetch`].
+    GitFetch,
+    /// Source Control panel's Pull button: `git pull --ff-only` (fails loudly on
+    /// divergence rather than merging/leaving a half-merged tree). Same reasoning +
+    /// reply pattern as [`GitFetch`](Self::GitFetch); see [`git_remote::git_pull`].
+    GitPull,
+    /// Source Control panel's Push button. Same reasoning + reply pattern as
+    /// [`GitFetch`](Self::GitFetch); see [`git_remote::git_push`].
+    GitPush,
+    /// Branch-switcher popover (footer/GitPanel) or graph context menu opened:
+    /// fetch every local + remote-tracking branch. Host-local, never the daemon,
+    /// like [`GitStatus`](Self::GitStatus); see [`git_branch::git_branch_list`].
+    GitBranchList,
+    /// Source Control multi-repo picker opened: discover every git repo across the
+    /// session's workdirs. Host-local, never the daemon, like
+    /// [`GitBranchList`](Self::GitBranchList); see [`git_repos::discover_repos`].
+    /// Reply lands as a `RepoList` push.
+    GitRepos,
+    /// Source Control repo picker changed: set the session's ACTIVE repo to `root`
+    /// (an absolute toplevel path from a prior `RepoList`). Host-local, never the
+    /// daemon, like [`SetGitKey`](Self::SetGitKey) — no reply of its own; the worker
+    /// pushes a follow-up [`GitStatus`](Self::GitStatus) for the newly-active repo.
+    SetActiveRepo { root: String },
+    /// Branch-switcher pick / graph "Checkout" (SAFE only, never `--force`): switch
+    /// (or detach onto) `ref_name` (a branch or a sha). Same reply pattern as
+    /// [`GitStage`](Self::GitStage) — React also fires a client-local
+    /// `refreshGraph()` once it lands. See [`git_branch::git_checkout`].
+    GitCheckout { ref_name: String },
+    /// Branch-switcher "+ Create new branch" / graph "Create branch here…" (SAFE
+    /// only). `start` is the commit-ish to branch from (`None` = HEAD); `checkout`
+    /// switches to it immediately. Same reply pattern as
+    /// [`GitCheckout`](Self::GitCheckout). See [`git_branch::git_create_branch`].
+    GitCreateBranch { name: String, start: Option<String>, checkout: bool },
+    /// Commit-graph row context menu "Cherry-pick" (G5b). May leave the tree
+    /// conflicted — the follow-up `GitStatus` reports that via `inProgress`/
+    /// `conflicted`, not this reply's `error` alone. See
+    /// [`git_destructive::git_cherry_pick`].
+    GitCherryPick { sha: String },
+    /// Commit-graph row context menu "Revert" (G5b). Same conflict reasoning as
+    /// [`GitCherryPick`](Self::GitCherryPick). See [`git_destructive::git_revert`].
+    GitRevert { sha: String },
+    /// Commit-graph row context menu "Reset branch to here" (G5b). `mode` is
+    /// `"soft"`/`"mixed"`/`"hard"` — `hard` is destructive; the React confirm is the
+    /// gate, not this handler. See [`git_destructive::git_reset`].
+    GitReset { sha: String, mode: String },
+    /// Branch-switcher / graph context menu "Merge into current branch" (G5b). May
+    /// conflict, same reasoning as [`GitCherryPick`](Self::GitCherryPick). See
+    /// [`git_destructive::git_merge`].
+    GitMerge { ref_name: String },
+    /// Rebase onto `upstream` (G5b/G6). `branch: Some(name)` is the GitKraken-style
+    /// drag-to-rebase (checks out + rebases `branch`, not the current branch);
+    /// `None` rebases the current branch. May conflict. See
+    /// [`git_destructive::git_rebase`].
+    GitRebase { upstream: String, branch: Option<String> },
+    /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/`"rebase"`/
+    /// `"cherry-pick"`/`"revert"`. See [`git_destructive::git_op_abort`].
+    GitOpAbort { kind: String },
+    /// The conflict banner's Continue button (G5b) — runs with `GIT_EDITOR=true` so
+    /// a `--continue` never hangs on an editor. See
+    /// [`git_destructive::git_op_continue`].
+    GitOpContinue { kind: String },
+    /// Source Control toolbar Stash button (GK4a): `git stash push`. Same reply
+    /// pattern as [`GitStage`](Self::GitStage). See [`git_stash::git_stash`].
+    GitStash,
+    /// Source Control toolbar Pop button (GK4a): `git stash pop`. May conflict,
+    /// same reasoning as [`GitCherryPick`](Self::GitCherryPick). See
+    /// [`git_stash::git_stash_pop`].
+    GitStashPop,
+    /// Stash count/indicator fetch (GK4a): `git stash list`. Host-local, never
+    /// the daemon, like [`GitStatus`](Self::GitStatus). See [`git_stash::git_stash_list`].
+    GitStashList,
+    /// Per-commit ACTIVITY fetch for the bubble/activity chart (GK5a): author/date/
+    /// lines-changed for `limit` commits on `HEAD`, optionally scoped to `path`.
+    /// Host-local, never the daemon, like [`GitGraph`](Self::GitGraph); see
+    /// [`git_activity::compute_git_activity`].
+    GitActivity { path: Option<String>, limit: u32 },
+    /// Extension-STORE browse (Store tab search/filter, or a mount-time fetch on the
+    /// home screen): fetch the koma.run catalogue. NEVER touches the daemon regardless
+    /// of attach state — the host does the PUBLIC (no-auth) network fetch itself, same
+    /// reasoning as [`GitStatus`](Self::GitStatus)/[`FileDiff`](Self::FileDiff) (this is
+    /// a stateless read, unlike install/uninstall, which mutate live daemon runtime
+    /// state and stay daemon-forwarded — see [`ExtNoSession`](Self::ExtNoSession)). See
+    /// `store_host::fetch_catalogue`.
+    StoreBrowse { query: Option<String>, category: Option<String> },
+    /// Extension-STORE detail (a catalogue card click): fetch one extension's full
+    /// detail. Same host-local reasoning as [`StoreBrowse`](Self::StoreBrowse); see
+    /// `store_host::fetch_detail`.
+    StoreDetail { id: String },
+    /// Extension-STORE "Installed" section fetch: read the local
+    /// `~/.koma/config.json` registry. Same host-local reasoning as
+    /// [`StoreBrowse`](Self::StoreBrowse) (a config read, not a daemon call); see
+    /// `store_host::installed_extensions`.
+    ListInstalledExtensions,
+    /// Fetch full detail of one locally-installed extension: registry fields +
+    /// on-disk manifest contributions (tools/models/panels/sub-agents). Same
+    /// host-local reasoning as [`ListInstalledExtensions`] — see
+    /// `store_host::get_installed_detail`.
+    GetInstalledExtensionDetail { id: String },
+    /// Graceful PRE-SESSION install/uninstall failure: `GuiReq::InstallExtension`/
+    /// `UninstallExtension` arrived with NO attached daemon (the ipc `live_req` slot is
+    /// `None` — the home screen / swapper). Install/uninstall mutate live daemon
+    /// runtime state (`ext_manager`/`mcp_manager`), so they stay daemon-forwarded and
+    /// simply can't run pre-session — this pushes a loud `ExtensionOpResult{ok:false}`
+    /// instead of silently dropping the request. `// TODO: global ext manager for
+    /// pre-session install`.
+    ExtNoSession { id: String },
+    /// Coding panel: list a directory's immediate children.
+    FileTree { root: String, path: String, request_id: String },
+    /// Coding panel: read a text file.
+    FileRead { root: String, path: String, request_id: String },
+    /// Coding panel: save a text file with stale-fingerprint protection.
+    FileSave {
+        root: String,
+        path: String,
+        content: String,
+        expected_fingerprint: String,
+        request_id: String,
+    },
+    /// Coding panel: create a new file or directory.
+    FileCreate { root: String, path: String, kind: String, request_id: String },
+    /// Coding panel: rename within the same workspace root.
+    FileRename {
+        root: String,
+        old_path: String,
+        new_path: String,
+        request_id: String,
+    },
+    /// Coding panel: delete a file or directory.
+    FileDelete { root: String, path: String, request_id: String },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
@@ -326,8 +717,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                                 ClientState::Attached(conn)
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "koma: could not start a new session {new_id}: {e:#}"
+                                crate::model::store::append_global_error_log(
+                                    "client",
+                                    &format!("could not start a new session {new_id}: {e:#}"),
                                 );
                                 // Degrade to the swapper (fresh discovery). Don't disturb
                                 // `prev_session`; the old daemon (if not killed) is still in
@@ -359,7 +751,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                         ClientState::Attached(conn)
                     }
                     Err(e) => {
-                        eprintln!("koma: could not attach to session {target}: {e:#}");
+                        crate::model::store::append_global_error_log(
+                            "client",
+                            &format!("could not attach to session {target}: {e:#}"),
+                        );
                         ClientState::Swapper(build_local_hub(prev_session.as_deref()))
                     }
                 },
@@ -374,7 +769,10 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                             ClientState::Attached(conn)
                         }
                         Err(e) => {
-                            eprintln!("koma: could not reconnect to session {prev}: {e:#}");
+                            crate::model::store::append_global_error_log(
+                                "client",
+                                &format!("could not reconnect to session {prev}: {e:#}"),
+                            );
                             ClientState::Swapper(build_local_hub(None))
                         }
                     },

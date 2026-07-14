@@ -50,7 +50,7 @@ use anyhow::Result;
 
 use crate::app::mcp::McpManager;
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
-use crate::ipc::mcp_proto::{McpRequest, McpResponse};
+use crate::ipc::mcp_proto::{McpRequest, McpResponse, McpServerStatus};
 use crate::model::{app_config::AppConfig, store};
 
 use super::signals::install_daemon_signals;
@@ -388,6 +388,17 @@ async fn handle_request(req: McpRequest, manager: &Arc<McpManager>) -> McpRespon
             McpResponse::Ack
         }
 
-        McpRequest::Status => McpResponse::Status(manager.server_status()),
+        McpRequest::Status => {
+            let status = manager.server_status();
+            let errors = manager.server_errors();
+            let servers: std::collections::HashMap<String, McpServerStatus> = status
+                .into_iter()
+                .map(|(uuid, tool_count)| {
+                    let error = errors.get(&uuid).cloned();
+                    (uuid, McpServerStatus { tool_count, error })
+                })
+                .collect();
+            McpResponse::Status { servers, global_error: None }
+        }
     }
 }

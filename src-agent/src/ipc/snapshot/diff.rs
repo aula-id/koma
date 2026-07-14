@@ -48,7 +48,26 @@ impl DiffResult {
 /// circuits to `needs_full` so the client rebuilds from a fresh snapshot. This is
 /// the correctness-first stance the stage calls for: a full snapshot is always a
 /// valid update, so when in doubt we send one rather than risk a wrong shadow.
-pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
+///
+/// `stream_subagent` is THIS client's read-only stream view (`ClientRequest::SetStreamView`
+/// → `HubClient::stream_subagent`): the id of the sub-agent it is live-streaming into a GUI
+/// stream tab, or `None`. A stream-VIEWED detached sub-agent is treated exactly like a
+/// visible/attached one — its per-step content churn forces a full resync so the transcript
+/// streams live — instead of being suppressed like a hidden background agent. Passing `None`
+/// (every TUI client, and any GUI client with no stream tab open) reproduces the prior
+/// behaviour byte-for-byte, so the TUI is unaffected.
+///
+/// `stream_session` is the UUID of the session that view is PINNED to (`HubClient::stream_session`).
+/// Because sub-agent ids are per-session counters (agent 0 exists in every session), the
+/// override is applied ONLY within the session whose snapshot `id` equals `stream_session`;
+/// for every other session the effective view is `None`, so viewing agent N in one session
+/// never un-suppresses agent N in another. `None` (unpinned) applies the override nowhere.
+pub fn diff(
+    prev: &StateSnapshot,
+    next: &StateSnapshot,
+    stream_subagent: Option<usize>,
+    stream_session: Option<&str>,
+) -> DiffResult {
     // --- structural: the mode VARIANT or its payload changed ---
     // `ModeSnapshot` is now a pure-data projection (not a bare tag), so this `!=`
     // fires on BOTH a variant switch (Chat -> QuitConfirm) AND a payload change
@@ -130,6 +149,21 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
         return DiffResult::full();
     }
 
+    // --- structural: the GLOBAL config catalogue changed (GUI Connector/MCP) ---
+    // The projected provider/model/MCP catalogue (+ the foreground session's local
+    // model overrides) rides no incremental delta and changes only on a discrete
+    // config edit (a GUI setter, or a Settings/MCP save). A change forces a full
+    // snapshot so the GUI host re-derives + re-pushes its `Config` envelope; the TUI
+    // client simply rebuilds (it ignores these fields). Cheap-correct: config edits
+    // are rare relative to streaming.
+    if prev.global.providers != next.global.providers
+        || prev.global.config_models != next.global.config_models
+        || prev.global.session_models != next.global.session_models
+        || prev.global.mcp_servers != next.global.mcp_servers
+    {
+        return DiffResult::full();
+    }
+
     // --- structural: the session SET (count or id order) changed ---
     // A different length or a reordered/replaced id list can't be expressed by the
     // per-session deltas (which address sessions by id and assume the set is
@@ -157,6 +191,14 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
 
     // --- per-session, id-keyed (the set is identical + in the same order here) ---
     for (p, n) in prev.sessions.iter().zip(next.sessions.iter()) {
+        // The stream-view sub-agent override applies ONLY to the PINNED session — sub-agent
+        // ids are per-session counters, so for any OTHER session the effective view is
+        // `None` and a same-numbered hidden detached agent there stays suppressed.
+        let sa_view = if stream_session == Some(n.id.as_str()) {
+            stream_subagent
+        } else {
+            None
+        };
         // Any of these moving is either hard to fold incrementally or rare enough
         // that a full resync is the honest, cheap-correct answer.
         let structural = p.messages != n.messages
@@ -179,10 +221,20 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
             || p.cwd != n.cwd
             // Sub-agent set: a HIDDEN detached agent's per-step content churn is
             // ignored (only structural id/name/status/detached changes fire) so it
-            // stays IPC-silent; a visible or attached agent still resyncs on any
-            // change. See `subagents_differ_for_client`.
-            || subagents_differ_for_client(&p.subagents, &n.subagents, viewer_open)
+            // stays IPC-silent; a visible, attached, or STREAM-VIEWED agent still
+            // resyncs on any change. `sa_view` is the session-gated stream view (only
+            // the pinned session sees it). See `subagents_differ_for_client`.
+            || subagents_differ_for_client(&p.subagents, &n.subagents, viewer_open, sa_view)
             || p.pending_subagents != n.pending_subagents
+            // Background-bash set: id/command/STATUS changes (a job spawned, finished,
+            // failed, or was killed) have no incremental delta, so resync. The shared
+            // projection carries no output, so an UN-VIEWED job's per-line output churn
+            // does NOT fire this — it stays as quiet as a hidden sub-agent. The ONE
+            // exception is the client's STREAM-VIEWED job: the hub's per-client post-pass
+            // stamps its `output_tail`, which IS part of `BashJobSnapshot`'s equality, so a
+            // viewed job's growing tail deliberately fires this → a full resync (the same
+            // accepted cost as a viewed sub-agent's transcript churn).
+            || p.bash_jobs != n.bash_jobs
             // A model change (settings override or global catalogue edit) has no
             // incremental delta; resync so the header updates immediately.
             || p.resolved_model_id != n.resolved_model_id
@@ -311,17 +363,23 @@ pub fn diff(prev: &StateSnapshot, next: &StateSnapshot) -> DiffResult {
 /// This is a strict WHITELIST for the hidden-detached case (compare ONLY
 /// id/name/status/detached) — any content field, present or future, is ignored while
 /// hidden, mirroring how background bash stays quiet.
+///
+/// `stream_subagent` is THIS client's stream-tab view: an agent whose id it names is
+/// treated as visible even while detached, so its transcript streams live (the GUI stream
+/// tab). Every other client passes `None` and keeps the exact prior behaviour.
 fn subagents_differ_for_client(
     prev: &[SubAgentSnapshot],
     next: &[SubAgentSnapshot],
     viewer_open: bool,
+    stream_subagent: Option<usize>,
 ) -> bool {
     if prev.len() != next.len() {
         return true;
     }
     prev.iter().zip(next).any(|(p, n)| {
-        if viewer_open || !n.detached {
-            // Visible (viewer open) or attached (foreground) -> any change matters.
+        if viewer_open || !n.detached || stream_subagent == Some(n.id) {
+            // Visible (viewer open), attached (foreground), or STREAM-VIEWED by this
+            // client -> any change matters (live transcript/report streaming).
             p != n
         } else {
             // Hidden detached agent -> ignore ALL content churn; only STRUCTURAL
@@ -346,10 +404,22 @@ enum AppendDiff {
 /// Classify `prev` -> `next` for an APPEND-ONLY buffer (the streaming content /
 /// reasoning buffers only ever grow within a turn, then reset between turns).
 ///
-/// `None` and `Some("")` are treated alike (both "no buffer"): a stream that goes
-/// `None` -> `Some("")` -> `Some("hi")` yields `Same` then `Appended("hi")`, and a
-/// commit that drops `Some("...")` -> `None` yields `Reset` so the shadow re-syncs.
+/// A `None`/`Some` FLIP (either direction) always yields `Reset`, even when the
+/// `Some` side is `""` — `Some("")` and `None` compare equal as strings, but they
+/// are NOT the same client-visible state: `None` means "no buffer" while `Some("")`
+/// means "a buffer exists (possibly an in-flight stream that errored before any
+/// token)". Collapsing that flip to `Same` (comparing via `unwrap_or("")`) would
+/// silently drop the transition — e.g. a zero-token stream error takes the buffer
+/// `Some("") -> None` and, treated as `Same`, the client shadow keeps stale
+/// `Some("")` forever (the stop button / cooking indicator never clears). The
+/// symmetric `None -> Some("")` (a stream begins but no structural change
+/// accompanies it) would likewise never show the cooking state. So any flip in
+/// `is_some()` forces a resync; only once both sides agree on Some/None do we fall
+/// through to the ordinary append-only comparison.
 fn append_suffix(prev: Option<&str>, next: Option<&str>) -> AppendDiff {
+    if prev.is_some() != next.is_some() {
+        return AppendDiff::Reset;
+    }
     let p = prev.unwrap_or("");
     let n = next.unwrap_or("");
     if p == n {

@@ -42,6 +42,65 @@ pub(crate) enum HubInbound {
     Disconnect { client_id: u64 },
 }
 
+/// An async [`ClientRequest::ListModels`] result, tagged with the client that asked, so
+/// the daemon loop's [`DaemonHub::drain_list_models`] can reply to exactly that client via
+/// the per-client seq'd `send_to` (a background task can't touch the per-client seq
+/// directly). `models` is the fetched model-id list, EMPTY on a failed/empty GET.
+pub(super) struct ListModelsReply {
+    pub(super) client_id: u64,
+    pub(super) provider: String,
+    pub(super) models: Vec<String>,
+}
+
+/// An async [`ClientRequest::ListRoutes`] result, tagged with the client that asked, so
+/// [`DaemonHub::drain_list_routes`] can reply to exactly that client via the per-client
+/// seq'd `send_to`. `routes` is the model's flattened provider-route list, EMPTY on a
+/// non-OpenRouter provider or a failed/empty GET. `provider`/`model_id` are echoed so the
+/// GUI ModelForm can drop a stale reply (a provider/model-id change refetches).
+pub(super) struct ListRoutesReply {
+    pub(super) client_id: u64,
+    pub(super) provider: String,
+    pub(super) model_id: String,
+    pub(super) routes: Vec<crate::ipc::proto::ModelEndpointWire>,
+}
+
+/// An async extension-STORE result, tagged with the client that asked, so
+/// [`DaemonHub::drain_store_replies`] can reply to exactly that client via the per-client
+/// seq'd `send_to` (a background reqwest task can't touch the per-client seq directly).
+/// `Catalogue`/`Detail` are the browse/detail fetches; `InstallArtifact` carries a downloaded
+/// (+ integrity-checked) zip whose verify + unpack + register + spawn the drain finishes ON
+/// the event loop (where it has `&mut AppState` + the managers); `InstallFailed` is any
+/// pre-verify failure (platform, auth, network) surfaced as an `ExtensionOpResult`.
+pub(super) enum StoreReply {
+    Catalogue {
+        client_id: u64,
+        items: Vec<crate::ipc::proto::StoreItemWire>,
+        error: Option<String>,
+    },
+    Detail {
+        client_id: u64,
+        detail: Option<crate::ipc::proto::StoreDetailWire>,
+        error: Option<String>,
+    },
+    /// A downloaded artifact ready for the on-loop verify+install step. `sha256` is the
+    /// advertised digest (empty if the server gave none); `signature` is the base64 Ed25519
+    /// signature, or `None` when the artifact is unsigned (dev — koma.run signing not live).
+    InstallArtifact {
+        client_id: u64,
+        id: String,
+        zip: Vec<u8>,
+        sha256: String,
+        signature: Option<String>,
+    },
+    /// A pre-verify install failure (platform unsupported / not signed in / network / HTTP
+    /// error) — surfaced verbatim as an `ExtensionOpResult{ok:false}`.
+    InstallFailed {
+        client_id: u64,
+        id: String,
+        error: String,
+    },
+}
+
 /// One enrolled client in the hub registry.
 pub(super) struct HubClient {
     /// Loop-assigned connection id (matches the per-client task's `client_id`).
@@ -95,6 +154,28 @@ pub(super) struct HubClient {
     /// before the cache is consulted (in `stream_deltas`), so each client's discriminant is
     /// its OWN foreground-session mode — a genuinely per-client cache, not a shared value.
     pub(super) mode_snapshot_cache: Option<(Discriminant<Mode>, Instant, ModeSnapshot)>,
+    /// PER-CLIENT read-only STREAM VIEW (`ClientRequest::SetStreamView`): the id of the
+    /// sub-agent this client is live-streaming into a GUI Explore stream tab, or `None`.
+    /// Consumed in [`stream_deltas`](DaemonHub::stream_deltas)'s diff so a VIEWED detached
+    /// sub-agent's per-step content churn is no longer suppressed (its transcript streams
+    /// live), while every other client (all `None`) keeps the hidden-background suppression.
+    /// `None` until this client sends a `SetStreamView`; TUI clients never do.
+    pub(super) stream_subagent: Option<usize>,
+    /// PER-CLIENT read-only STREAM VIEW: the id of the background-bash job this client is
+    /// live-streaming into a stream tab, or `None`. When `Some`, [`stream_deltas`](
+    /// DaemonHub::stream_deltas) stamps that ONE job's captured output tail into this
+    /// client's snapshot projection (`BashJobSnapshot::output_tail`), so the job's live
+    /// output crosses the wire for the viewed job alone. `None` until a `SetStreamView`.
+    pub(super) stream_bash: Option<usize>,
+    /// PER-CLIENT stream-view SESSION ANCHOR: the stable UUID ([`crate::app::state::SessionRuntime::id`])
+    /// of the session the [`stream_subagent`](Self::stream_subagent) / [`stream_bash`](
+    /// Self::stream_bash) ids belong to. REQUIRED because those ids are per-session counters
+    /// (agent 0 / bash 1 exist in EVERY session), so both consumers gate on this: the diff
+    /// only un-suppresses `stream_subagent` for the session whose snapshot `id` matches, and
+    /// the bash post-pass only stamps `output_tail` when the resolved foreground session's id
+    /// matches. Set atomically with the two ids in the `SetStreamView` handler; `None` until
+    /// then (and whenever both ids are `None`).
+    pub(super) stream_session: Option<String>,
 }
 
 /// The sync-loop <-> per-client-task bridge + the render-state streaming engine
@@ -124,6 +205,41 @@ pub(in crate::app::runtime) struct DaemonHub {
     /// gap between that fresh on-disk fingerprint and this stored one is exactly the
     /// stale-daemon skew the handshake exists to catch.
     pub(super) version: String,
+    /// Sender the async `ListModels` fetch tasks ship their [`ListModelsReply`] back on.
+    /// Kept here (a hub-owned clone) so the paired `list_models_rx` never observes a
+    /// premature `Disconnected`; the `ListModels` handler clones this into each spawned
+    /// GET task.
+    pub(super) list_models_tx: std::sync::mpsc::Sender<ListModelsReply>,
+    /// Receiver drained each tick by [`drain_list_models`](Self::drain_list_models),
+    /// which turns each landed reply into a seq'd `ModelList` frame to the requesting
+    /// client.
+    pub(super) list_models_rx: Receiver<ListModelsReply>,
+    /// Sender the async `ListRoutes` fetch tasks ship their [`ListRoutesReply`] back on
+    /// (a hub-owned clone, so the paired `list_routes_rx` never observes a premature
+    /// `Disconnected`). Mirrors `list_models_tx`.
+    pub(super) list_routes_tx: std::sync::mpsc::Sender<ListRoutesReply>,
+    /// Receiver drained each tick by [`drain_list_routes`](Self::drain_list_routes),
+    /// which turns each landed reply into a seq'd `ModelRoutes` frame to the requesting
+    /// client.
+    pub(super) list_routes_rx: Receiver<ListRoutesReply>,
+    /// Sender the async extension-STORE fetch/download tasks ship their [`StoreReply`] back
+    /// on (a hub-owned clone, so the paired `store_rx` never observes a premature
+    /// `Disconnected`). Mirrors `list_models_tx`; cloned into each spawned reqwest task by the
+    /// `requests_ext` handlers.
+    pub(super) store_tx: std::sync::mpsc::Sender<StoreReply>,
+    /// Receiver drained each tick by [`drain_store_replies`](Self::drain_store_replies),
+    /// which turns each landed browse/detail reply into a seq'd `StoreCatalogue`/
+    /// `StoreItemDetail` frame, and finishes a downloaded `InstallArtifact` on the loop.
+    pub(super) store_rx: Receiver<StoreReply>,
+    /// Set by [`ClientRequest::Interrupt`] (the GUI stop button / TUI Esc-equivalent
+    /// unconditional cut): forces [`stream_deltas`](Self::stream_deltas) to send EVERY
+    /// attached client a full `Snapshot` on its very next pass, bypassing the per-client
+    /// differ entirely. An interrupt must be a guaranteed correctness escape hatch — the
+    /// user's stop request must never leave a client's shadow stuck (e.g. a desynced
+    /// `streaming` buffer) — so the resync doesn't rely on the differ recognizing the
+    /// state change; it's an unconditional belt-and-suspenders reset. Consumed (reset to
+    /// `false`) at the top of `stream_deltas`.
+    pub(super) force_resync: bool,
 }
 
 impl DaemonHub {
@@ -139,15 +255,79 @@ impl DaemonHub {
     /// rebuild.
     pub(in crate::app::runtime) fn new() -> (Self, Sender<HubInbound>) {
         let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        let (list_models_tx, list_models_rx) = std::sync::mpsc::channel();
+        let (list_routes_tx, list_routes_rx) = std::sync::mpsc::channel();
+        let (store_tx, store_rx) = std::sync::mpsc::channel();
         (
             Self {
                 msg_rx,
                 clients: Vec::new(),
                 shutdown: false,
                 version: crate::model::store::build_fingerprint(),
+                list_models_tx,
+                list_models_rx,
+                list_routes_tx,
+                list_routes_rx,
+                store_tx,
+                store_rx,
+                force_resync: false,
             },
             msg_tx,
         )
+    }
+
+    /// Drain any landed [`ListModelsReply`]s and reply to each requesting client with a
+    /// seq'd [`DaemonEvent::ModelList`]. Called once per tick by the daemon loop. Uses
+    /// `send_to` so the per-client monotonic seq stays gap-free (a background GET task
+    /// can't advance it itself). A reply whose client has since vanished is silently
+    /// dropped (the picker is gone); an un-attached but still-connected client (the
+    /// Connector / Onboarding forms in the swapper) still receives it. The hub owns a
+    /// `list_models_tx` clone, so `Disconnected` never fires; handle it as "stop draining"
+    /// for robustness anyway.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_list_models(&mut self) {
+        // `try_recv` yields `Err` on both Empty and (never, since the hub holds a tx
+        // clone) Disconnected — either way, stop draining. So `while let Ok(..)` is
+        // exactly the drain-until-empty loop.
+        while let Ok(reply) = self.list_models_rx.try_recv() {
+            // Deliver to the requesting client whether or not it is attached to a
+            // session — the Connector and first-run Onboarding forms request the
+            // model catalogue while UN-attached (swapper / empty state), so gating
+            // on `attached` here black-holed the reply and left the picker empty.
+            // Only a vanished client (position None) is dropped.
+            if let Some(i) = self.clients.iter().position(|c| c.id == reply.client_id) {
+                self.send_to(
+                    i,
+                    crate::ipc::proto::DaemonEvent::ModelList {
+                        provider: reply.provider,
+                        models: reply.models,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Drain any landed [`ListRoutesReply`]s and reply to each requesting client with a
+    /// seq'd [`DaemonEvent::ModelRoutes`]. Called once per tick by the daemon loop — the
+    /// exact `drain_list_models` mirror for the ModelForm route picker (a background GET
+    /// task can't advance the per-client seq, so the reply is turned into a `send_to`
+    /// frame here). Delivered whether or not the client is session-attached (the form is
+    /// used un-attached); only a vanished client is silently dropped.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_list_routes(&mut self) {
+        while let Ok(reply) = self.list_routes_rx.try_recv() {
+            // Same as drain_list_models: the route picker is used un-attached in the
+            // Connector / Onboarding forms, so deliver regardless of session
+            // attachment; only a vanished client is dropped.
+            if let Some(i) = self.clients.iter().position(|c| c.id == reply.client_id) {
+                self.send_to(
+                    i,
+                    crate::ipc::proto::DaemonEvent::ModelRoutes {
+                        provider: reply.provider,
+                        model_id: reply.model_id,
+                        routes: reply.routes,
+                    },
+                );
+            }
+        }
     }
 
     /// Build the mode payload for client `idx`'s streaming projection, REUSING THAT
@@ -244,13 +424,21 @@ impl DaemonHub {
 
     /// Deregister the client at `idx` and pass the controller seat if it held it.
     ///
-    /// Shared by `Detach` (polite leave) and `Disconnect` (socket EOF). Single-
-    /// writer (DECISIONS): if the removed client was the controller, the FIRST
-    /// remaining client is promoted so a daemon never ends up writer-less while a
-    /// client is still attached (which would silently reject every mutation). No
-    /// snapshot is re-sent on promotion — the promoted client already holds a live
-    /// shadow; it simply gains mutate rights.
-    pub(super) fn deregister(&mut self, idx: usize) {
+    /// Shared by `Detach` (polite leave) and `Disconnect` (socket EOF) — the single
+    /// choke-point BOTH leave paths funnel through, so it also disarms the GUI OAuth push
+    /// side-channel if the leaving client was the armed one (`state.rest.oauth_gui_client`).
+    /// That stops a stale id from misrouting the next flow's state (incl. the email / plan /
+    /// account_id PII on success) to a gone connection — arm/disarm stays path-agnostic. A
+    /// vanished client already no-ops in `drain_oauth_pushes`; this is the belt to that
+    /// suspenders. Single-writer (DECISIONS): if the removed client was the controller, the
+    /// FIRST remaining client is promoted so a daemon never ends up writer-less while a
+    /// client is still attached (which would silently reject every mutation). No snapshot is
+    /// re-sent on promotion — the promoted client already holds a live shadow; it simply
+    /// gains mutate rights.
+    pub(super) fn deregister(&mut self, idx: usize, state: &mut AppState) {
+        if state.rest.oauth_gui_client == Some(self.clients[idx].id) {
+            state.rest.oauth_gui_client = None;
+        }
         let was_controller = self.clients[idx].is_controller;
         self.clients.remove(idx);
         if was_controller && !self.clients.iter().any(|c| c.is_controller) {

@@ -20,7 +20,7 @@ use super::{is_ctrl, Action};
 /// Handle a key press inside the `/todo` task-panel.
 ///
 /// Re-reads the todo list from the session's memory on each key so the panel
-/// stays current if the model writes new todos via the todowrite tool.
+/// stays current if the model writes new todos via the checklist tool.
 pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Ctrl+C is fully inert (koma disables it): swallow it here so it can't
     // fall through to any close/quit. Esc still closes the panel.
@@ -34,7 +34,7 @@ pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -
             // Reset the selected item to pending — signals the model to redo it.
             // Locked items (the plan-mode rails: "serve plan to user" / "save plan
             // to file & prompt approval") are system-managed — the model can't
-            // touch them either (enforced in the todowrite interception) — so a
+            // touch them either (enforced in the checklist interception) — so a
             // locked selection is a no-op here rather than resetting it.
             if !s.current().map(|item| item.locked).unwrap_or(false) {
                 s.reset_to_pending();

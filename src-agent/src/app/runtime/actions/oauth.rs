@@ -1,13 +1,13 @@
 //! Action handlers for the `/settings` OAuth submenu and `Mode::OnboardProvider`
 //! guided wizard: OAuthStart, OAuthCancel, OAuthPaste, OAuthDelete.
 //!
-//! `OAuthStart` spawns the Codex browser flow or the Kilo Code device flow on a
-//! background task (mirrors `settings::handle_fetch_model_endpoints`): a fresh
-//! `oauth_rx` channel is opened, the previous flow (if any) is aborted, and the
-//! spawned future sends `OAuthEvent`s the event-loop's `service_global` drains
-//! into the open OAuth submenu or wizard. `OAuthPaste` and `OAuthDelete` are
-//! synchronous — no background task, so they apply directly within this bracketed
-//! action.
+//! `OAuthStart` spawns the chosen provider's flow (`service::oauth::flow::run_flow` —
+//! shared with the GUI host-relay's detached login path) on a background task (mirrors
+//! `settings::handle_fetch_model_endpoints`): a fresh `oauth_rx` channel is opened, the
+//! previous flow (if any) is aborted, and the spawned future sends `OAuthEvent`s the
+//! event-loop's `service_global` drains into the open OAuth submenu or wizard.
+//! `OAuthPaste` and `OAuthDelete` are synchronous — no background task, so they apply
+//! directly within this bracketed action.
 
 use anyhow::Result;
 
@@ -15,7 +15,6 @@ use crate::app::mode::settings::OAuthFlowState;
 use crate::app::mode::{Mode, OnboardProviderStep};
 use crate::app::state::{AppState, AppStateRest};
 use crate::model::app_config::{OAuthConn, OAuthProvider};
-use crate::service::oauth::OAuthEvent;
 
 /// Handle `Action::OAuthStart`: supersede any in-flight flow, arm the
 /// transitional `Starting` screen, and spawn the chosen provider's flow.
@@ -31,6 +30,13 @@ pub(super) fn handle_oauth_start(
         h.abort();
     }
     state.rest.oauth_rx = None;
+    // Disarm any GUI OAuth push side-channel the superseded flow armed. This runs on
+    // EVERY start path (a GUI `StartOAuth` request AND a TUI keypress → `SendKey` →
+    // here), so arm/disarm is path-agnostic: a TUI-originated start leaves it disarmed,
+    // and the GUI request handler re-arms with its own client id AFTER this returns —
+    // so a stale id can never push another client this flow's state (incl. the email /
+    // plan / account_id PII on success).
+    state.rest.oauth_gui_client = None;
 
     // Optimistic transitional paint on whichever oauth-flow-bearing mode is active.
     match state.mode_mut() {
@@ -42,73 +48,15 @@ pub(super) fn handle_oauth_start(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     state.rest.oauth_rx = Some(rx);
 
-    let join = match provider {
-        OAuthProvider::Codex => handle.spawn(run_codex_flow(tx)),
-        OAuthProvider::Kilocode => handle.spawn(run_kilo_flow(tx)),
-    };
+    // The five per-provider flow bodies (Codex/Claude/Koma PKCE browser flows; Kilo
+    // Code/xAI device flows) now live in `service::oauth::flow` — a SINGLE copy shared
+    // with the GUI host-relay's detached `HostCtl::StartOAuth` path (`client::host`),
+    // which spawns the exact same dispatcher for a pre-session login. No behaviour
+    // change here: `run_flow` internally matches `provider` the same way this match
+    // used to.
+    let join = handle.spawn(crate::service::oauth::flow::run_flow(provider, tx));
     state.rest.oauth_task = Some(join.abort_handle());
     Ok(())
-}
-
-/// The Codex browser flow: build the PKCE authorization URL, open the system
-/// browser, wait on the loopback redirect, then exchange the code for tokens.
-/// Sends exactly one terminal event (`Success` or `Failed`) after an initial
-/// `CodexUrl`; a dropped receiver (flow superseded/cancelled) makes every send
-/// a silent no-op.
-async fn run_codex_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
-    let auth = crate::service::oauth::codex::build_auth_url();
-    let _ = tx.send(OAuthEvent::CodexUrl { url: auth.url.clone() });
-    crate::service::oauth::browser::open_in_browser(&auth.url);
-
-    let cb = match crate::service::oauth::loopback::catch_callback(&auth.pkce.state, 300).await {
-        Ok(cb) => cb,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
-
-    let http = reqwest::Client::new();
-    match crate::service::oauth::codex::exchange_code(&http, &cb.code, &auth.pkce.verifier).await {
-        Ok(tokens) => {
-            let conn = crate::service::oauth::codex::to_conn(tokens);
-            let _ = tx.send(OAuthEvent::Success { conn });
-        }
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-        }
-    }
-}
-
-/// The Kilo Code device flow: request a device code, open the system browser to
-/// its verification URL, poll for approval, then fetch the profile (org id /
-/// email) to label the connection. Sends exactly one terminal event after an
-/// initial `KiloCode`.
-async fn run_kilo_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
-    let http = reqwest::Client::new();
-    let dc = match crate::service::oauth::kilo::device_init(&http).await {
-        Ok(dc) => dc,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
-    let _ = tx.send(OAuthEvent::KiloCode {
-        user_code: dc.code.clone(),
-        verification_url: dc.verification_url.clone(),
-    });
-    crate::service::oauth::browser::open_in_browser(&dc.verification_url);
-
-    let token = match crate::service::oauth::kilo::poll(&http, &dc.code, dc.expires_in).await {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
-    let (org_id, email) = crate::service::oauth::kilo::profile(&http, &token).await;
-    let conn = crate::service::oauth::kilo::to_conn(token, org_id, email);
-    let _ = tx.send(OAuthEvent::Success { conn });
 }
 
 /// Handle `Action::OAuthCancel`: abort the in-flight task, drop the receiver,
@@ -119,6 +67,10 @@ pub(super) fn handle_oauth_cancel(state: &mut AppState) -> Result<()> {
         h.abort();
     }
     state.rest.oauth_rx = None;
+    // Disarm the GUI OAuth push side-channel regardless of who cancelled (a GUI
+    // `CancelOAuth` request OR a TUI Esc keypress) — the flow is over, so no further
+    // state should be pushed to a previously-armed client (path-agnostic disarm).
+    state.rest.oauth_gui_client = None;
     match state.mode_mut() {
         Mode::Settings(s) => s.oauth_flow = OAuthFlowState::Idle,
         // The wizard has no idle connections list — cancelling a wait returns to the

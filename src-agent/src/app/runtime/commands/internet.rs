@@ -22,6 +22,29 @@ pub(crate) fn internet_feedback(mode: InternetMode) -> (String, Option<String>) 
     }
 }
 
+/// Flash the shared internet-mode feedback (status-line label + optional install toast)
+/// IFF the mode actually changed from `old`.
+///
+/// Extracted so the settings-save path (`actions::settings::handle_save_settings`) and the
+/// GUI `SetSessionPrefs` handler apply IDENTICAL feedback without forking it — both capture
+/// the old mode, set the new one, persist, then call this. It only touches the transient
+/// status line + toast (never the persisted setting), so the caller owns the field-set +
+/// `sess.save()`; this is purely the "brief flash on an actual change" the two paths share.
+/// `old.is_some()` gates it to a live session (no session ⇒ no fg to flash on).
+pub(crate) fn flash_internet_feedback(
+    state: &mut AppState,
+    old: Option<InternetMode>,
+    new_mode: InternetMode,
+) {
+    if old.is_some_and(|old| old != new_mode) {
+        let (status, toast) = internet_feedback(new_mode);
+        state.rest.fg_mut().status = status;
+        if let Some(t) = toast {
+            state.rest.fg_mut().set_toast_info(t);
+        }
+    }
+}
+
 /// Handle the `/internet [simple|full]` command.
 ///
 /// `target` is `None` to toggle, or `Some(mode)` to set explicitly.

@@ -93,6 +93,25 @@ pub(super) fn handle_delete_mcp(state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
+/// Persist `config.json` and LIVE-reconnect the MCP manager from the just-saved server
+/// set — the MODE-INDEPENDENT core of [`persist_and_finish`], callable by the GUI config
+/// setters (the `SetMcpServer`/`DeleteMcpServer`/`EnableMcpServer` daemon handlers), which
+/// own no `Mode::Mcp` to refresh. Returns the save `Result` so the caller surfaces an
+/// error; the reconnect is best-effort and spawned off the event-loop thread for the same
+/// reason [`persist_and_finish`] does it (a `Proxy`-backend reconnect blocks on unix-socket
+/// round-trips to the MCP daemon). With no manager or zero servers the reconnect is a no-op.
+pub(in crate::app::runtime) fn save_and_reload_mcp(state: &mut AppState) -> Result<()> {
+    state.rest.config.save()?;
+    let servers = state.rest.config.mcp_servers.clone();
+    if let Some(m) = state.rest.mcp_manager.as_ref() {
+        let mgr = m.clone();
+        std::thread::spawn(move || {
+            mgr.reconnect(&servers);
+        });
+    }
+    Ok(())
+}
+
 /// Shared tail for create/save/delete: persist the config, refresh the in-mode
 /// snapshot from `config.mcp_servers`, select the entry with `select_uuid` (when
 /// non-empty and present), drop back to Browse, and set the status line.

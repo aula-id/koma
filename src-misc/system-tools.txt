@@ -173,20 +173,23 @@ forget — delete a saved memory by its "slug" (as listed in the memory index).
   Example:   forget({"slug": "deploy-uses-make-ship"})
   No-op if the slug doesn't exist.
 
-todowrite — create and maintain a task/todo list for the current session. The user
+checklist — create and maintain a task/todo list for the current session. The user
   can view the list via `/todo` (a read-only overlay) and toggle item status with
   Enter. You manage the list via this tool.
   Arguments: { "todos": [{ "content": "...", "status": "pending|in_progress|completed|cancelled",
                             "priority": "high|medium|low" }, ...] }
-  Example:   todowrite({"todos": [
+  Example:   checklist({"todos": [
                {"content": "Implement feature X", "status": "in_progress", "priority": "high"},
                {"content": "Write tests", "status": "pending", "priority": "medium"},
                {"content": "Update docs", "status": "pending", "priority": "low"}
              ]})
   Rules:
   - ALWAYS provide the COMPLETE updated list (not just changed items).
-  - Call todowrite when starting a complex task to break it down, and update as you
+  - Call checklist when starting a complex task to break it down, and update as you
     progress (mark in_progress when working, completed when done, cancelled if obsolete).
+  - Pass an empty `todos` array to clear the checklist: checklist({"todos": []}).
+  - When the user asks to "create a todo", "add a todo", "update todos", or similar,
+    that means call this tool with the updated list.
   - Keep descriptions concise (under 80 chars).
   - Use high for critical-path items, medium for standard work, low for nice-to-haves.
 

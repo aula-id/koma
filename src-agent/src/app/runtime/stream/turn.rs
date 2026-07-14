@@ -15,7 +15,7 @@ pub(crate) fn push_image_unsupported_notice(rest: &mut AppStateRest) {
     let notice = "Sorry, I can't see images on this model. Switch to a vision-capable model, or send your message without the image.".to_string();
     if let Some(sess) = rest.fg_mut().session.as_mut() {
         let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &notice, None);
-        sess.conversation.push_assistant(notice, None);
+        sess.conversation.push_assistant(notice, None, false);
         let _ = sess.save();
     }
 }
@@ -78,7 +78,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
     let reasoning = rt.take_reasoning();
     let _ = rt.take_reasoning_details();
     let buf = rt.take_stream().unwrap_or_default();
-    let (content, msg_reasoning) = final_answer(buf, reasoning);
+    let (content, msg_reasoning, promoted) = final_answer(buf, reasoning);
     let mut save_err = None;
     if !content.is_empty() {
         let mut committed = false;
@@ -89,30 +89,52 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
                 &content,
                 usage,
             );
-            sess.conversation.push_assistant(content, msg_reasoning);
+            sess.conversation.push_assistant(content, msg_reasoning, promoted);
             if let Err(e) = sess.save() {
                 save_err = Some(e.to_string());
             }
             committed = true;
         }
+        // Compute the effective per-turn cost ONCE so the live footer counter
+        // (`rt.cost`) and the `/usage` ledger can never drift. The provider's own
+        // figure wins when non-zero (OpenRouter's live number); when the provider
+        // reports 0.0 (Codex/Claude hardcode it; direct APIs like DeepSeek may
+        // omit it) fall back to the curated catalogue overlay's per-1M-token
+        // pricing for this (endpoint, model). `pending_dispatch_model_id` /
+        // `_endpoint` are the DISPATCH-time snapshot (see `run::start_stream_task`):
+        // re-resolving here could misattribute cost to a model that never served
+        // this request, since `agent_mode`/role assignments can change mid-stream.
+        let eff_cost = usage.map(|(pt, ct, cost)| {
+            if cost == 0.0 {
+                rt.pending_dispatch_endpoint
+                    .as_deref()
+                    .and_then(|ep| {
+                        crate::service::catalogue_overlay::overlay_cost(
+                            ep,
+                            rt.pending_dispatch_model_id.as_deref().unwrap_or_default(),
+                            pt,
+                            rt.tokens_cached,
+                            ct,
+                        )
+                    })
+                    .unwrap_or(cost)
+            } else {
+                cost
+            }
+        });
         // tokens_in = current context size (latest prompt), not cumulative.
         // tokens_out and cost are cumulative (each turn adds new spend). Written
         // to THIS session's own counters (the `sess` borrow above has ended).
         if committed {
-            if let Some((pt, ct, cost)) = usage {
+            if let (Some((pt, ct, _)), Some(eff)) = (usage, eff_cost) {
                 rt.tokens_in = pt;        // current context size, not a sum
                 rt.tokens_out += ct;
-                rt.cost += cost;
+                rt.cost += eff;
             }
         }
-        // Record into the global usage ledger (best-effort telemetry, non-fatal).
-        // The model id is read from `pending_dispatch_model_id` — snapshotted at
-        // DISPATCH time in `run::start_stream_task` — rather than re-resolved
-        // here: a stream can run for seconds, during which `agent_mode` can
-        // leave `Plan` (or role assignments can change), so re-resolving at this
-        // ledger-write point could misattribute cost to a model that never
-        // actually served this request. See `pending_dispatch_model_id`'s doc.
-        if let Some((pt, ct, cost)) = usage {
+        // Record into the global usage ledger (best-effort telemetry, non-fatal),
+        // using the SAME overlay-corrected `eff_cost` as the live counter above.
+        if let (Some((pt, ct, _)), Some(eff)) = (usage, eff_cost) {
             if let Some(sess) = rt.session.as_ref() {
                 let model_id = rt.pending_dispatch_model_id.clone().unwrap_or_default();
                 crate::model::usage::record_usage(
@@ -123,7 +145,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
                     pt,
                     rt.tokens_cached,
                     ct,
-                    cost,
+                    eff,
                 );
             }
         }
@@ -132,6 +154,12 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
     rt.current_task = None;
     match error.or(save_err) {
         Some(e) => {
+            // Catch-all: persist the real error to the per-session error log
+            // BEFORE any friendly-notice swap below, so the raw upstream detail
+            // is never lost even when the toast shows a simplified message.
+            if let Some(sess) = rest.sessions[sess_idx].session.as_ref() {
+                crate::model::store::append_error_log(&sess.path, "turn error", &e);
+            }
             // If the provider rejected the request because the model can't take
             // images (e.g. "No endpoints found that support image input") and the
             // last user message actually carried image attachments, swap the raw
@@ -283,11 +311,11 @@ pub(crate) fn advance_turn(
                     save_err = Some(e.to_string());
                 }
             } else {
-                let (content, msg_reasoning) =
+                let (content, msg_reasoning, promoted) =
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
                     let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
-                    sess.conversation.push_assistant(content, msg_reasoning);
+                    sess.conversation.push_assistant(content, msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
                         save_err = Some(e.to_string());
                     }
@@ -295,21 +323,39 @@ pub(crate) fn advance_turn(
             }
             committed = true;
         }
+        // Same effective-cost computation as `finish_stream`: overlay fallback
+        // when the provider reports 0.0, fed into BOTH the live counter and the
+        // ledger so they can't drift. See `finish_stream` for the full rationale.
+        let eff_cost = usage.map(|(pt, ct, cost)| {
+            if cost == 0.0 {
+                rt.pending_dispatch_endpoint
+                    .as_deref()
+                    .and_then(|ep| {
+                        crate::service::catalogue_overlay::overlay_cost(
+                            ep,
+                            rt.pending_dispatch_model_id.as_deref().unwrap_or_default(),
+                            pt,
+                            rt.tokens_cached,
+                            ct,
+                        )
+                    })
+                    .unwrap_or(cost)
+            } else {
+                cost
+            }
+        });
         // Counter update on THIS session's own totals, after the `sess` borrow
         // above ends so the disjoint-field borrows don't overlap.
         if committed {
-            if let Some((pt, ct, cost)) = usage {
+            if let (Some((pt, ct, _)), Some(eff)) = (usage, eff_cost) {
                 rt.tokens_in = pt; // current context size, not a sum
                 rt.tokens_out += ct;
-                rt.cost += cost;
+                rt.cost += eff;
             }
         }
-        // Record into the global usage ledger (best-effort telemetry, non-fatal).
-        // Same truthful-attribution note as `finish_stream`: read the DISPATCH-time
-        // snapshot (`pending_dispatch_model_id`) rather than re-resolving the role
-        // here, since `agent_mode`/role assignments can change while this round's
-        // stream was in flight.
-        if let Some((pt, ct, cost)) = usage {
+        // Record into the global usage ledger (best-effort telemetry, non-fatal),
+        // using the SAME overlay-corrected `eff_cost` as the live counter above.
+        if let (Some((pt, ct, _)), Some(eff)) = (usage, eff_cost) {
             if let Some(sess) = rt.session.as_ref() {
                 let model_id = rt.pending_dispatch_model_id.clone().unwrap_or_default();
                 crate::model::usage::record_usage(
@@ -320,7 +366,7 @@ pub(crate) fn advance_turn(
                     pt,
                     rt.tokens_cached,
                     ct,
-                    cost,
+                    eff,
                 );
             }
         }

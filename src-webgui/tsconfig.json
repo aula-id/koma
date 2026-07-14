@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    // monaco-editor's `exports` maps deep ESM subpaths via `"./*": "./*"` with
+    // no `types` condition, so tsc can't find editor.api's co-located d.ts.
+    // Point it at the real declaration (extensionless → tsc adds `.d.ts`). This
+    // is TYPES-ONLY: Vite has no tsconfig-paths plugin, so the bundler still
+    // resolves the lean editor.api.js at build (and the extensionless target
+    // would resolve to that same JS even if Vite did honour paths).
+    "paths": {
+      "monaco-editor/esm/vs/editor/editor.api": [
+        "./node_modules/monaco-editor/esm/vs/editor/editor.api"
+      ]
+    },
+    "lib": ["DOM", "DOM.Iterable", "ES2020"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.mts"]
+}

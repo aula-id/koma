@@ -20,12 +20,16 @@
 //!   the caller degrades to a human prompt in both modes.
 //!
 //! Both classifier calls run against the resolved Safeguard route
-//! (`resolve_role(config, settings, Safeguard)` → endpoint + key + model +
+//! (`resolve_role_dispatch(config, settings, Safeguard)` → endpoint + key + model +
 //! upstream-route slug) via the dedicated [`OpenRouterClient::classify_with`],
 //! which turns thinking OFF and pins a strict JSON schema so the safeguard model
 //! returns a machine-parseable `{allow, reason}` object fast and deterministically.
-//! An unresolved Safeguard route (fail-closed) becomes an unavailable verdict,
-//! degraded to a human prompt (TAC) / advisory toast (PC) by the caller.
+//! An unconfigured Safeguard route now falls back to the keyless koma-free tier
+//! (permissive posture — see [`crate::app::resolve::resolve_role_dispatch`]'s doc
+//! comment) instead of fail-closing outright; an unavailable classifier — koma-free
+//! included, when the call itself errors/times out/returns something unparseable —
+//! still becomes an unavailable verdict, degraded to a human prompt (TAC) /
+//! advisory toast (PC) by the caller, so a genuine outage still degrades safely.
 //! They build a two-message conversation (System = the embedded policy text, User
 //! = the prompt / the request + tool call) and parse the reply with
 //! [`parse_verdict`] (JSON-first, with a lenient text-scan fallback), all bounded
@@ -35,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::app::resolve::resolve_role;
+use crate::app::resolve::resolve_role_dispatch;
 use crate::dto::chat::{ChatMessage, Role};
 use crate::model::app_config::{AppConfig, ModelRole};
 use crate::model::settings::Settings;
@@ -280,11 +284,13 @@ async fn classify(
         available: false,
     };
     // Resolve the Safeguard route (session override > config > legacy classifier
-    // field). FAIL-CLOSED: an unresolved safeguard (unassigned / missing provider /
-    // empty key, with no legacy classifier model) yields `None` → an unavailable
-    // verdict, exactly as when the classifier can't be reached. The caller degrades
-    // that to a human prompt (TAC) / advisory toast (PC) rather than auto-allowing.
-    let Some(route) = resolve_role(config, settings, ModelRole::Safeguard) else {
+    // field) via the DISPATCH-time wrapper: PERMISSIVE POSTURE — an unassigned /
+    // dangling / empty-key Safeguard (nothing configured at all) no longer yields
+    // `None` here; it substitutes the keyless koma-free tier instead (see
+    // `resolve_role_dispatch`'s doc comment for the rationale). `None` is now only
+    // possible in practice if that substitution itself somehow fails to build,
+    // which it never does — this `let else` stays as the structural backstop.
+    let Some(route) = resolve_role_dispatch(config, settings, ModelRole::Safeguard) else {
         return unavailable("classifier not configured (no safeguard model) — set one in /settings".to_string());
     };
     // Call-boundary gate (fail-CLOSED): an Anthropic-typed safeguard provider can't
@@ -295,10 +301,24 @@ async fn classify(
     if !route.is_routable() {
         return unavailable("safeguard provider not wired (Anthropic)".to_string());
     }
+    // Defense in depth: a route can be routable yet still carry no usable auth —
+    // e.g. an EXPLICITLY configured Safeguard connection with an empty key (not
+    // the "nothing configured" case, which `resolve_role_dispatch` already
+    // substitutes koma-free for above). `Resolved::is_usable` already treats
+    // `ApiType::KomaFree` as usable-when-keyless, so the koma-free substitution
+    // route always passes this check. Treat a genuine leftover unusable route the
+    // same as unresolved rather than POSTing a doomed empty-bearer request.
+    if !route.is_usable() {
+        return unavailable(
+            "classifier not configured (safeguard route has no usable credentials) — set one in /settings"
+                .to_string(),
+        );
+    }
     // Resolve the Main route now so we can fall back to it when the Safeguard call
-    // fails. Done unconditionally (cheap — no I/O) before the first attempt so the
-    // owned route is available in both branches of the match below.
-    let main_route = resolve_role(config, settings, ModelRole::Main);
+    // fails. Dispatch-time resolve (same permissive posture) so a Main retry never
+    // hits an unusable route either. Done unconditionally (cheap — no I/O) before
+    // the first attempt so the owned route is available in both branches below.
+    let main_route = resolve_role_dispatch(config, settings, ModelRole::Main);
     match tokio::time::timeout(
         CLASSIFY_TIMEOUT,
         client.classify_with(route.conn(), &route.model_id, route.provider(), messages.clone()),

@@ -10,7 +10,8 @@ use crate::dto::openrouter::{
 use crate::model::app_config::ApiType;
 use super::codex::to_text_format;
 use super::helpers::{
-    auth_headers, clean_error, is_openrouter, parse_blob_ids, parse_summary, provider_routing_for,
+    accepts_reasoning_exclude, auth_headers, clean_error, parse_blob_ids, parse_summary,
+    provider_routing_for,
 };
 use super::client::OpenRouterClient;
 use super::types::Conn;
@@ -38,6 +39,13 @@ impl OpenRouterClient {
                 .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Anthropic streams-only too: `anthropic_collect` drains inline. No
+            // effort/schema (plain text summary).
+            return self
+                .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
@@ -45,6 +53,7 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // /compact summarisation uses no tools.
             tools: None,
             // Compaction is a mechanical summary; no thinking needed.
@@ -100,6 +109,12 @@ impl OpenRouterClient {
                 .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // No effort/schema (plain text reply).
+            return self
+                .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
@@ -107,6 +122,7 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Secondary-model calls use no tools.
             tools: None,
             // Secondary-model calls (awareness / classifier) don't think.
@@ -144,11 +160,13 @@ impl OpenRouterClient {
     /// Same body as `complete_with` (no tools, `stream: false`, usage on, provider
     /// pin from `provider`) but tuned for a deterministic, fast, machine-parseable
     /// verdict:
-    /// - `reasoning: {enabled: false}` turns thinking OFF. The safeguard model
-    ///   (`gpt-oss-safeguard-20b`) can reason, but a free-form thinking pass made
-    ///   the reply slow and unstructured; off is deterministic, fast, and fills
-    ///   `content` directly. `effort` and `enabled` are mutually exclusive — only
-    ///   `enabled` is set.
+    /// - `reasoning: {exclude: true}` (chat-completions transport, gated by
+    ///   [`accepts_reasoning_exclude`]) / effort `"none"` (Codex transport) keeps
+    ///   the verdict landing in `content` rather than a free-form thinking pass.
+    ///   NEVER `enabled: false` — that field 400s on some non-OpenRouter upstreams,
+    ///   a known landmine; `exclude: true` only HIDES reasoning (a reasoning model
+    ///   like `koma/apple` still spends the tokens), it does not skip it, so
+    ///   `max_tokens` must leave headroom for reasoning too (see below).
     /// - `response_format` pins a STRICT `json_schema` (`{allow, reason}`,
     ///   `additionalProperties:false`) so the model must return exactly the
     ///   verdict object as JSON. The safeguard model advertises both
@@ -201,6 +219,26 @@ impl OpenRouterClient {
             }
             return Ok(trimmed.to_string());
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Forced-tool structured output: pass the RAW verdict schema (the
+            // collect driver wraps it as the `respond` tool's input_schema).
+            let raw = self
+                .anthropic_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(schema.clone()),
+                )
+                .await?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow!("empty classifier reply"));
+            }
+            return Ok(trimmed.to_string());
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         // `strict: true` + `additionalProperties: false` force the model to emit
         // exactly the verdict object and nothing else.
@@ -218,20 +256,31 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Classifier calls use no tools.
             tools: None,
             // `exclude: true` (strip reasoning, keep it mandatory for gateways that
             // force it) is an OpenRouter-only extension — OpenAI-native gateways 400
-            // on it. Emit the `reasoning` object only for OpenRouter; elsewhere omit
-            // it and rely on the strict `response_format` JSON landing in `content`.
-            reasoning: is_openrouter(conn.endpoint).then_some(ReasoningConfig {
+            // on it. `accepts_reasoning_exclude` emits the `reasoning` object for an
+            // OpenRouter endpoint OR an `ApiType::KomaFree` route (koma.run is an
+            // OpenRouter-style proxy fronting a reasoning model that ACCEPTS this
+            // field, verified live, even though its endpoint URL isn't "openrouter");
+            // elsewhere omit it and rely on the strict `response_format` JSON landing
+            // in `content`.
+            reasoning: accepts_reasoning_exclude(&conn).then_some(ReasoningConfig {
                 effort: None,
                 enabled: None,
                 exclude: Some(true),
             }),
             // Force the verdict object as strict JSON.
             response_format: Some(response_format),
-            // Classifier returns a tiny JSON object; cap prevents runaway.
+            // Classifier returns a tiny JSON object; cap prevents runaway. Also
+            // doubles as reasoning headroom for a reasoning model behind the route
+            // (e.g. koma-free's `koma/apple`, verified live): `exclude: true` only
+            // hides reasoning, it still spends tokens on it (~372 tokens observed)
+            // before writing the verdict JSON — a much smaller cap (e.g. 60) starves
+            // it, yielding `content: null` / `finish_reason: "length"`. 2000 leaves
+            // ample headroom for both.
             max_tokens: Some(2_000),
         };
 
@@ -326,6 +375,21 @@ impl OpenRouterClient {
                 .await?;
             return parse_summary(&raw);
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Forced-tool structured output: pass the RAW summary schema.
+            let raw = self
+                .anthropic_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(schema.clone()),
+                )
+                .await?;
+            return parse_summary(&raw);
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         // `strict: true` + `additionalProperties: false` force the model to emit
         // exactly the summary object and nothing else.
@@ -345,13 +409,18 @@ impl OpenRouterClient {
             // provider behaves the same (no pin).
             provider: provider_routing_for(provider.unwrap_or("")),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Fold calls use no tools.
             tools: None,
             // `exclude: true` (strip reasoning, keep it mandatory for gateways that
             // force it) is an OpenRouter-only extension — OpenAI-native gateways 400
-            // on it. Emit the `reasoning` object only for OpenRouter; elsewhere omit
-            // it and rely on the strict `response_format` JSON landing in `content`.
-            reasoning: is_openrouter(conn.endpoint).then_some(ReasoningConfig {
+            // on it. `accepts_reasoning_exclude` emits the `reasoning` object for an
+            // OpenRouter endpoint OR an `ApiType::KomaFree` route (koma.run is an
+            // OpenRouter-style proxy fronting a reasoning model that ACCEPTS this
+            // field, verified live, even though its endpoint URL isn't "openrouter");
+            // elsewhere omit it and rely on the strict `response_format` JSON landing
+            // in `content`.
+            reasoning: accepts_reasoning_exclude(&conn).then_some(ReasoningConfig {
                 effort: None,
                 enabled: None,
                 exclude: Some(true),
@@ -459,6 +528,26 @@ impl OpenRouterClient {
             };
             return Ok(parse_blob_ids(&raw));
         }
+        if conn.api_type == ApiType::AnthropicCompatible {
+            // Best-effort: any failure → empty selection (rehydrate nothing).
+            // Forced-tool structured output: pass the RAW blob-selection schema.
+            let raw = match self
+                .anthropic_collect(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    "none",
+                    messages,
+                    Some(schema.clone()),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            };
+            return Ok(parse_blob_ids(&raw));
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         // `strict: true` + `additionalProperties: false` force the model to emit
         // exactly the id list and nothing else.
@@ -476,13 +565,18 @@ impl OpenRouterClient {
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            stream_options: None,
             // Router calls use no tools.
             tools: None,
             // `exclude: true` (strip reasoning, keep it mandatory for gateways that
             // force it) is an OpenRouter-only extension — OpenAI-native gateways 400
-            // on it. Emit the `reasoning` object only for OpenRouter; elsewhere omit
-            // it and rely on the strict `response_format` JSON landing in `content`.
-            reasoning: is_openrouter(conn.endpoint).then_some(ReasoningConfig {
+            // on it. `accepts_reasoning_exclude` emits the `reasoning` object for an
+            // OpenRouter endpoint OR an `ApiType::KomaFree` route (koma.run is an
+            // OpenRouter-style proxy fronting a reasoning model that ACCEPTS this
+            // field, verified live, even though its endpoint URL isn't "openrouter");
+            // elsewhere omit it and rely on the strict `response_format` JSON landing
+            // in `content`.
+            reasoning: accepts_reasoning_exclude(&conn).then_some(ReasoningConfig {
                 effort: None,
                 enabled: None,
                 exclude: Some(true),

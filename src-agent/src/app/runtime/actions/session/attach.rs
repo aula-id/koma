@@ -90,16 +90,20 @@ pub fn handle_close_session_hub(state: &mut AppState) -> Result<()> {
 
 /// Handle `Action::HubKillConfirm`: act on the session armed in the hub's
 /// `pending_kill`, then rebuild the hub in place so it stays open with the change
-/// reflected. The policy is "abort if cooking, else close":
+/// reflected. The policy is "interrupt if working, then ALWAYS close":
 ///
-/// - **Working session** → [`SessionRuntime::interrupt`]: stop its in-flight turn
-///   but KEEP the session (it goes idle, lock retained). The cooking row stays,
-///   now marked ready. Foreground is untouched.
-/// - **Idle session** → [`SessionRuntime::close`]: tombstone it (abort lanes,
-///   release its lock; the slot stays so no index shifts). If it was the
-///   foreground, reassign foreground onto another live session (via the shared
-///   [`handle_live_switch`] flat-UI-reset path), or — if none remain — spawn a
-///   fresh foreground via `/new` so `foreground` never points at a tombstone.
+/// - **Working session** → [`SessionRuntime::interrupt`] (stop its in-flight turn; it goes
+///   idle SYNCHRONOUSLY, lock retained) IMMEDIATELY FOLLOWED BY [`SessionRuntime::close`] in
+///   the SAME confirm — so one arm→confirm removes a working session outright, instead of
+///   only interrupting it and leaving the row live (which forced a second arm→confirm round
+///   to finally close it).
+/// - **Idle session** → [`SessionRuntime::close`] directly: tombstone it (abort lanes,
+///   release its lock; the slot stays so no index shifts).
+///
+/// Either way, once the session is closed: if it was the foreground, reassign foreground
+/// onto another live session (via the shared [`handle_live_switch`] flat-UI-reset path), or —
+/// if none remain — spawn a fresh foreground via `/new` so `foreground` never points at a
+/// tombstone.
 ///
 /// The hub is rebuilt from [`build_session_hub`] (single source of truth) and the
 /// user's prior `focus` + `history_query` are re-applied, with selections clamped.
@@ -141,9 +145,12 @@ pub fn handle_hub_kill_confirm(
     // 2. Act on the target. Out-of-range can't normally happen (the cooking idx is
     //    a live `sessions` index and `sessions` is only ever appended to), but guard.
     if session_idx < state.rest.sessions.len() {
+        // If the session is mid-turn, interrupt it FIRST. `interrupt()` is synchronous — it
+        // flips `is_working()` to false immediately — so we can close it in the SAME confirm
+        // below. This makes a single arm→confirm on a WORKING session actually remove it,
+        // instead of only interrupting it and leaving the row live (BUG: the old code returned
+        // after interrupt, forcing a second arm→confirm round to finally close it).
         if state.rest.sessions[session_idx].is_working() {
-            // Working → stop the turn but KEEP the session (goes idle). Foreground
-            // is untouched — interrupting a background session leaves it live.
             state.rest.sessions[session_idx].interrupt();
             // Compaction anim/timer is PER-SESSION now (C4), so clear it on the very
             // session we just interrupted — no foreground check needed (a background
@@ -151,45 +158,46 @@ pub fn handle_hub_kill_confirm(
             state.rest.sessions[session_idx].compact_anim_start = None;
             state.rest.sessions[session_idx].compact_apply_at = None;
             state.rest.sessions[session_idx].compact_pending = None;
-        } else {
-            // Idle → tombstone it. The slot stays in place (no index shift).
-            state.rest.sessions[session_idx].close();
+        }
 
-            // If the closed session was the foreground, reassign so `foreground`
-            // never points at a tombstone.
-            if session_idx == state.rest.foreground {
-                // First live, non-closed session — prefer one that ISN'T the one we
-                // just closed (it now reads closed anyway, so this is belt-and-braces).
-                let next = state
-                    .rest
-                    .sessions
-                    .iter()
-                    .enumerate()
-                    .find(|(i, rt)| {
-                        *i != session_idx && rt.session.is_some() && !rt.is_closed()
-                    })
-                    .map(|(i, _)| i);
-                match next {
-                    // Reuse the local foreground-switch path so the flat foreground-UI
-                    // is reset (composer/scroll/attachments/transcript) and the keyless
-                    // client is rebuilt for the now-shown session, exactly like a
-                    // cooking-pane Enter.
-                    Some(i) => handle_live_switch(i, state, client)?,
-                    // No live session left → spawn a fresh foreground so there is always a
-                    // valid one. Call `apply_new_session_local` directly (the legacy in-process
-                    // `/new` body): it appends + foregrounds + warms, inheriting last-used creds
-                    // (populated, since we had a live tab). NOT the `/new` slash command, which
-                    // (daemon-per-session) only sets `new_pending` — that would make the client
-                    // tear THIS daemon down + spawn a new one instead of restoring a foreground
-                    // here. `false` (Swap): nothing to kill, we just need a live foreground.
-                    None => {
-                        crate::app::runtime::commands::new_session::apply_new_session_local(
-                            state,
-                            client,
-                            handle,
-                            false,
-                        )?;
-                    }
+        // Close it (now idle, whether it started idle or we just interrupted it above):
+        // tombstone it. The slot stays in place (no index shift).
+        state.rest.sessions[session_idx].close();
+
+        // If the closed session was the foreground, reassign so `foreground`
+        // never points at a tombstone.
+        if session_idx == state.rest.foreground {
+            // First live, non-closed session — prefer one that ISN'T the one we
+            // just closed (it now reads closed anyway, so this is belt-and-braces).
+            let next = state
+                .rest
+                .sessions
+                .iter()
+                .enumerate()
+                .find(|(i, rt)| {
+                    *i != session_idx && rt.session.is_some() && !rt.is_closed()
+                })
+                .map(|(i, _)| i);
+            match next {
+                // Reuse the local foreground-switch path so the flat foreground-UI
+                // is reset (composer/scroll/attachments/transcript) and the keyless
+                // client is rebuilt for the now-shown session, exactly like a
+                // cooking-pane Enter.
+                Some(i) => handle_live_switch(i, state, client)?,
+                // No live session left → spawn a fresh foreground so there is always a
+                // valid one. Call `apply_new_session_local` directly (the legacy in-process
+                // `/new` body): it appends + foregrounds + warms, inheriting last-used creds
+                // (populated, since we had a live tab). NOT the `/new` slash command, which
+                // (daemon-per-session) only sets `new_pending` — that would make the client
+                // tear THIS daemon down + spawn a new one instead of restoring a foreground
+                // here. `false` (Swap): nothing to kill, we just need a live foreground.
+                None => {
+                    crate::app::runtime::commands::new_session::apply_new_session_local(
+                        state,
+                        client,
+                        handle,
+                        false,
+                    )?;
                 }
             }
         }

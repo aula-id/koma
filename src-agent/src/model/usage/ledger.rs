@@ -38,13 +38,15 @@ pub(crate) fn open() -> Option<Connection> {
         let _ = std::fs::create_dir_all(parent);
     }
     let conn = Connection::open(&path)
-        .map_err(|e| eprintln!("koma: usage ledger open error: {e}"))
+        .map_err(|e| {
+            crate::model::store::append_global_error_log("usage ledger", &format!("open error: {e}"))
+        })
         .ok()?;
     // Run the DDL only on the first `open()` in this process — see
     // `SCHEMA_ONCE`. Every later call reuses the schema created here.
     SCHEMA_ONCE.call_once(|| {
         if let Err(e) = ensure_schema(&conn) {
-            eprintln!("koma: usage ledger schema error: {e}");
+            crate::model::store::append_global_error_log("usage ledger", &format!("schema error: {e}"));
         }
     });
     Some(conn)
@@ -97,6 +99,6 @@ pub fn record_usage(
             tokens_in as i64, tokens_cached as i64, tokens_out as i64, cost
         ],
     ) {
-        eprintln!("koma: usage ledger insert error: {e}");
+        crate::model::store::append_global_error_log("usage ledger", &format!("insert error: {e}"));
     }
 }

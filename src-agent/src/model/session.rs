@@ -3,7 +3,7 @@
 //! A `Session` owns everything that belongs to one named conversation on disk:
 //!
 //! ```text
-//! ~/.simple-coder/sessions/<id>/
+//! ~/.koma/sessions/<id>/
 //!     settings.json   ← Settings (model, api_key, compaction…)
 //!     messages.json   ← Vec<ChatMessage> (the full history)
 //!     memory/
@@ -43,8 +43,11 @@ pub struct Session {
     pub name: String,
     pub path: PathBuf,
     /// Working-directory bucket: the parent dir name of `path`
-    /// (`sessions/<pwd_hash>/<id>`). Identifies the shared `LocalConfig` that
-    /// holds this session's `session_models` (see `store::shared_settings_path`).
+    /// (`sessions/<pwd_hash>/<id>`). Keys this session's per-project shared
+    /// resources — the memory dir (`store::memory_dir`) and image-attachment dir
+    /// (`store::session_images_dir`) — plus the one-time `session_models` migration
+    /// lookup in `Session::load` (`store::shared_settings_path`, read only for
+    /// pre-fix files). `session_models` itself is per-session now, not shared.
     pub pwd_hash: String,
     pub settings: Settings,
     pub conversation: Conversation,
@@ -116,9 +119,12 @@ impl Session {
     /// Steps:
     /// 1. Derive `id` from `dir`'s file name (the session UUID) and `pwd_hash`
     ///    from `dir.parent()`'s file name (the working-directory bucket).
-    /// 2. Read the per-session `settings.json` (or use defaults if absent), then
-    ///    overlay `session_models` from the shared `LocalConfig` for this bucket
-    ///    (it is `#[serde(skip)]` in the per-session file — see `settings.rs`).
+    /// 2. Read the per-session `settings.json` (or use defaults if absent).
+    ///    `session_models` now round-trips through this file (`#[serde(default)]`).
+    ///    ONE-TIME MIGRATION: a pre-fix file that lacks the `session_models` key is
+    ///    seeded once from the legacy shared `LocalConfig` bucket so existing picks
+    ///    survive the upgrade; a file that HAS the key (even an empty array) is
+    ///    trusted verbatim and never re-seeded.
     /// 3. Source `name` from the SQLite registry (falling back to `id`).
     /// 4. Read `messages.json` verbatim. A missing or unparseable file yields
     ///    an empty vec; no placeholder system message is inserted here.
@@ -147,14 +153,32 @@ impl Session {
             }
         };
 
-        // session_models is no longer in the per-session settings.json; overlay
-        // it from the shared per-dir LocalConfig so the in-memory Settings carry
-        // the catalogue the resolver expects. Best-effort: a missing/blank shared
-        // file yields an empty catalogue (LocalConfig::load handles that).
-        if let Ok(shared) = shared_settings_path(&pwd_hash) {
-            settings.session_models = LocalConfig::load(&shared)
-                .map(|c| c.session_models)
-                .unwrap_or_default();
+        // session_models now persists in the per-session settings.json above
+        // (#[serde(default)], so old files without the key load as empty). ONE-TIME
+        // MIGRATION for pre-fix files: the field used to live only in the shared
+        // per-dir LocalConfig bucket and was #[serde(skip)] here, so a file written
+        // by the old code has NO `session_models` key. Detect that (probe the raw
+        // JSON for the key) and, only then, seed from the shared bucket so the
+        // user's existing picks survive the upgrade. The seeded value self-persists
+        // on the next save(). If the key IS present (any post-fix file, even an
+        // empty array) we trust the file verbatim and never re-seed — that is what
+        // makes the migration one-time and lets a user legitimately clear their
+        // overrides without them coming back. Best-effort throughout: a missing
+        // shared file yields an empty catalogue.
+        let has_session_models_key = std::fs::read(&settings_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .map(|v| v.get("session_models").is_some())
+            // Fail-safe direction: a probe re-read failure defaults to "key absent"
+            // → migrate from the legacy shared bucket, which can only RESTORE old
+            // values, never lose what Settings::load already produced in memory.
+            .unwrap_or(false);
+        if !has_session_models_key {
+            if let Ok(shared) = shared_settings_path(&pwd_hash) {
+                settings.session_models = LocalConfig::load(&shared)
+                    .map(|c| c.session_models)
+                    .unwrap_or_default();
+            }
         }
 
         // Read messages.json verbatim. If missing OR the parsed vec is empty,
@@ -191,7 +215,10 @@ impl Session {
         // from loading.
         let scratch = crate::model::store::scratch_dir(&session.id);
         if let Err(e) = std::fs::create_dir_all(&scratch) {
-            eprintln!("koma: warning: could not create scratch dir {}: {e}", scratch.display());
+            crate::model::store::append_global_error_log(
+                "session",
+                &format!("warning: could not create scratch dir {}: {e}", scratch.display()),
+            );
         }
 
         // Ensure the image-attachment dir exists so resumed sessions can ingest
@@ -207,30 +234,24 @@ impl Session {
     /// Persist the session to disk + registry.
     ///
     /// Writes, in order:
-    /// 1. the per-session `settings.json` to `self.path` (`session_models` is
-    ///    `#[serde(skip)]`, so it is omitted here automatically);
-    /// 2. the shared per-dir `LocalConfig` (carrying `session_models`) to this
-    ///    bucket's `shared_settings_path`, creating the bucket dir if needed;
-    /// 3. `messages.json` to `self.path`;
-    /// 4. a registry `touch` so the session sorts most-recent in its bucket.
+    /// 1. the per-session `settings.json` to `self.path`. This now INCLUDES
+    ///    `session_models`, persisted via the normal `Settings` serialisation
+    ///    (the field is `#[serde(default)]`, not `#[serde(skip)]`), so a session's
+    ///    model overrides round-trip in its own file and never touch a sibling
+    ///    session's;
+    /// 2. `messages.json` to `self.path`;
+    /// 3. a registry `touch` so the session sorts most-recent in its bucket.
     ///
     /// Creates `self.path` if it does not exist (needed for a brand-new
     /// session before its first save).
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(&self.path)?;
+        // Writes the FULL Settings including session_models (now #[serde(default)],
+        // no longer #[serde(skip)]). The legacy shared per-dir LocalConfig bucket is
+        // deliberately NOT written anymore — that shared write was the cross-session
+        // clobber source (every sibling session overwrote the one bucket with its
+        // own in-memory copy). session_models is per-session now.
         self.settings.save(&self.settings_path())?;
-
-        // Persist the per-dir model catalogue to the SHARED bucket settings.json
-        // (the only place session_models lives now). Create the bucket dir if the
-        // session dir's parent doesn't exist yet.
-        let shared = shared_settings_path(&self.pwd_hash)?;
-        if let Some(parent) = shared.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        LocalConfig {
-            session_models: self.settings.session_models.clone(),
-        }
-        .save(&shared)?;
 
         let json = serde_json::to_vec_pretty(self.conversation.messages())?;
         std::fs::write(self.messages_path(), json)?;
@@ -356,7 +377,7 @@ impl Session {
         // from `AppStateRest::set_agent_mode` right before it calls this method.
         if self.plan_mode_hint {
             sys.push_str(
-                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need, and use the seqthink tool to structure your reasoning. Build the plan as a todo list with the todowrite tool — one item per step (two locked rail items are managed for you). When the plan is complete, call plan_ready with `highlights` (the key changes, decisions, and risks the user needs to approve) and `plan` (the full detailed plan — files, exact changes, reasoning — saved to plan.md). The user will approve it or discuss further."
+                "\n\n# Plan mode\nPlan mode is active. Tools are read-only: explore the codebase and gather what you need, and use the seqthink tool to structure your reasoning. Build the plan as a todo list with the checklist tool — one item per step (two locked rail items are managed for you). When the plan is complete, call plan_ready with `highlights` (the key changes, decisions, and risks the user needs to approve) and `plan` (the full detailed plan — files, exact changes, reasoning — saved to plan.md). The user will approve it or discuss further."
             );
         }
 

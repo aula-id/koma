@@ -95,6 +95,8 @@ pub struct SettingsState {
     pub sliding_cache: bool,
     /// Draft: bash output saving (filtered + tee-to-disk) toggle.
     pub bash_saving: bool,
+    /// Draft: GUI Coding panel auto-save toggle.
+    pub coding_autosave: bool,
     /// Draft: internet-access tier toggle.
     pub internet_mode: InternetMode,
     /// The session's effective working directory, captured at construction. Used
@@ -222,6 +224,9 @@ impl SettingsState {
                 roles: m.effective_roles(),
                 route: m.route.clone(),
                 session_only,
+                // Carry the clone-source identity through the settings editor so a
+                // save that doesn't touch this model preserves the GUI picker match.
+                source_uuid: m.source_uuid.clone(),
             }
         };
         let mut models: Vec<ModelDraft> =
@@ -263,6 +268,7 @@ impl SettingsState {
             short_send_enabled: session.settings.short_send_enabled,
             sliding_cache: session.settings.sliding_cache,
             bash_saving: session.settings.bash_saving,
+            coding_autosave: session.settings.coding_autosave,
             internet_mode: session.settings.internet_mode,
             cwd: effective_cwd,
             list_editing: false,
@@ -391,6 +397,9 @@ impl SettingsState {
             }
             SettingField::BashSaving => {
                 self.bash_saving = !self.bash_saving;
+            }
+            SettingField::CodingAutosave => {
+                self.coding_autosave = !self.coding_autosave;
             }
             SettingField::InternetMode => {
                 self.internet_mode = self.internet_mode.toggled();

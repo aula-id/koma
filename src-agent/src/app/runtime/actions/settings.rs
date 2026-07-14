@@ -37,6 +37,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.short_send_enabled,
             s.sliding_cache,
             s.bash_saving,
+            s.coding_autosave,
             s.internet_mode,
             s.providers.clone(),
             s.oauth_drafts.clone(),
@@ -64,6 +65,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         short_send_enabled,
         sliding_cache,
         bash_saving,
+        coding_autosave,
         internet_mode,
         provider_drafts,
         oauth_drafts,
@@ -147,6 +149,10 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // field None so it stops being serialized (migration on save).
             roles: d.roles.clone(),
             role: None,
+            // Preserve the clone-source identity through the save so a /settings save
+            // that never opened this override keeps the GUI picker's exact match
+            // (a modal edit re-authors the draft to None — see save_model_modal).
+            source_uuid: d.source_uuid.clone(),
         };
         // Global catalogue: session_only == false. Session override layer:
         // session_only == true (persisted to settings.json, never config).
@@ -163,6 +169,14 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         // Capture old internet mode before overwriting, so we can toast only
         // on actual change (avoids a spurious toast on every settings save).
         let old_internet = state.rest.fg().session.as_ref().map(|s| s.settings.internet_mode);
+        // BUG FIX: this save can reassign the Main role two ways at once — the
+        // session-local `session_models` write below, AND the global
+        // `config.models` write further down (b) — either of which can change
+        // what THIS session's Main resolves to. Snapshot before, compare after
+        // both writes land, and reset a now-stale `effort` iff the resolved
+        // Main model actually swapped (never on a re-save of the same model,
+        // and never for the many OTHER fields this same save also touches).
+        let before_main = state.rest.main_identity_now();
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.api_key = api_key;
             sess.settings.model = model;
@@ -189,6 +203,8 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // Bash-saving toggle: no client rebuild needed; the tool
             // context reads this flag per-spawn.
             sess.settings.bash_saving = bash_saving;
+            // Coding autosave: GUI-only preference; no client rebuild needed.
+            sess.settings.coding_autosave = coding_autosave;
             // Internet-mode toggle: no client rebuild needed; the tool
             // dispatch layer reads this flag per-request.
             sess.settings.internet_mode = internet_mode;
@@ -218,6 +234,11 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 state.rest.fg_mut().status = format!("error: {e}");
             }
         }
+        // c1) BUG FIX: both Main-affecting writes (a + b above) have landed and
+        // persisted — now check whether the resolved Main model actually
+        // swapped, and if so reset the stale `effort` (this call is its own
+        // save, on top of (c)'s, but ONLY fires on an actual swap).
+        state.rest.reset_effort_if_main_changed(before_main);
         // c2) Reindex the dir cache against the (possibly changed) workdirs.
         //     Spawns a background thread; non-blocking.
         let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());
@@ -250,14 +271,11 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //    helper so the Full-needs-install line matches the `/internet`
         //    and Ctrl+E paths exactly).  Only fires when the mode actually
         //    changed; it resets to "ready" on the next action.
-        if old_internet.is_some_and(|old| old != internet_mode) {
-            let (status, toast) =
-                crate::app::runtime::commands::internet::internet_feedback(internet_mode);
-            state.rest.fg_mut().status = status;
-            if let Some(t) = toast {
-                state.rest.fg_mut().set_toast_info(t);
-            }
-        }
+        crate::app::runtime::commands::internet::flash_internet_feedback(
+            state,
+            old_internet,
+            internet_mode,
+        );
     }
     *state.mode_mut() = Mode::Chat;
     Ok(())

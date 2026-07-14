@@ -1,6 +1,6 @@
 //! SQLite registry of sessions, keyed by working-directory hash.
 //!
-//! Lives at `~/.simple-coder/session.sqlite` (see
+//! Lives at `~/.koma/session.sqlite` (see
 //! [`crate::model::store::registry_path`]). It is the index that maps each
 //! session UUID to the working directory it was opened from (`pwd_hash`), its
 //! display name, and its timestamps — so `/resume` can list the sessions for the

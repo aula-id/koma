@@ -106,8 +106,19 @@ pub fn weekly_costs(weeks: i64) -> Vec<WeeklyCost> {
 /// **Non-fatal**: returns [`RangeTotals::default()`] (all zeroes) on any DB error.
 #[allow(dead_code)]
 pub fn range_totals(since_ts: i64) -> RangeTotals {
+    range_totals_scoped(since_ts, None)
+}
+
+/// Same as [`range_totals`], additionally filtered to a single `session_uuid` when
+/// `Some` — the GUI Usage panel's "session" scope toggle. `None` behaves identically
+/// to [`range_totals`]. The uuid is always parameter-bound, never interpolated.
+///
+/// **Non-fatal**: returns [`RangeTotals::default()`] (all zeroes) on any DB error.
+#[allow(dead_code)]
+pub fn range_totals_scoped(since_ts: i64, session_uuid: Option<&str>) -> RangeTotals {
     let Some(conn) = open() else { return RangeTotals::default() };
-    let mut stmt = match conn.prepare(
+    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
+    let sql = format!(
         "SELECT
             COALESCE(SUM(cost), 0.0),
             COALESCE(SUM(tokens_in), 0),
@@ -115,12 +126,13 @@ pub fn range_totals(since_ts: i64) -> RangeTotals {
             COALESCE(SUM(tokens_out), 0),
             COUNT(*)
          FROM usage
-         WHERE ts >= ?1",
-    ) {
+         WHERE ts >= ?1{clause}"
+    );
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return RangeTotals::default(),
     };
-    stmt.query_row(rusqlite::params![since_ts], |r| {
+    let mapper = |r: &rusqlite::Row| {
         Ok(RangeTotals {
             cost: r.get(0)?,
             tokens_in: r.get(1)?,
@@ -128,7 +140,11 @@ pub fn range_totals(since_ts: i64) -> RangeTotals {
             tokens_out: r.get(3)?,
             calls: r.get(4)?,
         })
-    })
+    };
+    match session_uuid {
+        Some(uuid) => stmt.query_row(rusqlite::params![since_ts, uuid], mapper),
+        None => stmt.query_row(rusqlite::params![since_ts], mapper),
+    }
     .unwrap_or_default()
 }
 
@@ -138,8 +154,24 @@ pub fn range_totals(since_ts: i64) -> RangeTotals {
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn top_models_in_range(since_ts: i64, limit: i64) -> Vec<ModelCostRange> {
+    top_models_in_range_scoped(since_ts, limit, None)
+}
+
+/// Same as [`top_models_in_range`], additionally filtered to a single
+/// `session_uuid` when `Some` — the GUI Usage panel's "session" scope toggle.
+/// `None` behaves identically to [`top_models_in_range`]. The uuid is always
+/// parameter-bound, never interpolated.
+///
+/// **Non-fatal**: returns an empty `Vec` on any DB error.
+#[allow(dead_code)]
+pub fn top_models_in_range_scoped(
+    since_ts: i64,
+    limit: i64,
+    session_uuid: Option<&str>,
+) -> Vec<ModelCostRange> {
     let Some(conn) = open() else { return Vec::new() };
-    let mut stmt = match conn.prepare(
+    let clause = if session_uuid.is_some() { " AND session_uuid = ?3" } else { "" };
+    let sql = format!(
         "SELECT
             COALESCE(model_id, ''),
             COALESCE(SUM(cost), 0.0),
@@ -148,15 +180,16 @@ pub fn top_models_in_range(since_ts: i64, limit: i64) -> Vec<ModelCostRange> {
             COALESCE(SUM(tokens_out), 0),
             COUNT(*)
          FROM usage
-         WHERE ts >= ?1
+         WHERE ts >= ?1{clause}
          GROUP BY model_id
          ORDER BY SUM(cost) DESC
-         LIMIT ?2",
-    ) {
+         LIMIT ?2"
+    );
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let rows = match stmt.query_map(rusqlite::params![since_ts, limit], |r| {
+    let mapper = |r: &rusqlite::Row| {
         Ok(ModelCostRange {
             model_id: r.get(0)?,
             total_cost: r.get(1)?,
@@ -165,11 +198,15 @@ pub fn top_models_in_range(since_ts: i64, limit: i64) -> Vec<ModelCostRange> {
             tokens_out: r.get(4)?,
             call_count: r.get(5)?,
         })
-    }) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
     };
-    rows.flatten().collect()
+    let rows = match session_uuid {
+        Some(uuid) => stmt.query_map(rusqlite::params![since_ts, limit, uuid], mapper),
+        None => stmt.query_map(rusqlite::params![since_ts, limit], mapper),
+    };
+    match rows {
+        Ok(r) => r.flatten().collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Split spend and call count between the `"main"` role and all `"sub:*"` roles
@@ -178,27 +215,43 @@ pub fn top_models_in_range(since_ts: i64, limit: i64) -> Vec<ModelCostRange> {
 /// **Non-fatal**: returns [`RoleSplit::default()`] (all zeroes) on any DB error.
 #[allow(dead_code)]
 pub fn role_split(since_ts: i64) -> RoleSplit {
+    role_split_scoped(since_ts, None)
+}
+
+/// Same as [`role_split`], additionally filtered to a single `session_uuid` when
+/// `Some` — the GUI Analytics tab's "session" scope. `None` behaves identically
+/// to [`role_split`]. The uuid is always parameter-bound, never interpolated.
+///
+/// **Non-fatal**: returns [`RoleSplit::default()`] (all zeroes) on any DB error.
+#[allow(dead_code)]
+pub fn role_split_scoped(since_ts: i64, session_uuid: Option<&str>) -> RoleSplit {
     let Some(conn) = open() else { return RoleSplit::default() };
-    let mut stmt = match conn.prepare(
+    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
+    let sql = format!(
         "SELECT
             COALESCE(SUM(CASE WHEN role = 'main' THEN cost ELSE 0 END), 0.0),
             COALESCE(SUM(CASE WHEN role = 'main' THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN role LIKE 'sub:%' THEN cost ELSE 0 END), 0.0),
             COALESCE(SUM(CASE WHEN role LIKE 'sub:%' THEN 1 ELSE 0 END), 0)
          FROM usage
-         WHERE ts >= ?1",
-    ) {
+         WHERE ts >= ?1{clause}"
+    );
+    let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
         Err(_) => return RoleSplit::default(),
     };
-    stmt.query_row(rusqlite::params![since_ts], |r| {
+    let mapper = |r: &rusqlite::Row| {
         Ok(RoleSplit {
             main_cost: r.get(0)?,
             main_calls: r.get(1)?,
             sub_cost: r.get(2)?,
             sub_calls: r.get(3)?,
         })
-    })
+    };
+    match session_uuid {
+        Some(uuid) => stmt.query_row(rusqlite::params![since_ts, uuid], mapper),
+        None => stmt.query_row(rusqlite::params![since_ts], mapper),
+    }
     .unwrap_or_default()
 }
 
@@ -211,17 +264,36 @@ pub fn role_split(since_ts: i64) -> RoleSplit {
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn spend_buckets(since_ts: i64, bucket: BucketSize, _n: usize, tz: i64) -> Vec<SpendBucket> {
+    spend_buckets_scoped(since_ts, bucket, _n, tz, None)
+}
+
+/// Same as [`spend_buckets`], additionally filtered to a single `session_uuid`
+/// when `Some` — the GUI Usage panel's "session" scope toggle. `None` behaves
+/// identically to [`spend_buckets`]. The uuid is always parameter-bound, never
+/// interpolated (only the static clause text + the bucket size, a fixed enum,
+/// are spliced into the SQL).
+///
+/// **Non-fatal**: returns an empty `Vec` on any DB error.
+#[allow(dead_code)]
+pub fn spend_buckets_scoped(
+    since_ts: i64,
+    bucket: BucketSize,
+    _n: usize,
+    tz: i64,
+    session_uuid: Option<&str>,
+) -> Vec<SpendBucket> {
     let Some(conn) = open() else { return Vec::new() };
     let secs = bucket.secs();
     // Bucket size is injected as a literal; SQLite does not accept arithmetic
     // expressions in GROUP BY via parameter substitution.
+    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
     let sql = format!(
         "SELECT
             ((ts + {tz}) - (ts + {tz}) % {secs} - {tz}) AS bucket_epoch,
             COALESCE(SUM(cost), 0.0),
             COALESCE(SUM(tokens_in + tokens_out), 0)
          FROM usage
-         WHERE ts >= ?1
+         WHERE ts >= ?1{clause}
          GROUP BY bucket_epoch
          ORDER BY bucket_epoch ASC"
     );
@@ -229,17 +301,21 @@ pub fn spend_buckets(since_ts: i64, bucket: BucketSize, _n: usize, tz: i64) -> V
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let rows = match stmt.query_map(rusqlite::params![since_ts], |r| {
+    let mapper = |r: &rusqlite::Row| {
         Ok(SpendBucket {
             bucket_epoch: r.get(0)?,
             cost: r.get(1)?,
             tokens: r.get(2)?,
         })
-    }) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
     };
-    rows.flatten().collect()
+    let rows = match session_uuid {
+        Some(uuid) => stmt.query_map(rusqlite::params![since_ts, uuid], mapper),
+        None => stmt.query_map(rusqlite::params![since_ts], mapper),
+    };
+    match rows {
+        Ok(r) => r.flatten().collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Per-model spend/token breakdown for a specific session UUID.

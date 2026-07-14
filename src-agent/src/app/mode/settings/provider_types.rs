@@ -34,16 +34,13 @@ impl ApiType {
         }
     }
 
-    /// Full human-readable label for the api type. The Anthropic variant is tagged
-    /// "(not wired)" because native Anthropic is deferred (the type persists but no
-    /// role routes to it yet — see [`ApiType::is_routable`]). Kept for
-    /// forward-compat; the UI Type field was removed (new providers are always
-    /// `OpenAiCompatible`).
+    /// Full human-readable label for the api type. Kept for forward-compat; the UI
+    /// Type field was removed (new providers are always `OpenAiCompatible`).
     #[allow(dead_code)]
     pub fn full_label(self) -> &'static str {
         match self {
             ApiType::OpenAiCompatible   => "OpenAI compatible",
-            ApiType::AnthropicCompatible => "Anthropic compatible (not wired)",
+            ApiType::AnthropicCompatible => "Anthropic (Claude)",
             ApiType::Codex               => "Codex (OAuth)",
             ApiType::KomaFree            => "koma free (keyless)",
         }
@@ -111,6 +108,9 @@ impl OAuthDraft {
                 let short = match c.provider {
                     OAuthProvider::Codex => "codex",
                     OAuthProvider::Kilocode => "kilocode",
+                    OAuthProvider::Xai => "xai",
+                    OAuthProvider::ClaudeAI => "claude",
+                    OAuthProvider::KomaRun => "koma",
                 };
                 let ident = if !c.email.is_empty() {
                     c.email.clone()

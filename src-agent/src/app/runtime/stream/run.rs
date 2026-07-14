@@ -240,7 +240,7 @@ over sec_remote (stateful socket).\n",
         // downgrade it to `None`. `shape` already treats `None` as "skip the fold +
         // snippet-router" gracefully (existing summary still applies) — no summary /
         // no recall, never a crash.
-        let aware = crate::app::resolve::resolve_role(
+        let aware = crate::app::resolve::resolve_role_dispatch(
             &state.rest.config,
             &sess.settings,
             crate::model::app_config::ModelRole::Awareness,
@@ -281,6 +281,55 @@ over sec_remote (stateful socket).\n",
     // model that actually served this request.
     state.rest.sessions[sess_idx].pending_dispatch_model_id =
         main.as_ref().map(|m| m.model_id.clone());
+    // Snapshot the endpoint alongside the model id (same dispatch-time
+    // rationale) so the usage-ledger write can look up curated overlay
+    // pricing (W3) when the provider reports cost as 0.0.
+    state.rest.sessions[sess_idx].pending_dispatch_endpoint =
+        main.as_ref().map(|m| m.endpoint.clone());
+
+    // Surface the SILENT koma-free downgrade — but only ONCE per user-visible turn,
+    // on its FIRST dispatch. `start_stream_task` re-enters on every tool-round
+    // continuation (`tools::dispatch` re-streams after each round), so an unguarded
+    // toast would fire N identical times for one N-round turn. `agent_steps` is the
+    // per-turn round counter: it is 0 on the fresh dispatch of every new turn (the
+    // submit/resend paths and the nudge/compaction-continue auto-wakes all reset it
+    // to 0 before dispatching) and is bumped to >0 in `turn.rs` the moment a round
+    // has tool calls — BEFORE that round re-streams — so `== 0` fires exactly on the
+    // first dispatch and suppresses the same-turn continuations. Also gate on
+    // `main.api_type == KomaFree` so an active Planner that resolved to its own real
+    // route (Plan mode) is never wrongly flagged — the effective turn route isn't
+    // koma-free there. `main_fallback_reason` then filters an EXPLICITLY selected
+    // koma-free (returns `None`) from a genuine fallback. Computed off an immutable
+    // borrow into an owned `Option<MainFallback>` BEFORE the mutable `set_toast`,
+    // mirroring the pending-dispatch write above, so no borrow conflict. `sess_idx`
+    // is the foreground session for a normal user send, and the toast projection/
+    // PushEnvelope read the foreground toast — so this reaches the GUI (and the TUI
+    // status line) exactly like the agent-unresolved warning.
+    let fallback = if state.rest.sessions[sess_idx].agent_steps == 0
+        && main
+            .as_ref()
+            .is_some_and(|m| m.api_type == crate::model::app_config::ApiType::KomaFree)
+    {
+        state.rest.sessions[sess_idx].session.as_ref().and_then(|sess| {
+            crate::app::resolve::main_fallback_reason(&state.rest.config, &sess.settings)
+        })
+    } else {
+        None
+    };
+    if let Some(reason) = fallback {
+        let msg = match reason {
+            crate::app::resolve::MainFallback::ProviderRemoved => {
+                "selected model's provider was removed — using koma free"
+            }
+            crate::app::resolve::MainFallback::NoKey => {
+                "selected model has no API key — using koma free"
+            }
+            crate::app::resolve::MainFallback::NotSignedIn => {
+                "selected model needs sign-in — using koma free"
+            }
+        };
+        state.rest.sessions[sess_idx].set_toast(msg.to_string());
+    }
 
     // 1. Window: the model's context-window size in tokens, from the cached
     //    catalogue. WINDOW-SIZING FIX: size against the RESOLVED Main model id
@@ -311,10 +360,12 @@ over sec_remote (stateful socket).\n",
         main.as_ref(),
     ) {
         (Some(sess), Some(m)) => {
-            // Codex Responses models are image-capable and have no static
-            // catalogue to consult, so never strip on a lookup that would
-            // necessarily miss; every other route uses the tri-state check.
-            let takes = if m.api_type == crate::model::app_config::ApiType::Codex {
+            // Codex Responses + Anthropic Claude models are image-capable and have
+            // no static OpenRouter catalogue to consult, so never strip on a lookup
+            // that would necessarily miss; every other route uses the tri-state check.
+            let takes = if m.api_type == crate::model::app_config::ApiType::Codex
+                || m.api_type == crate::model::app_config::ApiType::AnthropicCompatible
+            {
                 true
             } else {
                 match state.rest.models_cache.as_deref() {

@@ -115,6 +115,7 @@ pub(super) fn handle_save_creds(
             // legacy single-role field is left None so it isn't written.
             roles: vec![ModelRole::Main],
             role: None,
+            source_uuid: None,
         });
         // OpenRouter first-run: auto-register the cheap groq-pinned
         // Awareness and Safeguard model entries so the harness works
@@ -128,6 +129,7 @@ pub(super) fn handle_save_creds(
                 route: Some(DEFAULT_AWARENESS_PROVIDER.into()),
                 roles: vec![ModelRole::Awareness],
                 role: None,
+                source_uuid: None,
             });
             state.rest.config.models.push(ModelEntry {
                 uuid: uuid::Uuid::new_v4().to_string(),
@@ -137,6 +139,7 @@ pub(super) fn handle_save_creds(
                 route: Some(DEFAULT_CLASSIFIER_PROVIDER.into()),
                 roles: vec![ModelRole::Safeguard],
                 role: None,
+                source_uuid: None,
             });
         }
         if let Err(e) = state.rest.config.save() {

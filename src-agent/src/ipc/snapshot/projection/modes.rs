@@ -95,6 +95,9 @@ pub fn onboard_provider_snapshot(op: &OnboardProviderState) -> OnboardProviderSn
             match p {
                 crate::model::app_config::OAuthProvider::Codex => "codex",
                 crate::model::app_config::OAuthProvider::Kilocode => "kilocode",
+                crate::model::app_config::OAuthProvider::Xai => "xai",
+                crate::model::app_config::OAuthProvider::ClaudeAI => "claudeai",
+                crate::model::app_config::OAuthProvider::KomaRun => "komarun",
             }
             .to_string()
         }),
@@ -206,6 +209,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         short_send_enabled: st.short_send_enabled,
         sliding_cache: st.sliding_cache,
         bash_saving: st.bash_saving,
+        coding_autosave: st.coding_autosave,
         internet_mode: st.internet_mode.as_str().to_string(),
         cwd: st.cwd.display().to_string(),
         list_editing: st.list_editing,
@@ -255,6 +259,9 @@ pub fn oauth_draft_snapshot(o: &OAuthDraft) -> OAuthDraftSnapshot {
         provider: match o.provider {
             crate::model::app_config::OAuthProvider::Codex => "codex",
             crate::model::app_config::OAuthProvider::Kilocode => "kilocode",
+            crate::model::app_config::OAuthProvider::Xai => "xai",
+            crate::model::app_config::OAuthProvider::ClaudeAI => "claudeai",
+            crate::model::app_config::OAuthProvider::KomaRun => "komarun",
         }
         .to_string(),
         key: o.key.clone(),
@@ -469,6 +476,7 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
                     crate::model::agent_def::AgentSource::Session => "session",
                     crate::model::agent_def::AgentSource::Global => "global",
                     crate::model::agent_def::AgentSource::Builtin => "builtin",
+                    crate::model::agent_def::AgentSource::Extension => "extension",
                 }
                 .to_string(),
                 model_uuid: ag.model_uuid.clone(),

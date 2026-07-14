@@ -29,11 +29,81 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
+# Extension host: signed-zip verification + the shared wire protocol crate.
+# `zip` (deflate only — the pack.sh zips are deflate-compressed) unpacks an
+# installed extension; `ed25519-dalek` verifies the release signature over the
+# package's SHA-256 digest. `koma-extension` is a PATH dep on the sibling SDK
+# crate (its own detached workspace — the root `exclude` doesn't block a path
+# dep on the package) so the manifest/handshake wire types are shared verbatim,
+# never re-declared here.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ed25519-dalek = "2"
+koma-extension = { path = "../src-extension" }
+# Preemptive image downscaling at send time (see `data_url_for` in
+# dto/openrouter/request.rs): oversized attachments are decoded, resized, and
+# re-encoded before they hit the upstream chat API (previously no cap existed,
+# so an oversized original could 400 upstream). NORMAL (not gui-gated) dep —
+# the chat/attachment path is core, not GUI-only. `default-features = false`
+# + an explicit codec list keeps compile impact down: only the formats
+# attachments actually arrive as (png/jpeg/webp/gif/bmp) are compiled in — no
+# `rayon` (a single per-send image resize isn't worth the parallelism dep) and
+# no avif/tiff/exr/qoi/ico/dds/hdr/pnm/ff (unused, each pulls its own extra deps).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
 libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
+
+# --- feature = "gui": xterm.js + wry desktop client. All optional; the default
+# build pulls NONE of these (headless-safe, lean `cargo install`). ---
+# NOTE: wry's "transparent" cargo feature is REQUIRED for `with_transparent`
+# to have any effect at all on macOS/iOS (wry-0.52.1 src/wkwebview/mod.rs
+# gates the WKWebViewConfiguration `drawsBackground=NO` call behind
+# `#[cfg(feature = "transparent")]`; without it the call is compiled out and
+# the webview stays fully opaque no matter what `WebViewBuilder::with_transparent`
+# is set to). Linux (webkit2gtk) does not need this feature to honor transparency.
+wry = { version = "0.52", optional = true, features = ["transparent"] }
+tao = { version = "0.35", optional = true }
+# Native OS file/folder dialog for the GUI "+ New session" picker. On Linux the
+# default XDG-portal backend is async/thread-safe; on macOS/Windows it's the native
+# dialog. Run off the tao event-loop thread so its modal loop never stalls the 16ms
+# push loop. Optional + only pulled by the `gui` feature so the default build stays lean.
+rfd = { version = "0.15", optional = true }
+
+# macOS-only: lets us clear WKWebView's `underPageBackgroundColor`, which wry
+# 0.52.1 never touches on macOS (it only sets the legacy `drawsBackground`
+# KVC flag via the "transparent" feature above). On macOS 12+, WKWebView
+# paints an opaque `underPageBackgroundColor` behind the page independently
+# of `drawsBackground`, which is exactly the "opaque square behind the
+# rounded corners" symptom. Target-gated so it never touches non-macOS
+# builds; optional + only pulled in by the `gui` feature so the default
+# build stays lean. Version/feature set mirrors wry's own internal use of
+# this same crate (see wry-0.52.1 Cargo.toml) to avoid duplicate/conflicting
+# objc2 stacks.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSColor",
+] }
+
+# macOS-only native menu bar. On macOS, WKWebView's editing commands
+# (paste/copy/cut/select-all) are dispatched via the app's NSMenu Edit-menu
+# items through the responder chain. `koma gui` (gui/mod.rs) builds a
+# frameless tao window with NO menu bar, so Cmd+V/C/X/A never reach the
+# webview. `muda`'s `PredefinedMenuItem` variants (Cut/Copy/Paste/SelectAll/
+# Undo/Redo) bind the standard AppKit selectors, so installing a minimal
+# App+Edit menu fixes this with no custom key handling. Target-gated (like
+# `objc2-app-kit` above) so it never touches non-macOS builds, and
+# `default-features = false` to skip muda's `gtk`/`libxdo` defaults (those
+# back its Linux/BSD menu backend, irrelevant here and each an extra system
+# dependency we don't want anywhere near this crate's build). Optional +
+# only pulled in by the `gui` feature so the default build stays lean.
+muda = { version = "0.19", optional = true, default-features = false }
+
+[features]
+gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 
 [[bin]]
 name = "koma"
