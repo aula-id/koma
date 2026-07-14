@@ -194,6 +194,16 @@ fn is_granted(granted: &[Grant], required: Grant) -> bool {
         Grant::AgentsRead => {
             granted.contains(&Grant::AgentsRead) || granted.contains(&Grant::AgentsOrchestrate)
         }
+        // WAVE-1 COMPILE STUB: `required_grant` never returns these yet (no method
+        // requires them), so these arms are unreachable today. Exhaustiveness-only
+        // placeholder so the crate builds after `Grant` grew wave-1 protocol
+        // variants; real gating logic for each lands in the wave that wires its
+        // methods (see task board: sessions:manage / chat:prompt / models:invoke /
+        // context:publish).
+        Grant::SessionsManage => granted.contains(&Grant::SessionsManage),
+        Grant::ChatPrompt => granted.contains(&Grant::ChatPrompt),
+        Grant::ModelsInvoke => granted.contains(&Grant::ModelsInvoke),
+        Grant::ContextPublish => granted.contains(&Grant::ContextPublish),
     }
 }
 
@@ -213,6 +223,11 @@ fn grant_wire(g: Grant) -> &'static str {
     match g {
         Grant::AgentsRead => "agents:read",
         Grant::AgentsOrchestrate => "agents:orchestrate",
+        // WAVE-1 COMPILE STUB: see `is_granted` above.
+        Grant::SessionsManage => "sessions:manage",
+        Grant::ChatPrompt => "chat:prompt",
+        Grant::ModelsInvoke => "models:invoke",
+        Grant::ContextPublish => "context:publish",
     }
 }
 
