@@ -10,9 +10,8 @@
 
 use std::path::Path;
 
-use tokio::net::UnixStream;
-
 use super::frame::{self, FrameReader};
+use super::IpcStream;
 use crate::model::store;
 
 /// Connect to the daemon's unix socket at `path` (typically
@@ -21,20 +20,20 @@ use crate::model::store;
 /// A returned `Ok` stream means a daemon is live and listening. An `Err`
 /// (`NotFound` / `ConnectionRefused`) means no daemon is up — the signal the
 /// spawn-or-attach logic uses to decide it must spawn one.
-pub async fn connect(path: &Path) -> std::io::Result<UnixStream> {
-    UnixStream::connect(path).await
+pub async fn connect(path: &Path) -> std::io::Result<IpcStream> {
+    IpcStream::connect(path).await
 }
 
 /// Convenience over [`store::daemon_sock_path`] + [`connect`]: resolve a SESSION's keyed
 /// daemon socket path (`run/<session_id>.sock`) and connect to it.
 #[allow(dead_code)] // wired in daemon stage 3+ (spawn-or-attach)
-pub async fn connect_default(session_id: &str) -> anyhow::Result<UnixStream> {
+pub async fn connect_default(session_id: &str) -> anyhow::Result<IpcStream> {
     let path = store::daemon_sock_path(session_id)?;
     Ok(connect(&path).await?)
 }
 
 /// Send one length-prefixed frame (the raw JSON payload bytes) to the daemon.
-pub async fn send_frame(stream: &mut UnixStream, bytes: &[u8]) -> std::io::Result<()> {
+pub async fn send_frame(stream: &mut IpcStream, bytes: &[u8]) -> std::io::Result<()> {
     frame::write_frame(stream, bytes).await
 }
 
@@ -43,7 +42,7 @@ pub async fn send_frame(stream: &mut UnixStream, bytes: &[u8]) -> std::io::Resul
 /// socket read may deliver more than one frame), so the SAME [`FrameReader`] must
 /// be reused for the lifetime of the connection.
 pub async fn recv_frame(
-    stream: &mut UnixStream,
+    stream: &mut IpcStream,
     reader: &mut FrameReader,
 ) -> std::io::Result<Vec<u8>> {
     frame::read_frame(stream, reader).await

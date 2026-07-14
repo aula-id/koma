@@ -7,10 +7,10 @@
 //! file). No behaviour change.
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream as StdUnixStream;
 
 use crate::ipc::frame::FrameReader;
 use crate::ipc::mcp_proto::{McpRequest, McpResponse};
+use crate::ipc::SyncIpcStream as StdUnixStream;
 
 use super::PROXY_IO_TIMEOUT;
 

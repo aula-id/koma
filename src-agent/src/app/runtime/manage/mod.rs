@@ -58,7 +58,6 @@ pub use mcp::ensure_mcp_daemon_running;
 pub use probe::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -69,6 +68,7 @@ use anyhow::{anyhow, Context, Result};
 use crate::cli::DaemonSub;
 use crate::ipc::frame::FrameReader;
 use crate::ipc::proto::{ClientRequest, DaemonFrame};
+use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
 /// How long to wait for a freshly-spawned daemon's socket to start accepting before
@@ -155,7 +155,7 @@ pub fn daemon_alive(session_id: &str) -> bool {
     let Ok(path) = store::daemon_sock_path(session_id) else {
         return false;
     };
-    UnixStream::connect(&path).is_ok()
+    SyncIpcStream::connect(&path).is_ok()
 }
 
 /// Whether ANY session-daemon is currently alive, by probing every `*.sock` in the run
@@ -172,7 +172,7 @@ pub fn any_daemon_alive() -> bool {
 /// specific path). `true` only on a successful connect; any error (refused / not-found /
 /// permissions) reads as not-live.
 fn sock_path_alive(path: &Path) -> bool {
-    UnixStream::connect(path).is_ok()
+    SyncIpcStream::connect(path).is_ok()
 }
 
 /// Enumerate the session sockets under [`store::run_dir`], returning each `*.sock`
@@ -289,7 +289,7 @@ fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Resul
 ///
 /// `pub(super)` — called from `manage::mcp::ensure_mcp_daemon_running`.
 pub(super) fn probe_or_clear(path: &Path) -> Result<bool> {
-    match UnixStream::connect(path) {
+    match SyncIpcStream::connect(path) {
         Ok(_stream) => Ok(true), // a daemon is already live (probe stream dropped)
         Err(e) => match e.kind() {
             std::io::ErrorKind::ConnectionRefused => {
@@ -340,7 +340,7 @@ pub fn ensure_daemon_running(session_id: &str, resume: bool, workdir: Option<&Pa
     spawn_and_wait_until_alive(session_id, &path, resume, workdir)
 }
 
-/// Spawn-or-attach: return a connected blocking [`UnixStream`] to a LIVE daemon,
+/// Spawn-or-attach: return a connected blocking [`SyncIpcStream`] to a LIVE daemon,
 /// spawning one first if none is up.
 ///
 /// The blocking-stream variant of [`ensure_daemon_running`], used by `koma daemon
@@ -360,18 +360,18 @@ pub fn ensure_daemon_running(session_id: &str, resume: bool, workdir: Option<&Pa
 ///
 /// `session_id` keys the socket + the spawned daemon's `--session`, so this confirms a
 /// live session-daemon for exactly that session.
-pub fn ensure_daemon_and_connect(session_id: &str) -> Result<UnixStream> {
+pub fn ensure_daemon_and_connect(session_id: &str) -> Result<SyncIpcStream> {
     let path = store::daemon_sock_path(session_id)?;
 
     if probe_or_clear(&path)? {
         // Already live — reconnect for the caller (the probe stream was dropped).
-        return UnixStream::connect(&path)
+        return SyncIpcStream::connect(&path)
             .with_context(|| format!("connect to live daemon socket {}", path.display()));
     }
 
     // Nothing live → spawn + wait until it accepts, then connect for the caller.
     spawn_and_wait_until_alive(session_id, &path, false, None)?;
-    UnixStream::connect(&path)
+    SyncIpcStream::connect(&path)
         .with_context(|| format!("connect to spawned daemon socket {}", path.display()))
 }
 
@@ -392,7 +392,7 @@ fn spawn_and_wait_until_alive(
     let pid = spawn_daemon(session_id, resume, workdir)?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
-        match UnixStream::connect(path) {
+        match SyncIpcStream::connect(path) {
             Ok(_stream) => return Ok(()), // accepting — probe stream dropped
             Err(_) if Instant::now() < deadline => std::thread::sleep(SPAWN_POLL_INTERVAL),
             Err(e) => {
@@ -412,7 +412,7 @@ fn spawn_and_wait_until_alive(
 /// big-endian length + payload — the SAME wire codec as [`crate::ipc::frame`]).
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn send_request(stream: &mut UnixStream, req: &ClientRequest) -> Result<()> {
+pub(super) fn send_request(stream: &mut SyncIpcStream, req: &ClientRequest) -> Result<()> {
     let payload = serde_json::to_vec(req).context("serialise ClientRequest")?;
     let prefix = (payload.len() as u32).to_be_bytes();
     stream.write_all(&prefix).context("write frame prefix")?;
@@ -427,7 +427,7 @@ pub(super) fn send_request(stream: &mut UnixStream, req: &ClientRequest) -> Resu
 /// wait so a wedged daemon can't hang the CLI.
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn recv_frame(stream: &mut UnixStream, reader: &mut FrameReader) -> Result<DaemonFrame> {
+pub(super) fn recv_frame(stream: &mut SyncIpcStream, reader: &mut FrameReader) -> Result<DaemonFrame> {
     loop {
         // A previous read may have buffered a whole frame already.
         if let Some(bytes) = reader.next_frame().context("frame reassembly")? {
@@ -446,8 +446,8 @@ pub(super) fn recv_frame(stream: &mut UnixStream, reader: &mut FrameReader) -> R
 /// timeouts. Returns an error if no daemon is accepting (the bind-as-oracle signal).
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn connect_managed(path: &Path) -> Result<(UnixStream, FrameReader)> {
-    let stream = UnixStream::connect(path)
+pub(super) fn connect_managed(path: &Path) -> Result<(SyncIpcStream, FrameReader)> {
+    let stream = SyncIpcStream::connect(path)
         .with_context(|| format!("connect to daemon socket {}", path.display()))?;
     // Bound every blocking read/write so a stuck daemon can't wedge the CLI.
     stream

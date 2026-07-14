@@ -49,9 +49,9 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::UnixStream;
 
 use crate::app::runtime::HubInbound;
+use crate::ipc::IpcStream;
 use crate::ipc::frame::{self, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonFrame};
 
@@ -67,7 +67,7 @@ const FRAME_POLL: Duration = Duration::from_millis(4);
 /// this client with the hub (handing it the frame sender) BEFORE returning, so the
 /// task is enrolled the instant it starts; then spawns the I/O task on the ambient
 /// tokio runtime (the caller runs inside the daemon runtime).
-pub fn spawn(stream: UnixStream, client_id: u64, hub_tx: Sender<HubInbound>) {
+pub fn spawn(stream: IpcStream, client_id: u64, hub_tx: Sender<HubInbound>) {
     // This client's outbound frame channel: the hub holds the sender (enrolled via
     // Register below), this task owns the receiver and writes frames to the socket.
     let (frame_tx, frame_rx) = std::sync::mpsc::channel::<DaemonFrame>();
