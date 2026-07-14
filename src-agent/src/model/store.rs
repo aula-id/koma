@@ -387,6 +387,58 @@ pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(r"\\.\pipe\koma-{session_id}")))
 }
 
+/// Enumerate this user's koma named-pipe SESSION endpoints from the Windows pipe
+/// namespace, returning each pipe's `<session_id>` suffix — the same id
+/// [`daemon_sock_path`] embeds after `koma-`.
+///
+/// A named pipe is not a filesystem object, so [`run_dir`] has nothing to scan on
+/// Windows — every unix discovery/cleanup site walks `run/*.sock` FILES, which
+/// simply don't exist here. The pipe namespace itself IS enumerable instead:
+/// `read_dir(r"\\.\pipe\")` yields one entry per pipe with a live server instance,
+/// and each entry's `file_name()` is the pipe's bare name (no `\\.\pipe\` prefix).
+/// This is the Windows twin of that `run_dir` scan for every site that needs
+/// session ids: [`super::super::app::runtime::manage`]'s `list_session_sockets`,
+/// the MCP daemon's idle reaper, and `cmd_clean`'s orphan-pidfile sweep.
+///
+/// Filters out every RESERVED (non-session) `koma-*` pipe this codebase also
+/// binds, so callers never mistake one for a session: the singleton MCP daemon
+/// (`koma-mcp`, [`mcp_daemon_sock_path`]), any per-extension host pipe
+/// (`koma-ext-<id>`, [`ext_sock_path`]), and the two self-test pipes
+/// (`koma-ipc-selftest`, `koma-daemon-selftest`). Any OTHER `koma-`-prefixed name
+/// is assumed to be a session id minted by [`daemon_sock_path`].
+///
+/// Best-effort: enumerating the pipe namespace can transiently fail; an error
+/// degrades to an empty `Vec` rather than propagating, mirroring the "unreadable
+/// dir ⇒ nothing found" contract the unix `run_dir` scans already have.
+#[cfg(windows)]
+pub fn list_koma_session_pipes() -> Vec<String> {
+    const PREFIX: &str = "koma-";
+    // Exact non-session pipe names (checked with the shared `koma-` prefix still on).
+    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-ipc-selftest", "koma-daemon-selftest"];
+    // Non-session pipe name PREFIXES (also checked before stripping `koma-`), so a
+    // whole family — every extension host — is excluded without listing each id.
+    const RESERVED_PREFIX: &[&str] = &["koma-ext-"];
+
+    let entries = match std::fs::read_dir(r"\\.\pipe\") {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(PREFIX) {
+            continue; // not a koma pipe at all
+        }
+        if RESERVED_EXACT.contains(&name) || RESERVED_PREFIX.iter().any(|p| name.starts_with(p)) {
+            continue; // a known non-session koma pipe
+        }
+        out.push(name[PREFIX.len()..].to_string());
+    }
+    out
+}
+
 /// Path to a SESSION-daemon's PID file: `~/.koma/run/<session_id>.pid`.
 ///
 /// Advisory only — recorded for diagnostics/`kill`. It is NOT the liveness oracle
