@@ -227,6 +227,7 @@ async fn reaper_loop(shutting_down: std::sync::Arc<std::sync::atomic::AtomicBool
 /// file existing at all is enough to keep the shared MCP daemon alive (bias toward
 /// staying alive). An unreadable/absent run dir returns `true` (treated as "sessions
 /// may exist") so a transient error never causes a reap.
+#[cfg(unix)]
 fn run_dir_has_socket() -> bool {
     let dir = match store::run_dir() {
         Ok(d) => d,
@@ -246,6 +247,25 @@ fn run_dir_has_socket() -> bool {
         }
     }
     false
+}
+
+/// Windows twin of the unix [`run_dir_has_socket`] above: presence-only check of
+/// the pipe namespace for ANY live session pipe name (`koma-<id>`), via
+/// [`store::list_koma_session_pipes`].
+///
+/// Mirrors the unix arm's discipline exactly — NO connect-probe here either (a
+/// session pipe merely being visible in the namespace is enough to keep the shared
+/// MCP daemon alive, same bias-toward-staying-alive rationale as the unix
+/// file-presence check). The one difference: [`store::list_koma_session_pipes`]
+/// degrades a `read_dir` failure to an empty `Vec`, so unlike the unix arm this
+/// can't distinguish "genuinely no sessions" from "pipe namespace momentarily
+/// unreadable" and would read as `false` either way — but the reaper around this
+/// call already requires an initial grace period PLUS two consecutive empty scans
+/// ([`REAPER_INITIAL_GRACE`], [`REAPER_EMPTY_STREAK_TO_EXIT`]) before it trips, so a
+/// single transient enumeration miss can't cause a false reap.
+#[cfg(windows)]
+fn run_dir_has_socket() -> bool {
+    !store::list_koma_session_pipes().is_empty()
 }
 
 /// How long a single `accept` waits before we re-check the `shutting_down` flag. Short

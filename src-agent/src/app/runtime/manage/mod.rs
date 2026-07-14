@@ -186,6 +186,7 @@ fn sock_path_alive(path: &Path) -> bool {
 /// sessions) without consulting any pidfile for liveness.
 ///
 /// `pub(super)` — called from `manage::commands::{cmd_clean, sweep_stale_files}`.
+#[cfg(unix)]
 pub(super) fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, bool)>> {
     let dir = store::run_dir()?;
     let mut out = Vec::new();
@@ -204,6 +205,33 @@ pub(super) fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, 
         };
         let alive = sock_path_alive(&path);
         out.push((id.to_string(), path, alive));
+    }
+    Ok(out)
+}
+
+/// Windows twin of the unix [`list_session_sockets`] above.
+///
+/// There is no `run_dir` to scan for `*.sock` files here (a named pipe is not a
+/// filesystem object), so session ids instead come from
+/// [`store::list_koma_session_pipes`] — the pipe-namespace enumeration. Each id's
+/// pipe path is rebuilt via [`store::daemon_sock_path`] and probed with the SAME
+/// bind-as-oracle connect-probe ([`sock_path_alive`]) the unix arm uses, so a
+/// dead-but-still-visible pipe name (a wedged/crashed daemon whose pipe handle
+/// hasn't fully released) is verified exactly like a stale unix socket file is —
+/// presence in the namespace is only a CANDIDATE, never assumed alive on its own.
+/// Returns the same `(session_id, path, alive)` shape as the unix arm, so every
+/// downstream consumer (`live_session_sockets`, `any_daemon_alive`,
+/// `list_live_sessions`, the `cmd_status`/`kill`/`restart`/`clean` verbs) needs no
+/// platform split of its own.
+#[cfg(windows)]
+pub(super) fn list_session_sockets() -> Result<Vec<(String, std::path::PathBuf, bool)>> {
+    let mut out = Vec::new();
+    for id in store::list_koma_session_pipes() {
+        let Ok(path) = store::daemon_sock_path(&id) else {
+            continue;
+        };
+        let alive = sock_path_alive(&path);
+        out.push((id, path, alive));
     }
     Ok(out)
 }
