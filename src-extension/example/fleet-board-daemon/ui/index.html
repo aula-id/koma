@@ -16,34 +16,121 @@
         display: flex;
         height: 100%;
         flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        text-align: center;
-        padding: 24px;
+        gap: 12px;
+        padding: 16px;
         box-sizing: border-box;
       }
       h1 {
         margin: 0;
-        font-size: 20px;
+        font-size: 16px;
         font-weight: 600;
       }
-      p {
+      p.hint {
         margin: 0;
-        font-size: 13px;
+        font-size: 12px;
         color: #9a9a9a;
-        max-width: 32em;
+        max-width: 40em;
       }
+      p.hint code {
+        color: #cfcfcf;
+      }
+      #spawn {
+        align-self: flex-start;
+        background: #2d6cdf;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 6px 12px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #spawn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #rows {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        overflow-y: auto;
+      }
+      .row {
+        border-left: 3px solid #444;
+        padding: 4px 8px;
+        background: #262626;
+        border-radius: 2px;
+        word-break: break-word;
+      }
+      .row.agent { border-left-color: #2d6cdf; }
+      .row.event { border-left-color: #b06fd6; }
+      .row.error { border-left-color: #d64545; }
     </style>
   </head>
   <body>
     <main>
       <h1>Fleet Board</h1>
-      <p>
-        This page is served straight off the installed extension's own <code>ui/</code>
-        directory via <code>koma://extension/&lt;id&gt;/index.html</code> — a demo of
-        how an extension's <code>contributes.panels</code> renders as its own tab.
+      <p class="hint">
+        A working panel bridge demo. "Spawn card" sends
+        <code>{action:'spawn', task:'demo card'}</code> to the daemon over
+        <code>koma-panel.js</code>; the immediate reply and every later
+        event push (forwarded by <code>on_event</code> in
+        <code>src/main.rs</code>) render as rows below.
       </p>
+      <button id="spawn">Spawn card</button>
+      <div id="rows"></div>
     </main>
+
+    <!-- The reusable helper — see ui/koma-panel.js. It is a standalone,
+         dependency-free file: drop it into any panel's ui/ directory as-is
+         and it gives you `KomaPanel.send()` / `KomaPanel.onPush()`. -->
+    <script src="koma-panel.js"></script>
+    <script>
+      // Board-specific glue, inline in this page: this part is specific to
+      // THIS panel — koma-panel.js only knows how to move envelopes back
+      // and forth, it has no idea what a "card" is.
+      var rowsEl = document.getElementById('rows');
+      var spawnBtn = document.getElementById('spawn');
+
+      function addRow(kind, text) {
+        var row = document.createElement('div');
+        row.className = 'row ' + kind;
+        row.textContent = text;
+        rowsEl.prepend(row);
+      }
+
+      spawnBtn.addEventListener('click', function () {
+        spawnBtn.disabled = true;
+        KomaPanel.send({ action: 'spawn', task: 'demo card' })
+          .then(function (reply) {
+            // This is the IMMEDIATE ack from on_invoke —
+            // {"ok":true,"queued":true} — not the real spawn result. The
+            // actual spawn confirmation arrives later as an unsolicited
+            // push (see onPush below), once the driver thread has really
+            // called koma.call("agents.spawn", ...).
+            addRow('agent', 'queued: ' + JSON.stringify(reply));
+          })
+          .catch(function (err) {
+            addRow('error', 'spawn failed: ' + err.message);
+          })
+          .then(function () {
+            spawnBtn.disabled = false;
+          });
+      });
+
+      KomaPanel.onPush(function (payload) {
+        if (payload && payload.kind === 'agent') {
+          addRow(
+            'agent',
+            'agent ' + payload.agentId + ' (' + payload.task + '): ' + payload.status
+          );
+        } else if (payload && payload.kind === 'event') {
+          addRow('event', payload.name + ': ' + JSON.stringify(payload.params));
+        } else {
+          addRow('event', JSON.stringify(payload));
+        }
+      });
+    </script>
   </body>
 </html>

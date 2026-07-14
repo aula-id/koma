@@ -8,12 +8,15 @@ cd "$SCRIPT_DIR"
 # Create dist directory if missing
 mkdir -p dist
 
-# The four examples to package
+# The examples to package
 EXAMPLES=(
   "echo-tool-daemon"
   "upper-tool-oneshot"
   "fleet-board-daemon"
   "agent-peek-oneshot"
+  "oauth-demo-daemon"
+  "event-watcher-daemon"
+  "orchestrator-daemon"
 )
 
 echo "=== Building extensions ==="
