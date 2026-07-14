@@ -86,6 +86,28 @@ impl DaemonHub {
         }
     }
 
+    /// Drain a pending EXTENSION `sessions.switch` to a session THIS daemon does NOT own (W7).
+    /// The grant broker set `state.rest.ext_switch_pending = Some(uuid)` when a `sessions.switch`
+    /// target uuid was not a live session in this daemon's `sessions` Vec (a live LOCAL target
+    /// instead took the in-daemon `handle_live_switch` path and never set this). This consumes
+    /// the flag and BROADCASTS a one-shot [`DaemonEvent::AttachSession { session_id }`] to every
+    /// ATTACHED client, instructing them to attach that session's OTHER daemon (via its keyed
+    /// socket). The mirror of [`drain_new_pending`] → `NewSession` / [`drain_resume_pending`] →
+    /// `OpenSwapper` — a transient control frame, the daemon's own mode left untouched — but
+    /// broadcast to attached clients rather than only the controller (a `sessions.switch` may
+    /// target whichever window; the TUI shadow treats it as a non-visual no-op / may ignore the
+    /// hand-off, GUI wiring lands later). If no client is attached the flag is still cleared
+    /// (there is nowhere to attach) so it can't re-fire spuriously on the next attach.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_ext_switch_pending(&mut self, state: &mut AppState) {
+        if let Some(session_id) = state.rest.ext_switch_pending.take() {
+            for i in 0..self.clients.len() {
+                if self.clients[i].attached {
+                    self.send_to(i, DaemonEvent::AttachSession { session_id: session_id.clone() });
+                }
+            }
+        }
+    }
+
     /// Stream this tick's render-state changes to every ATTACHED client.
     ///
     /// Builds ONE fresh snapshot from live `state`, then for EACH attached client

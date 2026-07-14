@@ -117,6 +117,14 @@ pub(super) fn serialize_and_push(
                                     m.content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
                                 {
                                     (Some("bashNudge"), body.to_string(), m.reasoning.clone())
+                                } else if let Some(body) =
+                                    m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK)
+                                {
+                                    // Extension-prompt injection: reuse the compact
+                                    // "bashNudge" kind so the GUI STRIPS the sentinel and
+                                    // renders it compactly (a dedicated ext render is a
+                                    // later GUI wave); never a raw-sentinel user bubble.
+                                    (Some("bashNudge"), body.to_string(), m.reasoning.clone())
                                 } else {
                                     (None, m.content.clone(), m.reasoning.clone())
                                 }

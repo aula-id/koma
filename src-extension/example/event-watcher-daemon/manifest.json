@@ -1,0 +1,24 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.event-watcher-daemon",
+  "name": "Event Watcher",
+  "version": "0.0.0",
+  "description": "A minimal daemon extension that subscribes to every broadcast koma event and reports counts through a tool. The starter sample for contributes.events.",
+  "tier": "free",
+  "kind": "daemon",
+  "runtime": {
+    "exec": "event-watcher-daemon",
+    "args": []
+  },
+  "contributes": {
+    "tools": [
+      {
+        "name": "watcher.stats",
+        "description": "Return how many times each subscribed koma event has fired since this daemon started.",
+        "input_schema": { "type": "object", "properties": {} }
+      }
+    ],
+    "events": ["subagent.done", "agent.turn_end", "session.foreground_change"]
+  },
+  "requires": []
+}

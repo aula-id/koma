@@ -68,6 +68,24 @@ pub enum ClientRequest {
     /// attach and NO snapshot stream. The daemon must answer this WITHOUT mutating any
     /// session state (no create/attach, no foreground change, no Hello/Snapshot).
     Status,
+    /// FIRE-AND-FORGET cross-daemon sub-agent spawn (extension `sessions.spawn_into`, W7):
+    /// one session-daemon's grant broker connects ANOTHER session-daemon's keyed socket and
+    /// sends this to spawn a sub-agent INTO that daemon's own foreground/first-live session,
+    /// through the SAME `spawn_or_queue` path the model's `task` tool uses (`tool_call_id`
+    /// None, `detached` false). No attach, no streaming: the sending side speaks the blocking
+    /// management codec (like the `Status` discovery probe), reads a single
+    /// [`DaemonEvent::Ack`] (accepted/queued) or [`DaemonEvent::Error`] (failure), and closes
+    /// — the connection is NEVER enrolled as an attached client owing snapshots. `agent`
+    /// defaults to the built-in general agent when absent; `model`/`effort` are optional
+    /// per-spawn route overrides (empty = absent). v1 is intentionally poll-less: the target
+    /// daemon owns the resulting sub-agent, and the caller receives no ext-facing agent id
+    /// (no cross-daemon `agents.status`/`result` polling yet).
+    SpawnAgent {
+        agent: Option<String>,
+        task: String,
+        model: Option<String>,
+        effort: Option<String>,
+    },
     Resync,
     SwitchForeground { session_id: String },
     SubmitInput { text: String },
@@ -460,6 +478,24 @@ pub enum ClientRequest {
     /// Fetch the locally-installed extension registry (read-only): replies with a one-shot
     /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
     ListInstalledExtensions,
+
+    // ─── GUI extension PANEL bridge (W8) ─────────────────────────────────────
+    /// A GUI extension PANEL's request to its backing extension daemon. The panel iframe
+    /// (`koma://extension/<ext_id>/…`) posts it; the host forwards it here through the attached
+    /// daemon, which AUTO-STARTS the (daemon-kind, enabled) extension if it is not already
+    /// running — a panel being open implies user intent — then `invoke`s its `panel.msg` method
+    /// with `{ panelId, payload }` and answers OUT-OF-BAND with a [`DaemonEvent::ExtPanelReply`]
+    /// correlated by `req_id`. `panel_id` names the contributing panel; `payload` is the opaque
+    /// request body the extension defines. DAEMON-owned (the daemon holds the ext managers), so
+    /// attached-only — un-attached the GUI replies locally (W9). Neither `ensure_started` nor
+    /// the invoke runs on the event-loop thread (both block on a sync→async bridge); the handler
+    /// offloads them to `spawn_blocking`. gui-gated.
+    ExtPanelMsg {
+        ext_id: String,
+        panel_id: String,
+        req_id: Option<String>,
+        payload: serde_json::Value,
+    },
 }
 
 // ─── daemon -> client ────────────────────────────────────────────────────────
@@ -505,6 +541,17 @@ pub enum DaemonEvent {
     /// detaches — and attaches a freshly minted id); the shadow treats it as a non-visual
     /// no-op.
     NewSession { kill: bool },
+    /// One-shot: instruct the CONTROLLING client to ATTACH to ANOTHER session's daemon (the
+    /// extension `sessions.switch` hand-off to a session this daemon does not own, W7). A
+    /// broker `sessions.switch` whose target uuid is NOT a live session in THIS daemon sets
+    /// `state.rest.ext_switch_pending = Some(uuid)`; the hub drains it next tick and
+    /// broadcasts this to attached clients — the EXACT mirror of `new_pending` →
+    /// [`NewSession`] / `resume_pending` → [`OpenSwapper`], leaving the daemon's own mode
+    /// untouched. The client is expected to detach and re-attach the named session's daemon
+    /// (via its keyed socket). Payload-free beyond the target `session_id`. The TUI shadow
+    /// treats it as a non-visual no-op (it MAY ignore the hand-off); GUI wiring lands in a
+    /// later wave. Zero attached clients → structural no-op.
+    AttachSession { session_id: String },
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
@@ -672,6 +719,32 @@ pub enum DaemonEvent {
         ok: bool,
         error: Option<String>,
     },
+    /// Out-of-band reply to a [`ClientRequest::ExtPanelMsg`] (W8 panel bridge): the extension's
+    /// `panel.msg` invoke outcome, delivered to the REQUESTING client via the hub's per-client
+    /// seq'd `send_to` (the auto-start + invoke run off-loop on `spawn_blocking`, so they can't
+    /// advance the seq themselves — the same out-of-band pattern as [`StoreCatalogue`]). `req_id`
+    /// is echoed from the request so the GUI panel can correlate the reply to its pending call;
+    /// `ok`/`payload`/`error` carry the result (an unavailable / disabled / oneshot extension, a
+    /// failed auto-start, or a timed-out/failed invoke is `ok:false` + `error`). The GUI host
+    /// re-pushes it as an `ExtPanelReply` envelope; the TUI shadow treats it as a no-op.
+    ExtPanelReply {
+        ext_id: String,
+        panel_id: String,
+        req_id: Option<String>,
+        ok: bool,
+        payload: Option<serde_json::Value>,
+        error: Option<String>,
+    },
+    /// Unsolicited daemon→panel push (W8 panel bridge): an extension daemon sent a `panel.push`
+    /// notify, broadcast to EVERY attached client (panel pushes are NOT request-correlated — no
+    /// initiating client) by the daemon hub's `drain_ext_panel_pushes`.
+    /// `panel_id` names the target panel; `payload` is the extension-defined body. The GUI host
+    /// re-pushes it as an `ExtPanelPush` envelope; the TUI shadow treats it as a no-op.
+    ExtPanelPush {
+        ext_id: String,
+        panel_id: String,
+        payload: serde_json::Value,
+    },
     /// One-shot reply to a [`ClientRequest::GetMcpStatus`]: per-server connection state
     /// (tool counts + errors) plus an optional top-level availability error. The GUI
     /// host re-pushes this as a `McpStatus` envelope via `push_intercept`.
@@ -750,4 +823,120 @@ pub enum StateDelta {
     ForegroundChanged { session_id: String },
     SessionAdded(Box<SessionSnapshot>),
     Toast { kind: String, text: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cross-daemon spawn request (W7 `sessions.spawn_into`) survives a
+    /// serde round-trip intact — it crosses the unix socket between two
+    /// session-daemons, so its wire shape must be stable (all four fields,
+    /// including the `Option` absences).
+    #[test]
+    fn spawn_agent_serde_roundtrip() {
+        let full = ClientRequest::SpawnAgent {
+            agent: Some("researcher".into()),
+            task: "summarise the diff".into(),
+            model: Some("gpt-5".into()),
+            effort: Some("high".into()),
+        };
+        let bytes = serde_json::to_vec(&full).expect("serialise SpawnAgent");
+        let back: ClientRequest = serde_json::from_slice(&bytes).expect("deserialise SpawnAgent");
+        assert_eq!(back, full);
+
+        // Optional fields absent (the common `sessions.spawn_into { session, task }` shape).
+        let minimal = ClientRequest::SpawnAgent {
+            agent: None,
+            task: "do the thing".into(),
+            model: None,
+            effort: None,
+        };
+        let back2: ClientRequest =
+            serde_json::from_slice(&serde_json::to_vec(&minimal).unwrap()).unwrap();
+        assert_eq!(back2, minimal);
+    }
+
+    /// The attach-hand-off signal (W7 `sessions.switch` to a non-local session)
+    /// round-trips — it is broadcast to attached clients, so its wire shape must
+    /// hold.
+    #[test]
+    fn attach_session_serde_roundtrip() {
+        let ev = DaemonEvent::AttachSession {
+            session_id: "abc-123".into(),
+        };
+        let back: DaemonEvent =
+            serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    /// The panel→daemon request (W8 panel bridge) round-trips intact, INCLUDING the
+    /// `req_id` present/absent forms and an arbitrary JSON `payload` — it crosses the
+    /// unix socket from the GUI host to the daemon, so its wire shape must be stable.
+    #[test]
+    fn ext_panel_msg_serde_roundtrip() {
+        let with_id = ClientRequest::ExtPanelMsg {
+            ext_id: "run.koma.example".into(),
+            panel_id: "sidebar".into(),
+            req_id: Some("r-7".into()),
+            payload: serde_json::json!({ "action": "refresh", "n": 3 }),
+        };
+        let back: ClientRequest =
+            serde_json::from_slice(&serde_json::to_vec(&with_id).unwrap()).unwrap();
+        assert_eq!(back, with_id);
+
+        // Fire-and-forget shape (no correlation id).
+        let no_id = ClientRequest::ExtPanelMsg {
+            ext_id: "run.koma.example".into(),
+            panel_id: "sidebar".into(),
+            req_id: None,
+            payload: serde_json::Value::Null,
+        };
+        let back2: ClientRequest =
+            serde_json::from_slice(&serde_json::to_vec(&no_id).unwrap()).unwrap();
+        assert_eq!(back2, no_id);
+    }
+
+    /// The panel-reply event (W8) round-trips: both the ok+payload and the
+    /// error (`ok:false`, no payload) shapes cross the wire to the requesting client.
+    #[test]
+    fn ext_panel_reply_serde_roundtrip() {
+        let ok = DaemonEvent::ExtPanelReply {
+            ext_id: "run.koma.example".into(),
+            panel_id: "sidebar".into(),
+            req_id: Some("r-7".into()),
+            ok: true,
+            payload: Some(serde_json::json!({ "rows": [1, 2, 3] })),
+            error: None,
+        };
+        let back: DaemonEvent =
+            serde_json::from_slice(&serde_json::to_vec(&ok).unwrap()).unwrap();
+        assert_eq!(back, ok);
+
+        let err = DaemonEvent::ExtPanelReply {
+            ext_id: "run.koma.example".into(),
+            panel_id: "sidebar".into(),
+            req_id: None,
+            ok: false,
+            payload: None,
+            error: Some("extension not available".into()),
+        };
+        let back2: DaemonEvent =
+            serde_json::from_slice(&serde_json::to_vec(&err).unwrap()).unwrap();
+        assert_eq!(back2, err);
+    }
+
+    /// The unsolicited daemon→panel push (W8) round-trips — it is broadcast to every
+    /// attached client, so its wire shape must hold.
+    #[test]
+    fn ext_panel_push_serde_roundtrip() {
+        let ev = DaemonEvent::ExtPanelPush {
+            ext_id: "run.koma.example".into(),
+            panel_id: "sidebar".into(),
+            payload: serde_json::json!({ "tick": 42 }),
+        };
+        let back: DaemonEvent =
+            serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+    }
 }

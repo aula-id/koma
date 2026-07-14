@@ -221,6 +221,34 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             push(json);
         }
     }
+    // W8 panel bridge: re-push the panel.msg reply + the unsolicited daemon→panel push as their
+    // own envelopes BEFORE folding (each a non-visual fold no-op, keeping the seq gap-free), same
+    // clone-through as `ExtensionOpResult`. The `payload` rides as an arbitrary JSON value; the
+    // GUI push injection re-encodes the whole envelope via `serde_json::to_string` before
+    // `evaluate_script` (see `gui::mod`), so no manual escaping is needed here.
+    if let DaemonEvent::ExtPanelReply { ext_id, panel_id, req_id, ok, payload, error } = &frame.event {
+        let env = PushEnvelope::ExtPanelReply {
+            ext_id: ext_id.clone(),
+            panel_id: panel_id.clone(),
+            req_id: req_id.clone(),
+            ok: *ok,
+            payload: payload.clone(),
+            error: error.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
+    if let DaemonEvent::ExtPanelPush { ext_id, panel_id, payload } = &frame.event {
+        let env = PushEnvelope::ExtPanelPush {
+            ext_id: ext_id.clone(),
+            panel_id: panel_id.clone(),
+            payload: payload.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&env) {
+            push(json);
+        }
+    }
     // Generic daemon-to-GUI error: re-push as an AgentOp envelope so the
     // GUI surfaces it as an error toast and clears any pending saving state.
     // Any DaemonEvent::Error not handled by a more specific intercept above

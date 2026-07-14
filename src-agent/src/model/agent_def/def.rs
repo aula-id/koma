@@ -129,6 +129,19 @@ pub struct AgentDef {
     #[serde(skip)]
     pub source: AgentSource,
 
+    /// The owning extension's manifest id, when [`Self::source`] is
+    /// [`AgentSource::Extension`] — `None` for every other source. Populated by
+    /// [`super::registry::merge_extension_sub_agents`] from the `InstalledExtension`
+    /// being iterated; kept as a plain optional field (rather than payload on the
+    /// [`AgentSource::Extension`] variant itself) so `AgentSource` stays a cheap
+    /// `Copy` enum and every existing `match`/`==` site on it is untouched. Not
+    /// read anywhere yet — it exists so a later wave can prefer an extension's OWN
+    /// contributed model/provider when resolving that extension's sub-agents (see
+    /// [`crate::app::resolve::find_model_entry_by_slug`]'s `preferred_provider_uuids`
+    /// seam).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ext_id: Option<String>,
+
     /// Absolute path to the `.md` file, or `None` for built-ins. Used for
     /// save/delete.
     #[serde(skip)]
@@ -154,6 +167,7 @@ impl Default for AgentDef {
             disable: false,
             prompt: String::new(),
             source: AgentSource::Session,
+            ext_id: None,
             file_path: None,
         }
     }

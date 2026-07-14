@@ -1,0 +1,14 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.orchestrator-daemon",
+  "name": "Orchestrator",
+  "version": "0.0.0",
+  "description": "A grant-verbs how-to: walks sessions.list, models.invoke, context.set, chat.prompt, and agents.spawn in one commented driver sequence. Documentation-as-code.",
+  "tier": "free",
+  "kind": "daemon",
+  "runtime": {
+    "exec": "orchestrator-daemon",
+    "args": []
+  },
+  "requires": ["agents:orchestrate", "sessions:manage", "chat:prompt", "models:invoke", "context:publish"]
+}

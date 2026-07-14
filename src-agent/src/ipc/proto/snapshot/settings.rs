@@ -68,6 +68,10 @@ pub struct SettingsSnapshot {
     pub oauth_flow: OAuthFlowSnapshot,
     pub prov_sel: usize,
     pub prov_delete_armed: bool,
+    /// W12b: transient footer message when the user tried to delete an extension-managed
+    /// provider (refused). `#[serde(default)]` for older-client compatibility.
+    #[serde(default)]
+    pub prov_msg: Option<String>,
     pub prov_modal: Option<ProviderModalSnapshot>,
     pub models: Vec<ModelDraftSnapshot>,
     pub model_sel: usize,

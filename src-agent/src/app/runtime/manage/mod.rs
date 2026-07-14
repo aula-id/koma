@@ -53,7 +53,9 @@ mod probe;
 // keep resolving unchanged after the split.
 pub use commands::print_daemon_usage;
 pub use mcp::ensure_mcp_daemon_running;
-pub use probe::list_live_sessions;
+// `spawn_into_session` + `SpawnIntoReply` are the extension `sessions.spawn_into`
+// cross-process transport (W7), consumed by the grant broker outside this module tree.
+pub use probe::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;

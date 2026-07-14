@@ -348,6 +348,14 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     seq itself.
         hub.drain_store_replies(state);
 
+        // 3-sext. Broadcast the daemon→panel push outbox (`state.rest.ext_panel_pushes`), filled
+        //     by the `drain_ext_notifies` global drain (run in `service_global` above) when an
+        //     extension sends `panel.push`: fan each queued push out to EVERY attached client as a
+        //     seq'd `ExtPanelPush` frame (W8 panel bridge). Unlike the store/oauth drains this is
+        //     NOT request-correlated — a panel push has no initiating client — so it goes to all
+        //     attached shadows, not one by id. Empty except in the ticks a push lands.
+        hub.drain_ext_panel_pushes(state);
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the
@@ -379,6 +387,16 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     `drain_resume_pending`, so it observes a same-tick `/new` and rides the same
         //     control-frame seam BEFORE `stream_deltas`.
         hub.drain_new_pending(state);
+
+        // 3a-pre4. Extension `sessions.switch` hand-off (W7): the grant broker set
+        //     `state.rest.ext_switch_pending = Some(uuid)` when a `sessions.switch` targeted a
+        //     session THIS daemon does not own (a live LOCAL target took the in-daemon
+        //     `handle_live_switch` path instead and never set this). Mirror `/new`: broadcast a
+        //     one-shot `DaemonEvent::AttachSession { session_id }` to the ATTACHED clients so
+        //     they attach that session's OTHER daemon, leaving this daemon's own mode untouched.
+        //     Consume the flag here, right after `drain_new_pending`, so it rides the same
+        //     control-frame seam BEFORE `stream_deltas`.
+        hub.drain_ext_switch_pending(state);
 
         // 3a. Daemon-side `should_quit` sweep: `should_quit` means "quit the app",
         //     the same intent the LOCAL standalone TUI honours by breaking `run_loop`

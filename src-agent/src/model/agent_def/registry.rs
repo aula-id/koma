@@ -211,10 +211,16 @@ fn load_agents_from_dir(
 /// For every ENABLED [`InstalledExtension`](crate::model::app_config::InstalledExtension)
 /// in `config`, reads `<ext_root>/<id>/manifest.json` and turns each
 /// `contributes.sub_agents` entry into an [`AgentDef`] tagged
-/// [`AgentSource::Extension`]: `description`/`conditions`/`prompt` all come from
-/// the manifest's `description` (no separate agent-body field on the wire
-/// contribution), and `model`/`tools` are left at their defaults (inherit the
-/// session model; safe read-only tool set).
+/// [`AgentSource::Extension`]: `description`/`conditions` come from the
+/// manifest's `description`; `prompt` prefers the sub-agent's own (trimmed,
+/// non-empty) `prompt` field, falling back to `description` when absent/blank
+/// (an old-style manifest with no `prompt` field behaves exactly as before);
+/// `model`/`effort` are copied through VERBATIM as the RAW slug/token the
+/// manifest declares — resolution (turning that slug into a concrete route) is
+/// a SPAWN-TIME concern (see [`crate::app::resolve::resolve_agent`]'s step 1c),
+/// never done here. `tools` is left at its default (safe read-only set). Each
+/// merged def also carries [`AgentDef::ext_id`] — the owning extension's
+/// manifest id — for a later wave's ext-scoped model lookup.
 ///
 /// `InstalledExtension` only carries a flat projection of the manifest (id,
 /// version, tier, kind, exec, enabled) — NOT a cached `contributes` — so this
@@ -263,14 +269,27 @@ pub(crate) fn merge_extension_sub_agents(
             if name.is_empty() {
                 continue;
             }
+            // Prefer the sub-agent's own prompt (trimmed, non-empty); fall back to
+            // the description so an old-style manifest fragment (no `prompt` key)
+            // keeps behaving exactly as before.
+            let prompt = sub
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| sub.description.clone());
             agents.insert(
                 name.clone(),
                 AgentDef {
                     name,
                     description: sub.description.clone(),
                     conditions: sub.description.clone(),
-                    prompt: sub.description.clone(),
+                    prompt,
+                    model: sub.model.clone(),
+                    effort: sub.effort.clone(),
                     source: AgentSource::Extension,
+                    ext_id: Some(ext.id.clone()),
                     ..AgentDef::default()
                 },
             );

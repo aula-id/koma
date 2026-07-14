@@ -59,6 +59,14 @@ pub use manage::{
     run_daemon_subcommand,
 };
 
+// Re-export the live-session discovery + cross-daemon spawn transport at the `runtime` level
+// so the extension grant broker (`crate::app::ext::broker`, outside this module tree) can drive
+// the extension `sessions.*` verbs (W7): `list_live_sessions` merges the registry against live
+// daemons for `sessions.list`; `spawn_into_session` / `SpawnIntoReply` fire a one-shot
+// `SpawnAgent` at another session-daemon's socket for the `sessions.spawn_into` cross-process
+// branch. `manage` stays private; only these items are exposed.
+pub(crate) use manage::{list_live_sessions, spawn_into_session, SpawnIntoReply};
+
 // Re-export lifecycle entry points (previously free fns in this file).
 pub use lifecycle::{run, run_daemon, run_daemon_selftest};
 
@@ -80,6 +88,13 @@ pub(crate) use session_mgmt::{
 // can drive the SAME `task`-tool spawn path. `stream` stays private; only these two
 // items are exposed.
 pub(crate) use stream::{spawn_or_queue, SpawnOutcome};
+
+// Re-export the live foreground-switch chokepoint at the `runtime` level so the extension
+// grant broker (`crate::app::ext::broker`, outside this module tree) can drive the SAME
+// in-daemon `sessions.switch` path the hub's `SwitchForeground` uses — it already fans out the
+// `session.foreground_change` extension event (W5), so the broker must NOT re-emit. `actions`
+// stays otherwise private; only this item is exposed.
+pub(crate) use actions::session::handle_live_switch;
 
 pub(super) type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 

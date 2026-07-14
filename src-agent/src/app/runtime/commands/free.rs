@@ -132,6 +132,8 @@ pub(crate) fn set_session_koma_free(state: &mut AppState) -> Result<()> {
                 endpoint: KOMA_FREE_ENDPOINT.to_string(),
                 // Keyless: auth rides the X-Koma / X-Session headers.
                 api_key: String::new(),
+                // Native provider (the keyless free tier), not extension-managed.
+                ext_id: None,
             });
             (uuid, true)
         }

@@ -738,6 +738,19 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 let _ = ctx.ctl.send(HostCtl::ExtNoSession { id });
             }
         }
+        // Extension PANEL bridge (W8): forward the panel's message to the attached daemon, which
+        // auto-starts the extension + invokes its `panel.msg` and answers out-of-band with an
+        // `ExtPanelReply` the host re-pushes. Attached-only, like `Interrupt` — with NO attached
+        // daemon the request is dropped silently (there is no host-local ext manager to service
+        // it, mirroring the install `// TODO: global ext manager` gap); the GUI-side guard replies
+        // locally in W9.
+        GuiReq::ExtPanelMsg { ext_id, panel_id, req_id, payload } => {
+            if let Ok(g) = ctx.req.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(ClientRequest::ExtPanelMsg { ext_id, panel_id, req_id, payload });
+                }
+            }
+        }
         // Settings "SSH Keys" section: host-side key-vault fetch/mutations. ALWAYS
         // routed to the host-relay thread — never the daemon — regardless of
         // attach state (see `HostCtl::KeyList`), same reasoning as `GitStatus`.

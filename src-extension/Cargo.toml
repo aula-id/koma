@@ -14,4 +14,7 @@ members = [
   "example/upper-tool-oneshot",
   "example/fleet-board-daemon",
   "example/agent-peek-oneshot",
+  "example/oauth-demo-daemon",
+  "example/event-watcher-daemon",
+  "example/orchestrator-daemon",
 ]

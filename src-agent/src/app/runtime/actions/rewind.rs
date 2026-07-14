@@ -126,6 +126,7 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
             let content = m.content
                 .strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
                 .or_else(|| m.content.strip_prefix(crate::dto::chat::SHELL_MARK))
+                .or_else(|| m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
                 .map(str::to_string)
                 .unwrap_or_else(|| m.content.clone());
             Some(content)

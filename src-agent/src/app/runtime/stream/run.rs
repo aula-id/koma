@@ -102,6 +102,11 @@ pub(crate) fn start_stream_task(
                     first.content.push_str(summary);
                 }
             }
+            // Extension-published context (`context.set`): each granted extension's
+            // blob rides the VOLATILE tail (after the cache split) so it never busts
+            // the provider-cached head. Iterated in BTreeMap key order → a byte-stable
+            // tail across turns. Empty map = no-op (byte-identical to before).
+            append_ext_context(&mut first.content, &state.rest.ext_context);
             // Security mode: when active, tell the model it IS a security testing agent
             // and list its live security tools, so it uses them directly instead of
             // grepping the codebase for "security tools".
@@ -549,4 +554,54 @@ over sec_remote (stateful socket).\n",
         }
     });
     state.rest.sessions[sess_idx].current_task = Some(jh.abort_handle());
+}
+
+/// Append each extension's published context blob (`context.set`) to the volatile
+/// System tail. Iterated in `BTreeMap` KEY ORDER (deterministic) so the resulting
+/// tail is byte-STABLE across turns; a blank/whitespace blob is skipped. MUST be
+/// called AFTER the `CACHE_SPLIT_MARK` so these ride the UNCACHED tail — an
+/// extension updating its context never busts the provider-cached head. An empty
+/// map appends nothing (byte-identical to before this feature). Pure + free of any
+/// `state` borrow so the volatile-tail assembly stays testable.
+fn append_ext_context(dst: &mut String, ctx: &std::collections::BTreeMap<String, String>) {
+    for (ext_id, text) in ctx {
+        if text.trim().is_empty() {
+            continue;
+        }
+        dst.push_str("\n\n# Extension context: ");
+        dst.push_str(ext_id);
+        dst.push('\n');
+        dst.push_str(text);
+    }
+}
+
+#[cfg(test)]
+mod ext_context_tests {
+    use super::append_ext_context;
+    use std::collections::BTreeMap;
+
+    /// Blobs are appended in deterministic BTreeMap key order (alpha before zebra),
+    /// each as `\n\n# Extension context: <id>\n<text>`, and a blank blob is skipped.
+    #[test]
+    fn append_is_ordered_and_skips_blank() {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("zebra.ext".to_string(), "z-blob".to_string());
+        ctx.insert("alpha.ext".to_string(), "a-blob".to_string());
+        ctx.insert("blank.ext".to_string(), "   ".to_string());
+        let mut dst = String::from("HEAD");
+        append_ext_context(&mut dst, &ctx);
+        assert_eq!(
+            dst,
+            "HEAD\n\n# Extension context: alpha.ext\na-blob\n\n# Extension context: zebra.ext\nz-blob"
+        );
+    }
+
+    /// An empty map is a no-op — the volatile tail is byte-identical to before.
+    #[test]
+    fn empty_map_is_noop() {
+        let ctx: BTreeMap<String, String> = BTreeMap::new();
+        let mut dst = String::from("HEAD");
+        append_ext_context(&mut dst, &ctx);
+        assert_eq!(dst, "HEAD");
+    }
 }

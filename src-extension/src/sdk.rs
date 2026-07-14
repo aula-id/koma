@@ -18,6 +18,91 @@ use std::io::Read;
 
 /// Implemented by a sample to answer koma -> extension invocations
 /// (the "contributes" side: koma is calling into the extension).
+///
+/// # DEADLOCK RULE
+///
+/// The host-mode serve loop ([`host_run`]) is single-threaded, and `on_invoke`/
+/// `on_event` run ON that loop. Calling [`Koma::call`] from inside either handler
+/// deadlocks: `call` blocks waiting for a `KomaMsg::Result`, but the only thing that
+/// can read that `Result` off the socket is the very serve loop your handler is
+/// currently blocking. There is no other reader.
+///
+/// The safe pattern: reply immediately from `on_invoke` (or return from `on_event`),
+/// and hand any real work off to the driver thread (or your own worker thread) via a
+/// `std::sync::mpsc` channel you own. `Koma::notify` / `Koma::panel_push` are
+/// write-only (no reply is awaited) and are safe to call from either handler.
+///
+/// # OAuth providers (W11 — DELEGATED login)
+///
+/// If your manifest declares `contributes.oauth_providers` and requires the
+/// `oauth:contribute` grant, koma surfaces each provider as a row in its OAuth
+/// picker and delegates the WHOLE login to you over three `on_invoke` methods.
+/// koma stores the resulting token as a connection; it never sees your provider's
+/// client secret. Every call carries `{ "providerId": "<your provider id>" }`.
+///
+/// Your extension MUST be `kind: "daemon"` (the begin/poll handshake needs state
+/// held across invokes; a oneshot is respawned per invoke and can't remember a
+/// pending code).
+///
+/// - `oauth.begin { providerId }` → start a login. Reply EITHER
+///   `{ "url": "https://…" }` (browser method → koma shows a `waiting_url` phase
+///   with the URL for the user to open; koma does NOT auto-open it in v1) OR
+///   `{ "userCode": "ABCD-1234", "verificationUrl": "https://…" }` (device_code
+///   method → `waiting_code` phase) OR `{ "error": "…" }` (→ terminal `failed`).
+/// - `oauth.poll { providerId }` → koma polls this every ~3s after `begin`. Reply
+///   `{ "status": "pending" }` to keep waiting, `{ "status": "success", "token":
+///   { "access_token": "…", "refresh_token"?: "…", "expires_at"?: <unix secs>,
+///   "email"?: "…", "label"?: "…" } }` on completion (only `access_token` is
+///   required), or `{ "status": "failed", "error": "…" }`. A malformed reply or a
+///   bare `{ "error": "…" }` is treated as `failed`.
+/// - `oauth.cancel { providerId }` → best-effort teardown when the user cancels or
+///   a new flow supersedes this one. Reply anything; koma ignores the result.
+///
+/// Budgets koma enforces: each `oauth.*` invoke is bounded at 25s, and the whole
+/// begin→poll loop at 5 minutes overall (then `failed: timed out`). Reply to
+/// `begin`/`poll` promptly — do the real network waiting on your own thread and let
+/// `poll` report progress, exactly like the DEADLOCK RULE above.
+///
+/// # Registering models (W12 — `models.register` / `models.unregister`)
+///
+/// Once your user has connected one of your OAuth providers, you can register the models
+/// that account can serve into koma's global catalogue. Unlike the `oauth.*` methods above
+/// (which koma INVOKES on you), these are ext→koma CALLS you make with [`Koma::call`] — so,
+/// per the DEADLOCK RULE, make them from your driver/worker thread (e.g. right after a
+/// successful `oauth.poll`), never from inside `on_invoke`/`on_event`.
+///
+/// Your manifest must declare the model provider's `chat_endpoint` + `api_type` on its
+/// `OAuthProviderDef` (`api_type` must be `"openai"` or `"anthropic"` — the two wire
+/// protocols koma dispatches; an account-login-only provider omits them and `models.register`
+/// then refuses with `"provider is account-login only"`), and your extension must hold the
+/// `models:contribute` grant (registering models an OAuth account serves almost always means
+/// requiring BOTH `oauth:contribute` and `models:contribute`).
+///
+/// - `models.register { "models": [ { "id": "<model id>", "name": "<display name>" }, … ] }`
+///   → registers each model, SERVED BY your connected account. `id` and `name` are non-empty
+///   and ≤ 200 chars; at most 100 models per call. Re-registering a model you already
+///   registered UPDATES its display name IN PLACE and keeps its stable koma uuid (so a
+///   sub-agent already bound to it keeps resolving). Reply:
+///   `{ "registered": <n>, "uuids": [ "<uuid>", … ] }` (the stable per-model uuids). Errors:
+///   `{ "error": "no connected oauth account for this extension" }` (connect first) or
+///   `{ "error": "provider is account-login only" }` (declare `chat_endpoint`+`api_type`).
+/// - `models.unregister { "ids"?: [ "<id-or-uuid>", … ] }` → removes models you registered.
+///   Omit `ids` to remove ALL of yours; pass `ids` (each matching a `model_id` OR a returned
+///   uuid) to remove a subset. You can only ever remove YOUR OWN models — koma enforces an
+///   ownership wall, so another extension's or the user's own models are untouchable. Reply:
+///   `{ "removed": <n> }`.
+///
+/// ## The binding guarantee
+///
+/// Declare the model slugs your sub-agents use in your manifest `contributes.sub_agents`
+/// (each `SubAgentDef.model`). After your user connects your provider and you
+/// `models.register`, those sub-agents run on YOUR registered models: koma binds an
+/// extension-authored sub-agent's `model:` slug to a model served by that SAME extension's
+/// OAuth connection FIRST (matched uuid-deterministically), so a same-named model elsewhere
+/// in the user's catalogue can NEVER hijack your sub-agent's route. If you have not connected
+/// / registered yet, the slug resolves by the normal catalogue rules (and ultimately falls
+/// back to the user's Main model), so your sub-agents still run — just not on your models
+/// until the account is live.
 pub trait Extension {
     fn manifest(&self) -> ExtensionManifest;
 
@@ -25,6 +110,11 @@ pub trait Extension {
     fn on_invoke(&mut self, _method: &str, _params: serde_json::Value) -> serde_json::Value {
         serde_json::json!({ "error": "unimplemented" })
     }
+
+    /// Handle a koma->ext fire-and-forget `Event` (contributes side, `events` in the
+    /// manifest). No reply is sent back — unlike `on_invoke` there is no `Result`
+    /// frame. Default is a no-op. See the DEADLOCK RULE above.
+    fn on_event(&mut self, _name: &str, _params: serde_json::Value) {}
 }
 
 /// Handle passed to samples that need to DRIVE koma (the "requires" side:
@@ -100,6 +190,76 @@ impl Koma {
         let result_msg = KomaMsg::Result { id: 0, result: result.clone() };
         print_err(&format!("KOMA->EXT Result (reply to {method})"), &to_value(&result_msg));
         result
+    }
+
+    /// ext->koma fire-and-forget `Notify`: unlike [`Koma::call`], this does not wait
+    /// for (or expect) a `Result` reply — it writes the frame and returns
+    /// immediately. HOST mode: writes `ExtMsg::Notify` on the live socket (best
+    /// effort; write failures are swallowed the same way other fire-and-forget
+    /// sends are). DEMO mode: prints the frame in the same style [`Koma::call`]
+    /// prints its demo output. Safe to call from `on_invoke`/`on_event` (see the
+    /// DEADLOCK RULE on [`Extension`]).
+    pub fn notify(&mut self, name: &str, params: serde_json::Value) {
+        let msg = ExtMsg::Notify { name: name.to_string(), params };
+
+        #[cfg(unix)]
+        if let Some(h) = &self.host {
+            let _ = write_line(&h.writer, &msg);
+            return;
+        }
+
+        print_err(&format!("EXT->KOMA Notify {name}"), &to_value(&msg));
+    }
+
+    /// Convenience wrapper over [`Koma::notify`] for `panel.push`: sends
+    /// `{"panelId": panel_id, "payload": payload}` so a panel extension's live UI
+    /// can push updates to koma. Cheap insurance against the host's frame-size
+    /// kill: if the encoded payload exceeds 1 MiB it is logged and DROPPED rather
+    /// than sent (the host's frame limit is a few MiB higher than this, but a
+    /// misbehaving extension shouldn't get itself killed over a panel update).
+    pub fn panel_push(&mut self, panel_id: &str, payload: serde_json::Value) {
+        const MAX_PANEL_PUSH_BYTES: usize = 1024 * 1024;
+
+        let encoded_len = serde_json::to_string(&payload).map(|s| s.len());
+        match encoded_len {
+            Ok(len) if len > MAX_PANEL_PUSH_BYTES => {
+                eprintln!(
+                    "koma-ext: panel_push({panel_id}) payload is {len} bytes (> {MAX_PANEL_PUSH_BYTES} cap); dropping"
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("koma-ext: panel_push({panel_id}) payload failed to serialize: {e}; dropping");
+                return;
+            }
+            Ok(_) => {}
+        }
+
+        self.notify("panel.push", serde_json::json!({ "panelId": panel_id, "payload": payload }));
+    }
+
+    /// Cheaply clone this handle so it can be shared across threads (e.g. a driver
+    /// thread and a background worker both holding their own `Koma`). HOST mode:
+    /// the live connection state (`writer`, `pending`, `next_id`) is already
+    /// `Arc`-shared inside [`HostHandle`], so this is a shallow clone onto the SAME
+    /// connection — calls/notifies from either handle round-trip through it.
+    /// DEMO mode (and non-unix builds): there is no live connection to share, so
+    /// this returns a fresh demo handle instead of failing.
+    pub fn try_clone(&self) -> Koma {
+        #[cfg(unix)]
+        {
+            if let Some(h) = &self.host {
+                return Koma {
+                    next_agent_id: self.next_agent_id,
+                    host: Some(HostHandle {
+                        writer: std::sync::Arc::clone(&h.writer),
+                        pending: std::sync::Arc::clone(&h.pending),
+                        next_id: std::sync::Arc::clone(&h.next_id),
+                    }),
+                };
+            }
+        }
+        Koma::new_demo()
     }
 
     fn canned_result(&mut self, method: &str, params: &serde_json::Value) -> serde_json::Value {
@@ -368,6 +528,7 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
                 let result = ext.on_invoke(&method, params);
                 let _ = write_line(&writer, &ExtMsg::Result { id, result });
             }
+            KomaMsg::Event { name, params } => ext.on_event(&name, params),
             KomaMsg::Result { id, result } => {
                 if let Some(tx) = pending.lock().unwrap().remove(&id) {
                     let _ = tx.send(result);

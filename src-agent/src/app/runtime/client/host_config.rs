@@ -203,8 +203,20 @@ fn apply_global_config_req(
             true
         }
         ClientRequest::DeleteProvider { uuid } => {
-            cfg.remove_provider_by_uuid(uuid);
-            true
+            // W12b HOST GUARD (pre-session path): an EXTENSION-managed key-backed provider
+            // can never be deleted by the user — only uninstall removes it. This path has no
+            // structured-error reply channel (success re-pushes a `Config`, failure logs), so
+            // refuse IN PLACE (leave the provider, apply nothing → no save/push) + log.
+            if cfg.providers.iter().any(|p| p.uuid == *uuid && p.ext_id.is_some()) {
+                crate::model::store::append_global_error_log(
+                    "gui",
+                    &format!("refused deleting extension-managed provider {uuid} (uninstall to remove)"),
+                );
+                false
+            } else {
+                cfg.remove_provider_by_uuid(uuid);
+                true
+            }
         }
         ClientRequest::SetModel {
             uuid,

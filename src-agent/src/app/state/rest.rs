@@ -16,6 +16,23 @@ use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
 use super::types::{AgentMode, CataloguePending, TranscriptCache};
 
+/// W11: identity + cooperative-cancel handle for the ONE in-flight DELEGATED extension
+/// OAuth flow (see [`AppStateRest::oauth_ext_flow`]). The off-loop begin/poll task runs
+/// on `spawn_blocking` (both `ExtHostManager::ensure_started` and `invoke_with_timeout`
+/// block the calling thread), which — unlike a native async flow behind `oauth_task` —
+/// cannot be `abort`ed mid-run. So supersede/cancel is cooperative: setting `cancel`
+/// makes the poll loop exit at its next check. `ext_id`/`provider_id` let `CancelOAuth`
+/// fire a courtesy `oauth.cancel` invoke at the extension.
+pub struct ExtOAuthFlow {
+    /// The extension backing this flow (its manifest id).
+    pub ext_id: String,
+    /// The extension-local provider id (`oauth_providers[].id`) being logged into.
+    pub provider_id: String,
+    /// Cooperative cancel flag shared with the off-loop poll task; setting it makes the
+    /// loop exit promptly (a `spawn_blocking` task can't be aborted).
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 pub struct AppStateRest {
     /// The foreground session set. Always non-empty; `foreground` is always a
     /// valid index into it. For now there is exactly ONE entry (single-session);
@@ -169,6 +186,15 @@ pub struct AppStateRest {
     /// [`crate::app::runtime::commands::new_session::apply_new_session_local`] (the legacy
     /// append-a-session path) so `--local` `/new` behaves exactly as before.
     pub new_pending: Option<bool>,
+    /// Set by the extension grant broker's `sessions.switch` (W7) when the target session
+    /// uuid is NOT a live session in THIS daemon: a transient "tell the client to attach
+    /// that session's OTHER daemon" request, drained next tick by the hub into a one-shot
+    /// [`crate::ipc::proto::DaemonEvent::AttachSession`] broadcast to attached clients. The
+    /// EXACT mirror of `new_pending` → `NewSession` / `resume_pending` → `OpenSwapper`: a
+    /// transient signal, never a UI state, the daemon's own mode left untouched. A
+    /// `sessions.switch` to a LIVE local session takes the in-daemon `handle_live_switch`
+    /// path instead and never sets this. `None` when no cross-daemon switch is pending.
+    pub ext_switch_pending: Option<String>,
     /// Cache of each committed message's rendered visual lines, reused across
     /// frames so markdown/syntect highlighting doesn't re-run every redraw.
     /// Borrowed mutably by the chat renderer through a shared `&rest` (the UI is
@@ -346,6 +372,15 @@ pub struct AppStateRest {
     /// [`crate::ipc::proto::DaemonEvent::OAuthState`] to the initiating client. Empty except
     /// in the ticks a transition lands; never touched by the standalone/TUI loop.
     pub oauth_pushes: Vec<crate::service::oauth::OAuthPushOut>,
+    /// W11: the in-flight DELEGATED extension OAuth flow, if any. Set when a GUI
+    /// `StartOAuth` with an `ext:<extension_id>:<provider_id>` id spawns its off-loop
+    /// begin/poll task (`requests_oauth::run_ext_oauth_delegate`); reused by
+    /// `CancelOAuth` (to fire a best-effort `oauth.cancel` at the extension) and cleared
+    /// on the terminal push. Unlike a native flow, the poll task runs on `spawn_blocking`
+    /// and so can't be `abort`ed mid-run — its `cancel` flag is the cooperative
+    /// supersede/cancel signal the loop checks each iteration. `None` when no ext flow is
+    /// in flight (every native flow leaves this `None`).
+    pub oauth_ext_flow: Option<ExtOAuthFlow>,
     /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
     /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
     /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
@@ -372,6 +407,31 @@ pub struct AppStateRest {
     /// take/put-back it (mirroring `oauth_rx`); always `Some` between ticks.
     pub ext_call_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtCallRequest>>,
+    /// SENDER half of the extension notify lane. A clone is handed to
+    /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_notify_tx`); each
+    /// extension's socket reader task uses it to forward an ext->koma `Notify` — which
+    /// needs `AppState` access the reader task lacks — into the event loop. Created
+    /// once here and held for the app's lifetime (plus the manager's clone), so the
+    /// paired receiver never observes a premature `Disconnected`.
+    pub ext_notify_tx: tokio::sync::mpsc::UnboundedSender<crate::app::ext::ExtNotify>,
+    /// RECEIVER half of the extension notify lane, drained each tick in `service_global`
+    /// alongside `ext_call_rx` (`drains::drain_ext_notifies`, W8 panel bridge): each
+    /// [`crate::app::ext::ExtNotify`] is routed by name — a well-formed `panel.push` is queued
+    /// onto [`Self::ext_panel_pushes`] for the daemon hub to broadcast to attached panels; a
+    /// malformed `panel.push` or any unknown notify name is logged + dropped. `Option` only so
+    /// the drain can take/put-back it (mirroring `ext_call_rx`); always `Some` between ticks.
+    pub ext_notify_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtNotify>>,
+    /// BOUNDED daemon→panel push outbox (W8 panel bridge): `(ext_id, panel_id, payload)` triples
+    /// queued by `drains::drain_ext_notifies` when an extension sends a `panel.push`, drained
+    /// each tick by the daemon hub's `drain_ext_panel_pushes` — which broadcasts each as a seq'd
+    /// [`crate::ipc::proto::DaemonEvent::ExtPanelPush`] to every ATTACHED client. Capped at 256
+    /// with drop-OLDEST (a live panel wants the freshest state, not a backlog); the drain logs a
+    /// single overflow line per over-cap tick. Parallels `oauth_pushes`, but with a KEY
+    /// difference: `oauth_pushes`' producer is gated on the daemon-only `oauth_gui_client`, so it
+    /// stays empty in the standalone/TUI loop for free — a panel push has no such daemon-only
+    /// producer gate (an extension pushes regardless of GUI), so the standalone/TUI `run_loop`
+    /// CLEARS this each tick (there is no panel to receive it) rather than letting it retain.
+    pub ext_panel_pushes: Vec<(String, String, serde_json::Value)>,
     /// Per-extension registry of the sub-agents THAT extension has spawned,
     /// keyed by extension id. This is the containment boundary the grant broker
     /// (`app::ext::broker`) resolves every `agents.status`/`agents.result`/
@@ -389,6 +449,16 @@ pub struct AppStateRest {
     /// it clears every entry there. A per-extension uninstall path with event-loop
     /// access should clear its own entry the same way.
     pub ext_agents: HashMap<String, crate::app::ext::ExtAgentRegistry>,
+    /// Per-extension PUBLISHED CONTEXT blobs (`context.set` / `context.clear`),
+    /// keyed by the calling extension's id. A `BTreeMap` (not `HashMap`) so
+    /// iteration is in deterministic key order → the System-prompt VOLATILE TAIL
+    /// these ride in (appended in `stream::run::start_stream_task`, AFTER the
+    /// `CACHE_SPLIT_MARK`, so an update never busts the provider-cached head) is
+    /// byte-stable across turns. One extension can only ever read/replace its OWN
+    /// entry (keyed by caller identity), never another's. An empty map contributes
+    /// nothing to the tail (byte-identical to before this feature). Purely
+    /// in-memory / transient — `AppStateRest` is never serialised.
+    pub ext_context: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppStateRest {
@@ -409,6 +479,9 @@ impl AppStateRest {
         // drain never sees a premature `Disconnected`); the receiver is drained each
         // tick in `service_global`.
         let (ext_call_tx, ext_call_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Extension notify lane, created ONCE here for the same reason as
+        // `ext_call_tx`/`ext_call_rx` above.
+        let (ext_notify_tx, ext_notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let first = SessionRuntime::new();
         // Seed the viewed set with the sole session's UUID so the per-tick gates treat
         // it as foreground from tick zero (the local loop re-derives this each tick; the
@@ -458,6 +531,7 @@ impl AppStateRest {
             select_active: false,
             resume_pending: false,
             new_pending: None,
+            ext_switch_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
             plan_return_mode: None,
@@ -488,11 +562,16 @@ impl AppStateRest {
             oauth_task: None,
             oauth_gui_client: None,
             oauth_pushes: Vec::new(),
+            oauth_ext_flow: None,
             awareness_rx: None,
             awareness_tx: None,
             ext_call_tx,
             ext_call_rx: Some(ext_call_rx),
+            ext_notify_tx,
+            ext_notify_rx: Some(ext_notify_rx),
+            ext_panel_pushes: Vec::new(),
             ext_agents: HashMap::new(),
+            ext_context: std::collections::BTreeMap::new(),
         }
     }
 

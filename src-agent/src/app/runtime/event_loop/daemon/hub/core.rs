@@ -99,6 +99,22 @@ pub(super) enum StoreReply {
         id: String,
         error: String,
     },
+    /// A GUI panel→daemon message outcome (W8 panel bridge), packaged OFF-LOOP by
+    /// `DaemonHub::panel_msg` on `spawn_blocking` (the auto-start + `panel.msg` invoke both
+    /// block) and turned into a seq'd
+    /// [`crate::ipc::proto::DaemonEvent::ExtPanelReply`] to the requesting client by
+    /// `drain_store_replies`. `req_id` echoes the request for GUI correlation; `ok`/`payload`/
+    /// `error` carry the invoke result (or the auto-start / availability failure). Rides the
+    /// existing `store_tx`/`store_rx` channel — same one-shot lane as the install replies.
+    PanelReply {
+        client_id: u64,
+        ext_id: String,
+        panel_id: String,
+        req_id: Option<String>,
+        ok: bool,
+        payload: Option<serde_json::Value>,
+        error: Option<String>,
+    },
 }
 
 /// One enrolled client in the hub registry.
