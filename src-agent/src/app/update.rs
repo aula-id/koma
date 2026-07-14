@@ -45,9 +45,7 @@ pub fn run_update() -> Result<()> {
 
     // Inherit stdout/stderr so the installer's progress is visible in the
     // terminal. stdin is also inherited (some installers prompt for sudo).
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(sh_cmd)
+    let status = crate::tool::shell::os_shell_command(sh_cmd)
         .status()
         .map_err(|e| anyhow!("failed to launch installer: {e}"))?;
 
@@ -70,10 +68,18 @@ pub fn run_update() -> Result<()> {
 
 /// Return `true` if `name` is found on `$PATH` (best-effort — a missing `PATH`
 /// or a permission error returns `false`).
+///
+/// Unix: `command -v <name>`, exactly as before. Windows placeholder: `where
+/// <name>` — TODO(windows-port, phase B3): `where` searches `%PATH%` like
+/// `command -v` searches `$PATH`, but its match/quoting semantics differ
+/// slightly and it has not been exercised on Windows yet.
 fn which(name: &str) -> bool {
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {name}"))
+    #[cfg(unix)]
+    let cmd = format!("command -v {name}");
+    #[cfg(windows)]
+    let cmd = format!("where {name}");
+
+    crate::tool::shell::os_shell_command(&cmd)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

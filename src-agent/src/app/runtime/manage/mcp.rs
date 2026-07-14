@@ -10,6 +10,7 @@
 //! `unlink_mcp_daemon_files`, and `read_mcp_pidfile` are bumped to `pub(super)`
 //! HERE since `manage::commands` calls them.
 
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -20,7 +21,7 @@ use anyhow::{Context, Result};
 use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
-use super::{SIGNAL_GRACE, SPAWN_CONNECT_TIMEOUT, SPAWN_POLL_INTERVAL};
+use super::{StopSignal, SIGNAL_GRACE, SPAWN_CONNECT_TIMEOUT, SPAWN_POLL_INTERVAL};
 
 /// Whether the GLOBAL MCP daemon is currently ALIVE, by the same bind-as-oracle rule
 /// as [`super::daemon_alive`]: try to CONNECT to its singleton socket
@@ -59,11 +60,20 @@ fn spawn_mcp_daemon() -> Result<u32> {
     // into its own session; it touches no Rust state and only runs in the forked child
     // between fork and exec. A failure is ignored (best-effort detach) — the daemon
     // still runs; it just shares our process group, which the SIGHUP handler tolerates.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
+    }
+
+    // TODO(windows-port, phase B2: creation_flags DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP)
+    // Windows has no `pre_exec`/`setsid` equivalent yet — see the matching TODO in
+    // `manage::spawn_daemon`.
+    #[cfg(windows)]
+    {
+        // no-op: real detachment lands with the Windows port (see TODO above).
     }
 
     let child = cmd.spawn().context("failed to spawn `koma --mcp-daemon`")?;
@@ -176,7 +186,7 @@ pub(super) fn stop_mcp_daemon() {
 
     // SIGTERM (graceful at the OS level; the signal task runs the orderly teardown),
     // then wait.
-    super::send_signal(pid, libc::SIGTERM);
+    super::send_signal(pid, StopSignal::Term);
     if mcp_wait_until_dead(SIGNAL_GRACE) {
         unlink_mcp_daemon_files();
         println!("koma daemon: stopped MCP daemon (SIGTERM to pid {pid})");
@@ -184,7 +194,7 @@ pub(super) fn stop_mcp_daemon() {
     }
 
     // SIGKILL (last resort), then wait.
-    super::send_signal(pid, libc::SIGKILL);
+    super::send_signal(pid, StopSignal::Kill);
     let died = mcp_wait_until_dead(SIGNAL_GRACE);
     unlink_mcp_daemon_files();
     if died {

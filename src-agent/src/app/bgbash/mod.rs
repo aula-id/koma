@@ -16,7 +16,7 @@
 //! `UnboundedSender<usize>` (the job id) so the event loop can surface a toast.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -270,9 +270,7 @@ pub fn spawn_bash_job(
     thread::spawn(move || {
         // Spawn the child, capturing stdout + stderr separately so each can be
         // streamed by its own reader thread.
-        let mut child = match Command::new("sh")
-            .arg("-c")
-            .arg(&command)
+        let mut child = match crate::tool::shell::os_shell_command(&command)
             .current_dir(&cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -385,13 +383,28 @@ pub fn kill_bash_job(job: &BashJob) {
     // worker thread's `wait()` then unblocks and the reader pipes hit EOF.
     let pid = job.shared.pid.lock().ok().and_then(|g| *g);
     if let Some(pid) = pid {
-        // SAFETY: `kill(2)` with a pid we spawned and a standard signal number.
-        // A failure (e.g. the child already reaped) is ignored — best effort.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGTERM);
-        }
+        kill_child(pid);
     }
 }
+
+/// Best-effort terminate of a spawned child by pid.
+///
+/// SAFETY (unix): `kill(2)` with a pid we spawned and a standard signal number.
+/// A failure (e.g. the child already reaped) is ignored — best effort.
+#[cfg(unix)]
+fn kill_child(pid: u32) {
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+}
+
+/// TODO(windows-port, phase B2: kill via Job Object/taskkill). Windows has no
+/// `kill(2)`; a real implementation needs `TerminateProcess`/`taskkill` (or a Job
+/// Object for tree-kill, since the shell child may itself have spawned more).
+/// Conservative no-op stub so this compiles for now — the caller already treats
+/// this as best-effort.
+#[cfg(windows)]
+fn kill_child(_pid: u32) {}
 
 #[cfg(test)]
 #[path = "mod_test.rs"]

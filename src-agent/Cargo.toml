@@ -50,7 +50,6 @@ koma-extension = { path = "../src-extension" }
 # no avif/tiff/exr/qoi/ico/dds/hdr/pnm/ff (unused, each pulls its own extra deps).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
-libc = "0.2"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
@@ -81,6 +80,9 @@ rfd = { version = "0.15", optional = true }
 # build stays lean. Version/feature set mirrors wry's own internal use of
 # this same crate (see wry-0.52.1 Cargo.toml) to avoid duplicate/conflicting
 # objc2 stacks.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
     "std",

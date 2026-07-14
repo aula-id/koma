@@ -58,6 +58,7 @@ pub use mcp::ensure_mcp_daemon_running;
 pub use probe::{list_live_sessions, spawn_into_session, SpawnIntoReply};
 
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -264,11 +265,21 @@ fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Resul
     // into its own session; it touches no Rust state and only runs in the forked child
     // between fork and exec. A failure is ignored (best-effort detach) — the daemon
     // still runs; it just shares our process group, which the SIGHUP handler tolerates.
+    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
+    }
+
+    // TODO(windows-port, phase B2: creation_flags DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP)
+    // Windows has no `pre_exec`/`setsid` equivalent; until the Windows daemon-spawn
+    // port lands, the child inherits our console/process group instead of being
+    // fully detached — conservative placeholder, not a silent behavior change on unix.
+    #[cfg(windows)]
+    {
+        // no-op: real detachment lands with the Windows port (see TODO above).
     }
 
     let child = cmd.spawn().context("failed to spawn `koma --daemon`")?;
@@ -557,7 +568,7 @@ pub(super) fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
     };
 
     // SIGTERM (graceful at the OS level), then wait.
-    send_signal(pid, libc::SIGTERM);
+    send_signal(pid, StopSignal::Term);
     if wait_until_dead(session_id, SIGNAL_GRACE) {
         unlink_daemon_files(session_id);
         if !quiet {
@@ -567,7 +578,7 @@ pub(super) fn stop_session_daemon(session_id: &str, quiet: bool) -> Result<()> {
     }
 
     // SIGKILL (last resort), then wait.
-    send_signal(pid, libc::SIGKILL);
+    send_signal(pid, StopSignal::Kill);
     let died = wait_until_dead(session_id, SIGNAL_GRACE);
     unlink_daemon_files(session_id);
     if !quiet {
@@ -646,8 +657,7 @@ pub fn migrate_legacy_daemon() {
         .flatten()
         .and_then(|s| s.trim().parse::<u32>().ok())
         .inspect(|&pid| {
-            // SAFETY: kill(2) with a real signal is async-signal-safe; types match libc.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            send_signal(pid, StopSignal::Term);
         });
 
     // Poll up to ~1 s for the socket to disappear (the old daemon's SIGTERM handler
@@ -668,19 +678,40 @@ pub fn migrate_legacy_daemon() {
 
 // ─── signal + wait helpers ───────────────────────────────────────────────────
 
+/// Platform-neutral stop signal for [`send_signal`]. Unix maps each variant to the
+/// matching libc signal number; Windows has no equivalent yet (TODO below).
+pub(super) enum StopSignal {
+    /// Graceful terminate request (unix: `SIGTERM`).
+    Term,
+    /// Forceful kill (unix: `SIGKILL`).
+    Kill,
+}
+
 /// Send `sig` to `pid`, best-effort. A failure (ESRCH = already gone, EPERM = not
 /// ours) is ignored — `kill` re-checks liveness via the socket afterwards, so a
 /// failed signal just means the follow-up `wait_until_dead` decides the outcome.
 ///
 /// `pub(super)` — called from `manage::mcp::stop_mcp_daemon` and
 /// `manage::os::kill_orphan_daemon_processes`.
-pub(super) fn send_signal(pid: u32, sig: libc::c_int) {
+#[cfg(unix)]
+pub(super) fn send_signal(pid: u32, sig: StopSignal) {
+    let sig = match sig {
+        StopSignal::Term => libc::SIGTERM,
+        StopSignal::Kill => libc::SIGKILL,
+    };
     // SAFETY: `kill(2)` with a real signal number has no memory-safety preconditions
     // and the FFI types match libc's signature. We intentionally ignore the result.
     unsafe {
         libc::kill(pid as libc::pid_t, sig);
     }
 }
+
+/// TODO(windows-port, phase B2: Job Object / TerminateProcess). Windows has no
+/// `kill(2)`; a real implementation needs `OpenProcess`/`TerminateProcess` (or a
+/// Job Object for tree-kill). Conservative no-op stub so this compiles for now —
+/// callers already treat every signal as best-effort and re-check liveness after.
+#[cfg(windows)]
+pub(super) fn send_signal(_pid: u32, _sig: StopSignal) {}
 
 /// Poll the bind-as-oracle liveness of the SESSION-daemon for `session_id` until it stops
 /// accepting or `timeout` elapses. Returns `true` if it went down within the window,

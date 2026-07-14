@@ -555,6 +555,8 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // direct dependency; this is the one tiny unsafe FFI call it is needed for.
     // SAFETY: `signal` with SIG_IGN on SIGPIPE is async-signal-safe and the
     // canonical way to opt out of SIGPIPE; it touches no Rust state.
+    // SIGPIPE doesn't exist on Windows (no broken-pipe signal to ignore there).
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }

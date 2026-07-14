@@ -44,6 +44,7 @@ fn lock_path(session_dir: &Path) -> PathBuf {
 /// - any other errno (e.g. `EINVAL`, which signal 0 won't produce) → treat as DEAD so a surprising kernel reply can never wedge a session as permanently locked.
 ///
 /// Our own PID is alive by definition (kept as a fast path / belt-and-suspenders).
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
@@ -61,6 +62,17 @@ fn pid_alive(pid: u32) -> bool {
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::EPERM)
     )
+}
+
+/// TODO(windows-port, phase B2: OpenProcess liveness). Windows has no `kill(pid,
+/// 0)` idiom; a real check needs `OpenProcess`/`GetExitCodeProcess`. Conservative
+/// stub: always report the PID alive, so this never STEALS a lock we can't
+/// actually verify — worst case a stale lock lingers (same failure mode as an
+/// unreadable lock file), never a false "unlocked" that would let two instances
+/// clobber the same session.
+#[cfg(windows)]
+fn pid_alive(_pid: u32) -> bool {
+    true
 }
 
 /// Write our PID into the session's lock file, overwriting any existing one.
