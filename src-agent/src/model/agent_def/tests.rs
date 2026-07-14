@@ -266,6 +266,127 @@ fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Wave 4: a manifest `SubAgentDef` carrying the FULL set of new fields
+/// (`prompt`/`model`/`effort`, on top of `name`/`description`) merges every one
+/// of them into the fabricated [`AgentDef`], and the merged def carries the
+/// owning extension's id.
+#[test]
+fn extension_sub_agent_merges_full_fields_and_ext_id() {
+    use crate::model::app_config::{AppConfig, InstalledExtension};
+
+    let tmp = std::env::temp_dir().join(format!(
+        "koma-agentdef-ext-full-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let ext_id = "run.koma.example.full-subagent-test";
+    let ext_dir = tmp.join(ext_id);
+    std::fs::create_dir_all(&ext_dir).expect("create ext dir");
+    let manifest = serde_json::json!({
+        "schema": "koma-extension/v0",
+        "id": ext_id,
+        "name": "Full Sub Agent Test",
+        "version": "0.0.1",
+        "tier": "free",
+        "kind": "daemon",
+        "runtime": { "exec": "bin/tool", "args": [] },
+        "contributes": {
+            "sub_agents": [
+                {
+                    "name": "Auditor",
+                    "description": "Audits code for issues.",
+                    "prompt": "You are a meticulous code auditor. Find every issue.",
+                    "model": "openai/gpt-oss-20b",
+                    "effort": "high"
+                }
+            ]
+        },
+        "requires": []
+    });
+    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string())
+        .expect("write manifest");
+
+    let mut config = AppConfig::default();
+    config.installed_extensions.push(InstalledExtension {
+        id: ext_id.to_string(),
+        version: "0.0.1".to_string(),
+        tier: "free".to_string(),
+        granted: vec![],
+        enabled: true,
+        kind: "daemon".to_string(),
+        exec: "bin/tool".to_string(),
+    });
+
+    let mut agents: HashMap<String, AgentDef> = HashMap::new();
+    merge_extension_sub_agents(&config, &tmp, &mut agents);
+
+    let auditor = agents.get("auditor").expect("auditor sub-agent merged");
+    assert_eq!(auditor.source, AgentSource::Extension);
+    assert_eq!(auditor.description, "Audits code for issues.");
+    assert_eq!(auditor.conditions, "Audits code for issues.");
+    assert_eq!(auditor.prompt, "You are a meticulous code auditor. Find every issue.");
+    assert_eq!(auditor.model.as_deref(), Some("openai/gpt-oss-20b"));
+    assert_eq!(auditor.effort.as_deref(), Some("high"));
+    assert_eq!(auditor.ext_id.as_deref(), Some(ext_id));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Wave 4: a manifest `SubAgentDef` carrying ONLY `name`/`description` (the
+/// old-style shape) falls back to `description` for `prompt` and leaves
+/// `model`/`effort` unset — the additive fields never force a value when the
+/// manifest doesn't declare them.
+#[test]
+fn extension_sub_agent_partial_fields_fall_back_to_description() {
+    use crate::model::app_config::{AppConfig, InstalledExtension};
+
+    let tmp = std::env::temp_dir().join(format!(
+        "koma-agentdef-ext-partial-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let ext_id = "run.koma.example.partial-subagent-test";
+    let ext_dir = tmp.join(ext_id);
+    std::fs::create_dir_all(&ext_dir).expect("create ext dir");
+    let manifest = serde_json::json!({
+        "schema": "koma-extension/v0",
+        "id": ext_id,
+        "name": "Partial Sub Agent Test",
+        "version": "0.0.1",
+        "tier": "free",
+        "kind": "daemon",
+        "runtime": { "exec": "bin/tool", "args": [] },
+        "contributes": {
+            "sub_agents": [
+                { "name": "Planner", "description": "Plans the work." }
+            ]
+        },
+        "requires": []
+    });
+    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string())
+        .expect("write manifest");
+
+    let mut config = AppConfig::default();
+    config.installed_extensions.push(InstalledExtension {
+        id: ext_id.to_string(),
+        version: "0.0.1".to_string(),
+        tier: "free".to_string(),
+        granted: vec![],
+        enabled: true,
+        kind: "daemon".to_string(),
+        exec: "bin/tool".to_string(),
+    });
+
+    let mut agents: HashMap<String, AgentDef> = HashMap::new();
+    merge_extension_sub_agents(&config, &tmp, &mut agents);
+
+    let planner = agents.get("planner").expect("planner sub-agent merged");
+    assert_eq!(planner.prompt, "Plans the work.", "prompt falls back to description");
+    assert!(planner.model.is_none(), "no model declared -> None");
+    assert!(planner.effort.is_none(), "no effort declared -> None");
+    assert_eq!(planner.ext_id.as_deref(), Some(ext_id));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn to_markdown_round_trips_set_fields_only() {
     let a = AgentDef {

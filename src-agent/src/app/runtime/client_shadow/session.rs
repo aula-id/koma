@@ -93,6 +93,9 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             // Detachment drives turn bookkeeping only (never rendered); the client
             // never advances a turn, so a shadow pending entry is left non-detached.
             detached: false,
+            // Spawn overrides drive route RESOLUTION only (never rendered); the
+            // client never spawns/resolves, so a shadow pending entry carries none.
+            overrides: None,
         })
         .collect();
     // Reconstruct the running/finished sub-agents (plain data + an inert handle/rx)

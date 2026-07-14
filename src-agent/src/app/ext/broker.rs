@@ -86,8 +86,9 @@ pub struct ExtAgentRegistry {
 
 impl ExtAgentRegistry {
     /// Allocate a fresh ext-facing id for a just-spawned/queued sub-agent and
-    /// remember where it really lives. Returns the new ext-facing id.
-    fn insert(&mut self, session_uuid: String, local_subagent_id: usize) -> u64 {
+    /// remember where it really lives (+ whether this extension asked to be
+    /// notified on completion). Returns the new ext-facing id.
+    fn insert(&mut self, session_uuid: String, local_subagent_id: usize, notify: bool) -> u64 {
         let ext_agent_id = self.next_id;
         self.next_id += 1;
         self.map.insert(
@@ -95,6 +96,7 @@ impl ExtAgentRegistry {
             ExtAgentRef {
                 session_uuid,
                 local_subagent_id,
+                notify,
             },
         );
         ext_agent_id
@@ -113,6 +115,22 @@ impl ExtAgentRegistry {
         v.sort_by_key(|(id, _)| *id);
         v
     }
+
+    /// Resolve a sub-agent's LOCATION — `(session_uuid, local_subagent_id)`, the
+    /// identity a spawn/drain site observes — back to `(ext-facing id, notify)`.
+    /// Consumed by the W5 event wave to correlate a terminating sub-agent with
+    /// the extension that spawned it (and whether it asked for an `agents.done`
+    /// notification), without that drain site needing to know anything about
+    /// ext-facing ids itself. Oldest-registered entry wins on a duplicate
+    /// `(session_uuid, local_subagent_id)` pair (should not happen in practice —
+    /// ids are never reused — but this picks a stable winner over an arbitrary
+    /// `HashMap` iteration order).
+    pub(crate) fn find_by_location(&self, session_uuid: &str, local_id: usize) -> Option<(u64, bool)> {
+        self.entries_sorted()
+            .into_iter()
+            .find(|(_, r)| r.session_uuid == session_uuid && r.local_subagent_id == local_id)
+            .map(|(id, r)| (id, r.notify))
+    }
 }
 
 /// Where one ext-facing agent id really lives: the sub-agent's STABLE session
@@ -123,6 +141,11 @@ impl ExtAgentRegistry {
 struct ExtAgentRef {
     session_uuid: String,
     local_subagent_id: usize,
+    /// Whether this extension asked `agents.spawn` to notify it (an
+    /// `agents.done` event, delivered in the W5 event wave) when this
+    /// sub-agent reaches a terminal state. `false` = poll-only (the extension
+    /// calls `agents.status`/`agents.result` itself), today's only behavior.
+    notify: bool,
 }
 
 /// Resolve `session_uuid` to a LIVE (non-closed) session in `state.rest.sessions`.
@@ -406,15 +429,25 @@ fn active_session_idx(state: &AppState) -> Option<usize> {
     state.rest.sessions.iter().position(|s| !s.closed)
 }
 
-/// `agents.spawn { task, agent? }` → route through the SAME `spawn_or_queue` path
-/// the model's `task` tool uses (respecting `MAX_SUBAGENTS` → queue when full),
-/// into the ACTIVE (foreground) session. `agent` defaults to [`DEFAULT_AGENT`].
-/// Spawned NON-detached with no tool-call id (the `/task`-command shape) so
-/// completion records a display note + usage but never auto-wakes the chat
-/// model. The returned `agentId` is an EXT-FACING id freshly allocated from this
-/// extension's own [`ExtAgentRegistry`] (never the raw per-session sub-agent
-/// id), permanently bound to the session's STABLE UUID — see the registry's doc
-/// for why that containment matters.
+/// `agents.spawn { task, agent?, model?, effort?, notify? }` → route through the
+/// SAME `spawn_or_queue` path the model's `task` tool uses (respecting
+/// `MAX_SUBAGENTS` → queue when full), into the ACTIVE (foreground) session.
+/// `agent` defaults to [`DEFAULT_AGENT`]. Spawned NON-detached with no
+/// tool-call id (the `/task`-command shape) so completion records a display
+/// note + usage but never auto-wakes the chat model. The returned `agentId` is
+/// an EXT-FACING id freshly allocated from this extension's own
+/// [`ExtAgentRegistry`] (never the raw per-session sub-agent id), permanently
+/// bound to the session's STABLE UUID — see the registry's doc for why that
+/// containment matters.
+///
+/// `model` / `effort` are optional per-call overrides (see
+/// [`crate::app::subagent::SpawnOverrides`]) that steer THIS spawn's route
+/// without touching the named agent's own definition; an empty string for
+/// either is treated as absent (not an override). `notify` (default `false`)
+/// records whether this extension wants an `agents.done` event when the
+/// sub-agent finishes (consumed by the W5 event wave via
+/// [`ExtAgentRegistry::find_by_location`]) — unused until then, but recorded
+/// now so a spawn made this wave doesn't need to be re-issued once W5 lands.
 fn broker_spawn(
     state: &mut AppState,
     ext_id: &str,
@@ -438,20 +471,39 @@ fn broker_spawn(
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_AGENT);
 
+    // Optional per-call overrides. An empty string is treated as absent (an
+    // extension that sends `"model": ""` should not force an override).
+    let non_empty_string = |key: &str| -> Option<String> {
+        params
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let model = non_empty_string("model");
+    let effort = non_empty_string("effort");
+    let overrides = if model.is_some() || effort.is_some() {
+        Some(crate::app::subagent::SpawnOverrides { model, effort })
+    } else {
+        None
+    };
+    let notify = params.get("notify").and_then(|v| v.as_bool()).unwrap_or(false);
+
     // Capture the STABLE uuid of the session being spawned into BEFORE
     // `spawn_or_queue` (which needs `state` mutably) — this is the uuid the
     // resulting ext-facing agent id stays bound to regardless of any later
     // foreground switch.
     let session_uuid = state.rest.sessions[sess_idx].id.clone();
 
-    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false) {
+    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false, overrides) {
         SpawnOutcome::Spawned(local_id) => {
             let ext_agent_id = state
                 .rest
                 .ext_agents
                 .entry(ext_id.to_string())
                 .or_default()
-                .insert(session_uuid, local_id);
+                .insert(session_uuid, local_id, notify);
             json!({ "agentId": ext_agent_id, "status": "spawned" })
         }
         SpawnOutcome::Queued(local_id) => {
@@ -460,7 +512,7 @@ fn broker_spawn(
                 .ext_agents
                 .entry(ext_id.to_string())
                 .or_default()
-                .insert(session_uuid, local_id);
+                .insert(session_uuid, local_id, notify);
             json!({ "agentId": ext_agent_id, "status": "queued" })
         }
         SpawnOutcome::Failed => json!({
@@ -1004,8 +1056,8 @@ mod tests {
         ));
         let sess_uuid = state.rest.sessions[0].id.clone();
         let registry = state.rest.ext_agents.entry("test.ext".to_string()).or_default();
-        let ext_id_running = registry.insert(sess_uuid.clone(), 7);
-        let ext_id_done = registry.insert(sess_uuid, 9);
+        let ext_id_running = registry.insert(sess_uuid.clone(), 7, false);
+        let ext_id_done = registry.insert(sess_uuid, 9, false);
 
         // agents.list → array of {agentId, agent, status}, oldest-registered first.
         let list = call_broker(
@@ -1084,7 +1136,7 @@ mod tests {
             .ext_agents
             .entry("test.ext".to_string())
             .or_default()
-            .insert(sess_uuid, 3);
+            .insert(sess_uuid, 3, false);
 
         // Read-only → denied (no kill).
         let denied = call_broker(
@@ -1172,7 +1224,7 @@ mod tests {
             .ext_agents
             .entry("test.ext".to_string())
             .or_default()
-            .insert(session_a_uuid, 5);
+            .insert(session_a_uuid, 5, false);
 
         // Foreground switches to SESSION B.
         state.rest.foreground = 1;
@@ -1307,5 +1359,62 @@ mod tests {
             bogus.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown method")),
             "sessions.bogus must be UnknownMethod even with the family grant, got {bogus}"
         );
+    }
+
+    /// Wave 4: `ExtAgentRegistry::insert` records `notify`, and
+    /// `find_by_location` resolves a `(session_uuid, local_id)` pair back to the
+    /// exact `(ext-facing id, notify)` it was registered with.
+    #[test]
+    fn insert_records_notify_and_find_by_location_resolves_pair() {
+        let mut registry = ExtAgentRegistry::default();
+        let sess_uuid = "session-x".to_string();
+
+        let id_no_notify = registry.insert(sess_uuid.clone(), 10, false);
+        let id_notify = registry.insert(sess_uuid.clone(), 11, true);
+
+        let (found_id, found_notify) = registry
+            .find_by_location(&sess_uuid, 10)
+            .expect("location resolves");
+        assert_eq!(found_id, id_no_notify);
+        assert!(!found_notify, "notify: false must round-trip");
+
+        let (found_id2, found_notify2) = registry
+            .find_by_location(&sess_uuid, 11)
+            .expect("location resolves");
+        assert_eq!(found_id2, id_notify);
+        assert!(found_notify2, "notify: true must round-trip");
+
+        // A location never registered resolves to nothing.
+        assert!(registry.find_by_location(&sess_uuid, 999).is_none());
+        assert!(registry.find_by_location("other-session", 10).is_none());
+    }
+
+    /// Wave 4: `find_by_location` is scoped by session uuid — a fixture with TWO
+    /// sessions sharing the SAME local sub-agent id (mirroring
+    /// `cross_session_isolation_resolves_by_spawn_registry_not_foreground`'s
+    /// setup) resolves each `(session_uuid, local_id)` pair to its OWN entry,
+    /// never the other session's.
+    #[test]
+    fn find_by_location_scoped_by_session_not_just_local_id() {
+        let mut registry = ExtAgentRegistry::default();
+        let session_a = "session-a".to_string();
+        let session_b = "session-b".to_string();
+
+        // Same local id (5) registered against two DIFFERENT sessions.
+        let ext_id_a = registry.insert(session_a.clone(), 5, true);
+        let ext_id_b = registry.insert(session_b.clone(), 5, false);
+        assert_ne!(ext_id_a, ext_id_b, "distinct ext-facing ids even for the same local id");
+
+        let (found_a, notify_a) = registry
+            .find_by_location(&session_a, 5)
+            .expect("session A location resolves");
+        assert_eq!(found_a, ext_id_a);
+        assert!(notify_a);
+
+        let (found_b, notify_b) = registry
+            .find_by_location(&session_b, 5)
+            .expect("session B location resolves");
+        assert_eq!(found_b, ext_id_b);
+        assert!(!notify_b);
     }
 }
