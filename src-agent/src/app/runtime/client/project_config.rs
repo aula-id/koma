@@ -47,6 +47,12 @@ pub(super) struct ConfigProjection {
     mcp_status: std::collections::HashMap<String, usize>,
     /// Per-server error strings from `McpManager::server_errors()`.
     mcp_errors: std::collections::HashMap<String, String>,
+    /// W12b: model_uuid → the extension id that flagged it its recommended `default`
+    /// (inverted from `AppConfig::ext_preferred_models`). Drives the additive `recommendedBy`
+    /// hint on the model wire rows. Populated on the `from_app_config` (swapper) path which
+    /// holds the full config; empty on the attached `from_global` path (the `GlobalSnapshot`
+    /// does not yet carry it — deferred with the React picker-badge rendering).
+    ext_recommended: std::collections::HashMap<String, String>,
 }
 
 impl ConfigProjection {
@@ -62,6 +68,9 @@ impl ConfigProjection {
             palette_name: g.palette.clone(),
             mcp_status: std::collections::HashMap::new(),
             mcp_errors: std::collections::HashMap::new(),
+            // Attached path: the GlobalSnapshot doesn't carry ext_preferred_models yet
+            // (deferred with the picker-badge UI); no recommend hints on this path.
+            ext_recommended: std::collections::HashMap::new(),
         }
     }
 
@@ -82,6 +91,12 @@ impl ConfigProjection {
             palette_name: cfg.palette.clone(),
             mcp_status: std::collections::HashMap::new(),
             mcp_errors: std::collections::HashMap::new(),
+            // Invert ext_id → model_uuid into model_uuid → ext_id for the recommendedBy hint.
+            ext_recommended: cfg
+                .ext_preferred_models
+                .iter()
+                .map(|(ext, model)| (model.clone(), ext.clone()))
+                .collect(),
         }
     }
 
@@ -159,6 +174,8 @@ fn push_model(m: &crate::model::app_config::ModelEntry, scope: &'static str) -> 
         // A local override remembers the global uuid it was cloned from (set by
         // `set_session_main`); `None` on every global entry.
         source_uuid: m.source_uuid.clone(),
+        // Set by `push_config` from the projection's ext_recommended map (None by default).
+        recommended_by: None,
     }
 }
 
@@ -188,6 +205,8 @@ fn koma_free_synthetic_model(providers: &[crate::model::app_config::ProviderConn
         free: true,
         // The synthetic free row is not a clone of any global — no source identity.
         source_uuid: None,
+        // The synthetic free row is never an extension recommendation.
+        recommended_by: None,
     }
 }
 
@@ -240,6 +259,8 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         if is_koma_free_backed(m) {
             pm.free = true;
         }
+        // W12b: additive picker hint — which extension recommends this model as its default.
+        pm.recommended_by = cfg.ext_recommended.get(&m.uuid).cloned();
         pm
     }));
     models.extend(cfg.session_models.iter().map(|m| {
@@ -247,6 +268,7 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
         if is_koma_free_backed(m) {
             pm.free = true;
         }
+        pm.recommended_by = cfg.ext_recommended.get(&m.uuid).cloned();
         pm
     }));
 

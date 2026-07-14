@@ -234,7 +234,10 @@ pub fn draw(
         } else if st.editing {
             "type to edit · Enter/Esc done"
         } else if st.is_providers_category() && st.in_detail {
-            if st.prov_delete_armed {
+            if let Some(msg) = st.prov_msg.as_deref() {
+                // W12b: an extension-managed provider was refused deletion.
+                msg
+            } else if st.prov_delete_armed {
                 "ctrl+x again to CONFIRM delete · any key cancels"
             } else {
                 "↑↓ select · + add · ctrl+x delete · esc back"

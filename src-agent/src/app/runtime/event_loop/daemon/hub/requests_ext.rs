@@ -312,7 +312,13 @@ impl DaemonHub {
             );
         }
 
-        // Drop the registry entry + persist, then clear its ext-agent containment registry.
+        // W12b: PURGE the extension's CATALOGUE contributions (its key-backed providers, the
+        // models served by them or by its oauth conns, the oauth conns themselves, and its
+        // preferred-model record) BEFORE dropping the registry entry, so the single config save
+        // below persists everything at once. `main_reset` flags that a purged model held the
+        // GLOBAL Main role (resolution self-heals to koma-free; we toast the reset).
+        let purge = state.rest.config.purge_extension(&id);
+        // Drop the registry entry + persist (one save covers the purge + the registry removal).
         state.rest.config.remove_extension_by_id(&id);
         if let Err(e) = state.rest.config.save() {
             store::append_global_error_log(
@@ -320,7 +326,22 @@ impl DaemonHub {
                 &format!("save config after uninstall {id}: {e:#}"),
             );
         }
+        // Clear the extension's IN-MEMORY footprint: its published context blob, any buffered
+        // chat prompts in every session, and its ext-agent containment registry.
+        state.rest.ext_context.remove(&id);
+        for sess in state.rest.sessions.iter_mut() {
+            sess.pending_ext_prompts.retain(|(eid, _)| eid != &id);
+        }
         state.rest.ext_agents.remove(&id);
+
+        // Surface a purged Main-role assignment as a foreground toast (delivered via the
+        // snapshot diff) — mirrors how a dangling Main provider is otherwise reported.
+        if purge.main_reset {
+            state
+                .rest
+                .fg_mut()
+                .set_toast_info(format!("main model reset: extension {id} uninstalled"));
+        }
 
         self.send_to(
             idx,

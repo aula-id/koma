@@ -216,6 +216,13 @@ pub struct ProviderDraft {
     pub endpoint: String,
     pub api_type: ApiType,
     pub api_key: String,
+    /// W12b: the owning extension id when this row mirrors a key-backed EXTENSION-managed
+    /// provider (`ProviderConn::ext_id`), else `None` for a user-authored provider. Carried
+    /// through the settings editor so a save ROUND-TRIPS the ownership tag (the whole-Vec
+    /// replace at save time would otherwise strip it), and so the delete action can REFUSE
+    /// removing an ext-managed provider ("uninstall to remove"). `None` for every row the
+    /// user creates in the add-provider modal.
+    pub ext_id: Option<String>,
 }
 
 /// State for the "Add API provider" modal overlay.

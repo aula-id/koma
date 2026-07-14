@@ -93,7 +93,27 @@ impl DaemonHub {
     }
 
     // GUI provider delete: drop by uuid + persist (models keep any dangling ref).
+    //
+    // W12b HOST-ENFORCED GUARD: an EXTENSION-managed key-backed provider
+    // (`ProviderConn::ext_id` set) can never be deleted by the user — only uninstalling the
+    // owning extension removes it. Reject with a structured `DaemonEvent::Error` (the shape
+    // `ack_or_error` replies) so no client-side edit can orphan an extension's gateway.
     pub(super) fn delete_provider(&mut self, idx: usize, state: &mut AppState, uuid: String) {
+        if let Some(ext) = state
+            .rest
+            .config
+            .providers
+            .iter()
+            .find(|p| p.uuid == uuid)
+            .and_then(|p| p.ext_id.as_deref())
+        {
+            // Reuse the same `DaemonEvent::Error` reply shape as the success/failure ack.
+            self.ack_or_error(
+                idx,
+                Err(anyhow::anyhow!("managed by extension {ext} — uninstall to remove")),
+            );
+            return;
+        }
         state.rest.config.remove_provider_by_uuid(&uuid);
         let result = state.rest.config.save();
         self.ack_or_error(idx, result);
