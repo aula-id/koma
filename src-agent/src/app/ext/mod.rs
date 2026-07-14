@@ -659,8 +659,12 @@ mod tests {
     }
 
     /// The echo sample's manifest, with `runtime.exec` rewritten to `bin/echo-tool-daemon`
-    /// exactly as `pack.sh` does for the packaged form.
-    fn sample_manifest_json() -> String {
+    /// exactly as `pack.sh` does for the packaged form, and `id` overridden to `id` — the
+    /// four subprocess-spawning tests below each pass a UNIQUE id here so they never
+    /// collide on `store::ext_sock_path`'s fixed `~/.koma/run/ext-<id>.sock` path when run
+    /// concurrently (a shared id let concurrent tests steal each other's listener, causing
+    /// a flaky "extension did not connect within 10s").
+    fn sample_manifest_json(id: &str) -> String {
         let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("src-extension")
@@ -671,6 +675,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&src).expect("read sample manifest"))
                 .expect("parse sample manifest");
         v["runtime"]["exec"] = serde_json::Value::String("bin/echo-tool-daemon".to_string());
+        v["id"] = serde_json::Value::String(id.to_string());
         serde_json::to_string_pretty(&v).unwrap()
     }
 
@@ -708,8 +713,11 @@ mod tests {
             return;
         }
 
-        // Freshly pack the echo sample (its binary now speaks host mode).
-        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        // Freshly pack the echo sample (its binary now speaks host mode). Unique id
+        // (see `sample_manifest_json` doc) so this test's socket path never collides
+        // with the other three subprocess-spawning tests in this module.
+        let ext_id = "run.koma.example.echo-tool-daemon-roundtrip";
+        let zip_bytes = pack_zip(&binary, &sample_manifest_json(ext_id));
 
         // Deterministic test keypair; sign the zip's 32-byte SHA-256 digest.
         let signing = SigningKey::from_bytes(&[42u8; 32]);
@@ -723,7 +731,7 @@ mod tests {
         let installed =
             install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
                 .expect("signed install should succeed");
-        assert_eq!(installed.id, "run.koma.example.echo-tool-daemon");
+        assert_eq!(installed.id, ext_id);
         assert_eq!(installed.kind, "daemon");
         assert_eq!(installed.exec, "bin/echo-tool-daemon");
         assert_eq!(installed.tier, "free");
@@ -780,7 +788,12 @@ mod tests {
             return;
         }
 
-        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        // Unique id (see `sample_manifest_json` doc) so this test's socket path never
+        // collides with the other three subprocess-spawning tests in this module.
+        let zip_bytes = pack_zip(
+            &binary,
+            &sample_manifest_json("run.koma.example.echo-tool-daemon-notify"),
+        );
         let signing = SigningKey::from_bytes(&[91u8; 32]);
         let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
         let digest = Sha256::digest(&zip_bytes);
@@ -849,7 +862,12 @@ mod tests {
             return;
         }
 
-        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        // Unique id (see `sample_manifest_json` doc) so this test's socket path never
+        // collides with the other three subprocess-spawning tests in this module.
+        let zip_bytes = pack_zip(
+            &binary,
+            &sample_manifest_json("run.koma.example.echo-tool-daemon-notify-route"),
+        );
         let signing = SigningKey::from_bytes(&[92u8; 32]);
         let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
         let digest = Sha256::digest(&zip_bytes);
@@ -909,7 +927,12 @@ mod tests {
             return;
         }
 
-        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        // Unique id (see `sample_manifest_json` doc) so this test's socket path never
+        // collides with the other three subprocess-spawning tests in this module.
+        let zip_bytes = pack_zip(
+            &binary,
+            &sample_manifest_json("run.koma.example.echo-tool-daemon-mcp"),
+        );
         let signing = SigningKey::from_bytes(&[77u8; 32]);
         let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
         let digest = Sha256::digest(&zip_bytes);
