@@ -123,6 +123,16 @@ pub const KOMA_REFRESH_LEAD_SECS: u64 = 300;
 /// Codex's style of a conservative fraction of that window.
 pub const KOMA_MAX_REFRESH_AGE_SECS: u64 = 20 * 3_600;
 
+// --- Extension-delegated model providers (W12) ---
+
+/// Refresh an ext-backed access token this many seconds before it expires (5 min, matching
+/// xAI/koma's tight skew). koma never bakes provider-specific windows for extension tokens —
+/// their lifecycle is data-driven — so a single generic lead is used; whether a refresh
+/// actually fires is additionally gated on the conn carrying a `refresh_token_url` (see
+/// `manager::fresh_key`'s Extension arm). The age cap is disabled (`0`) since koma has no
+/// per-provider knowledge of an extension token's maximum silent-retry window.
+pub const EXT_REFRESH_LEAD_SECS: u64 = 300;
+
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
 /// into the chat-request resolution boundary.
 pub struct OAuthProviderMeta {
@@ -189,11 +199,13 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: "https://koma.run/api/v1",
             catalogue_endpoint: "",
         },
-        // W11: extension-delegated conns are NOT model providers in v1 (account
-        // login / token storage only). Empty placeholders; W12 will source the real
-        // endpoint from the extension's manifest (`OAuthProviderDef.chat_endpoint`),
-        // not this static table. An empty `catalogue_endpoint` also means the OAuth
-        // success drain never fires a catalogue fetch for an ext conn.
+        // W12: extension-backed conns are resolved DATA-DRIVEN from the conn's OWN stored
+        // meta (endpoint captured at login from the manifest `OAuthProviderDef.chat_endpoint`
+        // — see `app::resolve::ext_conn_route` / `OAuthConn::ext_model_route`), NOT this
+        // static table, which resolution bypasses for `Extension` conns. These stay empty
+        // placeholders (only reached by any non-resolution `meta()` caller); the empty
+        // `catalogue_endpoint` also means the OAuth success drain never fires a catalogue
+        // fetch for an ext conn.
         OAuthProvider::Extension => OAuthProviderMeta {
             chat_endpoint: "",
             catalogue_endpoint: "",

@@ -37,7 +37,7 @@
 //! the chat model is never auto-woken — the extension retrieves the real output by
 //! polling `agents.result`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -51,7 +51,7 @@ use crate::app::runtime::{
 use crate::app::state::{AppState, SessionRuntime, EXT_TURN_BUDGET};
 use crate::app::subagent::SubAgentStatus;
 use crate::ipc::proto::{ClientRequest, SessionStatus};
-use crate::model::app_config::ModelRole;
+use crate::model::app_config::{new_uuid, AppConfig, ModelEntry, ModelRole};
 use crate::model::session_registry::RegRow;
 use crate::model::store;
 use crate::service::openrouter::OpenRouterClient;
@@ -59,6 +59,14 @@ use crate::service::openrouter::OpenRouterClient;
 /// The agent an extension `agents.spawn` runs when it omits `agent` — koma's
 /// built-in general-purpose agent.
 const DEFAULT_AGENT: &str = "general";
+
+/// W12 `models.register` batch cap: at most this many models per call (a DoS guard on the
+/// global catalogue an extension can grow).
+const MAX_REGISTER_MODELS: usize = 100;
+
+/// W12 `models.register` per-field length cap: each model's `id` / `name` must be non-empty
+/// and no longer than this.
+const MAX_MODEL_FIELD_LEN: usize = 200;
 
 /// One extension's PRIVATE registry of the sub-agents IT spawned, keyed by an
 /// ext-facing id unique to THIS extension. This is the containment fix for a
@@ -251,6 +259,10 @@ fn required_grant(method: &str) -> Option<Grant> {
         }
         "chat.prompt" => Some(Grant::ChatPrompt),
         "models.invoke" => Some(Grant::ModelsInvoke),
+        // W12: registering/unregistering the extension's OWN models needs `models:contribute`
+        // (EXACT-MATCH, like every family below — `models:invoke` never confers it and vice
+        // versa; they gate different verbs).
+        "models.register" | "models.unregister" => Some(Grant::ModelsContribute),
         "context.set" | "context.clear" => Some(Grant::ContextPublish),
         _ => None,
     }
@@ -277,6 +289,8 @@ fn is_granted(granted: &[Grant], required: Grant) -> bool {
         // gates no broker verb), so this arm is here only for exhaustiveness / a
         // future direct check.
         Grant::OauthContribute => granted.contains(&Grant::OauthContribute),
+        // W12: exact-match — gates `models.register`/`models.unregister` only.
+        Grant::ModelsContribute => granted.contains(&Grant::ModelsContribute),
     }
 }
 
@@ -315,6 +329,7 @@ fn grant_wire(g: Grant) -> &'static str {
         Grant::ModelsInvoke => "models:invoke",
         Grant::ContextPublish => "context:publish",
         Grant::OauthContribute => "oauth:contribute",
+        Grant::ModelsContribute => "models:contribute",
     }
 }
 
@@ -332,6 +347,7 @@ pub(crate) fn parse_grants(wire: &[String]) -> Vec<Grant> {
             "models:invoke" => Some(Grant::ModelsInvoke),
             "context:publish" => Some(Grant::ContextPublish),
             "oauth:contribute" => Some(Grant::OauthContribute),
+            "models:contribute" => Some(Grant::ModelsContribute),
             _ => None,
         })
         .collect()
@@ -441,6 +457,15 @@ pub fn handle_ext_call(
             // reader cap) that answers on completion — so the model call never
             // blocks the event loop. OWNS the reply from here.
             broker_models_invoke(state, handle, client, &params, reply);
+        }
+        "models.register" => {
+            // W12: register the extension's OWN models into the GLOBAL catalogue, served by
+            // its connected OAuth account. The config mutation + save is cheap and MUST run on
+            // the loop (where `state.rest.config` is live), so this replies INLINE.
+            let _ = reply.send(broker_models_register(state, &ext_id, &params));
+        }
+        "models.unregister" => {
+            let _ = reply.send(broker_models_unregister(state, &ext_id, &params));
         }
         "context.set" => {
             let _ = reply.send(broker_context_set(state, &ext_id, &params));
@@ -989,6 +1014,195 @@ fn broker_models_invoke(
     });
 }
 
+/// W12: `models.register { models: [{ id, name }] }` → register the extension's OWN models
+/// into the GLOBAL catalogue (`config.models`), each served by the extension's connected
+/// OAuth account. SYNC on the loop (cheap config mutation + save).
+///
+/// The models are served by the MOST RECENT (last-connected) OAuth conn owned by this
+/// extension that is a usable model provider (carries a `chat_endpoint` + a recognised
+/// `api_type` — see [`crate::model::app_config::OAuthConn::ext_model_route`]). No such conn
+/// at all → `{"error":"no connected oauth account for this extension"}`; a conn exists but
+/// none is a model provider → `{"error":"provider is account-login only"}`.
+///
+/// Dedupe is by `(provider_uuid, model_id)`: a re-register of the same model UPDATES its
+/// display `name` IN PLACE while KEEPING its uuid (the stability contract — an ext sub-agent
+/// bound to that uuid keeps resolving). A new pair mints a fresh ROLE-LESS [`ModelEntry`]
+/// (`provider_uuid` = the conn uuid, so resolution binds it straight to that conn). Caps: at
+/// most [`MAX_REGISTER_MODELS`] per call, each `id`/`name` non-empty and ≤
+/// [`MAX_MODEL_FIELD_LEN`]; an invalid batch is rejected ATOMICALLY (nothing registered).
+/// Reply `{ "registered": n, "uuids": [...] }` (the stable uuids, including updated-in-place
+/// ones), then persist `config.json`.
+///
+/// Thin wrapper over the PURE [`apply_models_register`] (which owns the validation + catalogue
+/// mutation, unit-tested without touching `~/.koma/config.json`): persists only on a
+/// successful registration (the reply carries `"registered"`; an error reply carries none, so
+/// a rejected batch never re-writes the config).
+fn broker_models_register(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let reply = apply_models_register(&mut state.rest.config, ext_id, params);
+    if reply.get("registered").is_some() {
+        if let Err(e) = state.rest.config.save() {
+            store::append_global_error_log(
+                "ext models",
+                &format!("[{ext_id}] models.register save failed: {e:#}"),
+            );
+        }
+    }
+    reply
+}
+
+/// PURE core of [`broker_models_register`]: validate `params` and apply the registration to
+/// `config.models`, returning the reply JSON. Does NOT persist (the wrapper saves). See
+/// [`broker_models_register`] for the full contract.
+fn apply_models_register(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
+    let Some(models) = params.get("models").and_then(|v| v.as_array()) else {
+        return json!({ "error": "models.register requires a 'models' array" });
+    };
+    if models.is_empty() {
+        return json!({ "error": "models.register requires at least one model" });
+    }
+    if models.len() > MAX_REGISTER_MODELS {
+        return json!({ "error": format!("too many models (max {MAX_REGISTER_MODELS})") });
+    }
+    // Validate + collect (id, name) up front — a bad entry rejects the WHOLE batch (atomic:
+    // nothing is registered unless every entry is valid).
+    let mut parsed: Vec<(String, String)> = Vec::with_capacity(models.len());
+    for m in models {
+        let id = m.get("id").and_then(Value::as_str).unwrap_or("").trim();
+        let name = m.get("name").and_then(Value::as_str).unwrap_or("").trim();
+        if id.is_empty() || name.is_empty() {
+            return json!({ "error": "each model requires a non-empty 'id' and 'name'" });
+        }
+        if id.len() > MAX_MODEL_FIELD_LEN || name.len() > MAX_MODEL_FIELD_LEN {
+            return json!({ "error": format!("model id/name too long (max {MAX_MODEL_FIELD_LEN})") });
+        }
+        parsed.push((id.to_string(), name.to_string()));
+    }
+
+    // Pick the conn the models are served by. Owned uuid, so the immutable borrow of `config`
+    // ends before the mutation below.
+    let Some(conn_uuid) = pick_ext_provider_conn(config, ext_id) else {
+        // Distinguish "no account connected" from "connected but account-login-only".
+        let has_conn = config
+            .oauth_conns
+            .iter()
+            .any(|c| c.ext_id.as_deref() == Some(ext_id));
+        return if has_conn {
+            json!({ "error": "provider is account-login only" })
+        } else {
+            json!({ "error": "no connected oauth account for this extension" })
+        };
+    };
+
+    // Register each model: dedupe by (provider_uuid, model_id) — update the name in place
+    // (KEEP uuid, the stability contract), else mint a fresh role-less entry.
+    let mut uuids: Vec<String> = Vec::with_capacity(parsed.len());
+    for (id, name) in parsed {
+        if let Some(existing) = config
+            .models
+            .iter_mut()
+            .find(|e| e.provider_uuid == conn_uuid && e.model_id == id)
+        {
+            existing.name = name;
+            uuids.push(existing.uuid.clone());
+        } else {
+            let entry = ModelEntry {
+                uuid: new_uuid(),
+                name,
+                model_id: id,
+                provider_uuid: conn_uuid.clone(),
+                route: None,
+                roles: Vec::new(),
+                role: None,
+                source_uuid: None,
+            };
+            uuids.push(entry.uuid.clone());
+            config.models.push(entry);
+        }
+    }
+    json!({ "registered": uuids.len(), "uuids": uuids })
+}
+
+/// W12: `models.unregister { ids?: [String] }` → remove entries from `config.models` this
+/// extension OWNS (served by one of ITS OWN OAuth conns — the ownership wall: an extension
+/// can never unregister another extension's or the user's own models).
+///
+/// `ids` absent → remove ALL of the caller's entries. `ids` present → remove only the
+/// caller-owned entries whose `model_id` OR `uuid` matches one of `ids` (case-insensitively,
+/// mirroring the slug-match convention). Reply `{ "removed": n }`, persisting `config.json`
+/// only when something actually changed.
+///
+/// Thin wrapper over the PURE [`apply_models_unregister`] (unit-tested without disk):
+/// persists only when at least one entry was removed.
+fn broker_models_unregister(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let reply = apply_models_unregister(&mut state.rest.config, ext_id, params);
+    if reply.get("removed").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+        if let Err(e) = state.rest.config.save() {
+            store::append_global_error_log(
+                "ext models",
+                &format!("[{ext_id}] models.unregister save failed: {e:#}"),
+            );
+        }
+    }
+    reply
+}
+
+/// PURE core of [`broker_models_unregister`]: apply the removal to `config.models` and return
+/// the reply JSON. Does NOT persist (the wrapper saves). See [`broker_models_unregister`].
+fn apply_models_unregister(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
+    // The provider_uuids owned by THIS extension (its oauth conns) — the ownership wall.
+    let owned: HashSet<String> = config
+        .oauth_conns
+        .iter()
+        .filter(|c| c.ext_id.as_deref() == Some(ext_id))
+        .map(|c| c.uuid.clone())
+        .collect();
+    if owned.is_empty() {
+        return json!({ "removed": 0 });
+    }
+
+    // Optional id filter (model_id OR uuid, case-insensitive). Absent → remove all owned.
+    let id_filter: Option<Vec<String>> = params.get("ids").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    });
+
+    let before = config.models.len();
+    config.models.retain(|e| {
+        // Not owned by the caller → always kept (the ownership wall).
+        if !owned.contains(&e.provider_uuid) {
+            return true;
+        }
+        match &id_filter {
+            // No filter → remove every owned entry.
+            None => false,
+            // Filter → keep unless this owned entry matches by model_id or uuid.
+            Some(ids) => !ids
+                .iter()
+                .any(|id| id.eq_ignore_ascii_case(&e.model_id) || id.eq_ignore_ascii_case(&e.uuid)),
+        }
+    });
+    json!({ "removed": before - config.models.len() })
+}
+
+/// W12: the OAuth-conn uuid `models.register` serves an extension's models from — the MOST
+/// RECENT (last-appended; conns are pushed on login) conn owned by `ext_id` that is a usable
+/// model provider (both a `chat_endpoint` and a recognised `api_type`, via
+/// [`crate::model::app_config::OAuthConn::ext_model_route`]). `None` when the extension has
+/// no conn at all, or none of its conns is a model provider (all account-login-only). The
+/// returned uuid becomes the registered models' `provider_uuid`.
+fn pick_ext_provider_conn(config: &AppConfig, ext_id: &str) -> Option<String> {
+    config
+        .oauth_conns
+        .iter()
+        .rev()
+        .find(|c| c.ext_id.as_deref() == Some(ext_id) && c.ext_model_route().is_some())
+        .map(|c| c.uuid.clone())
+}
+
 /// `context.set { text }` → PUBLISH `text` as this extension's persistent context
 /// blob, keyed by the CALLER's `ext_id` (so an extension can only ever read/replace
 /// its OWN entry, never another's). The blob rides the System-prompt VOLATILE TAIL
@@ -1285,6 +1499,7 @@ mod tests {
     use crate::app::mode::Mode;
     use crate::app::state::AppState;
     use crate::app::subagent::{SubAgent, SubAgentStatus};
+    use crate::model::app_config::{OAuthConn, OAuthProvider};
 
     /// EXHAUSTIVE grant-gate truth table — the security boundary, tested pure (no
     /// state). Columns: granted set × method → expected [`GateDecision`].
@@ -1334,17 +1549,20 @@ mod tests {
         assert_eq!(method_permitted("agents.bogus", &[Orch]), GateDecision::UnknownMethod);
         assert_eq!(method_permitted("filesystem.read", &[Orch]), GateDecision::UnknownMethod);
 
-        // --- WAVE-3 families: each needs its OWN grant, EXACT-MATCH, no lattice edge.
-        use Grant::{ChatPrompt, ContextPublish, ModelsInvoke, SessionsManage};
+        // --- WAVE-3/12 families: each needs its OWN grant, EXACT-MATCH, no lattice edge.
+        use Grant::{ChatPrompt, ContextPublish, ModelsContribute, ModelsInvoke, SessionsManage};
 
         // (every verb in a family, the grant that family requires).
-        let new_families: [(&[&str], Grant); 4] = [
+        let new_families: [(&[&str], Grant); 5] = [
             (
                 &["sessions.list", "sessions.create", "sessions.switch", "sessions.spawn_into"],
                 SessionsManage,
             ),
             (&["chat.prompt"], ChatPrompt),
             (&["models.invoke"], ModelsInvoke),
+            // W12: models.register/unregister need `models:contribute`, DISTINCT from
+            // `models:invoke` despite sharing the `models.` prefix (exact-verb gate).
+            (&["models.register", "models.unregister"], ModelsContribute),
             (&["context.set", "context.clear"], ContextPublish),
         ];
 
@@ -1392,6 +1610,27 @@ mod tests {
             method_permitted("context.bogus", &[ContextPublish]),
             GateDecision::UnknownMethod
         );
+
+        // W12: `models:invoke` and `models:contribute` share the `models.` prefix but gate
+        // DIFFERENT verbs — neither confers the other (exact-verb match, no prefix leak).
+        assert_eq!(
+            method_permitted("models.register", &[ModelsInvoke]),
+            GateDecision::Deny(ModelsContribute),
+            "models:invoke must NOT unlock models.register"
+        );
+        assert_eq!(
+            method_permitted("models.invoke", &[ModelsContribute]),
+            GateDecision::Deny(ModelsInvoke),
+            "models:contribute must NOT unlock models.invoke"
+        );
+        assert_eq!(
+            method_permitted("models.register", &[ModelsContribute]),
+            GateDecision::Allow
+        );
+        assert_eq!(
+            method_permitted("models.bogus", &[ModelsContribute]),
+            GateDecision::UnknownMethod
+        );
     }
 
     /// `parse_grants` maps known wire strings and drops unknown ones (fail-closed).
@@ -1405,6 +1644,7 @@ mod tests {
             "models:invoke".to_string(),
             "context:publish".to_string(),
             "oauth:contribute".to_string(),
+            "models:contribute".to_string(),
             "filesystem:write".to_string(),
         ]);
         // Input order is preserved; the unknown "filesystem:write" is dropped.
@@ -1418,6 +1658,7 @@ mod tests {
                 Grant::ModelsInvoke,
                 Grant::ContextPublish,
                 Grant::OauthContribute,
+                Grant::ModelsContribute,
             ]
         );
         assert!(parse_grants(&["nonsense".to_string()]).is_empty());
@@ -2482,6 +2723,207 @@ mod tests {
         assert!(
             empty_task.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'task'")),
             "an empty task must error, got {empty_task}"
+        );
+    }
+
+    // ─── W12 models.register / models.unregister ────────────────────────────────
+    //
+    // The catalogue mutation is exercised through the PURE `apply_models_*` cores so no test
+    // ever writes `~/.koma/config.json` (the persisting broker wrappers save only on a real
+    // change). The GRANT GATE for the verbs is proven end-to-end via `call_broker` on paths
+    // that reply an error (so the wrapper never persists).
+
+    /// An ext-backed OAuthConn owned by `ext_id`, either a MODEL provider (with the W12
+    /// chat_endpoint + api_type meta) or account-login-only (no meta).
+    fn ext_conn(uuid: &str, ext_id: &str, model_provider: bool) -> OAuthConn {
+        OAuthConn {
+            uuid: uuid.to_string(),
+            provider: OAuthProvider::Extension,
+            access_token: "at".to_string(),
+            ext_id: Some(ext_id.to_string()),
+            provider_id: Some("prov".to_string()),
+            chat_endpoint: model_provider.then(|| "https://api.ext.test/v1".to_string()),
+            api_type: model_provider.then(|| "openai".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// register with NO connected conn → the "no account" error; nothing added.
+    #[test]
+    fn models_register_without_conn_errors() {
+        let mut config = AppConfig::default();
+        let out = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "m1", "name": "M1" }] }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("no connected oauth account")),
+            "got {out}"
+        );
+        assert!(config.models.is_empty());
+    }
+
+    /// register when the ext's only conn is account-login-only (no meta) → "account login only".
+    #[test]
+    fn models_register_account_login_only_errors() {
+        let mut config = AppConfig::default();
+        config.oauth_conns.push(ext_conn("c1", "my.ext", false));
+        let out = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "m1", "name": "M1" }] }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("account-login only")),
+            "got {out}"
+        );
+        assert!(config.models.is_empty());
+    }
+
+    /// register mints role-less entries served by the ext conn, replies stable uuids; a
+    /// re-register of the same (provider, id) UPDATES the name IN PLACE keeping the uuid.
+    #[test]
+    fn models_register_mints_and_dedupes_keeping_uuid() {
+        let mut config = AppConfig::default();
+        config.oauth_conns.push(ext_conn("conn-a", "my.ext", true));
+
+        let out = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "fast", "name": "Fast" }, { "id": "slow", "name": "Slow" }] }),
+        );
+        assert_eq!(out["registered"], json!(2));
+        assert_eq!(out["uuids"].as_array().unwrap().len(), 2);
+        assert_eq!(config.models.len(), 2);
+        assert!(config.models.iter().all(|m| m.provider_uuid == "conn-a"), "served by the ext conn");
+        assert!(config.models.iter().all(|m| m.roles.is_empty()), "ext models hold no runtime role");
+        let fast_uuid = config.models.iter().find(|m| m.model_id == "fast").unwrap().uuid.clone();
+
+        // Re-register "fast" with a NEW name → same uuid returned, name updated, no new entry.
+        let out2 = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "fast", "name": "Faster" }] }),
+        );
+        assert_eq!(out2["registered"], json!(1));
+        assert_eq!(out2["uuids"][0], json!(fast_uuid), "dedupe returns the STABLE uuid");
+        assert_eq!(config.models.len(), 2, "no new entry minted on re-register");
+        let fast = config.models.iter().find(|m| m.model_id == "fast").unwrap();
+        assert_eq!(fast.name, "Faster", "name updated in place");
+        assert_eq!(fast.uuid, fast_uuid, "uuid preserved (stability contract)");
+    }
+
+    /// >100 models is rejected atomically; a batch with any invalid entry registers NONE.
+    #[test]
+    fn models_register_rejects_over_cap_and_bad_fields() {
+        let mut config = AppConfig::default();
+        config.oauth_conns.push(ext_conn("conn-a", "my.ext", true));
+
+        let big: Vec<Value> = (0..101).map(|i| json!({ "id": format!("m{i}"), "name": "n" })).collect();
+        let over = apply_models_register(&mut config, "my.ext", &json!({ "models": big }));
+        assert!(
+            over.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("too many models")),
+            "got {over}"
+        );
+        assert!(config.models.is_empty(), "an over-cap batch registers nothing");
+
+        // One empty id → the whole batch is rejected (atomic), nothing registered.
+        let bad = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "ok", "name": "OK" }, { "id": "", "name": "Bad" }] }),
+        );
+        assert!(bad.get("error").is_some(), "an empty id rejects the whole batch, got {bad}");
+        assert!(config.models.is_empty(), "a batch with one bad entry registers NONE (atomic)");
+    }
+
+    /// Ownership wall + `ids` filter: a two-ext fixture proves ext A can NEVER remove ext B's
+    /// entries, `ids` absent removes ALL of the caller's, and an id filter (case-insensitive)
+    /// removes only the matching owned entry.
+    #[test]
+    fn models_unregister_ownership_wall_and_ids_filter() {
+        let mut config = AppConfig::default();
+        config.oauth_conns.push(ext_conn("conn-a", "ext.a", true));
+        config.oauth_conns.push(ext_conn("conn-b", "ext.b", true));
+        apply_models_register(
+            &mut config,
+            "ext.a",
+            &json!({ "models": [{ "id": "a1", "name": "A1" }, { "id": "a2", "name": "A2" }] }),
+        );
+        apply_models_register(&mut config, "ext.b", &json!({ "models": [{ "id": "b1", "name": "B1" }] }));
+        assert_eq!(config.models.len(), 3);
+
+        // ext A tries to unregister B's model by id → the ownership wall blocks it (0 removed).
+        let blocked = apply_models_unregister(&mut config, "ext.a", &json!({ "ids": ["b1"] }));
+        assert_eq!(blocked["removed"], json!(0), "ext A cannot touch ext B's entry");
+        assert_eq!(config.models.len(), 3);
+
+        // ext A unregister with ids ABSENT → removes ALL of A's (2); B's untouched.
+        let all_a = apply_models_unregister(&mut config, "ext.a", &json!({}));
+        assert_eq!(all_a["removed"], json!(2));
+        assert_eq!(config.models.len(), 1);
+        assert_eq!(config.models[0].model_id, "b1", "only ext B's entry remains");
+
+        // ext B unregister by specific model_id (case-insensitive) → removes it.
+        let b_by_id = apply_models_unregister(&mut config, "ext.b", &json!({ "ids": ["B1"] }));
+        assert_eq!(b_by_id["removed"], json!(1));
+        assert!(config.models.is_empty());
+    }
+
+    /// An extension with no connected conn removes nothing (empty ownership set), never
+    /// touching another owner's models.
+    #[test]
+    fn models_unregister_no_conn_removes_nothing() {
+        let mut config = AppConfig::default();
+        config.models.push(ModelEntry {
+            uuid: "x".to_string(),
+            model_id: "m".to_string(),
+            provider_uuid: "p".to_string(),
+            ..ModelEntry::default()
+        });
+        let out = apply_models_unregister(&mut config, "my.ext", &json!({}));
+        assert_eq!(out["removed"], json!(0));
+        assert_eq!(config.models.len(), 1, "a foreign entry is never removed");
+    }
+
+    /// GATE-first end-to-end: an ungranted `models.register` is denied BEFORE the handler;
+    /// a granted one reaches its real handler (which rejects an empty array). Both reply an
+    /// error, so the persisting wrapper never writes config.json.
+    #[test]
+    fn models_register_gate_first_then_reaches_handler() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+
+        // models:invoke ≠ models:contribute → grant denied, never dispatched.
+        let denied = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "my.ext",
+            &[Grant::ModelsInvoke],
+            "models.register",
+            json!({ "models": [] }),
+        );
+        assert!(
+            denied.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            "models:invoke must NOT unlock models.register, got {denied}"
+        );
+
+        // Granted → reaches the real handler's validation (empty array), not a stub/denial.
+        let reached = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "my.ext",
+            &[Grant::ModelsContribute],
+            "models.register",
+            json!({ "models": [] }),
+        );
+        assert!(
+            reached.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("at least one model")),
+            "a granted models.register reaches its handler, got {reached}"
         );
     }
 }

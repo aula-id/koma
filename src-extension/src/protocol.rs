@@ -145,6 +145,14 @@ pub enum Grant {
     /// so it has no `required_grant` entry on koma's side.
     #[serde(rename = "oauth:contribute")]
     OauthContribute,
+    /// W12: register/unregister the extension's OWN models into koma's global
+    /// catalogue over the `models.register` / `models.unregister` broker verbs.
+    /// Unlike [`Self::OauthContribute`] this DOES gate broker `Call` verbs (it has a
+    /// `required_grant` entry on koma's side). A model registered under this grant is
+    /// served by the extension's connected OAuth account (its `oauth:contribute`
+    /// conn), so an extension that registers models almost always requires BOTH.
+    #[serde(rename = "models:contribute")]
+    ModelsContribute,
 }
 
 // ---- duplex wire envelope ----
@@ -299,6 +307,7 @@ mod tests {
             (Grant::ModelsInvoke, "\"models:invoke\""),
             (Grant::ContextPublish, "\"context:publish\""),
             (Grant::OauthContribute, "\"oauth:contribute\""),
+            (Grant::ModelsContribute, "\"models:contribute\""),
         ];
         for (grant, wire) in cases {
             let serialized = serde_json::to_string(&grant).expect("serializes");

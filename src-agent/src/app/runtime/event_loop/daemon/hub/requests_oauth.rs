@@ -208,9 +208,15 @@ impl DaemonHub {
         if !record.granted.iter().any(|g| g == OAUTH_CONTRIBUTE_WIRE) {
             fail!("extension lacks the oauth:contribute grant".to_string());
         }
-        if !read_ext_oauth_providers(&ext_id).iter().any(|p| p.id == provider_id) {
+        // Capture the declared provider def (not just its presence) — W12 reads its
+        // `chat_endpoint`/`api_type`/`refresh` to stamp the ext-backed conn's model-provider
+        // meta on a successful login, so an ext token becomes a resolvable model provider.
+        let Some(provider_def) = read_ext_oauth_providers(&ext_id)
+            .into_iter()
+            .find(|p| p.id == provider_id)
+        else {
             fail!("extension does not declare this oauth provider".to_string());
-        }
+        };
         let Some(mgr) = state.rest.ext_manager.clone() else {
             fail!("extension not available".to_string());
         };
@@ -230,7 +236,7 @@ impl DaemonHub {
         let cancel_task = Arc::clone(&cancel);
         let provider_for_task = provider_id.clone();
         let join = handle.spawn_blocking(move || {
-            run_ext_oauth_delegate(&mgr, record, &provider_for_task, &cancel_task, tx);
+            run_ext_oauth_delegate(&mgr, record, &provider_for_task, &provider_def, &cancel_task, tx);
         });
         state.rest.oauth_task = Some(join.abort_handle());
         state.rest.oauth_ext_flow = Some(ExtOAuthFlow {
@@ -660,7 +666,29 @@ fn decide_poll(reply: &Value) -> PollDecision {
 /// uuid is minted HOST-side; `provider` is the [`OAuthProvider::Extension`] marker with the
 /// real identity carried in `ext_id`/`provider_id`. Only `access_token` is guaranteed
 /// present; the rest are best-effort from the extension's token payload.
-fn build_ext_conn(ext_id: &str, provider_id: &str, token: ExtToken) -> OAuthConn {
+///
+/// W12: the model-provider meta (`chat_endpoint`/`api_type`/refresh descriptor) is stamped
+/// from the manifest [`OAuthProviderDef`] `def`. `api_type` is NORMALIZED to `"openai"` /
+/// `"anthropic"` (an unrecognised or absent value stores `None`), so a conn whose manifest
+/// declared no usable model endpoint stays account-login-only — [`models.register`] refuses
+/// it and resolution treats a referencing entry as dangling. Empty declared strings collapse
+/// to `None` (nothing to route / refresh against).
+fn build_ext_conn(
+    ext_id: &str,
+    provider_id: &str,
+    def: &OAuthProviderDef,
+    token: ExtToken,
+) -> OAuthConn {
+    let non_empty = |s: &str| -> Option<String> {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    };
+    let chat_endpoint = def.chat_endpoint.as_deref().and_then(non_empty);
+    let api_type = normalize_ext_api_type(def.api_type.as_deref());
+    let (refresh_token_url, refresh_client_id) = match &def.refresh {
+        Some(r) => (non_empty(&r.token_url), non_empty(&r.client_id)),
+        None => (None, None),
+    };
     OAuthConn {
         uuid: uuid::Uuid::new_v4().to_string(),
         name: token
@@ -678,6 +706,25 @@ fn build_ext_conn(ext_id: &str, provider_id: &str, token: ExtToken) -> OAuthConn
         plan: String::new(),
         ext_id: Some(ext_id.to_string()),
         provider_id: Some(provider_id.to_string()),
+        chat_endpoint,
+        api_type,
+        refresh_token_url,
+        refresh_client_id,
+    }
+}
+
+/// W12: normalize a manifest [`OAuthProviderDef::api_type`] to the stored wire string koma
+/// resolves. Only `"openai"` and `"anthropic"` are model-provider wire types koma can
+/// dispatch (mapping to `OpenAiCompatible` / `AnthropicCompatible` at resolution — see
+/// [`crate::model::app_config::OAuthConn::ext_model_route`]); anything else — an
+/// account-login-only provider that omits `api_type`, or an unknown/legacy value like
+/// `"openai_compatible"` — stores `None`, which `models.register` later refuses as
+/// "provider is account-login only".
+fn normalize_ext_api_type(api_type: Option<&str>) -> Option<String> {
+    match api_type.map(str::trim) {
+        Some("openai") => Some("openai".to_string()),
+        Some("anthropic") => Some("anthropic".to_string()),
+        _ => None,
     }
 }
 
@@ -714,6 +761,7 @@ fn run_ext_oauth_delegate(
     mgr: &Arc<ExtHostManager>,
     record: InstalledExtension,
     provider_id: &str,
+    provider_def: &OAuthProviderDef,
     cancel: &AtomicBool,
     tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>,
 ) {
@@ -801,7 +849,7 @@ fn run_ext_oauth_delegate(
         match decide_poll(&poll) {
             PollDecision::Continue => continue,
             PollDecision::Success(token) => {
-                let conn = build_ext_conn(&record.id, provider_id, token);
+                let conn = build_ext_conn(&record.id, provider_id, provider_def, token);
                 let _ = tx.send(OAuthEvent::Success { conn });
                 return;
             }
@@ -1039,7 +1087,9 @@ mod ext_oauth_tests {
             email: Some("e@x.test".to_string()),
             label: Some("Nice Label".to_string()),
         };
-        let conn = build_ext_conn("run.koma.ext.demo", "demo", token);
+        // An account-login-only def (no chat_endpoint/api_type) → the conn is NOT a model
+        // provider (its W12 meta stays None).
+        let conn = build_ext_conn("run.koma.ext.demo", "demo", &def("demo", "Demo", "browser"), token);
         assert_eq!(conn.provider, OAuthProvider::Extension);
         assert_eq!(conn.ext_id.as_deref(), Some("run.koma.ext.demo"));
         assert_eq!(conn.provider_id.as_deref(), Some("demo"));
@@ -1049,6 +1099,50 @@ mod ext_oauth_tests {
         assert_eq!(conn.expires_at, 42);
         assert_eq!(conn.email, "e@x.test");
         assert!(!conn.uuid.is_empty()); // minted host-side
+        assert!(conn.chat_endpoint.is_none());
+        assert!(conn.api_type.is_none());
+        assert!(conn.ext_model_route().is_none(), "account-login-only conn is not a model provider");
+    }
+
+    /// W12: a def declaring a chat endpoint + a recognised api_type + a refresh descriptor
+    /// stamps the conn's model-provider meta, so the ext token becomes a resolvable provider.
+    #[test]
+    fn build_conn_stamps_model_provider_meta() {
+        let provider_def = OAuthProviderDef {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            method: "browser".to_string(),
+            chat_endpoint: Some("https://api.demo.test/v1".to_string()),
+            api_type: Some("openai".to_string()),
+            refresh: Some(koma_extension::protocol::OAuthRefreshDef {
+                token_url: "https://demo.test/token".to_string(),
+                client_id: "cid".to_string(),
+            }),
+        };
+        let token = ExtToken {
+            access_token: "at".to_string(),
+            refresh_token: Some("rt".to_string()),
+            expires_at: Some(42),
+            email: None,
+            label: None,
+        };
+        let conn = build_ext_conn("e.ext", "demo", &provider_def, token);
+        assert_eq!(conn.chat_endpoint.as_deref(), Some("https://api.demo.test/v1"));
+        assert_eq!(conn.api_type.as_deref(), Some("openai"));
+        assert_eq!(conn.refresh_token_url.as_deref(), Some("https://demo.test/token"));
+        assert_eq!(conn.refresh_client_id.as_deref(), Some("cid"));
+        assert!(conn.ext_model_route().is_some(), "a declared model provider resolves");
+    }
+
+    /// W12: only `"openai"`/`"anthropic"` are accepted api_type wires; anything else (an
+    /// unknown/legacy value, or absent) normalizes to `None` (account-login-only).
+    #[test]
+    fn normalize_ext_api_type_accepts_only_known_wires() {
+        assert_eq!(normalize_ext_api_type(Some("openai")).as_deref(), Some("openai"));
+        assert_eq!(normalize_ext_api_type(Some("  anthropic  ")).as_deref(), Some("anthropic"));
+        assert_eq!(normalize_ext_api_type(Some("openai_compatible")), None);
+        assert_eq!(normalize_ext_api_type(Some("")), None);
+        assert_eq!(normalize_ext_api_type(None), None);
     }
 
     #[test]
@@ -1060,7 +1154,7 @@ mod ext_oauth_tests {
             email: None,
             label: None,
         };
-        let conn = build_ext_conn("run.koma.ext.demo", "demo", token);
+        let conn = build_ext_conn("run.koma.ext.demo", "demo", &def("demo", "Demo", "browser"), token);
         assert_eq!(conn.name, "run.koma.ext.demo:demo"); // no label → id fallback
         assert_eq!(conn.refresh_token, "");
         assert_eq!(conn.expires_at, 0);
