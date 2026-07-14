@@ -253,7 +253,7 @@ fn parse_verdict(reply: &str) -> Option<Verdict> {
 /// spawned off-thread task), so it must resolve promptly or the round stays parked.
 /// On timeout the verdict is `unavailable("classifier timeout")`, so the caller
 /// degrades (TAC → human prompt) rather than hanging.
-const CLASSIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+const CLASSIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Run the classifier model over `messages` and return a [`Verdict`].
 ///
