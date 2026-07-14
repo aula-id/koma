@@ -67,6 +67,8 @@ pub fn ensure_koma_free_config(cfg: &mut AppConfig) {
                 endpoint: KOMA_FREE_ENDPOINT.to_string(),
                 // Keyless: auth rides the X-Koma / X-Session headers.
                 api_key: String::new(),
+                // Native provider (the keyless free tier), not extension-managed.
+                ext_id: None,
             });
             uuid
         }

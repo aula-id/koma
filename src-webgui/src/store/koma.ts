@@ -20,6 +20,7 @@ import {
 
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
 export { fileKey, initialCoding } from './coding'
+import { postToPanel } from '../lib/panelBridge'
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
@@ -1053,6 +1054,24 @@ export type PushEnvelope =
   // spinner). On success the authoritative registry reply is the following
   // InstalledExtensions push; `ok:false` + `error` surfaces a failure.
   | { k: 'ExtensionOpResult'; id: string; ok: boolean; error: string | null }
+  // Out-of-band reply to a GuiReq ExtPanelMsg (W9 panel bridge) — the
+  // extension's `panel.msg` invoke outcome, re-pushed by the host from the
+  // daemon's ExtPanelReply. Routed straight to the matching panel iframe via
+  // postToPanel (lib/panelBridge.ts) by `reqId`; never touches store state.
+  | {
+      k: 'ExtPanelReply'
+      extId: string
+      panelId: string
+      reqId: string | null
+      ok: boolean
+      payload?: unknown
+      error?: string | null
+    }
+  // Unsolicited daemon->panel push (W9 panel bridge) — re-pushed by the host
+  // from the daemon's ExtPanelPush so a panel iframe's live UI can update
+  // without a request. Routed straight to the matching panel iframe via
+  // postToPanel; never touches store state.
+  | { k: 'ExtPanelPush'; extId: string; panelId: string; payload: unknown }
   // Reply to GuiReq GitStatus — host-computed branch/ahead/behind + staged/
   // unstaged file lists for the Source Control "GIT" panel. Carries the
   // Rust `GitStatusResult` verbatim (already camelCase) flattened onto the
@@ -2922,6 +2941,29 @@ export const useKoma = create<KomaState>((set, get) => ({
                 : { ok: false, message: env.error ?? `Failed to ${verb.toLowerCase()} ${label}.` },
             },
           }
+        })
+        break
+      // W9 panel bridge: route straight through to the matching panel
+      // iframe, never touch store state. An unregistered panel (tab closed,
+      // reload racing the reply) makes postToPanel a silent no-op — these
+      // are fire-and-forget, never queued.
+      case 'ExtPanelReply':
+        postToPanel(env.extId, env.panelId, {
+          koma: 'host',
+          v: 1,
+          kind: 'reply',
+          reqId: env.reqId,
+          ok: env.ok,
+          payload: env.payload,
+          error: env.error,
+        })
+        break
+      case 'ExtPanelPush':
+        postToPanel(env.extId, env.panelId, {
+          koma: 'host',
+          v: 1,
+          kind: 'push',
+          payload: env.payload,
         })
         break
       case 'UsagePreview':

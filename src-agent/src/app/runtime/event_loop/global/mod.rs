@@ -66,6 +66,7 @@ pub(super) fn service_global(
     dirty |= drains::drain_sec_health(state);
     dirty |= drains::drain_oauth(state, handle);
     dirty |= drains::drain_ext_calls(state, client, handle);
+    dirty |= drains::drain_ext_notifies(state);
     dirty |= drains::drain_awareness(state);
     dirty |= drains::drain_warm(state);
     dirty |= drains::fetch_catalogue_debounced(state, client, handle);

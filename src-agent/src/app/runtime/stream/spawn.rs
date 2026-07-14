@@ -225,6 +225,10 @@ pub(crate) fn running_subagents(state: &AppState, sess_idx: usize) -> usize {
 /// client/session or the named agent doesn't resolve. Does NOT touch
 /// `next_subagent_id` (the caller owns id allocation). Does NOT await the
 /// sub-agent; the `$` panel is NOT auto-opened.
+///
+/// `overrides` steers the SPAWNED agent's route only (see
+/// [`crate::app::subagent::spawn_subagent`]'s doc); `None` (every caller except
+/// `agents.spawn`) resolves exactly as before.
 // Wide by nature: it bakes the full per-session sub-agent context (id, agent,
 // task, deferred-call id) on top of `state`/`sess_idx`/client/handle. Splitting
 // it into a struct would only obscure the call sites.
@@ -239,6 +243,7 @@ fn spawn_task_with_id(
     task_text: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> Option<usize> {
     if client.is_none() || state.rest.sessions[sess_idx].session.is_none() {
         return None;
@@ -285,10 +290,19 @@ fn spawn_task_with_id(
     // Warn when the agent declared its own model but it failed to resolve against
     // the session's in-memory session_models + global catalogue. The agent will run
     // on Main — surface this so the user isn't left wondering why their chosen model
-    // wasn't used.
+    // wasn't used. An `overrides.model`, when set, REPLACES the agent's own model
+    // reference for this check (applied to a throwaway clone) — so a bad override
+    // slug warns too, even when the agent's own declared model (if any) would have
+    // resolved fine.
     if let Some(agent) = registry.get(agent_name) {
-        if crate::app::resolve::agent_declares_model(agent)
-            && !crate::app::resolve::agent_model_resolves(&config, &settings, agent)
+        let mut check_agent = agent.clone();
+        if let Some(model) = overrides.as_ref().and_then(|o| o.model.as_ref()) {
+            check_agent.model = Some(model.clone());
+            check_agent.model_uuid = None;
+            check_agent.provider_uuid = None;
+        }
+        if crate::app::resolve::agent_declares_model(&check_agent)
+            && !crate::app::resolve::agent_model_resolves(&config, &settings, &check_agent)
         {
             state.rest.sessions[sess_idx]
                 .set_toast(format!("agent '{}' model unresolved — using main", agent_name));
@@ -311,6 +325,7 @@ fn spawn_task_with_id(
         tool_call_id,
         detached,
         state.rest.agent_mode,
+        overrides,
     )?;
     state.rest.sessions[sess_idx].subagents.push(sub);
     // Persist the new sub-agent record so it survives close/reopen (#25). Covers
@@ -343,10 +358,12 @@ pub(crate) fn spawn_task(
     task_text: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> Option<usize> {
     let id = state.rest.sessions[sess_idx].next_subagent_id;
-    let spawned =
-        spawn_task_with_id(state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached)?;
+    let spawned = spawn_task_with_id(
+        state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached, overrides,
+    )?;
     // Only consume the id on a successful spawn (a failed spawn leaves it free).
     state.rest.sessions[sess_idx].next_subagent_id += 1;
     Some(spawned)
@@ -393,9 +410,10 @@ pub(crate) fn spawn_or_queue(
     task_text: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> SpawnOutcome {
     if running_subagents(state, sess_idx) < crate::app::subagent::MAX_SUBAGENTS {
-        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached) {
+        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached, overrides) {
             Some(id) => SpawnOutcome::Spawned(id),
             None => SpawnOutcome::Failed,
         }
@@ -415,6 +433,7 @@ pub(crate) fn spawn_or_queue(
                 prompt: task_text.to_string(),
                 tool_call_id,
                 detached,
+                overrides,
             });
         SpawnOutcome::Queued(id)
     }
@@ -462,6 +481,7 @@ pub(crate) fn try_start_pending(
             &pending.prompt,
             pending.tool_call_id.clone(),
             pending.detached,
+            pending.overrides.clone(),
         );
         if started.is_none() {
             // The agent no longer resolves. Drop the entry; for a task-tool

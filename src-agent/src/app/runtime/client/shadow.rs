@@ -126,10 +126,14 @@ pub(super) fn apply_frame(
         // replies (`StoreCatalogue` / `StoreItemDetail` / `InstalledExtensions` /
         // `ExtensionOpResult`) follow the same story: the GUI host intercepts each in
         // `push_loop` (re-pushing its own envelope), and the TUI client never sends the store
-        // requests, so they fold as non-visual no-ops here.
+        // requests, so they fold as non-visual no-ops here. `AttachSession` is the W7 extension
+        // `sessions.switch`-to-a-non-local-session hand-off: the TUI MAY ignore it (GUI wiring
+        // lands later), so it too folds as a non-visual no-op here rather than latching a
+        // client-side attach like `OpenSwapper`/`NewSession` do.
         DaemonEvent::Ack
         | DaemonEvent::Error(_)
         | DaemonEvent::Status(_)
+        | DaemonEvent::AttachSession { .. }
         | DaemonEvent::FileSearchResults { .. }
         | DaemonEvent::ModelList { .. }
         | DaemonEvent::ModelRoutes { .. }
@@ -143,6 +147,11 @@ pub(super) fn apply_frame(
         | DaemonEvent::InstalledExtensions { .. }
         | DaemonEvent::ExtensionOpResult { .. } => false,
         | DaemonEvent::McpStatus { .. } => false,
+        // W8 panel bridge: the GUI host intercepts `ExtPanelReply`/`ExtPanelPush` in `push_loop`
+        // (re-pushing its own envelope); the TUI client never opens an extension panel, so both
+        // fold as non-visual no-ops here (like the store replies / `AttachSession`).
+        | DaemonEvent::ExtPanelReply { .. }
+        | DaemonEvent::ExtPanelPush { .. } => false,
     }
 }
 

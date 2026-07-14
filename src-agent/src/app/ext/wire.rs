@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use koma_extension::protocol::{ExtMsg, KomaMsg, PROTOCOL_VERSION};
 
 use super::install;
-use super::{ExtCallRequest, ExtHostManager, PendingMap, CONNECT_TIMEOUT};
+use super::{broker, ExtCallRequest, ExtHostManager, ExtNotify, PendingMap, CONNECT_TIMEOUT};
 
 /// Hard cap on a single newline-delimited frame — the handshake `Hello` line AND
 /// every steady-state `ExtMsg`/`KomaMsg` line. Both read sites buffer one line
@@ -315,13 +315,14 @@ pub(super) async fn writer_task(mut write_half: OwnedWriteHalf, mut rx: mpsc::Un
 ///
 /// - `Result{id,result}` completes (and removes) the matching pending koma→ext
 ///   `Invoke` with `Ok(result)`.
-/// - `Call{id,method,params}` is an ext→koma request. An `agents.*` method is routed
-///   to the grant broker: it is packaged into an [`ExtCallRequest`] and forwarded to
-///   the event loop over `ext_call_tx` (the only place with `AppState` access), gated
-///   there by this extension's granted scopes; the broker's reply is written back
-///   (same `id`) from a detached task so this loop keeps reading. Any other method
-///   (and a channel-closed / timeout on an `agents.*` call) gets a uniform error
-///   `KomaMsg::Result` so the extension's `call()` always unblocks.
+/// - `Call{id,method,params}` is an ext→koma request. A broker-family method (any
+///   [`broker::is_broker_method`] prefix) is routed to the grant broker: it is
+///   packaged into an [`ExtCallRequest`] and forwarded to the event loop over
+///   `ext_call_tx` (the only place with `AppState` access), gated there by this
+///   extension's granted scopes; the broker's reply is written back (same `id`) from
+///   a detached task so this loop keeps reading. Any non-broker method (and a
+///   channel-closed / timeout on a routed call) gets a uniform error `KomaMsg::Result`
+///   so the extension's `call()` always unblocks.
 /// - `Health{ok}` updates the entry's liveness flag.
 /// - a post-handshake `Hello` is unexpected and ignored.
 ///
@@ -366,16 +367,18 @@ pub(super) async fn reader_task(
                         }
                     }
                     ExtMsg::Call { id, method, params } => {
-                        if method.starts_with("agents.") {
-                            // The grant broker (`agents.*`): the reader task has no
-                            // `AppState`/session access, so hand the call off to the
-                            // event loop via `ext_call_tx` — gated there by THIS
-                            // extension's granted scopes — and reply with the broker's
-                            // Value once it answers. The await happens on a DETACHED
-                            // task so this loop keeps draining the socket (a reply
-                            // carries the same `id`, so out-of-order replies are fine);
-                            // on channel-closed / timeout it still replies an error so
-                            // the extension's `call()` never hangs.
+                        if broker::is_broker_method(&method) {
+                            // The grant broker (any broker-family method): the reader
+                            // task has no `AppState`/session access, so hand the call
+                            // off to the event loop via `ext_call_tx` — gated there by
+                            // THIS extension's granted scopes — and reply with the
+                            // broker's Value once it answers. A routed-but-unknown verb
+                            // (e.g. `sessions.bogus`) comes back as the broker's own
+                            // UnknownMethod error, NOT the wire stub below. The await
+                            // happens on a DETACHED task so this loop keeps draining the
+                            // socket (a reply carries the same `id`, so out-of-order
+                            // replies are fine); on channel-closed / timeout it still
+                            // replies an error so the extension's `call()` never hangs.
                             match mgr.ext_call_tx() {
                                 Some(tx) => {
                                     let granted = mgr.granted_for(&ext_id);
@@ -425,7 +428,7 @@ pub(super) async fn reader_task(
                                 }
                             }
                         } else {
-                            // Non-`agents.*` ext→koma methods keep the uniform stub.
+                            // Non-broker ext→koma methods keep the uniform stub.
                             send_result_frame(
                                 &writer,
                                 id,
@@ -438,6 +441,24 @@ pub(super) async fn reader_task(
                     }
                     ExtMsg::Hello { .. } => {
                         // Unexpected once past the handshake; ignore.
+                    }
+                    ExtMsg::Notify { name, params } => {
+                        // Fire-and-forget ext->koma notification: no `id`, no
+                        // `Result` reply expected. Hand it off to the event loop
+                        // (which has the `AppState` access this reader task
+                        // lacks — real dispatch, e.g. routing `panel.push` to the
+                        // panel bridge, is wired in a later wave) via
+                        // `ext_notify_tx`. If it isn't wired yet (tests /
+                        // pre-startup), drop the frame silently — there is no
+                        // reply to fail back to the extension either way. Never
+                        // spawns, never awaits: this loop keeps reading at once.
+                        if let Some(tx) = mgr.ext_notify_tx() {
+                            let _ = tx.send(ExtNotify {
+                                ext_id: ext_id.clone(),
+                                name,
+                                params,
+                            });
+                        }
                     }
                 }
             }

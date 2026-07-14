@@ -130,12 +130,14 @@ fn split_system(content: &str) -> (String, String) {
     }
 }
 
-/// Strip a leading `SHELL_MARK` / `BASH_NUDGE_MARK` transcript-render marker so
-/// the model reads the clean text — mirrors the chat-completions wire builder.
+/// Strip a leading `SHELL_MARK` / `BASH_NUDGE_MARK` / `EXT_PROMPT_MARK`
+/// transcript-render marker so the model reads the clean text — mirrors the
+/// chat-completions wire builder.
 fn strip_marks(content: &str) -> String {
     content
         .strip_prefix(crate::dto::chat::SHELL_MARK)
         .or_else(|| content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK))
+        .or_else(|| content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
         .unwrap_or(content)
         .to_string()
 }

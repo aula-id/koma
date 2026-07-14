@@ -286,6 +286,16 @@ pub(super) struct PushModel {
     /// free row, and a directly-authored local entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) source_uuid: Option<String>,
+    /// W12b: the id of the extension that flagged THIS model its recommended `default` (via
+    /// `models.register { default: true }`) — serialized as `recommendedBy`, an ADDITIVE hint
+    /// the GUI picker can badge ("recommended by <ext>"). Set only for a model uuid present in
+    /// `AppConfig::ext_preferred_models`; omitted (`None`) for every other row. Purely a hint:
+    /// when Main was unset the preferred model is auto-assigned (vacuum-fill) and this flag is
+    /// moot; when Main was already a real user choice this is the ONLY surfacing of a later
+    /// extension's recommendation (it never reassigns Main). GUI picker rendering of the badge
+    /// is deferred (wire-only for now).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) recommended_by: Option<String>,
 }
 
 /// One MCP-server row in a [`PushEnvelope::Config`] (the McpPanel Server model). `id` is

@@ -56,10 +56,14 @@
 //! keeps calling `resolve_role` + [`Resolved::is_usable`] directly and is
 //! unaffected; see that function's doc comment for the full list.
 
+use std::collections::HashSet;
+
 use crate::app::state::AgentMode;
 use crate::config::DEFAULT_BASE_URL;
 use crate::model::agent_def::AgentDef;
-use crate::model::app_config::{new_uuid, ApiType, AppConfig, ModelEntry, ModelRole, OAuthProvider};
+use crate::model::app_config::{
+    new_uuid, ApiType, AppConfig, ModelEntry, ModelRole, OAuthConn, OAuthProvider,
+};
 use crate::model::settings::Settings;
 use crate::service::koma_free::{KOMA_FREE_ENDPOINT, KOMA_FREE_MODEL};
 use crate::service::openrouter::Conn;
@@ -164,6 +168,82 @@ fn find_model_entry<'a>(
         .or_else(|| config.models.iter().find(|e| e.uuid == uuid))
 }
 
+/// Whether `entry` matches `slug`, tried against `model_id`, `name`, and
+/// `uuid` — case-insensitively (ASCII). This is deliberately permissive: an
+/// agent/extension author may name a model by any of the three identities a
+/// user would recognise it by in the catalogue UI.
+fn slug_matches(entry: &ModelEntry, slug: &str) -> bool {
+    entry.model_id.eq_ignore_ascii_case(slug)
+        || entry.name.eq_ignore_ascii_case(slug)
+        || entry.uuid.eq_ignore_ascii_case(slug)
+}
+
+/// Find a registered [`ModelEntry`] by SLUG (matched against `model_id`,
+/// `name`, or `uuid`, case-insensitively), checking `settings.session_models`
+/// first (per-session overrides win), then the global `config.models`. This is
+/// the spawn-time counterpart to [`find_model_entry`] (which matches by uuid
+/// only): a manifest-declared `SubAgentDef::model` or an `agents.spawn`
+/// override's `model` is a human-typed SLUG, not a registered uuid, so it needs
+/// the broader match.
+///
+/// `preferred_provider_uuids`, when `Some`, is consulted FIRST: entries whose
+/// `provider_uuid` is a member of the set are searched (across both
+/// catalogues, session-first) before falling back to the unrestricted scan
+/// below. This is a seam for a LATER wave: an extension-contributed sub-agent
+/// resolving its own `model:` slug should prefer a model/provider that same
+/// extension registered (once `models.register` lands) over an unrelated
+/// global entry that happens to share the slug. Every CURRENT caller passes
+/// `None` — no ext-scoped preference exists yet.
+pub(crate) fn find_model_entry_by_slug<'a>(
+    config: &'a AppConfig,
+    settings: &'a Settings,
+    slug: &str,
+    preferred_provider_uuids: Option<&HashSet<String>>,
+) -> Option<&'a ModelEntry> {
+    if let Some(preferred) = preferred_provider_uuids {
+        let hit = settings
+            .session_models
+            .iter()
+            .find(|e| slug_matches(e, slug) && preferred.contains(&e.provider_uuid))
+            .or_else(|| {
+                config
+                    .models
+                    .iter()
+                    .find(|e| slug_matches(e, slug) && preferred.contains(&e.provider_uuid))
+            });
+        if hit.is_some() {
+            return hit;
+        }
+    }
+    settings
+        .session_models
+        .iter()
+        .find(|e| slug_matches(e, slug))
+        .or_else(|| config.models.iter().find(|e| slug_matches(e, slug)))
+}
+
+/// W12: the set of OAuth-conn uuids OWNED by the extension that authored `agent` — the
+/// `provider_uuid`s an extension-contributed sub-agent should bind its manifest `model:`
+/// slug to FIRST (uuid-deterministic, so a same-named global model can't hijack it). Fed to
+/// [`find_model_entry_by_slug`]'s `preferred_provider_uuids` seam.
+///
+/// `None` for a non-extension agent (`ext_id` absent/blank) — no preference, today's
+/// behavior unchanged. `Some(set)` for an ext agent, even when the set is EMPTY (the
+/// extension has connected no OAuth account / registered no models yet): an empty preferred
+/// pass matches nothing and `find_model_entry_by_slug` falls straight through to the general
+/// pass, so the semantics are identical to `None` in that case but the intent stays explicit.
+fn ext_preferred_provider_uuids(config: &AppConfig, agent: &AgentDef) -> Option<HashSet<String>> {
+    let ext_id = agent.ext_id.as_deref().map(str::trim).filter(|e| !e.is_empty())?;
+    Some(
+        config
+            .oauth_conns
+            .iter()
+            .filter(|c| c.ext_id.as_deref() == Some(ext_id))
+            .map(|c| c.uuid.clone())
+            .collect(),
+    )
+}
+
 /// Build a [`Resolved`] from an assigned [`ModelEntry`] by resolving its
 /// `provider_uuid`, first against `config.providers` (a static-key provider) and
 /// then — on a miss — against `config.oauth_conns` (an OAuth-backed connection:
@@ -220,6 +300,16 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
     }
     // Fall back to an OAuth-backed connection (Codex / Kilo Code).
     let conn = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid)?;
+    // W12: an EXTENSION-backed conn is data-driven from its OWN stored provider meta
+    // (endpoint + wire type captured at login from the manifest `OAuthProviderDef`), NOT the
+    // static `registry::meta` table below (which is empty for Extension). Handled here with
+    // an early return so the native providers' resolution below stays BYTE-IDENTICAL. A conn
+    // that is account-login-only (no usable `chat_endpoint`+`api_type`) resolves to `None`,
+    // treated as a dangling reference — the W11 "not a model provider yet" stance preserved,
+    // now enforced structurally rather than surfacing a broken empty-endpoint route.
+    if conn.provider == OAuthProvider::Extension {
+        return ext_conn_route(conn, entry, effort);
+    }
     let meta = crate::service::oauth::registry::meta(conn.provider);
     let api_type = match conn.provider {
         OAuthProvider::Codex => ApiType::Codex,
@@ -231,6 +321,11 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         // wire koma.run as an actual chat backend). Safe placeholder wire type;
         // never actually hit today since no ModelEntry references this conn.
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
+        // W11: an ext-backed conn is not a model provider in v1 — no ModelEntry
+        // references it, so this `find` never yields one and this arm never runs.
+        // Placeholder wire type; W12 sources the real api_type from the extension
+        // manifest (`OAuthProviderDef.api_type`).
+        OAuthProvider::Extension => ApiType::OpenAiCompatible,
     };
     let account_id = match conn.provider {
         OAuthProvider::Codex => conn.account_id.clone(),
@@ -244,6 +339,9 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::ClaudeAI => String::new(),
         // Koma account login has no org/account header concept either.
         OAuthProvider::KomaRun => String::new(),
+        // W11: ext-backed conns carry no send-time account/org header (not a model
+        // provider in v1). Empty, same as the account-login providers.
+        OAuthProvider::Extension => String::new(),
     };
     Some(Resolved {
         model_id: entry.model_id.clone(),
@@ -253,6 +351,38 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         route: entry.route.clone(),
         effort,
         account_id,
+        oauth_uuid: conn.uuid.clone(),
+        install_id: String::new(),
+    })
+}
+
+/// W12: build the [`Resolved`] route for an EXTENSION-backed OAuth conn — data-driven from
+/// the conn's OWN stored provider meta (captured at login from the manifest
+/// [`OAuthProviderDef`](koma_extension::protocol::OAuthProviderDef)), NOT the static
+/// `registry::meta` table (which is empty for `Extension`).
+///
+/// Both a `chat_endpoint` AND a recognised `api_type` (`"openai"` →
+/// [`ApiType::OpenAiCompatible`], `"anthropic"` → [`ApiType::AnthropicCompatible`] — the two
+/// wire types the native OAuth arms produce) must be present, gated through the single
+/// [`OAuthConn::ext_model_route`] source of truth (shared with the `models.register` broker
+/// verb). Otherwise the conn is account-login-only and this returns `None`, so the
+/// referencing entry is treated as dangling (the W11 inert stance: an ext conn without a
+/// declared chat endpoint never routes a model).
+///
+/// The bearer is the conn's `access_token`; the conn `uuid` is threaded as `oauth_uuid` so
+/// the send-time `fresh_key` hook can refresh a near-expiry ext token (see
+/// `manager::fresh_key`). No account/org header identity (ext conns carry none), so
+/// `account_id` is empty — same as the account-login native providers.
+fn ext_conn_route(conn: &OAuthConn, entry: &ModelEntry, effort: String) -> Option<Resolved> {
+    let (endpoint, api_type) = conn.ext_model_route()?;
+    Some(Resolved {
+        model_id: entry.model_id.clone(),
+        endpoint: endpoint.to_string(),
+        api_key: conn.access_token.clone(),
+        api_type,
+        route: entry.route.clone(),
+        effort,
+        account_id: String::new(),
         oauth_uuid: conn.uuid.clone(),
         install_id: String::new(),
     })
@@ -601,13 +731,20 @@ pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMo
 /// A sub-agent carries its OWN model + provider on the definition, independent of
 /// the runtime role catalogue:
 ///
-/// 1. If the agent names a `model` AND its `provider_uuid` resolves to a known
-///    provider connection, dispatch against THAT provider (endpoint + key + wire
-///    type), pinning the agent's legacy `provider` routing slug as the upstream
-///    route. This is the explicit-assignment path and always wins.
-/// 2. Otherwise — the agent has no model, or its `provider_uuid` is absent /
-///    dangling — inherit the fully-resolved Main route so the sub-agent runs on
-///    whatever provider the user has actually configured (never silently dark).
+/// 1. If the agent names a `model_uuid` that resolves to a registered
+///    [`ModelEntry`], dispatch via that entry's own provider connection.
+/// 1b. Else, if the agent names a legacy `model` AND its `provider_uuid`
+///    resolves to a known provider connection, dispatch against THAT provider
+///    (endpoint + key + wire type), pinning the agent's legacy `provider`
+///    routing slug as the upstream route. This is the explicit-assignment path.
+/// 1c. Else, if the agent names a `model` slug with NO `provider_uuid` (the
+///    shape an extension-contributed sub-agent's manifest `model:` field or an
+///    `agents.spawn` override produces), look the slug up by model_id/name/uuid
+///    against the registered catalogues (see [`find_model_entry_by_slug`]) and
+///    dispatch there.
+/// 2. Otherwise — none of the above resolved — inherit the fully-resolved Main
+///    route so the sub-agent runs on whatever provider the user has actually
+///    configured (never silently dark).
 ///
 /// In BOTH cases the agent's own reasoning `effort` overrides the route's effort
 /// when set (an agent declares its own thinking budget); an unset effort keeps the
@@ -641,9 +778,20 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
     }
     // 2. Legacy explicit model + resolvable provider connection.
     if let Some(model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
-        let _ = model_id;
         if let Some(uuid) = agent.provider_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
             if config.providers.iter().any(|p| p.uuid == uuid) {
+                return true;
+            }
+        } else if let Some(entry) = find_model_entry_by_slug(
+            config,
+            settings,
+            model_id,
+            ext_preferred_provider_uuids(config, agent).as_ref(),
+        ) {
+            // 3. Slug reference (model set, no provider_uuid) → resolvable via
+            //    find_model_entry_by_slug, mirroring resolve_agent's step 1c (incl. the W12
+            //    ext-scoped preference so the resolve-check matches the real spawn route).
+            if from_entry(config, settings, entry, ModelRole::Main).is_some() {
                 return true;
             }
         }
@@ -651,9 +799,15 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
     false
 }
 
-/// Currently only called by the (Stage-1 inert) sub-agent spawn path, so it is
-/// unreferenced from the binary until that path is wired in — hence the allow.
-#[allow(dead_code)]
+/// Resolve an [`AgentDef`]'s dispatch route: called on EVERY sub-agent spawn
+/// (`app::subagent::spawn`, both the model-callable `task` tool and the extension
+/// `agents.spawn`/`sessions.spawn_into` broker paths) to pick which
+/// provider/model/effort that sub-agent actually runs on. Follows the resolution
+/// order documented above [`agent_declares_model`]: 1. a registered `model_uuid`
+/// entry; 1b. a legacy `model` + `provider_uuid` pair; 1c. a bare `model` slug
+/// looked up against the registered catalogues; else 2. inherit the fully-resolved
+/// Main route. The agent's own `effort`, when set, overrides whichever route is
+/// picked.
 pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) -> Option<Resolved> {
     // The agent's declared effort, applied on top of whichever route we land on.
     let agent_effort = agent.effort.clone();
@@ -699,6 +853,27 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
         // better to run on the configured Main provider than to go dark.
     }
 
+    // 1c. Slug reference: `model` set, but no `provider_uuid` (the shape an
+    //     extension-contributed sub-agent's manifest `model:` field produces, and
+    //     what an `agents.spawn` override's `model` param carries). Look the slug
+    //     up against the registered catalogues (session_models first) by
+    //     model_id/name/uuid and dispatch there — resolved fresh at SPAWN time,
+    //     never baked in at registry-merge time. A miss falls through to Main.
+    if agent.provider_uuid.is_none() {
+        if let Some(slug) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
+            // W12: an extension-contributed sub-agent prefers a model served by ITS OWN
+            // registered OAuth conn(s) FIRST — uuid-deterministic, so a same-named global
+            // entry can't hijack the extension's own model. A non-ext agent passes `None`
+            // (unchanged general lookup).
+            let preferred = ext_preferred_provider_uuids(config, agent);
+            if let Some(entry) = find_model_entry_by_slug(config, settings, slug, preferred.as_ref()) {
+                if let Some(resolved) = from_entry(config, settings, entry, ModelRole::Main) {
+                    return Some(with_effort(resolved));
+                }
+            }
+        }
+    }
+
     // 2. No usable model/provider → inherit the Main route.
     resolve_role(config, settings, ModelRole::Main).map(with_effort)
 }
@@ -706,3 +881,9 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
 #[cfg(test)]
 #[path = "resolve_test.rs"]
 mod tests;
+
+// W13: additional regression suite for the ext-preferred slug-binding seam — pure addition,
+// SEPARATE sibling module from `tests` above (never touches it).
+#[cfg(test)]
+#[path = "resolve_binding_test.rs"]
+mod resolve_binding_test;

@@ -21,8 +21,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::registry::{
     CLAUDE_MAX_REFRESH_AGE_SECS, CLAUDE_REFRESH_LEAD_SECS, CODEX_MAX_REFRESH_AGE_SECS,
-    CODEX_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS, KOMA_REFRESH_LEAD_SECS,
-    XAI_MAX_REFRESH_AGE_SECS, XAI_REFRESH_LEAD_SECS,
+    CODEX_REFRESH_LEAD_SECS, EXT_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS,
+    KOMA_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS, XAI_REFRESH_LEAD_SECS,
 };
 use super::{claude, codex, komarun, xai};
 use crate::model::app_config::{AppConfig, OAuthConn, OAuthProvider};
@@ -40,6 +40,12 @@ struct TokenSnap {
     /// (invalid_grant / refresh_token_reused): stop retrying, keep serving
     /// the last-known token until the user re-logs in.
     unrecoverable: bool,
+    /// W12: for an EXTENSION-backed conn, the manifest-declared generic OAuth2 token
+    /// endpoint koma POSTs a `refresh_token` grant to (and the optional `client_id`). `None`
+    /// for every native conn (each dispatches its own provider-specific refresh) and for an
+    /// ext conn whose manifest declared no refresh descriptor (koma then never refreshes it).
+    refresh_token_url: Option<String>,
+    refresh_client_id: Option<String>,
 }
 
 impl TokenSnap {
@@ -55,6 +61,10 @@ impl TokenSnap {
             OAuthProvider::ClaudeAI => String::new(),
             // koma.run account login has no org/account header concept either.
             OAuthProvider::KomaRun => String::new(),
+            // W11: an ext-backed conn is not a model provider in v1, so it has no
+            // send-time account/org header. (It never reaches send-time either — no
+            // ModelEntry resolves to it — but stay exhaustive + inert.)
+            OAuthProvider::Extension => String::new(),
         };
         TokenSnap {
             access_token: conn.access_token.clone(),
@@ -64,6 +74,9 @@ impl TokenSnap {
             provider: conn.provider,
             account,
             unrecoverable: false,
+            // Only ext-backed conns carry these (native conns leave them None).
+            refresh_token_url: conn.refresh_token_url.clone(),
+            refresh_client_id: conn.refresh_client_id.clone(),
         }
     }
 }
@@ -127,6 +140,13 @@ fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
         OAuthProvider::ClaudeAI => Some((CLAUDE_REFRESH_LEAD_SECS, CLAUDE_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::KomaRun => Some((KOMA_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::Kilocode => None,
+        // W12: an ext-backed token MAY be refreshable (when its manifest declared a refresh
+        // descriptor). Use a generic short lead + no age cap; a stale token only actually
+        // triggers a dispatch if the conn also carries a `refresh_token_url` (gated in
+        // `fresh_key`'s Extension arm) — otherwise that arm serves the cached token verbatim,
+        // exactly the W11 lifecycle-owned-by-extension behavior. A token with no `expires_at`
+        // (no lifecycle hint) never goes stale regardless (`is_stale`'s `near_expiry` gate).
+        OAuthProvider::Extension => Some((EXT_REFRESH_LEAD_SECS, 0)),
     }
 }
 
@@ -165,6 +185,51 @@ fn persist_refresh(uuid: &str, tokens: &codex::TokenResponse, refreshed_at: u64)
         conn.last_refresh = refreshed_at;
         let _ = config.save();
     }
+}
+
+/// W12: build the form body for a generic OAuth2 `refresh_token` grant against an
+/// extension-declared token endpoint. PURE (no I/O) so the request shape is unit-testable.
+/// `client_id` is included ONLY when the manifest declared a non-empty one (some token
+/// endpoints require it; others identify the client by the refresh token alone).
+fn ext_refresh_form(refresh_token: &str, client_id: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut form = vec![
+        ("grant_type", "refresh_token".to_string()),
+        ("refresh_token", refresh_token.to_string()),
+    ];
+    if let Some(cid) = client_id.map(str::trim).filter(|c| !c.is_empty()) {
+        form.push(("client_id", cid.to_string()));
+    }
+    form
+}
+
+/// W12: refresh an EXTENSION-backed token via a generic OAuth2 `refresh_token` grant,
+/// form-encoded and POSTed to the manifest-declared `token_url`. Returns the shared
+/// [`codex::TokenResponse`] shape (`{ access_token, refresh_token?, id_token?, expires_in? }`)
+/// so the caller's persist/update path stays provider-agnostic. Any transport / non-2xx /
+/// parse failure is an `Err(String)` (never a panic, never a logged token); `fresh_key`
+/// degrades to serving the cached token on `Err`, exactly like a native refresh failure.
+async fn ext_refresh(
+    client: &reqwest::Client,
+    token_url: &str,
+    refresh_token: &str,
+    client_id: Option<&str>,
+) -> Result<codex::TokenResponse, String> {
+    let form = ext_refresh_form(refresh_token, client_id);
+    let resp = client
+        .post(token_url)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|e| format!("ext token refresh request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "ext token refresh returned HTTP {}",
+            resp.status().as_u16()
+        ));
+    }
+    resp.json::<codex::TokenResponse>()
+        .await
+        .map_err(|e| format!("ext token refresh parse failed: {e}"))
 }
 
 /// The send-time hook: resolve `oauth_uuid` to a bearer token (refreshing it
@@ -223,6 +288,24 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         OAuthProvider::ClaudeAI => claude::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::KomaRun => komarun::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
+        // W12: refresh via the manifest-declared generic OAuth2 `refresh_token` endpoint,
+        // gated on the conn carrying BOTH a non-empty `refresh_token` AND a
+        // `refresh_token_url`. Without both, koma cannot refresh (login-only, or the
+        // extension owns the lifecycle) → serve the cached token verbatim, like Kilo Code.
+        OAuthProvider::Extension => {
+            match snap.refresh_token_url.as_deref().filter(|u| !u.trim().is_empty()) {
+                Some(url) if !snap.refresh_token.is_empty() => {
+                    ext_refresh(
+                        http_client(),
+                        url,
+                        &snap.refresh_token,
+                        snap.refresh_client_id.as_deref(),
+                    )
+                    .await
+                }
+                _ => return (snap.access_token.clone(), snap.account.clone()),
+            }
+        }
     };
     match refreshed {
         Ok(tokens) => {
@@ -260,5 +343,38 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
             // the cached, possibly stale, token rather than failing the send.
             (snap.access_token, snap.account)
         }
+    }
+}
+
+#[cfg(test)]
+mod ext_refresh_tests {
+    use super::ext_refresh_form;
+
+    /// W12: the generic OAuth2 refresh body always carries `grant_type=refresh_token` + the
+    /// refresh token, and appends `client_id` ONLY when a non-empty one is supplied (a
+    /// blank/whitespace client_id is treated as absent — some endpoints reject an empty one).
+    #[test]
+    fn ext_refresh_form_shapes_grant_body() {
+        // With a client_id.
+        let with = ext_refresh_form("rt-123", Some("cid-abc"));
+        assert_eq!(
+            with,
+            vec![
+                ("grant_type", "refresh_token".to_string()),
+                ("refresh_token", "rt-123".to_string()),
+                ("client_id", "cid-abc".to_string()),
+            ]
+        );
+        // Without a client_id → only the two required fields.
+        let without = ext_refresh_form("rt-123", None);
+        assert_eq!(
+            without,
+            vec![
+                ("grant_type", "refresh_token".to_string()),
+                ("refresh_token", "rt-123".to_string()),
+            ]
+        );
+        // A blank client_id is treated as absent.
+        assert_eq!(ext_refresh_form("rt-123", Some("   ")), without);
     }
 }

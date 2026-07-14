@@ -51,10 +51,11 @@ use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
 pub mod broker;
+pub mod events;
 pub mod install;
 pub mod register;
 mod wire;
-pub use broker::{ExtAgentRegistry, ExtCallRequest};
+pub use broker::{ExtAgentRegistry, ExtCallRequest, ExtNotify};
 use wire::{connect_and_handshake, reader_task, writer_task, Handshaked};
 
 /// A reply to a koma→ext `Invoke`: the extension's `result` value, or an error string
@@ -103,6 +104,11 @@ struct ExtEntry {
     /// [`ExtCallRequest`], so the grant broker gates against exactly what was extended
     /// to THIS extension.
     granted: Vec<Grant>,
+    /// The koma->ext event names this extension declared under `contributes.events`
+    /// (parsed from its on-disk `manifest.json` at [`ExtHostManager::ensure_started_at`],
+    /// lowercased + deduped). Read by [`ExtHostManager::subscribers`] to decide which
+    /// running extensions should receive a given `notify`.
+    events: Vec<String>,
 }
 
 /// The extension host manager. Holds the runtime [`Handle`] (so async socket work can be
@@ -119,6 +125,14 @@ pub struct ExtHostManager {
     /// case the reader answers such a call with a "broker not initialized" error
     /// rather than hanging the extension.
     ext_call_tx: Mutex<Option<mpsc::UnboundedSender<ExtCallRequest>>>,
+    /// Sender into the event loop's `ext_notify_rx` drain, used by every reader
+    /// task to hand an ext->koma `Notify` off to the event loop (the reader task
+    /// has no `AppState` access, same reason as `ext_call_tx`). Set once at
+    /// startup via [`Self::set_ext_notify_tx`]; `None` until then (and in unit
+    /// tests that never drive a `Notify`), in which case the reader silently
+    /// drops the frame — `Notify` is fire-and-forget, so there is nothing to
+    /// fail back to the extension either way.
+    ext_notify_tx: Mutex<Option<mpsc::UnboundedSender<ExtNotify>>>,
 }
 
 impl ExtHostManager {
@@ -128,6 +142,7 @@ impl ExtHostManager {
             handle: handle.clone(),
             inner: Mutex::new(HashMap::new()),
             ext_call_tx: Mutex::new(None),
+            ext_notify_tx: Mutex::new(None),
         })
     }
 
@@ -148,6 +163,24 @@ impl ExtHostManager {
             .clone()
     }
 
+    /// Wire the event-loop notify channel into the manager (called once at
+    /// startup with a clone of `AppStateRest::ext_notify_tx`). Every reader task
+    /// reads it via [`Self::ext_notify_tx`] to forward an ext->koma `Notify` to
+    /// the event loop.
+    pub fn set_ext_notify_tx(&self, tx: mpsc::UnboundedSender<ExtNotify>) {
+        *self.ext_notify_tx.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+    }
+
+    /// A clone of the notify sender, or `None` if it was never wired
+    /// ([`Self::set_ext_notify_tx`] not yet called). Consulted by the reader task
+    /// per ext->koma `Notify`.
+    pub(crate) fn ext_notify_tx(&self) -> Option<mpsc::UnboundedSender<ExtNotify>> {
+        self.ext_notify_tx
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
     /// The scopes granted to the running extension `ext_id` (empty if unknown/not
     /// running). Read by the reader task when packaging an `agents.*` `Call`.
     pub(crate) fn granted_for(&self, ext_id: &str) -> Vec<Grant> {
@@ -157,6 +190,50 @@ impl ExtHostManager {
             .get(ext_id)
             .map(|e| e.granted.clone())
             .unwrap_or_default()
+    }
+
+    /// The ids of every RUNNING extension whose `contributes.events` (lowercased at
+    /// start, see [`read_events_best_effort`]) contains `event` (also lowercased
+    /// here, so callers need not normalise it themselves). Used by a future fan-out
+    /// wave to decide who should receive a given koma->ext [`Self::notify`].
+    pub fn subscribers(&self, event: &str) -> Vec<String> {
+        let needle = event.to_lowercase();
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|(_, e)| e.running && e.events.contains(&needle))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// koma->ext fire-and-forget `Event`: serialize and queue `KomaMsg::Event { name,
+    /// params }` on `ext_id`'s writer channel. NON-BLOCKING — grabs the writer under a
+    /// brief lock, drops the lock, then sends onto the (unbounded) writer channel;
+    /// never awaits, so it is safe to call directly from the event loop. Returns
+    /// `false` (frame dropped, nothing queued) if `ext_id` is not running; `true` once
+    /// the frame is handed to the writer task (delivery itself is still best-effort,
+    /// same as every other write onto that channel).
+    pub fn notify(&self, ext_id: &str, name: &str, params: serde_json::Value) -> bool {
+        let writer = {
+            let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = match inner.get(ext_id) {
+                Some(e) if e.running => e,
+                _ => return false,
+            };
+            match &entry.writer {
+                Some(w) => w.clone(),
+                None => return false,
+            }
+        };
+
+        let event = KomaMsg::Event { name: name.to_string(), params };
+        let mut frame = match serde_json::to_string(&event) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+        frame.push('\n');
+        writer.send(frame).is_ok()
     }
 
     /// Spawn + handshake a daemon-kind extension if it is not already running (a no-op
@@ -197,12 +274,17 @@ impl ExtHostManager {
         // (re-)record this extension's granted scopes here — parsed from the persisted
         // wire strings — so the reader task spawned by this start gates `agents.*` calls
         // against exactly what koma extended to it (refreshed on every start/restart).
+        // `events` is likewise refreshed here (best-effort read of the on-disk
+        // manifest — see [`read_events_best_effort`]) so [`Self::subscribers`] always
+        // reflects the CURRENT manifest rather than whatever was true at install time.
         let granted = broker::parse_grants(&ext.granted);
+        let events = read_events_best_effort(install_dir);
         let gen_at_start = {
             let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
             let entry = inner.entry(ext.id.clone()).or_default();
             entry.generation = entry.generation.wrapping_add(1);
             entry.granted = granted;
+            entry.events = events;
             entry.generation
         };
 
@@ -286,16 +368,29 @@ impl ExtHostManager {
 
     /// koma→ext `Invoke`: send `method`/`params` to the running extension and block
     /// until its `Result` (or [`CALL_TIMEOUT`]) lands, returning the `result` value.
-    ///
-    /// THE SYNC→ASYNC BRIDGE (mirrors `SecDaemonManager::execute_blocking`): under a
-    /// brief lock it grabs the writer + a fresh id + a clone of the `pending` map, drops
-    /// the lock, registers a `oneshot`, spawns the write, and bridges the `oneshot` to a
-    /// `std::sync::mpsc` this thread blocks on with `recv_timeout`.
+    /// Thin wrapper over [`Self::invoke_with_timeout`] using the default timeout.
     pub fn invoke(
         &self,
         ext_id: &str,
         method: &str,
         params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.invoke_with_timeout(ext_id, method, params, CALL_TIMEOUT)
+    }
+
+    /// [`Self::invoke`] with an explicit round-trip `timeout` instead of the default
+    /// [`CALL_TIMEOUT`].
+    ///
+    /// THE SYNC→ASYNC BRIDGE (mirrors `SecDaemonManager::execute_blocking`): under a
+    /// brief lock it grabs the writer + a fresh id + a clone of the `pending` map, drops
+    /// the lock, registers a `oneshot`, spawns the write, and bridges the `oneshot` to a
+    /// `std::sync::mpsc` this thread blocks on with `recv_timeout`.
+    pub fn invoke_with_timeout(
+        &self,
+        ext_id: &str,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
     ) -> Result<serde_json::Value> {
         let (writer, id, pending, gen) = {
             let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
@@ -364,7 +459,7 @@ impl ExtHostManager {
             let _ = tx.send(r);
         });
 
-        match rx.recv_timeout(CALL_TIMEOUT) {
+        match rx.recv_timeout(timeout) {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => bail!("{e}"),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -466,6 +561,32 @@ impl ExtHostManager {
     }
 }
 
+/// Best-effort read of `<install_dir>/manifest.json`'s `contributes.events`,
+/// lowercased and deduped. A missing/unparsable manifest yields an empty list
+/// (never fails the start it's called from) — event subscription is advisory,
+/// unlike `granted` which gates security and is parsed from the persisted
+/// registry instead of the on-disk manifest.
+fn read_events_best_effort(install_dir: &Path) -> Vec<String> {
+    let path = install_dir.join("manifest.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    let Ok(manifest) =
+        serde_json::from_slice::<koma_extension::protocol::ExtensionManifest>(&bytes)
+    else {
+        return Vec::new();
+    };
+    let mut events: Vec<String> = manifest
+        .contributes
+        .events
+        .into_iter()
+        .map(|e| e.to_lowercase())
+        .collect();
+    events.sort();
+    events.dedup();
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::wire;
@@ -539,8 +660,12 @@ mod tests {
     }
 
     /// The echo sample's manifest, with `runtime.exec` rewritten to `bin/echo-tool-daemon`
-    /// exactly as `pack.sh` does for the packaged form.
-    fn sample_manifest_json() -> String {
+    /// exactly as `pack.sh` does for the packaged form, and `id` overridden to `id` — the
+    /// four subprocess-spawning tests below each pass a UNIQUE id here so they never
+    /// collide on `store::ext_sock_path`'s fixed `~/.koma/run/ext-<id>.sock` path when run
+    /// concurrently (a shared id let concurrent tests steal each other's listener, causing
+    /// a flaky "extension did not connect within 10s").
+    fn sample_manifest_json(id: &str) -> String {
         let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("src-extension")
@@ -551,6 +676,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&src).expect("read sample manifest"))
                 .expect("parse sample manifest");
         v["runtime"]["exec"] = serde_json::Value::String("bin/echo-tool-daemon".to_string());
+        v["id"] = serde_json::Value::String(id.to_string());
         serde_json::to_string_pretty(&v).unwrap()
     }
 
@@ -588,8 +714,11 @@ mod tests {
             return;
         }
 
-        // Freshly pack the echo sample (its binary now speaks host mode).
-        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        // Freshly pack the echo sample (its binary now speaks host mode). Unique id
+        // (see `sample_manifest_json` doc) so this test's socket path never collides
+        // with the other three subprocess-spawning tests in this module.
+        let ext_id = "run.koma.example.echo-tool-daemon-roundtrip";
+        let zip_bytes = pack_zip(&binary, &sample_manifest_json(ext_id));
 
         // Deterministic test keypair; sign the zip's 32-byte SHA-256 digest.
         let signing = SigningKey::from_bytes(&[42u8; 32]);
@@ -603,7 +732,7 @@ mod tests {
         let installed =
             install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
                 .expect("signed install should succeed");
-        assert_eq!(installed.id, "run.koma.example.echo-tool-daemon");
+        assert_eq!(installed.id, ext_id);
         assert_eq!(installed.kind, "daemon");
         assert_eq!(installed.exec, "bin/echo-tool-daemon");
         assert_eq!(installed.tier, "free");
@@ -642,6 +771,143 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Wave 2: `ExtHostManager::notify` reaches a running extension's `on_event`
+    /// (koma->ext `KomaMsg::Event`). Fires `notify`, then `invoke`s the echo
+    /// sample's `debug.last_event` test hook (which `on_event` populates) — the
+    /// writer channel is FIFO, so the notify frame is guaranteed to land before
+    /// the invoke frame queued after it, making the ordering deterministic
+    /// without a sleep/poll.
+    #[test]
+    fn notify_reaches_extension_on_event() {
+        let binary = sample_binary();
+        if !binary.exists() {
+            eprintln!(
+                "SKIP notify_reaches_extension_on_event: {} missing \
+                 (run `cargo build --workspace --release` in src-extension/)",
+                binary.display()
+            );
+            return;
+        }
+
+        // Unique id (see `sample_manifest_json` doc) so this test's socket path never
+        // collides with the other three subprocess-spawning tests in this module.
+        let zip_bytes = pack_zip(
+            &binary,
+            &sample_manifest_json("run.koma.example.echo-tool-daemon-notify"),
+        );
+        let signing = SigningKey::from_bytes(&[91u8; 32]);
+        let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
+        let digest = Sha256::digest(&zip_bytes);
+        let sha_hex = install::hex_encode(&digest);
+        let sig_b64 = b64(&signing.sign(digest.as_slice()).to_bytes());
+
+        let tmp =
+            std::env::temp_dir().join(format!("koma-ext-notify-test-{}", uuid::Uuid::new_v4()));
+        let installed =
+            install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+                .expect("signed install should succeed");
+
+        let _ = store::ensure_dirs();
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mgr = ExtHostManager::new(rt.handle());
+        let install_dir = tmp.join(&installed.id);
+        mgr.ensure_started_at(&installed, &install_dir)
+            .expect("ensure_started should hand-shake");
+
+        assert!(
+            mgr.notify(&installed.id, "test.evt", serde_json::json!({ "x": 1 })),
+            "notify to a running extension should queue the frame"
+        );
+
+        let out = mgr
+            .invoke(&installed.id, "debug.last_event", serde_json::json!({}))
+            .expect("invoke debug.last_event");
+        assert_eq!(out["name"], serde_json::json!("test.evt"));
+        assert_eq!(out["params"], serde_json::json!({ "x": 1 }));
+
+        mgr.stop(&installed.id);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Wave 2: `notify` on an extension that was never started must fail closed
+    /// (return `false`) rather than panic or hang.
+    #[test]
+    fn notify_to_stopped_extension_returns_false() {
+        let _ = store::ensure_dirs();
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mgr = ExtHostManager::new(rt.handle());
+        let ok = mgr.notify(
+            "run.koma.example.never-started",
+            "test.evt",
+            serde_json::json!({}),
+        );
+        assert!(!ok, "notify on a never-started extension must return false, not panic");
+    }
+
+    /// Wave 2: an ext->koma `Notify` (the echo sample's `drive` hook fires
+    /// `Koma::panel_push` once per connection) is routed onto `ext_notify_tx`
+    /// and observable on the event-loop side, with the correct `ext_id` and
+    /// `name`. Wires a plain test channel via `set_ext_notify_tx` BEFORE
+    /// starting the extension so the driver's push — which fires shortly after
+    /// the handshake completes, on its own side thread — is guaranteed to be
+    /// captured.
+    #[test]
+    fn ext_notify_routes_to_channel() {
+        let binary = sample_binary();
+        if !binary.exists() {
+            eprintln!(
+                "SKIP ext_notify_routes_to_channel: {} missing \
+                 (run `cargo build --workspace --release` in src-extension/)",
+                binary.display()
+            );
+            return;
+        }
+
+        // Unique id (see `sample_manifest_json` doc) so this test's socket path never
+        // collides with the other three subprocess-spawning tests in this module.
+        let zip_bytes = pack_zip(
+            &binary,
+            &sample_manifest_json("run.koma.example.echo-tool-daemon-notify-route"),
+        );
+        let signing = SigningKey::from_bytes(&[92u8; 32]);
+        let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
+        let digest = Sha256::digest(&zip_bytes);
+        let sha_hex = install::hex_encode(&digest);
+        let sig_b64 = b64(&signing.sign(digest.as_slice()).to_bytes());
+
+        let tmp = std::env::temp_dir()
+            .join(format!("koma-ext-notify-route-test-{}", uuid::Uuid::new_v4()));
+        let installed =
+            install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
+                .expect("signed install should succeed");
+
+        let _ = store::ensure_dirs();
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mgr = ExtHostManager::new(rt.handle());
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<ExtNotify>();
+        mgr.set_ext_notify_tx(tx);
+
+        let install_dir = tmp.join(&installed.id);
+        mgr.ensure_started_at(&installed, &install_dir)
+            .expect("ensure_started should hand-shake");
+
+        let notify = rt
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await
+            })
+            .expect("driver's panel_push should arrive within 10s")
+            .expect("channel should not close");
+
+        assert_eq!(notify.ext_id, installed.id);
+        assert_eq!(notify.name, "panel.push");
+        assert_eq!(notify.params["panelId"], serde_json::json!("p1"));
+        assert_eq!(notify.params["payload"], serde_json::json!({ "hello": true }));
+
+        mgr.stop(&installed.id);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Wave B: an extension's `contributes.tools` (the echo sample declares one
     /// `echo` tool) registers as `mcp__<sanitized-id>__echo` on a live
     /// [`crate::app::mcp::McpManager`], and a call through
@@ -662,7 +928,12 @@ mod tests {
             return;
         }
 
-        let zip_bytes = pack_zip(&binary, &sample_manifest_json());
+        // Unique id (see `sample_manifest_json` doc) so this test's socket path never
+        // collides with the other three subprocess-spawning tests in this module.
+        let zip_bytes = pack_zip(
+            &binary,
+            &sample_manifest_json("run.koma.example.echo-tool-daemon-mcp"),
+        );
         let signing = SigningKey::from_bytes(&[77u8; 32]);
         let pubkey_b64 = b64(&signing.verifying_key().to_bytes());
         let digest = Sha256::digest(&zip_bytes);

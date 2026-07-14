@@ -3,7 +3,7 @@
   "id": "run.koma.example.fleet-board-daemon",
   "name": "Fleet Board",
   "version": "0.0.0",
-  "description": "A komatica-style daemon extension: it contributes a kanban panel and drives koma's sub-agents, one per card.",
+  "description": "A komatica-style daemon extension: it contributes a kanban panel with a LIVE panel bridge (spawn a card from the UI, watch events flow back) and drives koma's sub-agents, one per card.",
   "tier": "paid",
   "kind": "daemon",
   "runtime": {
@@ -13,7 +13,17 @@
   "contributes": {
     "panels": [
       { "id": "board", "title": "Fleet Board", "icon": "kanban" }
-    ]
+    ],
+    "sub_agents": [
+      {
+        "name": "card-worker",
+        "description": "Works one fleet-board card end to end: reads the card's task, makes the change, and reports back.",
+        "prompt": "You are a fleet-board card worker. You have been handed exactly one card's task. Do the work the task describes, keep your changes scoped to that task, and finish with a short report of what you did.",
+        "model": "main",
+        "effort": "medium"
+      }
+    ],
+    "events": ["subagent.done", "agent.turn_end"]
   },
   "requires": ["agents:orchestrate"]
 }

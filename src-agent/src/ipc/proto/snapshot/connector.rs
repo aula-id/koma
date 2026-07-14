@@ -56,6 +56,12 @@ pub struct ProviderDraftSnapshot {
     pub endpoint: String,
     pub api_type: String,
     pub api_key: String,
+    /// W12b: the owning extension id when this draft mirrors a key-backed EXTENSION-managed
+    /// provider, else `None`. Projected so a thin client's settings view can refuse deleting an
+    /// ext-managed provider (the host also enforces this on save). `#[serde(default)]` keeps an
+    /// older client's snapshot deserializing cleanly.
+    #[serde(default)]
+    pub ext_id: Option<String>,
 }
 
 /// A serde-safe projection of one OAuth connection draft (provider-cycle merge

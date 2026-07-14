@@ -218,6 +218,14 @@ fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String
         .map(|grant| match grant {
             koma_extension::protocol::Grant::AgentsRead => "agents:read".to_string(),
             koma_extension::protocol::Grant::AgentsOrchestrate => "agents:orchestrate".to_string(),
+            // WAVE-1 COMPILE STUB: exhaustiveness-only, matching `broker::grant_wire`;
+            // see the comment there.
+            koma_extension::protocol::Grant::SessionsManage => "sessions:manage".to_string(),
+            koma_extension::protocol::Grant::ChatPrompt => "chat:prompt".to_string(),
+            koma_extension::protocol::Grant::ModelsInvoke => "models:invoke".to_string(),
+            koma_extension::protocol::Grant::ContextPublish => "context:publish".to_string(),
+            koma_extension::protocol::Grant::OauthContribute => "oauth:contribute".to_string(),
+            koma_extension::protocol::Grant::ModelsContribute => "models:contribute".to_string(),
         })
         .collect();
     let panels = manifest.contributes.panels.iter().map(|p| PanelWire {

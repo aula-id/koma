@@ -16,6 +16,8 @@ import { ToastContainer } from '../components/ToastContainer'
 import { UsageFooter } from '../components/UsageFooter'
 import { useKoma } from '../store/koma'
 import { BrailleSpinner } from '../components/BrailleSpinner'
+import { ExtensionPanelFrame } from '../components/ExtensionPanelFrame'
+import { installPanelBridgeListener } from '../lib/panelBridge'
 
 const SIDEBAR_MIN = 150
 const SIDEBAR_MAX = 500
@@ -99,9 +101,15 @@ function RootLayout() {
     // indicator has data on load, without requiring the Source Control panel
     // to ever be opened.
     useKoma.getState().req({ r: 'GitStatus' })
+    // Extension panel bridge (W9): single window-level `message` listener
+    // that attributes + forwards panel iframe traffic — see
+    // lib/panelBridge.ts. Idempotent, but installed here alongside the rest
+    // of the JS<->Rust bridge setup so exactly one listener exists.
+    const uninstallPanelBridge = installPanelBridgeListener()
     return () => {
       window.__komaClient = undefined
       window.komaIpc = undefined
+      uninstallPanelBridge()
     }
   }, [])
 
@@ -375,20 +383,8 @@ function TabbedMain() {
               </Suspense>
             </div>
           ) : t.kind === 'extension' ? (
-            // No lazy chunk here — it's a plain iframe, not a React component.
-            // `koma://extension/<id>/index.html` is a SEPARATE origin from the
-            // host chrome (served by `handle_extension_request` off the
-            // installed extension's own `ui/` dir), so the panel's own page
-            // can never script this one. No `sandbox` attribute: the extension
-            // origin isolation already provides the security boundary, and a
-            // restrictive `sandbox` would block the custom `koma:` scheme from
-            // loading at all.
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>
-              <iframe
-                src={`koma://extension/${t.extId}/index.html`}
-                title={t.title}
-                className="h-full w-full border-0"
-              />
+              <ExtensionPanelFrame extId={t.extId} panelId={t.panelId} title={t.title} />
             </div>
           ) : t.kind === 'codingFile' ? (
             <div key={t.id} className={`absolute inset-0 ${activeTabId === t.id ? '' : 'hidden'}`}>

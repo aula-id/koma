@@ -131,6 +131,10 @@ pub struct SettingsState {
     pub prov_sel: usize,
     /// `true` after the first Ctrl+X: next Ctrl+X confirms the delete.
     pub prov_delete_armed: bool,
+    /// W12b: a transient footer message set when the user tries to delete an
+    /// EXTENSION-managed provider (the delete is refused — only uninstall removes it).
+    /// Cleared on any navigation.
+    pub prov_msg: Option<String>,
     /// Active add-provider modal, if open.
     pub prov_modal: Option<ProviderModal>,
     /// In-memory list of model drafts (stub only, not persisted).
@@ -188,6 +192,9 @@ impl SettingsState {
                 endpoint: p.endpoint.clone(),
                 api_type: p.api_type,
                 api_key: p.api_key.clone(),
+                // Carry the extension-ownership tag so a save round-trips it and the delete
+                // action can refuse an ext-managed provider (W12b).
+                ext_id: p.ext_id.clone(),
             })
             .collect();
         // OAuth drafts: read-only-at-load reflection of `config.oauth_conns`,
@@ -281,6 +288,7 @@ impl SettingsState {
             oauth_flow: OAuthFlowState::Idle,
             prov_sel: 0,
             prov_delete_armed: false,
+            prov_msg: None,
             prov_modal: None,
             models,
             model_sel: 0,

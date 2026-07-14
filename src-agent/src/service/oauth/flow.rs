@@ -27,6 +27,17 @@ pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedS
         OAuthProvider::Xai => run_xai_flow(tx).await,
         OAuthProvider::ClaudeAI => run_claude_flow(tx).await,
         OAuthProvider::KomaRun => run_komarun_flow(tx).await,
+        // W11: an extension-delegated flow is NEVER driven through here — it runs
+        // off-loop in the daemon hub (`requests_oauth::run_ext_oauth_delegate`), keyed
+        // by an `ext:<id>:<provider>` picker id, and never via `Action::OAuthStart`
+        // (which is what spawns `run_flow`). This arm is exhaustiveness-only; terminate
+        // defensively rather than silently doing nothing (which would hang the wait
+        // screen on the "flow ended unexpectedly" disconnect path).
+        OAuthProvider::Extension => {
+            let _ = tx.send(OAuthEvent::Failed {
+                error: "extension OAuth is delegated, not run natively".to_string(),
+            });
+        }
     }
 }
 

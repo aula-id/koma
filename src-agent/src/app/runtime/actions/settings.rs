@@ -103,7 +103,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         }
         // Map provider drafts -> persisted ProviderConn (preserve uuid;
         // mint one only if a draft somehow arrived without it).
-        let provider_conns: Vec<ProviderConn> = provider_drafts
+        let mut provider_conns: Vec<ProviderConn> = provider_drafts
             .iter()
             .map(|d| ProviderConn {
                 uuid: if d.uuid.is_empty() {
@@ -115,8 +115,30 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 api_type: d.api_type,
                 endpoint: d.endpoint.clone(),
                 api_key: d.api_key.clone(),
+                // W12b: round-trip the extension-ownership tag so a settings save never
+                // silently converts an ext-managed key-backed provider into a native one.
+                ext_id: d.ext_id.clone(),
             })
             .collect();
+        // W12b HOST GUARD (the A3 whole-Vec-replace deletion path): an EXTENSION-managed
+        // provider is IMMUTABLE via settings (only the extension may change it, via
+        // `providers.register`; only uninstall removes it). RESTORE each ext provider verbatim
+        // from the existing config — replacing a round-tripped draft (in case a stale/older
+        // client dropped its `ext_id` or edited it) or re-appending one the draft omitted (a
+        // delete slipping through). Natives (no ext providers) → no-op, so a zero-extension
+        // config is byte-identical.
+        for ep in state
+            .rest
+            .config
+            .providers
+            .iter()
+            .filter(|p| p.ext_id.is_some())
+        {
+            match provider_conns.iter_mut().find(|p| p.uuid == ep.uuid) {
+                Some(slot) => *slot = ep.clone(),
+                None => provider_conns.push(ep.clone()),
+            }
+        }
         // Map model drafts -> persisted ModelEntry, resolving the draft's
         // positional `provider_idx` back to a `provider_uuid` against the
         // FRESHLY built provider_conns (so a model added in this same edit

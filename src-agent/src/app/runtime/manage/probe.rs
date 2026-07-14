@@ -123,3 +123,75 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
 
     out
 }
+
+/// The terminal reply of a cross-daemon [`spawn_into_session`] once the target daemon
+/// answered on the wire. A transport failure (connect / write / read / decode / EOF /
+/// timeout) is surfaced as the outer `Err(io::Error)` instead, with the ErrorKind
+/// preserved so the caller can map it (connect-refused/not-found vs. everything else).
+#[derive(Debug)]
+pub enum SpawnIntoReply {
+    /// The target daemon replied [`DaemonEvent::Ack`] — the sub-agent was spawned or queued
+    /// in its session.
+    Accepted,
+    /// The target daemon replied [`DaemonEvent::Error`] — it rejected the spawn (carries its
+    /// human-readable reason, e.g. "no live session").
+    Rejected(String),
+}
+
+/// Fire ONE [`ClientRequest::SpawnAgent`] at another session-daemon's keyed socket and read
+/// its one-shot [`DaemonEvent::Ack`]/[`DaemonEvent::Error`] reply — the transport half of the
+/// extension `sessions.spawn_into` cross-process branch (W7).
+///
+/// Blocking + runtime-free (it runs inside the broker's `spawn_blocking`), speaking the SAME
+/// length-prefixed sync codec ([`super::send_request`]/[`super::recv_frame`]) as the `Status`
+/// discovery probe. It NEVER sends `Attach`, so the target enrolls the connection but never
+/// streams it a snapshot — a pure connect→SpawnAgent→read-Ack→close, exactly the connectionless
+/// contract [`probe_status`] relies on. Bounded by the same short read timeout
+/// ([`PROBE_TIMEOUT`]) + frame cap ([`PROBE_MAX_FRAMES`]) as the probe, so a wedged/chatty
+/// target can never hang the caller (worst case ≈ `PROBE_TIMEOUT × PROBE_MAX_FRAMES`, well
+/// under the broker's 25s inner budget). No retries, no daemon auto-spawn.
+///
+/// Returns `Ok(Accepted)`/`Ok(Rejected(reason))` on a clean reply, or an `Err(io::Error)`
+/// (kind preserved) on any connect/write/read/decode/EOF/timeout/cap failure — the caller
+/// maps the kind to its structured error (connect-refused/ENOENT ⇒ "session not live";
+/// everything else ⇒ "target daemon incompatible or unavailable").
+pub fn spawn_into_session(sock_path: &Path, req: &ClientRequest) -> std::io::Result<SpawnIntoReply> {
+    // Connect (blocking). A refused / missing socket propagates its ErrorKind verbatim so the
+    // caller can distinguish "not live" from an incompatible/unavailable daemon.
+    let mut stream = UnixStream::connect(sock_path)?;
+    stream.set_read_timeout(Some(PROBE_TIMEOUT))?;
+    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+
+    // Send the spawn request. `send_request` yields an anyhow error on a write failure; a
+    // failed write is a post-connect transport fault, so collapse it to an io error whose
+    // kind lands on the caller's "unavailable" arm (never "not live").
+    super::send_request(&mut stream, req)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "spawn write failed"))?;
+
+    // Read until Ack/Error, ignoring any other frame defensively. Bounded by BOTH the per-read
+    // timeout (a quiet target trips `recv_frame`'s read error) and the frame cap (a chatty one
+    // can't keep us reading forever). Any read/decode/EOF fault collapses to an io error whose
+    // kind lands on the caller's "unavailable" arm.
+    let mut reader = FrameReader::new();
+    for _ in 0..PROBE_MAX_FRAMES {
+        match super::recv_frame(&mut stream, &mut reader) {
+            Ok(frame) => match frame.event {
+                DaemonEvent::Ack => return Ok(SpawnIntoReply::Accepted),
+                DaemonEvent::Error(msg) => return Ok(SpawnIntoReply::Rejected(msg)),
+                // Some other frame (e.g. a stray Hello) — keep reading for the real reply.
+                _ => continue,
+            },
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "spawn reply read/decode failed",
+                ))
+            }
+        }
+    }
+    // Hit the frame cap without an Ack/Error — treat as an unavailable/incompatible target.
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "no spawn ack within frame cap",
+    ))
+}

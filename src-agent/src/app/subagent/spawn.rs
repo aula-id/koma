@@ -24,7 +24,7 @@ use crate::tool::ToolCtx;
 
 use super::context;
 use super::engine::run_agent_loop;
-use super::{SubAgent, SubAgentStatus};
+use super::{SpawnOverrides, SubAgent, SubAgentStatus};
 
 /// Max characters of the task kept in the sub-agent's display label.
 const LABEL_LEN: usize = 60;
@@ -59,6 +59,13 @@ fn truncate_label(s: &str, max: usize) -> String {
 /// [`AbortHandle`](tokio::task::AbortHandle) and the receiver end of the event
 /// channel. `config` / `settings` are cloned into the task (owned, no borrow
 /// escapes); `ctx` is moved in whole.
+///
+/// `overrides`, when `Some`, steers ONLY the route resolution below: a
+/// `Some(model)`/`Some(effort)` field is applied to a throwaway CLONE of the
+/// registry's [`AgentDef`] before resolving — the registry entry itself, and
+/// every other input derived from it below (tools, prompt, steps), is
+/// untouched. `None` (the overwhelming common case — every non-extension spawn
+/// path passes it) resolves the agent exactly as before.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_subagent(
     client: &Arc<OpenRouterClient>,
@@ -75,12 +82,29 @@ pub fn spawn_subagent(
     tool_call_id: Option<String>,
     detached: bool,
     mode: AgentMode,
+    overrides: Option<SpawnOverrides>,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
 
     // Resolve the agent's route (its own model+provider, else inherit Main).
-    let resolved = crate::app::resolve::resolve_agent(config, settings, agent)?;
+    // An override, when present, is applied to a CLONE used only for this
+    // resolution — the registry's `agent` (used below for tools/prompt/steps)
+    // is never mutated.
+    let resolved = if let Some(ov) = &overrides {
+        let mut overridden = agent.clone();
+        if let Some(model) = &ov.model {
+            overridden.model = Some(model.clone());
+            overridden.model_uuid = None;
+            overridden.provider_uuid = None;
+        }
+        if let Some(effort) = &ov.effort {
+            overridden.effort = Some(effort.clone());
+        }
+        crate::app::resolve::resolve_agent(config, settings, &overridden)?
+    } else {
+        crate::app::resolve::resolve_agent(config, settings, agent)?
+    };
 
     // The effective allow-list + isolated seed conversation + step budget. While
     // the PARENT session is in Plan mode, the delegated sub-agent must stay
