@@ -55,6 +55,10 @@ impl TokenSnap {
             OAuthProvider::ClaudeAI => String::new(),
             // koma.run account login has no org/account header concept either.
             OAuthProvider::KomaRun => String::new(),
+            // W11: an ext-backed conn is not a model provider in v1, so it has no
+            // send-time account/org header. (It never reaches send-time either — no
+            // ModelEntry resolves to it — but stay exhaustive + inert.)
+            OAuthProvider::Extension => String::new(),
         };
         TokenSnap {
             access_token: conn.access_token.clone(),
@@ -127,6 +131,12 @@ fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
         OAuthProvider::ClaudeAI => Some((CLAUDE_REFRESH_LEAD_SECS, CLAUDE_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::KomaRun => Some((KOMA_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::Kilocode => None,
+        // W11: the EXTENSION owns an ext-backed token's whole lifecycle — koma never
+        // refreshes it itself (no window). `None` here makes `is_stale` always false,
+        // so `seed`-ing an ext conn into this cache (which the OAuth success drain does
+        // uniformly) is inert: it is served verbatim and never triggers a refresh
+        // dispatch (which would have no provider-specific dialect to speak anyway).
+        OAuthProvider::Extension => None,
     }
 }
 
@@ -223,6 +233,10 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         OAuthProvider::ClaudeAI => claude::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::KomaRun => komarun::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
+        // W11: unreachable (Extension's `refresh_window` is `None` → `is_stale` false →
+        // this dispatch never runs for it). Serve the cached token defensively, like
+        // Kilo Code — koma never speaks an extension's refresh dialect.
+        OAuthProvider::Extension => return (snap.access_token.clone(), snap.account.clone()),
     };
     match refreshed {
         Ok(tokens) => {

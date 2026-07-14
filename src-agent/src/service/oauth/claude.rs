@@ -224,6 +224,9 @@ pub fn to_conn(tokens: ClaudeTokenResponse) -> OAuthConn {
         org_id: String::new(),
         email,
         plan: String::new(),
+        // Native flow — never extension-backed (W11 fields stay None; omitted from JSON).
+        ext_id: None,
+        provider_id: None,
     }
 }
 

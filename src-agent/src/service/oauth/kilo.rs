@@ -158,5 +158,8 @@ pub fn to_conn(token: String, org_id: String, email: String) -> OAuthConn {
         org_id,
         email,
         plan: String::new(),
+        // Native flow — never extension-backed (W11 fields stay None; omitted from JSON).
+        ext_id: None,
+        provider_id: None,
     }
 }
