@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 use crate::app::runtime::client::{HostCtl, StreamView};
 use crate::ipc::proto::ClientRequest;
 
-use super::dispatch_forward::{forward_config_req, forward_or_host, forward_paste, write_attach_scratch};
+use super::dispatch_forward::{
+    forward_config_req, forward_or_host, forward_paste, write_attach_scratch,
+};
 use super::dispatch_git;
 use super::proto::GuiReq;
 
@@ -76,17 +78,15 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // loader (`switchingTo`) clears instead of stranding.
         GuiReq::NewSession { kill } => {
             let ctl = ctx.ctl.clone();
-            std::thread::spawn(move || {
-                match rfd::FileDialog::new().pick_folder() {
-                    Some(folder) => {
-                        let _ = ctl.send(HostCtl::New {
-                            workdir: Some(folder),
-                            kill,
-                        });
-                    }
-                    None => {
-                        let _ = ctl.send(HostCtl::RefreshHub);
-                    }
+            std::thread::spawn(move || match rfd::FileDialog::new().pick_folder() {
+                Some(folder) => {
+                    let _ = ctl.send(HostCtl::New {
+                        workdir: Some(folder),
+                        kill,
+                    });
+                }
+                None => {
+                    let _ = ctl.send(HostCtl::RefreshHub);
                 }
             });
         }
@@ -113,7 +113,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         }
         // Attach raw file bytes: decode, spill to a scratch path, and forward
         // as a Paste of that path so the daemon's existing ingest stages it.
-        GuiReq::AttachFile { name, bytes_b64, .. } => {
+        GuiReq::AttachFile {
+            name, bytes_b64, ..
+        } => {
             use base64::Engine;
             if let Ok(bytes) =
                 base64::engine::general_purpose::STANDARD.decode(bytes_b64.as_bytes())
@@ -183,11 +185,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             );
         }
         GuiReq::DeleteMcpServer { uuid } => {
-            forward_config_req(
-                &ctx.req,
-                &ctx.ctl,
-                ClientRequest::DeleteMcpServer { uuid },
-            );
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteMcpServer { uuid });
         }
         GuiReq::EnableMcpServer { uuid, enabled } => {
             forward_config_req(
@@ -221,11 +219,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             );
         }
         GuiReq::DeleteProvider { uuid } => {
-            forward_config_req(
-                &ctx.req,
-                &ctx.ctl,
-                ClientRequest::DeleteProvider { uuid },
-            );
+            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteProvider { uuid });
         }
         GuiReq::SetModel {
             uuid,
@@ -319,18 +313,23 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::SetGitKey { name } => dispatch_git::set_git_key(&ctx.ctl, name),
         GuiReq::GitFetch => dispatch_git::git_fetch(&ctx.ctl),
         GuiReq::GitPull => dispatch_git::git_pull(&ctx.ctl),
-        GuiReq::GitPush => dispatch_git::git_push(&ctx.ctl),
+        GuiReq::GitPush { mode, root } => dispatch_git::git_push(&ctx.ctl, mode, root),
         // Branch-switcher popover / graph context menu (G4 — safe branch ops
         // only). Same reasoning + routing as `GitStatus`/`GitStage` above.
-        GuiReq::GitBranchList => dispatch_git::git_branch_list(&ctx.ctl),
+        GuiReq::GitBranchList { request_id } => dispatch_git::git_branch_list(&ctx.ctl, request_id),
         // Source Control multi-repo picker (discover + set-active). Same host-local
         // routing as `GitBranchList`/`SetGitKey` above.
         GuiReq::GitRepos => dispatch_git::git_repos(&ctx.ctl),
         GuiReq::SetActiveRepo { root } => dispatch_git::set_active_repo(&ctx.ctl, root),
-        GuiReq::GitCheckout { ref_name } => dispatch_git::git_checkout(&ctx.ctl, ref_name),
-        GuiReq::GitCreateBranch { name, start, checkout } => {
-            dispatch_git::git_create_branch(&ctx.ctl, name, start, checkout)
+        GuiReq::GitCheckout { ref_name, root } => {
+            dispatch_git::git_checkout(&ctx.ctl, ref_name, root)
         }
+        GuiReq::GitCreateBranch {
+            name,
+            start,
+            checkout,
+            root,
+        } => dispatch_git::git_create_branch(&ctx.ctl, name, start, checkout, root),
         // Commit-graph interactive/destructive ops (G5b — cherry-pick/revert/reset/
         // merge/rebase/abort/continue). Same reasoning + routing as `GitStatus`
         // above; a conflict/in-progress state surfaces via the follow-up `GitStatus`
@@ -339,7 +338,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GitRevert { sha } => dispatch_git::git_revert(&ctx.ctl, sha),
         GuiReq::GitReset { sha, mode } => dispatch_git::git_reset(&ctx.ctl, sha, mode),
         GuiReq::GitMerge { ref_name } => dispatch_git::git_merge(&ctx.ctl, ref_name),
-        GuiReq::GitRebase { upstream, branch } => dispatch_git::git_rebase(&ctx.ctl, upstream, branch),
+        GuiReq::GitRebase { upstream, branch } => {
+            dispatch_git::git_rebase(&ctx.ctl, upstream, branch)
+        }
         GuiReq::GitOpAbort { kind } => dispatch_git::git_op_abort(&ctx.ctl, kind),
         GuiReq::GitOpContinue { kind } => dispatch_git::git_op_continue(&ctx.ctl, kind),
         // Usage panel: host-side ledger read (global `~/.koma/usage.sqlite`).
@@ -478,7 +479,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // forward it to the attached daemon so it un-suppresses the viewed
         // detached sub-agent's live churn + projects the viewed bash output tail.
         // The local update is unconditional; the daemon forward is attached-only.
-        GuiReq::SetStreamView { subagent, bash, session } => {
+        GuiReq::SetStreamView {
+            subagent,
+            bash,
+            session,
+        } => {
             // Local `live_view` is session-LESS: the fold reads the foreground
             // session's own snapshot (already session-scoped) and `live_view` is
             // reset on every session switch, so it can't mis-target cross-session.
@@ -488,7 +493,11 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             // The daemon DOES need the session pin (per-session ids); forward it.
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::SetStreamView { subagent, bash, session });
+                    let _ = tx.send(ClientRequest::SetStreamView {
+                        subagent,
+                        bash,
+                        session,
+                    });
                 }
             }
         }
@@ -618,8 +627,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             );
         }
         // /agents delete: same routing.
-        GuiReq::DeleteAgent { scope, name, req_seq } => {
-            forward_config_req(&ctx.req, &ctx.ctl, ClientRequest::DeleteAgent { scope, name, req_seq });
+        GuiReq::DeleteAgent {
+            scope,
+            name,
+            req_seq,
+        } => {
+            forward_config_req(
+                &ctx.req,
+                &ctx.ctl,
+                ClientRequest::DeleteAgent {
+                    scope,
+                    name,
+                    req_seq,
+                },
+            );
         }
         // OAuth screen open/refresh: dual-routed like GetSettings/GetAgents — the attached
         // daemon (or the un-attached host) answers with an `OAuthState` reply the host
@@ -641,7 +662,9 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
             forward_or_host(
                 &ctx.req,
                 &ctx.ctl,
-                ClientRequest::StartOAuth { provider: provider.clone() },
+                ClientRequest::StartOAuth {
+                    provider: provider.clone(),
+                },
                 HostCtl::StartOAuth { provider },
             );
         }
@@ -711,7 +734,10 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::InstallExtension { id, version } => {
             let forwarded = if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::InstallExtension { id: id.clone(), version });
+                    let _ = tx.send(ClientRequest::InstallExtension {
+                        id: id.clone(),
+                        version,
+                    });
                     true
                 } else {
                     false
@@ -744,10 +770,20 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // daemon the request is dropped silently (there is no host-local ext manager to service
         // it, mirroring the install `// TODO: global ext manager` gap); the GUI-side guard replies
         // locally in W9.
-        GuiReq::ExtPanelMsg { ext_id, panel_id, req_id, payload } => {
+        GuiReq::ExtPanelMsg {
+            ext_id,
+            panel_id,
+            req_id,
+            payload,
+        } => {
             if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(ClientRequest::ExtPanelMsg { ext_id, panel_id, req_id, payload });
+                    let _ = tx.send(ClientRequest::ExtPanelMsg {
+                        ext_id,
+                        panel_id,
+                        req_id,
+                        payload,
+                    });
                 }
             }
         }
@@ -756,8 +792,12 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         // attach state (see `HostCtl::KeyList`), same reasoning as `GitStatus`.
         // Bodies live in the sibling `dispatch_git` module.
         GuiReq::KeyList => dispatch_git::key_list(&ctx.ctl),
-        GuiReq::KeyGenerate { name, comment } => dispatch_git::key_generate(&ctx.ctl, name, comment),
-        GuiReq::KeyImport { name, private_key } => dispatch_git::key_import(&ctx.ctl, name, private_key),
+        GuiReq::KeyGenerate { name, comment } => {
+            dispatch_git::key_generate(&ctx.ctl, name, comment)
+        }
+        GuiReq::KeyImport { name, private_key } => {
+            dispatch_git::key_import(&ctx.ctl, name, private_key)
+        }
         GuiReq::KeyReveal { name, private } => dispatch_git::key_reveal(&ctx.ctl, name, private),
         GuiReq::KeyDelete { name } => dispatch_git::key_delete(&ctx.ctl, name),
         // Source Control toolbar stash ops (GK4a): host-side, ALWAYS routed to the
@@ -771,11 +811,27 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
 
         // Coding panel workspace file ops: serviced ENTIRELY host-side (direct fs
         // access), same reasoning + routing as `GitStatus`/`FileDiff`.
-        GuiReq::FileTree { root, path, request_id } => {
-            let _ = ctx.ctl.send(HostCtl::FileTree { root, path, request_id });
+        GuiReq::FileTree {
+            root,
+            path,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileTree {
+                root,
+                path,
+                request_id,
+            });
         }
-        GuiReq::FileRead { root, path, request_id } => {
-            let _ = ctx.ctl.send(HostCtl::FileRead { root, path, request_id });
+        GuiReq::FileRead {
+            root,
+            path,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileRead {
+                root,
+                path,
+                request_id,
+            });
         }
         GuiReq::FileSave {
             root,
@@ -818,8 +874,16 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 request_id,
             });
         }
-        GuiReq::FileDelete { root, path, request_id } => {
-            let _ = ctx.ctl.send(HostCtl::FileDelete { root, path, request_id });
+        GuiReq::FileDelete {
+            root,
+            path,
+            request_id,
+        } => {
+            let _ = ctx.ctl.send(HostCtl::FileDelete {
+                root,
+                path,
+                request_id,
+            });
         }
         // Write error log: host-local, unconditional, fire-and-forget.
         GuiReq::WriteErrorLog { message } => {

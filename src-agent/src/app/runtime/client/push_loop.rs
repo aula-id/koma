@@ -188,7 +188,8 @@ pub(super) fn push_loop(
     let (git_status_tx, git_status_rx) = std::sync::mpsc::channel::<super::git::GitStatusResult>();
     let (git_diff_tx, git_diff_rx) = std::sync::mpsc::channel::<super::git::GitDiffResult>();
     let (git_op_tx, git_op_rx) = std::sync::mpsc::channel::<super::git::GitOpResult>();
-    let (git_graph_tx, git_graph_rx) = std::sync::mpsc::channel::<super::git_graph::GitGraphResult>();
+    let (git_graph_tx, git_graph_rx) =
+        std::sync::mpsc::channel::<super::git_graph::GitGraphResult>();
     let (commit_detail_tx, commit_detail_rx) =
         std::sync::mpsc::channel::<super::git_graph::CommitDetailResult>();
     let (commit_diff_tx, commit_diff_rx) =
@@ -213,32 +214,35 @@ pub(super) fn push_loop(
     // pushes each as an `Analytics` envelope. Correlation fields ride inside
     // `AnalyticsResult` so React can drop a stale reply across rapid filter /
     // session changes.
-    let (analytics_tx, analytics_rx) =
-        std::sync::mpsc::channel::<super::diff::AnalyticsResult>();
+    let (analytics_tx, analytics_rx) = std::sync::mpsc::channel::<super::diff::AnalyticsResult>();
 
     // --- BRANCH LIST (GitBranchList) --- one-shot worker thread (blocking `git
     // for-each-ref`), like `GitGraph` above. `GitCheckout`/`GitCreateBranch`
     // reuse the EXISTING `git_op_tx`/`git_status_tx` channels below instead of a
     // dedicated channel (same `GitOp` + follow-up `GitStatus` reply pattern).
-    let (branch_list_tx, branch_list_rx) = std::sync::mpsc::channel::<super::git_branch::BranchListResult>();
+    let (branch_list_tx, branch_list_rx) =
+        std::sync::mpsc::channel::<super::git_branch::BranchListResult>();
 
     // --- REPO LIST (GitRepos) --- multi-repo picker discovery, one-shot worker
     // thread (blocking filesystem walk), like `GitBranchList` above.
     // `SetActiveRepo` carries no dedicated channel — it reuses the EXISTING
     // `git_status_tx` below (a follow-up `GitStatus` for the newly-active repo,
     // same pattern as `SetGitKey`).
-    let (repo_list_tx, repo_list_rx) = std::sync::mpsc::channel::<super::git_repos::RepoListResult>();
+    let (repo_list_tx, repo_list_rx) =
+        std::sync::mpsc::channel::<super::git_repos::RepoListResult>();
 
     // --- STASH (GitStashList) --- one-shot worker thread (blocking `git stash
     // list`), like `GitBranchList` above (GK4a). `GitStash`/`GitStashPop` reuse the
     // EXISTING `git_op_tx`/`git_status_tx` channels instead (same `GitOp` + follow-up
     // `GitStatus` reply pattern, since stashing changes the working tree).
-    let (stash_list_tx, stash_list_rx) = std::sync::mpsc::channel::<super::git_stash::StashListResult>();
+    let (stash_list_tx, stash_list_rx) =
+        std::sync::mpsc::channel::<super::git_stash::StashListResult>();
 
     // --- ACTIVITY (GitActivity, GK5a) --- one-shot worker thread (blocking `git log
     // --numstat`), like `GitGraph` above — a self-contained per-request reply, no
     // follow-up `GitStatus` needed (read-only, changes nothing).
-    let (activity_tx, activity_rx) = std::sync::mpsc::channel::<super::git_activity::ActivityResult>();
+    let (activity_tx, activity_rx) =
+        std::sync::mpsc::channel::<super::git_activity::ActivityResult>();
 
     // --- SSH KEY VAULT (KeyList/KeyGenerate/KeyImport/KeyDelete/KeyReveal) ---
     // Every op shells `ssh-keygen`/touches the filesystem (blocking), same
@@ -256,14 +260,10 @@ pub(super) fn push_loop(
     // shared `store_host` bodies (also used by the detached `host_swapper` twin);
     // NEVER touches the daemon in either host state (unlike `ListModels`/`ListRoutes`
     // above, which DO forward to the daemon while attached).
-    let (store_catalogue_tx, store_catalogue_rx) = std::sync::mpsc::channel::<(
-        Vec<crate::ipc::proto::StoreItemWire>,
-        Option<String>,
-    )>();
-    let (store_detail_tx, store_detail_rx) = std::sync::mpsc::channel::<(
-        Option<crate::ipc::proto::StoreDetailWire>,
-        Option<String>,
-    )>();
+    let (store_catalogue_tx, store_catalogue_rx) =
+        std::sync::mpsc::channel::<(Vec<crate::ipc::proto::StoreItemWire>, Option<String>)>();
+    let (store_detail_tx, store_detail_rx) =
+        std::sync::mpsc::channel::<(Option<crate::ipc::proto::StoreDetailWire>, Option<String>)>();
     let (installed_ext_tx, installed_ext_rx) =
         std::sync::mpsc::channel::<Vec<crate::ipc::proto::InstalledExtWire>>();
     let (installed_detail_tx, installed_detail_rx) = std::sync::mpsc::channel::<(
@@ -332,7 +332,10 @@ pub(super) fn push_loop(
                     }
                     let new_id = uuid::Uuid::new_v4().to_string();
                     push_switching(push, &new_id);
-                    return HostTransition::Attach { id: new_id, workdir };
+                    return HostTransition::Attach {
+                        id: new_id,
+                        workdir,
+                    };
                 }
                 // KILL the daemon `id`. Killing the CURRENTLY-ATTACHED session: queue a
                 // graceful QuitDaemon on the live conn (flushed by teardown), ensure its death
@@ -449,10 +452,18 @@ pub(super) fn push_loop(
                 // fetch uses (git: (b-sex)/(b-sept)/(b-oct); keys:
                 // (b-undec)/(b-tredec)/(b-duodec)).
                 Ok(super::HostCtl::GitStatus) => {
-                    git_host::spawn_git_status_attached(git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_status_attached(
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                 }
                 Ok(super::HostCtl::GitDiff { path, staged }) => {
-                    git_host::spawn_git_diff_attached(git_diff_tx.clone(), current_owned.clone(), path, staged);
+                    git_host::spawn_git_diff_attached(
+                        git_diff_tx.clone(),
+                        current_owned.clone(),
+                        path,
+                        staged,
+                    );
                 }
                 Ok(super::HostCtl::GitStage { paths }) => {
                     git_host::spawn_git_stage_attached(
@@ -487,35 +498,68 @@ pub(super) fn push_loop(
                     );
                 }
                 Ok(super::HostCtl::SetGitKey { name }) => {
-                    git_host::spawn_set_git_key_attached(git_status_tx.clone(), current_owned.clone(), name);
+                    git_host::spawn_set_git_key_attached(
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        name,
+                    );
                 }
                 Ok(super::HostCtl::GitFetch) => {
-                    git_host::spawn_git_fetch_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_fetch_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                 }
                 Ok(super::HostCtl::GitPull) => {
-                    git_host::spawn_git_pull_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_pull_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                 }
-                Ok(super::HostCtl::GitPush) => {
-                    git_host::spawn_git_push_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                Ok(super::HostCtl::GitPush { mode, root }) => {
+                    git_host::spawn_git_push_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        mode,
+                        root,
+                    );
                 }
                 // Source Control toolbar stash ops (GK4a): host-local, never the
                 // daemon. `GitStash`/`GitStashPop` reuse the EXISTING `git_op_tx`/
                 // `git_status_tx` channels (drained at (b-oct)/(b-sex) via
                 // `git_drain`); `GitStashList` drains at (b-quattuordec).
                 Ok(super::HostCtl::GitStash) => {
-                    git_host::spawn_git_stash_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_stash_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                 }
                 Ok(super::HostCtl::GitStashPop) => {
-                    git_host::spawn_git_stash_pop_attached(git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_stash_pop_attached(
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                 }
                 Ok(super::HostCtl::GitStashList) => {
-                    git_host::spawn_git_stash_list_attached(stash_list_tx.clone(), current_owned.clone());
+                    git_host::spawn_git_stash_list_attached(
+                        stash_list_tx.clone(),
+                        current_owned.clone(),
+                    );
                 }
                 // Branch-switcher / graph context menu (G4): host-local, never the
                 // daemon. `GitBranchList` drains at (b-octodec) below;
                 // `GitCheckout`/`GitCreateBranch` reuse the git-op channels above.
-                Ok(super::HostCtl::GitBranchList) => {
-                    git_host::spawn_git_branch_list_attached(branch_list_tx.clone(), current_owned.clone());
+                Ok(super::HostCtl::GitBranchList { request_id }) => {
+                    git_host::spawn_git_branch_list_attached(
+                        branch_list_tx.clone(),
+                        current_owned.clone(),
+                        request_id,
+                    );
                 }
                 // Source Control multi-repo picker: host-local, never the daemon.
                 // `GitRepos` drains at (b-octodec-bis) below; `SetActiveRepo` reuses
@@ -524,19 +568,35 @@ pub(super) fn push_loop(
                     git_host::spawn_git_repos_attached(repo_list_tx.clone(), current_owned.clone());
                 }
                 Ok(super::HostCtl::SetActiveRepo { root }) => {
-                    git_host::spawn_set_active_repo_attached(git_status_tx.clone(), current_owned.clone(), root);
+                    git_host::spawn_set_active_repo_attached(
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                        root,
+                    );
                 }
-                Ok(super::HostCtl::GitCheckout { ref_name }) => {
+                Ok(super::HostCtl::GitCheckout { ref_name, root }) => {
                     git_host::spawn_git_checkout_attached(
                         git_op_tx.clone(),
                         git_status_tx.clone(),
                         current_owned.clone(),
                         ref_name,
+                        root,
                     );
                 }
-                Ok(super::HostCtl::GitCreateBranch { name, start, checkout }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
-                    git_host::spawn_git_create_branch_attached(ot, st, cur, name, start, checkout);
+                Ok(super::HostCtl::GitCreateBranch {
+                    name,
+                    start,
+                    checkout,
+                    root,
+                }) => {
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
+                    git_host::spawn_git_create_branch_attached(
+                        ot, st, cur, name, start, checkout, root,
+                    );
                 }
                 // Commit-graph interactive/destructive ops (G5b): host-local, never
                 // the daemon. Each reuses the EXISTING `git_op_tx`/`git_status_tx`
@@ -545,47 +605,94 @@ pub(super) fn push_loop(
                 // needed (`GitStatus` already carries the fresh `inProgress`/
                 // `conflicted` fields).
                 Ok(super::HostCtl::GitCherryPick { sha }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_cherry_pick_attached(ot, st, cur, sha);
                 }
                 Ok(super::HostCtl::GitRevert { sha }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_revert_attached(ot, st, cur, sha);
                 }
                 Ok(super::HostCtl::GitReset { sha, mode }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_reset_attached(ot, st, cur, sha, mode);
                 }
                 Ok(super::HostCtl::GitMerge { ref_name }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_merge_attached(ot, st, cur, ref_name);
                 }
                 Ok(super::HostCtl::GitRebase { upstream, branch }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_rebase_attached(ot, st, cur, upstream, branch);
                 }
                 Ok(super::HostCtl::GitOpAbort { kind }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_op_abort_attached(ot, st, cur, kind);
                 }
                 Ok(super::HostCtl::GitOpContinue { kind }) => {
-                    let (ot, st, cur) = (git_op_tx.clone(), git_status_tx.clone(), current_owned.clone());
+                    let (ot, st, cur) = (
+                        git_op_tx.clone(),
+                        git_status_tx.clone(),
+                        current_owned.clone(),
+                    );
                     git_host::spawn_git_op_continue_attached(ot, st, cur, kind);
                 }
                 // Commit-graph panel: NEVER touches the daemon (host-local, regardless of
                 // attach state) — spawn the blocking git work off this thread; results are
                 // drained + pushed below at (b-quindec)/(b-sexdec)/(b-septdec).
                 Ok(super::HostCtl::GitGraph { limit, skip }) => {
-                    git_host::spawn_git_graph_attached(git_graph_tx.clone(), current_owned.clone(), limit, skip);
+                    git_host::spawn_git_graph_attached(
+                        git_graph_tx.clone(),
+                        current_owned.clone(),
+                        limit,
+                        skip,
+                    );
                 }
                 Ok(super::HostCtl::GitCommitDetail { sha }) => {
-                    git_host::spawn_commit_detail_attached(commit_detail_tx.clone(), current_owned.clone(), sha);
+                    git_host::spawn_commit_detail_attached(
+                        commit_detail_tx.clone(),
+                        current_owned.clone(),
+                        sha,
+                    );
                 }
                 Ok(super::HostCtl::GitCommitDiff { sha, path }) => {
-                    git_host::spawn_commit_diff_attached(commit_diff_tx.clone(), current_owned.clone(), sha, path);
+                    git_host::spawn_commit_diff_attached(
+                        commit_diff_tx.clone(),
+                        current_owned.clone(),
+                        sha,
+                        path,
+                    );
                 }
                 Ok(super::HostCtl::GitActivity { path, limit }) => {
-                    git_host::spawn_git_activity_attached(activity_tx.clone(), current_owned.clone(), path, limit);
+                    git_host::spawn_git_activity_attached(
+                        activity_tx.clone(),
+                        current_owned.clone(),
+                        path,
+                        limit,
+                    );
                 }
                 // USAGE PANEL preview fetch: NEVER touches the daemon (host-side ledger
                 // read only, regardless of attach state) — spawn the blocking sqlite work
@@ -611,9 +718,8 @@ pub(super) fn push_loop(
                 }) => {
                     let tx = analytics_tx.clone();
                     std::thread::spawn(move || {
-                        let result = super::diff::compute_analytics(
-                            req_seq, scope, session, range, metric,
-                        );
+                        let result =
+                            super::diff::compute_analytics(req_seq, scope, session, range, metric);
                         let _ = tx.send(result);
                     });
                 }
@@ -621,13 +727,27 @@ pub(super) fn push_loop(
                     git_host::spawn_key_list_attached(key_list_tx.clone());
                 }
                 Ok(super::HostCtl::KeyGenerate { name, comment }) => {
-                    git_host::spawn_key_generate_attached(key_op_tx.clone(), key_list_tx.clone(), name, comment);
+                    git_host::spawn_key_generate_attached(
+                        key_op_tx.clone(),
+                        key_list_tx.clone(),
+                        name,
+                        comment,
+                    );
                 }
                 Ok(super::HostCtl::KeyImport { name, private_key }) => {
-                    git_host::spawn_key_import_attached(key_op_tx.clone(), key_list_tx.clone(), name, private_key);
+                    git_host::spawn_key_import_attached(
+                        key_op_tx.clone(),
+                        key_list_tx.clone(),
+                        name,
+                        private_key,
+                    );
                 }
                 Ok(super::HostCtl::KeyDelete { name }) => {
-                    git_host::spawn_key_delete_attached(key_op_tx.clone(), key_list_tx.clone(), name);
+                    git_host::spawn_key_delete_attached(
+                        key_op_tx.clone(),
+                        key_list_tx.clone(),
+                        name,
+                    );
                 }
                 Ok(super::HostCtl::KeyReveal { name, private }) => {
                     git_host::spawn_key_reveal_attached(key_reveal_tx.clone(), name, private);
@@ -638,7 +758,11 @@ pub(super) fn push_loop(
                 // `store_host` bodies (also used by the detached `host_swapper`
                 // twin); results are drained + pushed below.
                 Ok(super::HostCtl::StoreBrowse { query, category }) => {
-                    store_host::spawn_store_browse_attached(store_catalogue_tx.clone(), query, category);
+                    store_host::spawn_store_browse_attached(
+                        store_catalogue_tx.clone(),
+                        query,
+                        category,
+                    );
                 }
                 Ok(super::HostCtl::StoreDetail { id }) => {
                     store_host::spawn_store_detail_attached(store_detail_tx.clone(), id);
@@ -647,7 +771,10 @@ pub(super) fn push_loop(
                     store_host::spawn_list_installed_attached(installed_ext_tx.clone());
                 }
                 Ok(super::HostCtl::GetInstalledExtensionDetail { id }) => {
-                    store_host::spawn_get_installed_detail_attached(installed_detail_tx.clone(), id);
+                    store_host::spawn_get_installed_detail_attached(
+                        installed_detail_tx.clone(),
+                        id,
+                    );
                 }
                 // Install/uninstall raced in with no daemon attached (in practice this
                 // can't happen here — an ATTACHED push_loop always has a live `req_tx`
@@ -731,7 +858,10 @@ pub(super) fn push_loop(
             // gap, equally frozen until the new session's first Snapshot.
             push_switching(push, &new_id);
             // Daemon-driven hand-off carries no picked folder — inherit the host cwd.
-            return HostTransition::Attach { id: new_id, workdir: None };
+            return HostTransition::Attach {
+                id: new_id,
+                workdir: None,
+            };
         }
         // `/select` transcript dump needs a terminal the host does not own — ignore it.
 
@@ -822,7 +952,14 @@ pub(super) fn push_loop(
         // submit-time reconcile keeps the staged images (React's text carries no markers).
         if let Ok(mut marks) = live_marks.lock() {
             marks.clear();
-            marks.extend(shadow.rest.fg().pending_attachments.iter().map(|a| a.marker_n));
+            marks.extend(
+                shadow
+                    .rest
+                    .fg()
+                    .pending_attachments
+                    .iter()
+                    .map(|a| a.marker_n),
+            );
         }
 
         // --- (c) serialise + push whatever changed (the draw seam) ---
