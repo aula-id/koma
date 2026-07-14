@@ -218,17 +218,24 @@ pub(super) fn apply_tool_call_delta(acc: &mut Vec<ToolCall>, d: &ToolCallDelta) 
 /// `Some(ProviderRouting)` with `allow_fallbacks: false` otherwise, strictly
 /// pinning the request to that single provider. Free helper so every request
 /// path (streaming, `complete`, `complete_with`) shares one routing rule.
+///
+/// Delegates the actual normalization to
+/// [`crate::model::app_config::ModelEntry::normalize_route`] so both the
+/// live-request pin and the persisted config self-heal identically: the
+/// literal sentinel `"auto"` (any case, surrounding whitespace ignored) maps
+/// to `None`, and a route already poisoned with an OpenRouter endpoint's
+/// display LABEL (`"Provider | model-variant"`, e.g.
+/// `"Xiaomi | xiaomi/mimo-v2.5-20260422"`) is healed down to just the
+/// provider-name prefix — provider names never contain `" | "`.
 pub(super) fn provider_routing_for(
     provider: &str,
 ) -> Option<crate::dto::openrouter::ProviderRouting> {
-    if provider.is_empty() {
-        None
-    } else {
-        Some(crate::dto::openrouter::ProviderRouting {
-            only: vec![provider.to_string()],
-            allow_fallbacks: false,
-        })
-    }
+    let pinned =
+        crate::model::app_config::ModelEntry::normalize_route(Some(provider.to_string()))?;
+    Some(crate::dto::openrouter::ProviderRouting {
+        only: vec![pinned],
+        allow_fallbacks: false,
+    })
 }
 
 /// True when `endpoint` speaks OpenRouter's `reasoning` dialect — i.e. accepts
@@ -236,8 +243,38 @@ pub(super) fn provider_routing_for(
 /// (OpenAI itself, a codex/9router gateway, etc.) reject those with
 /// `400 Unknown parameter: 'reasoning.exclude'`, so we emit them ONLY here. Groq
 /// & friends are reached THROUGH OpenRouter, so they match and keep working.
-pub(super) fn is_openrouter(endpoint: &str) -> bool {
+///
+/// `pub(crate)` (not `pub(super)`) so `effort_menu`
+/// (`app::runtime::commands::effort`) can use the SAME OpenRouter-vs-not
+/// precedence rule as the streaming path when deciding whether to trust the
+/// live `models_cache` catalogue or the curated `catalogue_overlay` for a
+/// non-OpenRouter endpoint (Codex/Claude/xAI/DeepSeek).
+pub(crate) fn is_openrouter(endpoint: &str) -> bool {
     endpoint.to_lowercase().contains("openrouter")
+}
+
+/// True when `conn` should receive `reasoning: {exclude: true}` in a oneshot
+/// request body (classifier / fold / blob-picker) — i.e. [`is_openrouter`]'s
+/// endpoint-substring check, OR `conn.api_type == ApiType::KomaFree`.
+///
+/// koma.run is an OpenRouter-style proxy (`koma/apple` is a reasoning model
+/// behind it) that ACCEPTS the OpenRouter-only `reasoning.exclude` field —
+/// verified live against real requests — even though its endpoint URL
+/// (`service::koma_free::KOMA_FREE_ENDPOINT`) doesn't contain "openrouter" and so
+/// fails the plain [`is_openrouter`] substring check. Without this, a koma-free
+/// classifier/fold/blob-picker call never asked the model to hide its reasoning,
+/// and `koma/apple` burns a large, unpredictable chunk of `max_tokens` on
+/// reasoning before ever writing the verdict JSON.
+///
+/// Deliberately NOT folded into [`is_openrouter`] itself, and deliberately NOT
+/// threaded into [`reasoning_config`]: that function's `"off"/"none"` branch
+/// sends `reasoning: {enabled: false}`, and `enabled: false` is a KNOWN LANDMINE
+/// that 400s on some upstreams — sending it to koma.run has not been verified and
+/// must not be risked. This predicate is scoped to the three `exclude: true`
+/// call sites in `oneshot.rs` (`classify_with`, `summarize_fold`, `pick_blobs`),
+/// never to the `enabled: false` path.
+pub(super) fn accepts_reasoning_exclude(conn: &Conn<'_>) -> bool {
+    is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree
 }
 
 /// Map a stored effort token to the request `reasoning` object.

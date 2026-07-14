@@ -8,6 +8,8 @@
 
 mod session;
 mod modes;
+mod settings;
 
 pub use session::*;
 pub use modes::*;
+pub use settings::*;

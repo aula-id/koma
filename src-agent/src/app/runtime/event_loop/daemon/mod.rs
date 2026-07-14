@@ -320,6 +320,34 @@ pub(in crate::app::runtime) fn daemon_loop(
         //    handling below so a closed-state snapshot reflects the tombstones.
         hub.drain_inbound(state, client, handle);
 
+        // 3-bis. Reply to any async `ListModels` GET that landed since the last tick with
+        //     a seq'd `ModelList` frame to the requesting client (the GUI Connector model
+        //     picker). Kept off the per-request path (the fetch is a network GET spawned by
+        //     the `ListModels` handler) and routed through `send_to` so the per-client seq
+        //     stays gap-free.
+        hub.drain_list_models();
+
+        // 3-ter. Same one-shot drain for any async `ListRoutes` GET (the GUI Connector
+        //     ModelForm ROUTE picker): turn each landed provider-route list into a seq'd
+        //     `ModelRoutes` frame to the requesting client.
+        hub.drain_list_routes();
+
+        // 3-quat. Drain the GUI OAuth push outbox (`state.rest.oauth_pushes`), queued by the
+        //     `drain_oauth` global drain (run in `service_global` above) as an in-flight
+        //     `StartOAuth` login progresses: turn each transition into a seq'd `OAuthState`
+        //     frame to the initiating client. Same one-shot pattern as the two drains above —
+        //     the flow runs off-thread and can't advance the per-client seq itself.
+        hub.drain_oauth_pushes(state);
+
+        // 3-quint. Drain the extension-STORE reply channel (`store_rx`), fed by the async
+        //     browse/detail/download tasks the `requests_ext` handlers spawn: turn each landed
+        //     browse/detail reply into a seq'd `StoreCatalogue`/`StoreItemDetail` frame, and
+        //     finish a downloaded install artifact (verify + unpack + register + spawn) ON the
+        //     loop — where it has `&mut state` + the managers. Same one-shot pattern as the
+        //     drains above; the network fetch runs off-thread and can't advance the per-client
+        //     seq itself.
+        hub.drain_store_replies(state);
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the
@@ -393,7 +421,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         // 3a-todo. Passive todo refresh: for every session whose mode is Todo,
         //     re-read memory/TODO.md periodically (same 500ms cadence as the TUI).
         //     This keeps the daemon's in-memory state current when the agent writes
-        //     todos via todowrite while the user has /open in a thin-client.
+        //     todos via checklist while the user has /open in a thin-client.
         for s in state.rest.sessions.iter_mut() {
             if s.closed { continue; }
             if let crate::app::mode::Mode::Todo(t) = &mut s.mode {

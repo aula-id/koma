@@ -6,8 +6,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::dto::chat::{ChatMessage, ToolCall};
 use crate::dto::openrouter::{
-    to_wire_with_images, ChatRequest, ImageWireCtx, StreamChunk, ToolDef, ToolFunctionDef,
-    UsageRequest,
+    to_wire_with_images, ChatRequest, ImageWireCtx, StreamChunk, StreamOptions, ToolDef,
+    ToolFunctionDef, UsageRequest,
 };
 use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
@@ -74,6 +74,26 @@ impl OpenRouterClient {
                 .await;
         }
 
+        // Claude (Anthropic) speaks the native Messages API — a different wire
+        // protocol — handled by the dedicated transport. `provider` (the OpenRouter
+        // route slug) is meaningless there and ignored.
+        if conn.api_type == ApiType::AnthropicCompatible {
+            return self
+                .anthropic_stream_complete(
+                    conn,
+                    &bearer,
+                    effective_account,
+                    model,
+                    effort,
+                    messages,
+                    advertise,
+                    mcp_tools,
+                    image_ctx,
+                    tx,
+                )
+                .await;
+        }
+
         // The plan-word steer is now injected into the System message upstream in
         // `start_stream_task`, BEFORE the volatile project-files/awareness tail and
         // ahead of the `CACHE_SPLIT_MARK` boundary, so it stays inside the cached
@@ -124,6 +144,15 @@ impl OpenRouterClient {
             stream: true,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
+            // OpenAI-standard streaming usage directive: generic OpenAI-spec
+            // servers (e.g. api.x.ai) ignore `usage:{include:true}` above and
+            // only emit the terminal usage chunk when this is set. Omitted for
+            // OpenRouter/koma-free, which already get cost data via `usage`.
+            stream_options: if is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree {
+                None
+            } else {
+                Some(StreamOptions { include_usage: true })
+            },
             tools: Some(tools),
             // Interactive chat is the only path that thinks; map the resolved
             // role's effort token to a `reasoning` directive (None = model default).
@@ -141,6 +170,13 @@ impl OpenRouterClient {
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
+                if let Some(ctx) = image_ctx.as_ref() {
+                    crate::model::store::append_error_log(
+                        &ctx.session_dir,
+                        "request send failed",
+                        &e.to_string(),
+                    );
+                }
                 emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
                 return Ok(());
             }
@@ -149,6 +185,13 @@ impl OpenRouterClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            if let Some(ctx) = image_ctx.as_ref() {
+                crate::model::store::append_error_log(
+                    &ctx.session_dir,
+                    &format!("HTTP {status} from {} (model {model})", conn.endpoint),
+                    &text,
+                );
+            }
             // koma-free is rate-limited per install against a shared free-tier
             // bucket; a 429 means it is busy/exhausted (Retry-After ignored on
             // purpose). Surface a human hint instead of the raw upstream JSON.
@@ -188,6 +231,13 @@ impl OpenRouterClient {
             let bytes = match chunk {
                 Ok(b) => b,
                 Err(e) => {
+                    if let Some(ctx) = image_ctx.as_ref() {
+                        crate::model::store::append_error_log(
+                            &ctx.session_dir,
+                            "stream read error",
+                            &e.to_string(),
+                        );
+                    }
                     emit(&tx, StreamEvent::Error(format!("stream error: {e}")));
                     return Ok(());
                 }

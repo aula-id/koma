@@ -1,4 +1,4 @@
-//! Binary entry point for the simple-coders-agent TUI.
+//! Binary entry point for the koma TUI.
 //!
 //! Parses CLI arguments via [`cli::parse`], handles any short-circuit modes
 //! (provisioner flags), then routes into one of the launch paths below.
@@ -14,6 +14,7 @@
 //! | `koma --resume` | open the session hub. |
 //! | `koma alone` | standalone no-daemon TUI ([`app::run`]); REFUSES if a daemon is already alive. The escape hatch (alias for `--local`). |
 //! | `koma daemon <status\|kill\|restart\|clean>` | daemon management CLI then exit. |
+//! | `koma gui` | feature-gated (`--features gui`) desktop client — a wry webview hosting xterm.js that renders the real koma terminal client spawned in a PTY. |
 //! | `koma --internet-fullmode-install [--force]` | provision Python full-mode (browser) env then exit. |
 //! | `koma --internet-fullmode-uninstall` | remove Python full-mode env then exit. |
 //!
@@ -55,6 +56,12 @@ fn main() -> anyhow::Result<()> {
     // reads base_dir(), so every entry path (TUI, --internet-fullmode-install,
     // --resume) sees the migrated directory.
     model::store::migrate_legacy_dir();
+
+    // Seed the catalogue overlay (reasoning/pricing metadata for non-OpenRouter
+    // providers) and kick off its non-blocking background refresh. Runs here,
+    // before the CLI subcommand fork, so both `koma` (TUI/daemon) and `koma gui`
+    // (which execs a bare `koma` client) hit it exactly once at startup.
+    service::catalogue_overlay::init();
 
     let opts = cli::parse(std::env::args());
 
@@ -167,6 +174,18 @@ fn main() -> anyhow::Result<()> {
         return app::run_daemon(opts);
     }
 
+    // --- desktop GUI path: feature-gated wry + xterm.js client (spawns the real
+    // koma terminal client in a PTY). Default builds omit the `gui` feature. ---
+    #[cfg(feature = "gui")]
+    if opts.gui {
+        return app::run_gui(opts);
+    }
+    #[cfg(not(feature = "gui"))]
+    if opts.gui {
+        eprintln!("koma was built without the `gui` feature. Rebuild with: cargo build --features gui");
+        std::process::exit(1);
+    }
+
     // --- explicit thin-client path: attach to an ALREADY-running daemon ---
     // Daemon-per-session: connects to the keyed socket `run/<id>.sock` of the session
     // named by `--session <id>` (REQUIRED here — there is no longer a single global
@@ -233,7 +252,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut opts = opts;
     let session_id = uuid::Uuid::new_v4().to_string();
-    if let Err(e) = app::ensure_daemon_running(&session_id, false) {
+    if let Err(e) = app::ensure_daemon_running(&session_id, false, None) {
         eprintln!("error: could not start the koma daemon: {e:#} — try `koma --local`");
         std::process::exit(1);
     }

@@ -105,7 +105,44 @@ pub(super) fn apply_frame(
         // `Status` is a discovery-only reply consumed by the SYNC `probe_status` path,
         // never the async attach client — but a frame is a frame, so handle it as a
         // non-visual no-op here for exhaustiveness rather than panic.
-        DaemonEvent::Ack | DaemonEvent::Error(_) | DaemonEvent::Status(_) => false,
+        // `FileSearchResults` is intercepted by the GUI host's `push_loop` BEFORE this
+        // fold (it re-pushes a `SearchResults` envelope); if it reaches here (the TUI
+        // client, which never sends `FileSearch`) it is a non-visual no-op. `ModelList` is
+        // the same story: the GUI host intercepts it (re-pushes a `ModelList` envelope),
+        // and the TUI client never sends `ListModels`, so it folds as a no-op here.
+        // `ModelRoutes` follows `ModelList` exactly (GUI host re-pushes a `RouteList`
+        // envelope; the TUI never sends `ListRoutes`), so it too folds as a no-op.
+        // `SettingsValues` is likewise a GUI-only reply (the host intercepts it in
+        // `push_loop` to re-push a `SettingsValues` envelope; the TUI never sends
+        // `GetSettings`), so it also folds as a non-visual no-op here. `EffortOptions`
+        // follows the exact same story for the GUI composer's effort picker (the host
+        // re-pushes an `EffortOptions` envelope; the TUI opens `Mode::Effort` directly
+        // and never sends `GetEffortOptions`). `AgentsValues` follows it too for the GUI
+        // /agents dashboard (the host re-pushes an `AgentsValues` envelope; the TUI drives
+        // the roster through `Mode::Agents` and never sends `ListAgents`). `OAuthState`
+        // follows the same story for the streaming GUI OAuth surface (the host re-pushes an
+        // `OAuthState` envelope; the TUI drives login through `Mode::Settings`/
+        // `OnboardProvider` and never sends `GetOAuthState`/`StartOAuth`). The extension-STORE
+        // replies (`StoreCatalogue` / `StoreItemDetail` / `InstalledExtensions` /
+        // `ExtensionOpResult`) follow the same story: the GUI host intercepts each in
+        // `push_loop` (re-pushing its own envelope), and the TUI client never sends the store
+        // requests, so they fold as non-visual no-ops here.
+        DaemonEvent::Ack
+        | DaemonEvent::Error(_)
+        | DaemonEvent::Status(_)
+        | DaemonEvent::FileSearchResults { .. }
+        | DaemonEvent::ModelList { .. }
+        | DaemonEvent::ModelRoutes { .. }
+        | DaemonEvent::SettingsValues { .. }
+        | DaemonEvent::EffortOptions { .. }
+        | DaemonEvent::AgentsValues { .. }
+        | DaemonEvent::AgentOp { .. }
+        | DaemonEvent::OAuthState { .. }
+        | DaemonEvent::StoreCatalogue { .. }
+        | DaemonEvent::StoreItemDetail { .. }
+        | DaemonEvent::InstalledExtensions { .. }
+        | DaemonEvent::ExtensionOpResult { .. } => false,
+        | DaemonEvent::McpStatus { .. } => false,
     }
 }
 

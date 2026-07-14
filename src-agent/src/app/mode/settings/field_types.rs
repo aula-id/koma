@@ -41,6 +41,8 @@ pub enum SettingField {
     SlidingCache,
     /// Toggle: whether bash/git_operator save filtered output logs to disk.
     BashSaving,
+    /// Toggle: GUI Coding panel auto-save (debounced) for dirty editor tabs.
+    CodingAutosave,
     /// Toggle: internet-access tier — `simple` (DDG in-process) vs `full`
     /// (scrapion Firefox subprocess, higher token usage).
     InternetMode,
@@ -69,6 +71,7 @@ impl SettingField {
             SettingField::ShortSendEnabled   => "Short-send",
             SettingField::SlidingCache       => "Sliding cache",
             SettingField::BashSaving         => "Bash shorts",
+            SettingField::CodingAutosave     => "Coding autosave",
             SettingField::InternetMode       => "Internet mode",
         }
     }
@@ -94,7 +97,7 @@ pub const SETTING_CATEGORIES: &[SettingCategory] = &[
     SettingCategory {
         name: "Session",
         group: "general",
-        fields: &[SettingField::Name, SettingField::Workdir, SettingField::ShortSendEnabled, SettingField::SlidingCache, SettingField::BashSaving, SettingField::InternetMode],
+        fields: &[SettingField::Name, SettingField::Workdir, SettingField::ShortSendEnabled, SettingField::SlidingCache, SettingField::BashSaving, SettingField::CodingAutosave, SettingField::InternetMode],
     },
     SettingCategory {
         name: "API Providers",

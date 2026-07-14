@@ -12,7 +12,7 @@
 //! Layout (top → bottom), centered:
 //!
 //! ```text
-//!                         simple-coder
+//!                         koma
 //!
 //!                  ⠙  indexing workspace
 //!                  ⠹  reading project docs

@@ -110,6 +110,12 @@ impl DaemonHub {
             return;
         }
 
+        // `ClientRequest::Interrupt` sets this to force EVERY attached client to a
+        // full `Snapshot` this pass, bypassing the differ — an unconditional stop
+        // must be a guaranteed resync even if a client's shadow drifted in a way the
+        // differ doesn't (yet) recognize. One-shot: consumed here.
+        let force = std::mem::take(&mut self.force_resync);
+
         for i in 0..self.clients.len() {
             if !self.clients[i].attached {
                 continue;
@@ -137,22 +143,65 @@ impl DaemonHub {
             // just above, so the cache's discriminant is read off ITS foreground-session
             // mode — a client opening `/help` rebuilds only its own cache, not the others'.
             let mode = self.mode_snapshot_cached(i, state);
-            let next = build_snapshot_with_mode(state, mode);
+            let mut next = build_snapshot_with_mode(state, mode);
+
+            // Per-client STREAM VIEW (bash): if this client is streaming a bash job into a
+            // GUI stream tab, stamp that ONE job's captured OUTPUT TAIL into its snapshot.
+            // The projection deliberately carries no bash output (it is shared by every
+            // client + the attach/resync path), so populate it here, per client, AFTER the
+            // build: read the live tail straight off the foreground session's registry (the
+            // transient foreground cursor was already swapped to this client above), then
+            // write it onto the matching `BashJobSnapshot` in `next`'s foreground session.
+            // A change to a VIEWED job's tail rides `SessionSnapshot.bash_jobs`'s structural
+            // diff → a full resync for this client only (the same accepted cost as a viewed
+            // sub-agent's content churn). Un-viewed jobs keep `output_tail: None`, so their
+            // per-line output stays IPC-silent exactly as before. GATED on the pinned
+            // session id: bash job ids are per-session counters, and the client's foreground
+            // can move daemon-side (`repoint_foreground_off_closed`) off the session the view
+            // was set on — so stamp ONLY when the resolved foreground session's id matches
+            // `stream_session`, else skip (a bare id would stamp a DIFFERENT session's
+            // same-numbered job).
+            if let Some(job_id) = self.clients[i].stream_bash {
+                let stream_session = self.clients[i].stream_session.clone();
+                let tail = state
+                    .rest
+                    .sessions
+                    .get(state.rest.foreground)
+                    .filter(|rt| stream_session.as_deref() == Some(rt.id.as_str()))
+                    .and_then(|rt| rt.bash_jobs.iter().find(|j| j.id == job_id))
+                    .map(|job| crate::app::bgbash::stream_output_tail(&job.output_snapshot()));
+                if let Some(tail) = tail {
+                    if let Some(fg_id) = next.foreground_id.clone() {
+                        if let Some(sess) = next.sessions.iter_mut().find(|s| s.id == fg_id) {
+                            if let Some(bj) = sess.bash_jobs.iter_mut().find(|b| b.id == job_id) {
+                                bj.output_tail = Some(tail);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Diff this client's OWN baseline -> next. Scoped so the immutable
             // borrow of `last_snapshot` ends before the `&mut self` sends below.
             // An attached client always has a baseline (seeded at attach/resync).
+            // `stream_subagent` (this client's viewed sub-agent, if any) un-suppresses that
+            // agent's live transcript churn in the diff — but ONLY within `stream_session`
+            // (per-session ids). Both borrow `clients[i]` immutably (disjoint from the
+            // `last_snapshot` borrow of `prev`), which ends before the `&mut self` sends.
             let result = {
+                let stream_subagent = self.clients[i].stream_subagent;
+                let stream_session = self.clients[i].stream_session.as_deref();
                 let prev = self.clients[i]
                     .last_snapshot
                     .as_ref()
                     .expect("attached client always has a baseline");
-                diff(prev, &next)
+                diff(prev, &next, stream_subagent, stream_session)
             };
 
-            if result.needs_full {
-                // Structural change: resend this client a full Snapshot + advance
-                // its baseline. `next` is shared across the loop, so clone per send.
+            if force || result.needs_full {
+                // Structural change (or a forced Interrupt resync): resend this
+                // client a full Snapshot + advance its baseline. `next` is shared
+                // across the loop, so clone per send.
                 self.send_to(i, DaemonEvent::Snapshot(Box::new(next.clone())));
                 self.clients[i].last_snapshot = Some(next.clone());
             } else if !result.deltas.is_empty() {

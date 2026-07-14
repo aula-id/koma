@@ -1,0 +1,14 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.agent-peek-oneshot",
+  "name": "Agent Peek",
+  "version": "0.0.0",
+  "description": "A minimal oneshot extension that contributes nothing and only reads koma's sub-agent state.",
+  "tier": "free",
+  "kind": "oneshot",
+  "runtime": {
+    "exec": "agent-peek-oneshot",
+    "args": []
+  },
+  "requires": ["agents:read"]
+}

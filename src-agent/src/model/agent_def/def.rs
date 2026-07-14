@@ -22,8 +22,13 @@ pub(super) const TASK_TOOLS: [&str; 3] = ["task", "task_output", "task_kill"];
 pub enum AgentSource {
     /// Built-in agent compiled into the binary.
     Builtin,
-    /// Global agent from `~/.simple-coder/agents/`.
+    /// Global agent from `~/.koma/agents/`.
     Global,
+    /// Sub-agent contributed by an installed + enabled extension's
+    /// `contributes.sub_agents` (its on-disk `manifest.json`). Merged as a tier
+    /// BETWEEN global and session, so a session agent of the same name still wins.
+    /// See [`super::registry::merge_extension_sub_agents`].
+    Extension,
     /// Session-specific agent from `<session_dir>/agents/`.
     #[default]
     Session,

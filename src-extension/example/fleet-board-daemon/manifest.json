@@ -1,0 +1,19 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.fleet-board-daemon",
+  "name": "Fleet Board",
+  "version": "0.0.0",
+  "description": "A komatica-style daemon extension: it contributes a kanban panel and drives koma's sub-agents, one per card.",
+  "tier": "paid",
+  "kind": "daemon",
+  "runtime": {
+    "exec": "fleet-board-daemon",
+    "args": []
+  },
+  "contributes": {
+    "panels": [
+      { "id": "board", "title": "Fleet Board", "icon": "kanban" }
+    ]
+  },
+  "requires": ["agents:orchestrate"]
+}

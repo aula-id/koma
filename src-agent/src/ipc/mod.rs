@@ -99,6 +99,22 @@ mod roundtrip_tests {
             // serialize -> deserialize (an empty string would alias the default).
             resolved_model_id: "anthropic/claude-sonnet-4-5".to_string(),
             pending_steer: Vec::new(),
+            bash_jobs: vec![],
+            file_changes: vec![],
+            plan_todos: vec![
+                PlanTodoSnapshot {
+                    content: "wire the PLAN section".to_string(),
+                    status: crate::app::mode::todo::TodoStatus::InProgress,
+                    locked: false,
+                },
+                // Exercise the locked-rail path too so the round-trip proves the
+                // new field survives serialize -> deserialize non-default.
+                PlanTodoSnapshot {
+                    content: "serve plan to user".to_string(),
+                    status: crate::app::mode::todo::TodoStatus::Pending,
+                    locked: true,
+                },
+            ],
         }
     }
 
@@ -134,6 +150,13 @@ mod roundtrip_tests {
             models_cache: None,
             models_cache_endpoint: None,
             models_cache_failed: None,
+            // GUI config catalogue projections default to empty here (their round-trip
+            // is exercised via the config-setter paths, not this global-snapshot sample).
+            providers: Vec::new(),
+            config_models: Vec::new(),
+            session_models: Vec::new(),
+            mcp_servers: Vec::new(),
+            oauth_conn_uuids: Vec::new(),
             // Non-default sub-agent viewer + `$` panel state so the round-trip proves
             // these stage-3 global flags survive serialize -> deserialize.
             agent_viewer: Some(1),

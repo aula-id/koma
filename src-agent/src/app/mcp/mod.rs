@@ -62,8 +62,6 @@
 //!   that runtime).
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -74,9 +72,23 @@ use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioC
 use rmcp::ServiceExt;
 
 use crate::dto::openrouter::{ToolDef, ToolFunctionDef};
-use crate::ipc::frame::FrameReader;
 use crate::ipc::mcp_proto::{McpRequest, McpResponse};
 use crate::model::app_config::{McpServerEntry, McpTransport};
+
+// Sync proxy-wire IO (`proxy_request`) and naming/result-flattening helpers
+// (`namespace_tools`/`sanitize_server_name`/`flatten_result`) live in the
+// sibling `proxy`/`util` modules (file size); re-imported here so every
+// existing bare call site in this file keeps compiling unchanged.
+mod proxy;
+mod util;
+use proxy::proxy_request;
+use util::flatten_result;
+
+// The connect machinery (`connect_all`/`connect_proxy`/`reconnect`/
+// `spawn_connect`, roughly the first half of `impl McpManager`) lives in the
+// sibling `connect` module (file size) as another `impl McpManager` block —
+// no `use` needed here, it's reached through the type, not this module's path.
+mod connect;
 
 /// How long a single server connect (spawn + MCP initialize + first tool list)
 /// may take before it is abandoned. A hung server then contributes zero tools
@@ -87,7 +99,24 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// gives up and returns an error string to the model.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A discovered remote tool, namespaced for advertisement.
+/// Where a [`DiscoveredTool`]'s calls are dispatched. Every tool in the snapshot
+/// is either a plain rmcp MCP server tool (the original design) or an
+/// extension-owned tool from `contributes.tools` (Wave B; see
+/// `crate::app::ext::register`) — the two are advertised identically via
+/// `tool_defs`/`tool_names`, but `execute_blocking` routes them completely
+/// differently (an rmcp `call_tool` vs. `ExtHostManager::invoke`).
+#[derive(Clone)]
+enum ToolSource {
+    /// Dispatch via the owning MCP server's live `Peer`, looked up in
+    /// `Snapshot::conns` by this server uuid.
+    McpServer(String),
+    /// Dispatch via `ExtHostManager::invoke(ext_id, "tool.call", { name, args })`.
+    /// Registered by [`McpManager::register_extension_tools`], never spawns an
+    /// rmcp/stdio connection (no `Snapshot::conns` entry exists for it).
+    Extension(String),
+}
+
+/// A discovered tool, namespaced for advertisement (`mcp__<server-or-ext>__<tool>`).
 #[derive(Clone)]
 struct DiscoveredTool {
     /// Namespaced name advertised to the model: `mcp__<server>__<tool>`.
@@ -96,9 +125,9 @@ struct DiscoveredTool {
     description: String,
     /// The tool's raw JSON-Schema parameters object (verbatim from the server).
     parameters: serde_json::Value,
-    /// uuid of the owning server entry (used to find the live `Peer` to call).
-    server_uuid: String,
-    /// The tool's ORIGINAL (un-namespaced) name, as the server knows it.
+    /// Where this tool's calls are dispatched (an MCP server or an extension).
+    source: ToolSource,
+    /// The tool's ORIGINAL (un-namespaced) name, as the server/extension knows it.
     original: String,
 }
 
@@ -121,19 +150,12 @@ struct ServerConn {
 /// threads.
 #[derive(Default)]
 struct Snapshot {
-    /// Live connections keyed by server uuid. A server that failed to connect has
-    /// no entry here.
     conns: HashMap<String, ServerConn>,
-    /// All discovered tools across all connected servers, in connection order.
     tools: Vec<DiscoveredTool>,
-    /// Monotonic config generation. Bumped by every [`McpManager::reconnect`] under
-    /// the snapshot lock. A background connect task captures the generation BEFORE
-    /// its `connect_one` await and re-checks it AFTER (under the lock, before
-    /// inserting): if a `reconnect` bumped the generation while the connect was in
-    /// flight, the task's result belongs to a torn-down config and is discarded.
-    /// This stops a slow in-flight connect from an OLD generation reappearing in
-    /// the snapshot ~20s after the user deleted that server (and from a reused uuid
-    /// double-inserting).
+    /// Per-server error strings, keyed by server uuid. Set by `spawn_connect` on
+    /// failure; cleared on `reconnect`. Exposed via `server_errors()` so the GUI
+    /// can show why a green-dot server has no tools.
+    errors: HashMap<String, String>,
     generation: u64,
 }
 
@@ -164,6 +186,10 @@ enum McpBackend {
     Proxy {
         sock: PathBuf,
         cache: Mutex<(Vec<ToolDef>, Vec<String>)>,
+        /// Last-known per-server error strings from the Status endpoint, cached
+        /// alongside the tool counts in `status_cache`. Populated by the
+        /// `server_status_cached` background refresh.
+        proxy_errors: Mutex<std::collections::HashMap<String, String>>,
     },
 }
 
@@ -202,293 +228,17 @@ pub struct McpManager {
     /// and the first [`Self::advertise_cached`] call kicks a refresh. Local backends
     /// ignore this (they serve live).
     advertise_cache_at: Mutex<Option<std::time::Instant>>,
+    /// The extension host manager, set by [`Self::register_extension_tools`] so
+    /// [`Self::execute_blocking`] can route an `Extension`-sourced tool's call
+    /// through `ExtHostManager::invoke`. `None` until the first extension tool is
+    /// registered (or ever, on a build with no extensions installed) — there is
+    /// exactly one `ExtHostManager` per process, so the last-registered clone wins
+    /// (they are always the same `Arc`). Only meaningful on the `Local` backend;
+    /// see [`Self::register_extension_tools`]'s docs for why `Proxy` is a no-op.
+    ext_manager: Mutex<Option<Arc<crate::app::ext::ExtHostManager>>>,
 }
 
 impl McpManager {
-    /// Build a LOCAL manager and kick off a background connect for every ENABLED
-    /// server. Returns immediately — connecting never blocks startup.
-    ///
-    /// With no enabled servers this is effectively a no-op constructor: the
-    /// snapshot stays empty, so [`Self::tool_defs`] / [`Self::tool_names`] are empty
-    /// and no task is spawned.
-    pub fn connect_all(
-        handle: &tokio::runtime::Handle,
-        servers: &[McpServerEntry],
-    ) -> Arc<Self> {
-        let manager = Arc::new(Self {
-            backend: McpBackend::Local {
-                handle: handle.clone(),
-                snapshot: Mutex::new(Snapshot::default()),
-            },
-            status_cache: Mutex::new((None, std::collections::HashMap::new())),
-            status_refreshing: std::sync::atomic::AtomicBool::new(false),
-            advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
-            advertise_cache_at: Mutex::new(None),
-        });
-
-        for server in servers {
-            if !server.enabled {
-                continue;
-            }
-            // One independent background connect per enabled server (see
-            // `spawn_connect`): a hang or failure on one never blocks startup or
-            // affects the others.
-            manager.spawn_connect(server.clone());
-        }
-
-        manager
-    }
-
-    /// Build a PROXY manager pointed at the global MCP daemon listening on `sock`
-    /// (`~/.koma/mcp.sock`). Fetches the daemon's advertised `(defs, names)` up front
-    /// via [`McpRequest::List`] and seeds the cache so the hot advertise accessors
-    /// answer without a round-trip.
-    ///
-    /// Returns `Err` if the daemon can't be reached (or answers something other than
-    /// [`McpResponse::Tools`]); the caller (`run_daemon`) uses that to FALL BACK to a
-    /// `Local` manager, so a missing/broken daemon is never worse than today.
-    ///
-    /// A `handle` is accepted for signature symmetry with [`Self::connect_all`] (and
-    /// so a future async-proxy variant can spawn on it); the current proxy is fully
-    /// synchronous connect-per-call, so it is not stored.
-    pub fn connect_proxy(
-        _handle: &tokio::runtime::Handle,
-        sock: PathBuf,
-    ) -> anyhow::Result<Arc<Self>> {
-        // Prime the advertise cache from the daemon. A connect/list failure here is
-        // the fallback trigger — surface it so the caller drops to a Local manager.
-        let (defs, names) = match proxy_request(&sock, &McpRequest::List)? {
-            McpResponse::Tools { defs, names } => (defs, names),
-            other => {
-                return Err(anyhow::anyhow!(
-                    "global MCP daemon answered List with an unexpected response: {other:?}"
-                ))
-            }
-        };
-
-        Ok(Arc::new(Self {
-            backend: McpBackend::Proxy {
-                sock,
-                cache: Mutex::new((defs, names)),
-            },
-            status_cache: Mutex::new((None, std::collections::HashMap::new())),
-            status_refreshing: std::sync::atomic::AtomicBool::new(false),
-            advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
-            advertise_cache_at: Mutex::new(None),
-        }))
-    }
-
-    /// Apply a NEW server set live: tear down the current connections (so their
-    /// child processes terminate) and reconnect from `servers`, all in the
-    /// background. Returns immediately — the caller (a `/mcp` save/delete handler)
-    /// is never blocked on teardown or reconnect.
-    ///
-    /// With no enabled servers this just clears the snapshot and spawns nothing, so
-    /// "remove the last server" cleanly drops to zero tools.
-    ///
-    /// ## Concurrency
-    ///
-    /// The snapshot mutex is held ONLY to swap out the old `conns`/`tools` (a quick
-    /// `std::mem::take`), then released before any `.await`: the old connections are
-    /// torn down on a spawned task, and each reconnect runs on its own spawned task
-    /// (via [`Self::spawn_connect`]). The lock is never held across an `.await` or
-    /// across a spawn.
-    pub fn reconnect(self: &Arc<Self>, servers: &[McpServerEntry]) {
-        // PROXY: the global daemon owns the real connections, so forward the new
-        // server set to IT and then refresh our local advertise cache from a fresh
-        // List. Best-effort: on any daemon error the cache is left as-is (stale but
-        // usable) — a failed live-reconnect is never worse than the prior state.
-        let (handle, snapshot) = match &self.backend {
-            McpBackend::Local { handle, snapshot } => (handle, snapshot),
-            McpBackend::Proxy { sock, cache } => {
-                match proxy_request(sock, &McpRequest::Reconnect { servers: servers.to_vec() }) {
-                    Ok(McpResponse::Ack) => {}
-                    Ok(other) => eprintln!(
-                        "mcp proxy: reconnect got an unexpected response ({other:?}); \
-                         cache left unchanged"
-                    ),
-                    Err(e) => eprintln!("mcp proxy: reconnect to global daemon failed: {e:#}"),
-                }
-                // Refresh the advertise cache so the panel/advertise reflect the new
-                // set once the daemon has applied it. A List failure leaves the old
-                // cache in place.
-                match proxy_request(sock, &McpRequest::List) {
-                    Ok(McpResponse::Tools { defs, names }) => {
-                        *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("mcp proxy: post-reconnect List failed: {e:#}"),
-                }
-                return;
-            }
-        };
-
-        // Take the old connections out under the lock, then drop the guard BEFORE
-        // doing any async teardown. `tools` is cleared here so stale tools stop
-        // being advertised immediately; the new tools repopulate as servers
-        // reconnect. (Holding the lock across the teardown await would violate the
-        // no-lock-across-await rule and could deadlock the sync readers.)
-        let old_conns: Vec<ServerConn> = {
-            let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
-            snap.tools.clear();
-            // Bump the generation under the SAME lock that clears conns+tools, so any
-            // connect task spawned for the OLD config (which captured the previous
-            // generation before its await) sees a mismatch when it re-locks to insert
-            // and discards its now-stale result. Wrapping-add is just defensive; this
-            // counter realistically never overflows.
-            snap.generation = snap.generation.wrapping_add(1);
-            std::mem::take(&mut snap.conns).into_values().collect()
-        };
-
-        // Tear down the old connections off-thread: `RunningService::cancel` is async
-        // (it cancels the service and awaits cleanup, terminating the stdio child).
-        // Best-effort — a failed cancel still drops the service, whose drop guard
-        // aborts it. We do NOT block the caller on this.
-        if !old_conns.is_empty() {
-            handle.spawn(async move {
-                for conn in old_conns {
-                    if let Err(e) = conn.service.cancel().await {
-                        eprintln!("mcp: teardown of a connection failed: {e}");
-                    }
-                }
-            });
-        }
-
-        // Reconnect every enabled server, each on its own background task.
-        for server in servers {
-            if !server.enabled {
-                continue;
-            }
-            self.spawn_connect(server.clone());
-        }
-    }
-
-    /// Spawn ONE background connect task for `server` and write its result into the
-    /// shared snapshot. The single place the connect-and-store routine lives, shared
-    /// by [`Self::connect_all`] (startup) and [`Self::reconnect`] (live config save).
-    ///
-    /// ## Concurrency
-    ///
-    /// The snapshot lock is acquired only AFTER `connect_one` has awaited to
-    /// completion — NEVER across the `.await` — and dropped before the task ends. A
-    /// failed connect logs and contributes zero tools.
-    ///
-    /// ## Generation guard (stale-result discard)
-    ///
-    /// The task captures the snapshot's `generation` under a BRIEF lock at the very
-    /// start (before the connect await), then re-checks it under the lock AFTER the
-    /// await, before inserting. If a [`Self::reconnect`] bumped the generation while
-    /// this connect was in flight (e.g. the user deleted the server, then it
-    /// finished connecting ~20s later), the captured and current generations differ:
-    /// the freshly built [`ServerConn`] is discarded (its drop guard cancels the
-    /// service + terminates any stdio child) and NOTHING is inserted. Both lock
-    /// regions are synchronous — the generation read and the check+insert each
-    /// acquire, use, and drop the guard with no `.await` held across it.
-    ///
-    /// ## Duplicate-prefix guard (sanitized-name collision)
-    ///
-    /// Two distinct server names can sanitize to the SAME `<server>` segment (e.g.
-    /// "My Server" and "my-server" both -> "my_server"), producing colliding
-    /// `mcp__my_server__*` prefixes. `execute_blocking` resolves a call by the FIRST
-    /// matching namespaced name, so the second server's same-named tools would be
-    /// silently mis-dispatched to the first. When the post-await insert detects that
-    /// the snapshot already holds tools with this server's sanitized prefix from a
-    /// DIFFERENT server uuid, it logs a warning and SKIPS this server entirely
-    /// (tools dropped, conn discarded) rather than advertise tools it can't dispatch
-    /// correctly. This check is synchronous, under the same insert lock.
-    fn spawn_connect(self: &Arc<Self>, server: McpServerEntry) {
-        // spawn_connect is only ever reached on a Local backend (connect_all /
-        // reconnect). Extract the runtime handle to spawn on; a Proxy manager has no
-        // connections to spawn, so it is a no-op guard.
-        let handle = match &self.backend {
-            McpBackend::Local { handle, .. } => handle.clone(),
-            McpBackend::Proxy { .. } => return,
-        };
-        let mgr = Arc::clone(self);
-        handle.spawn(async move {
-            // The snapshot lives on the Local backend; bail if this manager is a Proxy
-            // (unreachable — spawn_connect returned early above — but keeps the match
-            // total without an unwrap).
-            let snapshot = match &mgr.backend {
-                McpBackend::Local { snapshot, .. } => snapshot,
-                McpBackend::Proxy { .. } => return,
-            };
-            // Capture the CURRENT generation under a brief lock BEFORE the connect
-            // await. If a reconnect bumps it while we're connecting, the post-await
-            // re-check below will see the mismatch and discard this result.
-            let gen_at_start = {
-                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
-                snap.generation
-            };
-
-            match connect_one(&server).await {
-                Ok((service, tools)) => {
-                    let peer = service.peer().clone();
-                    let discovered = namespace_tools(&server, &tools);
-                    // The sanitized `<server>` segment this connection's tools live
-                    // under, with the full `mcp__<prefix>__` boundary so a longer
-                    // name (e.g. "my_server_2") can't false-match "my_server".
-                    let my_full_prefix = format!("mcp__{}__", sanitize_server_name(&server.name));
-
-                    // Hold the service in an Option so the lock region can MOVE it
-                    // into the snapshot on the keep path; whatever is left here after
-                    // the block (Some on a discard path, None on keep) is torn down
-                    // outside the lock — keeping `service` referenceable after a
-                    // CONDITIONAL move without upsetting the borrow checker.
-                    let mut to_discard: Option<RunningService<RoleClient, ()>> = Some(service);
-                    {
-                        // Lock taken only now (post-await), released at end of this
-                        // block — never held across an await.
-                        let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
-
-                        if snap.generation != gen_at_start {
-                            // A reconnect happened mid-connect: this result belongs to
-                            // a torn-down config. Leave `to_discard` = Some(service) so
-                            // it's cancelled below; insert nothing.
-                        } else if snap.tools.iter().any(|t| {
-                            t.namespaced.starts_with(&my_full_prefix)
-                                && t.server_uuid != server.uuid
-                        }) {
-                            // Another server already occupies this sanitized prefix.
-                            // Advertising these tools would let execute_blocking
-                            // mis-route by name, so skip this server entirely (tools
-                            // dropped, conn cancelled below).
-                            eprintln!(
-                                "mcp: server '{}' sanitizes to prefix '{}' already used by \
-                                 another configured server; skipping its tools to avoid \
-                                 mis-dispatch (rename one of the servers to fix)",
-                                server.name, my_full_prefix
-                            );
-                        } else {
-                            // Keep it: move the service into the snapshot and record
-                            // its tools. `take()` leaves `to_discard = None` so nothing
-                            // is torn down afterwards.
-                            let service = to_discard.take().expect("service present");
-                            snap.conns
-                                .insert(server.uuid.clone(), ServerConn { service, peer });
-                            snap.tools.extend(discovered);
-                        }
-                    }
-
-                    // Tear down a discarded connection OUTSIDE the lock (no guard held
-                    // across this await). Best-effort: a failed cancel still drops the
-                    // service, whose drop guard aborts it + terminates any stdio child.
-                    if let Some(service) = to_discard {
-                        if let Err(e) = service.cancel().await {
-                            eprintln!("mcp: teardown of a discarded connection failed: {e}");
-                        }
-                    }
-                }
-                Err(e) => {
-                    // A failed server = logged status + zero tools. Never a panic or
-                    // a hang; the rest of the app proceeds as if this server were
-                    // absent.
-                    eprintln!("mcp: server '{}' failed to connect: {e}", server.name);
-                }
-            }
-        });
-    }
-
     /// Wire [`ToolDef`]s for every discovered tool, ready to extend the request
     /// `tools` array. Empty when nothing has connected yet (or no servers are
     /// configured), so the advertise path pays nothing.
@@ -564,7 +314,7 @@ impl McpManager {
         // Empty cache: cold-start window — fetch live INLINE so the tools are on the
         // wire this turn instead of a turn later.
         if empty {
-            if let McpBackend::Proxy { sock, cache } = &self.backend {
+            if let McpBackend::Proxy { sock, cache, .. } = &self.backend {
                 match proxy_request(sock, &McpRequest::List) {
                     Ok(McpResponse::Tools { defs, names }) => {
                         *cache.lock().unwrap_or_else(|p| p.into_inner()) =
@@ -576,7 +326,10 @@ impl McpManager {
                         return (defs, names);
                     }
                     Ok(_) => {}
-                    Err(e) => eprintln!("mcp proxy: inline advertise List failed: {e:#}"),
+                    Err(e) => crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: inline advertise List failed: {e:#}"),
+                    ),
                 }
             }
             // Daemon not ready yet (or a transient error) — return the empty cache;
@@ -599,13 +352,16 @@ impl McpManager {
         {
             let mgr = Arc::clone(self);
             std::thread::spawn(move || {
-                if let McpBackend::Proxy { sock, cache } = &mgr.backend {
+                if let McpBackend::Proxy { sock, cache, .. } = &mgr.backend {
                     match proxy_request(sock, &McpRequest::List) {
                         Ok(McpResponse::Tools { defs, names }) => {
                             *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
                         }
                         Ok(_) => {}
-                        Err(e) => eprintln!("mcp proxy: advertise refresh List failed: {e:#}"),
+                        Err(e) => crate::model::store::append_global_error_log(
+                            "mcp",
+                            &format!("proxy: advertise refresh List failed: {e:#}"),
+                        ),
                     }
                 }
                 *mgr.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) =
@@ -634,8 +390,13 @@ impl McpManager {
                 // connected; then tally the discovered tools by their owning server.
                 let mut counts: std::collections::HashMap<String, usize> =
                     snap.conns.keys().map(|uuid| (uuid.clone(), 0)).collect();
+                // Only tally McpServer-sourced tools here — extension tools have
+                // no `conns` entry (no rmcp connection at all) and are not part of
+                // this per-MCP-server status map.
                 for t in &snap.tools {
-                    *counts.entry(t.server_uuid.clone()).or_insert(0) += 1;
+                    if let ToolSource::McpServer(uuid) = &t.source {
+                        *counts.entry(uuid.clone()).or_insert(0) += 1;
+                    }
                 }
                 counts
             }
@@ -643,7 +404,9 @@ impl McpManager {
             // any connect/decode failure (or an unexpected reply) reads as an EMPTY map
             // so the `/mcp` panel degrades to "no live status" rather than erroring.
             McpBackend::Proxy { sock, .. } => match proxy_request(sock, &McpRequest::Status) {
-                Ok(McpResponse::Status(map)) => map,
+                Ok(McpResponse::Status { servers, .. }) => {
+                    servers.into_iter().map(|(k, v)| (k, v.tool_count)).collect()
+                }
                 _ => std::collections::HashMap::new(),
             },
         }
@@ -693,10 +456,33 @@ impl McpManager {
                 }
                 // Proxy: blocking daemon round-trip, so refresh off-thread and serve
                 // the stale value now; the next call picks up the fresh one.
+                // Also refreshes the proxy_errors cache from the structured Status reply.
                 McpBackend::Proxy { .. } => {
                     let mgr = Arc::clone(self);
                     std::thread::spawn(move || {
-                        let fresh = mgr.server_status();
+                        let (fresh, errors) = match &mgr.backend {
+                            McpBackend::Proxy { sock, proxy_errors, .. } => {
+                                match proxy_request(sock, &McpRequest::Status) {
+                                    Ok(McpResponse::Status { servers, .. }) => {
+                                        let counts: std::collections::HashMap<String, usize> = servers
+                                            .iter()
+                                            .map(|(k, v)| (k.clone(), v.tool_count))
+                                            .collect();
+                                        let errs: std::collections::HashMap<String, String> = servers
+                                            .into_iter()
+                                            .filter_map(|(k, v)| v.error.map(|e| (k, e)))
+                                            .collect();
+                                        if let Ok(mut ec) = proxy_errors.lock() {
+                                            *ec = errs;
+                                        }
+                                        (counts, ())
+                                    }
+                                    _ => (std::collections::HashMap::new(), ()),
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                        let _ = errors; // drop the () sentinel
                         *mgr.status_cache.lock().unwrap_or_else(|p| p.into_inner()) =
                             (Some(std::time::Instant::now()), fresh);
                         mgr.status_refreshing.store(false, Ordering::Release);
@@ -710,6 +496,21 @@ impl McpManager {
             .unwrap_or_else(|p| p.into_inner())
             .1
             .clone()
+    }
+
+    /// Per-server error strings, keyed by server uuid. Only populated for servers
+    /// whose `spawn_connect` task failed. Read by the GUI to show a human-readable
+    /// failure reason next to a connected-but-failing server.
+    pub fn server_errors(&self) -> std::collections::HashMap<String, String> {
+        match &self.backend {
+            McpBackend::Local { snapshot, .. } => {
+                let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                snap.errors.clone()
+            }
+            McpBackend::Proxy { proxy_errors, .. } => {
+                proxy_errors.lock().unwrap_or_else(|p| p.into_inner()).clone()
+            }
+        }
     }
 
     /// Execute a namespaced MCP tool call and return its flattened text result.
@@ -763,20 +564,59 @@ impl McpManager {
             }
         };
 
-        // --- Local dispatch (unchanged) ---
-        // Resolve the owning server + original tool name, and clone the Peer so the
-        // async closure owns it (and we drop the snapshot lock before spawning).
-        let (peer, original) = {
+        // --- Local dispatch ---
+        // Resolve the tool's source first. An `Extension`-sourced tool never had
+        // an rmcp connection to begin with, so it short-circuits straight to
+        // `ExtHostManager::invoke` (itself a synchronous, already-blocking call —
+        // no sync->async bridge needed) and returns before the rmcp path below.
+        enum Dispatch {
+            Ext { ext_id: String, original: String },
+            Server(Peer<RoleClient>, String),
+        }
+        let dispatch = {
             let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
             let tool = snap
                 .tools
                 .iter()
                 .find(|t| t.namespaced == namespaced_name)
                 .ok_or_else(|| format!("unknown MCP tool '{namespaced_name}'"))?;
-            let conn = snap.conns.get(&tool.server_uuid).ok_or_else(|| {
-                format!("MCP server for tool '{namespaced_name}' is not connected")
-            })?;
-            (conn.peer.clone(), tool.original.clone())
+            match &tool.source {
+                ToolSource::Extension(ext_id) => Dispatch::Ext {
+                    ext_id: ext_id.clone(),
+                    original: tool.original.clone(),
+                },
+                ToolSource::McpServer(server_uuid) => {
+                    let conn = snap.conns.get(server_uuid).ok_or_else(|| {
+                        format!("MCP server for tool '{namespaced_name}' is not connected")
+                    })?;
+                    Dispatch::Server(conn.peer.clone(), tool.original.clone())
+                }
+            }
+        };
+
+        let (peer, original) = match dispatch {
+            Dispatch::Ext { ext_id, original } => {
+                let ext_manager = self
+                    .ext_manager
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                let Some(ext_manager) = ext_manager else {
+                    return Err(format!(
+                        "extension tool '{namespaced_name}': extension host not available"
+                    ));
+                };
+                let params = serde_json::json!({ "name": original, "args": args });
+                return match ext_manager.invoke(&ext_id, "tool.call", params) {
+                    Ok(v) => Ok(match v.get("output") {
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        Some(other) => other.to_string(),
+                        None => v.to_string(),
+                    }),
+                    Err(e) => Err(format!("extension tool '{namespaced_name}' failed: {e:#}")),
+                };
+            }
+            Dispatch::Server(peer, original) => (peer, original),
         };
 
         // Convert the JSON arguments into the `JsonObject` (serde_json::Map) rmcp
@@ -818,75 +658,61 @@ impl McpManager {
             )),
         }
     }
-}
 
-/// Send ONE [`McpRequest`] to the global MCP daemon at `sock` and block until its
-/// single [`McpResponse`] frame arrives (or the read times out).
-///
-/// The sync twin of the async accept loop's per-request cycle: a fresh blocking
-/// [`std::os::unix::net::UnixStream`] with [`PROXY_IO_TIMEOUT`] read/write timeouts,
-/// one length-prefixed JSON frame written (the SAME 4-byte-BE-len codec
-/// [`crate::ipc::frame`] defines), then one frame read back and decoded. Connect-
-/// per-call keeps it simple and robust — no long-lived connection state to manage,
-/// no shared mutable stream, and the daemon already parallelises across connections.
-///
-/// Runtime-free (plain std sockets), so it is safe to call from the synchronous tool
-/// dispatch thread whether or not a tokio runtime is in scope. Every failure
-/// (connect refused, write/read IO error, timeout, decode error) is surfaced as an
-/// `Err` the caller maps to a model-facing tool error or (for `connect_proxy`) a
-/// fallback trigger.
-fn proxy_request(sock: &std::path::Path, req: &McpRequest) -> anyhow::Result<McpResponse> {
-    use anyhow::Context;
-
-    // Connect (blocking). A refused/absent socket means the daemon isn't accepting.
-    let mut stream = StdUnixStream::connect(sock)
-        .with_context(|| format!("connect to global MCP daemon socket {}", sock.display()))?;
-    // Bound both directions so a wedged daemon can never hang the tool thread. The
-    // read timeout is the primary guard (a slow tool); the write side is naturally
-    // tiny but is bounded for symmetry.
-    stream
-        .set_read_timeout(Some(PROXY_IO_TIMEOUT))
-        .context("set MCP proxy read timeout")?;
-    stream
-        .set_write_timeout(Some(PROXY_IO_TIMEOUT))
-        .context("set MCP proxy write timeout")?;
-
-    proxy_send(&mut stream, req)?;
-    proxy_recv(&mut stream)
-}
-
-/// Write one [`McpRequest`] to `stream` as a length-prefixed JSON frame (4-byte
-/// big-endian payload length + payload — the shared [`crate::ipc::frame`] codec).
-/// The sync `McpRequest` twin of [`crate::app::runtime`]'s `send_request`.
-fn proxy_send(stream: &mut StdUnixStream, req: &McpRequest) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let payload = serde_json::to_vec(req).context("serialise McpRequest")?;
-    let prefix = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&prefix).context("write MCP frame prefix")?;
-    stream.write_all(&payload).context("write MCP frame payload")?;
-    stream.flush().context("flush MCP frame")?;
-    Ok(())
-}
-
-/// Block until ONE complete [`McpResponse`] frame arrives on `stream`, reassembling
-/// via the shared [`FrameReader`] (so a frame split across reads — or coalesced with
-/// a following one — is handled identically to the async path). The stream's read
-/// timeout bounds the wait. The sync `McpResponse` twin of [`crate::app::runtime`]'s
-/// `recv_frame`.
-fn proxy_recv(stream: &mut StdUnixStream) -> anyhow::Result<McpResponse> {
-    use anyhow::{anyhow, Context};
-    let mut reader = FrameReader::new();
-    loop {
-        // A previous read may have buffered a whole frame already.
-        if let Some(bytes) = reader.next_frame().context("MCP frame reassembly")? {
-            return serde_json::from_slice(&bytes).context("decode McpResponse");
+    /// Register an extension's `contributes.tools` as extension-dispatched tools,
+    /// namespaced `mcp__<ext>__<tool>` (reusing [`util::sanitize_server_name`] on
+    /// the extension id), advertised alongside regular MCP server tools via
+    /// [`Self::tool_defs`]/[`Self::tool_names`]/[`Self::advertise_cached`]. A call
+    /// to one of these routes through [`Self::execute_blocking`] to
+    /// `ext_manager.invoke(ext_id, "tool.call", ...)` instead of an rmcp
+    /// connection — no stdio/rmcp connection is ever spawned for these.
+    ///
+    /// Idempotent: re-registering the same `ext_id` (e.g. a disable→re-enable
+    /// cycle) first drops its prior entries, so nothing duplicates. Called by
+    /// [`crate::app::ext::register::register_contributions`] from the runtime
+    /// layer (boot-load today; a future install/enable command handler too) —
+    /// never from inside `ExtHostManager` itself, which has no visibility into
+    /// this manager.
+    ///
+    /// Local-backend only: a session daemon proxying to the global MCP daemon
+    /// (`Proxy` backend) has no wire-protocol support yet for routing a call
+    /// through to an extension living in a DIFFERENT process's `ExtHostManager` —
+    /// that is a later wave. On `Proxy` this is a silent no-op (matches
+    /// `spawn_connect`'s own Local-only guard).
+    pub fn register_extension_tools(
+        &self,
+        ext_id: &str,
+        tools: &[koma_extension::protocol::ToolDef],
+        ext_manager: Arc<crate::app::ext::ExtHostManager>,
+    ) {
+        let snapshot = match &self.backend {
+            McpBackend::Local { snapshot, .. } => snapshot,
+            McpBackend::Proxy { .. } => return,
+        };
+        let discovered = util::namespace_ext_tools(ext_id, tools);
+        {
+            let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+            snap.tools
+                .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
+            snap.tools.extend(discovered);
+            snap.generation = snap.generation.wrapping_add(1);
         }
-        let mut chunk = [0u8; 8192];
-        let n = stream.read(&mut chunk).context("read from global MCP daemon socket")?;
-        if n == 0 {
-            return Err(anyhow!("global MCP daemon closed the connection mid-frame"));
-        }
-        reader.push(&chunk[..n]);
+        *self.ext_manager.lock().unwrap_or_else(|p| p.into_inner()) = Some(ext_manager);
+    }
+
+    /// Remove every tool previously registered for `ext_id` via
+    /// [`Self::register_extension_tools`] (uninstall or disable). Called by
+    /// [`crate::app::ext::register::purge_contributions`]. A no-op on the `Proxy`
+    /// backend, or if `ext_id` had nothing registered.
+    pub fn purge_extension_tools(&self, ext_id: &str) {
+        let snapshot = match &self.backend {
+            McpBackend::Local { snapshot, .. } => snapshot,
+            McpBackend::Proxy { .. } => return,
+        };
+        let mut snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
+        snap.tools
+            .retain(|t| !matches!(&t.source, ToolSource::Extension(id) if id == ext_id));
+        snap.generation = snap.generation.wrapping_add(1);
     }
 }
 
@@ -946,94 +772,5 @@ async fn connect_one(
             "connect timed out after {}s",
             CONNECT_TIMEOUT.as_secs()
         )),
-    }
-}
-
-/// Turn a server's raw rmcp tools into namespaced [`DiscoveredTool`]s.
-fn namespace_tools(server: &McpServerEntry, tools: &[RmcpTool]) -> Vec<DiscoveredTool> {
-    let prefix = sanitize_server_name(&server.name);
-    tools
-        .iter()
-        .map(|t| {
-            let original = t.name.to_string();
-            DiscoveredTool {
-                namespaced: format!("mcp__{prefix}__{original}"),
-                description: t
-                    .description
-                    .as_ref()
-                    .map(|d| d.to_string())
-                    .unwrap_or_default(),
-                // `input_schema` is an `Arc<JsonObject>` (serde_json::Map); wrap it
-                // back into a `Value::Object` so it rides the wire as the tool's
-                // raw JSON-Schema `parameters`, exactly like a built-in tool.
-                parameters: serde_json::Value::Object((*t.input_schema).clone()),
-                server_uuid: server.uuid.clone(),
-                original,
-            }
-        })
-        .collect()
-}
-
-/// Sanitise a server name into the `<server>` segment of a namespaced tool name:
-/// lowercase, and collapse every run of non-`[a-z0-9_]` characters to a single
-/// `_`, trimming leading/trailing `_`. An empty/garbage name degrades to
-/// `"server"` so the namespaced tool name is always well-formed.
-fn sanitize_server_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut prev_underscore = false;
-    for ch in name.chars() {
-        let c = ch.to_ascii_lowercase();
-        if c.is_ascii_alphanumeric() || c == '_' {
-            out.push(c);
-            prev_underscore = c == '_';
-        } else if !prev_underscore {
-            out.push('_');
-            prev_underscore = true;
-        }
-    }
-    let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
-        "server".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Flatten an [`rmcp::model::CallToolResult`] into a single string for the model.
-///
-/// Text content blocks are concatenated (newline-separated); non-text blocks are
-/// noted by kind so the model knows something non-textual came back. When the
-/// server flagged the result as an error, the flattened text is returned as
-/// `Err(...)` so the dispatcher renders it as a tool error.
-fn flatten_result(res: rmcp::model::CallToolResult) -> Result<String, String> {
-    use rmcp::model::RawContent;
-
-    let mut parts: Vec<String> = Vec::new();
-    for c in &res.content {
-        // `Content` derefs to `RawContent`; match the underlying variant.
-        match &c.raw {
-            RawContent::Text(t) => parts.push(t.text.clone()),
-            RawContent::Image(_) => parts.push("[image content]".to_string()),
-            RawContent::Audio(_) => parts.push("[audio content]".to_string()),
-            RawContent::Resource(_) => parts.push("[embedded resource]".to_string()),
-            RawContent::ResourceLink(_) => parts.push("[resource link]".to_string()),
-        }
-    }
-    // Fall back to structured content if there were no content blocks at all.
-    if parts.is_empty() {
-        if let Some(sc) = &res.structured_content {
-            parts.push(sc.to_string());
-        }
-    }
-    let text = parts.join("\n");
-
-    if res.is_error == Some(true) {
-        Err(if text.is_empty() {
-            "tool reported an error".to_string()
-        } else {
-            text
-        })
-    } else {
-        Ok(text)
     }
 }

@@ -332,7 +332,7 @@ pub async fn run_agent_loop(
             //    on the cleaned report; commit the RAW text into history so the
             //    transcript still shows what the model literally said.
             if nudges < 2 && is_stall(&report) {
-                convo.push_assistant(assistant_text, reasoning.clone());
+                convo.push_assistant(assistant_text, reasoning.clone(), false);
                 convo.push_user(
                     "Continue now: call the tools you need to finish the task, \
                      then write your COMPLETE final report. \
@@ -346,7 +346,7 @@ pub async fn run_agent_loop(
                 continue;
             }
             // Genuine final answer (or nudge budget exhausted).
-            convo.push_assistant(assistant_text, None);
+            convo.push_assistant(assistant_text, None, false);
             // Final turn committed: snapshot the full history before finishing.
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
             // Deliver the CLEANED report (tags stripped, with empty-fallback) so a

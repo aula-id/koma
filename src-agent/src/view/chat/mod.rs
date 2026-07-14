@@ -5,7 +5,7 @@
 //! buffer, the input, and the status line into a structured layout:
 //!
 //! ```text
-//! simple-coder · {name} [{model}]          ← header (1 line)
+//! koma · {name} [{model}]          ← header (1 line)
 //! ─────────────────────────────────────────  ← dim bottom border
 //! [messages / transcript area]             ← scrollable, fills space,
 //!                                             auto-follows the bottom
@@ -44,13 +44,19 @@
 //! bordered popup palette floats above the input row listing the matching
 //! commands filtered in real time. Up/Down navigate the list; Tab completes.
 
+mod blocks;
 mod header;
-mod helpers;
+// `helpers` is otherwise private to the chat view, but the GUI host reuses ONE
+// function from it (`split_thinking`, itself `pub(crate)`) to peel the legacy
+// wanderer thinking lead-in in its push projection — keep the module reachable
+// so that single path resolves. Every other helper stays `pub(super)`.
+pub(crate) mod helpers;
 mod input;
 mod overlays;
 mod status;
 mod subagents;
-mod transcript;
+mod tool_format;
+pub(crate) mod transcript;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},

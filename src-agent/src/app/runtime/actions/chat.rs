@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::app::state::{AgentMode, AppState};
+use crate::app::state::AppState;
 use crate::dto::chat::Role;
 use crate::model::msglog;
 use crate::service::openrouter::OpenRouterClient;
@@ -87,7 +87,7 @@ pub(super) fn handle_submit(
         // Resolve the SAME route the send will use so the capability guard checks the
         // model that actually receives the image.
         let main = state.rest.fg().session.as_ref().and_then(|sess| {
-            crate::app::resolve::resolve_role(
+            crate::app::resolve::resolve_role_dispatch(
                 &state.rest.config,
                 &sess.settings,
                 crate::model::app_config::ModelRole::Main,
@@ -274,17 +274,29 @@ pub(super) fn handle_interrupt(state: &mut AppState) -> Result<()> {
     // sub-agents, commit the partial buffer to the foreground session) lives in
     // `SessionRuntime::interrupt()` so the session hub's Ctrl+X can reuse it on
     // ANY session; here it runs on the foreground.
-    if state.rest.fg().waiting {
-        let fg = state.rest.fg_mut();
-        fg.interrupt();
-        // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
-        // in-flight compaction animation / deferred apply so an interrupt mid-compact
-        // doesn't leave the spinner stuck forever.
-        fg.compact_anim_start = None;
-        fg.compact_apply_at = None;
-        fg.compact_pending = None;
+    //
+    // Unconditional cut: the user has the right to interrupt at any time, busy or
+    // not — like the TUI's Esc (which is pre-gated CLIENT-side on
+    // `waiting || compacting` in `controller/input/chat.rs`, so this daemon-side path
+    // being unconditional doesn't change TUI behavior; it matters for the GUI stop
+    // button and any other caller that reaches this handler without that gate).
+    // Calling `interrupt()` on an already-idle session is a harmless no-op: it aborts
+    // a `None` current_task, clears already-empty queues, and `take_stream()` yields
+    // `None` so nothing is committed (see `SessionRuntime::interrupt`).
+    let was_busy = state.rest.fg().is_ui_busy();
+    let fg = state.rest.fg_mut();
+    fg.interrupt();
+    // PER-SESSION compaction cleanup (C4): tear down THIS foreground session's
+    // in-flight compaction animation / deferred apply so an interrupt mid-compact
+    // doesn't leave the spinner stuck forever.
+    fg.compact_anim_start = None;
+    fg.compact_apply_at = None;
+    fg.compact_pending = None;
+    // Only report "interrupted" if there was actually something to cut — an idle
+    // session's no-op stop gets no misleading status change.
+    if was_busy {
+        state.rest.fg_mut().status = "interrupted".into();
     }
-    state.rest.fg_mut().status = "interrupted".into();
     Ok(())
 }
 
@@ -407,144 +419,6 @@ pub(super) fn handle_approve_tool(
     Ok(())
 }
 
-/// Handle `Action::BackgroundSubagent`: flip a running blocking sub-agent to
-/// detached mode without killing it.
-///
-/// - Sets `sa.detached = true` and clears `sa.tool_call_id`.
-/// - Removes the call id from `pending_subagent_calls`.
-/// - Pushes an immediate tool result for that call id so the parked main turn
-///   can resume (the park gate in `deferred.rs` fires next tick on an empty
-///   `pending_subagent_calls`).
-/// - Does NOT manually resume the turn — the existing gate in
-///   `event_loop/sessions/deferred.rs` (`pending_subagent_calls.is_empty()`)
-///   detects the cleared list next tick and calls `resume_after_subagents`.
-/// - The agent keeps running; on completion `drain_subagents` fires the standard
-///   detached completion nudge (keyed off `sa.detached`).
-pub(super) fn handle_background_subagent(id: usize, state: &mut AppState) -> Result<()> {
-    let fg = state.rest.foreground;
-
-    // Locate the sub-agent by stable session id.
-    let sa_idx = state.rest.sessions[fg]
-        .subagents
-        .iter()
-        .position(|sa| sa.id == id);
-    let Some(sa_idx) = sa_idx else {
-        // Stale id (agent was pruned / id wrapped) — no-op.
-        return Ok(());
-    };
-
-    // Guard: must be Running and not already detached, and must have a tool_call_id.
-    {
-        let sa = &state.rest.sessions[fg].subagents[sa_idx];
-        if !matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
-            || sa.detached
-            || sa.tool_call_id.is_none()
-        {
-            return Ok(());
-        }
-    }
-
-    // Take the call id before we mutate the sub-agent.
-    let call_id = state.rest.sessions[fg].subagents[sa_idx]
-        .tool_call_id
-        .take()
-        .unwrap(); // Safe: checked Some above.
-
-    // Flip to detached so the completion path fires a nudge instead of a tool result.
-    state.rest.sessions[fg].subagents[sa_idx].detached = true;
-
-    // Remove the call id from the park set and push an immediate tool result so the
-    // parked round's tool_call has a matching result and the round can continue.
-    state.rest.sessions[fg]
-        .pending_subagent_calls
-        .retain(|c| c != &call_id);
-
-    let agent_name = state.rest.sessions[fg].subagents[sa_idx].agent_name.clone();
-    let result_text = format!(
-        "backgrounded sub-agent #{id} ({agent_name}) — now running in the background. Its full \
-         report is delivered to you automatically when it finishes — no need to poll. Don't \
-         re-announce it to the user; just continue the conversation naturally, and you'll be \
-         woken with the result when it lands."
-    );
-    state.rest.sessions[fg]
-        .tool_results
-        .push((call_id, result_text));
-
-    // Status toast for user feedback.
-    state.rest.sessions[fg].status = format!("↳ backgrounded sub-agent #{id}");
-
-    Ok(())
-}
-
-/// Handle `Action::BackgroundAllSubagents`: flip EVERY running blocking sub-agent
-/// in the foreground session to detached mode at once.
-///
-/// Mirrors `handle_background_subagent` for each eligible agent, then sets a
-/// single summary status toast.  Eligibility: `Running` status, not already
-/// detached, has a `tool_call_id` (i.e. is blocking a main-turn park gate).
-///
-/// Emptying all entries from `pending_subagent_calls` lets the existing park gate
-/// in `event_loop/sessions/deferred.rs` (`pending_subagent_calls.is_empty()`)
-/// fire `resume_after_subagents` automatically on the next tick — no manual
-/// resume needed here.
-pub(super) fn handle_background_all_subagents(state: &mut AppState) -> Result<()> {
-    let fg = state.rest.foreground;
-
-    // Collect eligible indices first (immutable borrow) to avoid borrow conflicts
-    // when we later mutate per-agent fields and push tool results.
-    let eligible_indices: Vec<usize> = state.rest.sessions[fg]
-        .subagents
-        .iter()
-        .enumerate()
-        .filter(|(_, sa)| {
-            matches!(sa.status, crate::app::subagent::SubAgentStatus::Running)
-                && !sa.detached
-                && sa.tool_call_id.is_some()
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    let n = eligible_indices.len();
-    if n == 0 {
-        // Nothing to background — no-op; don't touch status.
-        return Ok(());
-    }
-
-    for sa_idx in eligible_indices {
-        // Take the call id before flipping detached.
-        let call_id = state.rest.sessions[fg].subagents[sa_idx]
-            .tool_call_id
-            .take()
-            .unwrap(); // Safe: filtered Some above.
-
-        let id = state.rest.sessions[fg].subagents[sa_idx].id;
-        let agent_name = state.rest.sessions[fg].subagents[sa_idx].agent_name.clone();
-
-        // Flip to detached so completion fires a nudge instead of a tool result.
-        state.rest.sessions[fg].subagents[sa_idx].detached = true;
-
-        // Remove from the park set + push an immediate tool result.
-        state.rest.sessions[fg]
-            .pending_subagent_calls
-            .retain(|c| c != &call_id);
-
-        let result_text = format!(
-            "backgrounded sub-agent #{id} ({agent_name}) — now running in the background. Its full \
-             report is delivered to you automatically when it finishes — no need to poll. Don't \
-             re-announce it to the user; just continue the conversation naturally, and you'll be \
-             woken with the result when it lands."
-        );
-        state.rest.sessions[fg]
-            .tool_results
-            .push((call_id, result_text));
-    }
-
-    // Single summary status after processing all agents.
-    state.rest.sessions[fg].status = format!("↳ backgrounded {n} sub-agent(s)");
-
-    Ok(())
-}
-
 /// Handle `Action::DenyTool`: answer every pending call with "denied by user",
 /// commit, and stop — do not re-stream.
 pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
@@ -604,241 +478,5 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
     state.rest.fg_mut().awaiting_classify = false;
     state.rest.fg_mut().pending_classify_verdict = None;
     state.rest.fg_mut().status = "denied — stopped".into();
-    Ok(())
-}
-
-/// Answer the paused `plan_ready` call (at `tool_idx`) with `result` and advance
-/// past it. Unlike a risky tool, `plan_ready` is FULLY INTERCEPTED — it is never
-/// re-dispatched through `run_tool`; its result is pushed directly (like a
-/// denial) so the parked round can be resumed by `process_tools`.
-fn answer_plan_ready(state: &mut AppState, result: String) {
-    if let Some(call) = state
-        .rest
-        .fg()
-        .pending_tool_calls
-        .get(state.rest.fg().tool_idx)
-        .cloned()
-    {
-        state.rest.fg_mut().tool_results.push((call.id, result));
-        state.rest.fg_mut().tool_idx += 1;
-    }
-}
-
-/// Leave Plan mode on plan approval, ALWAYS returning to `Auto` (the default
-/// execution mode) regardless of the pre-plan mode — the one exception is an armed
-/// `Yolo` stashed on entry, which is preserved. Consumes `plan_return_mode`.
-/// `set_agent_mode` does the rebuild/save on the Plan→ret transition and also
-/// clears `plan_return_mode` (already `None` after the `take`, so it's a no-op).
-fn restore_plan_return_mode(state: &mut AppState) {
-    // Approving a plan always returns to Auto (default execution mode), regardless
-    // of the pre-plan mode — keep only an armed Yolo.
-    let stashed = state.rest.plan_return_mode.take();
-    let ret = if stashed == Some(AgentMode::Yolo) && state.rest.yolo_armed {
-        AgentMode::Yolo
-    } else {
-        AgentMode::Auto
-    };
-    state.rest.set_agent_mode(ret);
-}
-
-/// Handle `Action::ApprovePlan` (`y` on a paused `plan_ready`): answer the call
-/// with the "approved — execute now" result, restore the pre-Plan mode, and
-/// resume the round so the model exits planning and executes the plan.
-pub(super) fn handle_approve_plan(
-    state: &mut AppState,
-    client: &mut Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-) -> Result<()> {
-    let fgi = state.rest.foreground;
-    state.rest.fg_mut().awaiting_approval = false;
-    state.rest.fg_mut().approval_reason = None;
-    // Read the approved plan off disk and embed its full body in the tool
-    // result, instead of just naming the path — the session dir can sit
-    // outside every configured workspace root, so a bare pointer sends the
-    // model off to `read` a path it may not be allowed to open (see the
-    // `resolve_read` sessions-tree bypass in `tool/mod.rs` for the other half
-    // of this fix). Falls back to the old pointer-only text if the read fails
-    // (no session, or the file vanished) so nothing regresses.
-    let plan_path_opt = state.rest.fg().session.as_ref().map(|s| s.plan_path());
-    let plan_body = plan_path_opt
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok());
-    let approve_text = match plan_body {
-        Some(body) => crate::tool::plan::plan_approved_text_with_body(&body),
-        None => {
-            let plan_path = plan_path_opt
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "the session plan.md".to_string());
-            crate::tool::plan::plan_approved_text(&plan_path)
-        }
-    };
-    answer_plan_ready(state, approve_text);
-    // Make the tool-call classifier PLAN-AWARE for the execution that follows: stash
-    // the approved plan text (truncated) on the fg session so `process_tools`
-    // prepends it to the classifier context. The classifier keeps running (safety net
-    // intact) but now allows the tool calls that carry out the plan. A read failure →
-    // no stash (classifier behaves exactly as before). Cleared on the next user submit
-    // / plan re-entry so it never leaks past this execution.
-    let approved_plan = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .and_then(|s| std::fs::read_to_string(s.plan_path()).ok())
-        .map(|t| t.chars().take(2000).collect::<String>());
-    state.rest.fg_mut().approved_plan = approved_plan;
-    // Leave Plan BEFORE resuming: the round finishes into `finish_tool_round` →
-    // `start_stream_task`, which reads `agent_mode` to size the advertised tool
-    // surface, so the continuation must already be in the restored (executing) mode.
-    // Planning is done — leaving Plan here (via set_agent_mode) drops the plan
-    // checklist so it doesn't bleed into `/todo`.
-    restore_plan_return_mode(state);
-    process_tools(state, fgi, client, handle);
-    Ok(())
-}
-
-/// Handle `Action::ApprovePlanCompact` (`a` on a paused `plan_ready`): like
-/// [`handle_approve_plan`], but instead of executing on the bloated planning
-/// context, COMPACT FIRST so the model executes from a clean, plan-led context.
-///
-/// FLOW (compact-first → seed drives execution): answer the parked `plan_ready`
-/// call, PAIR that answer into history, abandon the parked round, then fire
-/// `handle_compact(preserve_n = 0)` SYNCHRONOUSLY — collapsing the whole
-/// exploratory history to a summary. When that async compaction lands,
-/// `apply_compaction_result` (gated on `pending_plan_seed`) injects the approved
-/// `plan.md` as a fresh user turn and AUTO-WAKES the execution stream.
-///
-/// We deliberately do NOT call `process_tools` (that would immediately execute the
-/// plan on the UN-compacted context — the bug this fixes); compaction fires
-/// SYNCHRONOUSLY here instead of via a deferred/idle rail (an earlier design fired
-/// it only AFTER the whole execution turn drained — far too late, so the
-/// immediate-execute always won the race).
-pub(super) fn handle_approve_plan_compact(
-    state: &mut AppState,
-    client: &mut Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-) -> Result<()> {
-    let fgi = state.rest.foreground;
-    state.rest.fg_mut().awaiting_approval = false;
-    state.rest.fg_mut().approval_reason = None;
-    answer_plan_ready(
-        state,
-        crate::tool::plan::plan_approved_compact_text().to_string(),
-    );
-    // Make the tool-call classifier PLAN-AWARE for the post-compaction execution:
-    // stash the approved plan text (truncated) on the fg session so `process_tools`
-    // prepends it to the classifier context. The stash SURVIVES the compaction — the
-    // plan-seeded auto-wake in `apply_compaction_result` does not clear it — so the
-    // classifier stays plan-aware for the seeded execution stream. A read failure →
-    // no stash. Cleared on the next user submit / plan re-entry.
-    let approved_plan = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .and_then(|s| std::fs::read_to_string(s.plan_path()).ok())
-        .map(|t| t.chars().take(2000).collect::<String>());
-    state.rest.fg_mut().approved_plan = approved_plan;
-    // Leaving Plan here (via set_agent_mode) drops the plan checklist so it doesn't
-    // bleed into `/todo` (independent of the plan.md seed the compaction re-reads).
-    restore_plan_return_mode(state);
-    // Arm the one-shot seed so `apply_compaction_result` injects plan.md as the first
-    // post-compaction user turn and auto-wakes execution.
-    state.rest.pending_plan_seed = true;
-
-    // Answer any TRAILING pending tool calls that follow `plan_ready` in the same
-    // parallel batch. `answer_plan_ready` only advances `tool_idx` past the
-    // `plan_ready` call itself — calls at `pending_tool_calls[tool_idx..]` are still
-    // unanswered at this point. Left dangling, their assistant `tool_calls` entry has
-    // no matching tool result in the RAW `conversation.messages()` that
-    // `handle_compact` compacts from (`split_for_compaction`, NOT the sanitized
-    // `history()`) — strict providers (OpenAI/codex/OpenRouter) 400 on that dangling
-    // group, which surfaces as `StreamEvent::Error`, drops `pending_plan_seed`, and
-    // leaves the plan un-executed. Mirrors `handle_deny_tool`'s denied-ids flush
-    // (chat.rs `handle_deny_tool`) so every tool_call id is answered before the round
-    // is abandoned.
-    let trailing_ids: Vec<String> = state.rest.sessions[fgi]
-        .pending_tool_calls
-        .iter()
-        .skip(state.rest.sessions[fgi].tool_idx)
-        .map(|c| c.id.clone())
-        .collect();
-
-    // Pair the parked `plan_ready` tool-call before compacting. `answer_plan_ready`
-    // only STAGED the approval in `tool_results`; the assistant message that called
-    // `plan_ready` is already committed to history (advance_turn's
-    // `push_assistant_with_tools`). Compacting now would send that assistant turn
-    // with a DANGLING tool-call (no matching tool result) in the summary request —
-    // strict providers (OpenAI/codex/OpenRouter) 400 on that, which surfaces as
-    // `StreamEvent::Error`, drops the seed, and leaves the plan un-executed. Flush
-    // the staged result into the conversation (mirrors `finish_tool_round`, minus
-    // the re-stream) so the wire stays valid; the paired call+result collapse into
-    // the summary anyway. This also keeps history valid if the compaction itself
-    // fails, so the session can't wedge on a later turn.
-    let staged: Vec<(String, String)> = state.rest.sessions[fgi].tool_results.clone();
-    {
-        let rt = &mut state.rest.sessions[fgi];
-        if let Some(sess) = rt.session.as_mut() {
-            for (id, result) in &staged {
-                let _ = msglog::append(&sess.path, Role::Tool, result, None);
-                sess.conversation.push_tool(id.clone(), result.clone());
-            }
-            for id in &trailing_ids {
-                let _ = msglog::append(
-                    &sess.path,
-                    Role::Tool,
-                    "skipped — plan approved, compacting context",
-                    None,
-                );
-                sess.conversation.push_tool(
-                    id.clone(),
-                    "skipped — plan approved, compacting context".to_string(),
-                );
-            }
-            let _ = sess.save();
-        }
-    }
-    // Abandon the parked round: clear its per-round buffers (we are NOT resuming via
-    // `process_tools` — the post-compaction plan seed drives execution instead).
-    state.rest.sessions[fgi].pending_tool_calls.clear();
-    state.rest.sessions[fgi].tool_idx = 0;
-    state.rest.sessions[fgi].tool_results.clear();
-
-    // Satisfy `handle_compact`'s busy-guard so compaction ACTUALLY fires. During a
-    // parked plan approval the fg session still has `waiting == true` (only
-    // `advance_turn`'s final-answer branch clears it; the tool-call branch that
-    // parked us left it set), and `handle_compact` BAILS *and clears
-    // `pending_plan_seed`* when `fg().waiting` — which would silently kill the whole
-    // flow. `awaiting_approval` is already cleared above and `streaming` is None
-    // (taken in `advance_turn`), so clearing `waiting` makes `is_working()` false;
-    // `handle_compact` then re-sets `waiting = true` itself.
-    state.rest.fg_mut().waiting = false;
-    // Compact-first: collapse the entire planning history NOW (preserve_n = 0). The
-    // async result lands as `StreamEvent::Compacted` → `apply_compaction_result`,
-    // which seeds plan.md and auto-wakes the execution stream. `client` is already
-    // the `&mut Option<_>` the handler owns (no clone needed, unlike the deferred
-    // drain which holds a `&`).
-    let _ =
-        crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
-    Ok(())
-}
-
-/// Handle `Action::DenyPlan` (`n`/Esc on a paused `plan_ready`): answer the call
-/// with the "keep discussing" result and STAY in Plan mode, then resume the round
-/// so the model receives the feedback and can revise + re-present its plan.
-pub(super) fn handle_deny_plan(
-    state: &mut AppState,
-    client: &mut Option<Arc<OpenRouterClient>>,
-    handle: &tokio::runtime::Handle,
-) -> Result<()> {
-    let fgi = state.rest.foreground;
-    state.rest.fg_mut().awaiting_approval = false;
-    state.rest.fg_mut().approval_reason = None;
-    answer_plan_ready(state, crate::tool::plan::plan_denied_text().to_string());
-    // Mode stays Plan — deny means "keep discussing", so the plan checklist is
-    // DELIBERATELY preserved (the model revises it in place via todowrite). It is
-    // cleared only on a real exit from Plan (approve / mode-switch), in
-    // `set_agent_mode`'s leaving-plan branch.
-    process_tools(state, fgi, client, handle);
     Ok(())
 }

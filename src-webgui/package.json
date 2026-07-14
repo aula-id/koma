@@ -1,0 +1,32 @@
+{
+  "name": "koma-webgui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@streamdown/code": "^1.1.1",
+    "@tanstack/react-router": "^1.87.0",
+    "framer-motion": "^12.42.2",
+    "lottie-react": "^2.4.1",
+    "lucide-react": "^1.23.0",
+    "monaco-editor": "^0.55.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "streamdown": "^2.5.0",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "fflate": "^0.8.3",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

@@ -10,7 +10,7 @@ use crate::app::state::{AgentMode, AppState};
 /// While the session is in plan mode, reads the session-scoped
 /// `plan_todos.md` (the model's plan checklist + the two locked rails)
 /// instead of the per-directory `memory/TODO.md` — same source the
-/// `todowrite` interception + `plan_ready` write to. Outside plan mode,
+/// `checklist` interception + `plan_ready` write to. Outside plan mode,
 /// behaviour is unchanged. The panel re-reads on every key press.
 pub(super) fn handle_todo(state: &mut AppState) -> Result<()> {
     let in_plan = state.rest.agent_mode == AgentMode::Plan;

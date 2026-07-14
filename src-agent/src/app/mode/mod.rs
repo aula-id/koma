@@ -261,6 +261,6 @@ pub enum Mode {
     /// Task/TODO panel (`/todo`): a READ-ONLY master/detail view of the session's
     /// todo items. The LEFT pane lists items with status indicators; the RIGHT pane
     /// shows the selected item's content, status, and priority. The model writes
-    /// todos via the `todowrite` tool; the user views them here.
+    /// todos via the `checklist` tool; the user views them here.
     Todo(Box<TodoState>),
 }

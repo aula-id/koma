@@ -31,12 +31,14 @@
 
 mod blobs;
 mod query;
+mod records;
 mod schema;
 mod summary;
 
 // Public types
 pub use blobs::BlobRef;
 pub use query::ArchivedMsg;
+pub use records::{BashJobRecord, FileChange, SubAgentRecord};
 pub use summary::SummaryRow;
 
 // Public functions
@@ -44,5 +46,10 @@ pub use blobs::{fetch_blob_content, list_blobs, search_blobs};
 pub use query::{
     append, fetch_messages_since, max_message_id, message_count, totals, truncate_after,
     user_message_ids,
+};
+// Wave-5 per-session record persistence (file-change log + inert bash/sub-agent records).
+pub use records::{
+    read_bash_jobs, read_file_baseline, read_file_changes, read_subagents, record_file_baseline,
+    record_file_change, write_bash_jobs, write_subagents,
 };
 pub use summary::{read_summary, write_summary};

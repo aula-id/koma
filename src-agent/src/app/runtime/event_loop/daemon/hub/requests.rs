@@ -1,15 +1,9 @@
 use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 
-use crate::app::mode::Mode;
 use crate::app::state::AppState;
-use crate::controller::command::Command;
-use crate::controller::input::{handle_key, handle_paste, Action};
-use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus, StateSnapshot};
-use crate::ipc::snapshot::build_snapshot;
+use crate::ipc::proto::{ClientRequest, DaemonEvent};
 use crate::service::openrouter::OpenRouterClient;
-
-use crate::app::runtime::actions::apply_action;
 
 use super::core::{DaemonHub, HubInbound};
 
@@ -88,16 +82,20 @@ impl DaemonHub {
                     // Per-client mode cache: empty until this client's first stream tick
                     // builds it (the daemon-freeze fix, held per-client now).
                     mode_snapshot_cache: None,
+                    // No stream tab open until this client sends a `SetStreamView`.
+                    stream_subagent: None,
+                    stream_bash: None,
+                    stream_session: None,
                 });
             }
             HubInbound::Request { client_id, req } => {
                 self.handle_request(client_id, req, state, client, handle);
             }
             HubInbound::Disconnect { client_id } => {
-                // Transport gone: deregister + pass the controller seat. Unknown id
-                // (already removed via Detach) is a harmless no-op.
+                // Transport gone: deregister + pass the controller seat (also disarms the
+                // GUI OAuth side-channel if armed). Unknown id (already Detached) is a no-op.
                 if let Some(idx) = self.clients.iter().position(|c| c.id == client_id) {
-                    self.deregister(idx);
+                    self.deregister(idx, state);
                 }
             }
         }
@@ -175,83 +173,32 @@ impl DaemonHub {
         match req {
             // --- read-only / control (honoured for everyone) ---
             ClientRequest::Attach { .. } => {
-                // Daemon-per-session: the daemon ALREADY OWNS its one session (created or
-                // loaded at startup, keyed to its socket — see `install_daemon_session`),
-                // so Attach NO LONGER creates a session. The `cwd` the client carries is
-                // ignored here (the daemon's session is already rooted at the cwd it
-                // inherited at spawn). Attach is now purely: Hello + Snapshot + mark
-                // attached + seed this client's baseline. Re-attach / resync from an
-                // already-attached client is unchanged (it just re-snapshots).
-                //
-                // Build-skew handshake (task #142): emit the daemon's startup
-                // fingerprint as the FIRST frame this client receives, BEFORE its
-                // initial Snapshot. A client built from different code restarts this
-                // stale daemon instead of rendering its frames. Sent on every attach
-                // (incl. a re-attach) — it is one tiny frame and the client simply
-                // re-verifies it; the seq it carries stays monotonic with the Snapshot
-                // that follows. Cloning the stored string keeps `&mut self` free for the
-                // `send_to` below.
-                self.send_to(idx, DaemonEvent::Hello { version: self.version.clone() });
-                // ATOMIC attach (critique #2): build the full snapshot, send it, and
-                // flip the client to attached + seed ITS OWN baseline IN THIS TICK.
-                // Only this client's baseline is (re)seeded (blocker #2) — never a
-                // hub-global one — so a late attach can't swallow deltas another
-                // already-attached client still owes; that client diffs against its
-                // own untouched baseline. Reflects the daemon's single owned session.
-                let snap = build_snapshot(state);
-                self.send_to(idx, DaemonEvent::Snapshot(Box::new(snap.clone())));
-                self.clients[idx].attached = true;
-                self.clients[idx].last_snapshot = Some(snap);
+                self.attach(idx, state);
             }
             ClientRequest::Resync | ClientRequest::ListSessions => {
-                // Both answer with a fresh full snapshot (the simplest correct reply
-                // for ListSessions too — it carries the full session set). Re-seed
-                // ONLY this client's baseline so its subsequent deltas fold onto what
-                // it was just sent; other clients' baselines are untouched (blocker
-                // #2), so one client's resync never disturbs another's delta stream.
-                let snap = build_snapshot(state);
-                self.send_to(idx, DaemonEvent::Snapshot(Box::new(snap.clone())));
-                self.clients[idx].attached = true;
-                self.clients[idx].last_snapshot = Some(snap);
+                self.resync_or_list_sessions(idx, state);
             }
-            // Live-session DISCOVERY probe (daemon-per-session): answer with a single
-            // metadata frame for this daemon's ONE owned session and nothing else. This
-            // is the data source the hub/swapper consumes to enumerate live daemons
-            // WITHOUT attaching. It is strictly READ-ONLY — it must NOT create/attach a
-            // session, must NOT touch the foreground, and must NOT flip `attached` or
-            // seed `last_snapshot` (so a transient connect→Status→close never registers
-            // this connection as an attached client owing deltas, and never disturbs
-            // another client's baseline). It just reads metadata off the foreground
-            // runtime (the daemon's single session; `fg()` IS that session) and sends one
-            // `Status` frame. The C2 LOAD/STORE bracket around this in `handle_request`
-            // only moves the transient acting cursor (Status moves no foreground), so it
-            // adds no observable side effect here.
             ClientRequest::Status => {
-                let rt = state.rest.fg();
-                let status = SessionStatus {
-                    session_id: rt.id.clone(),
-                    // The session's display name (empty before a session is installed).
-                    name: rt
-                        .session
-                        .as_ref()
-                        .map(|s| s.name.clone())
-                        .unwrap_or_default(),
-                    // The session's effective working dir — the live `cd` override, else
-                    // its configured workdir; empty when no session is installed yet
-                    // (guarded on `session` so we don't leak the daemon's process cwd).
-                    pwd: rt
-                        .session
-                        .as_ref()
-                        .map(|_| rt.effective_cwd().display().to_string())
-                        .unwrap_or_default(),
-                    working: rt.is_ui_busy(),
-                };
-                self.send_to(idx, DaemonEvent::Status(status));
+                self.status(idx, state);
             }
             ClientRequest::Detach => {
-                // Polite leave: drop the client + pass the controller seat to the
-                // next attached client (single-writer controller-passing, DECISIONS).
-                self.deregister(idx);
+                self.detach(idx, state);
+            }
+
+            ClientRequest::FileSearch { query, limit } => {
+                self.file_search(idx, state, query, limit);
+            }
+
+            ClientRequest::ListModels { provider } => {
+                self.list_models(idx, state, handle, provider);
+            }
+
+            ClientRequest::ListRoutes { provider, model_id } => {
+                self.list_routes(idx, state, handle, provider, model_id);
+            }
+
+            ClientRequest::RemoveAttachment { marker_n } => {
+                self.remove_attachment(idx, state, marker_n);
             }
 
             // --- mutating: each client drives its OWN foreground (C2) ---
@@ -266,12 +213,24 @@ impl DaemonHub {
             // + `Detach`, both allowed for any client below — never `QuitDaemon` — so a
             // non-controller closing ITS window is fine and touches no other window.)
             ClientRequest::QuitDaemon if !self.clients[idx].is_controller => {
-                self.send_to(
-                    idx,
-                    DaemonEvent::Error(
-                        "read-only: only the controlling client can shut down the daemon".into(),
-                    ),
-                );
+                self.quit_daemon_observer_rejected(idx);
+            }
+
+            ClientRequest::GetSettings => {
+                self.get_settings(idx, state);
+            }
+
+            // GUI /agents dashboard read: reply with a one-shot `AgentsValues`.
+            ClientRequest::ListAgents => {
+                self.list_agents(idx, state);
+            }
+
+            ClientRequest::GetEffortOptions => {
+                self.get_effort_options(idx, state, client);
+            }
+
+            ClientRequest::SetStreamView { subagent, bash, session } => {
+                self.set_stream_view(idx, subagent, bash, session);
             }
             req => {
                 self.handle_controller_mutation(idx, req, state, client, handle);
@@ -303,36 +262,20 @@ impl DaemonHub {
             // and clear that session's sticky finished-unseen marker (critique #3 —
             // foregrounding a session counts as "seen").
             ClientRequest::SwitchForeground { session_id } => {
-                match state.rest.sessions.iter().position(|s| s.id == session_id) {
-                    Some(target) => {
-                        let result = apply_action(Action::LiveSwitch(target), state, client, handle);
-                        // LiveSwitch sets `foreground = target`; clear the marker on
-                        // the now-foreground session (index unchanged by the switch).
-                        if let Some(s) = state.rest.sessions.get_mut(target) {
-                            s.finished_unseen = false;
-                        }
-                        self.ack_or_error(idx, result);
-                    }
-                    None => self.send_to(
-                        idx,
-                        DaemonEvent::Error(format!("unknown session id: {session_id}")),
-                    ),
-                }
+                self.switch_foreground(idx, state, client, handle, session_id);
             }
 
             // Submit composed text to the foreground session — identical to the local
             // Enter-on-composer path (`Action::Submit` carries the text directly).
             ClientRequest::SubmitInput { text } => {
-                let result = apply_action(Action::Submit(text), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.submit_input(idx, state, client, handle, text);
             }
 
             // Run a `!` shell command in the foreground session's cwd, no model
             // round-trip — the same `Action::Shell` the local composer's leading-`!`
             // detection emits, so the shell-entry-append logic is never forked.
             ClientRequest::Shell { cmd } => {
-                let result = apply_action(Action::Shell(cmd), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.shell(idx, state, client, handle, cmd);
             }
 
             // Forward a key to the foreground session through the EXACT local input
@@ -340,9 +283,7 @@ impl DaemonHub {
             // Action -> apply_action. So the daemon reuses the same per-mode key
             // handling (chat / pickers / forms) as the local TUI.
             ClientRequest::SendKey(key) => {
-                let action = handle_key(state, key.to_key_event());
-                let result = apply_action(action, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.send_key(idx, state, client, handle, key);
             }
 
             // Forward a bracketed PASTE through the EXACT local paste pipeline:
@@ -357,32 +298,19 @@ impl DaemonHub {
             // mutates `state` directly and is infallible, so this always Acks (mirrors
             // the local loop, which just calls it then redraws — no `apply_action`).
             ClientRequest::Paste { text } => {
-                handle_paste(state, &text);
-                self.send_to(idx, DaemonEvent::Ack);
+                self.paste(idx, state, text);
             }
 
             // Answer the foreground session's pending tool-approval prompt via the
             // local approve/deny handlers.
             ClientRequest::ApproveTool { approve } => {
-                let action = if approve {
-                    Action::ApproveTool
-                } else {
-                    Action::DenyTool
-                };
-                let result = apply_action(action, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.approve_tool(idx, state, client, handle, approve);
             }
 
             // Answer a paused `plan_ready` approval via the local plan handlers.
             // An unrecognised decision maps to `DenyPlan` (fail-safe: keep planning).
             ClientRequest::PlanDecision { decision } => {
-                let action = match decision.as_str() {
-                    "approve" => Action::ApprovePlan,
-                    "compact" => Action::ApprovePlanCompact,
-                    _ => Action::DenyPlan,
-                };
-                let result = apply_action(action, state, client, handle);
-                self.ack_or_error(idx, result);
+                self.plan_decision(idx, state, client, handle, decision);
             }
 
             // Spawn a fresh parallel session via the local `/new` command. The
@@ -390,8 +318,7 @@ impl DaemonHub {
             // inherits last-used creds + the launch dir); wiring them is a later
             // refinement, so they are accepted-and-ignored rather than rejected.
             ClientRequest::NewSession { .. } => {
-                let result = apply_action(Action::Slash(Command::New(crate::controller::command::NewMode::Swap)), state, client, handle);
-                self.ack_or_error(idx, result);
+                self.new_session(idx, state, client, handle);
             }
 
             // Quit (close) a single session by stable UUID (daemon stage 10). Resolve
@@ -411,25 +338,298 @@ impl DaemonHub {
             // primitive; Phase C removes it along with the rest of the multi-session
             // machinery if nothing else picks it up.
             ClientRequest::QuitSession { session_id } => {
-                match state.rest.sessions.iter().position(|s| s.id == session_id) {
-                    Some(target) => {
-                        state.rest.sessions[target].close();
-                        self.repoint_foreground_off_closed(state);
-                        self.send_to(idx, DaemonEvent::Ack);
-                    }
-                    None => self.send_to(
-                        idx,
-                        DaemonEvent::Error(format!("unknown session id: {session_id}")),
-                    ),
-                }
+                self.quit_session(idx, state, session_id);
             }
+
+            // Rename the foreground session (the GUI RenameOverlay). The C2 LOAD
+            // bracket in `handle_request` already pointed the acting cursor at THIS
+            // client's foreground, so `fg_mut().session` is exactly the session the
+            // rename targets. Reuse the SAME clean, mode-independent
+            // `store::rename_session` the `/rename` slash-command and the Settings
+            // save use (name + settings.name + SQLite registry + `sess.save()`), so
+            // the daemon never forks the rename logic. An empty/whitespace name is a
+            // no-op Ack; a rename error surfaces as an `Error` frame.
+            ClientRequest::RenameSession { name } => {
+                self.rename_session(idx, state, name);
+            }
+
+            // GUI MCP CRUD (McpPanel). Build an `McpServerEntry` from the panel's form
+            // (mapping the single-line args/env STRING forms into the daemon's array/pair
+            // forms via the SAME `parse_args`/`parse_env` the TUI editor uses), upsert it
+            // into `config.mcp_servers` by uuid (a `None`/empty uuid mints a new one), then
+            // persist + live-reconnect the MCP manager via the mode-independent
+            // `save_and_reload_mcp`. Any client may drive this (config is global; the C2
+            // bracket is irrelevant here).
+            ClientRequest::SetMcpServer {
+                uuid,
+                name,
+                enabled,
+                transport,
+                command,
+                args,
+                env,
+                url,
+            } => {
+                self.set_mcp_server(idx, state, uuid, name, enabled, transport, command, args, env, url);
+            }
+
+            // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
+            ClientRequest::DeleteMcpServer { uuid } => {
+                self.delete_mcp_server(idx, state, uuid);
+            }
+
+            // GUI MCP enable toggle: set the `enabled` flag by uuid, persist + reconnect.
+            ClientRequest::EnableMcpServer { uuid, enabled } => {
+                self.enable_mcp_server(idx, state, uuid, enabled);
+            }
+
+            // GUI provider CRUD (Connector ProviderForm). Upsert by uuid via the
+            // config-layer setter (preserving wire type on edit, minting OpenAI-compatible
+            // on create), then persist. Config-global; any client may drive it.
+            ClientRequest::SetProvider {
+                uuid,
+                name,
+                endpoint,
+                api_key,
+            } => {
+                self.set_provider(idx, state, uuid, name, endpoint, api_key);
+            }
+
+            // GUI provider delete: drop by uuid + persist (models keep any dangling ref).
+            ClientRequest::DeleteProvider { uuid } => {
+                self.delete_provider(idx, state, uuid);
+            }
+
+            // GUI model CRUD (Connector ModelForm). Build a `ModelEntry` (parsing the
+            // lowercase role tokens; an empty `route` → `None`), then upsert with per-scope
+            // role-steal into either the GLOBAL catalogue (`config.models`, persisted via
+            // `config.save`) or the foreground session's LOCAL override layer
+            // (`settings.session_models`, persisted via `sess.save`). The two scopes keep
+            // the role invariant independently — same split the TUI Settings save uses.
+            ClientRequest::SetModel {
+                uuid,
+                name,
+                model_id,
+                provider_uuid,
+                route,
+                roles,
+                scope,
+            } => {
+                self.set_model(idx, state, uuid, name, model_id, provider_uuid, route, roles, scope);
+            }
+
+            // GUI model delete: remove by uuid from the addressed scope + persist.
+            ClientRequest::DeleteModel { uuid, scope } => {
+                self.delete_model(idx, state, uuid, scope);
+            }
+
+            // GUI theme picker (onboarding step 1 + the future Settings gear): set the
+            // active palette registry key + persist. Config-global; any client may drive
+            // it. Only `config.palette` (the live theme key) is touched — the deprecated
+            // `theme`/`accent` legacy fields are left as-is. The palette change is picked
+            // up by the snapshot diff (`ipc::snapshot::diff` gates a full snapshot on
+            // `palette`), so the GUI host re-derives + re-pushes its Config palette live.
+            ClientRequest::SetTheme { name } => {
+                self.set_theme(idx, state, name);
+            }
+
+            // GUI Settings tab (Session section): partial-update the foreground session's
+            // GUI-editable prefs. Only the `Some` fields are applied, EACH through the SAME
+            // per-field apply logic the TUI settings save uses
+            // (`actions::settings::handle_save_settings`):
+            //   - short-send / sliding-cache / bash-saving: plain field sets (:185-191) — no
+            //     client rebuild needed (each flag is read per-send / per-spawn).
+            //   - internet_mode: capture-old + set + the SHARED `flash_internet_feedback`
+            //     (status line + optional install toast, only on an actual change) — the exact
+            //     helper the settings save calls (:194 + feedback path).
+            //   - workdir: normalized (trim + drop empties + cwd fallback, :84-101) then a
+            //     dir-cache reindex (:221-227).
+            // The C2 LOAD bracket already pointed `fg()` at this client's session. After
+            // applying, `rebuild_system` refreshes the mode-gated roster + `sess.save()`
+            // persists (mirrors :198/:216), then a fresh `SettingsValues` is re-pushed so the
+            // GUI reflects reality, and the request is acked.
+            ClientRequest::SetSessionPrefs {
+                short_send,
+                sliding_cache,
+                bash_saving,
+                coding_autosave,
+                internet_mode,
+                workdir,
+            } => {
+                self.set_session_prefs(
+                    idx,
+                    state,
+                    short_send,
+                    sliding_cache,
+                    bash_saving,
+                    coding_autosave,
+                    internet_mode,
+                    workdir,
+                );
+            }
+
+            // GUI composer EFFORT picker pick: persist the chosen effort level with the
+            // SAME field-level sanitization `handle_save_effort` applies ("default" ->
+            // empty = model default) — but mutate the session field DIRECTLY rather than
+            // going through `Action::SaveEffort`, because that action ALSO does
+            // `*state.mode_mut() = Mode::Chat` at the end. `Mode` is per-SESSION, so
+            // routing through it would silently kick any OTHER client viewing this
+            // session (TUI in Settings/Agents/an approval, or its own `/effort` picker)
+            // back to Chat — exactly the bug `SetModel`/`SetSessionPrefs` avoid by
+            // replicating field effects directly instead of calling a mode-mutating
+            // action. No client rebuild needed: effort is resolved per-call. The C2 LOAD
+            // bracket already pointed `fg()` at this client's session. Reply framing
+            // mirrors `SetSessionPrefs`: a fresh `SettingsValues` re-push IS the reply
+            // (the effort-picker label rides the same settings channel), not a bare Ack.
+            ClientRequest::SetEffort { effort } => {
+                self.set_effort(idx, state, effort);
+            }
+
+            // GUI onboarding "koma free": mint/reuse the keyless Koma Free provider + a
+            // Main-role koma-free model in the GLOBAL config (the non-key equivalent of the
+            // TUI's `Action::SetupKomaFree`), then persist. Only the CONFIG mutation is
+            // shared with the TUI path (via `ensure_koma_free_config`) — the daemon owns no
+            // first-run session-create / mode-switch here (a GUI session already exists on
+            // this attached path). Config-global; any client may drive it. The config change
+            // forces a full snapshot, so the GUI host re-pushes `Config` (clearing `firstRun`).
+            ClientRequest::SetupKomaFree => {
+                self.setup_koma_free(idx, state);
+            }
+
+            // GUI stop button: interrupt the foreground session's in-flight turn via the
+            // SAME `Action::Interrupt` the TUI's Esc runs (abort the stream, commit the
+            // partial with `[interrupted]`, halt the agentic loop + kill running sub-agents).
+            // Unconditional cut: stop must always cut, busy or not (mirrors the TUI Esc's
+            // right to interrupt unconditionally) — `handle_interrupt` itself no longer
+            // gates on `is_ui_busy()`. Set `force_resync` so the NEXT `stream_deltas` pass
+            // (later this same tick) resends every attached client a full `Snapshot`
+            // regardless of what the differ concludes — a guaranteed resync for a client
+            // whose shadow drifted (e.g. the fixed `Some("")` stuck-streaming case), not
+            // dependent on the differ recognizing the change.
+            ClientRequest::Interrupt => {
+                self.interrupt(idx, state, client, handle);
+            }
+
+            // MCP status refresh: reply with live per-server tool counts + errors.
+            ClientRequest::GetMcpStatus { request_id } => {
+                self.get_mcp_status(idx, state, request_id);
+            }
+
+            // GUI get-effort-options reply.
+            // `Action::Resend` the TUI's Ctrl+R runs (pop trailing assistant
+            // messages + re-stream). `handle_resend` has its own busy/no-session/
+            // nothing-to-resend guards and reports a no-op via the status line.
+            ClientRequest::Resend => {
+                self.resend(idx, state, client, handle);
+            }
+
+            // GUI composer queued-list clear button: cancel every pending mid-turn
+            // steer via the SAME `Action::CancelSteers` the TUI's Ctrl+X-with-
+            // pending-steers runs (clears `pending_steer` + a status line); a
+            // no-op when the queue is already empty.
+            ClientRequest::CancelSteers => {
+                self.cancel_steers(idx, state, client, handle);
+            }
+
+            // GUI hover-edit pencil on a USER chat bubble: rewind the foreground
+            // session to JUST BEFORE the message at `index` — the non-key equivalent
+            // of the TUI's double-Esc `Mode::MessageRewind` + Enter. Reuses the exact
+            // `Action::RewindToMessage` core: abort any in-flight turn, truncate the
+            // live conversation + sqlite archive to before `index`, and refill the
+            // composer with that message's text (projected back via
+            // `GlobalSnapshot.input` / the `InputChanged` delta — NOT auto-sent). The
+            // core guards a non-user / out-of-range `index` as a clean no-op.
+            ClientRequest::RewindTo { index } => {
+                self.rewind_to(idx, state, client, handle, index);
+            }
+
+            // GUI composer mode selector: set the GLOBAL agent mode via the SAME
+            // `set_agent_mode` choke-point Shift+Tab / `/mode` use (so Plan enter/leave +
+            // the plan-boundary system-prompt swap stay correct — never assign `agent_mode`
+            // directly). `"yolo"` is gated on `yolo_armed` exactly like `/mode yolo`; an
+            // unknown token is a no-op. The mode change re-projects into the snapshot, so
+            // every attached client (incl. this GUI) reflects it live.
+            ClientRequest::SetMode { mode } => {
+                self.set_mode(idx, state, mode);
+            }
+
+            // GUI bash-row kill: terminate the foreground session's bg-bash job by id via
+            // the SAME `Action::BashKillJob` the `/bash` panel's Ctrl+X runs (SIGTERM +
+            // flip status→Killed). A no-op when the id is already gone.
+            ClientRequest::BashKill { id } => {
+                self.bash_kill(idx, state, client, handle, id);
+            }
+
+            // GUI agent-row kill: kill ONE sub-agent of the foreground session by id,
+            // mirroring the model-callable `task_kill` primitive — abort the tokio task +
+            // flip a still-Running status to Killed (a terminal status is left untouched).
+            // No pre-existing Action kills a sub-agent BY ID (the TUI's Ctrl+X targets by
+            // selection index), so this resolves + mutates inline. A no-op when the id is
+            // absent.
+            ClientRequest::KillSubagent { id } => {
+                self.kill_subagent(idx, state, id);
+            }
+
+            // GUI agent-row background button: flip ONE running sub-agent to detached via
+            // the SAME `Action::BackgroundSubagent` the TUI's Ctrl+B-on-selection runs.
+            // `handle_background_subagent` re-checks eligibility itself (Running, not
+            // already detached, has a `tool_call_id`) — a stale/ineligible id is a no-op.
+            ClientRequest::BackgroundSubagent { id } => {
+                self.background_subagent(idx, state, client, handle, id);
+            }
+
+            // GUI global Ctrl+B: background EVERY eligible sub-agent via the SAME
+            // `Action::BackgroundAllSubagents` the TUI's composer Ctrl+B runs.
+            // `handle_background_all_subagents` is a no-op when nothing is eligible.
+            ClientRequest::BackgroundAllSubagents => {
+                self.background_all_subagents(idx, state, client, handle);
+            }
+
+            // GUI model quick-picker: set (or clear) the foreground session's LOCAL Main
+            // override. `Some(uuid)` CLONES the matching GLOBAL `config.models` entry into a
+            // session-local Main `ModelEntry` (reusing an existing matching local override
+            // rather than duplicating); `None` REMOVES the override (inherit the global
+            // Main). Only `session_models` is touched — the global catalogue is untouched, so
+            // the global Main resurfaces the instant the override is dropped. Mirrors the
+            // `/free` clone-or-reuse path (`commands::free`). `resolve_role` scans
+            // `session_models` first, so the change takes effect next turn.
+            ClientRequest::SetSessionMain { model_uuid } => {
+                self.set_session_main(idx, state, model_uuid);
+            }
+
+            // GUI /agents editor upsert (create / save / rename): scope-resolve +
+            // built-in-protect, persist, rebuild the roster, re-push `AgentsValues`. The
+            // whole request rides in (destructured in `set_agent`) to keep this arm compact.
+            req @ ClientRequest::SetAgent { .. } => {
+                self.set_agent(idx, state, req);
+            }
+
+            // GUI /agents delete (a built-in is not deletable → error).
+            ClientRequest::DeleteAgent { scope, name, req_seq } => {
+                self.delete_agent(idx, state, scope, name, req_seq);
+            }
+
+            ClientRequest::GetOAuthState
+            | ClientRequest::StartOAuth { .. }
+            | ClientRequest::SubmitOAuthPaste { .. }
+            | ClientRequest::CancelOAuth
+            | ClientRequest::DeleteOAuthConn { .. } => self.oauth(idx, req, state, client, handle),
+
+            // GUI extension STORE (browse / detail / install / uninstall / list-installed):
+            // route the whole family to `requests_ext`'s thin `ext` router. Browse/detail hit
+            // the PUBLIC store endpoints; install/uninstall mutate the live managers + config
+            // (daemon-owned). Replies land out-of-band via the hub's `drain_store_replies`.
+            ClientRequest::StoreBrowse { .. }
+            | ClientRequest::StoreDetail { .. }
+            | ClientRequest::InstallExtension { .. }
+            | ClientRequest::UninstallExtension { .. }
+            | ClientRequest::ListInstalledExtensions => self.ext(idx, req, state, handle),
 
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
             // once `daemon_loop` observes `should_shutdown()` and returns.
             ClientRequest::QuitDaemon => {
-                self.shutdown = true;
-                self.send_to(idx, DaemonEvent::Ack);
+                self.quit_daemon(idx);
             }
 
             // Legacy `--resume` open-the-hub request. Daemon-per-session: the client no
@@ -440,8 +640,7 @@ impl DaemonHub {
             // tick (it does NOT build a daemon-side hub mode). Ack on success or Error on
             // failure (e.g. spawn_pending is set mid-/new).
             ClientRequest::OpenSessionHub => {
-                let result = crate::app::runtime::commands::new_session::handle_resume(state);
-                self.ack_or_error(idx, result);
+                self.open_session_hub(idx, state);
             }
 
             // The client reports the on-screen editor wrap width so the daemon's
@@ -449,12 +648,17 @@ impl DaemonHub {
             // width the client renders. Only meaningful when the daemon is in the
             // agents full-screen editor; a no-op Ack otherwise.
             ClientRequest::EditorWrapW(n) => {
-                if let Mode::Agents(ref a) = state.mode() {
-                    if let Some((_, ref ed)) = a.editor {
-                        ed.wrap_w.set(n);
-                    }
-                }
-                self.send_to(idx, DaemonEvent::Ack);
+                self.editor_wrap_w(idx, state, n);
+            }
+
+            // GUI status-footer Compact action: summarise + trim the foreground
+            // session's history via the SAME `handle_compact` entry point the TUI's
+            // `/compact` command calls (`preserve_n_override: None` — use the
+            // session's configured `compaction.preserve_n`). Busy / no-session is a
+            // no-op reported via the session's `status` line, exactly like `/compact`;
+            // any real error surfaces as `DaemonEvent::Error`.
+            ClientRequest::Compact => {
+                self.compact(idx, state, client, handle);
             }
 
             // Read-only / already-handled variants never reach here (handle_request
@@ -466,7 +670,15 @@ impl DaemonHub {
             | ClientRequest::Detach
             | ClientRequest::Resync
             | ClientRequest::ListSessions
-            | ClientRequest::Status => {
+            | ClientRequest::Status
+            | ClientRequest::RemoveAttachment { .. }
+            | ClientRequest::FileSearch { .. }
+            | ClientRequest::ListModels { .. }
+            | ClientRequest::ListRoutes { .. }
+            | ClientRequest::GetSettings
+            | ClientRequest::ListAgents
+            | ClientRequest::GetEffortOptions
+            | ClientRequest::SetStreamView { .. } => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }
@@ -474,10 +686,90 @@ impl DaemonHub {
 
     /// Reply `Ack` on success or `Error(msg)` on a handler error — so a failing
     /// action surfaces to the client instead of aborting the daemon loop.
-    fn ack_or_error(&mut self, idx: usize, result: anyhow::Result<()>) {
+    pub(super) fn ack_or_error(&mut self, idx: usize, result: anyhow::Result<()>) {
         match result {
             Ok(()) => self.send_to(idx, DaemonEvent::Ack),
             Err(e) => self.send_to(idx, DaemonEvent::Error(format!("{e:#}"))),
         }
+    }
+
+    /// Send client `idx` a [`DaemonEvent::SettingsValues`] built from the foreground
+    /// session's GUI-editable prefs + the global config palette — the reply to a
+    /// [`ClientRequest::GetSettings`] and the re-push after a
+    /// [`ClientRequest::SetSessionPrefs`]. The C2 LOAD bracket in `handle_request` already
+    /// pointed `fg()` at THIS client's foreground, so this reads exactly the session the
+    /// GUI Settings tab is editing. ALWAYS sends — when there is no foreground session it
+    /// falls back to `Settings::default()` (empty name/workdir, default toggles) so the tab
+    /// never hangs. `send_to` delivers regardless of attach state (like `ModelList`).
+    pub(super) fn send_settings_values(&mut self, idx: usize, state: &AppState) {
+        let default = crate::model::settings::Settings::default();
+        let session = state.rest.fg().session.as_ref();
+        let s = session.map(|sess| &sess.settings).unwrap_or(&default);
+        let event = DaemonEvent::SettingsValues {
+            // The RESOLVED display name (`Session.name`, which falls back to the session
+            // id/UUID when the `settings.name` draft is blank — session.rs:74), so the GUI
+            // Name input matches the tab bar / hub list and the skip-if-unchanged check is
+            // meaningful. `settings.name` alone is the raw draft — empty until an explicit
+            // rename. Empty only when there is truly no foreground session.
+            name: session.map(|sess| sess.name.clone()).unwrap_or_default(),
+            workdir: s.workdir.clone(),
+            short_send: s.short_send_enabled,
+            sliding_cache: s.sliding_cache,
+            bash_saving: s.bash_saving,
+            coding_autosave: s.coding_autosave,
+            internet_mode: s.internet_mode.as_str().to_string(),
+            palette: state.rest.config.palette.clone(),
+            effort: s.effort.clone(),
+        };
+        self.send_to(idx, event);
+    }
+
+    /// Reply with a one-shot [`DaemonEvent::McpStatus`] built from the configured
+    /// MCP server list and the live [`McpManager`]'s status + errors. When no
+    /// manager is installed, sends a status with `global_error` set so the frontend
+    /// shows an availability error instead of an indefinite spinner.
+    fn get_mcp_status(&mut self, idx: usize, state: &AppState, request_id: String) {
+        let mgr = state.rest.mcp_manager.as_ref();
+        let configured = &state.rest.config.mcp_servers;
+
+        let (status_map, error_map) = match mgr {
+            Some(mgr) => {
+                let status = mgr.server_status_cached();
+                let errors = mgr.server_errors();
+                (status, errors)
+            }
+            None => {
+                // No manager — send an availability error rather than empty status.
+                let event = crate::ipc::proto::DaemonEvent::McpStatus {
+                    request_id,
+                    servers: Vec::new(),
+                    global_error: Some("MCP manager not available (no session attached)".into()),
+                };
+                self.send_to(idx, event);
+                return;
+            }
+        };
+
+        let servers: Vec<crate::ipc::proto::McpStatusServer> = configured
+            .iter()
+            .map(|srv| {
+                let tool_count = status_map.get(&srv.uuid).copied().unwrap_or(0);
+                let connected = status_map.contains_key(&srv.uuid);
+                let error = error_map.get(&srv.uuid).cloned();
+                crate::ipc::proto::McpStatusServer {
+                    id: srv.uuid.clone(),
+                    connected,
+                    tool_count,
+                    error,
+                }
+            })
+            .collect();
+
+        let event = crate::ipc::proto::DaemonEvent::McpStatus {
+            request_id,
+            servers,
+            global_error: None,
+        };
+        self.send_to(idx, event);
     }
 }

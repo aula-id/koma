@@ -12,4 +12,8 @@ mod state;
 mod types;
 
 pub use state::{transport_label, McpState};
+// Re-exported so the GUI config setters (daemon `SetMcpServer` handler) can map the
+// panel's single-line args/env STRING forms into the daemon's array/pair forms using
+// the SAME parsers the TUI MCP editor uses — no forked parsing logic.
+pub(crate) use state::{parse_args, parse_env};
 pub use types::{McpEditField, McpSubMode};

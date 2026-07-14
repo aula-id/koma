@@ -15,12 +15,14 @@ use crate::controller::input::Action;
 use crate::service::openrouter::OpenRouterClient;
 
 mod agents;
+mod background;
 mod bash;
 mod todo;
 mod chat;
 mod mcp;
 mod oauth;
 mod onboard;
+mod plan_decision;
 // `pub(in crate::app::runtime)` so the `/quit` COMMAND handler (in the sibling
 // `commands` module) can route through the same `request_quit` chokepoint as the
 // quit keybind, instead of duplicating the working-aware open-or-quit logic.
@@ -38,6 +40,10 @@ mod settings;
 // keeps the dormant re-export warning-free at this commit.
 #[allow(unused_imports)]
 pub(in crate::app::runtime) use session::create_session_for_pwd;
+// Re-export the mode-independent MCP save+reload so the daemon's GUI config setters
+// (`SetMcpServer`/`DeleteMcpServer`/`EnableMcpServer`) can persist + live-reconnect the
+// MCP manager without a `Mode::Mcp` in scope.
+pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
 mod settings_creds;
 
 /// Apply one `Action` (the decoded result of a keystroke) by mutating state and,
@@ -112,15 +118,15 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::ApprovePlan => {
-            chat::handle_approve_plan(state, client, handle)?;
+            plan_decision::handle_approve_plan(state, client, handle)?;
         }
 
         Action::ApprovePlanCompact => {
-            chat::handle_approve_plan_compact(state, client, handle)?;
+            plan_decision::handle_approve_plan_compact(state, client, handle)?;
         }
 
         Action::DenyPlan => {
-            chat::handle_deny_plan(state, client, handle)?;
+            plan_decision::handle_deny_plan(state, client, handle)?;
         }
 
         Action::SetupKomaFree => {
@@ -332,11 +338,11 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::BackgroundSubagent(id) => {
-            chat::handle_background_subagent(id, state)?;
+            background::handle_background_subagent(id, state)?;
         }
 
         Action::BackgroundAllSubagents => {
-            chat::handle_background_all_subagents(state)?;
+            background::handle_background_all_subagents(state)?;
         }
 
         Action::OpenRewind => {

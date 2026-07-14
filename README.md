@@ -45,8 +45,23 @@ curl -fsSL https://koma.run/install.sh | sh
 
 Installs to `~/.local/bin` — no sudo required. Then run `koma` and start a session.
 
+### Desktop GUI (optional)
+
+The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gui` cargo feature and is NOT built by default:
+
+```sh
+cargo build -p agent --features gui
+```
+
+Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (e.g. `libwebkit2gtk-4.1-dev` on Debian/Ubuntu), plus GTK3 and libsoup3. macOS uses the system WebKit (no extra deps). The default `cargo install` / build pulls none of these — the GUI deps (`wry`, `tao`, `portable-pty`) are optional and only compiled with `--features gui`.
+
 More at **[koma.run](https://koma.run)**.
 
 ---
 
-*Curious how it works under the hood? See [`ARCHITECTURE.md`](ARCHITECTURE.md).*
+*Curious how it works under the hood? See [`ARCHITECTURE.md`](docs/ARCHITECTURE.md).*  
+
+*Extending the desktop GUI? See [`WEBGUI_SIDEBAR_TABS.md`](docs/WEBGUI_SIDEBAR_TABS.md).*  
+
+*Adding a new GUI feature? See [`ADDING_GUI_FEATURES.md`](docs/ADDING_GUI_FEATURES.md).*  
+*Connecting GUI tabs to Rust? See [`WEBGUI_IPC.md`](docs/WEBGUI_IPC.md).*

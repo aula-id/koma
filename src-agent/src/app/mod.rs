@@ -5,6 +5,9 @@
 //! - [`awareness`] – project-doc summarisation for the self-awareness block
 //! - [`bgbash`] – background-bash registry: run a shell command detached, poll it
 //!   with `bash_output`, stop it with `bash_kill`
+//! - [`ext`] – extension host: install + verify signed extension packages and
+//!   spawn/supervise them, talking the duplex extension protocol over a per-
+//!   extension unix socket
 //! - [`harness`] – safety classifier ("Pass B") + deterministic workspace check
 //! - [`mcp`] – MCP (Model Context Protocol) client: connect to configured servers,
 //!   discover their tools, advertise + dispatch them
@@ -21,6 +24,7 @@
 
 pub mod awareness;
 pub mod bgbash;
+pub mod ext;
 pub mod harness;
 pub mod mcp;
 pub mod mode;
@@ -34,6 +38,8 @@ pub mod version;
 
 pub use runtime::client_run;
 pub use runtime::run;
+#[cfg(feature = "gui")]
+pub use runtime::gui::run_gui;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
 pub use runtime::run_mcp_daemon;

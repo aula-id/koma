@@ -144,12 +144,12 @@ pub(super) fn apply_compaction_result(
         // Also resolve the Main route as a fallback: when the Awareness model call
         // itself fails (e.g. bad/typo'd model name) we retry once on the trusted
         // Main route before giving up.
-        if let Some(r) = crate::app::resolve::resolve_role(
+        if let Some(r) = crate::app::resolve::resolve_role_dispatch(
             &config,
             &settings,
             crate::model::app_config::ModelRole::Awareness,
         ) {
-            let main_route = crate::app::resolve::resolve_role(
+            let main_route = crate::app::resolve::resolve_role_dispatch(
                 &config,
                 &settings,
                 crate::model::app_config::ModelRole::Main,

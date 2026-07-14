@@ -10,7 +10,7 @@
 //!
 //! | Function | Purpose |
 //! |---|---|
-//! | [`internet_dir`] | `~/.simple-coder/internet/` — install root |
+//! | [`internet_dir`] | `~/.koma/internet/` — install root |
 //! | [`venv_python`] | path to the venv Python; used as "installed" marker |
 //! | [`is_installed`] | non-panicking predicate consumed by Stage 6 gating |
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
@@ -29,13 +29,13 @@ use crate::model::store::base_dir;
 /// vendored `scrapion_agent` package, `requirements.txt`, and metadata files.
 static INTERNET_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../src-internet");
 
-/// Returns `~/.simple-coder/internet/` — the root of the internet install.
+/// Returns `~/.koma/internet/` — the root of the internet install.
 pub fn internet_dir() -> Result<PathBuf> {
     Ok(base_dir()?.join("internet"))
 }
 
 /// Returns the path to the venv Python binary:
-/// `~/.simple-coder/internet/venv/bin/python`.
+/// `~/.koma/internet/venv/bin/python`.
 ///
 /// The presence of this file is the canonical "installed" marker used by both
 /// [`is_installed`] and the Stage 6 gating logic.

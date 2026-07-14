@@ -42,6 +42,18 @@ use serde::{Deserialize, Serialize};
 use crate::dto::openrouter::ToolDef;
 use crate::model::app_config::McpServerEntry;
 
+/// Per-server status returned by [`McpResponse::Status`].
+///
+/// `tool_count` is `0` for a connected server with zero tools; a still-connecting
+/// server has NO entry. `error` is `Some` only when the server's last connection
+/// attempt failed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerStatus {
+    pub tool_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// A request from a session-daemon (the proxy client) to the global MCP daemon.
 ///
 /// Framed with the shared 4-byte-BE-len + JSON codec ([`super::frame`]).
@@ -99,12 +111,18 @@ pub enum McpResponse {
     /// is reserved for PROTOCOL faults (malformed request, un-parseable args), not tool
     /// errors.
     CallResult(String),
-    /// Answer to [`McpRequest::Status`]: per-server discovered-tool count keyed by
-    /// server uuid — the exact shape
-    /// [`McpManager::server_status`](crate::app::mcp::McpManager::server_status)
-    /// returns, which the `/mcp` dashboard already consumes (a present key = connected;
-    /// its value = tool count).
-    Status(HashMap<String, usize>),
+    /// Answer to [`McpRequest::Status`]: per-server connection state.
+    ///
+    /// `servers` is the COMPLETE list — one entry per configured server uuid with its
+    /// live tool count (a present key = connected, even when `tool_count` is `0`) and
+    /// optional error string. Servers that have not yet connected (or are disabled) are
+    /// absent. `global_error` is a top-level transport/proxy error when the request
+    /// itself could not be serviced (e.g. proxy transport failure).
+    Status {
+        servers: HashMap<String, McpServerStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        global_error: Option<String>,
+    },
     /// Answer to [`McpRequest::Reconnect`]: the reconnect was accepted (it runs in the
     /// background, so this acks receipt, not completion).
     Ack,

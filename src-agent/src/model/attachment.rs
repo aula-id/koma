@@ -60,11 +60,18 @@ fn next_image_seq(images_dir: &Path) -> usize {
     next
 }
 
-/// Sniff a mime type from a path's extension first, confirming with the `infer`
-/// crate's magic-byte check when it has an opinion. Returns `None` when the file
-/// is not a recognised image. The extension is authoritative for the chosen
-/// `image/<ext>` string (so `.jpg` stays `image/jpeg`); `infer` only gates
-/// whether the bytes look like an image at all, rejecting a mislabelled file.
+/// Sniff a mime type from `bytes`' magic numbers first (via the `infer` crate),
+/// falling back to the path's extension only when `infer` has no conclusive
+/// opinion. Returns `None` when the file is not a recognised image — this
+/// rejection behavior is unchanged from the extension-first version.
+///
+/// The magic-byte type is AUTHORITATIVE: a `.png`-named file containing JPEG
+/// bytes comes back as `image/jpeg`, so the mime we store always matches what
+/// we actually send upstream (fixes 400s from mislabelled extensions). The
+/// extension is only consulted (a) to gate that this path is even a candidate
+/// image at all, and (b) as the mime fallback when `infer` can't identify the
+/// bytes at all (returns `None`) — some small/edge images aren't covered by
+/// `infer`, so we trust the extension exactly as before in that case.
 fn sniff_image_mime(path: &Path, bytes: &[u8]) -> Option<String> {
     let ext = path
         .extension()
@@ -73,15 +80,17 @@ fn sniff_image_mime(path: &Path, bytes: &[u8]) -> Option<String> {
     if !IMAGE_EXTS.contains(&ext.as_str()) {
         return None;
     }
-    // Magic-byte confirmation: if `infer` recognises the bytes, require that it
-    // sees an image. If it has no opinion (returns None) we trust the extension —
-    // some small/edge images aren't covered, and the extension already matched.
+    // Magic-byte check: if `infer` recognises the bytes, it wins outright —
+    // both for the reject gate (must be an image/*) and for the mime string
+    // itself (so a mislabelled extension doesn't lie about the real bytes).
     if let Some(kind) = infer::get(bytes) {
         if !kind.mime_type().starts_with("image/") {
             return None;
         }
+        return Some(kind.mime_type().to_string());
     }
-    // Canonicalise the extension to a mime subtype (jpg -> jpeg).
+    // `infer` had no opinion (some small/edge images aren't covered) — trust
+    // the extension, same as before.
     let subtype = if ext == "jpg" { "jpeg" } else { ext.as_str() };
     Some(format!("image/{subtype}"))
 }
@@ -137,10 +146,13 @@ pub fn ingest_image_bytes(
 /// Ingest raw image `bytes` with an EXPLICIT `mime` string (e.g. `"image/png"`)
 /// and `basename` (e.g. `"pasted.png"`) into `images_dir`.
 ///
-/// This is the clipboard-bitmap entry point: the caller already knows the mime
-/// type from the clipboard tool's `--type` argument, so no extension-first sniff
-/// is needed. The magic-byte check via `infer` is still performed as a sanity
-/// guard so corrupt / non-image clipboard data is rejected rather than saved.
+/// This is the clipboard-bitmap entry point: the caller supplies a `--type` mime
+/// from the clipboard tool, but the magic bytes are AUTHORITATIVE — when `infer`
+/// identifies a concrete image type, that wins over the host-supplied `mime`
+/// (fixes a mislabelled `--type` producing a mime that contradicts the actual
+/// bytes upstream). The host-supplied `mime` (falling back to the basename
+/// extension) is used only when `infer` can't identify the bytes at all. The
+/// magic-byte check also still gates rejection of non-image clipboard data.
 /// On success returns `(Attachment, "[Image #N]")`.
 pub fn ingest_image_from_raw_bytes(
     images_dir: &Path,
@@ -148,14 +160,17 @@ pub fn ingest_image_from_raw_bytes(
     mime: &str,
     basename: &str,
 ) -> Result<(Attachment, String)> {
-    // Sanity-check: the bytes must look like an image (magic bytes).
-    if let Some(kind) = infer::get(bytes) {
+    let inferred = infer::get(bytes);
+    if let Some(kind) = &inferred {
         if !kind.mime_type().starts_with("image/") {
             return Err(anyhow!("clipboard data does not appear to be an image"));
         }
     }
-    // If mime is empty or unrecognised, derive from basename extension as a fallback.
-    let effective_mime = if mime.starts_with("image/") {
+    let effective_mime = if let Some(kind) = inferred.filter(|k| k.mime_type().starts_with("image/")) {
+        // Magic bytes identified a concrete image type — trust that over the
+        // host-supplied `--type`, which may be stale or simply wrong.
+        kind.mime_type().to_string()
+    } else if mime.starts_with("image/") {
         mime.to_string()
     } else {
         // Try to derive from basename extension.
@@ -279,4 +294,56 @@ pub fn scan_at_image_tokens(
     }
 
     (result, attachments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal-but-valid JPEG magic bytes (SOI + APP0 marker) — enough for
+    /// `infer` to recognise the content as `image/jpeg` regardless of the
+    /// file's extension.
+    const JPEG_MAGIC: &[u8] = &[
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+    ];
+
+    #[test]
+    fn sniff_image_mime_trusts_magic_bytes_over_mislabeled_extension() {
+        // A file named `.png` but containing real JPEG bytes must sniff as
+        // `image/jpeg` (the magic bytes), NOT `image/png` (the extension) —
+        // otherwise the stored mime would contradict what upstream actually
+        // receives, producing a 400 "Multimodal data is corrupted" error.
+        let path = Path::new("photo.png");
+        let mime = sniff_image_mime(path, JPEG_MAGIC);
+        assert_eq!(mime.as_deref(), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn sniff_image_mime_falls_back_to_extension_when_infer_has_no_opinion() {
+        // Bytes `infer` can't identify (too short / no known magic) but which
+        // still carry a recognised image extension keep using the extension
+        // fallback, unchanged from prior behavior.
+        let path = Path::new("photo.png");
+        let mime = sniff_image_mime(path, b"not a real image body");
+        assert_eq!(mime.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn ingest_image_from_raw_bytes_trusts_magic_bytes_over_wrong_host_mime() {
+        // The host/clipboard tool claims `image/png` via `--type`, but the
+        // actual bytes are JPEG — the stored attachment mime must reflect the
+        // real bytes, not the (wrong) host-supplied type.
+        let dir = std::env::temp_dir().join(format!(
+            "koma_attachment_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (att, _marker) =
+            ingest_image_from_raw_bytes(&dir, JPEG_MAGIC, "image/png", "pasted.png").unwrap();
+        assert_eq!(att.mime, "image/jpeg");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -58,7 +58,7 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
 /// active, even if it slipped past the advertise fold. `git_operator` is allowed
 /// here at the tool-name level only; per-subcommand read-only filtering is a
 /// separate check, [`plan_git_subcommand_allowed`], since Plan may run READ git
-/// but not `commit`/`push`/`checkout`/etc. `todowrite` is allowed so the model can
+/// but not `commit`/`push`/`checkout`/etc. `checklist` is allowed so the model can
 /// maintain the plan checklist; while Plan is active it is FULLY INTERCEPTED (see
 /// `process_tools`) to write the session-scoped `plan_todos.md` + auto-managed
 /// rails, never the per-directory workspace `TODO.md`.
@@ -67,7 +67,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
         "read" | "grep" | "glob" | "dir_list" | "dir_cache_update" | "recall"
         | "web_search" | "web_fetch" | "pong" | "cd" | "git_cred"
         | "task" | "task_output" | "task_kill" | "bash_output" | "bash_kill"
-        | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "todowrite")
+        | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "checklist")
 }
 
 /// True when `subcmd` (the first element of a `git_operator` call's `args`
@@ -185,7 +185,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
-        Box::new(todo::TodoWrite),
+        Box::new(todo::Checklist),
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),
         Box::new(internet::WebDownload),
@@ -196,6 +196,26 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(plan::PlanReady),
         Box::new(seqthink::SeqThink),
     ]
+}
+
+/// Tool names the /agents editor's tool picker EXCLUDES from the selectable list —
+/// internal / infra tools a sub-agent should never be handed: `task` (the recursion
+/// guard), `pong` (a health no-op), and `dir_cache_update` (an internal reindex trigger).
+const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "pong", "dir_cache_update"];
+
+/// The user-selectable tool names for the /agents editor, in [`all_tools`] SOURCE ORDER
+/// (deterministic): every built-in tool name except [`AGENT_PICKER_EXCLUDED`].
+///
+/// THE SINGLE SOURCE OF TRUTH shared by the TUI tool picker
+/// ([`crate::app::mode::agents::ToolPickerState::from_draft`]) and the GUI /agents
+/// dashboard's `AgentsValues` envelope, so both offer exactly the same set — the daemon's
+/// attached reply, the host's un-attached fallback, and the TUI picker can never drift.
+pub fn agent_selectable_tools() -> Vec<String> {
+    all_tools()
+        .iter()
+        .map(|t| t.name().to_string())
+        .filter(|n| !AGENT_PICKER_EXCLUDED.contains(&n.as_str()))
+        .collect()
 }
 
 /// Tools that are NEVER advertised to the main chat model via
