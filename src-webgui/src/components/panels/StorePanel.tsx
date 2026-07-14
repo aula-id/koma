@@ -49,7 +49,7 @@ export function StorePanel() {
                 ) : (
                   <Blocks size={13} className="flex-none opacity-70" />
                 )}
-                <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{ext.id}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{ext.name || ext.id}</span>
                 <span className="flex-none text-[10px] text-koma-dim opacity-70">{ext.version}</span>
               </button>
             </li>

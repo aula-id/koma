@@ -284,14 +284,18 @@ impl DaemonHub {
             .config
             .installed_extensions
             .iter()
-            .map(|e| InstalledExtWire {
-                id: e.id.clone(),
-                version: e.version.clone(),
-                tier: e.tier.clone(),
-                kind: e.kind.clone(),
-                enabled: e.enabled,
-                granted: e.granted.clone(),
-                panels: read_ext_panels(&e.id),
+            .map(|e| {
+                let (name, panels) = read_ext_manifest_info(&e.id);
+                InstalledExtWire {
+                    id: e.id.clone(),
+                    name,
+                    version: e.version.clone(),
+                    tier: e.tier.clone(),
+                    kind: e.kind.clone(),
+                    enabled: e.enabled,
+                    granted: e.granted.clone(),
+                    panels,
+                }
             })
             .collect();
         self.send_to(idx, DaemonEvent::InstalledExtensions { items });
@@ -516,6 +520,46 @@ fn is_safe_ext_id(id: &str) -> bool {
     let has_alnum = id.chars().any(|c| c.is_ascii_alphanumeric());
     let dot_wrapped = id.starts_with('.') || id.ends_with('.');
     all_allowed && has_alnum && !dot_wrapped
+}
+
+/// Read the manifest for extension `id` and extract both the friendly name and
+/// the panel list. A missing/unreadable/unparsable manifest degrades to using
+/// the id as the name and an empty panel list (non-fatal for list rendering).
+fn read_ext_manifest_info(id: &str) -> (String, Vec<PanelWire>) {
+    let path = match store::extensions_dir() {
+        Ok(dir) => dir.join(id).join("manifest.json"),
+        Err(_) => return (id.to_string(), Vec::new()),
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return (id.to_string(), Vec::new()),
+    };
+    let manifest: koma_extension::protocol::ExtensionManifest = match serde_json::from_str(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            store::append_global_error_log(
+                "ext",
+                &format!("failed to parse manifest.json for {id}: {e}"),
+            );
+            return (id.to_string(), Vec::new());
+        }
+    };
+    let name = if manifest.name.is_empty() {
+        id.to_string()
+    } else {
+        manifest.name
+    };
+    let panels = manifest
+        .contributes
+        .panels
+        .into_iter()
+        .map(|p| PanelWire {
+            id: p.id,
+            title: p.title,
+            icon: p.icon,
+        })
+        .collect();
+    (name, panels)
 }
 
 /// Read `contributes.panels` straight off `extensions_dir()/<id>/manifest.json` — the

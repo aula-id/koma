@@ -648,6 +648,8 @@ export type ExtPanel = {
 // the registry, so this is a full projection.
 export type InstalledExt = {
   id: string
+  /** Human-readable name from the installed manifest, when available. */
+  name: string
   version: string
   tier: string
   kind: string
@@ -673,6 +675,8 @@ export type InstalledExtDetail = {
   tools: { name: string; description: string }[]
   models: { id: string; displayName: string }[]
   subAgents: { name: string; description: string }[]
+  /** Best-effort online store enrichment — absent on the initial local response. */
+  storeDetail?: StoreDetail | null
 }
 
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,
@@ -2851,6 +2855,31 @@ export const useKoma = create<KomaState>((set, get) => ({
           // Drop stale replies: only apply when the envelope's id matches the current request.
           if (env.id !== s.store.installedDetailRequestId) return s
           const detail = env.detail
+          // Enrichment response: detail.storeDetail present means this is the
+          // second (online) push. Merge store detail into the existing local
+          // detail. The request id is NOT cleared yet — enrichment completes
+          // the two-phase lifecycle.
+          if (detail?.storeDetail && s.store.installedDetail?.id === env.id) {
+            const merged = { ...s.store.installedDetail, storeDetail: detail.storeDetail }
+            const tabs = s.ui.tabs.map((t) =>
+              t.kind === 'installedExtension' && t.extId === env.id
+                ? { ...t, title: merged.name || merged.storeDetail?.name || merged.id }
+                : t,
+            )
+            return {
+              store: {
+                ...s.store,
+                installedDetail: merged,
+                installedDetailRequestId: null,
+              },
+              ui: { ...s.ui, tabs },
+            }
+          }
+          // Initial (local) response: populate detail and clear loading/error,
+          // but keep installedDetailRequestId alive so the subsequent
+          // enrichment response can pass the stale-reply guard. A new request
+          // from a different extension would overwrite the request id first,
+          // naturally invalidating a late enrichment for this one.
           const tabs = detail
             ? s.ui.tabs.map((t) =>
                 t.kind === 'installedExtension' && t.extId === env.id
@@ -2862,7 +2891,7 @@ export const useKoma = create<KomaState>((set, get) => ({
             store: {
               ...s.store,
               installedDetail: env.detail,
-              installedDetailRequestId: null,
+              // Keep installedDetailRequestId so enrichment can still match.
               installedDetailLoading: false,
               installedDetailError: env.error,
             },

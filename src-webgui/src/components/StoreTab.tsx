@@ -132,7 +132,7 @@ export default function StoreTab() {
                 <ul className="flex flex-col gap-1">{installed.map((ext) => (
                   <li key={ext.id} className="flex items-center gap-2 rounded-md border border-koma-border bg-koma-panel px-3 py-2">
                     {ext.kind === 'daemon' ? <Package size={14} className="flex-none text-koma-dim" /> : <Blocks size={14} className="flex-none text-koma-dim" />}
-                    <button onClick={() => openInstalledExtensionTab(ext.id)} className="min-w-0 flex-1 truncate text-left text-[12px] text-koma-fg hover:underline" title={ext.id}>{ext.id}</button>
+                    <button onClick={() => openInstalledExtensionTab(ext.id)} className="min-w-0 flex-1 truncate text-left text-[12px] text-koma-fg hover:underline" title={ext.id}>{ext.name || ext.id}</button>
                     <span className="flex-none text-[10px] text-koma-dim opacity-70">v{ext.version}</span>
                     <TierBadge tier={ext.tier} />
                     <InstallButton id={ext.id} installed pending={pendingOp === ext.id} onInstall={() => installExtension(ext.id)} onUninstall={() => uninstallExtension(ext.id)} />
