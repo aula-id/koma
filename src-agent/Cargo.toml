@@ -138,3 +138,44 @@ gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 [[bin]]
 name = "koma"
 path = "src/main.rs"
+
+# cargo-packager metadata (deb/wix packaging). All keys verified against the
+# cargo-packager `Config` struct (crates/packager/src/config/mod.rs, tag main
+# as of 2026-07): every field is `#[serde(rename_all = "camelCase")]` with
+# `deny_unknown_fields`, but nearly every multi-word field also carries
+# explicit `alias = "kebab-case"` / `alias = "snake_case"` entries, so the
+# kebab-case keys below (product-name, out-dir, fragment-paths, ...) all
+# deserialize correctly - this is NOT just camelCase-tolerant TOML, it's
+# real serde aliasing. Relative paths (icons, fragment-paths, desktop-template)
+# resolve relative to *this* Cargo.toml's directory (src-agent/), because the
+# packager CLI does `set_current_dir(manifest_path.parent())` before reading
+# them (crates/packager/src/cli/mod.rs) - hence the "../" prefixes.
+[package.metadata.packager]
+product-name = "koma"
+identifier = "run.koma.app"
+category = "DeveloperTool"
+# icon.ico is listed explicitly (not just the `icon*.png` glob) because
+# `Config::find_ico()` only auto-picks a `.ico` if one is literally present
+# in the resolved icons list; without it, the Windows MSI/ARP icon and this
+# fragment's Start Menu shortcut icon would silently fall back to a flat PNG
+# instead of the multi-res ICO. The deb hicolor icon generator ignores
+# non-`.png` entries on its own, so listing icon.ico here does not affect it.
+icons = ["../assets/icon.ico", "../assets/icon*.png"]
+# out-dir/binaries are provided on the CLI in CI
+
+[package.metadata.packager.deb]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+section = "utils"
+# cargo-packager's default .desktop Exec line is just the bare binary name
+# (`Exec=koma`, since a GUI launcher `.desktop` entry launches the ratatui
+# TUI with no controlling terminal (Terminal=false) and no way to do
+# anything). Our own template hardcodes `Exec=koma gui` instead.
+desktop-template = "../packaging/linux/koma.desktop.hbs"
+
+[package.metadata.packager.wix]
+fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
+# Must reference the actual ComponentGroup Id declared in the fragment above,
+# or the fragment's components are compiled but never added to the MSI's
+# Feature tree (see main.wxs's `Feature Id="External"`, which only pulls in
+# `{{#each component_group_refs}}` / `{{#each component_refs}}`).
+component-group-refs = ["KomaPathAndShortcut"]
