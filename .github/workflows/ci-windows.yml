@@ -1,0 +1,68 @@
+name: ci-windows
+
+# Compile-gate the Windows port on every PR and on pushes to main / this
+# feature branch, so the `gui` feature (wry/tao + build.rs npm step) and the
+# extension SDK workspace can't silently regress on Windows. Check-only: no
+# release build, no tests — just fast `cargo check` across the surfaces that
+# matter for Windows support.
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  push:
+    branches:
+      - main
+      - feature/build-and-windows
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+concurrency:
+  group: ci-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-windows:
+    name: check windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo check (default features)
+        run: cargo check -p agent --all-targets --locked
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: cargo check (gui feature)
+        run: cargo check -p agent --features gui --locked
+
+      - name: Cache cargo (src-extension)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-extension/target
+          key: windows-ext-cargo-${{ hashFiles('src-extension/Cargo.lock') }}
+
+      - name: cargo check (src-extension SDK + samples)
+        working-directory: src-extension
+        run: cargo check --all-targets --locked
