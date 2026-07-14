@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use koma_extension::protocol::{ExtMsg, KomaMsg, PROTOCOL_VERSION};
 
 use super::install;
-use super::{ExtCallRequest, ExtHostManager, PendingMap, CONNECT_TIMEOUT};
+use super::{ExtCallRequest, ExtHostManager, ExtNotify, PendingMap, CONNECT_TIMEOUT};
 
 /// Hard cap on a single newline-delimited frame — the handshake `Hello` line AND
 /// every steady-state `ExtMsg`/`KomaMsg` line. Both read sites buffer one line
@@ -440,11 +440,22 @@ pub(super) async fn reader_task(
                         // Unexpected once past the handshake; ignore.
                     }
                     ExtMsg::Notify { name, params } => {
-                        // WAVE-1 COMPILE STUB: `Notify` is fire-and-forget (no `id`,
-                        // no reply expected) and real dispatch (e.g. routing
-                        // `panel.push` to the panel bridge) is wired in a later
-                        // wave. For now, drain the frame without acting on it.
-                        let _ = (name, params);
+                        // Fire-and-forget ext->koma notification: no `id`, no
+                        // `Result` reply expected. Hand it off to the event loop
+                        // (which has the `AppState` access this reader task
+                        // lacks — real dispatch, e.g. routing `panel.push` to the
+                        // panel bridge, is wired in a later wave) via
+                        // `ext_notify_tx`. If it isn't wired yet (tests /
+                        // pre-startup), drop the frame silently — there is no
+                        // reply to fail back to the extension either way. Never
+                        // spawns, never awaits: this loop keeps reading at once.
+                        if let Some(tx) = mgr.ext_notify_tx() {
+                            let _ = tx.send(ExtNotify {
+                                ext_id: ext_id.clone(),
+                                name,
+                                params,
+                            });
+                        }
                     }
                 }
             }

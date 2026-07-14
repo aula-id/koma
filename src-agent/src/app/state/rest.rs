@@ -372,6 +372,22 @@ pub struct AppStateRest {
     /// take/put-back it (mirroring `oauth_rx`); always `Some` between ticks.
     pub ext_call_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtCallRequest>>,
+    /// SENDER half of the extension notify lane. A clone is handed to
+    /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_notify_tx`); each
+    /// extension's socket reader task uses it to forward an ext->koma `Notify` — which
+    /// needs `AppState` access the reader task lacks — into the event loop. Created
+    /// once here and held for the app's lifetime (plus the manager's clone), so the
+    /// paired receiver never observes a premature `Disconnected`.
+    pub ext_notify_tx: tokio::sync::mpsc::UnboundedSender<crate::app::ext::ExtNotify>,
+    /// RECEIVER half of the extension notify lane, drained each tick in
+    /// `service_global` alongside `ext_call_rx`: each [`crate::app::ext::ExtNotify`] is
+    /// dispatched (a later wave routes e.g. `panel.push` to the panel bridge). `Option`
+    /// only so the drain can take/put-back it (mirroring `ext_call_rx`); always `Some`
+    /// between ticks. `#[allow(dead_code)]`: the drain itself (`service_global`
+    /// dispatching each `ExtNotify`, e.g. to the panel bridge) is a later wave — this
+    /// field exists so the sender side has somewhere to deliver to today.
+    #[allow(dead_code)]
+    pub ext_notify_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtNotify>>,
     /// Per-extension registry of the sub-agents THAT extension has spawned,
     /// keyed by extension id. This is the containment boundary the grant broker
     /// (`app::ext::broker`) resolves every `agents.status`/`agents.result`/
@@ -409,6 +425,9 @@ impl AppStateRest {
         // drain never sees a premature `Disconnected`); the receiver is drained each
         // tick in `service_global`.
         let (ext_call_tx, ext_call_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Extension notify lane, created ONCE here for the same reason as
+        // `ext_call_tx`/`ext_call_rx` above.
+        let (ext_notify_tx, ext_notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let first = SessionRuntime::new();
         // Seed the viewed set with the sole session's UUID so the per-tick gates treat
         // it as foreground from tick zero (the local loop re-derives this each tick; the
@@ -492,6 +511,8 @@ impl AppStateRest {
             awareness_tx: None,
             ext_call_tx,
             ext_call_rx: Some(ext_call_rx),
+            ext_notify_tx,
+            ext_notify_rx: Some(ext_notify_rx),
             ext_agents: HashMap::new(),
         }
     }

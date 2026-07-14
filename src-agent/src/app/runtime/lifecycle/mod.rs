@@ -227,6 +227,10 @@ fn build_startup(
     // rather than hanging). The sender is cloned; the receiver stays on `AppStateRest`
     // for `service_global`'s `drain_ext_calls`.
     ext.set_ext_call_tx(state.rest.ext_call_tx.clone());
+    // Same reasoning for the notify lane: wired before any reader task is spawned so
+    // a fast-connecting extension's first `Notify` can reach the event loop rather
+    // than being silently dropped by `ext_notify_tx()` still reading `None`.
+    ext.set_ext_notify_tx(state.rest.ext_notify_tx.clone());
     // Captured for the registration hook below: `Option<Arc<McpManager>>` is
     // `None` in `--daemon` mode at this point (`run_daemon` builds its — possibly
     // `Proxy` — manager AFTER `build_startup` returns), so extension tools are
