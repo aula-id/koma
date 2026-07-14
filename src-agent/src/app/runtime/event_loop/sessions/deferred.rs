@@ -387,6 +387,12 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
     // set the toast on `rest`, then write `was_working` — so no borrow of `sessions[idx]`
     // overlaps the `rest`-level toast mutation.
     let now_working = state.rest.sessions[idx].is_working();
+    // W5: the RAW working->ready edge (NO `!viewed` qualifier, unlike `edge_finished`
+    // below). An extension wants every turn boundary — whether or not a client is
+    // watching — so `agent.turn_end` fires on this raw edge. Computed separately here
+    // so the existing toast / finished_unseen / was_working bookkeeping stays
+    // byte-identical; used only by the fan-out at the end of this function.
+    let raw_turn_end = state.rest.sessions[idx].was_working && !now_working;
     let edge_finished = state.rest.sessions[idx].was_working
         && !now_working
         && !viewed;
@@ -419,6 +425,16 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
         dirty = true;
     }
     state.rest.sessions[idx].was_working = now_working;
+
+    // W5: fan out `agent.turn_end` on the RAW working->ready edge. Placed after the
+    // toast / finished_unseen / was_working bookkeeping above (all left byte-identical)
+    // so the immutable `&AppState` the emit needs is a clean reborrow. Purely additive:
+    // it never sets `dirty` and, with no subscribed extensions, is a structural no-op.
+    if raw_turn_end {
+        let session_uuid = state.rest.sessions[idx].id.clone();
+        let params = serde_json::json!({ "session": session_uuid });
+        crate::app::ext::events::emit(state, "agent.turn_end", &params);
+    }
 
     dirty
 }

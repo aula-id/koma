@@ -37,6 +37,10 @@ impl DaemonHub {
                 if let Some(s) = state.rest.sessions.get_mut(target) {
                     s.finished_unseen = false;
                 }
+                // W5 note: the `session.foreground_change` extension event is emitted at
+                // the shared `handle_live_switch` chokepoint reached via the
+                // `apply_action(LiveSwitch)` above — NOT here. Every in-daemon foreground
+                // switch funnels through it, so a second emit here would double-fire.
                 self.ack_or_error(idx, result);
             }
             None => self.send_to(
