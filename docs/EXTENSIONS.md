@@ -508,10 +508,31 @@ Success: `{ "removed": <n> }`.
   a leaked key can be rotated without re-registering the models bound to it.
 - Success: `{ "uuid": <stable uuid> }`.
 
-**`providers.unregister`** — `{ "ids"?: [<string, matches uuid or name, case-insensitive>] }`. Ownership wall same as `models.unregister`. **Host delete guard**:
+**`providers.unregister`** — `{ "ids"?: [<string, matches uuid or name, case-insensitive>] }`. Ownership wall same as `models.unregister`. **Orphan-model sweep**:
 removal ALSO purges every model anchored to the removed provider (the exact same
 sweep the uninstall path uses — `config.remove_models_by_providers`) so no model
 is ever left pointing at a deleted provider. Success: `{ "removed": <n> }`.
+
+**Host-enforced delete guard (separate from the sweep above)** — this is about the
+OTHER direction: stopping a *user*, not the owning extension, from deleting or
+dropping a key-backed provider (`ProviderConn::ext_id` set). Only the extension
+itself (via `providers.register`/`providers.unregister`) or an uninstall may ever
+remove one; every user-facing config-editing surface refuses it explicitly,
+independently, in THREE places (plus a fourth belt-and-braces restore), so no
+single UI can orphan an extension's gateway:
+
+1. Attached daemon path — `requests_config.rs::delete_provider` rejects with a
+   structured `DaemonEvent::Error` (`"managed by extension {id} — uninstall to
+   remove"`) before any mutation.
+2. Pre-session / detached path — `host_config.rs::apply_global_config_req`'s
+   `DeleteProvider` arm refuses in place (no save, no push) and logs the same
+   reason (this path has no structured-error reply channel).
+3. TUI Settings screen — `settings/state/provider_ops.rs::prov_arm_or_delete`
+   refuses to even ARM the delete, surfacing a footer message instead.
+4. TUI Settings **bulk save** (`runtime/actions/settings.rs`) — the whole-Vec
+   provider-drafts replace RESTORES every ext-managed provider verbatim from the
+   existing config after building the draft list, so a stale/older client that
+   dropped or edited an `ext_id` entry can't silently delete or mutate it either.
 
 ---
 

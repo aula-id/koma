@@ -1288,3 +1288,9 @@ mod ext_purge_tests {
         assert!(!report.main_reset, "no removed model held Main");
     }
 }
+
+// W13: additional regression suite — pure addition, sibling file, never touches any module
+// above.
+#[cfg(test)]
+#[path = "app_config_test.rs"]
+mod app_config_test;

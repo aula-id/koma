@@ -873,3 +873,9 @@ mod ext_notify_tests {
         assert_eq!(out[EXT_PANEL_PUSH_CAP - 1].1, "p259");
     }
 }
+
+// W13: additional regression suite — pure addition, sibling file, never touches the
+// `ext_notify_tests` module above.
+#[cfg(test)]
+#[path = "drains_test.rs"]
+mod drains_test;

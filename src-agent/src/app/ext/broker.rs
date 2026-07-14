@@ -3674,3 +3674,9 @@ mod tests {
         assert_eq!(config.ext_preferred_models.get("ext.b").map(String::as_str), Some(b_uuid.as_str()));
     }
 }
+
+// W13: additional regression suite — pure addition, sibling file, never touches the `tests`
+// module above.
+#[cfg(test)]
+#[path = "broker_test.rs"]
+mod broker_test;
