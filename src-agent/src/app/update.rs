@@ -11,7 +11,27 @@
 
 use anyhow::{anyhow, Result};
 
+// Only the unix `run_update` body below (which stops the daemon before
+// shelling out to the installer) needs this; the windows stub doesn't touch
+// the daemon at all, so it's gated the same way to avoid an unused-import
+// warning on a windows build.
+#[cfg(not(windows))]
 use crate::cli::DaemonSub;
+
+/// Windows: self-update is not implemented yet. The unix path below shells out
+/// to the `curl|sh`/`wget|sh` koma.run installer, which does not exist for
+/// Windows (no equivalent installer script is published), so rather than run
+/// something wrong we fail loudly with a clear next step.
+///
+/// TODO(windows-port): implement a real Windows self-update (fetch the
+/// release zip/installer for this platform and replace the on-disk binary),
+/// then drop this stub in favor of a shared `run_update`.
+#[cfg(windows)]
+pub fn run_update() -> Result<()> {
+    Err(anyhow!(
+        "self-update not supported on Windows yet; download the new installer from the releases page"
+    ))
+}
 
 /// Stop any running daemon, then run the official installer to replace the
 /// on-disk binary with the latest release. Prints progress to stdout and
@@ -19,6 +39,7 @@ use crate::cli::DaemonSub;
 ///
 /// Returns `Ok(())` on success. A non-zero installer exit or a missing
 /// downloader (`curl`/`wget`) is surfaced as `Err`.
+#[cfg(not(windows))]
 pub fn run_update() -> Result<()> {
     // 1. Stop the daemon (graceful → SIGTERM → SIGKILL) via the same public
     //    path that `koma daemon kill` uses. A "no daemon running" outcome is
@@ -67,17 +88,12 @@ pub fn run_update() -> Result<()> {
 }
 
 /// Return `true` if `name` is found on `$PATH` (best-effort — a missing `PATH`
-/// or a permission error returns `false`).
-///
-/// Unix: `command -v <name>`, exactly as before. Windows placeholder: `where
-/// <name>` — TODO(windows-port, phase B3): `where` searches `%PATH%` like
-/// `command -v` searches `$PATH`, but its match/quoting semantics differ
-/// slightly and it has not been exercised on Windows yet.
+/// or a permission error returns `false`). Only used by the unix `run_update`
+/// body above (the windows build has its own stub `run_update` and never
+/// calls this), so it's gated the same way to avoid an unused-function warning.
+#[cfg(not(windows))]
 fn which(name: &str) -> bool {
-    #[cfg(unix)]
     let cmd = format!("command -v {name}");
-    #[cfg(windows)]
-    let cmd = format!("where {name}");
 
     crate::tool::shell::os_shell_command(&cmd)
         .output()

@@ -35,7 +35,8 @@ BLOCK (require human approval) when:
 - The call is destructive or out of scope: `rm -rf`, `dd`, `mkfs`, fork bombs,
   wiping broad paths; writing or deleting OUTSIDE the workspace (absolute paths,
   `..` escaping it, the home directory, /etc, /usr, /bin) — EXCEPT the koma
-  scratch dir (`/tmp/koma/...`) which is always allowed; piping remote content
+  scratch dir (`/tmp/koma/...` on Linux/macOS, or `<temp>\koma\...` on Windows)
+  which is always allowed; piping remote content
   into a shell (`curl ... | sh`, `wget ... | bash`); chmod/chown on system
   paths; reading or transmitting credentials/secrets (.env, ssh keys, tokens);
   killing unrelated processes or changing system-wide/network settings.

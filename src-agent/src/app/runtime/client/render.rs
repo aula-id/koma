@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
@@ -304,6 +304,16 @@ pub(super) fn render_loop(
         while event::poll(Duration::ZERO)? {
             match event::read()? {
                 Event::Key(key) => {
+                    // Windows crossterm reports both Press and Release KeyEventKinds
+                    // (unix only ever sends Press); this is the choke point where keys
+                    // enter this client process (locally handled AND forwarded to the
+                    // daemon via `SendKey`, whose wire form has no `kind` field — see
+                    // `ipc::proto::KeyWire` — so an unfiltered Release would replay the
+                    // whole key a second time both here and daemon-side). A `kind ==
+                    // Press` filter is a no-op on unix (every event already is Press).
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
                     // The `/quit` overlay's choices are CLIENT-process decisions, so
                     // when the shadow is in QuitConfirm (mirrored from the daemon's
                     // mode) the client intercepts its keys locally instead of

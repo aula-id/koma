@@ -102,6 +102,14 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_System_JobObjects",
 ] }
+# Clipboard-image paste (controller/input/clipboard.rs): linux/macos shell out to
+# xclip/wl-paste/pngpaste/osascript; windows has no equivalent always-present CLI
+# tool, so we use arboard for real `OpenClipboard`/`GetClipboardData` access.
+# `default-features = false` + explicit `image-data` (the feature that gates
+# `Clipboard::get_image`) keeps this lean; `image-data` pulls arboard's own
+# windows-only `image` dep with the same `png` feature our own `image` dep
+# above already enables, so cargo unifies them — no second PNG encoder needed.
+arboard = { version = "3", default-features = false, features = ["image-data"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [

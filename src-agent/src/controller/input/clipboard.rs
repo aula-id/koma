@@ -24,6 +24,11 @@
 //! bracketed-paste protocol (which koma routes through `handle_paste`), so
 //! Ctrl+V would otherwise be a no-op here.
 
+// `Command`/`Stdio` back the linux/macos backends below (they all shell out to
+// a CLI tool); the windows backend uses `arboard` instead (no subprocess), so
+// these are scoped to the platforms that actually use them to avoid an
+// unused-import warning on a windows build.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -274,15 +279,51 @@ fn try_osascript() -> Result<Vec<u8>, String> {
 }
 
 // ===========================================================================
-// Windows backend (not yet implemented)
+// Windows backend (`arboard` — real OpenClipboard/GetClipboardData access)
 // ===========================================================================
 
-/// TODO(windows-port, phase B3: arboard). Windows clipboard image access needs a
-/// crate like `arboard` (or raw Win32 `OpenClipboard`/`GetClipboardData` with
-/// `CF_DIB`/`CF_DIBV5` conversion to PNG) — neither is wired up yet. Conservative
-/// stub matching the Linux/macOS backends' signature so Ctrl+V paste on Windows
-/// surfaces a clear toast instead of failing to compile/link.
+/// Try to read PNG bytes from the clipboard. Returns the raw bytes on success
+/// or a human-readable error string on failure. Blocking — runs on a
+/// background thread (this fn itself is already invoked from one, in
+/// [`request_clipboard_image`]); internally hops to a SECOND thread so the
+/// arboard call is bounded by [`CLIPBOARD_TIMEOUT`] the same way the
+/// linux/macos subprocess-based backends bound their child process wait —
+/// arboard is synchronous with no timeout of its own, so without this a
+/// clipboard held by another app could hang the paste indefinitely.
 #[cfg(target_os = "windows")]
 fn fetch_clipboard_png() -> Result<Vec<u8>, String> {
-    Err("clipboard image capture not yet supported on Windows".to_string())
+    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(read_clipboard_image_as_png());
+    });
+
+    match rx.recv_timeout(CLIPBOARD_TIMEOUT) {
+        Ok(result) => result,
+        Err(_) => Err("clipboard read timed out".to_string()),
+    }
+}
+
+/// Open the OS clipboard via `arboard`, read its image (if any), and encode it
+/// as PNG bytes using the `image` crate — already a dependency (see the
+/// attachment-downscaling use in `dto/openrouter/request.rs`), so no second
+/// PNG encoder is needed just for this.
+#[cfg(target_os = "windows")]
+fn read_clipboard_image_as_png() -> Result<Vec<u8>, String> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| format!("could not access clipboard: {e}"))?;
+    let image_data = clipboard
+        .get_image()
+        .map_err(|_| "clipboard is empty or contains no image".to_string())?;
+
+    let width = image_data.width as u32;
+    let height = image_data.height as u32;
+    let rgba = image::RgbaImage::from_raw(width, height, image_data.bytes.into_owned())
+        .ok_or_else(|| "clipboard image has an invalid buffer size".to_string())?;
+
+    let mut png_bytes: Vec<u8> = Vec::new();
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .map_err(|e| format!("failed to encode clipboard image as PNG: {e}"))?;
+
+    Ok(png_bytes)
 }
