@@ -335,7 +335,7 @@ fn push_oauth_gui_terminal(state: &mut AppState, phase: &'static str, error: Opt
 /// of calls doesn't lag a tick behind.
 pub(super) fn drain_ext_calls(
     state: &mut AppState,
-    client: &Option<Arc<OpenRouterClient>>,
+    client: &mut Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> bool {
     let mut dirty = false;

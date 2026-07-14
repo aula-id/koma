@@ -169,6 +169,15 @@ pub struct AppStateRest {
     /// [`crate::app::runtime::commands::new_session::apply_new_session_local`] (the legacy
     /// append-a-session path) so `--local` `/new` behaves exactly as before.
     pub new_pending: Option<bool>,
+    /// Set by the extension grant broker's `sessions.switch` (W7) when the target session
+    /// uuid is NOT a live session in THIS daemon: a transient "tell the client to attach
+    /// that session's OTHER daemon" request, drained next tick by the hub into a one-shot
+    /// [`crate::ipc::proto::DaemonEvent::AttachSession`] broadcast to attached clients. The
+    /// EXACT mirror of `new_pending` → `NewSession` / `resume_pending` → `OpenSwapper`: a
+    /// transient signal, never a UI state, the daemon's own mode left untouched. A
+    /// `sessions.switch` to a LIVE local session takes the in-daemon `handle_live_switch`
+    /// path instead and never sets this. `None` when no cross-daemon switch is pending.
+    pub ext_switch_pending: Option<String>,
     /// Cache of each committed message's rendered visual lines, reused across
     /// frames so markdown/syntect highlighting doesn't re-run every redraw.
     /// Borrowed mutably by the chat renderer through a shared `&rest` (the UI is
@@ -487,6 +496,7 @@ impl AppStateRest {
             select_active: false,
             resume_pending: false,
             new_pending: None,
+            ext_switch_pending: None,
             transcript_cache: RefCell::new(TranscriptCache::default()),
             agent_mode: AgentMode::default(),
             plan_return_mode: None,

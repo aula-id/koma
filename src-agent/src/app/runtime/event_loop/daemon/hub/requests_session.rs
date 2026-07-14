@@ -13,6 +13,7 @@ use crate::ipc::proto::DaemonEvent;
 use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::actions::apply_action;
+use crate::app::runtime::{spawn_or_queue, SpawnOutcome};
 
 use super::core::DaemonHub;
 
@@ -68,6 +69,73 @@ impl DaemonHub {
             handle,
         );
         self.ack_or_error(idx, result);
+    }
+
+    // FIRE-AND-FORGET cross-daemon sub-agent spawn (extension `sessions.spawn_into`, W7):
+    // ANOTHER session-daemon's grant broker connected THIS daemon's keyed socket and sent
+    // `ClientRequest::SpawnAgent`. Spawn a sub-agent into THIS daemon's OWN foreground/first-live
+    // session — the `active_session_idx` pattern: the foreground when it is live, else the first
+    // non-closed session — through the SAME `spawn_or_queue` path the model's `task` tool uses
+    // (`tool_call_id` None, `detached` false, respecting `MAX_SUBAGENTS` → queue when full), then
+    // answer `DaemonEvent::Ack` on accepted/queued or `DaemonEvent::Error` on failure. `agent`
+    // defaults to the built-in general agent; `model`/`effort` are optional per-spawn route
+    // overrides (an empty string is treated as absent, mirroring `agents.spawn`).
+    //
+    // The sending connection NEVER attaches (it speaks only this one request then closes), so it
+    // is never streamed a snapshot — the SAME connectionless contract the `Status` discovery
+    // probe relies on (a registered-but-unattached client owes no deltas). The ext-facing
+    // registry does NOT track this spawn (v1: no cross-daemon polling); the target daemon owns
+    // the resulting sub-agent outright.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn spawn_agent(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        client: &Option<Arc<OpenRouterClient>>,
+        handle: &tokio::runtime::Handle,
+        agent: Option<String>,
+        task: String,
+        model: Option<String>,
+        effort: Option<String>,
+    ) {
+        let task = task.trim();
+        if task.is_empty() {
+            self.send_to(idx, DaemonEvent::Error("spawn requires a non-empty task".into()));
+            return;
+        }
+        // Active session: the foreground when live, else the first non-closed session.
+        let fg = state.rest.foreground;
+        let Some(sess_idx) = (fg < state.rest.sessions.len() && !state.rest.sessions[fg].closed)
+            .then_some(fg)
+            .or_else(|| state.rest.sessions.iter().position(|s| !s.closed))
+        else {
+            self.send_to(idx, DaemonEvent::Error("no live session".into()));
+            return;
+        };
+
+        let agent_name = agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("general");
+        // Empty string → absent (an extension that sends "" should not force an override).
+        let norm = |s: Option<String>| s.map(|v| v.trim().to_string()).filter(|s| !s.is_empty());
+        let (model, effort) = (norm(model), norm(effort));
+        let overrides = if model.is_some() || effort.is_some() {
+            Some(crate::app::subagent::SpawnOverrides { model, effort })
+        } else {
+            None
+        };
+
+        match spawn_or_queue(state, sess_idx, client, handle, agent_name, task, None, false, overrides) {
+            SpawnOutcome::Spawned(_) | SpawnOutcome::Queued(_) => {
+                self.send_to(idx, DaemonEvent::Ack)
+            }
+            SpawnOutcome::Failed => self.send_to(
+                idx,
+                DaemonEvent::Error(format!("failed to spawn agent '{agent_name}'")),
+            ),
+        }
     }
 
     // Quit (close) a single session by stable UUID (daemon stage 10). Resolve

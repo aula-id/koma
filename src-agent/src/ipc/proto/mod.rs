@@ -68,6 +68,24 @@ pub enum ClientRequest {
     /// attach and NO snapshot stream. The daemon must answer this WITHOUT mutating any
     /// session state (no create/attach, no foreground change, no Hello/Snapshot).
     Status,
+    /// FIRE-AND-FORGET cross-daemon sub-agent spawn (extension `sessions.spawn_into`, W7):
+    /// one session-daemon's grant broker connects ANOTHER session-daemon's keyed socket and
+    /// sends this to spawn a sub-agent INTO that daemon's own foreground/first-live session,
+    /// through the SAME `spawn_or_queue` path the model's `task` tool uses (`tool_call_id`
+    /// None, `detached` false). No attach, no streaming: the sending side speaks the blocking
+    /// management codec (like the `Status` discovery probe), reads a single
+    /// [`DaemonEvent::Ack`] (accepted/queued) or [`DaemonEvent::Error`] (failure), and closes
+    /// — the connection is NEVER enrolled as an attached client owing snapshots. `agent`
+    /// defaults to the built-in general agent when absent; `model`/`effort` are optional
+    /// per-spawn route overrides (empty = absent). v1 is intentionally poll-less: the target
+    /// daemon owns the resulting sub-agent, and the caller receives no ext-facing agent id
+    /// (no cross-daemon `agents.status`/`result` polling yet).
+    SpawnAgent {
+        agent: Option<String>,
+        task: String,
+        model: Option<String>,
+        effort: Option<String>,
+    },
     Resync,
     SwitchForeground { session_id: String },
     SubmitInput { text: String },
@@ -505,6 +523,17 @@ pub enum DaemonEvent {
     /// detaches — and attaches a freshly minted id); the shadow treats it as a non-visual
     /// no-op.
     NewSession { kill: bool },
+    /// One-shot: instruct the CONTROLLING client to ATTACH to ANOTHER session's daemon (the
+    /// extension `sessions.switch` hand-off to a session this daemon does not own, W7). A
+    /// broker `sessions.switch` whose target uuid is NOT a live session in THIS daemon sets
+    /// `state.rest.ext_switch_pending = Some(uuid)`; the hub drains it next tick and
+    /// broadcasts this to attached clients — the EXACT mirror of `new_pending` →
+    /// [`NewSession`] / `resume_pending` → [`OpenSwapper`], leaving the daemon's own mode
+    /// untouched. The client is expected to detach and re-attach the named session's daemon
+    /// (via its keyed socket). Payload-free beyond the target `session_id`. The TUI shadow
+    /// treats it as a non-visual no-op (it MAY ignore the hand-off); GUI wiring lands in a
+    /// later wave. Zero attached clients → structural no-op.
+    AttachSession { session_id: String },
     /// One-shot reply to a [`ClientRequest::Status`] discovery probe: this daemon's
     /// single owned session's metadata. Sent WITHOUT attaching the client or streaming
     /// any snapshot — the connection is expected to close right after.
@@ -750,4 +779,50 @@ pub enum StateDelta {
     ForegroundChanged { session_id: String },
     SessionAdded(Box<SessionSnapshot>),
     Toast { kind: String, text: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cross-daemon spawn request (W7 `sessions.spawn_into`) survives a
+    /// serde round-trip intact — it crosses the unix socket between two
+    /// session-daemons, so its wire shape must be stable (all four fields,
+    /// including the `Option` absences).
+    #[test]
+    fn spawn_agent_serde_roundtrip() {
+        let full = ClientRequest::SpawnAgent {
+            agent: Some("researcher".into()),
+            task: "summarise the diff".into(),
+            model: Some("gpt-5".into()),
+            effort: Some("high".into()),
+        };
+        let bytes = serde_json::to_vec(&full).expect("serialise SpawnAgent");
+        let back: ClientRequest = serde_json::from_slice(&bytes).expect("deserialise SpawnAgent");
+        assert_eq!(back, full);
+
+        // Optional fields absent (the common `sessions.spawn_into { session, task }` shape).
+        let minimal = ClientRequest::SpawnAgent {
+            agent: None,
+            task: "do the thing".into(),
+            model: None,
+            effort: None,
+        };
+        let back2: ClientRequest =
+            serde_json::from_slice(&serde_json::to_vec(&minimal).unwrap()).unwrap();
+        assert_eq!(back2, minimal);
+    }
+
+    /// The attach-hand-off signal (W7 `sessions.switch` to a non-local session)
+    /// round-trips — it is broadcast to attached clients, so its wire shape must
+    /// hold.
+    #[test]
+    fn attach_session_serde_roundtrip() {
+        let ev = DaemonEvent::AttachSession {
+            session_id: "abc-123".into(),
+        };
+        let back: DaemonEvent =
+            serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+    }
 }

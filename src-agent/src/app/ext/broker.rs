@@ -44,10 +44,15 @@ use serde_json::{json, Value};
 
 use koma_extension::protocol::Grant;
 
-use crate::app::runtime::{spawn_or_queue, SpawnOutcome};
+use crate::app::runtime::{
+    handle_live_switch, list_live_sessions, spawn_into_session, spawn_or_queue, SpawnIntoReply,
+    SpawnOutcome,
+};
 use crate::app::state::{AppState, SessionRuntime};
 use crate::app::subagent::SubAgentStatus;
+use crate::ipc::proto::{ClientRequest, SessionStatus};
 use crate::model::app_config::ModelRole;
+use crate::model::session_registry::RegRow;
 use crate::model::store;
 use crate::service::openrouter::OpenRouterClient;
 
@@ -324,11 +329,13 @@ pub(crate) fn parse_grants(wire: &[String]) -> Vec<Grant> {
 /// gated by the extension's `granted` scopes, and REPLY on the request's `reply`
 /// oneshot with the JSON the extension receives as its `KomaMsg::Result`.
 ///
-/// Takes `req` BY VALUE so the `reply` oneshot can move into a spawned task for the
-/// async verbs (`chat.prompt` / `models.invoke`, landing in a later wave); the verbs
-/// implemented today all reply INLINE before returning. The caller
-/// (`drain_ext_calls`) therefore no longer sends the reply itself — this function
-/// owns that.
+/// Takes `req` BY VALUE so the `reply` oneshot can move into a spawned task for the async
+/// verbs — `models.invoke` and the `sessions.list`/`sessions.create` /
+/// `sessions.spawn_into`-cross paths, which touch the network or another daemon's socket and
+/// so reply from a `spawn_blocking` task; every other verb replies INLINE before returning.
+/// The caller (`drain_ext_calls`) therefore no longer sends the reply itself — this function
+/// owns that. `client` is `&mut` because `sessions.switch` rebuilds the keyless client at the
+/// session boundary via [`handle_live_switch`].
 ///
 /// GRANT GATE FIRST (the security boundary): a call whose required grant is absent
 /// is rejected before ANY session state is read or mutated. Then the active session
@@ -339,7 +346,7 @@ pub(crate) fn parse_grants(wire: &[String]) -> Vec<Grant> {
 pub fn handle_ext_call(
     state: &mut AppState,
     handle: &tokio::runtime::Handle,
-    client: &Option<Arc<OpenRouterClient>>,
+    client: &mut Option<Arc<OpenRouterClient>>,
     req: ExtCallRequest,
 ) {
     // Own every field: `reply` must be movable into the gate arms (early reply +
@@ -372,10 +379,11 @@ pub fn handle_ext_call(
         GateDecision::Allow => {}
     }
 
-    // 2. Dispatch the (now-authorised) verb by family. The `agents.*` verbs run their
-    // real logic and reply inline; the newer families reply a not-implemented stub
-    // for now (their bodies land in later waves) — the gate + routing + by-value
-    // structure are what land this wave so later waves only fill the bodies.
+    // 2. Dispatch the (now-authorised) verb by family. Most verbs run their real logic and
+    // reply INLINE; the ones that touch the network / other daemons' sockets
+    // (`models.invoke`, `sessions.list`/`create`/`spawn_into`-cross) validate + resolve on
+    // the loop then MOVE the reply oneshot into a spawned task so the event loop never blocks
+    // — each inner-bounded well under the reader's 30s cap.
     //
     // `agents.spawn` ALONE resolves the ACTIVE (foreground) session — spawning into
     // "whatever chat session is in front of the user right now" is the intended
@@ -428,10 +436,31 @@ pub fn handle_ext_call(
         "context.clear" => {
             let _ = reply.send(broker_context_clear(state, &ext_id));
         }
-        // WAVE-3 STUB: the `sessions.*` family lands in W7. Gate + routing + by-value
-        // reply already here; only the bodies are owed.
-        "sessions.list" | "sessions.create" | "sessions.switch" | "sessions.spawn_into" => {
-            let _ = reply.send(json!({ "error": "not implemented" }));
+        "sessions.list" => {
+            // No sync state needed: enumerate the session registry + probe live daemons OFF
+            // the loop (sqlite read + blocking per-socket probes), then reply the merged array.
+            // The reader task caps this Call at 30s; the probe sweep is inner-bounded far below.
+            handle.spawn_blocking(move || {
+                let rows = crate::model::session_registry::list_all().unwrap_or_default();
+                let live = list_live_sessions();
+                let _ = reply.send(merge_sessions(rows, live));
+            });
+        }
+        "sessions.create" => {
+            // Sync validation + uuid mint; then spawn-or-attach the session's own daemon OFF
+            // the loop (the daemon create-or-loads the session itself). OWNS the reply.
+            broker_sessions_create(handle, &params, reply);
+        }
+        "sessions.switch" => {
+            // Fully SYNC: an in-daemon live session switches foreground here; a non-local
+            // uuid latches `ext_switch_pending` for the hub to signal the client next tick.
+            let _ = reply.send(broker_sessions_switch(state, client, &params));
+        }
+        "sessions.spawn_into" => {
+            // Sync local-vs-cross decision; the LOCAL branch replies inline, the CROSS branch
+            // moves the reply into a `spawn_blocking` that speaks to the target daemon's socket.
+            // OWNS the reply either way.
+            broker_sessions_spawn_into(state, &ext_id, client, handle, &params, reply);
         }
         // Unreachable: method_permitted already rejected anything else above.
         _ => {
@@ -951,6 +980,268 @@ fn broker_context_clear(state: &mut AppState, ext_id: &str) -> Value {
     json!({ "ok": true })
 }
 
+// ─── sessions.* (W7) ──────────────────────────────────────────────────────────
+
+/// Read `params[key]` as a TRIMMED non-empty owned `String`, else `None` — the shared
+/// "empty string is treated as absent" convention the `agents.spawn` overrides use, in an
+/// owned form the async `spawn_blocking` bodies can move.
+fn non_empty_owned(params: &Value, key: &str) -> Option<String> {
+    params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Merge the session REGISTRY rows against the currently-LIVE daemons into the
+/// `sessions.list` reply array: `[{ id, name, workdir, live, working }]`. PURE (no I/O) so
+/// the merge is unit-testable; the caller supplies both data sources.
+///
+/// Field mapping is best-effort from what each source actually carries:
+/// - Registry [`RegRow`]: `id ← uuid`, `name ← name`, `workdir ← workdir`.
+/// - A row whose uuid is among the live daemons → `live: true`, `working: <that daemon's
+///   working flag>`; a row with no live daemon → `live: false`, `working: false`.
+/// - A LIVE daemon with NO registry row (spawned but not yet/ever registered) is still
+///   included, keyed by [`SessionStatus`]: `id ← session_id`, `name: null`, `workdir ← pwd`,
+///   `live: true`, `working ← working`.
+///
+/// Registry rows come first (registry order = most-recently-updated first), then any
+/// live-but-unregistered sessions, so the list is stable + deterministic.
+fn merge_sessions(rows: Vec<RegRow>, live: Vec<SessionStatus>) -> Value {
+    let mut out: Vec<Value> = Vec::with_capacity(rows.len() + live.len());
+    for row in &rows {
+        let live_match = live.iter().find(|s| s.session_id == row.uuid);
+        out.push(json!({
+            "id": row.uuid,
+            "name": row.name,
+            "workdir": row.workdir,
+            "live": live_match.is_some(),
+            "working": live_match.map(|s| s.working).unwrap_or(false),
+        }));
+    }
+    // Live sessions with no registry row: include with a null name (nothing to name them by).
+    for s in &live {
+        if rows.iter().any(|r| r.uuid == s.session_id) {
+            continue;
+        }
+        out.push(json!({
+            "id": s.session_id,
+            "name": Value::Null,
+            "workdir": s.pwd,
+            "live": true,
+            "working": s.working,
+        }));
+    }
+    Value::Array(out)
+}
+
+/// Map a cross-daemon [`spawn_into_session`] transport failure (an [`std::io::ErrorKind`])
+/// to the extension-facing error JSON. PURE — factored out so the async path's failure
+/// mapping is unit-testable without a live socket. A refused/absent socket means the target
+/// session's daemon is not accepting (`"session not live"`); every other kind (write / read /
+/// decode / EOF / timeout / frame-cap) means it accepted the connection but did not speak the
+/// expected reply (`"target daemon incompatible or unavailable"`).
+fn spawn_into_error_json(kind: std::io::ErrorKind) -> Value {
+    use std::io::ErrorKind::{ConnectionRefused, NotFound};
+    match kind {
+        ConnectionRefused | NotFound => json!({ "error": "session not live" }),
+        _ => json!({ "error": "target daemon incompatible or unavailable" }),
+    }
+}
+
+/// `sessions.switch { session }` → move the user's FOREGROUND to `session`. Fully SYNC.
+///
+/// If `session` is a LIVE (non-closed) session in THIS daemon's `sessions` Vec, apply the
+/// SAME [`handle_live_switch`] chokepoint the hub's `SwitchForeground` uses (foreground
+/// repoint + flat-UI reset + keyless-client rebuild) and reply `{ ok, delivery: "local" }`.
+/// `handle_live_switch` already fans out `session.foreground_change` (W5), so this must NOT
+/// emit it again. Otherwise the target lives in ANOTHER daemon's process: latch
+/// `ext_switch_pending` for the hub to broadcast a one-shot `AttachSession` to attached
+/// clients next tick, and reply `{ ok, delivery: "signaled" }` (the actual attach is the
+/// client's job — GUI wiring lands later; the TUI may ignore it).
+fn broker_sessions_switch(
+    state: &mut AppState,
+    client: &mut Option<Arc<OpenRouterClient>>,
+    params: &Value,
+) -> Value {
+    let Some(uuid) = params
+        .get("session")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return json!({ "error": "sessions.switch requires a 'session'" });
+    };
+
+    if let Some(target) = state
+        .rest
+        .sessions
+        .iter()
+        .position(|s| s.id == uuid && !s.closed)
+    {
+        // Infallible in practice (the index was just resolved live); ignore the `Result`
+        // rather than surface a spurious error. Do NOT emit foreground_change — the switch
+        // chokepoint already did.
+        let _ = handle_live_switch(target, state, client);
+        return json!({ "ok": true, "delivery": "local" });
+    }
+
+    state.rest.ext_switch_pending = Some(uuid.to_string());
+    json!({ "ok": true, "delivery": "signaled" })
+}
+
+/// `sessions.create { workdir?, name? }` → mint a fresh session uuid and spawn-or-attach ITS
+/// OWN session-daemon (which create-or-loads the session itself — never pre-created here).
+/// OWNS `reply`.
+///
+/// SYNC on the loop: validate `workdir` (present ⇒ must be an absolute, existing path), mint
+/// the uuid, capture the optional `name`. Then MOVE the reply into a `spawn_blocking` that
+/// calls [`ensure_daemon_running`](crate::app::runtime::ensure_daemon_running) (blocking:
+/// spawn a detached `koma --daemon --session <uuid>` and poll-connect until it accepts,
+/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 30s cap, so no
+/// extra outer timer is needed). On success, best-effort set the display `name` (the daemon
+/// registers its registry row during startup, which can lag the socket coming up, so retry
+/// once after a short sleep if the row isn't there yet; a failure to name is NOT an error).
+/// Reply `{ id }` on success, `{ error }` on a spawn failure.
+/// Validate the optional `workdir` of a `sessions.create`. PURE (path metadata only) so the
+/// sync validation is unit-testable: `None` when absent/blank (the daemon buckets the new
+/// session under its own launch cwd), `Ok(Some(path))` when present AND an absolute, existing
+/// directory, or `Err(error json)` when present but relative / non-existent.
+fn parse_create_workdir(params: &Value) -> Result<Option<std::path::PathBuf>, Value> {
+    match params
+        .get("workdir")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(w) => {
+            let p = std::path::Path::new(w);
+            if !p.is_absolute() || !p.exists() {
+                return Err(json!({ "error": "workdir must be an absolute existing path" }));
+            }
+            Ok(Some(p.to_path_buf()))
+        }
+        None => Ok(None),
+    }
+}
+
+fn broker_sessions_create(
+    handle: &tokio::runtime::Handle,
+    params: &Value,
+    reply: tokio::sync::oneshot::Sender<Value>,
+) {
+    let workdir = match parse_create_workdir(params) {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = reply.send(e);
+            return;
+        }
+    };
+    let uuid = uuid::Uuid::new_v4().to_string();
+    let name = non_empty_owned(params, "name");
+
+    handle.spawn_blocking(move || {
+        let v = match crate::app::runtime::ensure_daemon_running(&uuid, false, workdir.as_deref()) {
+            Ok(()) => {
+                if let Some(name) = name {
+                    // The spawned daemon registers its registry row during startup, which can
+                    // lag the socket accepting. Best-effort: name it; if the row isn't there
+                    // yet, wait once and retry. A failure to name is NOT a create failure.
+                    let _ = crate::model::session_registry::set_name(&uuid, &name);
+                    if crate::model::session_registry::get(&uuid).ok().flatten().is_none() {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        let _ = crate::model::session_registry::set_name(&uuid, &name);
+                    }
+                }
+                json!({ "id": uuid })
+            }
+            Err(e) => json!({ "error": format!("{e:#}") }),
+        };
+        let _ = reply.send(v);
+    });
+}
+
+/// `sessions.spawn_into { session, task, agent?, model?, effort?, notify? }` → spawn a
+/// sub-agent into `session`. OWNS `reply`.
+///
+/// Validate `session` + a non-empty `task` up front (both branches need them). If `session`
+/// is a LIVE session in THIS daemon, take the SYNC LOCAL branch: reuse [`broker_spawn`] with
+/// that session's index — the SAME `spawn_or_queue` path + W4 overrides + notify registry
+/// binding `agents.spawn` uses — so the reply carries an ext-facing `agentId` (poll-able via
+/// `agents.status`/`result`), identical in shape to `agents.spawn`.
+///
+/// Otherwise the target lives in ANOTHER daemon's process: MOVE the reply into a
+/// `spawn_blocking` that fires a one-shot [`ClientRequest::SpawnAgent`] at the target's keyed
+/// socket via [`spawn_into_session`] (no attach, no streaming, no retry, no auto-spawn). Reply
+/// `{ status: "sent", session }` on Ack, `{ error }` on the target's Error, or a
+/// [`spawn_into_error_json`]-mapped transport error. NOTE: the ext-facing [`ExtAgentRegistry`]
+/// does NOT track cross-process spawns — v1 has no cross-daemon polling, so a cross spawn
+/// returns no `agentId`.
+fn broker_sessions_spawn_into(
+    state: &mut AppState,
+    ext_id: &str,
+    client: &Option<Arc<OpenRouterClient>>,
+    handle: &tokio::runtime::Handle,
+    params: &Value,
+    reply: tokio::sync::oneshot::Sender<Value>,
+) {
+    let Some(uuid) = params
+        .get("session")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        let _ = reply.send(json!({ "error": "sessions.spawn_into requires a 'session'" }));
+        return;
+    };
+    let task = params.get("task").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if task.is_empty() {
+        let _ = reply.send(json!({ "error": "sessions.spawn_into requires a non-empty 'task'" }));
+        return;
+    }
+
+    // LOCAL: a live session in THIS daemon → reuse the agents.spawn path with THAT index.
+    if let Some(sess_idx) = state
+        .rest
+        .sessions
+        .iter()
+        .position(|s| s.id == uuid && !s.closed)
+    {
+        let v = broker_spawn(state, ext_id, sess_idx, client, handle, params);
+        let _ = reply.send(v);
+        return;
+    }
+
+    // CROSS-PROCESS: fire-and-forget over the target daemon's socket, OFF the loop.
+    let session = uuid.to_string();
+    let agent = non_empty_owned(params, "agent");
+    let model = non_empty_owned(params, "model");
+    let effort = non_empty_owned(params, "effort");
+    let task_owned = task.to_string();
+    handle.spawn_blocking(move || {
+        let v = match store::daemon_sock_path(&session) {
+            Ok(path) => {
+                let req = ClientRequest::SpawnAgent {
+                    agent,
+                    task: task_owned,
+                    model,
+                    effort,
+                };
+                match spawn_into_session(&path, &req) {
+                    Ok(SpawnIntoReply::Accepted) => json!({ "status": "sent", "session": session }),
+                    Ok(SpawnIntoReply::Rejected(msg)) => json!({ "error": msg }),
+                    Err(e) => spawn_into_error_json(e.kind()),
+                }
+            }
+            // Resolving the session's socket path failed (base-dir error): treat as an
+            // unavailable target rather than a hang.
+            Err(_) => json!({ "error": "target daemon incompatible or unavailable" }),
+        };
+        let _ = reply.send(v);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1176,7 +1467,12 @@ mod tests {
             params,
             reply,
         };
-        handle_ext_call(state, handle, client, req);
+        // `handle_ext_call` now takes `&mut Option<..>` (W7 `sessions.switch` rebuilds the
+        // keyless client at the session boundary via `handle_live_switch`). No test here
+        // observes that rebuild — they assert on `state` + the reply — so a throwaway clone
+        // keeps every existing call site passing `&client` unchanged.
+        let mut client_local = client.clone();
+        handle_ext_call(state, handle, &mut client_local, req);
         reply_rx
             .try_recv()
             .expect("broker must reply inline on the oneshot in this wave")
@@ -1522,46 +1818,48 @@ mod tests {
         );
     }
 
-    /// WAVE-3: a NEW-family verb is gated by its OWN grant and, once allowed, reaches
-    /// the by-value dispatch's not-implemented stub (real body lands in W6/W7).
-    /// Proves the gate-first invariant holds for the new families exactly as for
-    /// `agents.*`: ungranted is denied BEFORE the stub, an unrelated grant never
-    /// unlocks it, and the reply travels back over the request's `reply` oneshot.
+    /// A NEW-family verb is gated by its OWN grant and, once allowed, reaches its
+    /// real handler (the W6/W7 bodies are now implemented, so there is no longer a
+    /// not-implemented stub). Proves the gate-first invariant holds for the new
+    /// families exactly as for `agents.*`: ungranted is denied BEFORE any dispatch,
+    /// an unrelated grant never unlocks it, and the reply travels back over the
+    /// request's `reply` oneshot.
     #[test]
-    fn new_family_verbs_gated_then_reach_stub() {
+    fn new_family_verbs_gate_first_then_reach_handler() {
         let rt = tokio::runtime::Runtime::new().expect("build runtime");
         let mut state = fixture_state();
         let client: Option<Arc<OpenRouterClient>> = None;
 
-        // Ungranted → grant denied (never reaches the stub, no state touched).
+        // Ungranted → grant denied (never reaches the handler, no state touched).
         let denied = call_broker(
             &mut state,
             rt.handle(),
             &client,
             "test.ext",
             &[],
-            "sessions.list",
-            json!({}),
+            "sessions.switch",
+            json!({ "session": "x" }),
         );
         assert!(
             denied.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
-            "sessions.list without sessions:manage must be denied, got {denied}"
+            "sessions.switch without sessions:manage must be denied, got {denied}"
         );
 
-        // Granted → passes the gate and hits the WAVE-3 stub.
-        let stub = call_broker(
+        // Granted → passes the gate and reaches the REAL sessions.switch handler, which
+        // (with no 'session' param) replies its own validation error INLINE — proving the
+        // gate let it through to the implemented body, not a stub and not a denial.
+        let reached = call_broker(
             &mut state,
             rt.handle(),
             &client,
             "test.ext",
             &[Grant::SessionsManage],
-            "sessions.list",
+            "sessions.switch",
             json!({}),
         );
-        assert_eq!(
-            stub,
-            json!({ "error": "not implemented" }),
-            "a granted new-family verb reaches the not-implemented stub, got {stub}"
+        assert!(
+            reached.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires a 'session'")),
+            "a granted sessions.switch reaches its real handler's validation, got {reached}"
         );
 
         // Cross-family: orchestrate must NOT unlock chat.prompt (exact-match gate).
@@ -1830,6 +2128,262 @@ mod tests {
         assert!(
             no_client.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("no llm client")),
             "a missing client must error, got {no_client}"
+        );
+    }
+
+    // ─── W7 sessions.* ────────────────────────────────────────────────────────
+
+    /// `merge_sessions` (the pure core of `sessions.list`) maps registry rows and
+    /// live daemons into the reply array: a registered+live row reports the live
+    /// daemon's `working`; a registered+dead row reports `live:false, working:false`;
+    /// a live daemon with NO registry row is appended with a `null` name. Registry
+    /// rows come first, live-but-unregistered after.
+    #[test]
+    fn merge_sessions_maps_registry_and_live() {
+        let rows = vec![
+            RegRow {
+                uuid: "live-1".into(),
+                pwd_hash: "h".into(),
+                name: "Live One".into(),
+                workdir: "/w/1".into(),
+                updated_at: 2,
+            },
+            RegRow {
+                uuid: "dead-1".into(),
+                pwd_hash: "h".into(),
+                name: "Dead One".into(),
+                workdir: "/w/dead".into(),
+                updated_at: 1,
+            },
+        ];
+        let live = vec![
+            SessionStatus {
+                session_id: "live-1".into(),
+                name: "ignored".into(),
+                pwd: "/w/1".into(),
+                working: true,
+            },
+            SessionStatus {
+                session_id: "ghost".into(),
+                name: "Ghost".into(),
+                pwd: "/w/ghost".into(),
+                working: false,
+            },
+        ];
+        let arr = merge_sessions(rows, live);
+        let arr = arr.as_array().expect("sessions.list is an array");
+        assert_eq!(arr.len(), 3);
+        // Registry rows first, in registry order.
+        assert_eq!(arr[0]["id"], json!("live-1"));
+        assert_eq!(arr[0]["name"], json!("Live One"));
+        assert_eq!(arr[0]["workdir"], json!("/w/1"));
+        assert_eq!(arr[0]["live"], json!(true));
+        assert_eq!(arr[0]["working"], json!(true), "live row reports the daemon's working flag");
+        assert_eq!(arr[1]["id"], json!("dead-1"));
+        assert_eq!(arr[1]["live"], json!(false));
+        assert_eq!(arr[1]["working"], json!(false), "dead row is never working");
+        // Live-but-unregistered appended with a null name.
+        assert_eq!(arr[2]["id"], json!("ghost"));
+        assert_eq!(arr[2]["name"], Value::Null, "unregistered live session has no name");
+        assert_eq!(arr[2]["workdir"], json!("/w/ghost"));
+        assert_eq!(arr[2]["live"], json!(true));
+        assert_eq!(arr[2]["working"], json!(false));
+    }
+
+    /// `spawn_into_error_json` (the pure failure map for the cross-process
+    /// `sessions.spawn_into` branch, which is otherwise hard to unit-test): a
+    /// refused/absent socket ⇒ "session not live"; every other io kind (timeout /
+    /// EOF / decode / broken-pipe / …) ⇒ "target daemon incompatible or unavailable".
+    #[test]
+    fn spawn_into_error_json_maps_io_kinds() {
+        use std::io::ErrorKind;
+        assert_eq!(
+            spawn_into_error_json(ErrorKind::ConnectionRefused),
+            json!({ "error": "session not live" })
+        );
+        assert_eq!(
+            spawn_into_error_json(ErrorKind::NotFound),
+            json!({ "error": "session not live" })
+        );
+        for k in [
+            ErrorKind::TimedOut,
+            ErrorKind::WouldBlock,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::InvalidData,
+            ErrorKind::BrokenPipe,
+        ] {
+            assert_eq!(
+                spawn_into_error_json(k),
+                json!({ "error": "target daemon incompatible or unavailable" }),
+                "io kind {k:?} must map to unavailable"
+            );
+        }
+    }
+
+    /// `parse_create_workdir` (the sync validation core of `sessions.create`): a
+    /// missing/blank workdir is `Ok(None)` (the daemon buckets under its own cwd); a
+    /// relative or non-existent path is rejected; an absolute existing dir is
+    /// `Ok(Some)`.
+    #[test]
+    fn parse_create_workdir_validation() {
+        assert!(matches!(parse_create_workdir(&json!({})), Ok(None)), "missing workdir → None");
+        assert!(
+            matches!(parse_create_workdir(&json!({ "workdir": "   " })), Ok(None)),
+            "blank workdir → None"
+        );
+
+        let rel = parse_create_workdir(&json!({ "workdir": "relative/dir" }));
+        assert!(rel.is_err(), "a relative workdir must be rejected");
+        assert!(rel
+            .unwrap_err()
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("absolute")));
+
+        let missing = parse_create_workdir(&json!({ "workdir": "/no/such/koma/test/dir/xyz" }));
+        assert!(missing.is_err(), "an absolute non-existent path must be rejected");
+
+        let dir = std::env::temp_dir();
+        let ok = parse_create_workdir(&json!({ "workdir": dir.to_str().unwrap() }));
+        assert!(matches!(ok, Ok(Some(_))), "an absolute existing dir must pass, got {ok:?}");
+    }
+
+    /// `sessions.switch` (fully sync): a LIVE local session uuid actually moves the
+    /// daemon's foreground (via the shared `handle_live_switch` chokepoint) and
+    /// replies `delivery: "local"`; a non-local uuid instead latches
+    /// `ext_switch_pending` for the hub to signal the client and replies
+    /// `delivery: "signaled"` without moving the local foreground.
+    #[test]
+    fn sessions_switch_local_moves_foreground_remote_signals() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state(); // session A at idx 0 (foreground)
+        let client: Option<Arc<OpenRouterClient>> = None;
+        let session_b = SessionRuntime::new();
+        let b_uuid = session_b.id.clone();
+        state.rest.sessions.push(session_b); // B at idx 1
+        assert_eq!(state.rest.foreground, 0);
+
+        // Local-live switch to B → foreground moves, delivery "local", no attach signal.
+        let local = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.switch",
+            json!({ "session": b_uuid }),
+        );
+        assert_eq!(local, json!({ "ok": true, "delivery": "local" }));
+        assert_eq!(state.rest.foreground, 1, "a local switch moves the foreground");
+        assert!(
+            state.rest.ext_switch_pending.is_none(),
+            "a local switch must NOT latch an attach signal"
+        );
+
+        // Non-local uuid → ext_switch_pending latched, delivery "signaled", foreground unmoved.
+        let remote = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.switch",
+            json!({ "session": "no-such-session" }),
+        );
+        assert_eq!(remote, json!({ "ok": true, "delivery": "signaled" }));
+        assert_eq!(
+            state.rest.ext_switch_pending.as_deref(),
+            Some("no-such-session"),
+            "a remote switch latches the attach signal"
+        );
+        assert_eq!(state.rest.foreground, 1, "a signaled switch must NOT move local foreground");
+    }
+
+    /// `sessions.spawn_into` LOCAL branch: a two-session fixture, spawning into the
+    /// NON-foreground session B by uuid, routes through `broker_spawn` with B's index
+    /// (not the foreground A's) — the queued sub-agent lands in B and the reply carries
+    /// an ext-facing `agentId`. Forced onto the QUEUE path (session filled to the
+    /// sub-agent cap) so no real model/task is needed; a client must exist for the
+    /// queue. Also covers the up-front `session`/`task` validation guards.
+    #[test]
+    fn spawn_into_local_queues_into_named_session_with_agentid() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state(); // session A (foreground) at idx 0
+
+        // Session B (non-foreground) at idx 1 with a minimal real `Session` (so the queue
+        // path's `session.is_none()` guard passes), filled to the sub-agent cap so
+        // `spawn_or_queue` takes the QUEUE branch (pure in-memory — no task/disk/network).
+        let mut session_b = SessionRuntime::new();
+        let b_uuid = session_b.id.clone();
+        session_b.session = Some(crate::model::session::Session::new(
+            b_uuid.clone(),
+            std::path::PathBuf::from("/tmp/koma-spawn-into-test"),
+            "hash".into(),
+            crate::model::settings::Settings::default(),
+            crate::model::conversation::Conversation::new(""),
+        ));
+        for i in 0..crate::app::subagent::MAX_SUBAGENTS {
+            session_b
+                .subagents
+                .push(inert_subagent(rt.handle(), i, "general", SubAgentStatus::Running));
+        }
+        session_b.next_subagent_id = crate::app::subagent::MAX_SUBAGENTS;
+        state.rest.sessions.push(session_b);
+
+        // A client must exist for the queue path (it never runs a task here).
+        let client: Option<Arc<OpenRouterClient>> = Some(crate::app::runtime::build_client());
+
+        let out = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.spawn_into",
+            json!({ "session": b_uuid, "task": "do it" }),
+        );
+        assert!(
+            out.get("agentId").is_some(),
+            "a local spawn_into must return an ext-facing agentId, got {out}"
+        );
+        assert_eq!(out["status"], json!("queued"));
+        // The queued spawn landed in session B (idx 1), NOT the foreground A (idx 0).
+        assert_eq!(
+            state.rest.sessions[1].pending_subagents.len(),
+            1,
+            "the spawn queued into the named non-foreground session B"
+        );
+        assert!(
+            state.rest.sessions[0].pending_subagents.is_empty(),
+            "the foreground session A must be untouched"
+        );
+
+        // Validation guards: a missing 'session' and an empty 'task' both error inline.
+        let no_session = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.spawn_into",
+            json!({ "task": "x" }),
+        );
+        assert!(
+            no_session.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("'session'")),
+            "a missing session must error, got {no_session}"
+        );
+        let empty_task = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.spawn_into",
+            json!({ "session": b_uuid, "task": "   " }),
+        );
+        assert!(
+            empty_task.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'task'")),
+            "an empty task must error, got {empty_task}"
         );
     }
 }
