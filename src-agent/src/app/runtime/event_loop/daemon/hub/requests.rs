@@ -631,15 +631,18 @@ impl DaemonHub {
             | ClientRequest::CancelOAuth
             | ClientRequest::DeleteOAuthConn { .. } => self.oauth(idx, req, state, client, handle),
 
-            // GUI extension STORE (browse / detail / install / uninstall / list-installed):
-            // route the whole family to `requests_ext`'s thin `ext` router. Browse/detail hit
-            // the PUBLIC store endpoints; install/uninstall mutate the live managers + config
-            // (daemon-owned). Replies land out-of-band via the hub's `drain_store_replies`.
+            // GUI extension STORE + PANEL bridge (browse / detail / install / uninstall /
+            // list-installed / panel.msg): route the whole family to `requests_ext`'s thin `ext`
+            // router. Browse/detail hit the PUBLIC store endpoints; install/uninstall mutate the
+            // live managers + config; `ExtPanelMsg` auto-starts the extension + invokes its
+            // `panel.msg` off-loop — all DAEMON-owned. Replies land out-of-band via the hub's
+            // `drain_store_replies`.
             ClientRequest::StoreBrowse { .. }
             | ClientRequest::StoreDetail { .. }
             | ClientRequest::InstallExtension { .. }
             | ClientRequest::UninstallExtension { .. }
-            | ClientRequest::ListInstalledExtensions => self.ext(idx, req, state, handle),
+            | ClientRequest::ListInstalledExtensions
+            | ClientRequest::ExtPanelMsg { .. } => self.ext(idx, req, state, handle),
 
             // Ask the daemon to shut down: latch the flag the loop polls, then Ack.
             // The actual teardown (release locks, drop runtime, unlink socket) runs
@@ -682,6 +685,8 @@ impl DaemonHub {
             // exhaustive without a spurious error. `Status` is among these — it is
             // answered in `dispatch_request` with its own one-shot frame and never falls
             // through to a mutation, so it must NOT reach this Ack path in practice.
+            // (`ExtPanelMsg` is NOT here: it is handled above by the `ext` group arm — the
+            // whole extension family, incl. panel.msg, is routed to `self.ext(..)`.)
             ClientRequest::Attach { .. }
             | ClientRequest::Detach
             | ClientRequest::Resync

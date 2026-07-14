@@ -147,6 +147,11 @@ pub(super) fn apply_frame(
         | DaemonEvent::InstalledExtensions { .. }
         | DaemonEvent::ExtensionOpResult { .. } => false,
         | DaemonEvent::McpStatus { .. } => false,
+        // W8 panel bridge: the GUI host intercepts `ExtPanelReply`/`ExtPanelPush` in `push_loop`
+        // (re-pushing its own envelope); the TUI client never opens an extension panel, so both
+        // fold as non-visual no-ops here (like the store replies / `AttachSession`).
+        | DaemonEvent::ExtPanelReply { .. }
+        | DaemonEvent::ExtPanelPush { .. } => false,
     }
 }
 

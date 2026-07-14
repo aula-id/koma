@@ -23,14 +23,18 @@
 //! [`store::append_global_error_log`] — never `eprintln!`/`println!` (this is TUI-owning
 //! runtime code).
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 
+use crate::app::ext::ExtHostManager;
 use crate::app::state::AppState;
 use crate::ipc::proto::{
     ClientRequest, DaemonEvent, InstalledExtWire, PanelWire, StoreContributesWire,
     StoreDetailWire, StoreItemWire,
 };
-use crate::model::app_config::OAuthProvider;
+use crate::model::app_config::{InstalledExtension, OAuthProvider};
 use crate::model::store;
 
 use super::core::{DaemonHub, StoreReply};
@@ -60,8 +64,66 @@ impl DaemonHub {
             }
             ClientRequest::UninstallExtension { id } => self.uninstall_extension(idx, state, id),
             ClientRequest::ListInstalledExtensions => self.list_installed_extensions(idx, state),
+            ClientRequest::ExtPanelMsg {
+                ext_id,
+                panel_id,
+                req_id,
+                payload,
+            } => self.panel_msg(idx, state, handle, ext_id, panel_id, req_id, payload),
             _ => {}
         }
+    }
+
+    /// Route one GUI panel→daemon message (W8 panel bridge) to its backing extension WITHOUT
+    /// blocking the event loop. Snapshots the requesting client id + the manager `Arc` + the
+    /// [`InstalledExtension`] record (enabled + kind, for the auto-start decision) up front, then
+    /// runs the auto-start-if-needed + `panel.msg` invoke on `spawn_blocking` — BOTH
+    /// [`ExtHostManager::ensure_started`] and [`ExtHostManager::invoke_with_timeout`] block the
+    /// calling thread on a sync→async bridge, so they must NEVER run on the event-loop thread.
+    /// The outcome ships back on the hub's `store_tx` as a [`StoreReply::PanelReply`] the per-tick
+    /// `drain_store_replies` turns into a seq'd [`DaemonEvent::ExtPanelReply`] to the requester.
+    /// A missing ext manager (no session runtime) replies `ok:false` synchronously (no task).
+    fn panel_msg(
+        &mut self,
+        idx: usize,
+        state: &AppState,
+        handle: &tokio::runtime::Handle,
+        ext_id: String,
+        panel_id: String,
+        req_id: Option<String>,
+        payload: serde_json::Value,
+    ) {
+        let client_id = self.clients[idx].id;
+        let tx = self.store_tx.clone();
+        // Snapshot the registry record up front — the closure runs off the event loop and must
+        // not borrow `state`. `None` = not installed (→ the decision's error path).
+        let record = state
+            .rest
+            .config
+            .installed_extensions
+            .iter()
+            .find(|e| e.id == ext_id)
+            .cloned();
+
+        // No live ext manager (no session runtime) → nothing can service the panel; reply now.
+        let Some(mgr) = state.rest.ext_manager.clone() else {
+            let _ = tx.send(StoreReply::PanelReply {
+                client_id,
+                ext_id,
+                panel_id,
+                req_id,
+                ok: false,
+                payload: None,
+                error: Some("extension not available".to_string()),
+            });
+            return;
+        };
+
+        // Off-loop: auto-start (if needed) + invoke `panel.msg`, then ship the outcome back.
+        handle.spawn_blocking(move || {
+            let reply = run_panel_msg(&mgr, client_id, ext_id, panel_id, req_id, payload, &record);
+            let _ = tx.send(reply);
+        });
     }
 
     /// Browse the store catalogue (PUBLIC, no auth): spawn a `GET /extensions[?q&category]`
@@ -359,6 +421,66 @@ impl DaemonHub {
                         );
                     }
                 }
+                // W8 panel bridge: turn a panel.msg outcome into a seq'd `ExtPanelReply` to the
+                // REQUESTING client (matched by id — a client that vanished mid-flight is silently
+                // dropped, same safe `position` map as the store replies above).
+                StoreReply::PanelReply {
+                    client_id,
+                    ext_id,
+                    panel_id,
+                    req_id,
+                    ok,
+                    payload,
+                    error,
+                } => {
+                    if let Some(i) = self.clients.iter().position(|c| c.id == client_id) {
+                        self.send_to(
+                            i,
+                            DaemonEvent::ExtPanelReply {
+                                ext_id,
+                                panel_id,
+                                req_id,
+                                ok,
+                                payload,
+                                error,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Broadcast every queued daemon→panel push (`state.rest.ext_panel_pushes`, filled by the
+    /// `drains::drain_ext_notifies` global drain when an extension sends `panel.push`) to ALL
+    /// ATTACHED clients as a seq'd [`DaemonEvent::ExtPanelPush`]. Called once per tick by the
+    /// daemon loop right after [`Self::drain_store_replies`]. Unlike `drain_store_replies` /
+    /// `drain_oauth_pushes` — which target ONE initiating client by id — a panel push is NOT
+    /// request-correlated (no initiator), so it fans out to EVERY attached client (an enrolled-
+    /// but-not-yet-attached client is skipped, exactly like every other delta — it has no live
+    /// shadow yet). Empty except in the ticks a push lands. `send_to` never removes a client (a
+    /// dead channel just skips the seq bump), so iterating by index is sound.
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_ext_panel_pushes(
+        &mut self,
+        state: &mut AppState,
+    ) {
+        if state.rest.ext_panel_pushes.is_empty() {
+            return;
+        }
+        let pushes = std::mem::take(&mut state.rest.ext_panel_pushes);
+        for (ext_id, panel_id, payload) in pushes {
+            for i in 0..self.clients.len() {
+                if self.clients[i].attached {
+                    // Clone per recipient — one push fans out to every attached shadow.
+                    self.send_to(
+                        i,
+                        DaemonEvent::ExtPanelPush {
+                            ext_id: ext_id.clone(),
+                            panel_id: panel_id.clone(),
+                            payload: payload.clone(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -447,6 +569,117 @@ impl DaemonHub {
                         error: Some(format!("{e:#}")),
                     },
                 );
+            }
+        }
+    }
+}
+
+/// The auto-start decision for a `panel.msg` (W8 panel bridge), factored out as a PURE function
+/// over the two inputs the on-`spawn_blocking` closure branches on so it is unit-testable without
+/// a live manager. `running` is `mgr.is_running(&ext_id)`; `record` is the extension's registry
+/// entry (`None` = not installed). Returns:
+///   - `Ok(true)`  → already running → invoke straight away (an already-live extension is used
+///                    regardless of its persisted `enabled` flag, which only gates auto-start).
+///   - `Ok(false)` → a daemon-kind, ENABLED, not-yet-running extension → `ensure_started` first
+///                    (a panel being open implies user intent; a blocking start is fine on the
+///                    pool).
+///   - `Err(msg)`  → not serviceable: MISSING / DISABLED / a ONESHOT-kind extension (spawned
+///                    per-invoke, so it has no live panel backend) → surfaced as the reply error.
+fn panel_start_decision(running: bool, record: Option<&InstalledExtension>) -> Result<bool, String> {
+    if running {
+        return Ok(true);
+    }
+    match record {
+        // Disabled (any kind) → not available (its auto-start is intentionally off).
+        Some(ext) if !ext.enabled => Err("extension not available".to_string()),
+        // Enabled daemon, not yet running → auto-start it.
+        Some(ext) if ext.kind == "daemon" => Ok(false),
+        // Enabled but not a daemon (oneshot) → no persistent panel backend to talk to.
+        Some(_) => Err("extension not available".to_string()),
+        // Not installed.
+        None => Err("extension not available".to_string()),
+    }
+}
+
+/// The OFF-LOOP body of [`DaemonHub::panel_msg`]: apply the [`panel_start_decision`], start the
+/// extension if the decision says so, then `invoke_with_timeout("panel.msg")` and package the
+/// outcome as a [`StoreReply::PanelReply`]. Runs on `spawn_blocking` (both `ensure_started` and
+/// `invoke_with_timeout` block on a sync→async bridge). Every failure — unavailable extension,
+/// failed auto-start, or a timed-out/errored invoke — becomes an `ok:false` reply carrying a
+/// human-readable `error`, logged via `append_global_error_log` (never `eprintln!`).
+fn run_panel_msg(
+    mgr: &Arc<ExtHostManager>,
+    client_id: u64,
+    ext_id: String,
+    panel_id: String,
+    req_id: Option<String>,
+    payload: serde_json::Value,
+    record: &Option<InstalledExtension>,
+) -> StoreReply {
+    // Decide + (maybe) start. `error` stays `None` on the happy path (running / just-started).
+    let error: Option<String> = match panel_start_decision(mgr.is_running(&ext_id), record.as_ref())
+    {
+        Ok(true) => None,
+        Ok(false) => match record.as_ref() {
+            // `Ok(false)` is only returned for a `Some(daemon, enabled)` record, so this is set.
+            Some(ext) => match mgr.ensure_started(ext) {
+                Ok(()) => None,
+                Err(e) => {
+                    store::append_global_error_log(
+                        "ext panel",
+                        &format!("auto-start {ext_id} for panel.msg failed: {e:#}"),
+                    );
+                    Some(format!("extension failed to start: {e:#}"))
+                }
+            },
+            None => Some("extension not available".to_string()),
+        },
+        Err(msg) => Some(msg),
+    };
+
+    if let Some(error) = error {
+        return StoreReply::PanelReply {
+            client_id,
+            ext_id,
+            panel_id,
+            req_id,
+            ok: false,
+            payload: None,
+            error: Some(error),
+        };
+    }
+
+    // Running (or just-started) → invoke `panel.msg` with the SDK's `{ panelId, payload }` shape.
+    // `panel_id` is cloned into the params (it is also returned in the reply); `ext_id` is
+    // borrowed for the invoke, then moved into the reply.
+    match mgr.invoke_with_timeout(
+        &ext_id,
+        "panel.msg",
+        serde_json::json!({ "panelId": panel_id.clone(), "payload": payload }),
+        Duration::from_secs(10),
+    ) {
+        Ok(value) => StoreReply::PanelReply {
+            client_id,
+            ext_id,
+            panel_id,
+            req_id,
+            ok: true,
+            payload: Some(value),
+            error: None,
+        },
+        Err(e) => {
+            store::append_global_error_log(
+                "ext panel",
+                &format!("panel.msg invoke for {ext_id} failed: {e:#}"),
+            );
+            StoreReply::PanelReply {
+                client_id,
+                ext_id,
+                panel_id,
+                req_id,
+                ok: false,
+                payload: None,
+                error: Some(format!("{e:#}")),
             }
         }
     }
@@ -1011,5 +1244,57 @@ mod tests {
         // Present-but-empty signature is treated as unsigned.
         let (_sha3, sig3) = parse_integrity_json(r#"{"sha256":"aa","signature":""}"#);
         assert!(sig3.is_none());
+    }
+
+    /// A registry fixture for the panel-start decision (only `enabled` + `kind` matter to it).
+    fn ext_record(kind: &str, enabled: bool) -> InstalledExtension {
+        InstalledExtension {
+            id: "run.koma.test".to_string(),
+            version: "0.0.1".to_string(),
+            tier: "free".to_string(),
+            granted: Vec::new(),
+            enabled,
+            kind: kind.to_string(),
+            exec: "bin/x".to_string(),
+        }
+    }
+
+    /// The panel-start decision (W8 auto-start) over every input combination: an already-running
+    /// extension is invoked straight away; a not-running daemon+enabled one is started; a
+    /// oneshot / disabled / missing one is a clean "extension not available" error.
+    #[test]
+    fn panel_start_decision_covers_all_cases() {
+        // Already running → invoke straight away, regardless of the record (or its absence).
+        assert_eq!(panel_start_decision(true, None), Ok(true));
+        assert_eq!(
+            panel_start_decision(true, Some(&ext_record("daemon", true))),
+            Ok(true)
+        );
+        // Disabled but somehow running → still Ok(true): the enabled flag only gates auto-start.
+        assert_eq!(
+            panel_start_decision(true, Some(&ext_record("daemon", false))),
+            Ok(true)
+        );
+
+        // Not running, daemon + enabled → auto-start (Ok(false)).
+        assert_eq!(
+            panel_start_decision(false, Some(&ext_record("daemon", true))),
+            Ok(false)
+        );
+        // Not running, oneshot-kind → error (no persistent panel backend).
+        assert_eq!(
+            panel_start_decision(false, Some(&ext_record("oneshot", true))),
+            Err("extension not available".to_string())
+        );
+        // Not running, disabled daemon → error (auto-start intentionally off).
+        assert_eq!(
+            panel_start_decision(false, Some(&ext_record("daemon", false))),
+            Err("extension not available".to_string())
+        );
+        // Not running, not installed → error.
+        assert_eq!(
+            panel_start_decision(false, None),
+            Err("extension not available".to_string())
+        );
     }
 }
