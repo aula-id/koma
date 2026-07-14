@@ -1,6 +1,6 @@
 # Extension architecture and communication contract
 
-> **Status: v0 / unstable.** This is an implementation contract, not a frozen public API. The wire types in `src-extension/src/protocol.rs` and the host implementation are authoritative. In particular, oneshot lifecycle, model/panel runtime wiring, and automatic restart are not complete features yet. Do not infer a future API from `docs/EXTENSIONS.md`.
+> **Status: v0 / unstable.** This is an implementation contract, not a frozen public API. The wire types in `src-extension/src/protocol.rs` and the host implementation are authoritative. In particular, oneshot lifecycle (the host still runs the full duplex serve loop rather than a strict one-request-then-exit cycle) and automatic restart after an unexpected exit are not complete features yet. Panel and model/provider runtime wiring — once the gaps this note used to describe — are now live: see `docs/EXTENSIONS.md`'s "Panel bridge" and `models:contribute` grants-reference sections, both verified against the same broker/hub source this document cites. Sections 2 and 8 below cover only the manifest shape and the original `agents.*` broker contract in low-level wire detail; `docs/EXTENSIONS.md` is the up-to-date, complete capability reference for everything landed since (the full 8-grant surface, events, the panel bridge, delegated OAuth) and is the doc to read first — come back here for byte-level framing/timeout/handshake detail it doesn't restate.
 
 ## 1. Scope and actors
 
@@ -31,16 +31,18 @@ One extension has one child and one live socket connection. A daemon extension i
 | `kind` | `ExtensionKind` | required | `"daemon"` or `"oneshot"`. |
 | `runtime` | `Runtime` | required | Object described below. |
 | `contributes` | `Contributes` | omitted => empty object | Object; `#[serde(default)]`. Empty arrays are omitted when serializing. |
-| `requires` | `Vec<Grant>` | omitted => `[]` | Array; `#[serde(default)]`; values `"agents:read"` and `"agents:orchestrate"`. |
+| `requires` | `Vec<Grant>` | omitted => `[]` | Array; `#[serde(default)]`. Eight wire values today: `"agents:read"`, `"agents:orchestrate"`, `"sessions:manage"`, `"chat:prompt"`, `"models:invoke"`, `"context:publish"`, `"oauth:contribute"`, `"models:contribute"` — see `docs/EXTENSIONS.md`'s grants reference for what each unlocks. |
 
 `runtime` is `{ "exec": String, "args": Vec<String> }`; `exec` is required, relative to the package root, and `args` defaults to `[]` and serializes as an array. `contributes` contains arrays (all default `[]`, all empty arrays skipped on serialization):
 
 | Contribution array | Item JSON fields and types | Current integration status |
 |---|---|---|
-| `sub_agents` | `{name: String, description: String}` | **Integrated:** merged on the next `AgentRegistry::load` while enabled. |
-| `models` | `{id: String, display_name: String}` | **Declared shape only:** model catalogue/runtime wiring is a later wave. |
-| `panels` | `{id: String, title: String, icon: String}`; `icon` defaults to `""` | **Metadata/UI projection integrated:** installed metadata drives the activity bar; runtime panel catalogue wiring remains staged. |
+| `sub_agents` | `{name: String, description: String, prompt?: String, model?: String, effort?: String}` | **Integrated:** merged on the next `AgentRegistry::load` while enabled. `model` resolves through the ext-owned-first slug binding chain in `src-agent/src/app/resolve.rs::resolve_agent()` — see `docs/EXTENSIONS.md`'s manifest reference for the full 5-step order. |
+| `models` | `{id: String, display_name: String}` | **Declared shape only** — the runtime catalogue is built through the `models:contribute` grant's `models.register`/`models.unregister` broker verbs (`src-agent/src/app/ext/broker.rs`), not from this array. |
+| `panels` | `{id: String, title: String, icon: String}`; `icon` defaults to `""` | **Integrated, including the live message bridge:** installed metadata drives the activity bar/tab, and an open panel's iframe talks to its backing daemon over the `panel.msg`/`panel.push` bridge — see `docs/EXTENSIONS.md`'s "Panel bridge" section for the full envelope spec, size caps, and auto-start rule. |
 | `tools` | `{name: String, description: String, input_schema: JSON Value}`; `input_schema` defaults to JSON `null` | **Integrated where an `McpManager` exists:** registered as namespaced MCP tools and invoked through the host. |
+| `events` | `[String]` | **Integrated:** subscribes to koma's fixed event vocabulary (`subagent.done`, `agent.turn_end`, `session.foreground_change`) — best-effort, only-subscribed delivery to `on_event`. See `docs/EXTENSIONS.md`'s "Events" section for exact payloads. |
+| `oauth_providers` | `{id, name, method, chat_endpoint?, api_type?, refresh?}` (W11/W12) | **Integrated:** each becomes an OAuth picker row backed by this extension's `oauth.begin`/`oauth.poll`/`oauth.cancel`, gated by `oauth:contribute`. `chat_endpoint`/`api_type` (W12) additionally make a connected provider a resolvable model gateway via `models.register`/`providers.register`. See `docs/EXTENSIONS.md`'s "OAuth providers" section. |
 
 The installer persists only registry fields (`id`, `version`, tier/kind wire strings, `granted`, `enabled`, `exec`); the on-disk manifest remains the contribution source. `Welcome.granted` currently echoes `Hello.manifest.requires`; it is informational and is not the enforcement authority.
 
@@ -132,9 +134,11 @@ Denied calls return `{ "error":"grant denied: <method> requires agents:read" }` 
 
 Spawn targets the active/foreground session (or first non-closed fallback), uses the normal `spawn_or_queue` path/cap, and is non-detached with no tool-call ID; completion records a display note/usage but does not wake the chat model. The returned extension-facing ID is private to this extension and permanently maps to a stable session UUID plus local sub-agent ID. List/status/result/kill never resolve raw IDs or another extension's/user's IDs, even after foreground switches. Uninstall removes that extension's registry.
 
+**This section only covers `agents:read`/`agents:orchestrate`, the first two grants the broker shipped with.** Six more grants (`sessions:manage`, `chat:prompt`, `models:invoke`, `context:publish`, `oauth:contribute`, `models:contribute`) have landed since, each unlocking its own set of broker verbs (`sessions.*`, `chat.prompt`, `models.invoke`, `context.*`, `oauth.*` invokes, `models.register`/`.unregister`, `providers.register`/`.unregister`) with the same "grant-gated, JSON-value replies, errors never left pending" shape as the table above. `docs/EXTENSIONS.md`'s grants reference has the complete, current table — every verb, every request/response shape, every error string, every numeric limit — kept in lockstep with `broker.rs`; treat it as authoritative for anything not `agents.*`.
+
 ## 9. Contribution invocation and limitations
 
-`contributes.tools` is registered as `mcp__<sanitized-extension-id>__<tool>` where an MCP manager is available; a model tool call reaches `ExtHostManager::invoke`, which sends `Invoke` and awaits `ExtMsg::Result`. `contributes.sub_agents` is merged by the next `AgentRegistry::load`. `models` and panel runtime/catalogue wiring are not complete. Panels currently provide metadata (`PanelWire` with `id/title/icon`) and are displayed using the first panel per installed extension; the socket host does not automatically provide a panel-specific runtime API. A contribution can therefore be declared without all imagined runtime behavior being active. Registration is pushed after successful daemon startup; purge removes extension tools on disable/uninstall.
+`contributes.tools` is registered as `mcp__<sanitized-extension-id>__<tool>` where an MCP manager is available; a model tool call reaches `ExtHostManager::invoke`, which sends `Invoke` and awaits `ExtMsg::Result`. `contributes.sub_agents` is merged by the next `AgentRegistry::load`, with `model`/`effort` resolved through the binding chain in `src-agent/src/app/resolve.rs` (see section 2 above). `contributes.models` stays declared-shape-only in the manifest — the actual runtime catalogue is built through `models.register`/`providers.register` (the `models:contribute` grant), not from this array. Panels are metadata-driven (`PanelWire` with `id/title/icon`) for activity-bar/tab display AND have a live runtime bridge: an open panel's iframe reaches its backing daemon's `on_invoke("panel.msg", ...)` over the host, with pushes flowing back via `Koma::panel_push` — see `docs/EXTENSIONS.md`'s "Panel bridge" section for the full envelope, caps, and auto-start rule; this document's section 10 below covers only the GUI IPC boundary framing, not that bridge's own contract. Registration is pushed after successful daemon startup; purge removes extension tools on disable/uninstall (and, for `models:contribute`/`oauth:contribute` state, the fuller purge described in `docs/EXTENSIONS.md`'s "Lifecycle" section).
 
 ## 10. Store, install, and GUI IPC boundaries
 
@@ -197,14 +201,14 @@ shutdown/uninstall -> stop/purge/remove
 
 Checklist for a custom extension based on `src-extension/example/fleet-board-daemon`:
 
-1. Depend on `koma-extension` by path; implement `Extension`, parse a checked-in manifest, and choose daemon only if persistent host state is required.
+1. Depend on `koma-extension` by path; implement `Extension`, parse a checked-in manifest, and choose daemon only if persistent host state is required (delegated OAuth and a live panel both require it).
 2. Keep `id`, `runtime.exec`, contribution names, and requested grants intentional; use `bin/<name>` in the packaged manifest.
 3. Implement every declared invocation method and return JSON values, including explicit error values.
-4. Use `Koma::call` only for the currently implemented `agents.*` methods; validate and handle timeout/error values.
+4. Use `Koma::call` only from a driver/worker thread you own, never from `on_invoke`/`on_event` — see the DEADLOCK RULE in `src-extension/src/sdk.rs`'s `Extension` trait docs and `docs/EXTENSIONS.md`'s "deadlock rule and threading model" section; validate and handle timeout/error values for whichever grant-gated verb you call (all eight are covered there, not just `agents.*`).
 5. Exercise demo mode, but test host mode with the real daemon, token, handshake, out-of-order calls, EOF, and oversized/malformed frames.
-6. Put panel assets under `ui/`, use relative URLs, and do not expect host globals or IPC in the iframe.
+6. Put panel assets under `ui/`, use relative URLs, and do not expect host globals or IPC in the iframe — talk to the host through the `panel.msg`/`panel.push` envelope instead (copy `ui/koma-panel.js` from `fleet-board-daemon` rather than hand-rolling it).
 7. Package `manifest.json`, `bin/<name>`, and optional `ui/`; production installation requires a signed archive.
-8. Verify contribution limitations: tools need a live MCP manager, sub-agents wait for registry load, and model/panel runtime wiring is not yet complete.
+8. Verify contribution limitations that are STILL true: tools need a live MCP manager, sub-agents wait for the next registry load. Panel and model/provider runtime wiring are NOT limitations anymore (see section 9) — don't design around gaps that have since closed.
 
 ## 14. Sources and verification
 
@@ -214,12 +218,17 @@ Checklist for a custom extension based on `src-extension/example/fleet-board-dae
 | Host lifecycle, generations, timeouts | `src-agent/src/app/ext/mod.rs`, `wire.rs` |
 | Install and path/signature checks | `src-agent/src/app/ext/install.rs` |
 | Contributions | `src-agent/src/app/ext/register.rs` |
-| Agent grants and ownership | `src-agent/src/app/ext/broker.rs`; event-loop drains |
+| Agent grants and ownership; `models.register`/`providers.register` | `src-agent/src/app/ext/broker.rs` (all 8 grants; event-loop drains feed it) |
+| Sub-agent model slug binding | `src-agent/src/app/resolve.rs` (`resolve_agent`, `ext_conn_route`, `ext_preferred_provider_uuids`) |
+| Event fan-out (`subagent.done`/`agent.turn_end`/`session.foreground_change`/`agents.done`) | `src-agent/src/app/ext/events.rs`, `mod.rs` (`notify`/`subscribers`); trigger sites in `runtime/event_loop/sessions/{subagents,deferred}.rs`, `runtime/actions/session/attach.rs` |
+| Delegated OAuth (`oauth.begin`/`.poll`/`.cancel`) | `src-agent/src/app/runtime/event_loop/daemon/hub/requests_oauth.rs` |
+| Extension uninstall purge (`purge_extension`) | `src-agent/src/model/app_config.rs` |
 | Startup/shutdown | `src-agent/src/app/runtime/lifecycle/mod.rs` |
-| Daemon/client and extension store requests | `src-agent/src/ipc/proto/mod.rs`; `runtime/event_loop/daemon/hub/requests_ext.rs` |
+| Daemon/client, extension store, and panel-bridge requests | `src-agent/src/ipc/proto/mod.rs`; `runtime/event_loop/daemon/hub/requests_ext.rs` |
 | GUI request/push boundaries | `runtime/gui/proto.rs`, `dispatch.rs`, `mod.rs`; `runtime/client/{connect.rs,bridge.rs,push_proto.rs}` |
+| GUI-side panel bridge (iframe postMessage layer) | `src-webgui/src/lib/panelBridge.ts`, `components/ExtensionPanelFrame.tsx` |
 | Installed metadata/detail projection | `src-agent/src/ipc/proto/snapshot/ext.rs`; host-local reads in `src-agent/src/app/runtime/client/store_host.rs` |
 | Web request/store/panel behavior | `src-webgui/src/koma.d.ts`, `store/koma.ts`, `routes/index.tsx`, `components/ActivityBar.tsx`, `components/TabBar.tsx`; `docs/WEBGUI_IPC.md` |
-| Design context and package intent | `docs/EXTENSIONS.md` |
+| Full capability reference (all grants, events, panel bridge, OAuth, lifecycle) | `docs/EXTENSIONS.md` |
 
-From `src-extension/`: `cargo check --workspace`, `cargo test --workspace`, `cargo run -p fleet-board-daemon`, `cargo run -p agent-peek-oneshot`, `./pack.sh`. From root: `cargo check -p agent`, `cargo build -p agent`, `cargo build -p agent --features gui` (Linux requires WebKitGTK/GTK3/libsoup3 development packages), `npm --prefix src-webgui run build`, and `cargo test -p agent`. Before install testing, confirm the archive has `manifest.json`, `bin/<runtime.exec>`, and (for a panel) `ui/index.html`; confirm manifest parsing, ID/exec guards, intentional grants, and a Hello/Welcome frame below 4 MiB.
+From `src-extension/`: `cargo check --workspace`, `cargo test --workspace`, `cargo run -p <any of the 7 examples in src-extension/example/>`, `./pack.sh` (builds and packages all 7). `src-extension` is its own workspace — the root `Cargo.toml` explicitly `exclude`s it, so root-level `cargo check --workspace`/`cargo test --workspace` never touch it; always `cd src-extension` (or pass `--manifest-path`) first. From root: `cargo check -p agent`, `cargo build -p agent`, `cargo build -p agent --features gui` (Linux requires WebKitGTK/GTK3/libsoup3 development packages), `npm --prefix src-webgui run build`, and `cargo test -p agent`. Before install testing, confirm the archive has `manifest.json`, `bin/<runtime.exec>`, and (for a panel) `ui/index.html` plus any other `ui/` assets (`cp -r` in `pack.sh` copies the whole directory, not a filtered glob); confirm manifest parsing, ID/exec guards, intentional grants, and a Hello/Welcome frame below 4 MiB.

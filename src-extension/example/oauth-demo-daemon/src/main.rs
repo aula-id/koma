@@ -1,12 +1,118 @@
-//! oauth-demo-daemon: the W11 test vehicle for DELEGATED extension OAuth.
+//! oauth-demo-daemon: the reference sample for DELEGATED extension OAuth
+//! (W11) and the model-provider-gateway wiring built on top of it (W12 /
+//! W12b). koma never sees your provider's client secret or runs any of the
+//! network flow itself — it only surfaces a picker row, relays progress
+//! phases, and stores whatever token you eventually hand back.
 //!
-//! It contributes one OAuth login provider (`demo`) and requires the
-//! `oauth:contribute` grant. koma surfaces it as a picker row and delegates the
-//! whole login to this daemon over the `oauth.*` invoke contract (see the SDK's
-//! `Extension` trait docs). This sample runs a FAKE device-code flow with no real
-//! network: `oauth.begin` hands back a user code + verification URL, the first two
-//! `oauth.poll`s report `pending`, and the third reports `success` with a fake
-//! token. Run `cargo run -p oauth-demo-daemon` to see the demo handshake.
+//! # The begin/poll/cancel contract
+//!
+//! This sample contributes one OAuth login provider (`demo`) and requires
+//! the `oauth:contribute` grant. That combination gets you three `on_invoke`
+//! methods, each carrying `{ "providerId": "demo" }` (your provider's `id`
+//! from `manifest.json`, so a daemon backing more than one provider knows
+//! which flow a call is for):
+//!
+//! - `oauth.begin` — start a login. We reply with a device code +
+//!   verification URL (`{"userCode": ..., "verificationUrl": ...}`), which
+//!   koma renders as its `waiting_code` phase. The other shape a real
+//!   extension can reply with is `{"url": "https://..."}` for a browser
+//!   flow (koma's `waiting_url` phase — it does NOT auto-open the URL) or
+//!   `{"error": "..."}` for an immediate, terminal `failed`.
+//! - `oauth.poll` — koma calls this roughly every 3 seconds after `begin`.
+//!   We reply `{"status": "pending"}` for the first `POLLS_UNTIL_SUCCESS -
+//!   1` calls, then `{"status": "success", "token": {...}}`. A real
+//!   extension backed by an actual network flow would do the real waiting
+//!   on its own thread and have `poll` report whatever that thread's state
+//!   is — replying promptly here matters: koma bounds EACH begin/poll
+//!   invoke at 25 seconds, and the WHOLE begin-to-success loop at 5 minutes
+//!   before giving up with `failed: "extension OAuth timed out"`.
+//! - `oauth.cancel` — best-effort teardown when the user backs out or a new
+//!   flow supersedes this one. We reply `{"ok": true}` but koma ignores
+//!   whatever we send back; only that we got the call and can drop our
+//!   pending state matters.
+//!
+//! Your extension MUST be `kind: "daemon"` for delegated OAuth — the
+//! begin/poll handshake needs state (a pending device code, an in-flight
+//! poll) held across invokes, and a `oneshot` is respawned fresh per invoke
+//! with nothing remembered.
+//!
+//! # W12/W12b: from a login to a resolvable model provider
+//!
+//! A provider that ONLY logs a user in (like this sample's `demo` provider)
+//! is account-login-only: koma stores the token as a connection, and that's
+//! the end of the story in v1. To make that connection a resolvable MODEL
+//! PROVIDER — so an extension-contributed sub-agent's `model:` slug (or a
+//! user's own model picker) can actually route requests through it — your
+//! manifest's `OAuthProviderDef` needs two more fields:
+//!
+//! ```jsonc
+//! {
+//!   "id": "acme",
+//!   "name": "Acme",
+//!   "method": "browser",
+//!   // W12 — makes this provider a resolvable model-provider gateway:
+//!   "chat_endpoint": "https://api.acme.test/v1",
+//!   "api_type": "openai",              // must be "openai" or "anthropic"
+//!   // W12, ignored in v1 (the extension owns the whole token lifecycle;
+//!   // koma never refreshes on your behalf yet):
+//!   "refresh": { "token_url": "https://acme.test/token", "client_id": "..." }
+//! }
+//! ```
+//!
+//! With that declared and the `models:contribute` grant also requested (an
+//! extension that registers models almost always needs BOTH
+//! `oauth:contribute` and `models:contribute`), once a user connects and
+//! your daemon has a live account, drive these two ext->koma calls from
+//! your DRIVER THREAD — never from `on_invoke`/`on_event`, per the SDK's
+//! DEADLOCK RULE — right after a successful `oauth.poll`:
+//!
+//! ```ignore
+//! // Register the models this connected account can serve. Re-registering
+//! // the same id later UPDATES its display name in place and keeps its
+//! // stable uuid, so anything already bound to it (e.g. a sub-agent) keeps
+//! // resolving. At most 100 models per call; `default: true` on at most
+//! // one entry.
+//! let reply = koma.call("models.register", serde_json::json!({
+//!     "models": [
+//!         { "id": "acme-large", "name": "Acme Large", "default": true },
+//!         { "id": "acme-fast",  "name": "Acme Fast" }
+//!     ]
+//! }));
+//! // -> { "registered": 2, "uuids": ["...", "..."], "defaultUuid": "..." }
+//! //
+//! // The "default": true entry is a HINT, not a command: koma only
+//! // "vacuum-fills" it onto the user's Main role if Main is currently
+//! // unset or still pointing at the keyless koma-free placeholder in BOTH
+//! // the global catalogue and the active session's overrides. First
+//! // vacuum-fill wins — once a real model holds Main anywhere, a later
+//! // extension's default only ever surfaces as a `recommendedBy` picker
+//! // hint, it never displaces what's already there.
+//!
+//! // Separately, a KEY-BACKED gateway (a provider you serve with your own
+//! // static API key rather than riding the user's OAuth token) registers
+//! // through providers.register instead — also gated by
+//! // `models:contribute`, also driver-thread-only:
+//! let reply = koma.call("providers.register", serde_json::json!({
+//!     "name": "acme-gateway",
+//!     "endpoint": "https://api.acme.test/v1",
+//!     "api_type": "openai",
+//!     "key": "sk-..."
+//! }));
+//! // -> { "uuid": "..." } — re-registering the same `name` ROTATES the key
+//! // in place and keeps the same uuid, so models already bound to this
+//! // provider keep resolving through a rotated key with no re-registration
+//! // needed. Uninstalling this extension purges everything it registered:
+//! // providers, the models served by them, its oauth conns, and its
+//! // preferred-model record — see docs/EXTENSIONS.md's lifecycle section.
+//! ```
+//!
+//! This sample's own fake flow stays account-login-only (no
+//! `chat_endpoint`/`api_type` in `manifest.json`, no `models:contribute`
+//! grant) so it keeps working with zero setup — the calls above are shown
+//! as comments, not exercised, precisely so you can see the shape without
+//! this sample needing a real backing model provider to demo against. Run
+//! `cargo run -p oauth-demo-daemon` to see the demo handshake and the
+//! `oauth.begin` step.
 
 use koma_extension::{run_daemon, DaemonDemo, Extension, ExtensionManifest};
 use serde_json::Value;
