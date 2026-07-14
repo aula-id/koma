@@ -7,10 +7,12 @@
 //! talk to.
 //!
 //! Mode is picked by the `KOMA_EXT_SOCKET` env var: if it is set a real koma host
-//! is on the other end — we connect to that unix socket, complete the
-//! `Hello`/`Welcome` handshake, and run the duplex serve loop (koma `Invoke`s us; we
-//! `Call` back into koma). If it is unset we run the scripted demo. The host client is
-//! std-only (blocking `UnixStream` + threads); it pulls no async runtime into the SDK.
+//! is on the other end — we connect to that endpoint (a unix domain socket path on
+//! unix, a `\\.\pipe\koma-ext-<id>` named-pipe path on Windows — same env var, same
+//! host-side handoff, just a platform-shaped value), complete the `Hello`/`Welcome`
+//! handshake, and run the duplex serve loop (koma `Invoke`s us; we `Call` back into
+//! koma). If it is unset we run the scripted demo. The host client is std-only
+//! (blocking stream + threads); it pulls no async runtime into the SDK.
 
 use crate::protocol::*;
 use std::io::IsTerminal;
@@ -124,19 +126,93 @@ pub trait Extension {
 pub struct Koma {
     next_agent_id: u32,
     /// Live host connection when driving a real koma (host mode). `None` in demo mode,
-    /// where [`Koma::call`] returns canned stubs. Unix-only (the transport is a unix
-    /// socket); the field simply does not exist on other platforms.
-    #[cfg(unix)]
+    /// where [`Koma::call`] returns canned stubs. Unix/Windows-only (the transport is a
+    /// unix socket or, on Windows, a named pipe — see [`SdkStream`]); the field simply
+    /// does not exist on other platforms.
+    #[cfg(any(unix, windows))]
     host: Option<HostHandle>,
+}
+
+/// Platform stream used by the SDK's blocking host-mode transport: on unix this is
+/// `std::os::unix::net::UnixStream` (unchanged); on Windows it is [`WindowsPipeStream`],
+/// a small wrapper over a `std::fs::File` opened on the pipe path koma hands us via
+/// `KOMA_EXT_SOCKET` — the SAME env var and handoff mechanism, just holding a
+/// `\\.\pipe\koma-ext-<id>` name instead of a unix socket path. Private: this type
+/// never appears in the crate's public API (only inside [`HostHandle`]).
+#[cfg(unix)]
+type SdkStream = std::os::unix::net::UnixStream;
+#[cfg(windows)]
+type SdkStream = WindowsPipeStream;
+
+/// Windows twin of `std::os::unix::net::UnixStream` for the SDK's blocking transport,
+/// mirroring the host's `SyncIpcStream` (`src-agent/src/ipc/win.rs`): a `std::fs::File`
+/// opened read+write on the pipe path, with the same bounded retry on
+/// `ERROR_PIPE_BUSY` (231, "all pipe instances are busy" — the server is momentarily
+/// between pre-armed instances). A truly-absent pipe (`NotFound`) is not retried; it
+/// propagates verbatim as the "no daemon" signal.
+#[cfg(windows)]
+struct WindowsPipeStream {
+    file: std::fs::File,
+}
+
+#[cfg(windows)]
+impl WindowsPipeStream {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    const CONNECT_BUSY_RETRIES: usize = 100;
+    const CONNECT_BUSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
+
+    /// Client-side connect to the pipe at `path`. Same signature shape as
+    /// `UnixStream::connect` so call sites need no per-platform changes.
+    fn connect(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let path = path.as_ref();
+        let mut attempts: usize = 0;
+        loop {
+            match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+                Ok(file) => return Ok(WindowsPipeStream { file }),
+                Err(e) if e.raw_os_error() == Some(Self::ERROR_PIPE_BUSY) => {
+                    attempts += 1;
+                    if attempts > Self::CONNECT_BUSY_RETRIES {
+                        return Err(e);
+                    }
+                    std::thread::sleep(Self::CONNECT_BUSY_BACKOFF);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Mirrors `UnixStream::try_clone`: an independent handle onto the same pipe
+    /// instance, used for the reader/writer split in [`host_run`].
+    fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(WindowsPipeStream { file: self.file.try_clone()? })
+    }
+}
+
+#[cfg(windows)]
+impl std::io::Read for WindowsPipeStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+#[cfg(windows)]
+impl std::io::Write for WindowsPipeStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
 }
 
 /// Shared pieces of a live host connection a [`Koma`] handle needs to drive koma:
 /// the write half (guarded so the serve loop and any driver thread can both send), the
 /// `pending` map the read loop fulfils when a `KomaMsg::Result` arrives, and a request
 /// id source.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct HostHandle {
-    writer: std::sync::Arc<std::sync::Mutex<std::os::unix::net::UnixStream>>,
+    writer: std::sync::Arc<std::sync::Mutex<SdkStream>>,
     pending: std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<u64, std::sync::mpsc::Sender<serde_json::Value>>>,
     >,
@@ -147,15 +223,15 @@ impl Koma {
     fn new_demo() -> Self {
         Koma {
             next_agent_id: 1,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             host: None,
         }
     }
 
     /// A handle bound to a live host connection (host mode).
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn new_host(
-        writer: std::sync::Arc<std::sync::Mutex<std::os::unix::net::UnixStream>>,
+        writer: std::sync::Arc<std::sync::Mutex<SdkStream>>,
         pending: std::sync::Arc<
             std::sync::Mutex<
                 std::collections::HashMap<u64, std::sync::mpsc::Sender<serde_json::Value>>,
@@ -178,7 +254,7 @@ impl Koma {
     /// returns a canned stub based on `method` and prints both the call and the canned
     /// reply to stderr.
     pub fn call(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(h) = &self.host {
             return host_call(h, method, params);
         }
@@ -202,7 +278,7 @@ impl Koma {
     pub fn notify(&mut self, name: &str, params: serde_json::Value) {
         let msg = ExtMsg::Notify { name: name.to_string(), params };
 
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(h) = &self.host {
             let _ = write_line(&h.writer, &msg);
             return;
@@ -243,10 +319,10 @@ impl Koma {
     /// the live connection state (`writer`, `pending`, `next_id`) is already
     /// `Arc`-shared inside [`HostHandle`], so this is a shallow clone onto the SAME
     /// connection — calls/notifies from either handle round-trip through it.
-    /// DEMO mode (and non-unix builds): there is no live connection to share, so
-    /// this returns a fresh demo handle instead of failing.
+    /// DEMO mode (and builds on platforms without a live transport): there is no live
+    /// connection to share, so this returns a fresh demo handle instead of failing.
     pub fn try_clone(&self) -> Koma {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             if let Some(h) = &self.host {
                 return Koma {
@@ -411,33 +487,34 @@ fn host_mode() -> bool {
     std::env::var_os("KOMA_EXT_SOCKET").is_some()
 }
 
-/// Host-mode entry point shared by [`run_daemon`] and [`run_oneshot`]: on unix, run the
-/// real duplex client ([`host_run`]); elsewhere the unix-socket transport is
-/// unavailable, so print a notice and exit cleanly.
+/// Host-mode entry point shared by [`run_daemon`] and [`run_oneshot`]: on unix or
+/// Windows, run the real duplex client ([`host_run`]) over the platform [`SdkStream`];
+/// elsewhere no transport is available, so print a notice and exit cleanly.
 fn host_serve(ext: impl Extension, driver: Option<fn(&mut Koma)>) {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         host_run(ext, driver);
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (ext, driver);
-        println!("koma-ext: host mode needs a unix socket (unsupported on this platform)");
+        println!("koma-ext: host mode needs a unix socket or named pipe (unsupported on this platform)");
     }
 }
 
-/// The real host client (unix): connect to `KOMA_EXT_SOCKET`, send `Hello`, read
-/// `Welcome`/`Reject`, then run the duplex loop — koma `Invoke`s us (dispatched to
-/// [`Extension::on_invoke`], answered with `ExtMsg::Result`), `Ping`s us (answered with
-/// `ExtMsg::Health`), and `Shutdown`s us (clean exit). Inbound `KomaMsg::Result` frames
-/// complete a pending ext→koma `Call`. If the sample ships a `driver`, it runs on a side
-/// thread with a live [`Koma`] handle so the "extension drives koma" direction is exercised
-/// too. Any connect/handshake failure logs to stderr and exits.
-#[cfg(unix)]
+/// The real host client (unix + Windows): connect to `KOMA_EXT_SOCKET` (a unix socket
+/// path, or on Windows a `\\.\pipe\koma-ext-<id>` name — see [`SdkStream`]), send
+/// `Hello`, read `Welcome`/`Reject`, then run the duplex loop — koma `Invoke`s us
+/// (dispatched to [`Extension::on_invoke`], answered with `ExtMsg::Result`), `Ping`s us
+/// (answered with `ExtMsg::Health`), and `Shutdown`s us (clean exit). Inbound
+/// `KomaMsg::Result` frames complete a pending ext→koma `Call`. If the sample ships a
+/// `driver`, it runs on a side thread with a live [`Koma`] handle so the "extension
+/// drives koma" direction is exercised too. Any connect/handshake failure logs to
+/// stderr and exits.
+#[cfg(any(unix, windows))]
 fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader};
-    use std::os::unix::net::UnixStream;
     use std::sync::atomic::AtomicU64;
     use std::sync::{mpsc, Arc, Mutex};
 
@@ -447,15 +524,15 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     };
     let token = std::env::var("KOMA_EXT_TOKEN").unwrap_or_default();
 
-    let stream = match UnixStream::connect(&socket) {
+    let stream = match SdkStream::connect(&socket) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("koma-ext: connect to {socket} failed: {e}");
             return;
         }
     };
-    // A second handle for the read half; reading and writing on independent clones of a
-    // unix socket concurrently is fine.
+    // A second handle for the read half; reading and writing on independent clones of
+    // the stream (unix socket, or Windows named-pipe file handle) concurrently is fine.
     let read_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(e) => {
@@ -545,7 +622,7 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
 
 /// ext->koma `Call` on a live host connection: register a pending slot, write the frame,
 /// and block (bounded) until the read loop delivers the matching `KomaMsg::Result`.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn host_call(h: &HostHandle, method: &str, params: serde_json::Value) -> serde_json::Value {
     use std::sync::atomic::Ordering;
     let id = h.next_id.fetch_add(1, Ordering::SeqCst);
@@ -568,9 +645,9 @@ fn host_call(h: &HostHandle, method: &str, params: serde_json::Value) -> serde_j
 
 /// Serialize `msg` as one newline-delimited JSON frame and write+flush it under the
 /// writer lock.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn write_line<T: serde::Serialize>(
-    writer: &std::sync::Arc<std::sync::Mutex<std::os::unix::net::UnixStream>>,
+    writer: &std::sync::Arc<std::sync::Mutex<SdkStream>>,
     msg: &T,
 ) -> std::io::Result<()> {
     use std::io::Write;
