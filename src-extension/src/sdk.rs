@@ -31,6 +31,37 @@ use std::io::Read;
 /// and hand any real work off to the driver thread (or your own worker thread) via a
 /// `std::sync::mpsc` channel you own. `Koma::notify` / `Koma::panel_push` are
 /// write-only (no reply is awaited) and are safe to call from either handler.
+///
+/// # OAuth providers (W11 — DELEGATED login)
+///
+/// If your manifest declares `contributes.oauth_providers` and requires the
+/// `oauth:contribute` grant, koma surfaces each provider as a row in its OAuth
+/// picker and delegates the WHOLE login to you over three `on_invoke` methods.
+/// koma stores the resulting token as a connection; it never sees your provider's
+/// client secret. Every call carries `{ "providerId": "<your provider id>" }`.
+///
+/// Your extension MUST be `kind: "daemon"` (the begin/poll handshake needs state
+/// held across invokes; a oneshot is respawned per invoke and can't remember a
+/// pending code).
+///
+/// - `oauth.begin { providerId }` → start a login. Reply EITHER
+///   `{ "url": "https://…" }` (browser method → koma shows a `waiting_url` phase
+///   with the URL for the user to open; koma does NOT auto-open it in v1) OR
+///   `{ "userCode": "ABCD-1234", "verificationUrl": "https://…" }` (device_code
+///   method → `waiting_code` phase) OR `{ "error": "…" }` (→ terminal `failed`).
+/// - `oauth.poll { providerId }` → koma polls this every ~3s after `begin`. Reply
+///   `{ "status": "pending" }` to keep waiting, `{ "status": "success", "token":
+///   { "access_token": "…", "refresh_token"?: "…", "expires_at"?: <unix secs>,
+///   "email"?: "…", "label"?: "…" } }` on completion (only `access_token` is
+///   required), or `{ "status": "failed", "error": "…" }`. A malformed reply or a
+///   bare `{ "error": "…" }` is treated as `failed`.
+/// - `oauth.cancel { providerId }` → best-effort teardown when the user cancels or
+///   a new flow supersedes this one. Reply anything; koma ignores the result.
+///
+/// Budgets koma enforces: each `oauth.*` invoke is bounded at 25s, and the whole
+/// begin→poll loop at 5 minutes overall (then `failed: timed out`). Reply to
+/// `begin`/`poll` promptly — do the real network waiting on your own thread and let
+/// `poll` report progress, exactly like the DEADLOCK RULE above.
 pub trait Extension {
     fn manifest(&self) -> ExtensionManifest;
 

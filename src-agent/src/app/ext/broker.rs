@@ -236,6 +236,12 @@ pub(crate) enum GateDecision {
 /// sole edge): `sessions.*` → [`Grant::SessionsManage`], `chat.prompt` →
 /// [`Grant::ChatPrompt`], `models.invoke` → [`Grant::ModelsInvoke`], `context.set`
 /// / `context.clear` → [`Grant::ContextPublish`].
+///
+/// NOTE: [`Grant::OauthContribute`] (W11) gates NO broker `Call` verb — it gates the
+/// OPPOSITE direction (host→ext `oauth.begin`/`oauth.poll`/`oauth.cancel` invokes) plus
+/// whether the extension's declared OAuth providers surface as picker rows. So it
+/// deliberately has NO arm here (an extension never `Call`s koma to drive an OAuth flow;
+/// koma drives the extension).
 fn required_grant(method: &str) -> Option<Grant> {
     match method {
         "agents.spawn" | "agents.kill" => Some(Grant::AgentsOrchestrate),
@@ -267,6 +273,10 @@ fn is_granted(granted: &[Grant], required: Grant) -> bool {
         Grant::ChatPrompt => granted.contains(&Grant::ChatPrompt),
         Grant::ModelsInvoke => granted.contains(&Grant::ModelsInvoke),
         Grant::ContextPublish => granted.contains(&Grant::ContextPublish),
+        // W11: exact-match like the rest. `required_grant` never returns this (it
+        // gates no broker verb), so this arm is here only for exhaustiveness / a
+        // future direct check.
+        Grant::OauthContribute => granted.contains(&Grant::OauthContribute),
     }
 }
 
@@ -304,6 +314,7 @@ fn grant_wire(g: Grant) -> &'static str {
         Grant::ChatPrompt => "chat:prompt",
         Grant::ModelsInvoke => "models:invoke",
         Grant::ContextPublish => "context:publish",
+        Grant::OauthContribute => "oauth:contribute",
     }
 }
 
@@ -320,6 +331,7 @@ pub(crate) fn parse_grants(wire: &[String]) -> Vec<Grant> {
             "chat:prompt" => Some(Grant::ChatPrompt),
             "models:invoke" => Some(Grant::ModelsInvoke),
             "context:publish" => Some(Grant::ContextPublish),
+            "oauth:contribute" => Some(Grant::OauthContribute),
             _ => None,
         })
         .collect()
@@ -1392,6 +1404,7 @@ mod tests {
             "chat:prompt".to_string(),
             "models:invoke".to_string(),
             "context:publish".to_string(),
+            "oauth:contribute".to_string(),
             "filesystem:write".to_string(),
         ]);
         // Input order is preserved; the unknown "filesystem:write" is dropped.
@@ -1404,9 +1417,24 @@ mod tests {
                 Grant::ChatPrompt,
                 Grant::ModelsInvoke,
                 Grant::ContextPublish,
+                Grant::OauthContribute,
             ]
         );
         assert!(parse_grants(&["nonsense".to_string()]).is_empty());
+
+        // Round-trip lock-step with `grant_wire` for every parsed grant.
+        for grant in &g {
+            assert_eq!(parse_grants(&[grant_wire(*grant).to_string()]), vec![*grant]);
+        }
+
+        // W11: `oauth:contribute` gates no broker verb, so the gate still treats every
+        // `oauth.*` method as UnknownMethod even when the grant is held (it is not a
+        // broker `Call` family at all — koma drives the extension, not the reverse).
+        assert_eq!(
+            method_permitted("oauth.begin", &[Grant::OauthContribute]),
+            GateDecision::UnknownMethod
+        );
+        assert!(!is_broker_method("oauth.begin"));
     }
 
     /// `is_broker_method` recognises every broker family prefix (one representative

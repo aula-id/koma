@@ -30,6 +30,13 @@ use crate::model::app_config::OAuthConn;
 /// flow (Codex browser login, or a Kilo Code / xAI device login). Sent across
 /// the `oauth_rx` channel opened by `Action::OAuthStart`'s handler and drained
 /// once per tick in `service_global`'s event loop (mirrors `StreamEvent`/`WarmEvent`).
+///
+/// `Success` intentionally carries the `OAuthConn` BY VALUE (not boxed): this is a rare,
+/// terminal, single-shot event (one per completed login), so the marginal stack size of the
+/// large variant is irrelevant, and boxing would force a `Box::new`/deref at every native
+/// flow sender + the drain — churn on load-bearing native paths for no runtime benefit.
+/// (W11 grew `OAuthConn` by two `Option<String>`s, nudging it past clippy's threshold.)
+#[allow(clippy::large_enum_variant)]
 pub enum OAuthEvent {
     /// The Codex flow reached the "open this URL" step (loopback listener is up).
     CodexUrl { url: String },

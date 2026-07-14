@@ -1,0 +1,23 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.oauth-demo-daemon",
+  "name": "OAuth Demo",
+  "version": "0.0.0",
+  "description": "A daemon extension that contributes a delegated OAuth login provider (fake device-code flow), the W11 test vehicle.",
+  "tier": "free",
+  "kind": "daemon",
+  "runtime": {
+    "exec": "oauth-demo-daemon",
+    "args": []
+  },
+  "contributes": {
+    "oauth_providers": [
+      {
+        "id": "demo",
+        "name": "Demo Login",
+        "method": "device_code"
+      }
+    ]
+  },
+  "requires": ["oauth:contribute"]
+}

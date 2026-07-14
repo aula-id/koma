@@ -287,6 +287,11 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         // wire koma.run as an actual chat backend). Safe placeholder wire type;
         // never actually hit today since no ModelEntry references this conn.
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
+        // W11: an ext-backed conn is not a model provider in v1 — no ModelEntry
+        // references it, so this `find` never yields one and this arm never runs.
+        // Placeholder wire type; W12 sources the real api_type from the extension
+        // manifest (`OAuthProviderDef.api_type`).
+        OAuthProvider::Extension => ApiType::OpenAiCompatible,
     };
     let account_id = match conn.provider {
         OAuthProvider::Codex => conn.account_id.clone(),
@@ -300,6 +305,9 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::ClaudeAI => String::new(),
         // Koma account login has no org/account header concept either.
         OAuthProvider::KomaRun => String::new(),
+        // W11: ext-backed conns carry no send-time account/org header (not a model
+        // provider in v1). Empty, same as the account-login providers.
+        OAuthProvider::Extension => String::new(),
     };
     Some(Resolved {
         model_id: entry.model_id.clone(),

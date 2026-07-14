@@ -189,5 +189,14 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: "https://koma.run/api/v1",
             catalogue_endpoint: "",
         },
+        // W11: extension-delegated conns are NOT model providers in v1 (account
+        // login / token storage only). Empty placeholders; W12 will source the real
+        // endpoint from the extension's manifest (`OAuthProviderDef.chat_endpoint`),
+        // not this static table. An empty `catalogue_endpoint` also means the OAuth
+        // success drain never fires a catalogue fetch for an ext conn.
+        OAuthProvider::Extension => OAuthProviderMeta {
+            chat_endpoint: "",
+            catalogue_endpoint: "",
+        },
     }
 }

@@ -130,6 +130,15 @@ pub enum OAuthProvider {
     /// shape but against koma.run's native-client OAuth endpoints (form-encoded token
     /// exchange, no client_id/scope). Account login only — not a model provider yet.
     KomaRun,
+    /// W11: a token stored by an EXTENSION-delegated OAuth flow. The actual provider
+    /// identity lives in the connection's `ext_id`/`provider_id` fields, not this enum
+    /// (which stays `Copy` + closed) — this variant is just the "backed by an extension"
+    /// marker. Account login / token storage ONLY in v1: it is NOT a model provider yet,
+    /// so every native code path treats it as an inert placeholder (W12 wires ext tokens
+    /// as resolvable model providers). Serde tag `"extension"`; deliberately NOT mapped
+    /// back by [`Self::from_wire_id`] (ext flows route through the `ext:<id>:<provider>`
+    /// picker id, never a bare wire token).
+    Extension,
 }
 
 impl OAuthProvider {
@@ -141,6 +150,10 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xAI",
             OAuthProvider::ClaudeAI => "Claude",
             OAuthProvider::KomaRun => "Koma",
+            // W11: generic marker label; a real ext-backed conn's picker row uses the
+            // extension manifest's provider `name`, never this (see
+            // `requests_oauth::ext_oauth_rows_for`).
+            OAuthProvider::Extension => "Extension",
         }
     }
 
@@ -155,15 +168,22 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xai",
             OAuthProvider::ClaudeAI => "claudeai",
             OAuthProvider::KomaRun => "komarun",
+            // W11: stamped as the `provider` on an ext-backed conn's tokenless wire
+            // projection (so the webview sees a stable marker); the connection's real
+            // identity is its `ext_id`/`provider_id`. NOT a `from_wire_id` input.
+            OAuthProvider::Extension => "extension",
         }
     }
 
-    /// The exact inverse of [`Self::wire_id`]: resolve a `StartOAuth` wire string
+    /// The exact inverse of [`Self::wire_id`] for the NATIVE flow-driving variants:
+    /// resolve a `StartOAuth` wire string
     /// (`"codex"` / `"kilocode"` / `"xai"` / `"claudeai"` / `"komarun"`) back to its
     /// [`OAuthProvider`]. `None` for anything else, INCLUDING `"codex_paste"` — that
     /// token selects the paste-token input screen, not a real flow-driving provider,
     /// so it is deliberately not an `OAuthProvider` variant (see
-    /// [`Self::flow_kind`]'s doc). Shared by every `StartOAuth` caller that needs the
+    /// [`Self::flow_kind`]'s doc) — AND `"extension"` (the W11 storage marker), whose
+    /// flows route through the `ext:<extension_id>:<provider_id>` picker id in
+    /// `start_oauth`, never a bare wire token. Shared by every `StartOAuth` caller that needs the
     /// mapping (the daemon's `hub::requests_oauth::start_oauth` and the GUI host-
     /// relay's detached `HostCtl::StartOAuth` handler) so the wire contract has one
     /// source of truth instead of two hand-written `match`es drifting apart.
@@ -190,6 +210,11 @@ impl OAuthProvider {
             OAuthProvider::Xai => "device",
             OAuthProvider::ClaudeAI => "pkce",
             OAuthProvider::KomaRun => "pkce",
+            // W11: never surfaced through the enum-driven `oauth_providers()` list (ext
+            // rows carry their own kind, mapped from the manifest `method` — see
+            // `requests_oauth::method_to_kind`), so this value is exhaustiveness-only and
+            // never reaches the picker. An inert placeholder.
+            OAuthProvider::Extension => "paste",
         }
     }
 }
@@ -230,6 +255,18 @@ pub struct OAuthConn {
     /// Codex plan type (e.g. "plus", "pro").
     #[serde(default)]
     pub plan: String,
+    /// W11: for an EXTENSION-delegated connection (`provider == Extension`), the id of
+    /// the extension that owns this token's login flow. `None` for every native conn.
+    /// `skip_serializing_if` keeps a native conn's on-disk JSON BYTE-IDENTICAL to the
+    /// pre-W11 shape (the field is simply absent), and `default` lets an older config
+    /// without the key load cleanly. W12 adds `chat_endpoint`/`api_type` alongside these
+    /// to make an ext token a resolvable model provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ext_id: Option<String>,
+    /// W11: the extension-local provider id (its manifest `oauth_providers[].id`) this
+    /// token was minted for. `None` for every native conn (see [`Self::ext_id`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
 }
 
 /// Runtime role slot a model can be assigned to. Each role is GLOBALLY exclusive
@@ -833,5 +870,66 @@ mod oauth_provider_wire_tests {
         assert_eq!(OAuthProvider::from_wire_id("codex_paste"), None);
         assert_eq!(OAuthProvider::from_wire_id("not_a_provider"), None);
         assert_eq!(OAuthProvider::from_wire_id(""), None);
+        // W11: the `extension` storage marker is NOT a from_wire_id input — ext flows
+        // route through the `ext:<id>:<provider>` picker id, never a bare token.
+        assert_eq!(OAuthProvider::from_wire_id("extension"), None);
+    }
+}
+
+#[cfg(test)]
+mod oauth_conn_serde_tests {
+    use super::{OAuthConn, OAuthProvider};
+
+    /// A NATIVE OAuthConn exactly as pre-W11 `config.json` wrote it — no
+    /// `ext_id`/`provider_id` keys, field order matching the struct declaration
+    /// (which is the order `serde_json` emits). The W11 change MUST NOT alter this.
+    const NATIVE_CONN_JSON: &str = concat!(
+        r#"{"uuid":"11111111-1111-1111-1111-111111111111","name":"codex (me@example.com)","#,
+        r#""provider":"codex","access_token":"at","refresh_token":"rt","id_token":"it","#,
+        r#""expires_at":1750000000,"last_refresh":1749000000,"account_id":"acc","org_id":"","#,
+        r#""email":"me@example.com","plan":"pro"}"#
+    );
+
+    /// SERDE-COMPAT PROOF: a pre-W11 native conn deserializes cleanly (the two new
+    /// `Option` fields default to `None`) AND re-serializes BYTE-IDENTICALLY. The new
+    /// fields carry `skip_serializing_if = "Option::is_none"`, so a native conn never
+    /// emits them — existing `config.json` files round-trip unchanged.
+    #[test]
+    fn native_conn_roundtrips_byte_stable() {
+        let conn: OAuthConn = serde_json::from_str(NATIVE_CONN_JSON).expect("pre-W11 conn parses");
+        assert_eq!(conn.provider, OAuthProvider::Codex);
+        assert!(conn.ext_id.is_none());
+        assert!(conn.provider_id.is_none());
+        let reser = serde_json::to_string(&conn).expect("serializes");
+        assert_eq!(
+            reser, NATIVE_CONN_JSON,
+            "a native OAuthConn must round-trip byte-identically after W11"
+        );
+    }
+
+    /// An EXT-backed conn serializes with the `"extension"` provider tag plus the two
+    /// ext fields, and round-trips back to an equal value.
+    #[test]
+    fn ext_conn_roundtrips() {
+        let conn = OAuthConn {
+            uuid: "22222222-2222-2222-2222-222222222222".to_string(),
+            name: "Demo account".to_string(),
+            provider: OAuthProvider::Extension,
+            access_token: "demo-at".to_string(),
+            email: "demo@example.com".to_string(),
+            ext_id: Some("run.koma.example.oauth-demo-daemon".to_string()),
+            provider_id: Some("demo".to_string()),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&conn).expect("serializes");
+        assert_eq!(v["provider"], "extension");
+        assert_eq!(v["ext_id"], "run.koma.example.oauth-demo-daemon");
+        assert_eq!(v["provider_id"], "demo");
+
+        let back: OAuthConn = serde_json::from_value(v).expect("ext conn roundtrips");
+        assert_eq!(back.provider, OAuthProvider::Extension);
+        assert_eq!(back.ext_id.as_deref(), Some("run.koma.example.oauth-demo-daemon"));
+        assert_eq!(back.provider_id.as_deref(), Some("demo"));
+        assert_eq!(back.access_token, "demo-at");
     }
 }
