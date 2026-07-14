@@ -69,13 +69,17 @@ pub(super) fn git_pull(ctl: &Sender<HostCtl>) {
 }
 
 /// `GuiReq::GitPush`.
-pub(super) fn git_push(ctl: &Sender<HostCtl>) {
-    let _ = ctl.send(HostCtl::GitPush);
+pub(super) fn git_push(
+    ctl: &Sender<HostCtl>,
+    mode: Option<crate::app::runtime::client::git_remote::GitPushMode>,
+    root: Option<String>,
+) {
+    let _ = ctl.send(HostCtl::GitPush { mode, root });
 }
 
 /// `GuiReq::GitBranchList` (G4).
-pub(super) fn git_branch_list(ctl: &Sender<HostCtl>) {
-    let _ = ctl.send(HostCtl::GitBranchList);
+pub(super) fn git_branch_list(ctl: &Sender<HostCtl>, request_id: Option<u64>) {
+    let _ = ctl.send(HostCtl::GitBranchList { request_id });
 }
 
 /// `GuiReq::GitRepos` (multi-repo picker).
@@ -89,8 +93,8 @@ pub(super) fn set_active_repo(ctl: &Sender<HostCtl>, root: String) {
 }
 
 /// `GuiReq::GitCheckout` (G4).
-pub(super) fn git_checkout(ctl: &Sender<HostCtl>, ref_name: String) {
-    let _ = ctl.send(HostCtl::GitCheckout { ref_name });
+pub(super) fn git_checkout(ctl: &Sender<HostCtl>, ref_name: String, root: Option<String>) {
+    let _ = ctl.send(HostCtl::GitCheckout { ref_name, root });
 }
 
 /// `GuiReq::GitCreateBranch` (G4).
@@ -99,8 +103,14 @@ pub(super) fn git_create_branch(
     name: String,
     start: Option<String>,
     checkout: bool,
+    root: Option<String>,
 ) {
-    let _ = ctl.send(HostCtl::GitCreateBranch { name, start, checkout });
+    let _ = ctl.send(HostCtl::GitCreateBranch {
+        name,
+        start,
+        checkout,
+        root,
+    });
 }
 
 /// `GuiReq::GitCherryPick` (G5b).

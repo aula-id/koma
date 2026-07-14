@@ -26,6 +26,7 @@ import { Select } from './form'
 import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
+import { GitPushMenu } from '../GitPushMenu'
 
 // git-porcelain status char -> badge tone. Mirrors ExplorePanel's FILE_STATUS
 // idiom (added = good, modified = accent, deleted = error): A/? = new
@@ -284,7 +285,6 @@ export function GitPanel() {
   const setGitKey = useKoma((s) => s.setGitKey)
   const gitFetch = useKoma((s) => s.gitFetch)
   const gitPull = useKoma((s) => s.gitPull)
-  const gitPush = useKoma((s) => s.gitPush)
   const openGraphTab = useKoma((s) => s.openGraphTab)
   const sessionId = useKoma((s) => s.session.id)
 
@@ -393,15 +393,7 @@ export function GitPanel() {
         >
           <ArrowDown size={13} />
         </SyncButton>
-        <SyncButton
-          title={(git.ahead ?? 0) > 0 ? `Push (${git.ahead} ahead)` : 'Push'}
-          onClick={gitPush}
-          disabled={!!remoteBusy}
-          busy={remoteBusy === 'push'}
-          badge={git.ahead ?? 0}
-        >
-          <ArrowUp size={13} />
-        </SyncButton>
+        <GitPushMenu badge={git.ahead ?? 0} />
         <span className="flex-1" />
         <KeyRound size={12} className="flex-none text-koma-dim opacity-60" />
         <div className="min-w-0 max-w-[130px] flex-none" title="SSH key used for fetch/pull/push">

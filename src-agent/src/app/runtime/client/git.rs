@@ -63,6 +63,9 @@ pub(super) struct GitStatusResult {
     /// `unstaged` into their own list — a conflicted file shouldn't masquerade as an
     /// ordinary staged/unstaged modification. Empty outside a conflict.
     pub conflicted: Vec<GitFileEntry>,
+    /// Host-planned default push action. Additive and omitted only when no safe
+    /// push can be planned (detached, ambiguous remote, or unproved divergence).
+    pub push_mode: Option<super::git_remote::GitPushMode>,
 }
 
 /// The result of a host-side [`compute_git_diff`], pushed to the GUI as a `GitDiff`
@@ -106,11 +109,21 @@ pub(super) struct GitOpResult {
 }
 
 fn op_ok(op: &str) -> GitOpResult {
-    GitOpResult { ok: true, op: op.to_string(), error: None, message: None }
+    GitOpResult {
+        ok: true,
+        op: op.to_string(),
+        error: None,
+        message: None,
+    }
 }
 
 fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
-    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()), message: None }
+    GitOpResult {
+        ok: false,
+        op: op.to_string(),
+        error: Some(error.into()),
+        message: None,
+    }
 }
 
 /// Run `git <args>` with `dir` as cwd, `GIT_TERMINAL_PROMPT=0` (never block on an
@@ -150,17 +163,29 @@ pub(super) fn git_cmd_env(
     args: &[&str],
     extra: Option<(&str, &str)>,
 ) -> Option<std::process::Output> {
-    let mut cmd = std::process::Command::new("git");
-    cmd.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0");
-    if let Some((k, v)) = extra {
-        cmd.env(k, v);
-    }
-    // Poison-safe acquire: a panicked holder must not permanently brick every future
-    // git op (a bricked lock here would freeze the WHOLE git panel, worse than the bug
-    // being fixed). Held only for the scope of this call — the guard drops (and the
-    // lock releases) as soon as `cmd.output()` returns, right before this fn returns.
+    with_git_transaction(|git| git(dir, args, extra))
+}
+
+/// Run several git commands as one process-local transaction.  Push planning uses
+/// this to ensure the ref and lease it proves are still the ones it acts on; other
+/// host git workers cannot interleave between planning and execution.
+pub(super) fn with_git_transaction<T>(
+    f: impl FnOnce(
+        &dyn Fn(&std::path::Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    ) -> T,
+) -> T {
     let _guard = GIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    cmd.output().ok()
+    let run = |dir: &std::path::Path, args: &[&str], extra: Option<(&str, &str)>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args)
+            .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0");
+        if let Some((k, v)) = extra {
+            cmd.env(k, v);
+        }
+        cmd.output().ok()
+    };
+    f(&run)
 }
 
 /// Resolve the git repository root for `session` — the SINGLE choke point every git
@@ -226,6 +251,7 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         key_name: None,
         in_progress: None,
         conflicted: Vec::new(),
+        push_mode: None,
     };
 
     let Some(root) = repo_root_for(session) else {
@@ -272,15 +298,27 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
                     }
                 } else if let Some(ab) = rest.strip_prefix("branch.ab ") {
                     let mut nums = ab.split_whitespace();
-                    ahead = nums.next().and_then(|s| s.strip_prefix('+')).and_then(|s| s.parse().ok());
-                    behind = nums.next().and_then(|s| s.strip_prefix('-')).and_then(|s| s.parse().ok());
+                    ahead = nums
+                        .next()
+                        .and_then(|s| s.strip_prefix('+'))
+                        .and_then(|s| s.parse().ok());
+                    behind = nums
+                        .next()
+                        .and_then(|s| s.strip_prefix('-'))
+                        .and_then(|s| s.parse().ok());
                 }
             }
             // Ordinary changed entry: `<XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`.
             "1" => {
                 let cols: Vec<&str> = rest.splitn(8, ' ').collect();
                 if cols.len() == 8 {
-                    push_ordinary(&mut staged, &mut unstaged, cols[0], cols[7].to_string(), None);
+                    push_ordinary(
+                        &mut staged,
+                        &mut unstaged,
+                        cols[0],
+                        cols[7].to_string(),
+                        None,
+                    );
                 }
             }
             // Renamed/copied entry: `<XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>`,
@@ -290,7 +328,13 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
                 i += 1;
                 let orig_path = fields.get(i).cloned();
                 if cols.len() == 9 {
-                    push_ordinary(&mut staged, &mut unstaged, cols[0], cols[8].to_string(), orig_path);
+                    push_ordinary(
+                        &mut staged,
+                        &mut unstaged,
+                        cols[0],
+                        cols[8].to_string(),
+                        orig_path,
+                    );
                 }
             }
             // Unmerged/conflict: `<XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`.
@@ -338,6 +382,7 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
         key_name,
         in_progress,
         conflicted,
+        push_mode: super::git_remote::push_mode_for(&root),
     }
 }
 
@@ -360,7 +405,8 @@ pub(super) fn compute_git_status(session: Option<&str>) -> GitStatusResult {
 /// `None` when nothing is in flight.
 fn detect_in_progress(root: &std::path::Path) -> Option<String> {
     let head_ref_exists = |name: &str| {
-        git_cmd(root, &["rev-parse", "-q", "--verify", name]).is_some_and(|out| out.status.success())
+        git_cmd(root, &["rev-parse", "-q", "--verify", name])
+            .is_some_and(|out| out.status.success())
     };
     if head_ref_exists("MERGE_HEAD") {
         return Some("merge".to_string());
@@ -619,8 +665,12 @@ pub(super) fn git_commit(message: &str, session: Option<&str>) -> GitOpResult {
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
     };
+    super::git_remote::invalidate_rebase_proofs(&root);
     match git_cmd(&root, &["commit", "-m", message]) {
-        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) if out.status.success() => {
+            super::git_remote::invalidate_rebase_proofs(&root);
+            op_ok(OP)
+        }
         Some(out) => op_err(OP, git_failure(&out, "git commit failed")),
         None => op_err(OP, "failed to run git"),
     }

@@ -6,7 +6,7 @@
 //! (`CodexUrl`/`KiloCode`) — a dropped receiver (flow superseded/cancelled) makes every
 //! send a silent no-op.
 //!
-//! Factored out of `app::runtime::actions::oauth` (0.2.26 → GUI-detached OAuth wave) so
+//! Factored out of `app::runtime::actions::oauth` (0.2.28 → GUI-detached OAuth wave) so
 //! BOTH callers — the daemon's `Action::OAuthStart` handler (an attached session's flow)
 //! and the GUI host-relay's detached `HostCtl::StartOAuth` handler (the home-screen /
 //! pre-session flow, `client::host::host_swapper`) — spawn the SAME code, sending
@@ -47,16 +47,21 @@ pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedS
 /// receiver (flow superseded/cancelled) makes every send a silent no-op.
 async fn run_codex_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let auth = super::codex::build_auth_url();
-    let _ = tx.send(OAuthEvent::CodexUrl { url: auth.url.clone() });
+    let _ = tx.send(OAuthEvent::CodexUrl {
+        url: auth.url.clone(),
+    });
     super::browser::open_in_browser(&auth.url);
 
-    let cb = match super::loopback::catch_callback(&auth.pkce.state, 300, super::registry::CODEX_PORT).await {
-        Ok(cb) => cb,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
+    let cb =
+        match super::loopback::catch_callback(&auth.pkce.state, 300, super::registry::CODEX_PORT)
+            .await
+        {
+            Ok(cb) => cb,
+            Err(e) => {
+                let _ = tx.send(OAuthEvent::Failed { error: e });
+                return;
+            }
+        };
 
     let http = reqwest::Client::new();
     match super::codex::exchange_code(&http, &cb.code, &auth.pkce.verifier).await {
@@ -75,19 +80,25 @@ async fn run_codex_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// for tokens. Mirrors `run_codex_flow` exactly, against Anthropic's own endpoints.
 async fn run_claude_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let auth = super::claude::build_auth_url();
-    let _ = tx.send(OAuthEvent::CodexUrl { url: auth.url.clone() });
+    let _ = tx.send(OAuthEvent::CodexUrl {
+        url: auth.url.clone(),
+    });
     super::browser::open_in_browser(&auth.url);
 
-    let cb = match super::loopback::catch_callback(&auth.pkce.state, 300, super::registry::CLAUDE_PORT).await {
-        Ok(cb) => cb,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
+    let cb =
+        match super::loopback::catch_callback(&auth.pkce.state, 300, super::registry::CLAUDE_PORT)
+            .await
+        {
+            Ok(cb) => cb,
+            Err(e) => {
+                let _ = tx.send(OAuthEvent::Failed { error: e });
+                return;
+            }
+        };
 
     let http = reqwest::Client::new();
-    match super::claude::exchange_code(&http, &cb.code, &auth.pkce.verifier, &auth.pkce.state).await {
+    match super::claude::exchange_code(&http, &cb.code, &auth.pkce.verifier, &auth.pkce.state).await
+    {
         Ok(tokens) => {
             let conn = super::claude::to_conn(tokens);
             let _ = tx.send(OAuthEvent::Success { conn });
@@ -104,19 +115,26 @@ async fn run_claude_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// client_id/scope) endpoints.
 async fn run_komarun_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let auth = super::komarun::build_auth_url();
-    let _ = tx.send(OAuthEvent::CodexUrl { url: auth.url.clone() });
+    let _ = tx.send(OAuthEvent::CodexUrl {
+        url: auth.url.clone(),
+    });
     super::browser::open_in_browser(&auth.url);
 
-    let cb = match super::loopback::catch_callback(&auth.pkce.state, 300, super::registry::KOMA_PORT).await {
-        Ok(cb) => cb,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
+    let cb =
+        match super::loopback::catch_callback(&auth.pkce.state, 300, super::registry::KOMA_PORT)
+            .await
+        {
+            Ok(cb) => cb,
+            Err(e) => {
+                let _ = tx.send(OAuthEvent::Failed { error: e });
+                return;
+            }
+        };
 
     let http = reqwest::Client::new();
-    match super::komarun::exchange_code(&http, &cb.code, &auth.pkce.verifier, &auth.pkce.state).await {
+    match super::komarun::exchange_code(&http, &cb.code, &auth.pkce.verifier, &auth.pkce.state)
+        .await
+    {
         Ok(tokens) => {
             let conn = super::komarun::to_conn(tokens);
             let _ = tx.send(OAuthEvent::Success { conn });

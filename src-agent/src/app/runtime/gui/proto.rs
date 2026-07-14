@@ -75,8 +75,12 @@ pub(super) enum ClientMsg {
 #[serde(tag = "r")]
 pub(super) enum GuiReq {
     Ready,
-    Submit { text: String },
-    SelectSession { id: String },
+    Submit {
+        text: String,
+    },
+    SelectSession {
+        id: String,
+    },
     /// The hub `[+ new session]` row, or the attached chat view's "new session". `kill`
     /// (default `false`) additionally reaps the CURRENTLY-ATTACHED session's daemon as part
     /// of the switch (the chat view's "close this + start fresh"); the plain start-screen add
@@ -88,11 +92,15 @@ pub(super) enum GuiReq {
     /// A hub session row's KILL button (a live COOKING row, or the attached session itself).
     /// Forwarded as [`HostCtl::KillSession`]; the host escalates the kill off its control
     /// loop and refreshes the hub once the daemon is confirmed dead.
-    KillSession { id: String },
+    KillSession {
+        id: String,
+    },
     /// A hub HISTORY row's DELETE button: physically remove that session (disk + registry).
     /// Forwarded as [`HostCtl::DeleteSession`]; the host resolves the path from the uuid and
     /// refuses to delete a live/locked session (defense in depth).
-    DeleteSession { id: String },
+    DeleteSession {
+        id: String,
+    },
     RefreshHub,
     /// Cancel an in-progress session switch (the full-screen loader's Cancel button):
     /// best-effort bail back to the hub. Forwarded as [`HostCtl::ToSwapper`]. The swap
@@ -121,7 +129,9 @@ pub(super) enum GuiReq {
     /// lives in the workspace, so no bytes are shipped). Forwarded verbatim as a
     /// [`ClientRequest::Paste`]: an image path is ingested into `pending_attachments`;
     /// a non-image path is handled by the daemon's paste path as before.
-    AttachPath { path: String },
+    AttachPath {
+        path: String,
+    },
     /// Drop a staged attachment chip by its `[Image #N]` marker number (`markerN`).
     /// Forwarded as [`ClientRequest::RemoveAttachment`], which unstages it daemon-side;
     /// the resulting `pending_attachments` change re-emits the Snapshot (chips update).
@@ -141,7 +151,9 @@ pub(super) enum GuiReq {
     /// [`ClientRequest::RenameSession`], which sets the session's name + persists it
     /// (registry + settings) daemon-side; the resulting title change re-emits the
     /// Snapshot so `Snapshot.title` — which the overlay prefills from — updates.
-    Rename { name: String },
+    Rename {
+        name: String,
+    },
 
     // ─── GUI config setters (Connector + MCP panels) ─────────────────────────
     // Forwarded to the attached daemon (which owns `AppConfig`) as the matching
@@ -160,9 +172,14 @@ pub(super) enum GuiReq {
         url: String,
     },
     /// Remove an MCP server by uuid (McpPanel arm-delete).
-    DeleteMcpServer { uuid: String },
+    DeleteMcpServer {
+        uuid: String,
+    },
     /// Toggle an MCP server's enabled flag by uuid (McpPanel list switch).
-    EnableMcpServer { uuid: String, enabled: bool },
+    EnableMcpServer {
+        uuid: String,
+        enabled: bool,
+    },
     /// Request live MCP server connection status for the sidebar panel. Answered with
     /// a one-shot `McpStatus` push envelope (routed through the attached daemon).
     /// `requestId` is echoed back so the frontend can discard stale replies.
@@ -180,7 +197,9 @@ pub(super) enum GuiReq {
         api_key: String,
     },
     /// Remove a provider by uuid (Connector arm-delete).
-    DeleteProvider { uuid: String },
+    DeleteProvider {
+        uuid: String,
+    },
     /// Upsert a model (Connector ModelForm). `uuid` is absent for a new model; `roles`
     /// are lowercase tokens; `scope` is `"global"`/`"local"`.
     SetModel {
@@ -197,10 +216,15 @@ pub(super) enum GuiReq {
         scope: String,
     },
     /// Remove a model by uuid from the addressed `scope` (Connector arm-delete).
-    DeleteModel { uuid: String, scope: String },
+    DeleteModel {
+        uuid: String,
+        scope: String,
+    },
     /// Fetch the live model-id catalogue for a provider (Connector model picker). The
     /// daemon replies out-of-band; the host re-pushes it as a `ModelList` envelope.
-    ListModels { provider: String },
+    ListModels {
+        provider: String,
+    },
     /// Fetch the live PROVIDER-ROUTE list for one model (Connector ModelForm route picker),
     /// keyed by `provider` uuid + `modelId` (`author/slug`). The daemon fetches the model's
     /// OpenRouter endpoints (non-OpenRouter → empty) and replies out-of-band; the host
@@ -218,7 +242,9 @@ pub(super) enum GuiReq {
     /// wanted): routed UNCONDITIONALLY to the host-relay thread via `HostCtl::FileDiff`,
     /// unlike `ListModels`/`ListRoutes`'s attached-daemon-preferring dual routing, so it
     /// works identically whether a session is attached or not.
-    FileDiff { path: String },
+    FileDiff {
+        path: String,
+    },
     /// Explore "GIT" panel opened / refreshed: fetch a host-computed git status
     /// (branch, ahead/behind, staged + unstaged file lists) for the foreground
     /// session's repo. Same reasoning as `FileDiff` — the host process has direct git
@@ -242,43 +268,61 @@ pub(super) enum GuiReq {
     /// same reasoning as `GitStatus`/`GitDiff` — host-local, never the daemon. The
     /// reply is a one-shot `GitOp` envelope, immediately followed by a fresh
     /// `GitStatus` push so the panel's lists refresh from authoritative state.
-    GitStage { paths: Vec<String> },
+    GitStage {
+        paths: Vec<String>,
+    },
     /// The GIT panel's "Unstage All" header action / a staged row's hover "−" button:
     /// `git restore --staged --` the given `paths`. Same routing + reply pattern as
     /// `GitStage`.
-    GitUnstage { paths: Vec<String> },
+    GitUnstage {
+        paths: Vec<String>,
+    },
     /// The GIT panel's "Discard All Changes" header action / an unstaged row's discard
     /// button — destructive, so the React side gates it behind a confirm BEFORE
     /// sending this (this request itself is not reconfirmed host-side). PER PATH: an
     /// untracked file is deleted from disk; a tracked file's unstaged edits are reset
     /// from the index (`git restore --`) — staged content is never touched. Same
     /// routing + reply pattern as `GitStage`; see `git_discard`.
-    GitDiscard { paths: Vec<String> },
+    GitDiscard {
+        paths: Vec<String>,
+    },
     /// The GIT panel's commit box submit: `git commit -m <message>` whatever is
     /// CURRENTLY staged. An empty/whitespace-only `message` is rejected host-side (no
     /// git invocation at all) — the reply's `GitOp.error` surfaces that (or git's own
     /// stderr, e.g. "nothing to commit"). Same routing as `GitStage`; the React commit
     /// box clears its draft on a successful (`ok:true`) reply.
-    GitCommit { message: String },
+    GitCommit {
+        message: String,
+    },
     /// The GitKraken-style commit-graph panel opened / scrolled (load-more): fetch
     /// `limit` commits starting `skip` back from the tip, across every ref. Same
     /// reasoning + routing as `GitStatus` — routed UNCONDITIONALLY to the host-relay
     /// thread via `HostCtl::GitGraph`, host-local, never the daemon.
-    GitGraph { limit: u32, skip: u32 },
+    GitGraph {
+        limit: u32,
+        skip: u32,
+    },
     /// A commit-graph row clicked: fetch that commit's full metadata (incl. body) +
     /// changed-file list to open the commit-detail view. Same routing as `GitGraph`.
-    GitCommitDetail { sha: String },
+    GitCommitDetail {
+        sha: String,
+    },
     /// A commit-detail file row clicked: fetch a host-computed diff for `path` at
     /// commit `sha` (vs its first parent) to open a Monaco diff tab. Same routing as
     /// `GitGraph`.
-    GitCommitDiff { sha: String, path: String },
+    GitCommitDiff {
+        sha: String,
+        path: String,
+    },
     /// The GIT panel's key-picker changed: assign the foreground session's repo to
     /// use SSH key `name` (a vault key from the Settings "SSH Keys" section) for
     /// remote ops, or clear the assignment (`name: null` — "Default (system ssh)").
     /// Routed UNCONDITIONALLY to the host-relay thread via `HostCtl::SetGitKey`,
     /// same reasoning as `GitStage` — host-local, never the daemon. No dedicated
     /// reply; the reply is a fresh `GitStatus` push reflecting the new `keyName`.
-    SetGitKey { name: Option<String> },
+    SetGitKey {
+        name: Option<String>,
+    },
     /// The GIT panel's Fetch button: `git fetch --prune` for the foreground
     /// session's repo, using its assigned key's SSH override if one is set. Same
     /// routing as `GitStage` — host-local, never the daemon. The reply is a
@@ -290,12 +334,20 @@ pub(super) enum GuiReq {
     /// routing + reply pattern as `GitFetch`.
     GitPull,
     /// The GIT panel's Push button. Same routing + reply pattern as `GitFetch`.
-    GitPush,
+    GitPush {
+        #[serde(default)]
+        mode: Option<crate::app::runtime::client::git_remote::GitPushMode>,
+        #[serde(default)]
+        root: Option<String>,
+    },
     /// Branch-switcher popover (footer/GitPanel) or graph context menu opened
     /// (G4): fetch every local + remote-tracking branch. Same routing as
     /// `GitStatus` — host-local, never the daemon. Reply lands as a
     /// `BranchList` push.
-    GitBranchList,
+    GitBranchList {
+        #[serde(default, rename = "requestId")]
+        request_id: Option<u64>,
+    },
     /// Source Control multi-repo picker opened: discover every git repo across the
     /// session's workdirs. Same routing as `GitStatus` — host-local, never the
     /// daemon. Reply lands as a `RepoList` push.
@@ -304,7 +356,9 @@ pub(super) enum GuiReq {
     /// (an absolute toplevel path from a prior `RepoList`). Routed to the host-relay
     /// thread via `HostCtl::SetActiveRepo`, same reasoning as `SetGitKey` — the reply
     /// is a fresh `GitStatus` push for the newly-active repo.
-    SetActiveRepo { root: String },
+    SetActiveRepo {
+        root: String,
+    },
     /// Branch-switcher pick / graph "Checkout"/"Checkout commit" (G4 — SAFE
     /// only, never `--force`): switch (or detach onto) `ref` — a branch name or
     /// a sha. `ref` is a Rust keyword, so the field is `ref_name`
@@ -313,6 +367,8 @@ pub(super) enum GuiReq {
     GitCheckout {
         #[serde(rename = "ref")]
         ref_name: String,
+        #[serde(default)]
+        root: Option<String>,
     },
     /// Branch-switcher "+ Create new branch" / graph "Create branch here…"
     /// (G4 — SAFE only): create branch `name`. `start` is the commit-ish to
@@ -323,20 +379,29 @@ pub(super) enum GuiReq {
         name: String,
         start: Option<String>,
         checkout: bool,
+        #[serde(default)]
+        root: Option<String>,
     },
     /// Commit-graph row context menu "Cherry-pick" (G5b — may conflict; the
     /// follow-up `GitStatus` push's `inProgress`/`conflicted` fields carry that
     /// state, not this request's reply alone). Forwarded as
     /// [`HostCtl::GitCherryPick`].
-    GitCherryPick { sha: String },
+    GitCherryPick {
+        sha: String,
+    },
     /// Commit-graph row context menu "Revert" (G5b). Same conflict reasoning as
     /// `GitCherryPick`. Forwarded as [`HostCtl::GitRevert`].
-    GitRevert { sha: String },
+    GitRevert {
+        sha: String,
+    },
     /// Commit-graph row context menu "Reset branch to here" (G5b). `mode` is
     /// `"soft"`/`"mixed"`/`"hard"` — `hard` DISCARDS uncommitted changes; the
     /// React side gates this behind a confirm BEFORE sending it (this request
     /// itself is not reconfirmed host-side). Forwarded as [`HostCtl::GitReset`].
-    GitReset { sha: String, mode: String },
+    GitReset {
+        sha: String,
+        mode: String,
+    },
     /// Branch-switcher / graph context menu "Merge into current branch" (G5b —
     /// may conflict, same reasoning as `GitCherryPick`). `ref` is a Rust
     /// keyword, so the field is `ref_name` (`#[serde(rename = "ref")]` keeps the
@@ -359,11 +424,15 @@ pub(super) enum GuiReq {
     /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/
     /// `"rebase"`/`"cherry-pick"`/`"revert"` (echoing `GitStatus.inProgress`).
     /// Forwarded as [`HostCtl::GitOpAbort`].
-    GitOpAbort { kind: String },
+    GitOpAbort {
+        kind: String,
+    },
     /// The conflict banner's Continue button (G5b). Same `kind` values as
     /// `GitOpAbort`. Forwarded as [`HostCtl::GitOpContinue`] — the host runs it
     /// with `GIT_EDITOR=true` so it never hangs on an editor prompt.
-    GitOpContinue { kind: String },
+    GitOpContinue {
+        kind: String,
+    },
     /// Activity-bar "Usage" panel: fetch a host-computed LAST-7-DAYS usage preview
     /// (totals, a 7-entry daily cost series, top 3 models) straight off the global
     /// `~/.koma/usage.sqlite` ledger. Same reasoning as `FileDiff`: the ledger is a
@@ -416,7 +485,9 @@ pub(super) enum GuiReq {
     /// ATTACHED (the daemon persists + re-pushes the Config palette), or applied directly
     /// to `~/.koma/config.json` on the swapper thread when PRE-SESSION (onboarding runs
     /// before any session exists) via [`HostCtl::ConfigMutate`].
-    SetTheme { name: String },
+    SetTheme {
+        name: String,
+    },
     /// The GUI onboarding "koma free" choice: mint/reuse the keyless Koma Free provider +
     /// a Main-role model in the GLOBAL config. Routed EXACTLY like the config setters via
     /// `forward_config_req` (works ATTACHED through the daemon and UN-ATTACHED through the
@@ -438,7 +509,9 @@ pub(super) enum GuiReq {
     /// sends this while idle (mirrors the TUI's busy guard) — while working it
     /// falls through to a normal `Submit` instead (queues as a steer), a
     /// deliberate deviation from the TUI (which no-ops a `!` line while busy).
-    Shell { cmd: String },
+    Shell {
+        cmd: String,
+    },
     /// Ctrl+R composer parity: resend the last user turn (pop trailing assistant
     /// messages + re-stream). Forwarded as [`ClientRequest::Resend`], attached-only
     /// (like `Interrupt`) — the daemon's `handle_resend` reports a no-op (busy /
@@ -453,22 +526,30 @@ pub(super) enum GuiReq {
     /// Forwarded as [`ClientRequest::RewindTo`], which runs koma's `RewindToMessage`
     /// action (abort in-flight turn + truncate live/sqlite + refill the composer); a
     /// non-user / out-of-range index is a clean daemon-side no-op.
-    RewindTo { index: usize },
+    RewindTo {
+        index: usize,
+    },
     /// The Explore sidepanel agent-row KILL button: kill sub-agent `id`. Forwarded as
     /// [`ClientRequest::KillSubagent`].
-    KillSubagent { id: usize },
+    KillSubagent {
+        id: usize,
+    },
     /// The Explore sidepanel agent-row BACKGROUND button: background sub-agent `id`
     /// (flip it to detached without killing it — the agent keeps running, its report
     /// lands via a later push instead of parking the turn). Forwarded as
     /// [`ClientRequest::BackgroundSubagent`].
-    BackgroundSubagent { id: usize },
+    BackgroundSubagent {
+        id: usize,
+    },
     /// The global Ctrl+B shortcut: background EVERY eligible running sub-agent at once
     /// (mirrors the TUI composer's Ctrl+B). Forwarded as
     /// [`ClientRequest::BackgroundAllSubagents`].
     BackgroundAll,
     /// The Explore sidepanel bash-row KILL button: kill bg-bash job `id` (the numeric part
     /// of the row's `bash-<id>`). Forwarded as [`ClientRequest::BashKill`].
-    KillBash { id: usize },
+    KillBash {
+        id: usize,
+    },
     /// The Explore STREAM TAB view changed: `subagent`/`bash` name which sub-agent / bash
     /// job the webview is live-streaming (the active stream tab), or both absent = no
     /// stream tab. The host remembers this LOCALLY (shared `live_view`, read by the fold to
@@ -502,7 +583,9 @@ pub(super) enum GuiReq {
     /// (`"auto"`/`"normal"`/`"plan"`/`"yolo"`). Forwarded as [`ClientRequest::SetMode`],
     /// which routes through the daemon's `set_agent_mode` choke-point; the resulting
     /// snapshot re-projection reflects the new mode back to every attached client.
-    SetMode { mode: String },
+    SetMode {
+        mode: String,
+    },
 
     // ─── GUI approval gate (wave-7 approval overlay) ─────────────────────────────
     // The GUI renders the paused-call overlay off `Snapshot.awaitingApproval` +
@@ -511,7 +594,9 @@ pub(super) enum GuiReq {
     /// The tool-approval card's Approve/Deny buttons (paused risky/classifier call).
     /// Forwarded as [`ClientRequest::ApproveTool`] — `approve:true` runs the call,
     /// `false` bounces it back to the model (koma's y/n equivalent).
-    ApproveTool { approve: bool },
+    ApproveTool {
+        approve: bool,
+    },
     /// The status-footer Compact action: summarise + trim the foreground session's
     /// history. Forwarded as [`ClientRequest::Compact`] (koma's `/compact` equivalent).
     /// Compacting without an attached session is meaningless, so the un-attached case
@@ -521,7 +606,9 @@ pub(super) enum GuiReq {
     /// of `"approve"`, `"compact"` (approve + compact history to the plan), or `"deny"`
     /// (keep discussing). Forwarded verbatim as [`ClientRequest::PlanDecision`], koma's
     /// y/a/n plan-resume equivalent.
-    PlanDecision { decision: String },
+    PlanDecision {
+        decision: String,
+    },
 
     // ─── GUI Settings tab (vscode-style page) ────────────────────────────────────
     /// The Settings tab opened / re-activated: fetch the foreground session's GUI-editable
@@ -565,7 +652,9 @@ pub(super) enum GuiReq {
     /// [`ClientRequest::SetEffort`], attached-only like `SetPrefs`. The daemon
     /// re-pushes a fresh `SettingsValues` as the reply, updating the picker's
     /// trigger-pill label.
-    SetEffort { effort: String },
+    SetEffort {
+        effort: String,
+    },
 
     // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────────
     /// The /agents dashboard opened / refreshed: fetch the merged sub-agent registry +
@@ -623,11 +712,15 @@ pub(super) enum GuiReq {
     /// (`HostCtl::StartOAuth`), so koma.run/provider sign-in works with no session attached.
     /// Either side streams progress back as `OAuthState` pushes (`waiting_url`/`waiting_code`
     /// → `success`/`failed`).
-    StartOAuth { provider: String },
+    StartOAuth {
+        provider: String,
+    },
     /// Complete the Codex paste-token flow with a raw access `token`. Forwarded as
     /// [`ClientRequest::SubmitOAuthPaste`], attached-only — the paste screen only ever
     /// follows an in-session `StartOAuth("codex_paste")`.
-    SubmitOAuthPaste { token: String },
+    SubmitOAuthPaste {
+        token: String,
+    },
     /// Cancel an in-flight login flow. Dual-routed like `StartOAuth` via [`forward_or_host`]
     /// — un-attached, aborts whatever host-local flow is in flight (a no-op if none) so the
     /// Cancel button in the Account section never dangles pre-session either.
@@ -636,13 +729,17 @@ pub(super) enum GuiReq {
     /// [`forward_or_host`] — the attached daemon deletes + evicts, or (un-attached) the host
     /// removes it from the on-disk config + evicts the cache — then re-pushes a fresh
     /// `OAuthState`, so a connection is removable pre-session too.
-    DeleteOAuthConn { uuid: String },
+    DeleteOAuthConn {
+        uuid: String,
+    },
     /// Open `url` in the SYSTEM browser (never inside the webview) — e.g. the Settings
     /// "Account" section's "Manage account on koma.run" link. HOST-LOCAL, unconditional
     /// (no session/attach needed): just spawns the OS opener via
     /// `service::oauth::browser::open_in_browser` and returns — fire-and-forget, no reply,
     /// no push.
-    OpenExternal { url: String },
+    OpenExternal {
+        url: String,
+    },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────────
     // Browse/detail/installed-list are HOST-LOCAL — routed UNCONDITIONALLY to the
@@ -661,7 +758,9 @@ pub(super) enum GuiReq {
         category: Option<String>,
     },
     /// Fetch one extension's detail. Routed as `HostCtl::StoreDetail`.
-    StoreDetail { id: String },
+    StoreDetail {
+        id: String,
+    },
     /// Install `id` (optional `version`). Forwarded as [`ClientRequest::InstallExtension`]
     /// to the attached daemon; with none attached, pushes a graceful
     /// `ExtensionOpResult{ok:false}` instead.
@@ -670,12 +769,16 @@ pub(super) enum GuiReq {
         version: Option<String>,
     },
     /// Uninstall `id`. Same routing as [`InstallExtension`](Self::InstallExtension).
-    UninstallExtension { id: String },
+    UninstallExtension {
+        id: String,
+    },
     /// Fetch the locally-installed registry. Routed as `HostCtl::ListInstalledExtensions`.
     ListInstalledExtensions,
     /// Fetch full detail of one locally-installed extension. Routed as
     /// `HostCtl::GetInstalledExtensionDetail`.
-    GetInstalledExtensionDetail { id: String },
+    GetInstalledExtensionDetail {
+        id: String,
+    },
 
     // ─── GUI extension PANEL bridge (W8) ─────────────────────────────────────────
     /// A GUI extension PANEL's request to its backing extension daemon. The panel iframe
@@ -713,7 +816,10 @@ pub(super) enum GuiReq {
     /// defaults to `"koma"` when blank). Forwarded as [`HostCtl::KeyGenerate`]; the
     /// reply is a one-shot `KeyOp` envelope, immediately followed by a fresh
     /// `KeyList` push so the section's list refreshes.
-    KeyGenerate { name: String, comment: String },
+    KeyGenerate {
+        name: String,
+        comment: String,
+    },
     /// Import an EXISTING private key (`name` + pasted `privateKey` text) into the
     /// vault; the host derives + writes the matching public half. Forwarded as
     /// [`HostCtl::KeyImport`]; same reply pattern as `KeyGenerate`.
@@ -727,10 +833,15 @@ pub(super) enum GuiReq {
     /// (gated behind a deliberate click + warning React-side; never surfaced
     /// passively — the user owns these keys outright). Forwarded as
     /// [`HostCtl::KeyReveal`]; the reply is a one-shot `KeyReveal` envelope.
-    KeyReveal { name: String, private: bool },
+    KeyReveal {
+        name: String,
+        private: bool,
+    },
     /// Delete keypair `name` (both halves, best-effort). Forwarded as
     /// [`HostCtl::KeyDelete`]; same reply pattern as `KeyGenerate`.
-    KeyDelete { name: String },
+    KeyDelete {
+        name: String,
+    },
 
     // ─── GitKraken-style stash ops (GK4a) ─────────────────────────────────────
     // Same reasoning as `GitStatus`/`GitStage` above — the host process already has
@@ -823,5 +934,7 @@ pub(super) enum GuiReq {
     /// Used by the web frontend to log runtime errors that only occur in the
     /// built/running app (not in dev mode with full error messages). Host-local,
     /// unconditional — no reply, no attach needed.
-    WriteErrorLog { message: String },
+    WriteErrorLog {
+        message: String,
+    },
 }
