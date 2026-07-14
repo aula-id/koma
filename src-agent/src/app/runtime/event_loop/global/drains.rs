@@ -346,19 +346,13 @@ pub(super) fn drain_ext_calls(
     loop {
         match rx.try_recv() {
             Ok(req) => {
-                let crate::app::ext::ExtCallRequest {
-                    ext_id,
-                    granted,
-                    method,
-                    params,
-                    reply,
-                } = req;
-                let result = crate::app::ext::broker::handle_ext_call(
-                    state, handle, client, &ext_id, &granted, &method, params,
-                );
-                // The extension's reader task awaits this oneshot; a dropped receiver
-                // (it already timed out) just discards the reply — never a hang.
-                let _ = reply.send(result);
+                // Hand the whole request (BY VALUE) to the broker — it owns the reply
+                // oneshot now, so it can move that oneshot into a spawned task for the
+                // async verbs a later wave adds. For today's inline verbs it still
+                // replies synchronously before returning; a dropped receiver (the
+                // reader task already timed out) just discards the reply — never a
+                // hang. Zero behaviour change for the agents.* flows.
+                crate::app::ext::broker::handle_ext_call(state, handle, client, req);
                 dirty = true;
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
