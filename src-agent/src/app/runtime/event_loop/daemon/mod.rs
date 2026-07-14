@@ -348,6 +348,14 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     seq itself.
         hub.drain_store_replies(state);
 
+        // 3-sext. Broadcast the daemon→panel push outbox (`state.rest.ext_panel_pushes`), filled
+        //     by the `drain_ext_notifies` global drain (run in `service_global` above) when an
+        //     extension sends `panel.push`: fan each queued push out to EVERY attached client as a
+        //     seq'd `ExtPanelPush` frame (W8 panel bridge). Unlike the store/oauth drains this is
+        //     NOT request-correlated — a panel push has no initiating client — so it goes to all
+        //     attached shadows, not one by id. Empty except in the ticks a push lands.
+        hub.drain_ext_panel_pushes(state);
+
         // 3a-pre. `/select` hand-off: a just-drained `/select` slash-command (forwarded
         //     by the controller) set `state.rest.select_pending`. The standalone loop
         //     acts on this every tick by dumping the transcript to its OWN terminal; the

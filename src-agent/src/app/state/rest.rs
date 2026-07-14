@@ -388,15 +388,24 @@ pub struct AppStateRest {
     /// once here and held for the app's lifetime (plus the manager's clone), so the
     /// paired receiver never observes a premature `Disconnected`.
     pub ext_notify_tx: tokio::sync::mpsc::UnboundedSender<crate::app::ext::ExtNotify>,
-    /// RECEIVER half of the extension notify lane, drained each tick in
-    /// `service_global` alongside `ext_call_rx`: each [`crate::app::ext::ExtNotify`] is
-    /// dispatched (a later wave routes e.g. `panel.push` to the panel bridge). `Option`
-    /// only so the drain can take/put-back it (mirroring `ext_call_rx`); always `Some`
-    /// between ticks. `#[allow(dead_code)]`: the drain itself (`service_global`
-    /// dispatching each `ExtNotify`, e.g. to the panel bridge) is a later wave — this
-    /// field exists so the sender side has somewhere to deliver to today.
-    #[allow(dead_code)]
+    /// RECEIVER half of the extension notify lane, drained each tick in `service_global`
+    /// alongside `ext_call_rx` (`drains::drain_ext_notifies`, W8 panel bridge): each
+    /// [`crate::app::ext::ExtNotify`] is routed by name — a well-formed `panel.push` is queued
+    /// onto [`Self::ext_panel_pushes`] for the daemon hub to broadcast to attached panels; a
+    /// malformed `panel.push` or any unknown notify name is logged + dropped. `Option` only so
+    /// the drain can take/put-back it (mirroring `ext_call_rx`); always `Some` between ticks.
     pub ext_notify_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtNotify>>,
+    /// BOUNDED daemon→panel push outbox (W8 panel bridge): `(ext_id, panel_id, payload)` triples
+    /// queued by `drains::drain_ext_notifies` when an extension sends a `panel.push`, drained
+    /// each tick by the daemon hub's `drain_ext_panel_pushes` — which broadcasts each as a seq'd
+    /// [`crate::ipc::proto::DaemonEvent::ExtPanelPush`] to every ATTACHED client. Capped at 256
+    /// with drop-OLDEST (a live panel wants the freshest state, not a backlog); the drain logs a
+    /// single overflow line per over-cap tick. Parallels `oauth_pushes`, but with a KEY
+    /// difference: `oauth_pushes`' producer is gated on the daemon-only `oauth_gui_client`, so it
+    /// stays empty in the standalone/TUI loop for free — a panel push has no such daemon-only
+    /// producer gate (an extension pushes regardless of GUI), so the standalone/TUI `run_loop`
+    /// CLEARS this each tick (there is no panel to receive it) rather than letting it retain.
+    pub ext_panel_pushes: Vec<(String, String, serde_json::Value)>,
     /// Per-extension registry of the sub-agents THAT extension has spawned,
     /// keyed by extension id. This is the containment boundary the grant broker
     /// (`app::ext::broker`) resolves every `agents.status`/`agents.result`/
@@ -533,6 +542,7 @@ impl AppStateRest {
             ext_call_rx: Some(ext_call_rx),
             ext_notify_tx,
             ext_notify_rx: Some(ext_notify_rx),
+            ext_panel_pushes: Vec::new(),
             ext_agents: HashMap::new(),
             ext_context: std::collections::BTreeMap::new(),
         }

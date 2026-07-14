@@ -134,6 +134,16 @@ pub(super) fn run_loop(
             dirty = true;
         }
 
+        // 1c. Standalone/TUI has NO daemon hub to broadcast panel pushes, so the
+        //     `drain_ext_notifies` global drain (inside `service_global` above) would otherwise
+        //     let `ext_panel_pushes` retain entries here (an extension can send `panel.push`
+        //     regardless of whether koma is TUI or GUI). oauth's analogous outbox stays empty in
+        //     this loop for free because its PRODUCER is gated on a daemon-only field
+        //     (`oauth_gui_client`); a panel push has no such gate, so CLEAR the outbox each tick —
+        //     there is no panel to receive it in the TUI. The daemon loop DRAINS it instead
+        //     (`hub.drain_ext_panel_pushes`), so this clear never runs there.
+        state.rest.ext_panel_pushes.clear();
+
         // 2. Input poll cadence. While WORKING (waiting), poll fast so two things
         //    stay smooth: tokens flush at >=60fps when a stream is live, and the
         //    comet redraws at ~12fps (80ms) even when nothing streams (the 8ms

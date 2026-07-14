@@ -457,6 +457,29 @@ pub(super) enum PushEnvelope {
         detail: Option<crate::ipc::proto::InstalledExtensionDetailWire>,
         error: Option<String>,
     },
+    /// Out-of-band reply to a `ExtPanelMsg` (W8 panel bridge) — the extension's `panel.msg`
+    /// invoke outcome, re-pushed from the intercepted `DaemonEvent::ExtPanelReply` so the panel
+    /// iframe can correlate it by `reqId` and resolve its pending request. `ok`/`payload`/`error`
+    /// carry the result (an unavailable / disabled / oneshot extension, a failed auto-start, or a
+    /// timed-out/failed invoke is `ok:false` + `error`). camelCase keys per the JS contract.
+    #[serde(rename_all = "camelCase")]
+    ExtPanelReply {
+        ext_id: String,
+        panel_id: String,
+        req_id: Option<String>,
+        ok: bool,
+        payload: Option<serde_json::Value>,
+        error: Option<String>,
+    },
+    /// Unsolicited daemon→panel push (W8 panel bridge) — re-pushed from the intercepted
+    /// `DaemonEvent::ExtPanelPush` so a panel iframe's live UI updates without a request.
+    /// camelCase keys per the JS contract.
+    #[serde(rename_all = "camelCase")]
+    ExtPanelPush {
+        ext_id: String,
+        panel_id: String,
+        payload: serde_json::Value,
+    },
     /// One-shot reply to a `GetEffortOptions`: the derived `/effort` menu for the
     /// foreground session's current model. `state` is `"loading"` (a catalogue
     /// fetch was just armed or is already in flight — `options` empty),

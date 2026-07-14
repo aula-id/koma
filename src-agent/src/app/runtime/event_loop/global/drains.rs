@@ -365,6 +365,104 @@ pub(super) fn drain_ext_calls(
     dirty
 }
 
+/// Hard cap on the daemon→panel push outbox (`AppStateRest::ext_panel_pushes`). Over cap, the
+/// OLDEST pushes are shed (a live panel wants the freshest state, not a stale backlog).
+const EXT_PANEL_PUSH_CAP: usize = 256;
+
+/// Drain the extension NOTIFY lane (`ext_notify_rx`) — ext→koma fire-and-forget `Notify`s an
+/// extension's socket reader task queued (it has no [`AppState`]). Today the ONE handled notify
+/// is `panel.push` (W8 panel bridge): a well-formed `{ panelId: String, payload: Value }` is
+/// queued onto the bounded `ext_panel_pushes` outbox for the daemon hub to broadcast to attached
+/// panels; a malformed `panel.push` OR any unknown notify name is logged + dropped (never a
+/// panic). Mirrors [`drain_ext_calls`]'s take/put-back (the paired sender lives on `AppStateRest`
+/// + the manager's clone for the app's lifetime, so the channel never closes) and its
+/// drain-until-empty loop.
+///
+/// After draining this tick's burst the outbox cap is enforced ONCE ([`enforce_ext_panel_cap`]):
+/// drop the OLDEST over-cap entries + log a SINGLE overflow line — not one per shed item, so a
+/// hot extension can't spam the error log. The daemon hub drains what remains
+/// (`drain_ext_panel_pushes`); the standalone/TUI loop CLEARS it each tick (see
+/// `event_loop::run_loop`), since there is no panel there to receive it. Non-blocking (try_recv).
+pub(super) fn drain_ext_notifies(state: &mut AppState) -> bool {
+    let mut dirty = false;
+    // Always `Some` between ticks; the take/put-back is only to free `state` for the routing
+    // (which mutates `state.rest.ext_panel_pushes`).
+    let Some(mut rx) = state.rest.ext_notify_rx.take() else {
+        return false;
+    };
+    loop {
+        match rx.try_recv() {
+            Ok(notify) => {
+                route_ext_notify(&mut state.rest.ext_panel_pushes, notify);
+                dirty = true;
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            // Sender held for the app's lifetime, so this shouldn't happen; stop draining if it
+            // ever does (put the receiver back regardless).
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+        }
+    }
+    state.rest.ext_notify_rx = Some(rx);
+    enforce_ext_panel_cap(&mut state.rest.ext_panel_pushes);
+    dirty
+}
+
+/// Route ONE extension notify into the panel-push outbox (the per-notify body of
+/// [`drain_ext_notifies`], factored out for testing). A well-formed `panel.push` appends
+/// `(ext_id, panel_id, payload)`; a malformed `panel.push` or any UNKNOWN notify name is logged
+/// + dropped (the outbox is left untouched). Cap enforcement is the caller's, done once per tick.
+fn route_ext_notify(
+    out: &mut Vec<(String, String, serde_json::Value)>,
+    notify: crate::app::ext::ExtNotify,
+) {
+    if notify.name == "panel.push" {
+        match parse_panel_push(&notify.params) {
+            Some((panel_id, payload)) => out.push((notify.ext_id, panel_id, payload)),
+            None => {
+                crate::model::store::append_global_error_log(
+                    "ext panel",
+                    &format!(
+                        "dropping malformed panel.push from {} (params: {})",
+                        notify.ext_id, notify.params
+                    ),
+                );
+            }
+        }
+    } else {
+        // No other notify name is routed yet — log + drop (never a panic).
+        crate::model::store::append_global_error_log(
+            "ext notify",
+            &format!(
+                "dropping unknown notify {:?} from {}",
+                notify.name, notify.ext_id
+            ),
+        );
+    }
+}
+
+/// Parse a `panel.push` notify's params into `(panel_id, payload)`, or `None` when malformed
+/// (missing / non-string `panelId`, or missing `payload`). The extension SDK sends
+/// `{ "panelId": <string>, "payload": <value> }` — see `koma_extension::Koma::panel_push`.
+fn parse_panel_push(params: &serde_json::Value) -> Option<(String, serde_json::Value)> {
+    let panel_id = params.get("panelId")?.as_str()?.to_string();
+    let payload = params.get("payload")?.clone();
+    Some((panel_id, payload))
+}
+
+/// Enforce the panel-push outbox cap ([`EXT_PANEL_PUSH_CAP`]) with drop-OLDEST, logging a SINGLE
+/// overflow line when it fires (not one per shed item — a hot extension mustn't spam the error
+/// log). Called once at the end of [`drain_ext_notifies`]'s per-tick drain.
+fn enforce_ext_panel_cap(out: &mut Vec<(String, String, serde_json::Value)>) {
+    if out.len() > EXT_PANEL_PUSH_CAP {
+        let overflow = out.len() - EXT_PANEL_PUSH_CAP;
+        out.drain(0..overflow);
+        crate::model::store::append_global_error_log(
+            "ext panel",
+            &format!("panel-push outbox over cap ({EXT_PANEL_PUSH_CAP}); dropped {overflow} oldest"),
+        );
+    }
+}
+
 /// Drain the dedicated awareness-recompute channel (`cd` / post-`/compact`),
 /// mirroring the `sec_health_rx` drain just above. Distinct from `warm_rx`:
 /// that channel is REPLACED per warm, so a recompute in flight when a new warm
@@ -686,5 +784,92 @@ fn apply_to_settings_modal_for(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod ext_notify_tests {
+    //! Unit coverage for the W8 panel-push routing core (`route_ext_notify` +
+    //! `parse_panel_push` + `enforce_ext_panel_cap`). These ARE the whole per-notify + cap logic
+    //! of [`drain_ext_notifies`]; its thin take/put-back drain shell is the identical pattern to
+    //! [`drain_ext_calls`] (exercised end-to-end by `app::ext`'s integration test that drives a
+    //! real extension's `panel_push` onto `ext_notify_tx`), so it is not re-tested against a full
+    //! `AppState` here.
+    use super::*;
+
+    fn notify(name: &str, params: serde_json::Value) -> crate::app::ext::ExtNotify {
+        crate::app::ext::ExtNotify {
+            ext_id: "run.koma.test".to_string(),
+            name: name.to_string(),
+            params,
+        }
+    }
+
+    #[test]
+    fn parse_panel_push_reads_or_rejects() {
+        // Well-formed → Some.
+        assert_eq!(
+            parse_panel_push(&serde_json::json!({ "panelId": "p1", "payload": { "x": 1 } })),
+            Some(("p1".to_string(), serde_json::json!({ "x": 1 })))
+        );
+        // Missing payload → None.
+        assert_eq!(
+            parse_panel_push(&serde_json::json!({ "panelId": "p1" })),
+            None
+        );
+        // Missing panelId → None.
+        assert_eq!(parse_panel_push(&serde_json::json!({ "payload": 1 })), None);
+        // Non-string panelId → None.
+        assert_eq!(
+            parse_panel_push(&serde_json::json!({ "panelId": 7, "payload": 1 })),
+            None
+        );
+    }
+
+    #[test]
+    fn route_ext_notify_appends_valid_panel_push_only() {
+        let mut out = Vec::new();
+        route_ext_notify(
+            &mut out,
+            notify(
+                "panel.push",
+                serde_json::json!({ "panelId": "p1", "payload": { "ok": true } }),
+            ),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "run.koma.test");
+        assert_eq!(out[0].1, "p1");
+        assert_eq!(out[0].2, serde_json::json!({ "ok": true }));
+
+        // Malformed panel.push → dropped, no outbox growth.
+        route_ext_notify(&mut out, notify("panel.push", serde_json::json!({ "nope": 1 })));
+        assert_eq!(out.len(), 1);
+
+        // Unknown notify name → dropped, no outbox growth.
+        route_ext_notify(
+            &mut out,
+            notify("tool.call", serde_json::json!({ "panelId": "p1", "payload": 1 })),
+        );
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn enforce_cap_drops_oldest() {
+        let mut out: Vec<(String, String, serde_json::Value)> = Vec::new();
+        for i in 0..260 {
+            route_ext_notify(
+                &mut out,
+                notify(
+                    "panel.push",
+                    serde_json::json!({ "panelId": format!("p{i}"), "payload": i }),
+                ),
+            );
+        }
+        assert_eq!(out.len(), 260);
+        enforce_ext_panel_cap(&mut out);
+        assert_eq!(out.len(), EXT_PANEL_PUSH_CAP);
+        // The first 4 pushed (p0..=p3) are the shed-oldest; p4 becomes the new head, p259 the tail.
+        assert_eq!(out[0].1, "p4");
+        assert_eq!(out[EXT_PANEL_PUSH_CAP - 1].1, "p259");
     }
 }

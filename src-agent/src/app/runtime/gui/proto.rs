@@ -677,6 +677,26 @@ pub(super) enum GuiReq {
     /// `HostCtl::GetInstalledExtensionDetail`.
     GetInstalledExtensionDetail { id: String },
 
+    // ─── GUI extension PANEL bridge (W8) ─────────────────────────────────────────
+    /// A GUI extension PANEL's request to its backing extension daemon. The panel iframe
+    /// (`koma://extension/<extId>/…`) posts this; the host forwards it to the attached daemon as
+    /// [`ClientRequest::ExtPanelMsg`], which auto-starts the extension + invokes its `panel.msg`
+    /// and answers OUT-OF-BAND with an `ExtPanelReply` push the host re-pushes. `reqId` correlates
+    /// the reply; `payload` is the extension-defined request body. Attached-only, like `Interrupt`
+    /// — with NO attached daemon it is dropped silently (the GUI-side guard replies locally in
+    /// W9). camelCase fields to match the JS contract; `payload` defaults to `null` so a body-less
+    /// request still decodes.
+    ExtPanelMsg {
+        #[serde(rename = "extId")]
+        ext_id: String,
+        #[serde(rename = "panelId")]
+        panel_id: String,
+        #[serde(rename = "reqId", default)]
+        req_id: Option<String>,
+        #[serde(default)]
+        payload: serde_json::Value,
+    },
+
     // ─── GUI SSH key vault (Settings "SSH Keys" submenu, wave 4a) ────────────────
     // A GUI-only, MANUAL, user-owned key vault (`<~/.koma>/keys/`) — completely
     // separate from the model's own git credential machinery (`git_cred.rs`/
