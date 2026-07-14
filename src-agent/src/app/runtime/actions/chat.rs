@@ -40,9 +40,22 @@ pub(super) fn handle_submit(
             state.rest.fg_mut().set_toast("5 pending allowed!".to_string());
             return Ok(());
         }
+        // Real user activity (queued-steer path): reset the extension-injection
+        // budget counter (cost-DoS guard, review finding) — the user typed
+        // something, even though it's queued as a mid-turn steer rather than
+        // starting fresh. Mirrors the reset below for the immediate-kickoff path.
+        state.rest.fg_mut().ext_injected_turns = 0;
         state.rest.fg_mut().pending_steer.push(steer_text);
         return Ok(());
     }
+    // Real user activity (immediate-kickoff path): reset the extension-injection
+    // budget counter (cost-DoS guard, review finding — see
+    // `SessionRuntime::ext_injected_turns`) now that we know this submit is a real,
+    // non-steer user turn proceeding past the busy guards above. NEVER reset from a
+    // synthetic kickoff — bash/subagent/ext-nudge auto-wakes
+    // (`event_loop::sessions::deferred`) call `start_stream_task` directly and never
+    // go through this handler.
+    state.rest.fg_mut().ext_injected_turns = 0;
     // Prompt-classifier (PC): keep a copy of the user's prompt to
     // classify in the background once the turn is kicked off.
     let pc_prompt = text.clone();

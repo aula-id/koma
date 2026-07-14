@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::app::state::AppState;
+use crate::app::state::{AppState, EXT_TURN_BUDGET};
 use crate::service::openrouter::OpenRouterClient;
 
 use super::super::super::stream::resume_after_subagents;
@@ -379,11 +379,36 @@ pub(super) fn drain_deferred_and_resume(
     //   several extensions prompt at once.
     // - CONSECUTIVE-DUP DEDUPE: the broker refuses a prompt identical to the buffer's
     //   last entry, so an extension resending the same text can't fill the buffer.
+    // - TURN BUDGET (cost-DoS guard, review finding): additionally gated on
+    //   `ext_injected_turns < EXT_TURN_BUDGET`. This is the belt-and-braces half of
+    //   the pair with `broker_chat_prompt`'s own budget check — a prompt buffered
+    //   just BEFORE the budget tripped would otherwise still get injected here even
+    //   though the broker would now refuse a fresh one. Once the budget is exhausted
+    //   the buffer stays parked (not dropped) until a real user turn resets the
+    //   counter (see `SessionRuntime::ext_injected_turns` / `actions::chat::handle_submit`).
+    //   The toast block just below fires once when that park begins.
+    if !state.rest.sessions[idx].pending_ext_prompts.is_empty()
+        && !state.rest.sessions[idx].is_working()
+        && state.rest.sessions[idx].ext_injected_turns == EXT_TURN_BUDGET
+    {
+        // One-shot: the FIRST idle tick the budget is found EXACTLY exhausted (not
+        // `>=`) with prompts still buffered pops the toast, then nudges the counter
+        // past budget so this can't re-fire every tick while parked. A real user
+        // turn resets the counter to 0 (`handle_submit`), re-arming this for the
+        // next park. Mirrors the existing `set_toast_info` pattern used elsewhere in
+        // this file (the bg-bash / `!`-shell completion toasts above).
+        state.rest.sessions[idx].set_toast_info(
+            "extensions paused: turn budget reached — type anything to resume".to_string(),
+        );
+        state.rest.sessions[idx].ext_injected_turns = EXT_TURN_BUDGET + 1;
+        dirty = true;
+    }
     if ext_prompts_ready(
         !state.rest.sessions[idx].pending_ext_prompts.is_empty(),
         state.rest.sessions[idx].is_working(),
         client.is_some(),
         state.rest.sessions[idx].session.is_some(),
+        state.rest.sessions[idx].ext_injected_turns,
     ) {
         let prompts = std::mem::take(&mut state.rest.sessions[idx].pending_ext_prompts);
         // Leading EXT_PROMPT_MARK → compact transcript render + wire strip. One
@@ -419,6 +444,10 @@ pub(super) fn drain_deferred_and_resume(
         state.rest.reset_scroll_at(idx);
         state.rest.sessions[idx].status = "thinking".into();
         super::super::super::stream::start_stream_task(history, state, idx, client, handle);
+        // Cost-DoS guard (review finding): count THIS injected turn AFTER the
+        // successful kickoff, so the budget check above (and `broker_chat_prompt`'s
+        // own check) sees an accurate consecutive-injection count on the next call.
+        state.rest.sessions[idx].ext_injected_turns += 1;
         dirty = true;
     }
 
@@ -426,13 +455,22 @@ pub(super) fn drain_deferred_and_resume(
 }
 
 /// Pure gate for the extension-prompt injection lane (mirrors the bash/subagent
-/// nudge gates): drain-and-inject ONLY when the session is IDLE and has BOTH a
-/// client and a live session to run the resulting turn. `is_working` subsumes
-/// `waiting`, so a stream already kicked off this tick (by the bash/subagent nudge
-/// blocks) keeps this false — the never-double-launch invariant. Factored out so
-/// the loop-guard can be unit-tested without a live session/client fixture.
-fn ext_prompts_ready(has_prompts: bool, is_working: bool, has_client: bool, has_session: bool) -> bool {
-    has_prompts && !is_working && has_client && has_session
+/// nudge gates): drain-and-inject ONLY when the session is IDLE, has BOTH a client
+/// and a live session to run the resulting turn, AND the consecutive-injection
+/// budget (`injected_turns < EXT_TURN_BUDGET`, the cost-DoS guard — see
+/// [`EXT_TURN_BUDGET`](crate::app::state::EXT_TURN_BUDGET)) is not yet exhausted.
+/// `is_working` subsumes `waiting`, so a stream already kicked off this tick (by the
+/// bash/subagent nudge blocks) keeps this false — the never-double-launch invariant.
+/// Factored out so the loop-guard can be unit-tested without a live session/client
+/// fixture.
+fn ext_prompts_ready(
+    has_prompts: bool,
+    is_working: bool,
+    has_client: bool,
+    has_session: bool,
+    injected_turns: u32,
+) -> bool {
+    has_prompts && !is_working && has_client && has_session && injected_turns < EXT_TURN_BUDGET
 }
 
 /// Build the injected user-turn body for buffered extension prompts: a leading
@@ -535,7 +573,7 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
 
 #[cfg(test)]
 mod ext_prompt_tests {
-    use super::{ext_prompt_body, ext_prompts_ready};
+    use super::{ext_prompt_body, ext_prompts_ready, EXT_TURN_BUDGET};
 
     /// The injected body leads with EXT_PROMPT_MARK and lists each buffered prompt as
     /// its own `[ext:<id>] <text>` line, then the trailing instruction.
@@ -570,17 +608,31 @@ mod ext_prompt_tests {
     }
 
     /// The gate is IDLE-ONLY and needs BOTH a client and a live session; buffered
-    /// entries SURVIVE a working state (untouched until idle).
+    /// entries SURVIVE a working state (untouched until idle). `injected_turns` below
+    /// budget in every case here.
     #[test]
     fn gate_is_idle_only_and_needs_client_and_session() {
         // All preconditions met → ready to inject.
-        assert!(ext_prompts_ready(true, false, true, true));
+        assert!(ext_prompts_ready(true, false, true, true, 0));
         // WORKING → never ready: buffered entries survive a working state untouched.
-        assert!(!ext_prompts_ready(true, true, true, true));
+        assert!(!ext_prompts_ready(true, true, true, true, 0));
         // No buffered prompts → nothing to inject.
-        assert!(!ext_prompts_ready(false, false, true, true));
+        assert!(!ext_prompts_ready(false, false, true, true, 0));
         // No client / no session → can't run the turn.
-        assert!(!ext_prompts_ready(true, false, false, true));
-        assert!(!ext_prompts_ready(true, false, true, false));
+        assert!(!ext_prompts_ready(true, false, false, true, 0));
+        assert!(!ext_prompts_ready(true, false, true, false, 0));
+    }
+
+    /// Cost-DoS guard (review finding): the gate additionally requires
+    /// `injected_turns < EXT_TURN_BUDGET`. One below budget is still ready; AT or
+    /// OVER budget is never ready, even with every other precondition satisfied.
+    #[test]
+    fn gate_is_not_ready_once_turn_budget_exhausted() {
+        // One below budget → still ready.
+        assert!(ext_prompts_ready(true, false, true, true, EXT_TURN_BUDGET - 1));
+        // Exactly at budget → not ready (this is the park point the toast fires on).
+        assert!(!ext_prompts_ready(true, false, true, true, EXT_TURN_BUDGET));
+        // Past budget (the toast block's post-nudge value) → still not ready.
+        assert!(!ext_prompts_ready(true, false, true, true, EXT_TURN_BUDGET + 1));
     }
 }

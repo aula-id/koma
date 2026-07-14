@@ -40,6 +40,22 @@ use crate::tool::DirCache;
 
 use super::types::ToastKind;
 
+/// Consecutive extension-injected-turn budget (cost-DoS guard, review finding — see
+/// [`SessionRuntime::ext_injected_turns`]): the max number of synthetic `chat.prompt`
+/// turns the deferred-drain injection gate
+/// (`app::runtime::event_loop::sessions::deferred`) will fire back-to-back, and the
+/// ceiling `broker_chat_prompt` (`app::ext::broker`) refuses to buffer past, before a
+/// REAL user turn resets the counter. LOAD-BEARING — without this ceiling an
+/// extension subscribed to `agent.turn_end` that re-prompts with varying text
+/// (defeating the broker's consecutive-duplicate dedupe) could keep the session
+/// spending API calls indefinitely while the user is away. Enforced in TWO places
+/// belt-and-braces: the broker refuses to even BUFFER a new prompt once at/over
+/// budget, and the deferred injection gate additionally refuses to INJECT an
+/// already-buffered one — so a prompt buffered just before the budget tripped stays
+/// parked, never silently dropped. Defined here (next to the counter it bounds) and
+/// re-exported through `app::state` so both consumers share the ONE constant.
+pub const EXT_TURN_BUDGET: u32 = 10;
+
 /// Per-session execution state. Always non-empty in [`super::AppStateRest::sessions`];
 /// the foreground one is reached through `fg()` / `fg_mut()`.
 pub struct SessionRuntime {
@@ -329,6 +345,21 @@ pub struct SessionRuntime {
     /// the buffer. Purely in-memory / transient — `SessionRuntime` is rebuilt fresh
     /// each launch (it is never serialised), so this is never persisted.
     pub pending_ext_prompts: Vec<(String, String)>,
+    /// Consecutive EXTENSION-injected turn counter (cost-DoS guard, review finding):
+    /// the number of synthetic user turns injected back-to-back by the `chat.prompt`
+    /// broker path (see [`EXT_TURN_BUDGET`]) SINCE the last REAL user turn.
+    /// Incremented AFTER a successful ext-prompt injection kickoff (the deferred-drain
+    /// gate in `app::runtime::event_loop::sessions::deferred`); reset to `0` the
+    /// moment a genuine user submit is accepted (`actions::chat::handle_submit`, both
+    /// the immediate-kickoff and the queued-steer paths) — NEVER by a synthetic
+    /// kickoff, since bash/subagent/ext-nudge auto-wakes call `start_stream_task`
+    /// directly and bypass `handle_submit` entirely. Bounds an extension subscribed to
+    /// `agent.turn_end` that keeps re-prompting with varying text (defeating the
+    /// broker's consecutive-duplicate dedupe) from spending unbounded API cost while
+    /// the user is away: once this reaches [`EXT_TURN_BUDGET`], both the injection
+    /// gate and the `chat.prompt` broker refuse further turns until a real user turn
+    /// resets it. Purely transient (never serialised), like `pending_ext_prompts`.
+    pub ext_injected_turns: u32,
     /// All sub-agents spawned this session (running + finished). Drained each tick
     /// by the event loop; finished ones stay in the list for the UI to show their
     /// final state.
@@ -561,6 +592,7 @@ impl SessionRuntime {
             pending_bash_nudges: Vec::new(),
             pending_subagent_nudges: Vec::new(),
             pending_ext_prompts: Vec::new(),
+            ext_injected_turns: 0,
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
             pending_steer: Vec::new(),
