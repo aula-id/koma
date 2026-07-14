@@ -439,6 +439,13 @@ pub(super) async fn reader_task(
                     ExtMsg::Hello { .. } => {
                         // Unexpected once past the handshake; ignore.
                     }
+                    ExtMsg::Notify { name, params } => {
+                        // WAVE-1 COMPILE STUB: `Notify` is fire-and-forget (no `id`,
+                        // no reply expected) and real dispatch (e.g. routing
+                        // `panel.push` to the panel bridge) is wired in a later
+                        // wave. For now, drain the frame without acting on it.
+                        let _ = (name, params);
+                    }
                 }
             }
             Ok(None) => break, // EOF: child closed the connection

@@ -5,7 +5,13 @@
 use koma_extension::{run_daemon, DaemonDemo, Extension, ExtensionManifest};
 use serde_json::Value;
 
-struct EchoTool;
+#[derive(Default)]
+struct EchoTool {
+    /// The last koma->ext `Event` this extension saw, recorded by `on_event`.
+    /// Exposed via the `debug.last_event` invoke method as a test hook consumed
+    /// by the host-side wave-2 tests.
+    last_event: Option<(String, Value)>,
+}
 
 impl Extension for EchoTool {
     fn manifest(&self) -> ExtensionManifest {
@@ -22,14 +28,22 @@ impl Extension for EchoTool {
                     .unwrap_or("");
                 serde_json::json!({ "output": text })
             }
+            "debug.last_event" => match &self.last_event {
+                Some((name, params)) => serde_json::json!({ "name": name, "params": params }),
+                None => serde_json::json!({ "name": Value::Null }),
+            },
             other => serde_json::json!({ "error": format!("unknown method: {other}") }),
         }
+    }
+
+    fn on_event(&mut self, name: &str, params: Value) {
+        self.last_event = Some((name.to_string(), params));
     }
 }
 
 fn main() {
     run_daemon(
-        EchoTool,
+        EchoTool::default(),
         DaemonDemo {
             invoke: Some((
                 "tool.call".to_string(),
