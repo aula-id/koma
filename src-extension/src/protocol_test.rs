@@ -122,7 +122,7 @@ fn koma_msg_welcome_roundtrips_optional_permutations_and_field_order() {
     // Empty granted set (a freshly-installed extension with no grants echoed yet).
     let empty = KomaMsg::Welcome {
         protocol: PROTOCOL_VERSION.to_string(),
-        koma_version: "0.2.26".to_string(),
+        koma_version: "0.2.27".to_string(),
         granted: Vec::new(),
     };
     let wire = serde_json::to_value(&empty).expect("serializes");
@@ -136,7 +136,7 @@ fn koma_msg_welcome_roundtrips_optional_permutations_and_field_order() {
     // Multi-grant set, reordered wire (tag last, granted before koma_version/protocol).
     let reordered = json!({
         "granted": ["agents:read", "chat:prompt"],
-        "koma_version": "0.2.26",
+        "koma_version": "0.2.27",
         "protocol": PROTOCOL_VERSION,
         "t": "welcome",
     });
@@ -144,7 +144,7 @@ fn koma_msg_welcome_roundtrips_optional_permutations_and_field_order() {
     match back2 {
         KomaMsg::Welcome { protocol, koma_version, granted } => {
             assert_eq!(protocol, PROTOCOL_VERSION);
-            assert_eq!(koma_version, "0.2.26");
+            assert_eq!(koma_version, "0.2.27");
             assert_eq!(granted, vec![Grant::AgentsRead, Grant::ChatPrompt]);
         }
         other => panic!("expected KomaMsg::Welcome, got {other:?}"),
