@@ -78,6 +78,20 @@ pub fn handle_live_switch(
     // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
     // the repoint above; the now-foreground session shows its OWN stored mode (normally
     // Chat). Forcing Chat here would clobber a target that legitimately had its own overlay.
+
+    // W5: fan out `session.foreground_change` to subscribed extensions, carrying the
+    // NEW foreground session uuid. This is the SINGLE chokepoint every in-daemon
+    // foreground switch funnels through — the daemon hub's UUID-keyed
+    // `SwitchForeground` (via `apply_action(LiveSwitch)`), the TUI session hub's
+    // cooking-pane Enter, and the post-close foreground reassignment all land here —
+    // so emitting once here covers them all with no double-fire. Placed last, after
+    // every `&mut` mutation above, so the emit's `&AppState` reborrow is clean. In
+    // daemon-per-session a switch to a session owned by a DIFFERENT daemon is invisible
+    // to this daemon's extensions; this event only fires for in-daemon switches. Zero
+    // subscribers → structural no-op.
+    let new_fg = state.rest.sessions[idx].id.clone();
+    let params = serde_json::json!({ "session": new_fg });
+    crate::app::ext::events::emit(state, "session.foreground_change", &params);
     Ok(())
 }
 

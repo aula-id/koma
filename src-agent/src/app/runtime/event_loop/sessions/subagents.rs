@@ -43,7 +43,23 @@ pub(super) fn drain_subagents(
     // round can resume with no dangling tool_call ids.
     let mut deferred_results: Vec<(String, String)> = Vec::new();
 
+    // W5: sub-agent terminal transitions observed THIS tick, to fan out to
+    // subscribed extensions AFTER the loop (collect-then-apply, same borrow
+    // discipline as `deferred_results` — the emit takes `&AppState`). Each tuple is
+    // (session_uuid, local_subagent_id, agent_name, status). Only a genuine
+    // Running->terminal edge is pushed; see the `was_running` gate below.
+    let mut ext_terminal_emissions: Vec<(String, usize, String, &'static str)> = Vec::new();
+
     for i in 0..state.rest.sessions[idx].subagents.len() {
+        // W5: snapshot whether this sub-agent was Running at the START of this tick.
+        // A Running->terminal transition observed by the end of the iteration is
+        // fanned out exactly once; a restored/already-terminal record was NOT Running
+        // here, so it never emits (and a kill applied via the broker already emitted).
+        let was_running = matches!(
+            state.rest.sessions[idx].subagents[i].status,
+            SubAgentStatus::Running
+        );
+
         // --- collect phase: drain rx into a local vec ---
         let mut disconnected = false;
         let events: Vec<AgentEvent> = {
@@ -384,6 +400,30 @@ pub(super) fn drain_subagents(
         if let Some(pair) = defer {
             deferred_results.push(pair);
         }
+
+        // W5: a Running->terminal transition THIS tick → queue an extension fan-out
+        // for after the loop. The `was_running` gate makes this an EDGE (restored /
+        // already-terminal records were not Running at tick start, so they never
+        // fire); the settled status decides the label. Disconnect->Killed then a
+        // late Done in the same tick settles to Done (Done wins), and that is what
+        // is reported here.
+        if was_running {
+            let sa = &state.rest.sessions[idx].subagents[i];
+            let terminal = match &sa.status {
+                SubAgentStatus::Done(_) => Some("done"),
+                SubAgentStatus::Error(_) => Some("error"),
+                SubAgentStatus::Killed => Some("killed"),
+                SubAgentStatus::Running => None,
+            };
+            if let Some(status) = terminal {
+                ext_terminal_emissions.push((
+                    state.rest.sessions[idx].id.clone(),
+                    sa.id,
+                    sa.agent_name.clone(),
+                    status,
+                ));
+            }
+        }
     }
 
     // Deliver every terminal task-tool result into the parked round's
@@ -420,6 +460,21 @@ pub(super) fn drain_subagents(
     // tick, so a restored session shows the final status not a stale "running" (#25).
     if status_changed {
         crate::app::runtime::bg_persist::persist_subagents(&state.rest.sessions[idx]);
+    }
+
+    // W5: fan out every sub-agent terminal transition collected this tick. AFTER the
+    // per-agent loop + persist so the immutable `&AppState` the emit needs is a clean
+    // reborrow. Each fires the owned `agents.done` (notify:true spawner only) plus the
+    // subscribed `subagent.done` broadcast; with no subscribed extensions it is a
+    // structural no-op that never touches `dirty` or any session state.
+    for (session_uuid, local_id, agent, status) in ext_terminal_emissions {
+        crate::app::ext::events::emit_subagent_terminal(
+            state,
+            &session_uuid,
+            local_id,
+            &agent,
+            status,
+        );
     }
 
     dirty

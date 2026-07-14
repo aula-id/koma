@@ -51,6 +51,7 @@ use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
 pub mod broker;
+pub mod events;
 pub mod install;
 pub mod register;
 mod wire;

@@ -88,7 +88,11 @@ impl ExtAgentRegistry {
     /// Allocate a fresh ext-facing id for a just-spawned/queued sub-agent and
     /// remember where it really lives (+ whether this extension asked to be
     /// notified on completion). Returns the new ext-facing id.
-    fn insert(&mut self, session_uuid: String, local_subagent_id: usize, notify: bool) -> u64 {
+    ///
+    /// `pub(crate)` so the W5 event-fan-out tests (`app::ext::events`) can build
+    /// registry fixtures the same way `agents.spawn` populates them, without
+    /// re-implementing id allocation.
+    pub(crate) fn insert(&mut self, session_uuid: String, local_subagent_id: usize, notify: bool) -> u64 {
         let ext_agent_id = self.next_id;
         self.next_id += 1;
         self.map.insert(
@@ -660,6 +664,11 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
     };
 
     let mut killed = false;
+    // W5: capture the fan-out triple ONLY on a genuine Running->Killed transition
+    // (never the idempotent re-kill of an already-terminal agent, never the
+    // pending-queue drop of one that never ran). Emitted AFTER the &mut kill work
+    // below so the &AppState the event fan-out needs is a clean reborrow.
+    let mut killed_transition: Option<(String, usize, String)> = None;
 
     if let Some(sa) = state.rest.sessions[sess_idx]
         .subagents
@@ -670,6 +679,8 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
         // Only transition a still-running agent; a terminal one keeps its outcome.
         if matches!(sa.status, SubAgentStatus::Running) {
             sa.status = SubAgentStatus::Killed;
+            killed_transition =
+                Some((r.session_uuid.clone(), r.local_subagent_id, sa.agent_name.clone()));
         }
         killed = true;
     }
@@ -688,6 +699,14 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
         // Persist the terminal transition so a restored session doesn't show a
         // stale "running" (mirrors `drain_subagents`' status-change persist).
         crate::app::runtime::bg_persist::persist_subagents(&state.rest.sessions[sess_idx]);
+        // W5: fan out the terminal event AFTER the mutable kill work. Fires only on
+        // a genuine Running->Killed transition (captured above) — a pending-queue
+        // drop or an idempotent re-kill of an already-terminal agent emits nothing,
+        // and the next `drain_subagents` tick won't re-emit (the agent is no longer
+        // Running there, so its was-running edge is false).
+        if let Some((session_uuid, local_id, agent)) = killed_transition {
+            super::events::emit_subagent_terminal(state, &session_uuid, local_id, &agent, "killed");
+        }
         json!({ "killed": true })
     } else {
         json!({ "error": format!("unknown agentId: {ext_agent_id}") })
