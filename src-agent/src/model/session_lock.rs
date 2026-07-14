@@ -64,15 +64,14 @@ fn pid_alive(pid: u32) -> bool {
     )
 }
 
-/// TODO(windows-port, phase B2: OpenProcess liveness). Windows has no `kill(pid,
-/// 0)` idiom; a real check needs `OpenProcess`/`GetExitCodeProcess`. Conservative
-/// stub: always report the PID alive, so this never STEALS a lock we can't
-/// actually verify — worst case a stale lock lingers (same failure mode as an
-/// unreadable lock file), never a false "unlocked" that would let two instances
-/// clobber the same session.
+/// Windows liveness via [`crate::model::proc_win::pid_alive`] (`OpenProcess` +
+/// `GetExitCodeProcess`) — the real check that replaces the phase-A2 always-alive stub.
+/// It is still biased toward ALIVE on ambiguity, so — like the old stub — it never
+/// STEALS a lock it cannot verify, but it now correctly reports a crashed owner's PID as
+/// dead so a stale lock is swept instead of wedging the session forever.
 #[cfg(windows)]
-fn pid_alive(_pid: u32) -> bool {
-    true
+fn pid_alive(pid: u32) -> bool {
+    crate::model::proc_win::pid_alive(pid)
 }
 
 /// Write our PID into the session's lock file, overwriting any existing one.

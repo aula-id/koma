@@ -398,13 +398,36 @@ fn kill_child(pid: u32) {
     }
 }
 
-/// TODO(windows-port, phase B2: kill via Job Object/taskkill). Windows has no
-/// `kill(2)`; a real implementation needs `TerminateProcess`/`taskkill` (or a Job
-/// Object for tree-kill, since the shell child may itself have spawned more).
-/// Conservative no-op stub so this compiles for now — the caller already treats
-/// this as best-effort.
+/// Best-effort terminate of a spawned background-bash child by pid (Windows).
+///
+/// Uses `taskkill /T /F /PID` — a TREE kill — rather than a bare `TerminateProcess`.
+/// Rationale: on Windows the job's direct child is `cmd.exe /C <command>` (see
+/// [`crate::tool::shell::os_shell_command`]), so terminating just that pid would ORPHAN
+/// the real work `cmd.exe` spawned and leave `bash_kill` ineffective; `/T` reaps the
+/// whole descendant tree so the job actually stops, and `/F` forces it (console apps
+/// routinely ignore the graceful WM_CLOSE). This is the ONE place a targeted whole-tree
+/// stop is needed — the daemon's Job Object only tree-kills on daemon DEATH. It is
+/// deliberately MORE thorough than the unix arm (a single `SIGTERM` to the direct child),
+/// never less, and touches no unix behaviour.
+///
+/// Spawned with `CREATE_NO_WINDOW` (no console flash) and null stdio; fire-and-forget +
+/// best-effort like the unix `libc::kill` — `taskkill` is near-instant, and a spawn
+/// failure (already-exited pid, `taskkill` absent) is ignored.
 #[cfg(windows)]
-fn kill_child(_pid: u32) {}
+fn kill_child(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    let pid_arg = pid.to_string();
+    let _ = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", pid_arg.as_str()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
 
 #[cfg(test)]
 #[path = "mod_test.rs"]

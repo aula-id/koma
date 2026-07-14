@@ -561,6 +561,14 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 
+    // Windows has no SIGPIPE; instead arm the kill-on-close Job Object safety net NOW —
+    // before `build_startup` spawns any child (e.g. an auto-started extension daemon) —
+    // so every child auto-joins the job and a hard `TerminateProcess` of this daemon
+    // tears the whole tree down. Not needed on unix (setsid + the signal/`QuitDaemon`
+    // teardown release the tree there).
+    #[cfg(windows)]
+    super::signals::install_killtree_job();
+
     // Daemon-per-session: `--session <id>` is REQUIRED. This daemon binds the keyed
     // socket `run/<id>.sock` and owns exactly session `<id>` (the client minted the id
     // and passed it here, so both agree on the key). Erroring clearly beats binding a

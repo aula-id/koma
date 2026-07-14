@@ -88,45 +88,149 @@ pub(super) fn install_daemon_signals(
     shutting_down
 }
 
-/// Windows placeholder twin of the unix [`install_daemon_signals`] above.
+/// Windows twin of the unix [`install_daemon_signals`] above.
 ///
-/// TODO(windows-port, phase B2: ctrl_close/ctrl_shutdown + IPC shutdown message).
-/// Windows has no SIGHUP/SIGTERM — the console-control-event set is
-/// CTRL_C/CTRL_BREAK/CTRL_CLOSE/CTRL_LOGOFF/CTRL_SHUTDOWN, and a headless daemon
-/// (no console) mostly only ever sees the last two, which `tokio::signal::windows`
-/// exposes separately from `ctrl_c()`. For now this only wires up `ctrl_c()`
-/// (the CTRL_C_EVENT / SIGINT analogue) to mirror the unix "first request begins
-/// graceful shutdown, second hard-exits" behavior; there is no SIGHUP-survive
-/// equivalent yet (a real port should also listen for ctrl_close/ctrl_shutdown so
-/// the daemon tears down cleanly when its console/session is closed, and should
-/// consider driving shutdown through the same IPC `QuitDaemon` message the
-/// graceful stop path already uses instead of a bare signal).
+/// Windows has no SIGHUP/SIGTERM — the console-control set is
+/// CTRL_C/CTRL_BREAK/CTRL_CLOSE/CTRL_LOGOFF/CTRL_SHUTDOWN. This wires up the three that
+/// `tokio::signal::windows` exposes and that a headless (`DETACHED_PROCESS`, console-less)
+/// daemon can plausibly see, all flipping the SAME `shutting_down` flag the SYNC loop
+/// polls:
+///
+/// - **`ctrl_c` (CTRL_C_EVENT / SIGINT analogue)** — first press begins graceful
+///   shutdown, a second press hard-exits, mirroring the unix double-SIGTERM guard.
+/// - **`ctrl_close` (CTRL_CLOSE_EVENT)** — the console/window is closing.
+/// - **`ctrl_shutdown` (CTRL_SHUTDOWN_EVENT)** — the system is shutting down.
+///
+/// `ctrl_close`/`ctrl_shutdown` are BEST-EFFORT extra triggers: any stream that fails to
+/// register is skipped (its `select!` branch parks forever), and — critically — Windows
+/// may HARD-KILL the process before an async close/shutdown handler finishes running
+/// (tokio #7039), so a graceful teardown from these is NOT guaranteed. The PRIMARY
+/// graceful path on Windows is therefore the IPC message (`QuitDaemon` for a session
+/// daemon, `McpRequest::Shutdown` for the MCP daemon) that `koma daemon kill` sends, which
+/// runs entirely inside the still-alive daemon loop. There is no SIGHUP-survive equivalent
+/// (a detached daemon has no controlling terminal to lose).
 #[cfg(windows)]
 pub(super) fn install_daemon_signals(
     handle: &tokio::runtime::Handle,
 ) -> Arc<std::sync::atomic::AtomicBool> {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::signal::windows::{ctrl_c, ctrl_close, ctrl_shutdown};
 
     let shutting_down = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shutting_down);
 
     let _enter = handle.enter();
     handle.spawn(async move {
-        // Best-effort registration, mirroring the unix task's tolerance of a
-        // registration failure (rely on `QuitDaemon` if `ctrl_c()` can't be wired up).
+        // Best-effort registration of each stream. A `None` (registration failed) makes
+        // that branch park forever via `pending()`, so the others still work; if ALL
+        // three are `None` the task idles and the daemon relies on the IPC shutdown
+        // message — the exact fallback the unix task takes when signal registration fails.
+        let mut cc = ctrl_c().ok();
+        let mut close = ctrl_close().ok();
+        let mut shutdown = ctrl_shutdown().ok();
+
         let mut requested = 0u32;
         loop {
-            if tokio::signal::ctrl_c().await.is_err() {
-                return; // no signal handling available; rely on QuitDaemon
-            }
-            if requested == 0 {
-                requested = 1;
-                flag.store(true, Ordering::Relaxed);
-            } else {
-                std::process::exit(0);
+            tokio::select! {
+                // CTRL_C_EVENT: first begins graceful shutdown, a second hard-exits.
+                _ = async {
+                    match cc.as_mut() {
+                        Some(s) => { s.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    if requested == 0 {
+                        requested = 1;
+                        flag.store(true, Ordering::Relaxed);
+                    } else {
+                        std::process::exit(0);
+                    }
+                }
+                // CTRL_CLOSE_EVENT: console/window closing — begin graceful shutdown
+                // (best-effort; Windows may hard-kill before cleanup finishes, #7039).
+                _ = async {
+                    match close.as_mut() {
+                        Some(s) => { s.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                // CTRL_SHUTDOWN_EVENT: system shutting down — same best-effort trigger.
+                _ = async {
+                    match shutdown.as_mut() {
+                        Some(s) => { s.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    flag.store(true, Ordering::Relaxed);
+                }
             }
         }
     });
 
     shutting_down
+}
+
+/// Windows-only: arm a "kill the whole tree when I die" safety net (phase B2).
+///
+/// Creates an anonymous Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, assigns
+/// THIS (daemon) process to it, and INTENTIONALLY LEAKS the handle so the job lives
+/// exactly as long as the process. Child processes the daemon spawns later (shell
+/// subprocesses, MCP stdio servers) are AUTO-ASSIGNED to the job by the kernel — Windows
+/// associates a new process with its creator's job unless the child is created
+/// `CREATE_BREAKAWAY_FROM_JOB` (which koma never sets) — so they belong to this job too.
+/// When the daemon dies for ANY reason (graceful exit OR a hard `TerminateProcess`, which
+/// skips Rust teardown), the kernel closes the last job handle and `KILL_ON_JOB_CLOSE`
+/// terminates every process still alive in the job — closing the orphaned-child gap a
+/// hard kill would otherwise leave on Windows (there is no process-group `SIGKILL` like
+/// unix).
+///
+/// Entirely best-effort: any failure just leaves the net un-armed (the daemon still
+/// runs). CAVEAT: assigning self to a job while ALREADY in one creates a NESTED job, which
+/// requires Windows 8+ — on older Windows `AssignProcessToJobObject` fails and the net is
+/// simply absent (acceptable; koma targets modern Windows). Call this at daemon startup
+/// BEFORE any child is spawned so the whole tree is covered.
+#[cfg(windows)]
+pub(super) fn install_killtree_job() {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    // SAFETY: every Win32 call uses correct arg types; the job handle is null-checked and
+    // CloseHandle'd ONLY on the failure paths. On SUCCESS the handle is deliberately NOT
+    // closed (leaked) so the kernel holds the job open for the whole process lifetime.
+    // `zeroed::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()` is valid — it is a plain repr(C)
+    // POD whose all-zero state means "no limits", onto which we set only the one flag.
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            let _ = CloseHandle(job);
+            return;
+        }
+        if AssignProcessToJobObject(job, GetCurrentProcess()) == 0 {
+            // Most likely an already-jobbed process on pre-Win8 (no nested jobs). Release
+            // the unused job rather than leak a net that would protect nothing.
+            let _ = CloseHandle(job);
+            return;
+        }
+        // SUCCESS: `job` (a Copy raw HANDLE, no Drop) goes out of scope WITHOUT a
+        // CloseHandle — the intentional leak. The kernel closes it when this process
+        // dies, firing KILL_ON_JOB_CLOSE on any surviving child.
+    }
 }
