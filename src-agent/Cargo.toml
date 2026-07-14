@@ -161,7 +161,7 @@ category = "DeveloperTool"
 # instead of the multi-res ICO. The deb hicolor icon generator ignores
 # non-`.png` entries on its own, so listing icon.ico here does not affect it.
 icons = ["../assets/icon.ico", "../assets/icon*.png"]
-# out-dir/binaries are provided on the CLI in CI
+# CI runs `cargo packager --release` after `cargo build --release`; binaries and out-dir auto-detect from target/release
 
 [package.metadata.packager.deb]
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
