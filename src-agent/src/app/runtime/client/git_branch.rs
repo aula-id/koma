@@ -28,11 +28,21 @@ fn git_cmd(dir: &std::path::Path, args: &[&str]) -> Option<std::process::Output>
 }
 
 fn op_ok(op: &str) -> GitOpResult {
-    GitOpResult { ok: true, op: op.to_string(), error: None, message: None }
+    GitOpResult {
+        ok: true,
+        op: op.to_string(),
+        error: None,
+        message: None,
+    }
 }
 
 fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
-    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()), message: None }
+    GitOpResult {
+        ok: false,
+        op: op.to_string(),
+        error: Some(error.into()),
+        message: None,
+    }
 }
 
 /// One ref entry in a [`BranchListResult`], parsed off one `git for-each-ref`
@@ -49,6 +59,8 @@ pub(super) struct BranchInfo {
     pub name: String,
     pub kind: String,
     pub is_current: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
 }
 
 /// The result of a host-side [`git_branch_list`], pushed to the GUI as a
@@ -60,6 +72,11 @@ pub(super) struct BranchInfo {
 pub(super) struct BranchListResult {
     pub branches: Vec<BranchInfo>,
     pub error: Option<String>,
+    /// Repo identity used to reject stale picker actions after an active-repo switch.
+    pub root: Option<String>,
+    /// Echoed request generation. Optional for protocol compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<u64>,
 }
 
 /// Reject anything that isn't a syntactically valid git branch NAME before it
@@ -81,22 +98,120 @@ fn valid_branch_name(root: &std::path::Path, name: &str) -> bool {
     }
 }
 
-/// Compute a host-side BRANCH LIST (every local + remote-tracking branch, PLUS
-/// every tag — GK4a), answering a [`super::HostCtl::GitBranchList`]. Resolves the
-/// repo root off `session` ([`repo_root_for`]), then runs `git for-each-ref --format=
-/// %(refname)%09%(HEAD) refs/heads refs/remotes refs/tags`: each record is
-/// `<refname>\t<HEAD-marker>`, `HEAD-marker` being `*` for the one entry HEAD
-/// currently points at, else empty. `refs/heads/X` -> local branch `X`;
-/// `refs/remotes/X` -> remote branch `X` (e.g. `origin/main`) — EXCEPT a
-/// remote's symbolic `HEAD` pointer (`refs/remotes/origin/HEAD`, `X` ending in
-/// `/HEAD`), which is skipped (not a real branch, just the remote's default-
-/// branch pointer); `refs/tags/X` -> tag `X`, `is_current` always `false`. The
-/// React ref-tree groups the combined list by `kind`; a branch SWITCHER further
-/// filters to local/remote only (a React-side concern, not this fn's). ALWAYS
-/// returns a result — a non-git workdir sets `error` rather than panicking,
-/// mirroring [`super::git::compute_git_status`].
-pub(super) fn git_branch_list(session: Option<&str>) -> BranchListResult {
-    let empty = |error: Option<String>| BranchListResult { branches: Vec::new(), error };
+/// Parse NUL-delimited `git worktree list --porcelain -z` fields. NUL framing
+/// preserves paths containing newlines as well as spaces.
+fn parse_worktree_output(stdout: &[u8]) -> std::collections::HashMap<String, String> {
+    fn finish_record(
+        worktrees: &mut std::collections::HashMap<String, String>,
+        path: &mut Option<String>,
+        branch: &mut Option<String>,
+    ) {
+        if let (Some(path), Some(branch)) = (path.take(), branch.take()) {
+            worktrees.insert(branch, path);
+        } else {
+            *path = None;
+            *branch = None;
+        }
+    }
+
+    let mut worktrees = std::collections::HashMap::new();
+    let mut path = None;
+    let mut branch = None;
+    for field in stdout.split(|b| *b == 0) {
+        if field.is_empty() {
+            finish_record(&mut worktrees, &mut path, &mut branch);
+        } else if let Some(value) = field.strip_prefix(b"worktree ") {
+            if path.is_some() {
+                finish_record(&mut worktrees, &mut path, &mut branch);
+            }
+            path = Some(String::from_utf8_lossy(value).into_owned());
+        } else if let Some(value) = field.strip_prefix(b"branch refs/heads/") {
+            branch = Some(String::from_utf8_lossy(value).into_owned());
+        }
+    }
+    finish_record(&mut worktrees, &mut path, &mut branch);
+    worktrees
+}
+
+fn parse_branch_output(
+    stdout: &[u8],
+    worktrees: &std::collections::HashMap<String, String>,
+) -> Vec<BranchInfo> {
+    let text = String::from_utf8_lossy(stdout);
+    let mut branches = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let refname = parts.next().unwrap_or("");
+        let is_current = parts.next().unwrap_or("").trim() == "*";
+        if let Some(name) = refname.strip_prefix("refs/heads/") {
+            branches.push(BranchInfo {
+                name: name.to_string(),
+                kind: "local".to_string(),
+                is_current,
+                worktree_path: worktrees.get(name).cloned(),
+            });
+        } else if let Some(name) = refname.strip_prefix("refs/remotes/") {
+            if !name.ends_with("/HEAD") {
+                branches.push(BranchInfo {
+                    name: name.to_string(),
+                    kind: "remote".to_string(),
+                    is_current: false,
+                    worktree_path: None,
+                });
+            }
+        } else if let Some(name) = refname.strip_prefix("refs/tags/") {
+            branches.push(BranchInfo {
+                name: name.to_string(),
+                kind: "tag".to_string(),
+                is_current: false,
+                worktree_path: None,
+            });
+        }
+    }
+    branches
+}
+
+fn worktree_branches(
+    root: &std::path::Path,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    match git_cmd(root, &["worktree", "list", "--porcelain", "-z"]) {
+        Some(out) if out.status.success() => Ok(parse_worktree_output(&out.stdout)),
+        Some(out) => Err(git_failure(&out, "git worktree list failed")),
+        None => Err("failed to run git".to_string()),
+    }
+}
+
+fn occupied_worktree_path<'a>(
+    worktrees: &'a std::collections::HashMap<String, String>,
+    branch: &str,
+    current_root: &std::path::Path,
+) -> Option<&'a str> {
+    worktrees
+        .get(branch)
+        .filter(|path| std::path::Path::new(path.as_str()) != current_root)
+        .map(String::as_str)
+}
+
+fn local_branch_exists(root: &std::path::Path, name: &str) -> Result<bool, String> {
+    let full_ref = format!("refs/heads/{name}");
+    match git_cmd(root, &["show-ref", "--verify", "--quiet", &full_ref]) {
+        Some(out) if out.status.success() => Ok(true),
+        Some(out) if out.status.code() == Some(1) => Ok(false),
+        Some(out) => Err(git_failure(&out, "git show-ref failed")),
+        None => Err("failed to run git".to_string()),
+    }
+}
+
+/// List local branches, remote-tracking branches, and tags. Worktree occupancy
+/// comes from `git worktree list --porcelain`, rather than the version-dependent
+/// `for-each-ref %(worktreepath)` atom.
+pub(super) fn git_branch_list(session: Option<&str>, request_id: Option<u64>) -> BranchListResult {
+    let empty = |error: Option<String>| BranchListResult {
+        branches: Vec::new(),
+        error,
+        root: None,
+        request_id,
+    };
 
     let Some(root) = repo_root_for(session) else {
         return empty(Some("not a git repository".to_string()));
@@ -116,40 +231,26 @@ pub(super) fn git_branch_list(session: Option<&str>) -> BranchListResult {
         Some(out) => return empty(Some(git_failure(&out, "git for-each-ref failed"))),
         None => return empty(Some("failed to run git".to_string())),
     };
+    let worktrees = match worktree_branches(&root) {
+        Ok(worktrees) => worktrees,
+        Err(error) => return empty(Some(error)),
+    };
 
-    let text = String::from_utf8_lossy(&stdout);
-    let mut branches = Vec::new();
-    for line in text.lines() {
-        let mut parts = line.splitn(2, '\t');
-        let refname = parts.next().unwrap_or("");
-        let is_current = parts.next().unwrap_or("").trim() == "*";
-        if let Some(name) = refname.strip_prefix("refs/heads/") {
-            branches.push(BranchInfo { name: name.to_string(), kind: "local".to_string(), is_current });
-        } else if let Some(name) = refname.strip_prefix("refs/remotes/") {
-            // Skip a remote's symbolic HEAD pointer (`origin/HEAD`) — not a real
-            // branch to switch to, just the remote's default-branch marker.
-            if name.ends_with("/HEAD") {
-                continue;
-            }
-            branches.push(BranchInfo { name: name.to_string(), kind: "remote".to_string(), is_current: false });
-        } else if let Some(name) = refname.strip_prefix("refs/tags/") {
-            branches.push(BranchInfo { name: name.to_string(), kind: "tag".to_string(), is_current: false });
-        }
+    BranchListResult {
+        branches: parse_branch_output(&stdout, &worktrees),
+        error: None,
+        root: Some(root.to_string_lossy().into_owned()),
+        request_id,
     }
-
-    BranchListResult { branches, error: None }
 }
 
-/// Switch (or detach onto) `ref_name` — a branch name or a commit sha —
-/// answering a [`super::HostCtl::GitCheckout`]. Validated via
-/// [`valid_commit_ref`] (accepts both a branch name and a sha/short-sha)
-/// before ever touching `git`. Runs a BARE `git checkout <ref_name>` — a
-/// branch name switches (creating a remote-tracking local branch via git's own
-/// DWIM if it's a bare remote short name like `origin/x` -> `x`), a sha goes
-/// DETACHED — never `--force`, so a dirty worktree in the way surfaces git's
-/// own stderr (e.g. "Your local changes would be overwritten") rather than
-/// being clobbered. `op` is `"checkout"`.
-pub(super) fn git_checkout(ref_name: &str, session: Option<&str>) -> GitOpResult {
+/// Safely switch to `ref_name` without force. Before checking out an existing
+/// local branch, reject it when another worktree already has it checked out.
+pub(super) fn git_checkout(
+    ref_name: &str,
+    expected_root: Option<&str>,
+    session: Option<&str>,
+) -> GitOpResult {
     const OP: &str = "checkout";
     if !valid_commit_ref(ref_name) {
         return op_err(OP, "invalid ref");
@@ -157,32 +258,53 @@ pub(super) fn git_checkout(ref_name: &str, session: Option<&str>) -> GitOpResult
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
     };
+    // Keep this stale-picker guard before any action based on the requested ref.
+    if expected_root.is_some_and(|expected| root != std::path::Path::new(expected)) {
+        return op_err(OP, "repository changed; refresh branches and try again");
+    }
+
+    match local_branch_exists(&root, ref_name) {
+        Ok(true) => match worktree_branches(&root) {
+            Ok(worktrees) => {
+                if let Some(path) = occupied_worktree_path(&worktrees, ref_name, &root) {
+                    return op_err(
+                        OP,
+                        format!("branch '{ref_name}' is already checked out at '{path}'"),
+                    );
+                }
+            }
+            Err(error) => return op_err(OP, error),
+        },
+        Ok(false) => {}
+        Err(error) => return op_err(OP, error),
+    }
+
+    super::git_remote::invalidate_rebase_proofs(&root);
     match git_cmd(&root, &["checkout", ref_name]) {
-        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) if out.status.success() => {
+            super::git_remote::invalidate_rebase_proofs(&root);
+            op_ok(OP)
+        }
         Some(out) => op_err(OP, git_failure(&out, "git checkout failed")),
         None => op_err(OP, "failed to run git"),
     }
 }
 
-/// Create branch `name`, answering a [`super::HostCtl::GitCreateBranch`].
-/// `name` is validated via [`valid_branch_name`] (git's own `check-ref-format`
-/// rules); `start` (the commit-ish to branch from — `None` means "current
-/// HEAD", git's own default when omitted) is validated via
-/// [`valid_commit_ref`] when present. `checkout: true` switches to the new
-/// branch immediately (`git checkout -b <name> [<start>]`); `false` only
-/// creates it, leaving HEAD where it was (`git branch <name> [<start>]`). Op
-/// is `"createBranch"`. A name collision / invalid start point surfaces git's
-/// own stderr.
+/// Create branch `name`, optionally checking it out, without force.
 pub(super) fn git_create_branch(
     name: &str,
     start: Option<&str>,
     checkout: bool,
+    expected_root: Option<&str>,
     session: Option<&str>,
 ) -> GitOpResult {
     const OP: &str = "createBranch";
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
     };
+    if expected_root.is_some_and(|expected| root != std::path::Path::new(expected)) {
+        return op_err(OP, "repository changed; refresh branches and try again");
+    }
     if !valid_branch_name(&root, name) {
         return op_err(OP, "invalid branch name");
     }
@@ -192,14 +314,102 @@ pub(super) fn git_create_branch(
         }
     }
 
-    let mut args: Vec<&str> = if checkout { vec!["checkout", "-b", name] } else { vec!["branch", name] };
+    let mut args: Vec<&str> = if checkout {
+        vec!["checkout", "-b", name]
+    } else {
+        vec!["branch", name]
+    };
     if let Some(s) = start {
         args.push(s);
     }
 
+    super::git_remote::invalidate_rebase_proofs(&root);
     match git_cmd(&root, &args) {
-        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) if out.status.success() => {
+            super::git_remote::invalidate_rebase_proofs(&root);
+            op_ok(OP)
+        }
         Some(out) => op_err(OP, git_failure(&out, "git branch failed")),
         None => op_err(OP, "failed to run git"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn porcelain_parser_maps_branched_worktrees_and_preserves_spaces() {
+        let worktrees = parse_worktree_output(
+            b"worktree /repo with spaces\0HEAD aaaa\0branch refs/heads/main\0\0\
+              worktree /linked/topic tree\0HEAD bbbb\0branch refs/heads/topic\0locked reason with spaces\0\0\
+              worktree /detached tree\0HEAD cccc\0detached\0\0\
+              worktree /stale\n tree\0HEAD dddd\0branch refs/heads/stale\0prunable gitdir file points to non-existent location\0",
+        );
+
+        assert_eq!(worktrees.len(), 3);
+        assert_eq!(
+            worktrees.get("main").map(String::as_str),
+            Some("/repo with spaces")
+        );
+        assert_eq!(
+            worktrees.get("topic").map(String::as_str),
+            Some("/linked/topic tree")
+        );
+        assert_eq!(
+            worktrees.get("stale").map(String::as_str),
+            Some("/stale\n tree")
+        );
+        assert!(!worktrees.contains_key("detached"));
+    }
+
+    #[test]
+    fn branch_output_uses_porcelain_occupancy_and_skips_remote_head() {
+        let worktrees = parse_worktree_output(
+            b"worktree /repo\0branch refs/heads/main\0\0worktree /other\0branch refs/heads/topic\0",
+        );
+        let refs = parse_branch_output(
+            b"refs/heads/main\t*\nrefs/heads/topic\t \nrefs/heads/free\t \nrefs/remotes/origin/HEAD\t \nrefs/remotes/origin/main\t \nrefs/tags/v1\t \n",
+            &worktrees,
+        );
+        assert_eq!(refs.len(), 5);
+        assert!(refs[0].is_current);
+        assert_eq!(refs[0].worktree_path.as_deref(), Some("/repo"));
+        assert_eq!(refs[1].worktree_path.as_deref(), Some("/other"));
+        assert_eq!(refs[2].worktree_path, None);
+        assert_eq!(refs[3].kind, "remote");
+        assert_eq!(refs[4].kind, "tag");
+    }
+
+    #[test]
+    fn local_branch_is_free_here_but_occupied_in_another_worktree() {
+        let worktrees = parse_worktree_output(
+            b"worktree /repo root\0branch refs/heads/main\0\0worktree /other tree\0branch refs/heads/topic\0",
+        );
+
+        assert_eq!(
+            occupied_worktree_path(&worktrees, "main", std::path::Path::new("/repo root")),
+            None
+        );
+        assert_eq!(
+            occupied_worktree_path(&worktrees, "free", std::path::Path::new("/repo root")),
+            None
+        );
+        assert_eq!(
+            occupied_worktree_path(&worktrees, "topic", std::path::Path::new("/repo root")),
+            Some("/other tree")
+        );
+    }
+
+    #[test]
+    fn malformed_and_unknown_ref_records_are_ignored_safely() {
+        let refs = parse_branch_output(
+            b"garbage\nrefs/notes/x\t*\nrefs/heads/ok\n",
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "ok");
+        assert!(!refs[0].is_current);
+        assert_eq!(refs[0].worktree_path, None);
     }
 }

@@ -98,6 +98,9 @@ export function GraphRefTree({ scrollToSha }: Props) {
     scrollToSha(commit.sha)
   }
 
+  const checkoutOccupied = (b: BranchInfo) => b.worktreePath
+    ?? (b.kind === 'remote' ? locals.find((local) => local.name === remoteShortName(b.name))?.worktreePath : undefined)
+
   const checkout = (b: BranchInfo) => {
     gitCheckout(b.kind === 'remote' ? remoteShortName(b.name) : b.name)
   }
@@ -117,7 +120,7 @@ export function GraphRefTree({ scrollToSha }: Props) {
               icon={<GitBranch size={13} className="flex-none text-koma-fg opacity-45" />}
               onClick={() => pick(b)}
               // Already checked out — nothing to switch to.
-              onCheckout={b.isCurrent ? undefined : () => checkout(b)}
+              onCheckout={b.isCurrent || b.worktreePath ? undefined : () => checkout(b)}
             />
           ))}
         </AccordionSection>
@@ -134,7 +137,7 @@ export function GraphRefTree({ scrollToSha }: Props) {
               b={b}
               icon={<Cloud size={13} className="flex-none text-koma-fg opacity-45" />}
               onClick={() => pick(b)}
-              onCheckout={() => checkout(b)}
+              onCheckout={checkoutOccupied(b) ? undefined : () => checkout(b)}
             />
           ))}
         </AccordionSection>

@@ -45,38 +45,38 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-mod connect;
-mod render;
-mod shadow;
-mod input;
 mod bridge;
-mod swapper;
-mod swapper_keys;
+mod connect;
 mod diff;
 mod file_ops;
 mod git;
-mod git_remote;
-mod git_graph;
 mod git_activity;
 mod git_branch;
 mod git_destructive;
-mod git_stash;
-mod git_repos;
-mod keys;
+mod git_drain;
+mod git_graph;
 mod git_host;
 mod git_host_mut;
-mod store_host;
+pub(super) mod git_remote;
+mod git_repos;
+mod git_stash;
 mod host;
 mod host_catalogue;
 mod host_config;
-mod push_proto;
-mod push_proto_git;
-mod push_rows;
+mod input;
+mod keys;
 mod project;
 mod project_config;
 mod push_intercept;
 mod push_loop;
-mod git_drain;
+mod push_proto;
+mod push_proto_git;
+mod push_rows;
+mod render;
+mod shadow;
+mod store_host;
+mod swapper;
+mod swapper_keys;
 
 #[cfg(test)]
 #[path = "analytics_test.rs"]
@@ -92,8 +92,8 @@ use crate::app::mode::{Mode, SessionHub};
 use crate::ipc::proto::ClientRequest;
 use crate::model::store;
 
-use connect::{connect_attach_and_handshake, Connection};
 use bridge::WRITER_FLUSH_TIMEOUT;
+use connect::{connect_attach_and_handshake, Connection};
 use swapper::{build_local_hub, run_swapper, SwapperOutcome};
 
 use crate::app::runtime::terminal::TerminalGuard;
@@ -147,8 +147,12 @@ fn restart_daemon_animated(
 
     // Propagate the restart's result; a panicked worker thread → generic error.
     match worker.join() {
-        Ok(res) => res.map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}")),
-        Err(_) => Err(anyhow::anyhow!("reopening thread panicked during daemon restart")),
+        Ok(res) => {
+            res.map_err(|e| anyhow::anyhow!("failed to restart the stale koma daemon: {e:#}"))
+        }
+        Err(_) => Err(anyhow::anyhow!(
+            "reopening thread panicked during daemon restart"
+        )),
     }
 }
 
@@ -170,8 +174,9 @@ fn attach_session(
 ) -> Result<Connection> {
     // Make sure a daemon owns this session before we connect. No-op when it is already
     // live (the bind-as-oracle probe inside short-circuits); spawns + waits otherwise.
-    super::manage::ensure_daemon_running(session_id, false, None)
-        .map_err(|e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"))?;
+    super::manage::ensure_daemon_running(session_id, false, None).map_err(|e| {
+        anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}")
+    })?;
 
     let sock_path = store::daemon_sock_path(session_id)?;
     let my_fingerprint = store::build_fingerprint();
@@ -224,9 +229,8 @@ fn teardown_connection(handle: &tokio::runtime::Handle, conn: Connection) {
 
     let _ = req_tx.send(ClientRequest::Detach);
     drop(req_tx);
-    let _ = handle.block_on(async {
-        tokio::time::timeout(WRITER_FLUSH_TIMEOUT, writer_handle).await
-    });
+    let _ =
+        handle.block_on(async { tokio::time::timeout(WRITER_FLUSH_TIMEOUT, writer_handle).await });
 }
 
 // ─── host-relay: the GUI host IS the daemon client ───────────────────────────────
@@ -455,11 +459,14 @@ pub(super) enum HostCtl {
     GitPull,
     /// Source Control panel's Push button. Same reasoning + reply pattern as
     /// [`GitFetch`](Self::GitFetch); see [`git_remote::git_push`].
-    GitPush,
+    GitPush {
+        mode: Option<git_remote::GitPushMode>,
+        root: Option<String>,
+    },
     /// Branch-switcher popover (footer/GitPanel) or graph context menu opened:
     /// fetch every local + remote-tracking branch. Host-local, never the daemon,
     /// like [`GitStatus`](Self::GitStatus); see [`git_branch::git_branch_list`].
-    GitBranchList,
+    GitBranchList { request_id: Option<u64> },
     /// Source Control multi-repo picker opened: discover every git repo across the
     /// session's workdirs. Host-local, never the daemon, like
     /// [`GitBranchList`](Self::GitBranchList); see [`git_repos::discover_repos`].
@@ -474,12 +481,20 @@ pub(super) enum HostCtl {
     /// (or detach onto) `ref_name` (a branch or a sha). Same reply pattern as
     /// [`GitStage`](Self::GitStage) — React also fires a client-local
     /// `refreshGraph()` once it lands. See [`git_branch::git_checkout`].
-    GitCheckout { ref_name: String },
+    GitCheckout {
+        ref_name: String,
+        root: Option<String>,
+    },
     /// Branch-switcher "+ Create new branch" / graph "Create branch here…" (SAFE
     /// only). `start` is the commit-ish to branch from (`None` = HEAD); `checkout`
     /// switches to it immediately. Same reply pattern as
     /// [`GitCheckout`](Self::GitCheckout). See [`git_branch::git_create_branch`].
-    GitCreateBranch { name: String, start: Option<String>, checkout: bool },
+    GitCreateBranch {
+        name: String,
+        start: Option<String>,
+        checkout: bool,
+        root: Option<String>,
+    },
     /// Commit-graph row context menu "Cherry-pick" (G5b). May leave the tree
     /// conflicted — the follow-up `GitStatus` reports that via `inProgress`/
     /// `conflicted`, not this reply's `error` alone. See
@@ -500,7 +515,10 @@ pub(super) enum HostCtl {
     /// drag-to-rebase (checks out + rebases `branch`, not the current branch);
     /// `None` rebases the current branch. May conflict. See
     /// [`git_destructive::git_rebase`].
-    GitRebase { upstream: String, branch: Option<String> },
+    GitRebase {
+        upstream: String,
+        branch: Option<String>,
+    },
     /// The conflict banner's Abort button (G5b). `kind` is `"merge"`/`"rebase"`/
     /// `"cherry-pick"`/`"revert"`. See [`git_destructive::git_op_abort`].
     GitOpAbort { kind: String },
@@ -530,7 +548,10 @@ pub(super) enum HostCtl {
     /// a stateless read, unlike install/uninstall, which mutate live daemon runtime
     /// state and stay daemon-forwarded — see [`ExtNoSession`](Self::ExtNoSession)). See
     /// `store_host::fetch_catalogue`.
-    StoreBrowse { query: Option<String>, category: Option<String> },
+    StoreBrowse {
+        query: Option<String>,
+        category: Option<String>,
+    },
     /// Extension-STORE detail (a catalogue card click): fetch one extension's full
     /// detail. Same host-local reasoning as [`StoreBrowse`](Self::StoreBrowse); see
     /// `store_host::fetch_detail`.
@@ -554,9 +575,17 @@ pub(super) enum HostCtl {
     /// pre-session install`.
     ExtNoSession { id: String },
     /// Coding panel: list a directory's immediate children.
-    FileTree { root: String, path: String, request_id: String },
+    FileTree {
+        root: String,
+        path: String,
+        request_id: String,
+    },
     /// Coding panel: read a text file.
-    FileRead { root: String, path: String, request_id: String },
+    FileRead {
+        root: String,
+        path: String,
+        request_id: String,
+    },
     /// Coding panel: save a text file with stale-fingerprint protection.
     FileSave {
         root: String,
@@ -566,7 +595,12 @@ pub(super) enum HostCtl {
         request_id: String,
     },
     /// Coding panel: create a new file or directory.
-    FileCreate { root: String, path: String, kind: String, request_id: String },
+    FileCreate {
+        root: String,
+        path: String,
+        kind: String,
+        request_id: String,
+    },
     /// Coding panel: rename within the same workspace root.
     FileRename {
         root: String,
@@ -575,7 +609,11 @@ pub(super) enum HostCtl {
         request_id: String,
     },
     /// Coding panel: delete a file or directory.
-    FileDelete { root: String, path: String, request_id: String },
+    FileDelete {
+        root: String,
+        path: String,
+        request_id: String,
+    },
 }
 
 /// Run the thin attach client, with the daemon-per-session SWAPPER.
@@ -637,7 +675,9 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
         // Plain `koma` / `--session X`: attach immediately to the minted/given id (REQUIRED
         // here — without it there is no socket to reach).
         let id = opts.session.clone().ok_or_else(|| {
-            anyhow::anyhow!("internal: client_run requires a session id (--session <id>) without --resume")
+            anyhow::anyhow!(
+                "internal: client_run requires a session id (--session <id>) without --resume"
+            )
         })?;
         let conn = attach_session(&mut terminal, &handle, &id)?;
         current_session_id = Some(id);
@@ -664,12 +704,7 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                 // inert `AbortHandle` a reconstructed shadow `SubAgent` carries.
                 let transition = {
                     let _rt_ctx = handle.enter();
-                    render::render_loop(
-                        &mut terminal,
-                        &conn.frame_rx,
-                        &conn.req_tx,
-                        prebuffered,
-                    )
+                    render::render_loop(&mut terminal, &conn.frame_rx, &conn.req_tx, prebuffered)
                 };
 
                 match transition {
@@ -740,45 +775,49 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
             }
 
             // --- SWAPPER: the detached `/resume` picker ---
-            ClientState::Swapper(mut hub) => match run_swapper(&mut terminal, &mut hub, prev_session.as_deref())? {
-                // Picked a target session: attach to its daemon (spawning if needed). On
-                // success it becomes the foreground; on failure DEGRADE to the swapper
-                // rebuilt from fresh discovery (the dead/unreachable session drops out)
-                // rather than crash — the user can pick again.
-                SwapperOutcome::Pick(target) => match attach_session(&mut terminal, &handle, &target) {
-                    Ok(conn) => {
-                        current_session_id = Some(target);
-                        ClientState::Attached(conn)
-                    }
-                    Err(e) => {
-                        crate::model::store::append_global_error_log(
-                            "client",
-                            &format!("could not attach to session {target}: {e:#}"),
-                        );
-                        ClientState::Swapper(build_local_hub(prev_session.as_deref()))
-                    }
-                },
-                // Cancelled: reconnect to the previous session if there was one; otherwise
-                // (a `--resume` cold start with nothing to return to) exit cleanly. A
-                // failed reconnect to a since-died previous daemon also degrades back to
-                // the swapper instead of crashing.
-                SwapperOutcome::Cancel => match prev_session.take() {
-                    Some(prev) => match attach_session(&mut terminal, &handle, &prev) {
-                        Ok(conn) => {
-                            current_session_id = Some(prev);
-                            ClientState::Attached(conn)
+            ClientState::Swapper(mut hub) => {
+                match run_swapper(&mut terminal, &mut hub, prev_session.as_deref())? {
+                    // Picked a target session: attach to its daemon (spawning if needed). On
+                    // success it becomes the foreground; on failure DEGRADE to the swapper
+                    // rebuilt from fresh discovery (the dead/unreachable session drops out)
+                    // rather than crash — the user can pick again.
+                    SwapperOutcome::Pick(target) => {
+                        match attach_session(&mut terminal, &handle, &target) {
+                            Ok(conn) => {
+                                current_session_id = Some(target);
+                                ClientState::Attached(conn)
+                            }
+                            Err(e) => {
+                                crate::model::store::append_global_error_log(
+                                    "client",
+                                    &format!("could not attach to session {target}: {e:#}"),
+                                );
+                                ClientState::Swapper(build_local_hub(prev_session.as_deref()))
+                            }
                         }
-                        Err(e) => {
-                            crate::model::store::append_global_error_log(
-                                "client",
-                                &format!("could not reconnect to session {prev}: {e:#}"),
-                            );
-                            ClientState::Swapper(build_local_hub(None))
-                        }
+                    }
+                    // Cancelled: reconnect to the previous session if there was one; otherwise
+                    // (a `--resume` cold start with nothing to return to) exit cleanly. A
+                    // failed reconnect to a since-died previous daemon also degrades back to
+                    // the swapper instead of crashing.
+                    SwapperOutcome::Cancel => match prev_session.take() {
+                        Some(prev) => match attach_session(&mut terminal, &handle, &prev) {
+                            Ok(conn) => {
+                                current_session_id = Some(prev);
+                                ClientState::Attached(conn)
+                            }
+                            Err(e) => {
+                                crate::model::store::append_global_error_log(
+                                    "client",
+                                    &format!("could not reconnect to session {prev}: {e:#}"),
+                                );
+                                ClientState::Swapper(build_local_hub(None))
+                            }
+                        },
+                        None => break,
                     },
-                    None => break,
-                },
-            },
+                }
+            }
         };
     }
 

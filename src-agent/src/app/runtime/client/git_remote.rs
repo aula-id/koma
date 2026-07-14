@@ -38,8 +38,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use super::git::{git_cmd_env, git_failure, repo_root_for, GitOpResult};
+use super::git::{git_cmd_env, git_failure, repo_root_for, with_git_transaction, GitOpResult};
 use super::keys::key_private_path;
 
 /// Process-lifetime monotonic counter folded into [`atomic_write`]'s temp
@@ -50,15 +51,30 @@ use super::keys::key_private_path;
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn op_ok(op: &str) -> GitOpResult {
-    GitOpResult { ok: true, op: op.to_string(), error: None, message: None }
+    GitOpResult {
+        ok: true,
+        op: op.to_string(),
+        error: None,
+        message: None,
+    }
 }
 
 fn op_ok_msg(op: &str, message: impl Into<String>) -> GitOpResult {
-    GitOpResult { ok: true, op: op.to_string(), error: None, message: Some(message.into()) }
+    GitOpResult {
+        ok: true,
+        op: op.to_string(),
+        error: None,
+        message: Some(message.into()),
+    }
 }
 
 fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
-    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()), message: None }
+    GitOpResult {
+        ok: false,
+        op: op.to_string(),
+        error: Some(error.into()),
+        message: None,
+    }
 }
 
 /// Resolve `<~/.koma>/git_keys.json`'s path (does NOT create it — an absent file
@@ -94,9 +110,9 @@ fn load_map() -> HashMap<String, String> {
 fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut tmp_name = file_name.to_owned();
     tmp_name.push(format!(".{}.{}.tmp", std::process::id(), seq));
@@ -118,7 +134,9 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// (the panel's key picker's current value) and by every remote op below to
 /// decide whether to inject a `GIT_SSH_COMMAND` override.
 pub(super) fn assigned_key(root: &Path) -> Option<String> {
-    load_map().get(&root.to_string_lossy().into_owned()).cloned()
+    load_map()
+        .get(&root.to_string_lossy().into_owned())
+        .cloned()
 }
 
 /// Assign (`Some(name)`) or clear (`None`) repo `root`'s key. Best-effort: a
@@ -288,24 +306,514 @@ pub(super) fn git_pull(session: Option<&str>) -> GitOpResult {
     }
 }
 
-/// `git push` for `session`'s repo, answering a [`super::HostCtl::GitPush`].
-/// Same `GIT_SSH_COMMAND` injection as [`git_fetch`]/[`git_pull`]. Failure
-/// (no upstream configured, non-fast-forward rejection, auth) surfaces git's
-/// own stderr verbatim — never force-pushes or configures an upstream on the
-/// GUI's behalf.
-pub(super) fn git_push(session: Option<&str>) -> GitOpResult {
+/// Push behavior requested by the GUI. `Automatic` delegates the decision to the
+/// authoritative host planner; the other values are deliberate menu choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum GitPushMode {
+    Automatic,
+    Plain,
+    SetUpstream,
+    ForceWithLease,
+}
+
+#[derive(Clone, Debug)]
+struct RebaseProof {
+    old_tip: String,
+    new_tip: String,
+}
+
+static REBASE_PROOFS: OnceLock<Mutex<HashMap<(PathBuf, String), RebaseProof>>> = OnceLock::new();
+
+fn proofs() -> &'static Mutex<HashMap<(PathBuf, String), RebaseProof>> {
+    REBASE_PROOFS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(super) fn begin_rebase(root: &Path, branch: &str, old_tip: &str) {
+    let mut tracker = proofs().lock().unwrap_or_else(|e| e.into_inner());
+    // Starting a new GUI rewrite invalidates every older proof in this repository.
+    tracker.retain(|(proof_root, _), _| proof_root != root);
+    tracker.insert(
+        (root.to_path_buf(), branch.to_string()),
+        RebaseProof {
+            old_tip: old_tip.to_string(),
+            new_tip: String::new(),
+        },
+    );
+}
+
+pub(super) fn finish_rebase(root: &Path, branch: &str, new_tip: &str) -> bool {
+    let key = (root.to_path_buf(), branch.to_string());
+    let mut tracker = proofs().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(proof) = tracker
+        .get_mut(&key)
+        .filter(|proof| proof.new_tip.is_empty())
+    else {
+        return false;
+    };
+    if proof.old_tip == new_tip {
+        tracker.remove(&key);
+    } else {
+        proof.new_tip = new_tip.to_string();
+    }
+    true
+}
+
+pub(super) fn clear_pending_rebase(root: &Path) {
+    proofs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(proof_root, _), proof| proof_root != root || !proof.new_tip.is_empty());
+}
+
+pub(super) fn invalidate_rebase_proofs(root: &Path) {
+    proofs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(proof_root, _), _| proof_root != root);
+}
+
+pub(super) fn has_pending_rebase(root: &Path, branch: &str, old_tip: &str) -> bool {
+    proofs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(root.to_path_buf(), branch.to_string()))
+        .is_some_and(|proof| proof.new_tip.is_empty() && proof.old_tip == old_tip)
+}
+
+/// Record only GUI-initiated, successfully completed rebases.  A later automatic
+/// force push must additionally prove ancestry and an exact remote lease.
+pub(super) fn record_rebase(root: &Path, branch: &str, old_tip: &str, new_tip: &str) {
+    let key = (root.to_path_buf(), branch.to_string());
+    let mut tracker = proofs().lock().unwrap_or_else(|e| e.into_inner());
+    if old_tip == new_tip {
+        tracker.remove(&key);
+    } else {
+        tracker.insert(
+            key,
+            RebaseProof {
+                old_tip: old_tip.to_string(),
+                new_tip: new_tip.to_string(),
+            },
+        );
+    }
+}
+
+#[derive(Debug)]
+struct PushTarget {
+    branch: String,
+    remote: String,
+    remote_branch: String,
+    upstream_oid: Option<String>,
+    has_upstream: bool,
+}
+
+fn output_text(out: Option<std::process::Output>) -> Option<String> {
+    let out = out?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn valid_remote_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.bytes().any(|b| b == 0 || b.is_ascii_whitespace())
+}
+
+fn parse_status_headers(text: &str) -> (Option<String>, Option<String>) {
+    let mut branch = None;
+    let mut upstream = None;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("# branch.head ") {
+            if v != "(detached)" {
+                branch = Some(v.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("# branch.upstream ") {
+            upstream = Some(v.to_string());
+        }
+    }
+    (branch, upstream)
+}
+
+fn config_value(
+    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    root: &Path,
+    key: &str,
+) -> Option<String> {
+    output_text(git(root, &["config", "--get", key], None)).filter(|s| !s.is_empty())
+}
+
+fn plan_target(
+    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    root: &Path,
+) -> Result<PushTarget, String> {
+    let status = output_text(git(root, &["status", "--porcelain=v2", "--branch"], None))
+        .ok_or_else(|| "git status failed".to_string())?;
+    let (branch, upstream) = parse_status_headers(&status);
+    let branch = branch.ok_or_else(|| "cannot push detached HEAD".to_string())?;
+    if !valid_remote_component(&branch) {
+        return Err("invalid current branch".to_string());
+    }
+    if let Some(upstream) = upstream {
+        let branch_remote_key = format!("branch.{branch}.remote");
+        let merge_key = format!("branch.{branch}.merge");
+        let tracking_remote = config_value(git, root, &branch_remote_key)
+            .filter(|r| r != ".")
+            .ok_or_else(|| "unsupported upstream configuration".to_string())?;
+        let merge_ref = config_value(git, root, &merge_key)
+            .ok_or_else(|| "unsupported upstream configuration".to_string())?;
+        let merge_branch = merge_ref
+            .strip_prefix("refs/heads/")
+            .ok_or_else(|| "nonstandard upstream mapping is not supported".to_string())?;
+        // Porcelain's upstream name must have the standard remote/branch mapping;
+        // otherwise deriving a push destination from a custom fetch refspec is unsafe.
+        if upstream != format!("{tracking_remote}/{merge_branch}") {
+            return Err("nonstandard upstream mapping is not supported".to_string());
+        }
+
+        let branch_push = format!("branch.{branch}.pushRemote");
+        let remote = config_value(git, root, &branch_push)
+            .or_else(|| config_value(git, root, "remote.pushDefault"))
+            .unwrap_or_else(|| tracking_remote.clone());
+        // An override remote has no independent merge mapping. It is safe only
+        // for the standard same-name (`push.default=simple`) destination.
+        let remote_branch = if remote == tracking_remote {
+            merge_branch.to_string()
+        } else if merge_branch == branch.as_str() {
+            branch.clone()
+        } else {
+            return Err("push remote override has an ambiguous destination".to_string());
+        };
+        if !valid_remote_component(&remote) || !valid_remote_component(&remote_branch) {
+            return Err("unsupported upstream configuration".to_string());
+        }
+        let upstream_oid = output_text(git(root, &["rev-parse", "--verify", &upstream], None));
+        return Ok(PushTarget {
+            branch,
+            remote,
+            remote_branch,
+            upstream_oid,
+            has_upstream: true,
+        });
+    }
+
+    // Never guess among several remotes. Respect Git's explicit push settings,
+    // then the branch fetch remote, and only finally a sole configured remote.
+    let branch_push = format!("branch.{branch}.pushRemote");
+    let branch_remote = format!("branch.{branch}.remote");
+    let branch_remote_value = config_value(git, root, &branch_remote);
+    let explicit = config_value(git, root, &branch_push)
+        .or_else(|| config_value(git, root, "remote.pushDefault"));
+    let remote = if let Some(remote) = explicit {
+        Some(remote)
+    } else if let Some(remote) = branch_remote_value {
+        (remote != ".").then_some(remote)
+    } else {
+        let remotes = output_text(git(root, &["remote"], None)).unwrap_or_default();
+        let mut lines = remotes.lines();
+        let one = lines.next();
+        match (one, lines.next()) {
+            (Some(one), None) => Some(one.to_string()),
+            _ => None,
+        }
+    }
+    .ok_or_else(|| "no unambiguous remote is configured".to_string())?;
+    if !valid_remote_component(&remote) {
+        return Err("invalid push remote".to_string());
+    }
+    Ok(PushTarget {
+        branch: branch.clone(),
+        remote,
+        remote_branch: branch,
+        upstream_oid: None,
+        has_upstream: false,
+    })
+}
+
+fn is_ancestor(
+    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    root: &Path,
+    older: &str,
+    newer: &str,
+) -> bool {
+    git(root, &["merge-base", "--is-ancestor", older, newer], None)
+        .is_some_and(|o| o.status.success())
+}
+
+fn automatic_mode(
+    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    root: &Path,
+    target: &PushTarget,
+) -> Result<GitPushMode, String> {
+    let Some(upstream) = target.upstream_oid.as_deref() else {
+        return if target.has_upstream {
+            Err("cannot resolve the configured upstream".to_string())
+        } else {
+            Ok(GitPushMode::SetUpstream)
+        };
+    };
+    let head = output_text(git(root, &["rev-parse", "--verify", "HEAD"], None))
+        .ok_or_else(|| "cannot resolve HEAD".to_string())?;
+    if is_ancestor(git, root, upstream, &head) {
+        return Ok(GitPushMode::Plain);
+    }
+    let proof = proofs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(root.to_path_buf(), target.branch.clone()))
+        .cloned();
+    match proof {
+        Some(p) if p.new_tip == head && is_ancestor(git, root, upstream, &p.old_tip) => {
+            Ok(GitPushMode::ForceWithLease)
+        }
+        Some(_) => {
+            proofs()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&(root.to_path_buf(), target.branch.clone()));
+            Err(
+                "branch diverged from its upstream; no GUI rebase proof permits a force push"
+                    .to_string(),
+            )
+        }
+        None => Err(
+            "branch diverged from its upstream; no GUI rebase proof permits a force push"
+                .to_string(),
+        ),
+    }
+}
+
+/// Cheap local projection used by GitStatus to label the push menu. The actual
+/// push always replans under the transaction and, for force, checks the server.
+pub(super) fn push_mode_for(root: &Path) -> Option<GitPushMode> {
+    with_git_transaction(|git| {
+        let target = plan_target(git, root).ok()?;
+        automatic_mode(git, root, &target).ok()
+    })
+}
+
+/// Authoritative push planner/executor. Planning and execution are serialized as
+/// one transaction. Force is accepted only with GUI-rebase proof, ancestry proof,
+/// and a freshly queried exact server-side lease.
+pub(super) fn git_push(
+    mode: Option<GitPushMode>,
+    expected_root: Option<&str>,
+    session: Option<&str>,
+) -> GitOpResult {
     const OP: &str = "push";
     let Some(root) = repo_root_for(session) else {
         return op_err(OP, "not a git repository");
     };
+    if expected_root.is_some_and(|expected| root != Path::new(expected)) {
+        return op_err(OP, "repository changed; refresh status and try again");
+    }
     let ssh_cmd = ssh_command_for(&root);
     let extra = ssh_cmd.as_ref().map(|c| ("GIT_SSH_COMMAND", c.as_str()));
-    match git_cmd_env(&root, &["push"], extra) {
-        Some(out) if out.status.success() => match success_message(&out) {
-            Some(msg) => op_ok_msg(OP, msg),
-            None => op_ok(OP),
-        },
-        Some(out) => op_err(OP, git_failure(&out, "git push failed")),
-        None => op_err(OP, "failed to run git"),
+    with_git_transaction(|git| {
+        let target = match plan_target(git, &root) {
+            Ok(v) => v,
+            Err(e) => return op_err(OP, e),
+        };
+        let requested = mode.unwrap_or(GitPushMode::Automatic);
+        let selected = if requested == GitPushMode::Automatic {
+            match automatic_mode(git, &root, &target) {
+                Ok(GitPushMode::ForceWithLease) => {
+                    return op_err(OP, "force push requires explicit inline confirmation")
+                }
+                Ok(v) => v,
+                Err(e) => return op_err(OP, e),
+            }
+        } else {
+            requested
+        };
+
+        let dst = format!("HEAD:refs/heads/{}", target.remote_branch);
+        let out = match selected {
+            GitPushMode::Automatic => unreachable!(),
+            GitPushMode::Plain => git(&root, &["push", &target.remote, &dst], extra),
+            GitPushMode::SetUpstream => {
+                if target.has_upstream {
+                    return op_err(OP, "branch already has an upstream");
+                }
+                git(
+                    &root,
+                    &["push", "--set-upstream", &target.remote, &dst],
+                    extra,
+                )
+            }
+            GitPushMode::ForceWithLease => {
+                if automatic_mode(git, &root, &target) != Ok(GitPushMode::ForceWithLease) {
+                    return op_err(OP, "force push is not backed by a current GUI rebase proof");
+                }
+                let expected = match target.upstream_oid.as_deref() {
+                    Some(v) => v,
+                    None => return op_err(OP, "force push requires an upstream"),
+                };
+                let remote_ref = format!("refs/heads/{}", target.remote_branch);
+                let advertised = output_text(git(
+                    &root,
+                    &["ls-remote", &target.remote, &remote_ref],
+                    extra,
+                ))
+                .and_then(|s| s.split_whitespace().next().map(str::to_string));
+                if advertised.as_deref() != Some(expected) {
+                    return op_err(OP, "remote changed since the last fetch; fetch and review before force pushing");
+                }
+                let lease = format!("--force-with-lease={remote_ref}:{expected}");
+                git(&root, &["push", &lease, &target.remote, &dst], extra)
+            }
+        };
+        match out {
+            Some(out) if out.status.success() => {
+                if selected == GitPushMode::ForceWithLease {
+                    proofs()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&(root.clone(), target.branch.clone()));
+                }
+                match success_message(&out) {
+                    Some(msg) => op_ok_msg(OP, msg),
+                    None => op_ok(OP),
+                }
+            }
+            Some(out) => op_err(OP, git_failure(&out, "git push failed")),
+            None => op_err(OP, "failed to run git"),
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_porcelain_branch_headers() {
+        let (branch, upstream) = parse_status_headers(
+            "# branch.oid abc\n# branch.head feature/x\n# branch.upstream origin/feature/x\n# branch.ab +2 -1\n",
+        );
+        assert_eq!(branch.as_deref(), Some("feature/x"));
+        assert_eq!(upstream.as_deref(), Some("origin/feature/x"));
+    }
+
+    #[test]
+    fn detached_and_missing_upstream_are_distinct() {
+        assert_eq!(
+            parse_status_headers("# branch.head (detached)\n"),
+            (None, None)
+        );
+        assert_eq!(
+            parse_status_headers("# branch.head topic\n"),
+            (Some("topic".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn remote_components_reject_option_and_whitespace_injection() {
+        assert!(valid_remote_component("origin"));
+        assert!(valid_remote_component("team/repo"));
+        assert!(!valid_remote_component(""));
+        assert!(!valid_remote_component("--upload-pack=evil"));
+        assert!(!valid_remote_component("origin other"));
+        assert!(!valid_remote_component("origin\nother"));
+    }
+
+    fn ok_output(text: &str) -> std::process::Output {
+        std::process::Output {
+            status: std::process::Command::new("true").status().unwrap(),
+            stdout: text.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn existing_upstream_honors_push_remote_precedence() {
+        let git = |_root: &Path, args: &[&str], _extra: Option<(&str, &str)>| {
+            let value = match args {
+                ["status", "--porcelain=v2", "--branch"] => {
+                    "# branch.head topic\n# branch.upstream origin/topic\n"
+                }
+                ["config", "--get", "branch.topic.remote"] => "origin\n",
+                ["config", "--get", "branch.topic.merge"] => "refs/heads/topic\n",
+                ["config", "--get", "branch.topic.pushRemote"] => "publish\n",
+                ["config", "--get", "remote.pushDefault"] => "fallback\n",
+                ["rev-parse", "--verify", "origin/topic"] => "abc\n",
+                _ => return None,
+            };
+            Some(ok_output(value))
+        };
+        let target = plan_target(&git, Path::new(".")).unwrap();
+        assert_eq!(target.remote, "publish");
+        assert_eq!(target.remote_branch, "topic");
+    }
+
+    #[test]
+    fn existing_upstream_refuses_ambiguous_override_destination() {
+        let git = |_root: &Path, args: &[&str], _extra: Option<(&str, &str)>| {
+            let value = match args {
+                ["status", "--porcelain=v2", "--branch"] => {
+                    "# branch.head topic\n# branch.upstream origin/main\n"
+                }
+                ["config", "--get", "branch.topic.remote"] => "origin\n",
+                ["config", "--get", "branch.topic.merge"] => "refs/heads/main\n",
+                ["config", "--get", "branch.topic.pushRemote"] => "publish\n",
+                _ => return None,
+            };
+            Some(ok_output(value))
+        };
+        assert!(plan_target(&git, Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn push_modes_have_stable_wire_names() {
+        assert_eq!(
+            serde_json::to_string(&GitPushMode::Automatic).unwrap(),
+            "\"automatic\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GitPushMode::SetUpstream).unwrap(),
+            "\"set-upstream\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GitPushMode::ForceWithLease).unwrap(),
+            "\"force-with-lease\""
+        );
+        assert_eq!(
+            serde_json::from_str::<GitPushMode>("\"force-with-lease\"").unwrap(),
+            GitPushMode::ForceWithLease
+        );
+    }
+
+    #[test]
+    fn rebase_tracker_records_only_rewrites() {
+        let root = Path::new("tracker-test-root");
+        let key = (root.to_path_buf(), "topic".to_string());
+        proofs()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key);
+        begin_rebase(root, "topic", "aaa");
+        assert!(has_pending_rebase(root, "topic", "aaa"));
+        assert!(!finish_rebase(root, "other", "bbb"));
+        assert!(has_pending_rebase(root, "topic", "aaa"));
+        record_rebase(root, "topic", "aaa", "aaa");
+        assert!(proofs()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .is_none());
+        record_rebase(root, "topic", "aaa", "bbb");
+        let proof = proofs()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .cloned()
+            .unwrap();
+        assert_eq!(proof.old_tip, "aaa");
+        assert_eq!(proof.new_tip, "bbb");
+        proofs()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key);
     }
 }

@@ -156,12 +156,16 @@ export function Select<T extends string>({
   onChange,
   placeholder,
   disabled,
+  triggerIcon,
+  triggerTitle,
 }: {
   value: T | ''
   options: { value: T; label: string }[]
   onChange: (v: T) => void
   placeholder?: string
   disabled?: boolean
+  triggerIcon?: ReactNode
+  triggerTitle?: string
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -211,12 +215,22 @@ export function Select<T extends string>({
           setOpen((o) => !o)
         }}
         disabled={isDisabled}
-        className="flex h-7 w-full items-center justify-between rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg disabled:opacity-40"
+        title={triggerTitle}
+        aria-label={triggerTitle}
+        className={
+          triggerIcon
+            ? 'flex h-5 items-center gap-0.5 rounded px-1 text-koma-fg opacity-70 hover:bg-koma-hover hover:opacity-100 disabled:opacity-40'
+            : 'flex h-7 w-full items-center justify-between rounded border border-koma-border bg-koma-bg px-2 text-[12px] text-koma-fg disabled:opacity-40'
+        }
       >
-        <span className={`truncate ${selected ? '' : 'opacity-40'}`}>
-          {selected?.label ?? placeholder ?? 'Select…'}
-        </span>
-        <ChevronDown size={13} className="flex-none opacity-60" />
+        {triggerIcon ? (
+          triggerIcon
+        ) : (
+          <span className={`truncate ${selected ? '' : 'opacity-40'}`}>
+            {selected?.label ?? placeholder ?? 'Select…'}
+          </span>
+        )}
+        <ChevronDown size={triggerIcon ? 11 : 13} className="flex-none opacity-60" />
       </button>
       {open &&
         !isDisabled &&
@@ -228,8 +242,8 @@ export function Select<T extends string>({
             style={{
               position: 'fixed',
               top: rect.bottom + 4,
-              left: rect.left,
-              width: rect.width,
+              left: triggerIcon ? Math.max(8, rect.right - 180) : rect.left,
+              width: triggerIcon ? 180 : rect.width,
               zIndex: 80,
             }}
             className="max-h-40 overflow-y-auto rounded border border-koma-border bg-koma-panel py-1 shadow-xl"
