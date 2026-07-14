@@ -10,7 +10,6 @@
 //! `unlink_mcp_daemon_files`, and `read_mcp_pidfile` are bumped to `pub(super)`
 //! HERE since `manage::commands` calls them.
 
-use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -18,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
 use super::{SIGNAL_GRACE, SPAWN_CONNECT_TIMEOUT, SPAWN_POLL_INTERVAL};
@@ -34,7 +34,7 @@ pub fn mcp_daemon_alive() -> bool {
     let Ok(path) = store::mcp_daemon_sock_path() else {
         return false;
     };
-    UnixStream::connect(&path).is_ok()
+    SyncIpcStream::connect(&path).is_ok()
 }
 
 /// Spawn a DETACHED `koma --mcp-daemon` child and return its PID.
@@ -78,7 +78,7 @@ fn spawn_mcp_and_wait_until_alive(path: &Path) -> Result<()> {
     let pid = spawn_mcp_daemon()?;
     let deadline = Instant::now() + SPAWN_CONNECT_TIMEOUT;
     loop {
-        match UnixStream::connect(path) {
+        match SyncIpcStream::connect(path) {
             Ok(_stream) => return Ok(()), // accepting — probe stream dropped
             Err(_) if Instant::now() < deadline => std::thread::sleep(SPAWN_POLL_INTERVAL),
             Err(e) => {

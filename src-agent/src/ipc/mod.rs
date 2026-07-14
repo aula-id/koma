@@ -18,6 +18,17 @@
 //! daemon/client loop wiring that consumes them is still a later stage; the
 //! transport is additive and does not touch the TUI path.
 
+/// Platform IPC transport aliases. On unix these are the tokio unix-domain-socket
+/// types; a Windows named-pipe backend will provide the same shapes behind
+/// `#[cfg(windows)]` later.
+#[cfg(unix)]
+pub type IpcListener = tokio::net::UnixListener;
+#[cfg(unix)]
+pub type IpcStream = tokio::net::UnixStream;
+/// Blocking (std) counterpart used by the sync management/probe clients.
+#[cfg(unix)]
+pub type SyncIpcStream = std::os::unix::net::UnixStream;
+
 pub mod client;
 pub mod conn;
 pub mod frame;

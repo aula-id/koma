@@ -247,7 +247,7 @@ const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 /// A transient `accept` error is logged-by-ignoring and retried after a short sleep —
 /// one bad accept must not tear down the daemon's listener.
 async fn accept_loop(
-    listener: tokio::net::UnixListener,
+    listener: crate::ipc::IpcListener,
     manager: Arc<McpManager>,
     shutting_down: &std::sync::atomic::AtomicBool,
 ) {
@@ -285,7 +285,7 @@ async fn accept_loop(
 /// non-split [`tokio::net::UnixStream`] is borrowed `&mut` for the read then the write
 /// within each cycle — no split into independent halves is needed (unlike the session
 /// daemon, which pushes unsolicited frames).
-async fn connection_loop(mut stream: tokio::net::UnixStream, manager: Arc<McpManager>) {
+async fn connection_loop(mut stream: crate::ipc::IpcStream, manager: Arc<McpManager>) {
     let mut reader = FrameReader::new();
     loop {
         // Read one request frame. EOF / decode error / any read error ends the
@@ -314,7 +314,7 @@ async fn connection_loop(mut stream: tokio::net::UnixStream, manager: Arc<McpMan
 /// Serialise + frame-write one [`McpResponse`]. A serialise failure is a daemon bug,
 /// not a transport fault; it is surfaced as an in-band [`McpResponse::Error`] so the
 /// client still gets a well-formed frame.
-async fn respond(stream: &mut tokio::net::UnixStream, resp: &McpResponse) -> std::io::Result<()> {
+async fn respond(stream: &mut crate::ipc::IpcStream, resp: &McpResponse) -> std::io::Result<()> {
     let bytes = match serde_json::to_vec(resp) {
         Ok(b) => b,
         Err(e) => serde_json::to_vec(&McpResponse::Error(format!("encode failed: {e}")))

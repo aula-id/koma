@@ -19,12 +19,12 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
-use tokio::net::UnixStream;
 
 use super::client;
 use super::frame::FrameReader;
 use super::proto::{ClientRequest, DaemonEvent, DaemonFrame};
 use super::server;
+use super::IpcStream;
 use crate::model::store;
 
 /// Dedicated socket path for the self-test, kept distinct from the real daemon
@@ -111,7 +111,7 @@ async fn roundtrip() -> Result<()> {
     });
 
     // --- client side: connect, send the request, read + verify the reply ---
-    let mut stream: UnixStream = client::connect(&path).await.context("client connect")?;
+    let mut stream: IpcStream = client::connect(&path).await.context("client connect")?;
     let mut reader = FrameReader::new();
 
     client::send_frame(&mut stream, &request_bytes)
