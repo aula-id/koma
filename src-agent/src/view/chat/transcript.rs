@@ -302,6 +302,13 @@ pub(super) fn render_message_block(
             if let Some(body) = msg.content.strip_prefix(crate::dto::chat::BASH_NUDGE_MARK) {
                 return render_bash_nudge_block(body, palette);
             }
+            // Extension-prompt injection (grant broker `chat.prompt`): same compact
+            // dim render as the bg-bash nudge — line 1 only (the first buffered
+            // `[ext:<id>] <text>`), NOT a `★` user turn. The full multi-prompt body +
+            // trailer is model-only context (stripped on the wire).
+            if let Some(body) = msg.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK) {
+                return render_bash_nudge_block(body, palette);
+            }
             // `!` user-shell shortcut entry: a SHELL_MARK-prefixed user message
             // carrying `$ <cmd>\n<output>`. Render it DISTINCTLY (not a `★` user
             // turn): a `$ <cmd>` header in the accent, then the captured output dim

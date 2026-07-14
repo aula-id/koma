@@ -29,6 +29,17 @@ pub const SHELL_MARK: &str = "\u{2064}";
 /// `summary\n<context>` text. Invisible char, distinct from `SHELL_MARK`.
 pub const BASH_NUDGE_MARK: &str = "\u{2061}";
 
+/// Prefix marking a `User` message as an EXTENSION-PROMPT injection: a synthetic
+/// turn injected when one or more extensions buffered a `chat.prompt` (via the
+/// grant broker) and the session next goes idle, so the model acts on them as
+/// user requests. The transcript renders it as ONE compact dim line (mirrors
+/// `BASH_NUDGE_MARK`); the wire builder (`to_wire`) STRIPS it so the model reads
+/// the clean `[ext:<id>] <text>` body. Two U+2060 WORD JOINERs — an invisible
+/// PAIR sharing NO codepoint with `SHELL_MARK` / `BASH_NUDGE_MARK` /
+/// `PLAN_NUDGE_MARK` / `CACHE_SPLIT_MARK`, so it can never collide with their
+/// `strip_prefix` / `split_once` / `replace` logic.
+pub const EXT_PROMPT_MARK: &str = "\u{2060}\u{2060}";
+
 /// Which participant authored a message.
 ///
 /// Serialised as lowercase strings (`"system"`, `"user"`, `"assistant"`) to

@@ -318,6 +318,17 @@ pub struct SessionRuntime {
     /// is injected verbatim into the wake-nudge body so the model receives the
     /// complete result without needing to call task_output.
     pub pending_subagent_nudges: Vec<(usize, String, String)>,
+    /// Extension-buffered `chat.prompt` texts awaiting injection as a synthetic
+    /// user turn, each `(ext_id, text)`. Filled by the grant broker's
+    /// `chat.prompt` arm (buffer-only — it NEVER injects) and drained into ONE
+    /// injected user turn the next time this session goes idle (see the event-loop
+    /// `deferred` drain), mirroring [`pending_bash_nudges`](Self::pending_bash_nudges)
+    /// / [`pending_subagent_nudges`](Self::pending_subagent_nudges). Hard-capped at
+    /// 5 by the broker with consecutive-duplicate dedupe, so a `turn_end`-subscribed
+    /// extension that re-prompts can neither amplify into a runaway loop nor flood
+    /// the buffer. Purely in-memory / transient — `SessionRuntime` is rebuilt fresh
+    /// each launch (it is never serialised), so this is never persisted.
+    pub pending_ext_prompts: Vec<(String, String)>,
     /// All sub-agents spawned this session (running + finished). Drained each tick
     /// by the event loop; finished ones stay in the list for the UI to show their
     /// final state.
@@ -549,6 +560,7 @@ impl SessionRuntime {
             bash_done_tx: None,
             pending_bash_nudges: Vec::new(),
             pending_subagent_nudges: Vec::new(),
+            pending_ext_prompts: Vec::new(),
             subagents: Vec::new(),
             pending_subagents: VecDeque::new(),
             pending_steer: Vec::new(),

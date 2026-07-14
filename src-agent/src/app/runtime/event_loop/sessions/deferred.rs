@@ -355,7 +355,101 @@ pub(super) fn drain_deferred_and_resume(
         dirty = true;
     }
 
+    // --- extension-prompt injection: inject + auto-wake when idle ---
+    // Extensions BUFFER `chat.prompt` texts into `pending_ext_prompts` via the grant
+    // broker (buffer-only — the broker NEVER injects). Exactly like the two
+    // background-completion nudges above, the moment this session is idle we drain
+    // the WHOLE buffer into ONE synthetic user turn so the model acts on the
+    // extensions' prompts as user requests. While busy we leave the buffer untouched
+    // and re-check next tick — never injecting mid-turn (which would corrupt
+    // tool_call/tool_result ordering).
+    //
+    // LOOP-GUARD semantics:
+    // - IDLE-ONLY: `is_working()` subsumes `waiting`, so a turn already in flight —
+    //   INCLUDING one the bash/subagent nudge blocks above just kicked off THIS tick
+    //   (they set `waiting = true`) — makes this gate false and we defer to a later
+    //   tick. Same never-double-launch-a-stream invariant the subagent block above
+    //   documents: at most ONE auto-wake stream starts per tick, and this block, being
+    //   LAST, defers to either background-completion nudge that already fired.
+    // - CAP-5 LOAD-BEARING: the broker caps the buffer at 5. An extension subscribed
+    //   to `agent.turn_end` that re-prompts on every turn-end converges to at most ONE
+    //   buffered prompt per turn (its prompt drains here; it re-buffers one on the
+    //   resulting turn_end; that drains next idle) — a steady state of ≤1 turn per
+    //   prompt. It CANNOT amplify into a runaway loop; the cap is the hard ceiling if
+    //   several extensions prompt at once.
+    // - CONSECUTIVE-DUP DEDUPE: the broker refuses a prompt identical to the buffer's
+    //   last entry, so an extension resending the same text can't fill the buffer.
+    if ext_prompts_ready(
+        !state.rest.sessions[idx].pending_ext_prompts.is_empty(),
+        state.rest.sessions[idx].is_working(),
+        client.is_some(),
+        state.rest.sessions[idx].session.is_some(),
+    ) {
+        let prompts = std::mem::take(&mut state.rest.sessions[idx].pending_ext_prompts);
+        // Leading EXT_PROMPT_MARK → compact transcript render + wire strip. One
+        // `[ext:<id>] <text>` line per buffered prompt, then a trailing instruction.
+        let body = ext_prompt_body(&prompts);
+
+        // Append as a USER turn (model input), persist to msglog + messages.json, then
+        // capture history for the wire — mirrors the bash-nudge block above EXACTLY.
+        let history = {
+            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
+            let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+            sess.conversation.push_user(body);
+            let _ = sess.save();
+            sess.conversation.history()
+        };
+
+        // Per-turn reset + start stream, mirroring handle_submit's kickoff. The session
+        // is idle here, so these are clean-state resets (defensive).
+        {
+            let rt = &mut state.rest.sessions[idx];
+            rt.begin_stream();
+            rt.waiting = true;
+            rt.agent_steps = 0;
+            rt.pending_tool_calls.clear();
+            rt.awaiting_approval = false;
+            rt.tool_idx = 0;
+            rt.tool_results.clear();
+            rt.pending_tool_tasks.clear();
+            rt.awaiting_tool_tasks = false;
+            rt.awaiting_classify = false;
+            rt.pending_classify_verdict = None;
+        }
+        state.rest.reset_scroll_at(idx);
+        state.rest.sessions[idx].status = "thinking".into();
+        super::super::super::stream::start_stream_task(history, state, idx, client, handle);
+        dirty = true;
+    }
+
     dirty
+}
+
+/// Pure gate for the extension-prompt injection lane (mirrors the bash/subagent
+/// nudge gates): drain-and-inject ONLY when the session is IDLE and has BOTH a
+/// client and a live session to run the resulting turn. `is_working` subsumes
+/// `waiting`, so a stream already kicked off this tick (by the bash/subagent nudge
+/// blocks) keeps this false — the never-double-launch invariant. Factored out so
+/// the loop-guard can be unit-tested without a live session/client fixture.
+fn ext_prompts_ready(has_prompts: bool, is_working: bool, has_client: bool, has_session: bool) -> bool {
+    has_prompts && !is_working && has_client && has_session
+}
+
+/// Build the injected user-turn body for buffered extension prompts: a leading
+/// [`EXT_PROMPT_MARK`](crate::dto::chat::EXT_PROMPT_MARK) (compact transcript render
+/// + wire strip), one `[ext:<id>] <text>` line per buffered prompt, then a trailing
+/// instruction line telling the model these are extension-injected user requests.
+/// Pure so the shape is unit-testable without the event loop.
+fn ext_prompt_body(prompts: &[(String, String)]) -> String {
+    let mut body = String::from(crate::dto::chat::EXT_PROMPT_MARK);
+    let lines = prompts
+        .iter()
+        .map(|(ext_id, text)| format!("[ext:{ext_id}] {text}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    body.push_str(&lines);
+    body.push_str("\nThese prompts were injected by extensions; act on them as user requests.");
+    body
 }
 
 /// Detect the working→ready edge for `idx` and emit a background-finish toast.
@@ -437,4 +531,56 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
     }
 
     dirty
+}
+
+#[cfg(test)]
+mod ext_prompt_tests {
+    use super::{ext_prompt_body, ext_prompts_ready};
+
+    /// The injected body leads with EXT_PROMPT_MARK and lists each buffered prompt as
+    /// its own `[ext:<id>] <text>` line, then the trailing instruction.
+    #[test]
+    fn body_leads_with_mark_and_lists_each_prompt() {
+        let prompts = vec![
+            ("alpha.ext".to_string(), "do X".to_string()),
+            ("beta.ext".to_string(), "do Y".to_string()),
+        ];
+        let body = ext_prompt_body(&prompts);
+        assert!(
+            body.starts_with(crate::dto::chat::EXT_PROMPT_MARK),
+            "the body must lead with EXT_PROMPT_MARK so it renders compactly + strips on the wire"
+        );
+        // Strip the mark → the model-visible body: joined lines + trailer.
+        let visible = body.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK).unwrap();
+        assert_eq!(
+            visible,
+            "[ext:alpha.ext] do X\n[ext:beta.ext] do Y\nThese prompts were injected by extensions; act on them as user requests."
+        );
+    }
+
+    /// A single buffered prompt still gets the mark + its line + the trailer.
+    #[test]
+    fn single_prompt_body_shape() {
+        let body = ext_prompt_body(&[("x.ext".to_string(), "hello".to_string())]);
+        let visible = body.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK).unwrap();
+        assert_eq!(
+            visible,
+            "[ext:x.ext] hello\nThese prompts were injected by extensions; act on them as user requests."
+        );
+    }
+
+    /// The gate is IDLE-ONLY and needs BOTH a client and a live session; buffered
+    /// entries SURVIVE a working state (untouched until idle).
+    #[test]
+    fn gate_is_idle_only_and_needs_client_and_session() {
+        // All preconditions met → ready to inject.
+        assert!(ext_prompts_ready(true, false, true, true));
+        // WORKING → never ready: buffered entries survive a working state untouched.
+        assert!(!ext_prompts_ready(true, true, true, true));
+        // No buffered prompts → nothing to inject.
+        assert!(!ext_prompts_ready(false, false, true, true));
+        // No client / no session → can't run the turn.
+        assert!(!ext_prompts_ready(true, false, false, true));
+        assert!(!ext_prompts_ready(true, false, true, false));
+    }
 }

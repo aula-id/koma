@@ -405,6 +405,16 @@ pub struct AppStateRest {
     /// it clears every entry there. A per-extension uninstall path with event-loop
     /// access should clear its own entry the same way.
     pub ext_agents: HashMap<String, crate::app::ext::ExtAgentRegistry>,
+    /// Per-extension PUBLISHED CONTEXT blobs (`context.set` / `context.clear`),
+    /// keyed by the calling extension's id. A `BTreeMap` (not `HashMap`) so
+    /// iteration is in deterministic key order → the System-prompt VOLATILE TAIL
+    /// these ride in (appended in `stream::run::start_stream_task`, AFTER the
+    /// `CACHE_SPLIT_MARK`, so an update never busts the provider-cached head) is
+    /// byte-stable across turns. One extension can only ever read/replace its OWN
+    /// entry (keyed by caller identity), never another's. An empty map contributes
+    /// nothing to the tail (byte-identical to before this feature). Purely
+    /// in-memory / transient — `AppStateRest` is never serialised.
+    pub ext_context: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppStateRest {
@@ -514,6 +524,7 @@ impl AppStateRest {
             ext_notify_tx,
             ext_notify_rx: Some(ext_notify_rx),
             ext_agents: HashMap::new(),
+            ext_context: std::collections::BTreeMap::new(),
         }
     }
 
