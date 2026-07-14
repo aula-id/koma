@@ -9,9 +9,11 @@
 //! [`ExtMsg::Call`](koma_extension::protocol::ExtMsg) is not handled inline on the
 //! read path; it is packaged into an [`ExtCallRequest`] and pushed onto
 //! `AppStateRest::ext_call_tx`, then drained on the event loop (where `AppState`
-//! is live) by `drain_ext_calls`, which calls [`handle_ext_call`] here and sends
-//! the resulting JSON back over the request's `reply` oneshot. This mirrors the
-//! `drain_oauth` background→event-loop hand-off exactly.
+//! is live) by `drain_ext_calls`, which hands the whole request to
+//! [`handle_ext_call`] here — the broker itself now replies over the request's
+//! `reply` oneshot (it takes `req` BY VALUE so that oneshot can later move into a
+//! spawned task for the async verbs). This mirrors the `drain_oauth`
+//! background→event-loop hand-off.
 //!
 //! ## The security boundary
 //!
@@ -136,22 +138,24 @@ fn resolve_ext_session<'a>(state: &'a AppState, session_uuid: &str) -> Option<&'
         .find(|s| s.id == session_uuid && !s.closed)
 }
 
-/// An ext→koma `agents.*` call awaiting dispatch on the event loop.
+/// An ext→koma broker call awaiting dispatch on the event loop.
 ///
 /// Built by the extension's [`reader_task`](super::wire::reader_task) (which has
 /// no [`AppState`] access) and pushed onto `AppStateRest::ext_call_tx`; drained
-/// each tick by `drain_ext_calls`, which hands it to [`handle_ext_call`] and
-/// sends the broker's JSON back on `reply`. Carries the extension's `granted`
-/// scopes so the gate is evaluated against exactly what koma extended to THIS
-/// extension.
+/// each tick by `drain_ext_calls`, which hands the whole request to
+/// [`handle_ext_call`] — the broker replies over `reply` itself (it owns the
+/// oneshot, so a future async verb can move it into a spawned task). Carries the
+/// extension's `granted` scopes so the gate is evaluated against exactly what koma
+/// extended to THIS extension.
 pub struct ExtCallRequest {
     /// The calling extension's id (for logging / diagnostics).
     pub ext_id: String,
     /// The scopes koma granted this extension (its manifest `requires`, echoed at
     /// handshake). The grant gate is evaluated against this set.
     pub granted: Vec<Grant>,
-    /// The canonical method: `agents.spawn` | `agents.list` | `agents.status` |
-    /// `agents.result` | `agents.kill`.
+    /// The canonical method — an `agents.*` verb (`spawn` | `list` | `status` |
+    /// `result` | `kill`), or one of the newer `sessions.*` / `chat.prompt` /
+    /// `models.invoke` / `context.*` families (see [`is_broker_method`]).
     pub method: String,
     /// Method params (e.g. `{ "task": ..., "agent": ... }` / `{ "agentId": ... }`).
     pub params: Value,
@@ -186,16 +190,29 @@ pub(crate) enum GateDecision {
     UnknownMethod,
 }
 
-/// The grant an `agents.*` method requires, or `None` if the method is unknown.
+/// The grant a broker method requires, or `None` if the method is unknown — an
+/// unrecognised verb in a routed family (e.g. `sessions.bogus`) lands on the `None`
+/// arm, so the gate reports [`GateDecision::UnknownMethod`] rather than a silent
+/// allow.
 ///
 /// `agents.spawn` / `agents.kill` MUTATE the fleet → require
 /// [`Grant::AgentsOrchestrate`]. `agents.list` / `agents.status` /
 /// `agents.result` only READ → require [`Grant::AgentsRead`] (satisfied by
-/// orchestrate too; see [`is_granted`]).
+/// orchestrate too; see [`is_granted`]). Each newer family requires its OWN grant,
+/// EXACT-MATCH — no cross-family or lattice implication (orchestrate⇒read stays the
+/// sole edge): `sessions.*` → [`Grant::SessionsManage`], `chat.prompt` →
+/// [`Grant::ChatPrompt`], `models.invoke` → [`Grant::ModelsInvoke`], `context.set`
+/// / `context.clear` → [`Grant::ContextPublish`].
 fn required_grant(method: &str) -> Option<Grant> {
     match method {
         "agents.spawn" | "agents.kill" => Some(Grant::AgentsOrchestrate),
         "agents.list" | "agents.status" | "agents.result" => Some(Grant::AgentsRead),
+        "sessions.list" | "sessions.create" | "sessions.switch" | "sessions.spawn_into" => {
+            Some(Grant::SessionsManage)
+        }
+        "chat.prompt" => Some(Grant::ChatPrompt),
+        "models.invoke" => Some(Grant::ModelsInvoke),
+        "context.set" | "context.clear" => Some(Grant::ContextPublish),
         _ => None,
     }
 }
@@ -203,19 +220,16 @@ fn required_grant(method: &str) -> Option<Grant> {
 /// Whether `granted` satisfies `required`. Orchestrate IMPLIES read: a
 /// read-requiring method is permitted by either `AgentsRead` or
 /// `AgentsOrchestrate`; an orchestrate-requiring method needs `AgentsOrchestrate`
-/// outright (read alone never grants it).
+/// outright (read alone never grants it). That orchestrate⇒read edge is the SOLE
+/// lattice implication — every grant below is EXACT-MATCH: holding one never
+/// confers another, and orchestrate never confers any of them.
 fn is_granted(granted: &[Grant], required: Grant) -> bool {
     match required {
         Grant::AgentsOrchestrate => granted.contains(&Grant::AgentsOrchestrate),
         Grant::AgentsRead => {
             granted.contains(&Grant::AgentsRead) || granted.contains(&Grant::AgentsOrchestrate)
         }
-        // WAVE-1 COMPILE STUB: `required_grant` never returns these yet (no method
-        // requires them), so these arms are unreachable today. Exhaustiveness-only
-        // placeholder so the crate builds after `Grant` grew wave-1 protocol
-        // variants; real gating logic for each lands in the wave that wires its
-        // methods (see task board: sessions:manage / chat:prompt / models:invoke /
-        // context:publish).
+        // EXACT-MATCH: one grant per family, no implication in or out (see doc above).
         Grant::SessionsManage => granted.contains(&Grant::SessionsManage),
         Grant::ChatPrompt => granted.contains(&Grant::ChatPrompt),
         Grant::ModelsInvoke => granted.contains(&Grant::ModelsInvoke),
@@ -234,12 +248,25 @@ pub(crate) fn method_permitted(method: &str, granted: &[Grant]) -> GateDecision 
     }
 }
 
-/// The wire string for a [`Grant`] (for error messages / logs).
+/// Whether `method` belongs to a family this broker owns — the SINGLE SOURCE OF
+/// TRUTH shared by the wire router ([`super::wire::reader_task`], which decides
+/// whether to hand a `Call` to the broker or answer the wire-level "unknown koma
+/// method" stub) and the gate here, so the two can NEVER diverge. Routing keys on
+/// the family PREFIX only; the exact-verb allow/deny/unknown decision is
+/// [`method_permitted`]'s job — so a routed-but-unrecognised verb (e.g.
+/// `sessions.bogus`) flows to the broker and comes back as
+/// [`GateDecision::UnknownMethod`], never the wire stub.
+pub(crate) fn is_broker_method(method: &str) -> bool {
+    const PREFIXES: [&str; 5] = ["agents.", "sessions.", "chat.", "models.", "context."];
+    PREFIXES.iter().any(|p| method.starts_with(p))
+}
+
+/// The wire string for a [`Grant`] (for error messages / logs). Inverse of
+/// [`parse_grants`]'s mapping — keep the two in lock-step.
 fn grant_wire(g: Grant) -> &'static str {
     match g {
         Grant::AgentsRead => "agents:read",
         Grant::AgentsOrchestrate => "agents:orchestrate",
-        // WAVE-1 COMPILE STUB: see `is_granted` above.
         Grant::SessionsManage => "sessions:manage",
         Grant::ChatPrompt => "chat:prompt",
         Grant::ModelsInvoke => "models:invoke",
@@ -256,32 +283,52 @@ pub(crate) fn parse_grants(wire: &[String]) -> Vec<Grant> {
         .filter_map(|s| match s.as_str() {
             "agents:read" => Some(Grant::AgentsRead),
             "agents:orchestrate" => Some(Grant::AgentsOrchestrate),
+            "sessions:manage" => Some(Grant::SessionsManage),
+            "chat:prompt" => Some(Grant::ChatPrompt),
+            "models:invoke" => Some(Grant::ModelsInvoke),
+            "context:publish" => Some(Grant::ContextPublish),
             _ => None,
         })
         .collect()
 }
 
-/// Dispatch one ext→koma `agents.*` call against the ACTIVE chat session, gated by
-/// the extension's `granted` scopes. Returns the JSON the extension receives as its
-/// `KomaMsg::Result`.
+/// Dispatch one ext→koma broker [`ExtCallRequest`] against the ACTIVE chat session,
+/// gated by the extension's `granted` scopes, and REPLY on the request's `reply`
+/// oneshot with the JSON the extension receives as its `KomaMsg::Result`.
+///
+/// Takes `req` BY VALUE so the `reply` oneshot can move into a spawned task for the
+/// async verbs (`chat.prompt` / `models.invoke`, landing in a later wave); the verbs
+/// implemented today all reply INLINE before returning. The caller
+/// (`drain_ext_calls`) therefore no longer sends the reply itself — this function
+/// owns that.
 ///
 /// GRANT GATE FIRST (the security boundary): a call whose required grant is absent
 /// is rejected before ANY session state is read or mutated. Then the active session
-/// is resolved; then the verb is dispatched. Never panics — every failure path
-/// returns an `{"error": ...}` object so the extension's `call()` always unblocks.
+/// is resolved; then the verb is dispatched. Never panics — every path replies an
+/// `{"error": ...}` object (or a real result) so the extension's `call()` always
+/// unblocks. A dropped `reply` receiver (the reader task already timed out) simply
+/// discards the reply — never a hang.
 pub fn handle_ext_call(
     state: &mut AppState,
     handle: &tokio::runtime::Handle,
     client: &Option<Arc<OpenRouterClient>>,
-    ext_id: &str,
-    granted: &[Grant],
-    method: &str,
-    params: Value,
-) -> Value {
+    req: ExtCallRequest,
+) {
+    // Own every field: `reply` must be movable into the gate arms (early reply +
+    // return) and, for the async verbs a later wave adds, into a spawned task.
+    let ExtCallRequest {
+        ext_id,
+        granted,
+        method,
+        params,
+        reply,
+    } = req;
+
     // 1. GRANT GATE — airtight, and before touching a single session field.
-    match method_permitted(method, granted) {
+    match method_permitted(&method, &granted) {
         GateDecision::UnknownMethod => {
-            return json!({ "error": format!("unknown method: {method}") });
+            let _ = reply.send(json!({ "error": format!("unknown method: {method}") }));
+            return;
         }
         GateDecision::Deny(required) => {
             let wire = grant_wire(required);
@@ -290,30 +337,59 @@ pub fn handle_ext_call(
                 "extensions",
                 &format!("[{ext_id}] grant denied: {method} requires {wire}"),
             );
-            return json!({ "error": format!("grant denied: {method} requires {wire}") });
+            let _ =
+                reply.send(json!({ "error": format!("grant denied: {method} requires {wire}") }));
+            return;
         }
         GateDecision::Allow => {}
     }
 
-    // 2. Dispatch the (now-authorised) verb. `agents.spawn` ALONE resolves the
-    // ACTIVE (foreground) session — spawning into "whatever chat session is in
-    // front of the user right now" is the intended behavior. Every other verb
-    // resolves the sub-agent through THIS extension's own [`ExtAgentRegistry`]
-    // instead (never the foreground), so a foreground switch between a spawn and
-    // a later poll can never redirect that poll at a different session's sub-agent.
-    match method {
+    // 2. Dispatch the (now-authorised) verb by family. The `agents.*` verbs run their
+    // real logic and reply inline; the newer families reply a not-implemented stub
+    // for now (their bodies land in later waves) — the gate + routing + by-value
+    // structure are what land this wave so later waves only fill the bodies.
+    //
+    // `agents.spawn` ALONE resolves the ACTIVE (foreground) session — spawning into
+    // "whatever chat session is in front of the user right now" is the intended
+    // behavior. Every other `agents.*` verb resolves the sub-agent through THIS
+    // extension's own [`ExtAgentRegistry`] instead (never the foreground), so a
+    // foreground switch between a spawn and a later poll can never redirect that poll
+    // at a different session's sub-agent.
+    match method.as_str() {
         "agents.spawn" => {
-            let Some(sess_idx) = active_session_idx(state) else {
-                return json!({ "error": "no active session" });
+            let v = match active_session_idx(state) {
+                Some(sess_idx) => broker_spawn(state, &ext_id, sess_idx, client, handle, &params),
+                None => json!({ "error": "no active session" }),
             };
-            broker_spawn(state, ext_id, sess_idx, client, handle, &params)
+            let _ = reply.send(v);
         }
-        "agents.list" => broker_list(state, ext_id),
-        "agents.status" => broker_status(state, ext_id, &params),
-        "agents.result" => broker_result(state, ext_id, &params),
-        "agents.kill" => broker_kill(state, ext_id, &params),
+        "agents.list" => {
+            let _ = reply.send(broker_list(state, &ext_id));
+        }
+        "agents.status" => {
+            let _ = reply.send(broker_status(state, &ext_id, &params));
+        }
+        "agents.result" => {
+            let _ = reply.send(broker_result(state, &ext_id, &params));
+        }
+        "agents.kill" => {
+            let _ = reply.send(broker_kill(state, &ext_id, &params));
+        }
+        // WAVE-3 STUB: implemented in W6/W7. Gate + routing + by-value reply land now.
+        "sessions.list"
+        | "sessions.create"
+        | "sessions.switch"
+        | "sessions.spawn_into"
+        | "chat.prompt"
+        | "models.invoke"
+        | "context.set"
+        | "context.clear" => {
+            let _ = reply.send(json!({ "error": "not implemented" }));
+        }
         // Unreachable: method_permitted already rejected anything else above.
-        _ => json!({ "error": format!("unknown method: {method}") }),
+        _ => {
+            let _ = reply.send(json!({ "error": format!("unknown method: {method}") }));
+        }
     }
 }
 
@@ -645,6 +721,65 @@ mod tests {
         // An unrecognised verb is never a silent allow.
         assert_eq!(method_permitted("agents.bogus", &[Orch]), GateDecision::UnknownMethod);
         assert_eq!(method_permitted("filesystem.read", &[Orch]), GateDecision::UnknownMethod);
+
+        // --- WAVE-3 families: each needs its OWN grant, EXACT-MATCH, no lattice edge.
+        use Grant::{ChatPrompt, ContextPublish, ModelsInvoke, SessionsManage};
+
+        // (every verb in a family, the grant that family requires).
+        let new_families: [(&[&str], Grant); 4] = [
+            (
+                &["sessions.list", "sessions.create", "sessions.switch", "sessions.spawn_into"],
+                SessionsManage,
+            ),
+            (&["chat.prompt"], ChatPrompt),
+            (&["models.invoke"], ModelsInvoke),
+            (&["context.set", "context.clear"], ContextPublish),
+        ];
+
+        for (methods, own) in new_families {
+            // An UNRELATED grant to probe cross-family isolation (never `own`).
+            let unrelated = if own == SessionsManage { ChatPrompt } else { SessionsManage };
+            for m in methods {
+                // No grants → denied (missing its own grant).
+                assert_eq!(
+                    method_permitted(m, &[]),
+                    GateDecision::Deny(own),
+                    "empty grants must deny {m}"
+                );
+                // Its OWN grant → allowed.
+                assert_eq!(
+                    method_permitted(m, &[own]),
+                    GateDecision::Allow,
+                    "{m} must be allowed under its own grant"
+                );
+                // An unrelated grant → still denied (exact-match, no cross-family unlock).
+                assert_eq!(
+                    method_permitted(m, &[unrelated]),
+                    GateDecision::Deny(own),
+                    "an unrelated grant must NOT unlock {m}"
+                );
+                // agents:orchestrate is the ONLY lattice edge and it stops at agents.* —
+                // it must NOT unlock any new family.
+                assert_eq!(
+                    method_permitted(m, &[Orch]),
+                    GateDecision::Deny(own),
+                    "orchestrate must NOT unlock the new-family method {m}"
+                );
+            }
+        }
+
+        // A bogus verb in each new family is UnknownMethod even when the family grant
+        // IS held — the gate keys on the exact verb, never the family prefix.
+        assert_eq!(
+            method_permitted("sessions.bogus", &[SessionsManage]),
+            GateDecision::UnknownMethod
+        );
+        assert_eq!(method_permitted("chat.bogus", &[ChatPrompt]), GateDecision::UnknownMethod);
+        assert_eq!(method_permitted("models.bogus", &[ModelsInvoke]), GateDecision::UnknownMethod);
+        assert_eq!(
+            method_permitted("context.bogus", &[ContextPublish]),
+            GateDecision::UnknownMethod
+        );
     }
 
     /// `parse_grants` maps known wire strings and drops unknown ones (fail-closed).
@@ -653,10 +788,45 @@ mod tests {
         let g = parse_grants(&[
             "agents:read".to_string(),
             "agents:orchestrate".to_string(),
+            "sessions:manage".to_string(),
+            "chat:prompt".to_string(),
+            "models:invoke".to_string(),
+            "context:publish".to_string(),
             "filesystem:write".to_string(),
         ]);
-        assert_eq!(g, vec![Grant::AgentsRead, Grant::AgentsOrchestrate]);
+        // Input order is preserved; the unknown "filesystem:write" is dropped.
+        assert_eq!(
+            g,
+            vec![
+                Grant::AgentsRead,
+                Grant::AgentsOrchestrate,
+                Grant::SessionsManage,
+                Grant::ChatPrompt,
+                Grant::ModelsInvoke,
+                Grant::ContextPublish,
+            ]
+        );
         assert!(parse_grants(&["nonsense".to_string()]).is_empty());
+    }
+
+    /// `is_broker_method` recognises every broker family prefix (one representative
+    /// verb each) and nothing else — the single source of truth the wire router and
+    /// the gate both consult, so they can never disagree on what routes here.
+    #[test]
+    fn is_broker_method_covers_all_families() {
+        for m in [
+            "agents.spawn",
+            "sessions.list",
+            "chat.prompt",
+            "models.invoke",
+            "context.set",
+        ] {
+            assert!(is_broker_method(m), "{m} must route to the broker");
+        }
+        // Other ext→koma families (panel/tool) and the empty method must NOT route here.
+        for m in ["tool.call", "panel.msg", ""] {
+            assert!(!is_broker_method(m), "{m:?} must NOT route to the broker");
+        }
     }
 
     /// Build a minimal single-session [`AppState`] fixture for the broker
@@ -698,6 +868,34 @@ mod tests {
         }
     }
 
+    /// Drive [`handle_ext_call`] for one method and return the JSON it replies on
+    /// the request's oneshot. Every arm in this wave replies INLINE (no task spawn),
+    /// so the oneshot is already fulfilled by the time `handle_ext_call` returns and
+    /// `try_recv` never races — this restores the old `-> Value` test ergonomics
+    /// after the by-value / async-ready signature change, with identical semantics.
+    fn call_broker(
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        client: &Option<Arc<OpenRouterClient>>,
+        ext_id: &str,
+        granted: &[Grant],
+        method: &str,
+        params: Value,
+    ) -> Value {
+        let (reply, mut reply_rx) = tokio::sync::oneshot::channel::<Value>();
+        let req = ExtCallRequest {
+            ext_id: ext_id.to_string(),
+            granted: granted.to_vec(),
+            method: method.to_string(),
+            params,
+            reply,
+        };
+        handle_ext_call(state, handle, client, req);
+        reply_rx
+            .try_recv()
+            .expect("broker must reply inline on the oneshot in this wave")
+    }
+
     /// CRITICAL: with only `AgentsRead`, `agents.spawn` (needs orchestrate) is
     /// grant-denied and NOTHING is spawned.
     #[test]
@@ -706,7 +904,7 @@ mod tests {
         let mut state = fixture_state();
         let client: Option<Arc<OpenRouterClient>> = None;
 
-        let out = handle_ext_call(
+        let out = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -739,7 +937,7 @@ mod tests {
         let mut state = fixture_state();
         let client: Option<Arc<OpenRouterClient>> = None;
 
-        let out = handle_ext_call(
+        let out = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -768,7 +966,7 @@ mod tests {
         let mut state = fixture_state();
         let client: Option<Arc<OpenRouterClient>> = None;
 
-        let out = handle_ext_call(
+        let out = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -810,7 +1008,7 @@ mod tests {
         let ext_id_done = registry.insert(sess_uuid, 9);
 
         // agents.list → array of {agentId, agent, status}, oldest-registered first.
-        let list = handle_ext_call(
+        let list = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -828,7 +1026,7 @@ mod tests {
         assert_eq!(arr[1]["status"], json!("done"));
 
         // agents.status on the running one.
-        let st = handle_ext_call(
+        let st = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -841,7 +1039,7 @@ mod tests {
         assert_eq!(st["status"], json!("running"));
 
         // agents.result on the done one → its final report text.
-        let res = handle_ext_call(
+        let res = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -855,7 +1053,7 @@ mod tests {
 
         // Unknown id → error (not a panic, not a silent empty). Note this is an
         // ext-facing id this extension was NEVER handed, not a raw local id.
-        let unknown = handle_ext_call(
+        let unknown = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -889,7 +1087,7 @@ mod tests {
             .insert(sess_uuid, 3);
 
         // Read-only → denied (no kill).
-        let denied = handle_ext_call(
+        let denied = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -909,7 +1107,7 @@ mod tests {
 
         // Orchestrate → killed. (No session dir on the fixture, so the persist is a
         // best-effort no-op — the in-memory status transition is what we assert.)
-        let killed = handle_ext_call(
+        let killed = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -981,7 +1179,7 @@ mod tests {
 
         // agents.status must resolve to session A's sub-agent (Running/general),
         // never session B's (Done/researcher), despite B now being foreground.
-        let status = handle_ext_call(
+        let status = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -1001,7 +1199,7 @@ mod tests {
         );
 
         // agents.kill on the same id must land on session A's sub-agent only.
-        let killed = handle_ext_call(
+        let killed = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -1022,7 +1220,7 @@ mod tests {
 
         // An agentId this extension was never handed — including the bare raw
         // local id 5, which was never itself an ext-facing id — must be rejected.
-        let unknown = handle_ext_call(
+        let unknown = call_broker(
             &mut state,
             rt.handle(),
             &client,
@@ -1035,6 +1233,79 @@ mod tests {
             unknown.get("error").and_then(|e| e.as_str()),
             Some(format!("unknown agentId: {}", 5).as_str()),
             "an id never handed to this extension must be rejected, got {unknown}"
+        );
+    }
+
+    /// WAVE-3: a NEW-family verb is gated by its OWN grant and, once allowed, reaches
+    /// the by-value dispatch's not-implemented stub (real body lands in W6/W7).
+    /// Proves the gate-first invariant holds for the new families exactly as for
+    /// `agents.*`: ungranted is denied BEFORE the stub, an unrelated grant never
+    /// unlocks it, and the reply travels back over the request's `reply` oneshot.
+    #[test]
+    fn new_family_verbs_gated_then_reach_stub() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+
+        // Ungranted → grant denied (never reaches the stub, no state touched).
+        let denied = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[],
+            "sessions.list",
+            json!({}),
+        );
+        assert!(
+            denied.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            "sessions.list without sessions:manage must be denied, got {denied}"
+        );
+
+        // Granted → passes the gate and hits the WAVE-3 stub.
+        let stub = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.list",
+            json!({}),
+        );
+        assert_eq!(
+            stub,
+            json!({ "error": "not implemented" }),
+            "a granted new-family verb reaches the not-implemented stub, got {stub}"
+        );
+
+        // Cross-family: orchestrate must NOT unlock chat.prompt (exact-match gate).
+        let cross = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "chat.prompt",
+            json!({}),
+        );
+        assert!(
+            cross.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            "orchestrate must NOT unlock chat.prompt, got {cross}"
+        );
+
+        // A routed-but-unknown verb in a granted family → UnknownMethod, not the stub.
+        let bogus = call_broker(
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::SessionsManage],
+            "sessions.bogus",
+            json!({}),
+        );
+        assert!(
+            bogus.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown method")),
+            "sessions.bogus must be UnknownMethod even with the family grant, got {bogus}"
         );
     }
 }
