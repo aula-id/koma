@@ -395,8 +395,7 @@ export function GitPanel() {
         </SyncButton>
         <GitPushMenu badge={git.ahead ?? 0} />
         <span className="flex-1" />
-        <KeyRound size={12} className="flex-none text-koma-dim opacity-60" />
-        <div className="min-w-0 max-w-[130px] flex-none" title="SSH key used for fetch/pull/push">
+        <div className="flex-none" title="SSH key used for fetch/pull/push">
           <Select
             value={git.keyName ?? ''}
             options={[
@@ -404,6 +403,8 @@ export function GitPanel() {
               ...keys.map((k) => ({ value: k.name, label: k.name })),
             ]}
             onChange={(name) => setGitKey(name || null)}
+            triggerIcon={<KeyRound size={12} />}
+            triggerTitle="SSH key used for fetch/pull/push"
           />
         </div>
       </div>
