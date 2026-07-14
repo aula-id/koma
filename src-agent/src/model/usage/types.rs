@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Returns the local timezone offset in seconds east of UTC (e.g. UTC+7 → 25200,
 /// UTC-5 → -18000). Uses POSIX `localtime_r` via libc. Falls back to 0 on error.
 #[allow(unsafe_code)]
+#[cfg(unix)]
 pub fn local_utc_offset_secs() -> i64 {
     unsafe {
         let ts = libc::time(std::ptr::null_mut());
@@ -10,6 +11,15 @@ pub fn local_utc_offset_secs() -> i64 {
         libc::localtime_r(&ts, &mut tm);
         tm.tm_gmtoff
     }
+}
+
+/// TODO(windows-port: GetTimeZoneInformation). Windows has no `localtime_r`/
+/// `tm_gmtoff`; a real implementation needs `GetTimeZoneInformation` (accounting
+/// for DST via `GetDynamicTimeZoneInformation` or `TIME_ZONE_ID_DAYLIGHT`).
+/// Conservative stub: report UTC (0 offset) rather than guess.
+#[cfg(windows)]
+pub fn local_utc_offset_secs() -> i64 {
+    0
 }
 
 // ── Read-only query types ────────────────────────────────────────────────────

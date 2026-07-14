@@ -28,6 +28,7 @@ use std::sync::Arc;
 /// `tokio::signal::unix::signal` needs the reactor. If any stream fails to register
 /// (extremely unlikely on Linux), the daemon proceeds WITHOUT that handler rather
 /// than aborting — a controller's `QuitDaemon` still provides a clean stop path.
+#[cfg(unix)]
 pub(super) fn install_daemon_signals(
     handle: &tokio::runtime::Handle,
 ) -> Arc<std::sync::atomic::AtomicBool> {
@@ -80,6 +81,49 @@ pub(super) fn install_daemon_signals(
                         std::process::exit(0);
                     }
                 }
+            }
+        }
+    });
+
+    shutting_down
+}
+
+/// Windows placeholder twin of the unix [`install_daemon_signals`] above.
+///
+/// TODO(windows-port, phase B2: ctrl_close/ctrl_shutdown + IPC shutdown message).
+/// Windows has no SIGHUP/SIGTERM — the console-control-event set is
+/// CTRL_C/CTRL_BREAK/CTRL_CLOSE/CTRL_LOGOFF/CTRL_SHUTDOWN, and a headless daemon
+/// (no console) mostly only ever sees the last two, which `tokio::signal::windows`
+/// exposes separately from `ctrl_c()`. For now this only wires up `ctrl_c()`
+/// (the CTRL_C_EVENT / SIGINT analogue) to mirror the unix "first request begins
+/// graceful shutdown, second hard-exits" behavior; there is no SIGHUP-survive
+/// equivalent yet (a real port should also listen for ctrl_close/ctrl_shutdown so
+/// the daemon tears down cleanly when its console/session is closed, and should
+/// consider driving shutdown through the same IPC `QuitDaemon` message the
+/// graceful stop path already uses instead of a bare signal).
+#[cfg(windows)]
+pub(super) fn install_daemon_signals(
+    handle: &tokio::runtime::Handle,
+) -> Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&shutting_down);
+
+    let _enter = handle.enter();
+    handle.spawn(async move {
+        // Best-effort registration, mirroring the unix task's tolerance of a
+        // registration failure (rely on `QuitDaemon` if `ctrl_c()` can't be wired up).
+        let mut requested = 0u32;
+        loop {
+            if tokio::signal::ctrl_c().await.is_err() {
+                return; // no signal handling available; rely on QuitDaemon
+            }
+            if requested == 0 {
+                requested = 1;
+                flag.store(true, Ordering::Relaxed);
+            } else {
+                std::process::exit(0);
             }
         }
     });

@@ -281,6 +281,7 @@ pub(super) fn generate_key(name: &str, comment: &str) -> KeyOpResult {
 /// rejection) the just-written private file is cleaned up and an error
 /// surfaced — never leaves an orphaned/unusable private-only file behind.
 pub(super) fn import_key(name: &str, private_key: &str) -> KeyOpResult {
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
 
     const OP: &str = "import";
@@ -305,11 +306,15 @@ pub(super) fn import_key(name: &str, private_key: &str) -> KeyOpResult {
 
     {
         use std::io::Write;
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&priv_path);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        // Create with 0600 from the start (no create-then-chmod TOCTOU window).
+        // TODO(windows-port, phase B3: restrict ACLs so the private key file
+        // isn't inherited-permissive) — Windows has no unix permission bits;
+        // a real port needs a security-descriptor/ACL equivalent at create time.
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let file = opts.open(&priv_path);
         match file {
             Ok(mut f) => {
                 if let Err(e) = f.write_all(content.as_bytes()) {

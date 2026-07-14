@@ -56,7 +56,8 @@ fn daemon_selftest_inner() -> Result<()> {
 
     // Ignore SIGPIPE for parity with the real daemon (a dead client write must not
     // kill us). SAFETY: SIG_IGN on SIGPIPE is async-signal-safe and touches no Rust
-    // state — the same call `run_daemon` makes.
+    // state — the same call `run_daemon` makes. SIGPIPE doesn't exist on Windows.
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }

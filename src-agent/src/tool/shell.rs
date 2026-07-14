@@ -30,6 +30,34 @@ pub(crate) enum ShellExit {
     Early,
 }
 
+/// Build a [`Command`] that runs `command` through the platform's shell: unix
+/// `sh -c <command>` (exactly as every caller ran it before this helper existed);
+/// Windows `cmd /C <command>` (placeholder — see the TODO below).
+///
+/// This is the ONE place every "run an arbitrary shell command string" call site
+/// in the crate should go through, so the unix behavior never drifts between
+/// them and the Windows gap is in exactly one spot.
+///
+/// TODO(windows-port, phase B3: Git Bash discovery). `cmd /C` has different
+/// quoting/escaping and builtin semantics than `sh -c` (no unix-style globbing,
+/// different `&&`/pipe/quote handling, etc.), so a command string written for
+/// `sh -c` may not behave the same way here. A real port should prefer a
+/// Git-Bash-compatible `sh` if one is discoverable on the system (e.g. bundled
+/// with Git for Windows), falling back to `cmd` only when none is found.
+#[cfg(unix)]
+pub(crate) fn os_shell_command(command: &str) -> Command {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command);
+    cmd
+}
+
+#[cfg(windows)]
+pub(crate) fn os_shell_command(command: &str) -> Command {
+    let mut cmd = Command::new("cmd");
+    cmd.arg("/C").arg(command);
+    cmd
+}
+
 /// Spawn `command` via `sh -c` in `cwd`, capture stdout+stderr, strip ANSI, and
 /// return the combined output alongside its exit status. Bounded by `timeout_ms`
 /// (the child keeps running on a drain thread past the timeout, but the caller is
@@ -37,9 +65,7 @@ pub(crate) enum ShellExit {
 /// TTY); never panics.
 pub(crate) fn capture_raw(command: &str, cwd: &Path, timeout_ms: u64) -> (String, ShellExit) {
     // Spawn the child, capturing stdout + stderr.
-    let child = match Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let child = match os_shell_command(command)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

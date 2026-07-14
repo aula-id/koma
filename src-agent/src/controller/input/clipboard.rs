@@ -272,3 +272,17 @@ fn try_osascript() -> Result<Vec<u8>, String> {
         Err(e) => Err(e),
     }
 }
+
+// ===========================================================================
+// Windows backend (not yet implemented)
+// ===========================================================================
+
+/// TODO(windows-port, phase B3: arboard). Windows clipboard image access needs a
+/// crate like `arboard` (or raw Win32 `OpenClipboard`/`GetClipboardData` with
+/// `CF_DIB`/`CF_DIBV5` conversion to PNG) — neither is wired up yet. Conservative
+/// stub matching the Linux/macOS backends' signature so Ctrl+V paste on Windows
+/// surfaces a clear toast instead of failing to compile/link.
+#[cfg(target_os = "windows")]
+fn fetch_clipboard_png() -> Result<Vec<u8>, String> {
+    Err("clipboard image capture not yet supported on Windows".to_string())
+}
