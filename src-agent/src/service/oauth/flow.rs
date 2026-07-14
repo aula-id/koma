@@ -6,7 +6,7 @@
 //! (`CodexUrl`/`KiloCode`) — a dropped receiver (flow superseded/cancelled) makes every
 //! send a silent no-op.
 //!
-//! Factored out of `app::runtime::actions::oauth` (0.2.26 → GUI-detached OAuth wave) so
+//! Factored out of `app::runtime::actions::oauth` (0.2.27 → GUI-detached OAuth wave) so
 //! BOTH callers — the daemon's `Action::OAuthStart` handler (an attached session's flow)
 //! and the GUI host-relay's detached `HostCtl::StartOAuth` handler (the home-screen /
 //! pre-session flow, `client::host::host_swapper`) — spawn the SAME code, sending
