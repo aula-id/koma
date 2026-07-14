@@ -48,7 +48,7 @@ use crate::app::runtime::{
     handle_live_switch, list_live_sessions, spawn_into_session, spawn_or_queue, SpawnIntoReply,
     SpawnOutcome,
 };
-use crate::app::state::{AppState, SessionRuntime};
+use crate::app::state::{AppState, SessionRuntime, EXT_TURN_BUDGET};
 use crate::app::subagent::SubAgentStatus;
 use crate::ipc::proto::{ClientRequest, SessionStatus};
 use crate::model::app_config::ModelRole;
@@ -690,6 +690,17 @@ fn broker_result(state: &AppState, ext_id: &str, params: &Value) -> Value {
 /// (the registry entry is deliberately left in place rather than removed, so a
 /// later `status`/`result` on the same id keeps reporting the terminal
 /// `Killed` outcome instead of flipping to "unknown agentId").
+///
+/// `"killed": true` means the target was FOUND and is (now) terminal — it does NOT
+/// mean this call necessarily caused a state transition. Calling `agents.kill` on a
+/// sub-agent that had already settled as `Done`/`Error` (finished on its own before
+/// this call arrived) still replies `killed: true`, but that settled outcome is
+/// PRESERVED (only a still-`Running` agent is transitioned to `Killed` — see the
+/// `matches!(sa.status, SubAgentStatus::Running)` guard below) and no terminal event
+/// is re-emitted (the W5 fan-out only fires on a genuine Running→Killed transition,
+/// captured in `killed_transition`). A subsequent `agents.status`/`agents.result` on
+/// the same id keeps reporting whatever it had already settled to (`done`/`error`),
+/// never `killed`.
 fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
     let Some(ext_agent_id) = parse_ext_agent_id(params) else {
         return json!({ "error": "agents.kill requires an 'agentId'" });
@@ -794,11 +805,17 @@ fn parse_ext_agent_id(params: &Value) -> Option<u64> {
 /// tool_call/tool_result ordering) — buffer-only, synchronous reply.
 ///
 /// Validation, IN ORDER: `text` trimmed non-empty; `text.len() <= 16384` (16KB);
-/// a prompt IDENTICAL to the buffer's LAST entry is a consecutive-duplicate and is
-/// dropped (reports the unchanged queue length, no growth — checked BEFORE the cap
-/// so a repeat never trips it); a buffer already at the cap of 5 rejects further
-/// prompts. Otherwise `(ext_id, text)` is pushed. Reply `{ "queued": <len> }` on
-/// accept/dedupe, else `{ "error": ... }`.
+/// the session's consecutive-injection BUDGET
+/// ([`EXT_TURN_BUDGET`](crate::app::state::EXT_TURN_BUDGET), the cost-DoS guard —
+/// review finding) must not already be exhausted, else the call is refused outright
+/// rather than buffered (this is the "front door" half of the belt-and-braces pair
+/// with the deferred injection gate's own budget check — see
+/// `event_loop::sessions::deferred::ext_prompts_ready`); a prompt IDENTICAL to the
+/// buffer's LAST entry is a consecutive-duplicate and is dropped (reports the
+/// unchanged queue length, no growth — checked BEFORE the cap so a repeat never
+/// trips it); a buffer already at the cap of 5 rejects further prompts. Otherwise
+/// `(ext_id, text)` is pushed. Reply `{ "queued": <len> }` on accept/dedupe, else
+/// `{ "error": ... }`.
 fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, params: &Value) -> Value {
     let text = params
         .get("text")
@@ -810,6 +827,14 @@ fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, param
     }
     if text.len() > 16_384 {
         return json!({ "error": "prompt exceeds 16KB" });
+    }
+    // Cost-DoS guard (review finding): once this session has injected
+    // EXT_TURN_BUDGET consecutive extension turns with no real user activity in
+    // between, refuse to even buffer a further prompt. A prompt already buffered
+    // before the budget tripped is untouched (it stays parked — see the deferred
+    // injection gate's own belt-and-braces check).
+    if state.rest.sessions[sess_idx].ext_injected_turns >= EXT_TURN_BUDGET {
+        return json!({ "error": "extension turn budget exhausted; waiting for user activity" });
     }
     let buf = &mut state.rest.sessions[sess_idx].pending_ext_prompts;
     // Consecutive-duplicate dedupe FIRST (before the cap): an extension resending the
@@ -2016,6 +2041,51 @@ mod tests {
             "a >16KB prompt must be rejected, got {toobig}"
         );
         assert!(fresh.rest.sessions[0].pending_ext_prompts.is_empty());
+    }
+
+    /// Cost-DoS guard (review finding): `chat.prompt` refuses to buffer once the
+    /// session's `ext_injected_turns` counter is AT the budget, but still accepts
+    /// one below it. Mirrors `EXT_TURN_BUDGET` (10).
+    #[test]
+    fn chat_prompt_respects_turn_budget() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let client: Option<Arc<OpenRouterClient>> = None;
+
+        // At budget (10) → refused, nothing buffered.
+        let mut at_budget = fixture_state();
+        at_budget.rest.sessions[0].ext_injected_turns = EXT_TURN_BUDGET;
+        let out = call_broker(
+            &mut at_budget,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::ChatPrompt],
+            "chat.prompt",
+            json!({ "text": "please respond" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("turn budget exhausted")),
+            "at budget must be refused, got {out}"
+        );
+        assert!(
+            at_budget.rest.sessions[0].pending_ext_prompts.is_empty(),
+            "a budget-refused prompt must NOT be buffered"
+        );
+
+        // One below budget (9) → accepted normally.
+        let mut below_budget = fixture_state();
+        below_budget.rest.sessions[0].ext_injected_turns = EXT_TURN_BUDGET - 1;
+        let out = call_broker(
+            &mut below_budget,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::ChatPrompt],
+            "chat.prompt",
+            json!({ "text": "please respond" }),
+        );
+        assert_eq!(out, json!({ "queued": 1 }), "below budget must be accepted, got {out}");
+        assert_eq!(below_budget.rest.sessions[0].pending_ext_prompts.len(), 1);
     }
 
     /// W6 context.set / context.clear: keyed by the CALLER's ext id, 8KB

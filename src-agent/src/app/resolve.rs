@@ -719,9 +719,15 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
     false
 }
 
-/// Currently only called by the (Stage-1 inert) sub-agent spawn path, so it is
-/// unreferenced from the binary until that path is wired in — hence the allow.
-#[allow(dead_code)]
+/// Resolve an [`AgentDef`]'s dispatch route: called on EVERY sub-agent spawn
+/// (`app::subagent::spawn`, both the model-callable `task` tool and the extension
+/// `agents.spawn`/`sessions.spawn_into` broker paths) to pick which
+/// provider/model/effort that sub-agent actually runs on. Follows the resolution
+/// order documented above [`agent_declares_model`]: 1. a registered `model_uuid`
+/// entry; 1b. a legacy `model` + `provider_uuid` pair; 1c. a bare `model` slug
+/// looked up against the registered catalogues; else 2. inherit the fully-resolved
+/// Main route. The agent's own `effort`, when set, overrides whichever route is
+/// picked.
 pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) -> Option<Resolved> {
     // The agent's declared effort, applied on top of whichever route we land on.
     let agent_effort = agent.effort.clone();
