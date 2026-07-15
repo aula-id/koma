@@ -18,44 +18,46 @@ export function StorePanel() {
   }, [refreshInstalled])
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto">
-      <button
-        onClick={openStoreTab}
-        className="flex items-center gap-2 px-3 py-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
-      >
-        <Blocks size={14} className="flex-none opacity-80" />
-        <span>Browse Extensions</span>
-      </button>
+    <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-koma-panel">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <button
+          onClick={openStoreTab}
+          className="flex items-center gap-2 px-3 py-2 text-left text-[12px] text-koma-fg hover:bg-koma-hover"
+        >
+          <Blocks size={14} className="flex-none opacity-80" />
+          <span>Browse Extensions</span>
+        </button>
 
-      <div className="mt-1 px-3 pb-1 pt-2 text-[10px] uppercase tracking-wider text-koma-dim opacity-60">
-        Installed{installed.length > 0 ? ` (${installed.length})` : ''}
-      </div>
-
-      {installed.length === 0 ? (
-        <div className="px-3 py-2 text-[11px] text-koma-dim opacity-70">
-          No extensions installed yet.
+        <div className="mt-1 px-3 pb-1 pt-2 text-[10px] uppercase tracking-wider text-koma-dim opacity-60">
+          Installed{installed.length > 0 ? ` (${installed.length})` : ''}
         </div>
-      ) : (
-        <ul className="flex flex-col">
-          {installed.map((ext) => (
-            <li key={ext.id}>
-              <button
-                onClick={() => openInstalledExtensionTab(ext.id)}
-                title={ext.id}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-koma-hover"
-              >
-                {ext.kind === 'daemon' ? (
-                  <Package size={13} className="flex-none opacity-70" />
-                ) : (
-                  <Blocks size={13} className="flex-none opacity-70" />
-                )}
-                <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{ext.name || ext.id}</span>
-                <span className="flex-none text-[10px] text-koma-dim opacity-70">{ext.version}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+
+        {installed.length === 0 ? (
+          <div className="px-3 py-2 text-[11px] text-koma-dim opacity-70">
+            No extensions installed yet.
+          </div>
+        ) : (
+          <ul className="flex flex-col">
+            {installed.map((ext) => (
+              <li key={ext.id}>
+                <button
+                  onClick={() => openInstalledExtensionTab(ext.id)}
+                  title={ext.id}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-koma-hover"
+                >
+                  {ext.kind === 'daemon' ? (
+                    <Package size={13} className="flex-none opacity-70" />
+                  ) : (
+                    <Blocks size={13} className="flex-none opacity-70" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-koma-fg">{ext.name || ext.id}</span>
+                  <span className="flex-none text-[10px] text-koma-dim opacity-70">{ext.version}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }
