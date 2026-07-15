@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::app::resolve::Resolved;
 use crate::dto::chat::ToolCall;
@@ -244,6 +244,7 @@ pub async fn run_agent_loop(
     task_intent: String,
     max_steps: Option<usize>,
     tx: UnboundedSender<AgentEvent>,
+    mut inject_rx: UnboundedReceiver<String>,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
     // runs out of steps before the model gives a no-tool reply.
@@ -259,6 +260,30 @@ pub async fn run_agent_loop(
 
     let mut step: usize = 0;
     loop {
+        // Injection drain (turn-boundary steering): fold any messages pushed onto
+        // this sub-agent's injection channel since the last turn into the isolated
+        // history as fresh `user` turns BEFORE this step streams, so the model sees
+        // them on its NEXT model call (never mid-stream). Non-blocking: `try_recv`
+        // until empty/closed. Each is mirrored to the orchestrator as an `Injected`
+        // event (flat transcript) and, once any landed, a single `Snapshot` (the
+        // structured viewer history), so a human watching the `$` panel sees the
+        // steer. A closed channel (the sender dropped) simply drains nothing.
+        let mut injected_any = false;
+        loop {
+            match inject_rx.try_recv() {
+                Ok(msg) => {
+                    convo.push_user(msg.clone());
+                    emit(&tx, AgentEvent::Injected(msg));
+                    injected_any = true;
+                }
+                // Empty (nothing queued) or Disconnected (sender gone): stop draining.
+                Err(_) => break,
+            }
+        }
+        if injected_any {
+            emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
+        }
+
         emit(&tx, AgentEvent::Step(step));
 
         // 1. Stream one model reply on a fresh per-step channel, then drain it.

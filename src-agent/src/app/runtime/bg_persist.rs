@@ -139,6 +139,10 @@ pub(crate) fn restore_bg_records(
         // whose handle is never used to abort, and a fresh channel nothing writes to.
         let abort = handle.spawn(std::future::ready(())).abort_handle();
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Inert injection sender: a restored record is always terminal (no live
+        // loop drains it), so `inject_into_subagent` reports `Terminal` and never
+        // sends — this channel is only here to satisfy the field's type.
+        let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
         rt.subagents.push(SubAgent {
             id,
             agent_name: rec.name,
@@ -147,6 +151,7 @@ pub(crate) fn restore_bg_records(
             status,
             abort,
             rx,
+            inject_tx,
             // The live transcript/report is NOT persisted (record + status only), so a
             // restored agent shows an empty history — honest for a dead worker.
             transcript: Vec::new(),

@@ -43,7 +43,7 @@ pub(super) use plan::{
     build_convo_context, intercept_plan_enter, intercept_plan_readonly_gate, intercept_plan_ready,
     intercept_checklist_plan,
 };
-pub(super) use task::{intercept_task, intercept_task_kill, intercept_task_output};
+pub(super) use task::{intercept_task, intercept_task_kill, intercept_task_output, intercept_task_send};
 
 /// What an `intercept_*` block resolved to, mirroring the three ways the
 /// original inline `if` block could end: keep looping (`Continue`), park the

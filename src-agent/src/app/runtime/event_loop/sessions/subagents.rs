@@ -111,6 +111,7 @@ pub(super) fn drain_subagents(
                                 || l.starts_with("→ ")
                                 || l.starts_with("✓ ")
                                 || l.starts_with("⋯ ")
+                                || l.starts_with("» ")
                                 || l.starts_with("done:")
                                 || l.starts_with("error:")
                         });
@@ -142,6 +143,19 @@ pub(super) fn drain_subagents(
                             .is_some_and(|l| l == &divider);
                         if !dup {
                             sa.transcript.push(divider);
+                        }
+                    }
+                    AgentEvent::Injected(msg) => {
+                        // A follow-up user message was injected into this running
+                        // sub-agent (broker `agents.send` / `task_send`) and folded
+                        // into its history at this turn boundary. Log a distinct
+                        // transcript line so a human watching the $ panel sees the
+                        // steer; the Snapshot emitted right after carries the same
+                        // message into the structured viewer history.
+                        sa.transcript.push(format!("» steer: {}", trunc(&msg, 200)));
+                        if sa.transcript.len() > 200 {
+                            let drop = sa.transcript.len() - 200;
+                            sa.transcript.drain(..drop);
                         }
                     }
                     AgentEvent::Snapshot(m) => {

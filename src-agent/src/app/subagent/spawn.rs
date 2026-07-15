@@ -66,6 +66,10 @@ fn truncate_label(s: &str, max: usize) -> String {
 /// every other input derived from it below (tools, prompt, steps), is
 /// untouched. `None` (the overwhelming common case — every non-extension spawn
 /// path passes it) resolves the agent exactly as before.
+///
+/// `initial_injects` seeds the sub-agent's injection channel with follow-up user
+/// messages captured while it was QUEUED (empty for a live spawn); they arrive as
+/// its first follow-ups on the first loop iteration, right after the task prompt.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_subagent(
     client: &Arc<OpenRouterClient>,
@@ -84,6 +88,7 @@ pub fn spawn_subagent(
     ext_owned: bool,
     mode: AgentMode,
     overrides: Option<SpawnOverrides>,
+    initial_injects: Vec<String>,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
@@ -157,6 +162,16 @@ pub fn spawn_subagent(
     // Save the model_id before `resolved` is moved into run_agent_loop.
     let spawned_model_id = resolved.model_id.clone();
     let (tx, rx) = mpsc::unbounded_channel();
+    // The INJECTION channel: `inject_tx` is stored on the returned `SubAgent` so
+    // the broker / `task_send` can steer this agent; `inject_rx` is drained at each
+    // turn boundary by `run_agent_loop`. Any `initial_injects` (follow-ups stashed
+    // while this delegation was QUEUED) are seeded now — buffered by the unbounded
+    // channel and delivered as the sub-agent's first follow-ups on its first
+    // iteration, right after the seed task prompt.
+    let (inject_tx, inject_rx) = mpsc::unbounded_channel();
+    for msg in initial_injects {
+        let _ = inject_tx.send(msg);
+    }
     let jh = handle.spawn(run_agent_loop(
         client_arc,
         resolved,
@@ -169,6 +184,7 @@ pub fn spawn_subagent(
         task_intent,
         max_steps,
         tx,
+        inject_rx,
     ));
 
     Some(SubAgent {
@@ -179,6 +195,7 @@ pub fn spawn_subagent(
         status: SubAgentStatus::Running,
         abort: jh.abort_handle(),
         rx,
+        inject_tx,
         transcript: Vec::new(),
         messages: Vec::new(),
         live_text: String::new(),

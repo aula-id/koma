@@ -422,10 +422,16 @@ to the calling extension's OWN `ExtAgentRegistry` — never the raw session
 | --- | --- | --- | --- |
 | `agents.spawn` | `{ "task": <string, required non-empty>, "agent"?: <string, default `"general"`>, "model"?: <string slug>, "effort"?: <string>, "notify"?: <bool, default false> }` | `{ "agentId": <u64, ext-facing>, "status": "spawned" }` or, once the 5-slot `MAX_SUBAGENTS` cap is full, `{ "agentId", "status": "queued" }` | empty task → `"agents.spawn requires a non-empty 'task'"`; no foreground session → `"no active session"`; unresolvable agent/client → `"failed to spawn agent '<agent>' (no client/session or unknown agent)"` |
 | `agents.kill` | `{ "agentId" }` | `{ "killed": true }` — idempotent; killing an already-terminal agent still returns `true` without re-firing a terminal event | missing/unknown/closed → same shapes as `agents.status` |
+| `agents.send` | `{ "agentId": <u64 or numeric string>, "message": <string, required non-empty> }` | `{ "sent": true }` — the message is injected as a follow-up USER turn, delivered at the sub-agent's next TURN BOUNDARY (never mid-stream); a still-queued agent stashes it and returns `{ "sent": true, "status": "queued" }` (delivered at promotion) | empty message → `"agents.send requires a non-empty 'message'"`; a terminal (done/killed/error) agent → `"agent is terminal"`; missing `agentId`/unknown id/closed session → same shapes as `agents.status` |
 
 Spawn targets the ACTIVE (foreground) session, through the same `spawn_or_queue`
 path the model's own `task` tool uses, non-detached with no `tool_call_id` (so
-completion never auto-wakes the chat model on its own). `notify: true` additionally
+completion never auto-wakes the chat model on its own). `agents.send` STEERS a
+sub-agent already spawned this way: its `message` lands in the agent's isolated
+history as a fresh user turn at the next turn boundary (the same mechanism the
+main agent's own `task_send` tool uses), so you can add context or correct course
+without killing and re-delegating — the agent's result still arrives via
+`agents.result` / the `agents.done` event as usual. `notify: true` additionally
 arms a private `agents.done` event to the SPAWNING extension on terminal state —
 see "Events" below; this is independent of `contributes.events`. The returned
 `agentId` is a fresh id from this extension's own registry, permanently bound to a
