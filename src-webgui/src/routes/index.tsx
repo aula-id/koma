@@ -101,6 +101,9 @@ function RootLayout() {
     // indicator has data on load, without requiring the Source Control panel
     // to ever be opened.
     useKoma.getState().req({ r: 'GitStatus' })
+    // Also refresh installed extensions so the sidebar is populated without
+    // requiring the Store panel to ever be opened.
+    useKoma.getState().refreshInstalled()
     // Extension panel bridge (W9): single window-level `message` listener
     // that attributes + forwards panel iframe traffic — see
     // lib/panelBridge.ts. Idempotent, but installed here alongside the rest
