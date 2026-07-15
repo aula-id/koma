@@ -692,13 +692,18 @@ delivered regardless of whether `"agents.done"` appears in that extension's
 See `event-watcher-daemon` for the subscribed-broadcast side and
 `fleet-board-daemon`/`orchestrator-daemon` for the `notify: true` side.
 
-The `"error"` field is ADDITIVE and present ONLY when `"status": "error"` — it
-carries the sub-agent's failure text (the same string `agents.status`/
-`agents.result` would report), so a `notify: true` spawner learns *why* its
-sub-agent died without a separate poll. A `"done"`/`"killed"` payload never carries
-it. Older extensions that don't read the field are unaffected; the full terminal
-payload — including a `"done"` sub-agent's report text, which never travels over
-this event — remains available via the `agents.result` pull path.
+The `"error"` field is ADDITIVE. It is present when `"status": "error"` — carrying
+the sub-agent's failure text (the same string `agents.status`/`agents.result` would
+report), so a `notify: true` spawner learns *why* its sub-agent died without a
+separate poll — and ALSO on a `"killed"` event when the daemon is shutting down
+(including the build-skew auto-restart after an upgrade), where it reads
+`"error": "daemon restart"`: an extension that wants restart-resilience should treat
+that reason as RESPAWNABLE (re-spawn the agent once reconnected to the fresh daemon)
+rather than as a real failure. A `"done"` payload never carries the field, and a
+`"killed"` from an explicit `agents.kill` carries none either. Older extensions that
+don't read the field are unaffected; the full terminal payload — including a `"done"`
+sub-agent's report text, which never travels over this event — remains available via
+the `agents.result` pull path.
 
 Separately from delivery, every sub-agent an extension spawns through
 `agents.spawn` is marked ext-owned, and an ext-owned agent's completion is
@@ -710,8 +715,8 @@ extension gets its result through `agents.result` / `agents.done` (when
 tracked either way.
 
 No event payload ever carries a sub-agent's report text or transcript — only ids,
-names, short status labels, and (on `agents.done` with `"status": "error"`) the
-short failure string described above. There is no batching, coalescing, or
+names, short status labels, and (on `agents.done` with `"status": "error"`, or a
+daemon-shutdown `"status": "killed"`) the short reason string described above. There is no batching, coalescing, or
 rate-limiting on delivery; each trigger fans out individually and synchronously at
 the point of the state transition.
 

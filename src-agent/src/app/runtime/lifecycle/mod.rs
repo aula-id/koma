@@ -502,6 +502,96 @@ fn install_daemon_session(
     }
 }
 
+/// Bounded window between firing the ext-owned sub-agent death notices
+/// ([`notify_ext_owned_subagents_on_shutdown`]) and stopping the extension host, so the
+/// per-extension async writer tasks get a moment to write+flush those queued frames to
+/// their sockets — and the still-live extension children a moment to READ them — before
+/// `stop_all` SIGKILLs the children. [`ExtHostManager::notify`](crate::app::ext::ExtHostManager::notify)
+/// only QUEUES a frame onto an unbounded mpsc; the socket write happens LATER on the
+/// async `writer_task`, so without this pause `drop(rt)` could cancel that writer before
+/// the notice ever left the process. Only paid when at least one notice was emitted, so a
+/// shutdown with no ext-owned work adds zero latency.
+const EXT_SHUTDOWN_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Fire a `killed` death notice to the spawner of every EXTENSION-OWNED sub-agent still
+/// in flight, because the host is shutting down. Returns the number notified.
+///
+/// Runs from [`shutdown_runtime`] BEFORE the extension host is torn down, while the
+/// duplex ext wire (and the runtime) are still live, so an `agents.done {
+/// status:"killed", error:"daemon restart" }` frame can reach the spawner. That lets a
+/// restart-resilient extension respawn its agent under the fresh daemon (the build-skew
+/// auto-restart after a binary upgrade is the motivating case) instead of seeing a bare
+/// "killed" it can't tell from a real failure.
+///
+/// The reason is GENERIC by necessity: a skew-restart's `QuitDaemon` is indistinguishable
+/// on the wire from a `koma daemon kill` / `/quit` `QuitDaemon` (the request carries no
+/// skew context), and a first-`SIGTERM` graceful stop flips the same flag — so every
+/// graceful shutdown reports the same respawnable `"daemon restart"`.
+///
+/// Covers both in-flight kinds:
+/// - RUNNING ext-owned [`SubAgent`](crate::app::subagent::SubAgent)s — flipped to
+///   [`Killed`](crate::app::subagent::SubAgentStatus::Killed) first (an honest in-memory
+///   record), then emitted.
+/// - QUEUED ext-owned [`PendingSubagent`](crate::app::subagent::PendingSubagent)s — they
+///   never ran, but `broker_spawn` registered each in `ext_agents` at ENQUEUE time (with
+///   its `notify` flag), so the owned `agents.done` still correlates to the spawner;
+///   emitted too so a queued delegation isn't silently lost across the restart.
+///
+/// The `Running` gate is also the de-dupe: an agent already settled (by `broker_kill`, by
+/// `drain_subagents` observing its terminal edge, or by `close()`'s
+/// `abort_running_subagents`) is no longer `Running`, so it is skipped here and never
+/// double-emitted. RESTORED-from-disk records likewise never match — `restore_bg_records`
+/// coerces any still-"running" record to `Killed` AND sets `ext_owned = false`, so they
+/// stay terminal + un-emitted on both this path and the `drain_subagents` was-running edge.
+fn notify_ext_owned_subagents_on_shutdown(state: &mut AppState) -> usize {
+    use crate::app::subagent::SubAgentStatus;
+
+    // Ext-only: with no extension host there are no ext-owned agents at all, so this is a
+    // pure no-op and the common (no-extensions) shutdown stays byte-identical.
+    if state.rest.ext_manager.is_none() {
+        return 0;
+    }
+
+    // The single, generic, respawnable reason for EVERY graceful shutdown (see fn docs:
+    // a skew-restart is indistinguishable from a plain quit on the wire).
+    const REASON: &str = "daemon restart";
+
+    // Collect-then-emit: the status flip needs `&mut`, the emit needs `&AppState`, so
+    // gather (session_uuid, local_id, agent_name) first — flipping running ones to Killed
+    // as we go — then emit once the mutable walk is done.
+    let mut targets: Vec<(String, usize, String)> = Vec::new();
+    for si in 0..state.rest.sessions.len() {
+        let session_uuid = state.rest.sessions[si].id.clone();
+        for ai in 0..state.rest.sessions[si].subagents.len() {
+            let sa = &mut state.rest.sessions[si].subagents[ai];
+            if sa.ext_owned && matches!(sa.status, SubAgentStatus::Running) {
+                sa.status = SubAgentStatus::Killed;
+                targets.push((session_uuid.clone(), sa.id, sa.agent_name.clone()));
+            }
+        }
+        // Queued ext-owned delegations that never started (no status field — always
+        // "queued"): emit for each so its spawner learns it died with the daemon.
+        for p in &state.rest.sessions[si].pending_subagents {
+            if p.ext_owned {
+                targets.push((session_uuid.clone(), p.id, p.agent_name.clone()));
+            }
+        }
+    }
+
+    for (session_uuid, local_id, agent) in &targets {
+        crate::app::ext::events::emit_subagent_terminal(
+            state,
+            session_uuid,
+            *local_id,
+            agent,
+            "killed",
+            Some(REASON),
+        );
+    }
+
+    targets.len()
+}
+
 /// Release every live session's on-disk lock, then drop the tokio runtime LAST.
 ///
 /// Shared clean-exit teardown for both the TUI and daemon paths. Multi-session
@@ -512,6 +602,24 @@ fn install_daemon_session(
 /// makes a post-drop send a safe no-op (no panic, no deadlock). A crash that skips
 /// this is covered by PID-liveness staleness in `store::is_locked`.
 fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
+    // Death-notice pass FIRST — while the duplex ext wire AND the runtime are still live,
+    // and BEFORE `stop_all` kills the extension children: tell every ext-owned in-flight
+    // sub-agent's spawner it is dying to a host shutdown/restart, so a restart-resilient
+    // extension respawns it rather than seeing a bare "killed". Returns 0 (pure no-op)
+    // when no extension host is built, so a normal shutdown is byte-identical.
+    let notified = notify_ext_owned_subagents_on_shutdown(state);
+    if notified > 0 {
+        crate::model::store::append_global_error_log(
+            "subagent",
+            &format!("killed by daemon shutdown: {notified} ext-owned agents notified"),
+        );
+        // Give the async writer tasks (still scheduled on the not-yet-dropped runtime) a
+        // bounded moment to flush those queued notice frames to the ext sockets — and the
+        // still-live children a moment to read them — before `stop_all` below SIGKILLs
+        // them. Gated on `notified > 0`, so a shutdown with nothing to flush adds nothing.
+        std::thread::sleep(EXT_SHUTDOWN_FLUSH_GRACE);
+    }
+
     // Stop every running extension BEFORE the runtime drops. `ExtHostManager::stop`
     // (called per-extension by `stop_all`) takes the child out of its entry and drops
     // it locally; with `kill_on_drop(true)` that drop needs a LIVE runtime to actually
