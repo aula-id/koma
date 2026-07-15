@@ -4,7 +4,7 @@ Detailed architectural documentation of koma's terminal user interface and its c
 
 ## System Overview
 
-The TUI is a ratatui-based terminal application that runs as a thin client connecting to a headless session daemon over a Unix domain socket. The daemon owns the agent runtime, session locks, and all async work; the client handles rendering and input.
+The TUI is a ratatui-based terminal application that runs as a thin client connecting to a headless session daemon over a Unix domain socket (a named pipe on Windows). The daemon owns the agent runtime, session locks, and all async work; the client handles rendering and input.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -18,7 +18,7 @@ The TUI is a ratatui-based terminal application that runs as a thin client conne
 │             │ mpsc channels            │                      │
 │             └──────────┬───────────────┘                      │
 └────────────────────────┼─────────────────────────────────────┘
-                         │ Unix domain socket
+                         │ Unix domain socket (named pipe on Windows)
                          │ ~/.koma/run/<session_id>.sock
                          │ Length-prefixed JSON (4-byte BE + payload)
                          ▼
@@ -44,7 +44,7 @@ The TUI is a ratatui-based terminal application that runs as a thin client conne
 Every `koma` invocation follows the same protocol:
 
 1. **Mint a UUID** for this session.
-2. **Ensure a daemon** is running for that UUID: try to `connect` to `~/.koma/run/<uuid>.sock`. Success = daemon alive (attach as client). Connection refused = no daemon (spawn one and become it).
+2. **Ensure a daemon** is running for that UUID: try to `connect` to `~/.koma/run/<uuid>.sock` (on Windows, the named pipe `\\.\pipe\koma-<uuid>`). Success = daemon alive (attach as client). Connection refused = no daemon (spawn one and become it).
 3. **Attach as a thin client** to the daemon's socket.
 
 Each daemon owns exactly ONE session. Multiple sessions = multiple daemons, each bound to their own socket. A "session" in koma is a conversation with its own history, settings, and working directory — isolated from all others.
@@ -53,7 +53,7 @@ Each daemon owns exactly ONE session. Multiple sessions = multiple daemons, each
 
 Daemon liveness is determined by **who holds the bound socket**, NOT by PID files. PIDs get reused, making PID-based checks unreliable. A successful `connect()` means a daemon is alive; `ConnectionRefused` means it is not, and this process may bind and become the daemon.
 
-Stale sockets from crashed daemons are removed before binding (the crash left a socket file with no listener). This is safe because bind — not file existence — is the liveness oracle.
+Stale sockets from crashed daemons are removed before binding (the crash left a socket file with no listener). This is safe because bind — not file existence — is the liveness oracle. On Windows the same oracle holds over a named pipe instead: the first server instance is created with `first_pipe_instance(true)`, which fails if a live daemon already owns the name — and since a named pipe is not a filesystem object, a crashed daemon leaves nothing to clean up (the pipe is released the instant its owning process dies).
 
 ## IPC Protocol
 
@@ -432,7 +432,7 @@ koma agents   # or koma --resume
 ```
 
 1. Client enters `SessionHub` mode
-2. Scans `~/.koma/run/*.sock` for live session-daemons (probes with `Status`)
+2. Scans `~/.koma/run/*.sock` for live session-daemons (on Windows, the `\\.\pipe\koma-*` namespace instead), probing with `Status`
 3. Lists on-disk sessions from the SQLite registry
 4. User picks a session
 5. Client ensures daemon is running for that session

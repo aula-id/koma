@@ -25,7 +25,7 @@ The GUI is a native desktop window powered by **wry** (webview) + **tao** (event
 │  │  - push_loop (JSON → UserEvent::Push → evaluate_script)│  │
 │  └──────────────┬────────────────────────────────────────┘  │
 └─────────────────┼───────────────────────────────────────────┘
-                  │ Unix domain socket (~/.koma/run/<id>.sock)
+                  │ Unix domain socket (~/.koma/run/<id>.sock; named pipe on Windows)
                   ▼
         ┌──────────────────┐
         │  Session Daemon   │  (headless, owns agent runtime + session lock)
@@ -76,7 +76,7 @@ The critical architectural decision: the GUI host IS the daemon client, but the 
 
 Spawns via `run_host_relay()` with its own tokio runtime. Responsibilities:
 
-- Connects to the session daemon over a Unix socket
+- Connects to the session daemon over a Unix socket (a named pipe on Windows)
 - Runs the **fold loop**: receives `DaemonFrame` (snapshots + deltas) and re-derives the authoritative React state envelope
 - Runs the **push_loop**: serializes each state envelope as a complete JSON object and sends it to the main thread via `EventLoopProxy::send_event(UserEvent::Push(json))`
 - Handles `HostCtl` messages from the main thread for session lifecycle operations
@@ -236,7 +236,7 @@ wry's default `.build(&window)` on Linux uses X11 foreign-window reparenting, wh
 ## Daemon Lifecycle from GUI Perspective
 
 1. **Window opens**: IPC handler receives `GuiReq::Ready` → sends `HostCtl::Ready` to host-relay.
-2. **Host-relay boots**: Scans for live session daemons (`~/.koma/run/*.sock`), probes with `Status` request. If found, attaches to one and pushes `Hub` envelope. If none, pushes empty `Hub` with new-session prompt.
+2. **Host-relay boots**: Scans for live session daemons (`~/.koma/run/*.sock`; on Windows, the `\\.\pipe\koma-*` namespace instead — see `store.rs`'s pipe-enumeration path), probes with `Status` request. If found, attaches to one and pushes `Hub` envelope. If none, pushes empty `Hub` with new-session prompt.
 3. **Session selected**: `GuiReq::SelectSession` → `HostCtl::Select(id)` → host-relay attaches to that daemon, fold loop starts receiving `DaemonFrame` → pushes `Snapshot`.
 4. **Chat**: `GuiReq::Submit` → `ClientRequest::SubmitInput` → daemon processes → fold loop receives stream events → pushes `StreamMsg` envelopes.
 5. **Window close**: tao event loop exits → host-relay thread drops → daemon connection closes. The daemon itself keeps running (resumable via the swapper or a new terminal client).
@@ -264,6 +264,8 @@ wry's default `.build(&window)` on Linux uses X11 foreign-window reparenting, wh
 |---|---|---|
 | `~/.koma/run/<session_id>.sock` | Session daemon | Client↔daemon IPC |
 | `~/.koma/mcp.sock` | Global MCP daemon | Session daemon↔MCP proxy |
+
+On Windows these are named pipes instead of unix-domain sockets (`\\.\pipe\koma-<session_id>`, `\\.\pipe\koma-mcp`) — not filesystem objects under `~/.koma/run/`, but the same rendezvous role. See `src-agent/src/ipc/win.rs` and `src-agent/src/model/store.rs`.
 
 ### Key Constants
 
