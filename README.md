@@ -45,15 +45,25 @@ curl -fsSL https://koma.run/install.sh | sh
 
 Installs to `~/.local/bin` — no sudo required. Then run `koma` and start a session.
 
+Works on Linux, macOS, and Windows. On Windows, run that same command from a Git Bash terminal — it installs `koma.exe`. Windows needs [Git for Windows](https://git-scm.com/download/win) (koma's shell tool runs commands through Git Bash).
+
 ### Desktop GUI (optional)
 
-The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gui` cargo feature and is NOT built by default:
+The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gui` cargo feature at build time, but you don't need to build it yourself on most platforms:
+
+- **macOS** — the install.sh binary already has `gui` baked in; `koma gui` just works.
+- **Linux** — the raw install.sh binary is TUI-only (webkitgtk isn't safe to hard-link into a binary meant to run on headless servers). Grab the `.deb` or `.AppImage` instead; both are `gui`-featured and add a desktop entry that launches straight into `koma gui`.
+- **Windows** — the `.msi` installer is the GUI build (it installs the WebView2 runtime for you if it's missing; WebView2 ships with Windows 11 and most patched Windows 10 machines already). The raw `koma-windows-x64.exe` from install.sh is TUI-only.
+
+Grab the platform installer from the [latest release](https://github.com/aula-id/koma/releases/latest): `koma-x64.deb` / `koma-arm64.deb`, `koma-x64.AppImage` / `koma-arm64.AppImage`, `koma-x64.msi`.
+
+Building the GUI from source yourself (e.g. a gui-featured Linux binary):
 
 ```sh
 cargo build -p agent --features gui
 ```
 
-Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (e.g. `libwebkit2gtk-4.1-dev` on Debian/Ubuntu), plus GTK3 and libsoup3. macOS uses the system WebKit (no extra deps). The default `cargo install` / build pulls none of these — the GUI deps (`wry`, `tao`, `portable-pty`) are optional and only compiled with `--features gui`.
+Linux build prerequisite: `webkit2gtk-4.1` and its dev headers (e.g. `libwebkit2gtk-4.1-dev` on Debian/Ubuntu), plus GTK3 and libsoup3. macOS and Windows use the system-provided webview (WebKit / WebView2) — no extra deps. The default `cargo install` / build pulls none of these — the GUI deps (`wry`, `tao`, `portable-pty`) are optional and only compiled with `--features gui`.
 
 More at **[koma.run](https://koma.run)**.
 

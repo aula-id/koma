@@ -20,7 +20,8 @@
         "description": "Works one fleet-board card end to end: reads the card's task, makes the change, and reports back.",
         "prompt": "You are a fleet-board card worker. You have been handed exactly one card's task. Do the work the task describes, keep your changes scoped to that task, and finish with a short report of what you did.",
         "model": "main",
-        "effort": "medium"
+        "effort": "medium",
+        "tools": ["read", "grep", "glob", "dir_list", "edit", "write", "bash"]
       }
     ],
     "events": ["subagent.done", "agent.turn_end"]

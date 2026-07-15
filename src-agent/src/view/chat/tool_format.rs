@@ -96,6 +96,16 @@ fn tool_signature_inner(name: &str, v: &serde_json::Value) -> Option<String> {
             serde_json::Value::String(s) => s.clone(),
             other => other.to_string(),
         }),
+        "task_send" => {
+            let id = v.get("agent_id").map(|x| match x {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })?;
+            Some(match s("message") {
+                Some(m) => format!("#{id}: {m}"),
+                None => format!("#{id}"),
+            })
+        }
         _ => None,
     }
 }

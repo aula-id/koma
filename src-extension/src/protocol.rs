@@ -18,6 +18,20 @@ pub struct ExtensionManifest {
     pub contributes: Contributes,
     #[serde(default)]
     pub requires: Vec<Grant>,
+    /// Optional dedicated state directory this extension owns, declared as a path
+    /// string (typically `"~/.<ext-name>"`, e.g. `"~/.event-watcher"`). When present,
+    /// koma validates it, CREATES it if missing, and injects it as an extra workspace
+    /// root of every session so the agent's file tools + `bash` may read/write there
+    /// (an extension's own sub-agents can persist state that survives a restart).
+    ///
+    /// The path must resolve STRICTLY under `$HOME` (`%USERPROFILE%` on Windows); koma
+    /// rejects `$HOME` itself, its own `~/.koma` tree, the credential stores `~/.ssh` /
+    /// `~/.aws` / `~/.gnupg` (and anything under them), and `~/.config` itself (its
+    /// subdirectories are allowed). A path that fails validation is logged and skipped —
+    /// it never blocks the extension from starting. Serde-default/optional so a manifest
+    /// predating this field parses unchanged. See `docs/EXTENSIONS.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +81,14 @@ pub struct SubAgentDef {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Tool allow-list this sub-agent should be granted on install. Names must
+    /// match koma's selectable tool set (see `agent_selectable_tools()` on the
+    /// koma side); unknown names are dropped (not a hard failure) when merged
+    /// into the runtime `AgentDef`. Omitted/empty → koma's safe read-only
+    /// default (`read`, `grep`, `glob`, `dir_list`), same as before this field
+    /// existed. Serde-default so old manifests parse unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -139,6 +139,10 @@ pub(crate) fn restore_bg_records(
         // whose handle is never used to abort, and a fresh channel nothing writes to.
         let abort = handle.spawn(std::future::ready(())).abort_handle();
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Inert injection sender: a restored record is always terminal (no live
+        // loop drains it), so `inject_into_subagent` reports `Terminal` and never
+        // sends — this channel is only here to satisfy the field's type.
+        let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
         rt.subagents.push(SubAgent {
             id,
             agent_name: rec.name,
@@ -147,6 +151,7 @@ pub(crate) fn restore_bg_records(
             status,
             abort,
             rx,
+            inject_tx,
             // The live transcript/report is NOT persisted (record + status only), so a
             // restored agent shows an empty history — honest for a dead worker.
             transcript: Vec::new(),
@@ -165,6 +170,12 @@ pub(crate) fn restore_bg_records(
             // future non-terminal restore path fails safe (`nudged: false`, i.e.
             // still eligible for a nudge) instead of silently swallowing one.
             nudged: is_terminal,
+            // Restored records are dead AND already latched (`nudged` above), so the
+            // /task terminal fold and the `agents.done` Running->terminal edge can
+            // never re-fire on them — the origin flag is therefore INERT here and is
+            // deliberately NOT persisted (the `SubAgentRecord` carries no `ext_owned`
+            // column). `false` is the safe, behavior-neutral value.
+            ext_owned: false,
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,

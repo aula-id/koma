@@ -1,4 +1,4 @@
 {
-  "version": "0.2.28",
-  "message": "feat: koma-free keyless tier - start koma with zero setup. New 3-way first-run chooser (koma free / provider / custom): koma free routes everything to a free hosted model with no API key, provider runs a guided OAuth login then model pick, custom keeps the endpoint+key flow. /free toggles any session onto the free tier and back."
+  "version": "0.3.0",
+  "message": "feat: Windows support (TUI+GUI), deb/AppImage/msi packaging, extension platform wave (manifest tools, MCP for sub-agents, agents.send steering, workspace_dir, theme-aware panels, dev install)"
 }

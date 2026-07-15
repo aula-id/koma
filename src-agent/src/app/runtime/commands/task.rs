@@ -52,7 +52,7 @@ pub(super) fn handle_task(
     // `/task` sub-agents are never detached: the slash command has no background
     // mode, so pass `detached = false` (blocking/foreground-style lifecycle).
     match super::super::stream::spawn_or_queue(
-        state, fgi, client, handle, &agent_name, &task_text, None, false, None,
+        state, fgi, client, handle, &agent_name, &task_text, None, false, false, None,
     ) {
         super::super::stream::SpawnOutcome::Spawned(id) => {
             state

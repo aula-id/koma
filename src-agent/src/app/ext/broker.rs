@@ -245,8 +245,8 @@ pub(crate) enum GateDecision {
 /// arm, so the gate reports [`GateDecision::UnknownMethod`] rather than a silent
 /// allow.
 ///
-/// `agents.spawn` / `agents.kill` MUTATE the fleet → require
-/// [`Grant::AgentsOrchestrate`]. `agents.list` / `agents.status` /
+/// `agents.spawn` / `agents.kill` / `agents.send` MUTATE or STEER the fleet →
+/// require [`Grant::AgentsOrchestrate`]. `agents.list` / `agents.status` /
 /// `agents.result` only READ → require [`Grant::AgentsRead`] (satisfied by
 /// orchestrate too; see [`is_granted`]). Each newer family requires its OWN grant,
 /// EXACT-MATCH — no cross-family or lattice implication (orchestrate⇒read stays the
@@ -261,7 +261,7 @@ pub(crate) enum GateDecision {
 /// koma drives the extension).
 fn required_grant(method: &str) -> Option<Grant> {
     match method {
-        "agents.spawn" | "agents.kill" => Some(Grant::AgentsOrchestrate),
+        "agents.spawn" | "agents.kill" | "agents.send" => Some(Grant::AgentsOrchestrate),
         "agents.list" | "agents.status" | "agents.result" => Some(Grant::AgentsRead),
         "sessions.list" | "sessions.create" | "sessions.switch" | "sessions.spawn_into" => {
             Some(Grant::SessionsManage)
@@ -426,7 +426,8 @@ pub fn handle_ext_call(
     // reply INLINE; the ones that touch the network / other daemons' sockets
     // (`models.invoke`, `sessions.list`/`create`/`spawn_into`-cross) validate + resolve on
     // the loop then MOVE the reply oneshot into a spawned task so the event loop never blocks
-    // — each inner-bounded well under the reader's 30s cap.
+    // — each inner-bounded well under the reader's verb-scoped cap (360s for `models.invoke`,
+    // 120s `EXT_CALL_TIMEOUT` default for every other verb — see `wire.rs`).
     //
     // `agents.spawn` ALONE resolves the ACTIVE (foreground) session — spawning into
     // "whatever chat session is in front of the user right now" is the intended
@@ -454,6 +455,9 @@ pub fn handle_ext_call(
         "agents.kill" => {
             let _ = reply.send(broker_kill(state, &ext_id, &params));
         }
+        "agents.send" => {
+            let _ = reply.send(broker_send(state, &ext_id, &params));
+        }
         "chat.prompt" => {
             // Resolve the ACTIVE session (the same fallback `agents.spawn` uses), then
             // BUFFER the prompt — never inject from here (that risks corrupting an
@@ -468,9 +472,10 @@ pub fn handle_ext_call(
         }
         "models.invoke" => {
             // Validates + resolves ON the loop, then either replies a sync error
-            // inline OR moves `reply` into a spawned one-shot task (25s < the 30s
-            // reader cap) that answers on completion — so the model call never
-            // blocks the event loop. OWNS the reply from here.
+            // inline OR moves `reply` into a spawned one-shot task (330s < the
+            // reader's 360s `EXT_MODELS_CALL_TIMEOUT` verb cap for this method)
+            // that answers on completion — so the model call never blocks the
+            // event loop. OWNS the reply from here.
             broker_models_invoke(state, handle, client, &params, reply);
         }
         "models.register" => {
@@ -499,7 +504,8 @@ pub fn handle_ext_call(
         "sessions.list" => {
             // No sync state needed: enumerate the session registry + probe live daemons OFF
             // the loop (sqlite read + blocking per-socket probes), then reply the merged array.
-            // The reader task caps this Call at 30s; the probe sweep is inner-bounded far below.
+            // The reader task caps this Call at the 120s `EXT_CALL_TIMEOUT` default (this is
+            // not `models.invoke`); the probe sweep is inner-bounded far below that.
             handle.spawn_blocking(move || {
                 let rows = crate::model::session_registry::list_all().unwrap_or_default();
                 let live = list_live_sessions();
@@ -546,8 +552,10 @@ fn active_session_idx(state: &AppState) -> Option<usize> {
 /// SAME `spawn_or_queue` path the model's `task` tool uses (respecting
 /// `MAX_SUBAGENTS` → queue when full), into the ACTIVE (foreground) session.
 /// `agent` defaults to [`DEFAULT_AGENT`]. Spawned NON-detached with no
-/// tool-call id (the `/task`-command shape) so completion records a display
-/// note + usage but never auto-wakes the chat model. The returned `agentId` is
+/// tool-call id (the `/task`-command shape) but marked `ext_owned`, so its
+/// completion is COMPLETELY SILENT in the human chat (no fold note, no nudge) —
+/// the spawner instead receives the result via the owned `agents.done` event.
+/// Usage + the persisted sub-agent record are still recorded. The returned `agentId` is
 /// an EXT-FACING id freshly allocated from this extension's own
 /// [`ExtAgentRegistry`] (never the raw per-session sub-agent id), permanently
 /// bound to the session's STABLE UUID — see the registry's doc for why that
@@ -609,7 +617,11 @@ fn broker_spawn(
     // foreground switch.
     let session_uuid = state.rest.sessions[sess_idx].id.clone();
 
-    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false, overrides) {
+    // `ext_owned = true`: this is an EXTENSION-INTERNAL agent. On terminal it stays
+    // COMPLETELY SILENT in the human chat (no fold note, no nudge) — the spawner
+    // receives the result via the owned `agents.done` event instead (see
+    // `emit_subagent_terminal`). Usage + the sub-agent record are still recorded.
+    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false, true, overrides) {
         SpawnOutcome::Spawned(local_id) => {
             let ext_agent_id = state
                 .rest
@@ -833,6 +845,65 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
     }
 }
 
+/// `agents.send { agentId, message }` → inject `message` as a follow-up USER turn
+/// into the sub-agent, delivered at its next TURN BOUNDARY (never mid-stream). The
+/// running sub-agent's loop folds it into its isolated history + viewer transcript
+/// on its next iteration. Resolved ONLY through THIS extension's own
+/// [`ExtAgentRegistry`] (same containment as `status`/`kill`), so an extension can
+/// never steer a sub-agent it didn't spawn.
+///
+/// Running → `{ "sent": true }`; QUEUED (over the cap, not yet started) → the
+/// message is stashed on the pending record and delivered at promotion, replying
+/// `{ "sent": true, "status": "queued" }`; TERMINAL (done/killed/error) →
+/// `{ "error": "agent is terminal" }`. Missing/empty `message` → its own error;
+/// missing `agentId` / unknown id / closed session mirror the `agents.status`
+/// error shapes exactly.
+fn broker_send(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let Some(ext_agent_id) = parse_ext_agent_id(params) else {
+        return json!({ "error": "agents.send requires an 'agentId'" });
+    };
+    let message = params
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if message.is_empty() {
+        return json!({ "error": "agents.send requires a non-empty 'message'" });
+    }
+    let message = message.to_string();
+    // Resolve the ext-facing id through THIS extension's registry (clone the ref so
+    // the mutable session borrow below is unencumbered — mirrors `broker_kill`).
+    let Some(r) = state
+        .rest
+        .ext_agents
+        .get(ext_id)
+        .and_then(|reg| reg.get(ext_agent_id))
+        .cloned()
+    else {
+        return json!({ "error": format!("unknown agentId: {ext_agent_id}") });
+    };
+    let Some(sess_idx) = state
+        .rest
+        .sessions
+        .iter()
+        .position(|s| s.id == r.session_uuid && !s.closed)
+    else {
+        return json!({ "error": "session closed" });
+    };
+    // Funnel through the SAME core the `task_send` tool uses, so both surfaces
+    // steer identically.
+    use crate::app::subagent::InjectOutcome;
+    match state.rest.sessions[sess_idx].inject_into_subagent(r.local_subagent_id, message) {
+        InjectOutcome::Sent => json!({ "sent": true }),
+        InjectOutcome::Queued => json!({ "sent": true, "status": "queued" }),
+        InjectOutcome::Terminal => json!({ "error": "agent is terminal" }),
+        // The registry entry resolved but the sub-agent is neither in `subagents`
+        // nor `pending_subagents` (its session was cleared) — same shape as an
+        // unknown id, which is what it now effectively is.
+        InjectOutcome::Unknown => json!({ "error": format!("unknown agentId: {ext_agent_id}") }),
+    }
+}
+
 /// The wire status label for a [`SubAgentStatus`] — matches the snapshot
 /// projection's vocabulary (`running` / `done` / `killed` / `error`).
 fn status_label(s: &SubAgentStatus) -> &'static str {
@@ -911,8 +982,9 @@ fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, param
     json!({ "queued": buf.len() })
 }
 
-/// `models.invoke { role?, system?, prompt }` → a ONE-SHOT completion against the
-/// resolved model for `role` (default `"main"`), run OFF the event loop.
+/// `models.invoke { role?, system?, prompt, format? }` → a ONE-SHOT completion
+/// against the resolved model for `role` (default `"main"`), run OFF the event
+/// loop.
 ///
 /// Validated + resolved SYNCHRONOUSLY on the loop: `prompt` non-empty and
 /// `<= 32768` bytes; `role` one of `main`/`awareness`/`safeguard`/`compactor`/
@@ -924,13 +996,23 @@ fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, param
 /// / [`is_usable`](crate::app::resolve::Resolved::is_usable); a client must exist.
 /// Any of these fail → a sync `{"error": ...}` reply and NO task is spawned.
 ///
+/// `format`: when the string `"json"`, the request pins OpenAI-dialect strict
+/// `response_format: {"type":"json_object"}` (threaded through
+/// [`OpenRouterClient::complete_with`]'s `json_mode` flag); any other value, or
+/// the field absent, is today's free-form-text behavior. The flag is DIALECT-
+/// GATED: `complete_with` only honours it on the chat-completions branch
+/// (`OpenAiCompatible`/`KomaFree`) — the Codex and Anthropic-compatible dialects
+/// have no `json_object` wire equivalent, so `format:"json"` is silently ignored
+/// (never an error) when the resolved route speaks either of those.
+///
 /// Once validated, an owned `Resolved` + an `Arc` clone of the client + the reply
 /// oneshot MOVE into a spawned task (the `spawn_awareness_recompute` pattern) that
-/// runs `complete_with` under a 25s `tokio::time::timeout` — 25s deliberately
-/// UNDERCUTS the reader task's 30s `EXT_CALL_TIMEOUT` so the extension always
-/// receives a value rather than a transport timeout. Reply `{ "output": <text>,
-/// "model": <id> }` on success, `{ "error": "model call failed: <e>" }` on a call
-/// error, or `{ "error": "model call timed out" }`. The event loop never blocks.
+/// runs `complete_with` under a 330s `tokio::time::timeout` — 330s deliberately
+/// UNDERCUTS the reader task's 360s `EXT_MODELS_CALL_TIMEOUT` verb cap (see
+/// `wire.rs`) so the extension always receives a value rather than a transport
+/// timeout. Reply `{ "output": <text>, "model": <id> }` on success,
+/// `{ "error": "model call failed: <e>" }` on a call error, or
+/// `{ "error": "model call timed out" }`. The event loop never blocks.
 fn broker_models_invoke(
     state: &AppState,
     handle: &tokio::runtime::Handle,
@@ -965,6 +1047,11 @@ fn broker_models_invoke(
             return;
         }
     };
+    // Optional structured-output request: only the literal "json" opts in
+    // (threaded to `complete_with`'s `json_mode`, dialect-gated there — see the
+    // doc comment above). Any other value, or the field absent, is today's
+    // free-form behavior.
+    let json_mode = params.get("format").and_then(|v| v.as_str()) == Some("json");
     // Optional system prompt (absent / blank → no System message prepended).
     let system = params
         .get("system")
@@ -1022,10 +1109,17 @@ fn broker_models_invoke(
             crate::dto::chat::Role::User,
             prompt_owned,
         ));
-        // 25s < the 30s reader cap: the extension always gets a value back.
+        // 330s < the reader's 360s `EXT_MODELS_CALL_TIMEOUT` verb cap: the
+        // extension always gets a value back.
         let out = tokio::time::timeout(
-            std::time::Duration::from_secs(25),
-            client_task.complete_with(route.conn(), &route.model_id, route.provider(), messages),
+            std::time::Duration::from_secs(330),
+            client_task.complete_with(
+                route.conn(),
+                &route.model_id,
+                route.provider(),
+                messages,
+                json_mode,
+            ),
         )
         .await;
         let v = match out {
@@ -1727,8 +1821,9 @@ fn broker_sessions_switch(
 /// the uuid, capture the optional `name`. Then MOVE the reply into a `spawn_blocking` that
 /// calls [`ensure_daemon_running`](crate::app::runtime::ensure_daemon_running) (blocking:
 /// spawn a detached `koma --daemon --session <uuid>` and poll-connect until it accepts,
-/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 30s cap, so no
-/// extra outer timer is needed). On success, best-effort set the display `name` (the daemon
+/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 120s
+/// `EXT_CALL_TIMEOUT` default cap (this is not `models.invoke`), so no extra outer
+/// timer is needed). On success, best-effort set the display `name` (the daemon
 /// registers its registry row during startup, which can lag the socket coming up, so retry
 /// once after a short sleep if the row isn't there yet; a failure to name is NOT an error).
 /// Reply `{ id }` on success, `{ error }` on a spawn failure.
@@ -1885,7 +1980,7 @@ mod tests {
         use Grant::{AgentsOrchestrate as Orch, AgentsRead as Read};
 
         // Every recognised method partitioned by the grant it requires.
-        let orchestrate_methods = ["agents.spawn", "agents.kill"];
+        let orchestrate_methods = ["agents.spawn", "agents.kill", "agents.send"];
         let read_methods = ["agents.list", "agents.status", "agents.result"];
 
         // granted = []  → EVERYTHING denied.
@@ -2120,6 +2215,9 @@ mod tests {
     ) -> SubAgent {
         let abort = handle.spawn(std::future::ready(())).abort_handle();
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // A live injection sender the test can observe as "sent" for a Running
+        // fixture; its receiver is dropped, so the send is a harmless no-op.
+        let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
         SubAgent {
             id,
             agent_name: agent_name.to_string(),
@@ -2128,12 +2226,14 @@ mod tests {
             status,
             abort,
             rx,
+            inject_tx,
             transcript: Vec::new(),
             messages: Vec::new(),
             live_text: String::new(),
             tool_call_id: None,
             detached: false,
             nudged: false,
+            ext_owned: false,
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,
@@ -2235,6 +2335,120 @@ mod tests {
             err.contains("failed to spawn"),
             "with orchestrate granted the call reaches the spawn path (which fails for \
              lack of a client/session in the fixture), got {out}"
+        );
+    }
+
+    /// `agents.send` steers a RUNNING sub-agent (`sent:true`), stashes onto a
+    /// QUEUED one (`sent:true,status:queued` + the message lands in its
+    /// `pending_injects`), and REFUSES a TERMINAL one (`agent is terminal`).
+    /// Bad/absent params + unknown ids mirror the `agents.status` error shapes,
+    /// and the verb is orchestrate-gated (a read-only grant is denied). All ids
+    /// resolve through the extension's OWN registry, exactly like status/kill.
+    #[test]
+    fn send_steers_running_stashes_queued_refuses_terminal() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+
+        // A running agent (steerable), a done agent (terminal), and a queued one.
+        state.rest.sessions[0]
+            .subagents
+            .push(inert_subagent(rt.handle(), 3, "general", SubAgentStatus::Running));
+        state.rest.sessions[0].subagents.push(inert_subagent(
+            rt.handle(),
+            4,
+            "researcher",
+            SubAgentStatus::Done("done".to_string()),
+        ));
+        state.rest.sessions[0]
+            .pending_subagents
+            .push_back(crate::app::subagent::PendingSubagent {
+                id: 5,
+                agent_name: "general".to_string(),
+                prompt: "queued task".to_string(),
+                tool_call_id: None,
+                detached: false,
+                ext_owned: false,
+                overrides: None,
+                pending_injects: Vec::new(),
+            });
+        let sess_uuid = state.rest.sessions[0].id.clone();
+        let registry = state.rest.ext_agents.entry("test.ext".to_string()).or_default();
+        let ext_running = registry.insert(sess_uuid.clone(), 3, false);
+        let ext_done = registry.insert(sess_uuid.clone(), 4, false);
+        let ext_queued = registry.insert(sess_uuid, 5, false);
+
+        // Running → delivered.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_running, "message": "focus on the parser" }),
+        );
+        assert_eq!(out.get("sent").and_then(|v| v.as_bool()), Some(true), "running send must report sent, got {out}");
+        assert!(out.get("status").is_none(), "a running send is not queued, got {out}");
+
+        // Queued → stashed + status:queued, and the message lands in pending_injects.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_queued, "message": "also check tests" }),
+        );
+        assert_eq!(out.get("sent").and_then(|v| v.as_bool()), Some(true), "queued send must report sent, got {out}");
+        assert_eq!(out.get("status").and_then(|v| v.as_str()), Some("queued"), "queued send must mark queued, got {out}");
+        let pend = state.rest.sessions[0]
+            .pending_subagents
+            .iter()
+            .find(|p| p.id == 5)
+            .expect("queued agent still present");
+        assert_eq!(pend.pending_injects, vec!["also check tests".to_string()], "queued send must stash the message");
+
+        // Terminal → refused (nothing delivered).
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_done, "message": "too late" }),
+        );
+        assert_eq!(out.get("error").and_then(|v| v.as_str()), Some("agent is terminal"), "terminal send must refuse, got {out}");
+
+        // Unknown ext id → unknown agentId.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": 9999, "message": "x" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown agentId")),
+            "unknown id must error, got {out}"
+        );
+
+        // Missing agentId / empty message → their own validation errors.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send", json!({ "message": "x" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires an 'agentId'")),
+            "missing agentId must error, got {out}"
+        );
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_running, "message": "   " }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'message'")),
+            "empty message must error, got {out}"
+        );
+
+        // Orchestrate-gated: a read-only grant is denied outright.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsRead], "agents.send",
+            json!({ "agentId": ext_running, "message": "x" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            "read-only grant must deny agents.send, got {out}"
         );
     }
 

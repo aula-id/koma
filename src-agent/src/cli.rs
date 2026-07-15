@@ -7,6 +7,9 @@
 //! - `koma --resume`               — open the session hub.
 //! - `koma alone`                  — standalone no-daemon TUI (friendly alias for `--local`).
 //! - `koma daemon <status|kill|restart|clean>` — daemon management CLI.
+//! - `koma ext install --dev <zip|dir>` — sideload an unsigned local extension
+//!   (dev-only; `koma ext`/`koma ext install` with no `--dev` prints usage — the
+//!   in-app store is the normal, signed install path).
 //! - `--internet-fullmode-install` — provision the Python full-mode (browser) environment and exit.
 //! - `--internet-fullmode-uninstall` — remove the Python full-mode environment and exit.
 //! - `--force`                     — modifier for `--internet-fullmode-install`: force a reinstall
@@ -82,6 +85,21 @@ pub enum DaemonCli {
     Usage,
 }
 
+/// The outcome of detecting a `koma ext …` invocation (dev-sideload verb family).
+///
+/// Mirrors [`DaemonCli`]'s shape: `main` short-circuits the TUI for ANY `ext`
+/// invocation, valid or malformed. Today the only real verb is `install --dev
+/// <path>`; `ext`, `ext install` (no `--dev`), or anything else prints usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtCli {
+    /// `ext install --dev <path>` — sideload an unsigned `.zip` or directory from
+    /// local disk into `~/.koma/extensions/<id>/`, no store/signature/signin.
+    InstallDev(String),
+    /// `ext` alone, `ext install` without `--dev`, or an unrecognised verb — print
+    /// usage and exit non-zero.
+    Usage,
+}
+
 /// Parsed command-line options passed through to the runtime.
 #[derive(Debug, Clone, Default)]
 pub struct Opts {
@@ -126,6 +144,10 @@ pub struct Opts {
     /// short-circuits into a usage print + non-zero exit (bare/unknown verb); `None`
     /// is the normal path (TUI / other flags). Either `Some` exits before the TUI.
     pub subcommand: Option<DaemonCli>,
+    /// A `koma ext …` invocation, if one was given: the dev-sideload verb family
+    /// (`ext install --dev <path>`). Mirrors `subcommand`'s short-circuit shape —
+    /// `Some(_)` (valid or [`ExtCli::Usage`]) diverts `main` before the TUI starts.
+    pub ext: Option<ExtCli>,
     /// When `true`, stop the running daemon then run the installer to fetch the
     /// latest release binary, then exit (`koma update` positional verb).
     pub update: bool,
@@ -219,6 +241,25 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             opts.subcommand = Some(match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
                 Some(sub) => DaemonCli::Run(sub),
                 None => DaemonCli::Usage,
+            });
+        }
+        Some("ext") => {
+            // `ext install --dev <path>` is the only real verb; `--dev`'s value is
+            // NOT a positional (the loop above only iterates non-`--` tokens), so it
+            // is read the same way `--session <id>` is: scan consecutive pairs in
+            // `all` for the token right after `--dev`.
+            opts.ext = Some(match positional.next().map(String::as_str) {
+                Some("install") => {
+                    let dev_path = all
+                        .windows(2)
+                        .find(|pair| pair[0] == "--dev")
+                        .map(|pair| pair[1].clone());
+                    match dev_path {
+                        Some(path) => ExtCli::InstallDev(path),
+                        None => ExtCli::Usage,
+                    }
+                }
+                _ => ExtCli::Usage,
             });
         }
         _ => {}

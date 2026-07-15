@@ -1,5 +1,3 @@
-import type { GuiReq } from '../koma'
-
 /**
  * Log an error to the Rust backend's global error log (~/.koma/error.log).
  * Used by the error boundary to persist errors that only occur in the built app.

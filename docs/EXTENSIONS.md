@@ -4,7 +4,18 @@
 > shaped and will change until it is frozen at v1. This version reflects the
 > feature set landed through wave W12b (delegated OAuth, `models.register`,
 > `providers.register`, the full grants surface, the panel bridge, and event
-> fan-out) — everything described below is real and runnable today, not a
+> fan-out) plus everything landed since: manifest sub-agents can declare a
+> `tools` allow-list and now inherit connected MCP tools automatically; a
+> manifest can declare a `workspace_dir` — an extension-owned writable root
+> injected into every session; `models.invoke` takes `format: "json"` and its
+> timeouts were raised (every other verb gets a 120s wire timeout;
+> `models.invoke` alone gets 360s wire / 330s inner); `agents.send` lets an extension steer an
+> already-spawned sub-agent at its next turn boundary; sub-agents an
+> extension spawns via `agents.spawn` are completely silent in the human's
+> chat (the spawner gets the result through `agents.done` instead); panels
+> are theme-aware (`KomaPanel.onTheme`/`getTheme`); and `koma ext install
+> --dev` sideloads an unsigned local build with no store, no signature, no
+> sign-in — everything described below is real and runnable today, not a
 > proposal. For the byte-level wire contract (framing, timeouts, handshake
 > state machine) see `docs/ARCH_EXTENSION.md`; this document is the
 > capability reference — what an extension can do and exactly how, with
@@ -167,6 +178,10 @@ identity, whether it is a free or paid extension, how koma should launch it, and
 its contributions and its requirements. That manifest is the whole agreement between
 koma and the extension in one place — the full field-by-field reference is next.
 
+Building your own extension? `koma ext install --dev <zip|dir>` sideloads it locally
+with no store, no signature, no sign-in — see "Dev install (offline, unsigned)"
+under Lifecycle below.
+
 ## How it looks in the app
 
 Installed extensions live in the sidebar, each with its own icon sitting next to
@@ -219,7 +234,8 @@ demo mode**: run any of them with `cargo run -p <name>` and, with no koma proces
 the other end, it prints the handshake and the scripted interaction it would have
 with koma, frame by frame, so the protocol's shape is visible without a host to talk
 to. Set `KOMA_EXT_SOCKET` (and `KOMA_EXT_TOKEN`) and a sample instead connects to a
-real koma over that unix socket and runs for real.
+real koma over that socket and runs for real — a unix socket path on Linux/macOS,
+or a `\\.\pipe\koma-ext-<id>` named pipe on Windows.
 
 Rust is the source of truth and the first SDK; a generated TypeScript version comes
 later.
@@ -305,6 +321,40 @@ startup, so a bad manifest fails loudly instead of silently drifting from the co
 | `runtime` | object | required | `{ "exec": <string>, "args"?: [<string>] }` — `exec` is relative to the package root; `args` defaults to `[]`. |
 | `contributes` | object | omitted → `{}` | See below. |
 | `requires` | `[Grant]` | omitted → `[]` | Wire strings, e.g. `"agents:orchestrate"`. See the grants reference. |
+| `workspace_dir` | string | omitted → none | An extension-owned state directory koma creates and injects as a session workspace root. Must resolve strictly under `$HOME`. See "`workspace_dir`" below. |
+
+### `workspace_dir`
+
+An optional dedicated state directory the extension owns, declared as a path string —
+typically `"~/.<ext-name>"` (the `event-watcher-daemon` sample uses `"~/.event-watcher"`):
+
+```json
+{ "workspace_dir": "~/.event-watcher" }
+```
+
+When present, koma validates the path, **creates it if missing**, and injects its
+canonical form as an extra workspace root of every session. It appears as an `[N]` root
+alongside the launch directory, so the agent's file tools and `bash` may read and write
+there (an extension's own sub-agents can persist state that survives a restart) — it is
+exempt from the safety harness the same way any configured workspace root is, and is
+named in the system prompt's "Extension workspaces" note by its `[N]` index and owning
+extension id.
+
+**Validation rules.** A path that fails ANY rule is logged to `~/.koma/error.log` and
+skipped — it never blocks the extension from starting:
+
+- `~` / `~/…` expands to `$HOME` (`%USERPROFILE%` on Windows); a `~user` form is rejected.
+- The resolved path must be **strictly under `$HOME`** — `$HOME` itself is rejected, as is anything outside `$HOME`.
+- koma's own `~/.koma` tree is rejected.
+- The credential stores `~/.ssh`, `~/.aws`, `~/.gnupg` — and everything under them — are rejected.
+- `~/.config` **itself** is rejected, but its subdirectories (e.g. `~/.config/my-ext`) are allowed.
+- Any other `$HOME` subdirectory — including a dotdir like `~/.babalic-extension` — is allowed.
+
+Comparison is on canonicalized paths (symlinks and `..` resolved), so a symlinked escape
+can't slip past. Injection happens at daemon/TUI startup, and again the moment an
+extension is installed at runtime (no restart needed). It is in-memory and re-derived
+from the currently **enabled** extension set on every start, so disabling or uninstalling
+an extension drops its workspace root on the next start.
 
 ### `contributes`
 
@@ -314,7 +364,7 @@ an old manifest missing a field added in a later wave still parses (this is test
 
 | Array | Item shape |
 | --- | --- |
-| `sub_agents` | `{ "name": <string>, "description": <string>, "prompt"?: <string>, "model"?: <string>, "effort"?: <string> }` |
+| `sub_agents` | `{ "name": <string>, "description": <string>, "prompt"?: <string>, "model"?: <string>, "effort"?: <string>, "tools"?: [<string>] }` |
 | `models` | `{ "id": <string>, "display_name": <string> }` (declared shape only — see `models:contribute` in the grants reference for the runtime catalogue) |
 | `panels` | `{ "id": <string>, "title": <string>, "icon"?: <string, default "">  }` |
 | `tools` | `{ "name": <string>, "description": <string>, "input_schema"?: <JSON Schema value> }` |
@@ -351,6 +401,21 @@ SAME extension's models first, so a same-named model elsewhere in the user's
 catalogue can never hijack an extension's route — but the sub-agent still runs
 either way, just on Main until the extension's account is connected and its models
 are registered.
+
+**`sub_agents[].tools`** — the tool allow-list this sub-agent installs with. Names
+must match koma's selectable tool set (the same names the `/agents` editor's tool
+picker offers — things like `"read"`, `"grep"`, `"glob"`, `"dir_list"`, `"edit"`,
+`"write"`, `"bash"`; unknown names are dropped with a logged warning rather than
+failing the extension). Omitted or empty means koma's safe read-only default
+(`read`, `grep`, `glob`, `dir_list`) — the same behavior as before this field
+existed. This is a **seed, not a hard override**: it applies fresh from the
+manifest on every load, but the moment a user edits and saves that sub-agent from
+the `/agents` dashboard, their edit persists as a session-scope override that wins
+over the manifest from then on. Separately from this allow-list, every sub-agent —
+manifest-declared or not — also inherits whatever MCP tools are currently
+connected, exactly like the main agent does (there is no per-agent MCP picker);
+this `tools` field only ever narrows koma's own built-in tools, it never affects
+MCP tool availability.
 
 **`oauth_providers`** (`OAuthProviderDef`) — each becomes a row in koma's OAuth
 picker (see "OAuth providers" below for the full flow):
@@ -411,10 +476,16 @@ to the calling extension's OWN `ExtAgentRegistry` — never the raw session
 | --- | --- | --- | --- |
 | `agents.spawn` | `{ "task": <string, required non-empty>, "agent"?: <string, default `"general"`>, "model"?: <string slug>, "effort"?: <string>, "notify"?: <bool, default false> }` | `{ "agentId": <u64, ext-facing>, "status": "spawned" }` or, once the 5-slot `MAX_SUBAGENTS` cap is full, `{ "agentId", "status": "queued" }` | empty task → `"agents.spawn requires a non-empty 'task'"`; no foreground session → `"no active session"`; unresolvable agent/client → `"failed to spawn agent '<agent>' (no client/session or unknown agent)"` |
 | `agents.kill` | `{ "agentId" }` | `{ "killed": true }` — idempotent; killing an already-terminal agent still returns `true` without re-firing a terminal event | missing/unknown/closed → same shapes as `agents.status` |
+| `agents.send` | `{ "agentId": <u64 or numeric string>, "message": <string, required non-empty> }` | `{ "sent": true }` — the message is injected as a follow-up USER turn, delivered at the sub-agent's next TURN BOUNDARY (never mid-stream); a still-queued agent stashes it and returns `{ "sent": true, "status": "queued" }` (delivered at promotion) | empty message → `"agents.send requires a non-empty 'message'"`; a terminal (done/killed/error) agent → `"agent is terminal"`; missing `agentId`/unknown id/closed session → same shapes as `agents.status` |
 
 Spawn targets the ACTIVE (foreground) session, through the same `spawn_or_queue`
 path the model's own `task` tool uses, non-detached with no `tool_call_id` (so
-completion never auto-wakes the chat model on its own). `notify: true` additionally
+completion never auto-wakes the chat model on its own). `agents.send` STEERS a
+sub-agent already spawned this way: its `message` lands in the agent's isolated
+history as a fresh user turn at the next turn boundary (the same mechanism the
+main agent's own `task_send` tool uses), so you can add context or correct course
+without killing and re-delegating — the agent's result still arrives via
+`agents.result` / the `agents.done` event as usual. `notify: true` additionally
 arms a private `agents.done` event to the SPAWNING extension on terminal state —
 see "Events" below; this is independent of `contributes.events`. The returned
 `agentId` is a fresh id from this extension's own registry, permanently bound to a
@@ -445,7 +516,17 @@ tool-call/tool-result ordering.
 
 | Verb | Params | Success | Limits / errors |
 | --- | --- | --- | --- |
-| `models.invoke` | `{ "prompt": <string, required non-empty>, "role"?: `"main"` \| `"awareness"` \| `"safeguard"` \| `"compactor"` \| `"planner"` (default `"main"`), "system"?: <string> }` | `{ "output": <string>, "model": <model id string> }` | **32KB cap** on `prompt` → `"prompt exceeds 32KB"`; unrecognized role → `"unknown role"` (never silently falls back to Main); no route → `"no usable route for role <role>"`; route not dispatchable → `"role <role> route is not dispatchable (Anthropic-compatible not wired)"`; no usable auth → `"role <role> route has no usable auth"`; no client → `"no llm client"`; stuck backend → `"model call timed out"` after koma's internal **25s** budget (deliberately under the 30s broker-call ceiling, so you always get a value back) |
+| `models.invoke` | `{ "prompt": <string, required non-empty>, "role"?: `"main"` \| `"awareness"` \| `"safeguard"` \| `"compactor"` \| `"planner"` (default `"main"`), "system"?: <string>, "format"?: `"json"` }` | `{ "output": <string>, "model": <model id string> }` | **32KB cap** on `prompt` → `"prompt exceeds 32KB"`; unrecognized role → `"unknown role"` (never silently falls back to Main); no route → `"no usable route for role <role>"`; route not dispatchable → `"role <role> route is not dispatchable (Anthropic-compatible not wired)"`; no usable auth → `"role <role> route has no usable auth"`; no client → `"no llm client"`; stuck backend → `"model call timed out"` after koma's internal **330s** budget (deliberately under the reader's **360s** verb-scoped cap for this method, so you always get a value back) |
+
+`format: "json"` pins strict OpenAI-dialect JSON output
+(`response_format: {"type":"json_object"}`) on the request. **Dialect caveat:**
+this only takes effect when the resolved `role`'s route speaks the
+OpenAI/OpenRouter chat-completions dialect. Routes on the Codex
+(ChatGPT-subscription Responses API) or Anthropic-compatible dialects have no
+`json_object` wire equivalent — for those, `format` is silently IGNORED (never
+an error), and you get today's free-form text back. Any value other than the
+literal string `"json"`, or the field absent, is also today's free-form
+behavior.
 
 ### `context:publish`
 
@@ -561,6 +642,15 @@ broadcast `subagent.done` others may also be subscribed to. See `event-watcher-d
 for the subscribed-broadcast side and `fleet-board-daemon`/`orchestrator-daemon` for
 the `notify: true` side.
 
+Separately from delivery, every sub-agent an extension spawns through
+`agents.spawn` is marked ext-owned, and an ext-owned agent's completion is
+**completely silent in the human's chat** — no fold note, no nudge, nothing
+pushed to the transcript — regardless of `notify`. This is unlike a human-run
+`/task`, whose completion folds a compact checkmark line into the chat. The
+extension gets its result through `agents.result` / `agents.done` (when
+`notify: true`) instead; usage and the persisted sub-agent record are still
+tracked either way.
+
 No event payload ever carries a sub-agent's report text or transcript — only ids,
 names, and short status labels. There is no batching, coalescing, or rate-limiting
 on delivery; each trigger fans out individually and synchronously at the point of
@@ -675,6 +765,72 @@ when the matching `reply` envelope arrives (or on timeout), and `onPush()`
 registers a handler fanned out on every `push` envelope. See
 `fleet-board-daemon/ui/index.html` for it wired up to a real "Spawn card" button.
 
+### Theme
+
+Panels are theme-aware: the GUI host pushes the current palette to every registered
+panel automatically, and a panel can also pull it on demand. This is a THIRD,
+distinct sub-contract on top of the `msg`/`push` envelopes above — its own `kind`
+values, so a panel never confuses a theme repaint with an extension-originated
+push.
+
+Host → panel, unsolicited (a live palette change, AND once immediately when the
+panel iframe registers — so a panel opened mid-session doesn't have to wait for the
+next theme switch to paint itself correctly):
+```json
+{ "koma": "host", "v": 1, "kind": "theme", "payload": { "palette": { /* roles */ }, "name": "<string>", "dark": <bool> } }
+```
+
+Panel → host, one-shot query (works even detached — no active koma session
+required, since theme is a pure UI concern):
+```json
+{ "koma": "panel", "v": 1, "kind": "theme?", "reqId": "<string>" }
+```
+answered as an ordinary `reply` envelope with the same `{ palette, name, dark }`
+payload shape.
+
+`palette` carries the same nine roles the chat chrome itself paints with (host
+`PushPalette`, `src-agent/src/app/runtime/client/push_rows.rs`), each a `#rrggbb`
+string:
+
+| Role | Meaning |
+| --- | --- |
+| `bg` | Canvas background |
+| `fg` | Primary text |
+| `accent` | Highlights — rails, active state, primary buttons |
+| `dim` | Muted text / secondary borders |
+| `panel` | Raised surface — cards, bands, overlays |
+| `warn` | Amber warning cues |
+| `success` | Green success cues |
+| `info` | Blue info cues |
+| `error` | Red error cues |
+
+`name` is the active entry's key in the host's named-palette registry
+(`view::theme::PALETTES` — round-trips as a `SetTheme { name }` request from the
+Settings tab, not something a panel sends). `dark` is a bool the host derives from
+`bg`'s relative luminance (`project_config.rs`'s `palette_is_dark`) — cheaper than
+every panel re-deriving it from a hex string, and guaranteed to agree with the
+host's own dark/light classification.
+
+`koma-panel.js` wraps both directions:
+
+```js
+KomaPanel.onTheme(theme => {
+  // theme = { palette: {...}, name: 'dark', dark: true }
+  document.documentElement.style.setProperty('--koma-bg', theme.palette.bg);
+  document.documentElement.style.setProperty('--koma-fg', theme.palette.fg);
+});
+
+KomaPanel.getTheme()               // -> Promise<{ palette, name, dark }>, default 15s timeout
+  .then(theme => /* ... */);
+```
+
+`onTheme()` fires on every host `theme` push (register-time delivery + live
+changes) AND once on the module's own initial `getTheme()` query it fires on load —
+so a handler registered any time after the script loads still gets the CURRENT
+theme immediately, not just the next change. See `fleet-board-daemon/ui/index.html`
+for it wired up to `--koma-*` CSS custom properties with the panel's original
+hardcoded colours kept as fallbacks.
+
 ---
 
 ## OAuth providers (delegated flow)
@@ -745,6 +901,41 @@ Verifies the zip's SHA-256 then an Ed25519 signature over it before any disk wri
 rejects unsafe zip paths; unpacks under `~/.koma/extensions/<id>/`; persists an
 enabled registry entry. `kind: "daemon"` extensions are started immediately after a
 successful install (one of four auto-start triggers — see below).
+
+### Dev install (offline, unsigned)
+
+`koma ext install --dev <zip|dir>` sideloads a LOCAL extension with none of the
+store's discipline — no signature, no koma.run sign-in, no network at all. It's the
+CLI-level escape hatch for iterating on an extension you're building: point it at the
+`.zip` `src-extension/pack.sh` produces, or at an already-staged directory (a
+`manifest.json` + `bin/<exec>` at its root — the same shape a zip unpacks to, e.g.
+what `pack.sh` stages before zipping). `koma ext` / `koma ext install` with no
+`--dev` just prints usage; there is no other CLI surface for install — the in-app
+store is the normal, signed path for anyone who isn't developing the extension
+itself.
+
+- **zip vs. dir**: a `.zip` goes through the same unpack pipeline as a signed
+  install, minus the integrity/signature check. A directory is validated
+  (`manifest.json` must be present and parse) then COPIED — never symlinked, since
+  Windows has no reliable unprivileged symlink — into `~/.koma/extensions/<id>/`.
+  Either way, `runtime.exec` must already resolve to a real file at the target
+  location — raw crate source (no `bin/` staging, no built binary) will fail with a
+  clear error rather than installing something that can't spawn.
+- **auto-grants**: every capability the manifest's `requires` lists is granted
+  automatically (dev installs skip any confirmation step), and each one is printed
+  to the terminal as it's granted (`[dev] granting agents:orchestrate ...`) so you
+  can see the surface you just gave the extension.
+- **tier marker**: the registry entry's `tier` is forced to `"dev"` (instead of
+  whatever the manifest declares) so it's visually distinguishable from a real
+  store install wherever tier is shown.
+- **reinstall**: installing the same id again replaces the existing entry in place
+  (`[dev] replacing existing <id> vX.Y.Z`) — install → test → reinstall is a normal
+  loop, not something you need to uninstall first.
+- **enabled by default**: a dev install is always `enabled: true` — it's for
+  testing right now, not sitting dormant.
+- Runs before the daemon starts, so a freshly-installed extension is live for the
+  *next* `koma` session immediately; anything already running needs a restart to
+  pick it up.
 
 ### Uninstall — the full purge list
 

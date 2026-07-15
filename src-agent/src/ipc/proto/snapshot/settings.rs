@@ -197,10 +197,17 @@ pub struct AgentEntry {
     pub name: String,
     pub description: String,
     pub conditions: String,
-    /// "session" | "project" | "global" | "builtin"
+    /// "session" | "project" | "global" | "builtin" | "extension"
     pub source: String,
     pub model_uuid: Option<String>,
     pub model: Option<String>,
     pub tools: Vec<String>,
     pub prompt: String,
+    /// The owning extension's manifest id, when [`Self::source`] is
+    /// `"extension"` — `None` for every other source. Mirrors
+    /// [`crate::model::agent_def::AgentDef::ext_id`]; lets the GUI /agents
+    /// dashboard group extension-contributed sub-agents under their owning
+    /// extension instead of drowning the flat list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ext_id: Option<String>,
 }

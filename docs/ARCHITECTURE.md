@@ -436,7 +436,7 @@ SaveSettings / SaveEffort → Chat
 `config.json` is read/written by `model/app_config.rs::AppConfig`. It holds only
 global visual preferences. All per-session config lives in `settings.json`.
 
-`session.lock` holds the owning process PID; liveness is probed via portable `kill(pid, 0)` (not `/proc`), so it works on both Linux and macOS.
+`session.lock` holds the owning process PID; liveness is probed via portable `kill(pid, 0)` (not `/proc`) on unix, so it works on both Linux and macOS; on Windows the equivalent lives in `model::proc_win::pid_alive` (`OpenProcess` + `GetExitCodeProcess`, biased toward reporting a process alive on any ambiguity).
 
 `workdir` in `settings.json` is a `Vec<String>` (backward-compatible: a legacy
 plain-string value is deserialized as a one-element vec). The first non-empty

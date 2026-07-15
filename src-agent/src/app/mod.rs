@@ -36,6 +36,7 @@ pub mod subagent;
 pub mod update;
 pub mod version;
 
+pub use ext::{print_ext_usage, run_ext_install_dev};
 pub use runtime::client_run;
 pub use runtime::run;
 #[cfg(feature = "gui")]

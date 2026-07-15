@@ -668,6 +668,48 @@ impl SessionRuntime {
         }
     }
 
+    /// Inject a follow-up user `message` into the sub-agent with local `id` in
+    /// this session — the SINGLE shared core of the broker `agents.send` verb and
+    /// the main-agent `task_send` tool, so the two surfaces steer identically.
+    ///
+    /// - RUNNING → hand it to the agent's injection channel (the engine folds it
+    ///   into history + the viewer transcript at its NEXT turn boundary) →
+    ///   [`Sent`](crate::app::subagent::InjectOutcome::Sent). Best-effort: a
+    ///   Running agent whose loop just ended has a closed receiver, so the send is
+    ///   dropped and the next `drain_subagents` tick settles it — but the caller
+    ///   still reports success, since status is the source of truth.
+    /// - QUEUED (still in `pending_subagents`, not yet started) → stash it on the
+    ///   pending record for delivery at promotion →
+    ///   [`Queued`](crate::app::subagent::InjectOutcome::Queued).
+    /// - TERMINAL (done/killed/error) →
+    ///   [`Terminal`](crate::app::subagent::InjectOutcome::Terminal) (nothing sent).
+    /// - no such id →
+    ///   [`Unknown`](crate::app::subagent::InjectOutcome::Unknown).
+    ///
+    /// Callers validate `message` non-empty before calling.
+    pub fn inject_into_subagent(
+        &mut self,
+        id: usize,
+        message: String,
+    ) -> crate::app::subagent::InjectOutcome {
+        use crate::app::subagent::{InjectOutcome, SubAgentStatus};
+        // A live (running or already-terminal) record takes precedence over a
+        // queued one — ids are unique across the two, but check running first so a
+        // just-promoted agent is steered live, not re-stashed.
+        if let Some(sa) = self.subagents.iter().find(|s| s.id == id) {
+            if matches!(sa.status, SubAgentStatus::Running) {
+                let _ = sa.inject_tx.send(message);
+                return InjectOutcome::Sent;
+            }
+            return InjectOutcome::Terminal;
+        }
+        if let Some(p) = self.pending_subagents.iter_mut().find(|p| p.id == id) {
+            p.pending_injects.push(message);
+            return InjectOutcome::Queued;
+        }
+        InjectOutcome::Unknown
+    }
+
     // ----- toast management (per-session in C6; was `impl AppStateRest`) -----
 
     /// Show an error toast (red box) for ~6 seconds on THIS session.

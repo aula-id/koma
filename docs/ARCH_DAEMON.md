@@ -26,7 +26,7 @@ Comprehensive documentation of koma's session daemon — its lifecycle, IPC prot
 
 koma's daemon is built on several deliberate architectural decisions:
 
-1. **Bind is the liveness oracle.** Who currently holds the bound Unix socket proves liveness. PID files are never used for liveness checks — PIDs get reused, making them unreliable.
+1. **Bind is the liveness oracle.** Who currently holds the bound Unix socket (a named pipe on Windows, with the same "first instance wins" bind-as-oracle contract) proves liveness. PID files are never used for liveness checks — PIDs get reused, making them unreliable.
 
 2. **Daemon-per-session.** Each daemon owns exactly one session. Multiple sessions = multiple daemons. This eliminates cross-session contention and simplifies locking.
 
