@@ -1,4 +1,4 @@
 {
-  "version": "0.3.3",
-  "message": "feat: nuke uninstall, manifest MCP auto-registration, TUI koma.run login, Windows polish (no console popups, icons everywhere), daemon-restart death notices, deb launcher fix"
+  "version": "0.3.4",
+  "message": "fix: MCP manager built on demand - adding the first MCP server to a live session daemon now advertises immediately, no restart needed"
 }

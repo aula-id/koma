@@ -30,7 +30,7 @@ pub(super) fn handle_close_mcp(state: &mut AppState) -> Result<()> {
 /// On success the dashboard returns to Browse with the new server selected; on a
 /// save error the status line reports it and the editor stays open so the draft
 /// isn't lost.
-pub(super) fn handle_create_mcp(state: &mut AppState) -> Result<()> {
+pub(super) fn handle_create_mcp(state: &mut AppState, handle: &tokio::runtime::Handle) -> Result<()> {
     let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
@@ -39,13 +39,13 @@ pub(super) fn handle_create_mcp(state: &mut AppState) -> Result<()> {
     let name = entry.name.clone();
 
     state.rest.config.mcp_servers.push(entry);
-    persist_and_finish(state, &uuid, format!("mcp server saved: {name} — connecting…"));
+    persist_and_finish(state, handle, &uuid, format!("mcp server saved: {name} — connecting…"));
     Ok(())
 }
 
 /// Handle `Action::SaveMcp`: overwrite the server whose uuid matches the Edit
 /// draft with the drafts' values, persist, and refresh the snapshot.
-pub(super) fn handle_save_mcp(state: &mut AppState) -> Result<()> {
+pub(super) fn handle_save_mcp(state: &mut AppState, handle: &tokio::runtime::Handle) -> Result<()> {
     let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
@@ -66,13 +66,13 @@ pub(super) fn handle_save_mcp(state: &mut AppState) -> Result<()> {
     } else {
         state.rest.config.mcp_servers.push(entry);
     }
-    persist_and_finish(state, &uuid, format!("mcp server saved: {name} — connecting…"));
+    persist_and_finish(state, handle, &uuid, format!("mcp server saved: {name} — connecting…"));
     Ok(())
 }
 
 /// Handle `Action::DeleteMcp`: remove the selected server from `config.mcp_servers`
 /// by uuid, persist, and refresh the snapshot.
-pub(super) fn handle_delete_mcp(state: &mut AppState) -> Result<()> {
+pub(super) fn handle_delete_mcp(state: &mut AppState, handle: &tokio::runtime::Handle) -> Result<()> {
     let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
@@ -89,8 +89,54 @@ pub(super) fn handle_delete_mcp(state: &mut AppState) -> Result<()> {
     state.rest.config.mcp_servers.retain(|s| s.uuid != uuid);
     // After a delete there's no entry to re-select, so pass an empty uuid (the
     // snapshot refresh just clamps the cursor).
-    persist_and_finish(state, "", format!("mcp server removed: {name}"));
+    persist_and_finish(state, handle, "", format!("mcp server removed: {name}"));
     Ok(())
+}
+
+/// Construct `state.rest.mcp_manager` on demand if it is still `None`.
+///
+/// TRAP: the manager is deliberately left `None` at daemon boot when
+/// `config.mcp_servers` is empty (see `lifecycle::run_daemon`'s MCP setup) — no
+/// manager, no global MCP daemon spawned, byte-identical to a build without MCP.
+/// That means the FIRST server ever added to a live, already-running daemon has
+/// no manager to reconnect: both `save_and_reload_mcp` and `persist_and_finish`
+/// gate their reconnect on `mcp_manager.is_some()`, so without this call the new
+/// server would land in `config.json` but never advertise any `mcp__` tools until
+/// the daemon is restarted. Call this BEFORE that `is_some()` check so a
+/// just-saved first server gets a live manager immediately.
+///
+/// Mirrors the boot-path construction in `lifecycle::run_daemon` exactly: ensure
+/// the singleton global MCP daemon is running, connect a PROXY to it, and fall
+/// back to a LOCAL `connect_all` if either step fails (never worse than today).
+/// No-op if a manager already exists, or if there are no ENABLED servers to
+/// connect (so a user with zero/all-disabled servers never spawns the global
+/// daemon). Never panics — a connect failure is logged and `mcp_manager` stays
+/// `None`.
+fn ensure_mcp_manager(state: &mut AppState, handle: &tokio::runtime::Handle) {
+    if state.rest.mcp_manager.is_some() {
+        return;
+    }
+    if !state.rest.config.mcp_servers.iter().any(|s| s.enabled) {
+        return;
+    }
+
+    let proxy = crate::model::store::mcp_daemon_sock_path().and_then(|sock| {
+        crate::app::runtime::manage::ensure_mcp_daemon_running()
+            .and_then(|()| crate::app::mcp::McpManager::connect_proxy(handle, sock))
+    });
+    state.rest.mcp_manager = Some(match proxy {
+        // Proxying to the shared global daemon: the dedup win.
+        Ok(proxy) => proxy,
+        // FALLBACK: any ensure/connect failure ⇒ own the connections locally, so
+        // this daemon still has working MCP (just not shared).
+        Err(e) => {
+            crate::model::store::append_global_error_log(
+                "mcp",
+                &format!("global daemon unavailable ({e:#}); using local servers"),
+            );
+            crate::app::mcp::McpManager::connect_all(handle, &state.rest.config.mcp_servers)
+        }
+    });
 }
 
 /// Persist `config.json` and LIVE-reconnect the MCP manager from the just-saved server
@@ -100,8 +146,12 @@ pub(super) fn handle_delete_mcp(state: &mut AppState) -> Result<()> {
 /// error; the reconnect is best-effort and spawned off the event-loop thread for the same
 /// reason [`persist_and_finish`] does it (a `Proxy`-backend reconnect blocks on unix-socket
 /// round-trips to the MCP daemon). With no manager or zero servers the reconnect is a no-op.
-pub(in crate::app::runtime) fn save_and_reload_mcp(state: &mut AppState) -> Result<()> {
+pub(in crate::app::runtime) fn save_and_reload_mcp(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
     state.rest.config.save()?;
+    ensure_mcp_manager(state, handle);
     let servers = state.rest.config.mcp_servers.clone();
     if let Some(m) = state.rest.mcp_manager.as_ref() {
         let mgr = m.clone();
@@ -119,9 +169,15 @@ pub(in crate::app::runtime) fn save_and_reload_mcp(state: &mut AppState) -> Resu
 /// On a save FAILURE the config was still mutated in memory (it just isn't on
 /// disk yet); we report the error and leave the editor open so the user can retry
 /// rather than silently losing their draft.
-fn persist_and_finish(state: &mut AppState, select_uuid: &str, ok_status: String) {
+fn persist_and_finish(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+    select_uuid: &str,
+    ok_status: String,
+) {
     match state.rest.config.save() {
         Ok(()) => {
+            ensure_mcp_manager(state, handle);
             let servers = state.rest.config.mcp_servers.clone();
             if let Mode::Mcp(m) = state.mode_mut() {
                 m.reload(&servers);
