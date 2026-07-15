@@ -46,9 +46,12 @@ pub(super) fn drain_subagents(
     // W5: sub-agent terminal transitions observed THIS tick, to fan out to
     // subscribed extensions AFTER the loop (collect-then-apply, same borrow
     // discipline as `deferred_results` — the emit takes `&AppState`). Each tuple is
-    // (session_uuid, local_subagent_id, agent_name, status). Only a genuine
+    // (session_uuid, local_subagent_id, agent_name, status, error). `error` is
+    // `Some(text)` only for a `SubAgentStatus::Error` settlement — the text behind
+    // the sub-agent's `agents.done`/`subagent.done` `"error"` field. Only a genuine
     // Running->terminal edge is pushed; see the `was_running` gate below.
-    let mut ext_terminal_emissions: Vec<(String, usize, String, &'static str)> = Vec::new();
+    let mut ext_terminal_emissions: Vec<(String, usize, String, &'static str, Option<String>)> =
+        Vec::new();
 
     for i in 0..state.rest.sessions[idx].subagents.len() {
         // W5: snapshot whether this sub-agent was Running at the START of this tick.
@@ -448,17 +451,18 @@ pub(super) fn drain_subagents(
         if was_running {
             let sa = &state.rest.sessions[idx].subagents[i];
             let terminal = match &sa.status {
-                SubAgentStatus::Done(_) => Some("done"),
-                SubAgentStatus::Error(_) => Some("error"),
-                SubAgentStatus::Killed => Some("killed"),
+                SubAgentStatus::Done(_) => Some(("done", None)),
+                SubAgentStatus::Error(e) => Some(("error", Some(e.clone()))),
+                SubAgentStatus::Killed => Some(("killed", None)),
                 SubAgentStatus::Running => None,
             };
-            if let Some(status) = terminal {
+            if let Some((status, error)) = terminal {
                 ext_terminal_emissions.push((
                     state.rest.sessions[idx].id.clone(),
                     sa.id,
                     sa.agent_name.clone(),
                     status,
+                    error,
                 ));
             }
         }
@@ -505,13 +509,14 @@ pub(super) fn drain_subagents(
     // reborrow. Each fires the owned `agents.done` (notify:true spawner only) plus the
     // subscribed `subagent.done` broadcast; with no subscribed extensions it is a
     // structural no-op that never touches `dirty` or any session state.
-    for (session_uuid, local_id, agent, status) in ext_terminal_emissions {
+    for (session_uuid, local_id, agent, status, error) in ext_terminal_emissions {
         crate::app::ext::events::emit_subagent_terminal(
             state,
             &session_uuid,
             local_id,
             &agent,
             status,
+            error.as_deref(),
         );
     }
 

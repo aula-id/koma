@@ -634,13 +634,21 @@ and a not-currently-running extension simply doesn't get it (no queueing).
 
 **`agents.done`** is a related but DIFFERENT mechanism, worth calling out
 separately: `{ "agentId": <u64, the EXT-FACING id from agents.spawn>, "status":
-"done"\|"error"\|"killed" }`, delivered ONLY to the single extension that spawned
-that agent with `agents.spawn { "notify": true }` — and delivered regardless of
-whether `"agents.done"` appears in that extension's `contributes.events` at all. A
-spawn with `notify: false` (today's default) gets no `agents.done` — only the
-broadcast `subagent.done` others may also be subscribed to. See `event-watcher-daemon`
-for the subscribed-broadcast side and `fleet-board-daemon`/`orchestrator-daemon` for
-the `notify: true` side.
+"done"\|"error"\|"killed", "error"?: <string> }`, delivered ONLY to the single
+extension that spawned that agent with `agents.spawn { "notify": true }` — and
+delivered regardless of whether `"agents.done"` appears in that extension's
+`contributes.events` at all. A spawn with `notify: false` (today's default) gets no
+`agents.done` — only the broadcast `subagent.done` others may also be subscribed to.
+See `event-watcher-daemon` for the subscribed-broadcast side and
+`fleet-board-daemon`/`orchestrator-daemon` for the `notify: true` side.
+
+The `"error"` field is ADDITIVE and present ONLY when `"status": "error"` — it
+carries the sub-agent's failure text (the same string `agents.status`/
+`agents.result` would report), so a `notify: true` spawner learns *why* its
+sub-agent died without a separate poll. A `"done"`/`"killed"` payload never carries
+it. Older extensions that don't read the field are unaffected; the full terminal
+payload — including a `"done"` sub-agent's report text, which never travels over
+this event — remains available via the `agents.result` pull path.
 
 Separately from delivery, every sub-agent an extension spawns through
 `agents.spawn` is marked ext-owned, and an ext-owned agent's completion is
@@ -652,9 +660,10 @@ extension gets its result through `agents.result` / `agents.done` (when
 tracked either way.
 
 No event payload ever carries a sub-agent's report text or transcript — only ids,
-names, and short status labels. There is no batching, coalescing, or rate-limiting
-on delivery; each trigger fans out individually and synchronously at the point of
-the state transition.
+names, short status labels, and (on `agents.done` with `"status": "error"`) the
+short failure string described above. There is no batching, coalescing, or
+rate-limiting on delivery; each trigger fans out individually and synchronously at
+the point of the state transition.
 
 ---
 
