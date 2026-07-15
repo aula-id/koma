@@ -9,9 +9,10 @@ pub(super) const DEFAULT_TOOLS: [&str; 4] = ["read", "grep", "glob", "dir_list"]
 
 /// Delegation/orchestration tools that are NEVER included in a sub-agent's
 /// allow-list. `task` is the recursion guard (a sub-agent can't fan out its own
-/// sub-agents); `task_output` / `task_kill` manage the MAIN agent's detached
+/// sub-agents); `task_send` steers other sub-agents (same main-only orchestration
+/// guard); `task_output` / `task_kill` manage the MAIN agent's detached
 /// (`run_in_background`) delegations, which a sub-agent has no business touching.
-pub(super) const TASK_TOOLS: [&str; 3] = ["task", "task_output", "task_kill"];
+pub(super) const TASK_TOOLS: [&str; 4] = ["task", "task_send", "task_output", "task_kill"];
 
 // ---------------------------------------------------------------------------
 // AgentDef
