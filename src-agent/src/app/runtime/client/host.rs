@@ -32,8 +32,8 @@ use super::host_catalogue::{
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_ext_no_session, push_file_diff, push_model_list, push_oauth_state,
-    push_route_list, push_analytics, push_settings_values, push_switching, push_usage_preview,
+    push_agents_values, push_analytics, push_ext_no_session, push_file_diff, push_model_list,
+    push_oauth_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::store_host;
 use super::swapper::build_local_hub;
@@ -67,9 +67,9 @@ fn attach_session_headless(
     session_id: &str,
     workdir: Option<&std::path::Path>,
 ) -> anyhow::Result<Connection> {
-    crate::app::runtime::manage::ensure_daemon_running(session_id, false, workdir).map_err(|e| {
-        anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}")
-    })?;
+    crate::app::runtime::manage::ensure_daemon_running(session_id, false, workdir).map_err(
+        |e| anyhow::anyhow!("could not start the koma daemon for session {session_id}: {e:#}"),
+    )?;
 
     let sock_path = store::daemon_sock_path(session_id)?;
     let my_fingerprint = store::build_fingerprint();
@@ -138,7 +138,10 @@ pub(in crate::app::runtime) fn run_host_relay(
     // The client owns no sessions; it needs the config dirs only to resolve sockets.
     let _ = store::ensure_dirs();
 
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             crate::model::store::append_global_error_log(
@@ -235,10 +238,11 @@ pub(super) fn spawn_ensure_dead(id: String) {
 pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>, id: String) {
     std::thread::spawn(move || {
         // Never delete a session that is currently live or whose on-disk lock is held.
-        let live: std::collections::HashSet<String> = crate::app::runtime::manage::list_live_sessions()
-            .into_iter()
-            .map(|s| s.session_id)
-            .collect();
+        let live: std::collections::HashSet<String> =
+            crate::app::runtime::manage::list_live_sessions()
+                .into_iter()
+                .map(|s| s.session_id)
+                .collect();
         if !live.contains(&id) {
             if let Ok(metas) = store::list_all_sessions() {
                 if let Some(meta) = metas.into_iter().find(|m| m.id == id && !m.locked) {
@@ -256,7 +260,6 @@ pub(super) fn spawn_delete_and_refresh(ctl_tx: std::sync::mpsc::Sender<HostCtl>,
         let _ = ctl_tx.send(HostCtl::RefreshHub);
     });
 }
-
 
 // `fetch_models_for_provider`, `fetch_routes_for_provider`, `build_host_agents_values`,
 // and `build_host_oauth_state` moved to the sibling `host_catalogue` module (file size) —
@@ -361,12 +364,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     .unwrap_or_default();
                 let session = current.map(str::to_string);
                 std::thread::spawn(move || {
-                    super::file_ops::handle_file_ctl(
-                        &ctl,
-                        &push2,
-                        &workdirs,
-                        session.as_deref(),
-                    );
+                    super::file_ops::handle_file_ctl(&ctl, &push2, &workdirs, session.as_deref());
                 });
             }
             // Explore GIT panel + Settings SSH-key vault, all opened/mutated while
@@ -407,7 +405,12 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // Bubble/activity chart (GK5a): same host-local reasoning as
             // `GitStatus`/`GitGraph`.
             Ok(HostCtl::GitActivity { path, limit }) => {
-                git_host::spawn_git_activity(P::clone(push), current.map(str::to_string), path, limit);
+                git_host::spawn_git_activity(
+                    P::clone(push),
+                    current.map(str::to_string),
+                    path,
+                    limit,
+                );
             }
             Ok(HostCtl::SetGitKey { name }) => {
                 git_host::spawn_set_git_key(P::clone(push), current.map(str::to_string), name);
@@ -418,8 +421,8 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::GitPull) => {
                 git_host::spawn_git_pull(P::clone(push), current.map(str::to_string));
             }
-            Ok(HostCtl::GitPush) => {
-                git_host::spawn_git_push(P::clone(push), current.map(str::to_string));
+            Ok(HostCtl::GitPush { mode, root }) => {
+                git_host::spawn_git_push(P::clone(push), current.map(str::to_string), mode, root);
             }
             // Source Control toolbar stash ops (GK4a): same host-local reasoning
             // as `GitStatus`/`GitFetch` above. Bodies live in `git_host`.
@@ -435,8 +438,12 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // Branch-switcher popover / graph context menu (G4): same host-local
             // reasoning as `GitStatus`/`GitGraph`. Bodies live in the shared
             // `git_branch`/`git_host` modules.
-            Ok(HostCtl::GitBranchList) => {
-                git_host::spawn_git_branch_list(P::clone(push), current.map(str::to_string));
+            Ok(HostCtl::GitBranchList { request_id }) => {
+                git_host::spawn_git_branch_list(
+                    P::clone(push),
+                    current.map(str::to_string),
+                    request_id,
+                );
             }
             // Source Control multi-repo picker (discover + set-active): same host-local
             // reasoning as `GitBranchList`/`SetGitKey` above.
@@ -446,16 +453,27 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::SetActiveRepo { root }) => {
                 git_host::spawn_set_active_repo(P::clone(push), current.map(str::to_string), root);
             }
-            Ok(HostCtl::GitCheckout { ref_name }) => {
-                git_host::spawn_git_checkout(P::clone(push), current.map(str::to_string), ref_name);
+            Ok(HostCtl::GitCheckout { ref_name, root }) => {
+                git_host::spawn_git_checkout(
+                    P::clone(push),
+                    current.map(str::to_string),
+                    ref_name,
+                    root,
+                );
             }
-            Ok(HostCtl::GitCreateBranch { name, start, checkout }) => {
+            Ok(HostCtl::GitCreateBranch {
+                name,
+                start,
+                checkout,
+                root,
+            }) => {
                 git_host::spawn_git_create_branch(
                     P::clone(push),
                     current.map(str::to_string),
                     name,
                     start,
                     checkout,
+                    root,
                 );
             }
             // Commit-graph interactive/destructive ops (G5b): same host-local
@@ -476,7 +494,12 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 git_host::spawn_git_merge(P::clone(push), current.map(str::to_string), ref_name);
             }
             Ok(HostCtl::GitRebase { upstream, branch }) => {
-                git_host::spawn_git_rebase(P::clone(push), current.map(str::to_string), upstream, branch);
+                git_host::spawn_git_rebase(
+                    P::clone(push),
+                    current.map(str::to_string),
+                    upstream,
+                    branch,
+                );
             }
             Ok(HostCtl::GitOpAbort { kind }) => {
                 git_host::spawn_git_op_abort(P::clone(push), current.map(str::to_string), kind);
@@ -555,8 +578,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             }) => {
                 let push2 = P::clone(push);
                 std::thread::spawn(move || {
-                    let result =
-                        compute_analytics(req_seq, scope, session, range, metric);
+                    let result = compute_analytics(req_seq, scope, session, range, metric);
                     push_analytics(&push2, result);
                 });
             }
@@ -605,7 +627,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             // config load), so it runs inline.
             Ok(HostCtl::GetOAuthState) => {
                 let (conns, providers) = build_host_oauth_state();
-                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+                push_oauth_state(
+                    push,
+                    "idle".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    conns,
+                    providers,
+                );
             }
             // GUI OAuth login START while detached (the home-screen / pre-session Settings
             // "Sign in" buttons): there is no attached daemon to run the flow, so run it
@@ -742,7 +773,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     h.abort();
                 }
                 let (conns, providers) = build_host_oauth_state();
-                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+                push_oauth_state(
+                    push,
+                    "idle".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    conns,
+                    providers,
+                );
             }
             // GUI OAuth connection delete while detached: remove it from `~/.koma/config.json`,
             // persist, evict its token-refresh cache entry OFF-thread (evict is async), then
@@ -762,7 +802,16 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                     crate::service::oauth::manager::evict(&uuid2).await;
                 });
                 let (conns, providers) = build_host_oauth_state();
-                push_oauth_state(push, "idle".to_string(), None, None, None, None, conns, providers);
+                push_oauth_state(
+                    push,
+                    "idle".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    conns,
+                    providers,
+                );
             }
             // A hub row's KILL button. In the swapper there is no ATTACHED session, so this
             // is always a background/live-row kill: escalate the kill OFF this thread (it
@@ -793,7 +842,10 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
             Ok(HostCtl::New { workdir, kill: _ }) => {
                 let new_id = uuid::Uuid::new_v4().to_string();
                 push_switching(push, &new_id);
-                return HostStep::Attach { id: new_id, workdir };
+                return HostStep::Attach {
+                    id: new_id,
+                    workdir,
+                };
             }
             // The ipc side hung up (window gone) — leave the host.
             Err(_) => return HostStep::Done,

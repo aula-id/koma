@@ -216,7 +216,12 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
   const gitRebase = useKoma((s) => s.gitRebase)
   const branch = useKoma((s) => s.git.branch)
   const detached = useKoma((s) => s.git.detached)
+  const branches = useKoma((s) => s.branches)
   const currentBranch = detached ? null : branch
+  const targetOccupied = target.kind === 'ref' && target.refKind !== 'tag'
+    && branches.some((b) => b.kind === 'local'
+      && b.name === (target.refKind === 'remote' ? remoteShortName(target.name) : target.name)
+      && !!b.worktreePath && !b.isCurrent)
 
   const [mode, setMode] = useState<Mode>('menu')
   const [newName, setNewName] = useState('')
@@ -453,6 +458,7 @@ export function GraphContextMenu({ x, y, target, onClose }: Props) {
           {target.refKind !== 'tag' && (
             <MenuItem
               icon={<GitCommitHorizontal size={13} />}
+              disabled={targetOccupied}
               onClick={() => {
                 // A remote chip's `name` is the full `<remote>/<branch>` form —
                 // strip it via the shared `remoteShortName` helper (same one

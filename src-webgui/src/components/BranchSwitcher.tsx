@@ -54,17 +54,20 @@ function useClampedVPos(
   return top
 }
 
-function BranchRow({ b, onPick }: { b: BranchInfo; onPick: (b: BranchInfo) => void }) {
+function BranchRow({ b, occupiedPath, onPick }: { b: BranchInfo; occupiedPath?: string; onPick: (b: BranchInfo) => void }) {
+  const occupied = !!occupiedPath && !b.isCurrent
   return (
     <button
       type="button"
-      disabled={b.isCurrent}
+      disabled={b.isCurrent || occupied}
       onClick={() => onPick(b)}
-      title={b.name}
+      title={occupied ? `Checked out in ${occupiedPath}` : b.name}
       className={`flex w-full items-center gap-1.5 px-2.5 py-1 text-left font-mono text-[12px] ${
         b.isCurrent
           ? 'cursor-default text-koma-accent opacity-90'
-          : 'text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100'
+          : occupied
+            ? 'cursor-not-allowed text-koma-dim opacity-45'
+            : 'text-koma-fg opacity-80 transition-colors hover:bg-koma-hover hover:opacity-100'
       }`}
     >
       {b.isCurrent ? <Check size={12} className="flex-none" /> : <span className="w-3 flex-none" />}
@@ -146,8 +149,10 @@ export function BranchSwitcher({ variant }: BranchSwitcherProps) {
   const locals = useMemo(() => filtered.filter((b) => b.kind === 'local'), [filtered])
   const remotes = useMemo(() => filtered.filter((b) => b.kind === 'remote'), [filtered])
 
+  const occupiedPath = (b: BranchInfo) => b.worktreePath
+    ?? (b.kind === 'remote' ? branches.find((local) => local.kind === 'local' && local.name === remoteShortName(b.name))?.worktreePath : undefined)
   const pick = (b: BranchInfo) => {
-    if (b.isCurrent) return
+    if (b.isCurrent || occupiedPath(b)) return
     gitCheckout(b.kind === 'remote' ? remoteShortName(b.name) : b.name)
     setOpen(false)
   }
@@ -228,7 +233,7 @@ export function BranchSwitcher({ variant }: BranchSwitcherProps) {
                     </div>
                   )}
                   {locals.map((b) => (
-                    <BranchRow key={`l:${b.name}`} b={b} onPick={pick} />
+                    <BranchRow key={`l:${b.name}`} b={b} occupiedPath={occupiedPath(b)} onPick={pick} />
                   ))}
                   {remotes.length > 0 && (
                     <div className="px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-koma-dim opacity-60">
@@ -236,7 +241,7 @@ export function BranchSwitcher({ variant }: BranchSwitcherProps) {
                     </div>
                   )}
                   {remotes.map((b) => (
-                    <BranchRow key={`r:${b.name}`} b={b} onPick={pick} />
+                    <BranchRow key={`r:${b.name}`} b={b} occupiedPath={occupiedPath(b)} onPick={pick} />
                   ))}
                   {!branchesLoading && locals.length === 0 && remotes.length === 0 && (
                     <div className="px-2.5 py-2 text-[11px] text-koma-dim opacity-70">No branches</div>
