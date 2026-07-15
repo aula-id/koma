@@ -66,8 +66,10 @@
         <!-- launch app checkbox -->
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="!(loc.LaunchApp)" />
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1"/>
-        <Property Id="WixShellExecTarget" Value="[!Path]" />
-        <CustomAction Id="LaunchApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
+        <!-- koma-vendored template diff (vs pristine cargo-packager v0.11.8 main.wxs): the exit-dialog
+             launch checkbox must start the GUI. WixShellExec cannot pass arguments, so use a direct
+             ExeCommand running `"[!Path]" gui` (quoted - INSTALLDIR may contain spaces). -->
+        <CustomAction Id="LaunchApplication" Directory="INSTALLDIR" ExeCommand="&quot;[!Path]&quot; gui" Return="asyncNoWait" Impersonate="yes" />
 
         <UI>
             <!-- launch app checkbox -->
