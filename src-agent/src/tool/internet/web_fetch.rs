@@ -144,13 +144,16 @@ fn scrapion_fetch(url: &str) -> Result<String, String> {
     let (tx, rx) = mpsc::channel::<std::io::Result<std::process::Output>>();
     let url_arg = url.to_string();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&python)
-            .arg("-m")
+        let mut cmd = std::process::Command::new(&python);
+        cmd.arg("-m")
             .arg("scrapion_agent")
             .arg("--json")
             .arg(&url_arg)
-            .current_dir(&dir)
-            .output();
+            .current_dir(&dir);
+        // No console flash on Windows — see `tool::shell::no_console_window`'s
+        // docs for the `FreeConsole()` causal chain this guards against.
+        crate::tool::shell::no_console_window(&mut cmd);
+        let out = cmd.output();
         let _ = tx.send(out);
     });
 

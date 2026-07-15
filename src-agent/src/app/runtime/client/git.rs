@@ -183,6 +183,11 @@ pub(super) fn with_git_transaction<T>(
         if let Some((k, v)) = extra {
             cmd.env(k, v);
         }
+        // No console flash on Windows — see `tool::shell::no_console_window`'s
+        // docs for the `FreeConsole()` causal chain this guards against. This is
+        // THE single choke point every host git spawn funnels through, so one
+        // fix here covers status/diff/stage/unstage/discard/commit/fetch/pull/push.
+        crate::tool::shell::no_console_window(&mut cmd);
         cmd.output().ok()
     };
     f(&run)

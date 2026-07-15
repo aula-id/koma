@@ -859,6 +859,10 @@ async fn connect_one(
                     for (k, v) in &env {
                         c.env(k, v);
                     }
+                    // No console flash on Windows — see
+                    // `tool::shell::no_console_window_tokio`'s docs for the
+                    // `FreeConsole()` causal chain this guards against.
+                    crate::tool::shell::no_console_window_tokio(c);
                 });
                 let transport = TokioChildProcess::new(cmd)
                     .map_err(|e| format!("spawn '{}' failed: {e}", server.command))?;

@@ -130,11 +130,12 @@ pub(super) fn key_private_path(name: &str) -> Option<PathBuf> {
 /// interactive passphrase/prompt, mirroring `git_cmd`'s guard), returning
 /// `None` on any spawn failure rather than panicking.
 fn ssh_keygen_cmd(args: &[&str]) -> Option<std::process::Output> {
-    std::process::Command::new("ssh-keygen")
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .ok()
+    let mut cmd = std::process::Command::new("ssh-keygen");
+    cmd.args(args).env("GIT_TERMINAL_PROMPT", "0");
+    // No console flash on Windows — see `tool::shell::no_console_window`'s docs
+    // for the `FreeConsole()` causal chain this guards against.
+    crate::tool::shell::no_console_window(&mut cmd);
+    cmd.output().ok()
 }
 
 /// Extract ssh-keygen's own failure message from a non-zero `Output`: prefer
