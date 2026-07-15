@@ -566,14 +566,29 @@ pub(super) enum HostCtl {
     /// host-local reasoning as [`ListInstalledExtensions`] — see
     /// `store_host::get_installed_detail`.
     GetInstalledExtensionDetail { id: String },
-    /// Graceful PRE-SESSION install/uninstall failure: `GuiReq::InstallExtension`/
-    /// `UninstallExtension` arrived with NO attached daemon (the ipc `live_req` slot is
-    /// `None` — the home screen / swapper). Install/uninstall mutate live daemon
-    /// runtime state (`ext_manager`/`mcp_manager`), so they stay daemon-forwarded and
-    /// simply can't run pre-session — this pushes a loud `ExtensionOpResult{ok:false}`
-    /// instead of silently dropping the request. `// TODO: global ext manager for
-    /// pre-session install`.
-    ExtNoSession { id: String },
+    /// PRE-SESSION install: `GuiReq::InstallExtension` arrived with NO attached daemon
+    /// (the ipc `live_req` slot is `None` — the home screen / swapper). Runs the SAME
+    /// KomaRun sign-in check + download + verify/unpack pipeline the daemon's
+    /// `requests_ext::install_extension`/`finish_install` use (the bearer lives in the
+    /// GLOBAL `AppConfig`, not anything session-scoped), but SKIPS the session-scoped
+    /// tail — MCP tool registration, ext-daemon auto-start, workspace-root injection —
+    /// since there is no live `ext_manager`/`mcp_manager`/foreground session pre-session.
+    /// That tail self-heals: `lifecycle::build_startup` re-runs `ensure_started` +
+    /// `register_contributions` for every enabled daemon-kind extension on EVERY daemon
+    /// boot, and re-derives the workspace-root injection from the CURRENT enabled set on
+    /// every boot too; a not-yet-started daemon-kind extension also lazily auto-starts on
+    /// its first opened panel (see `requests_ext::panel_start_decision`). See
+    /// `store_host::spawn_install`.
+    InstallExtension {
+        id: String,
+        version: Option<String>,
+    },
+    /// PRE-SESSION uninstall — same host-local reasoning as [`InstallExtension`]:
+    /// purges the on-disk package + registry entry. No live `ext_manager`/`mcp_manager`
+    /// to purge contributions from or stop a running child — nothing is registered
+    /// pre-session in the first place — so there is nothing to undo. See
+    /// `store_host::spawn_uninstall`.
+    UninstallExtension { id: String },
     /// Coding panel: list a directory's immediate children.
     FileTree {
         root: String,

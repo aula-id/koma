@@ -725,18 +725,18 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
         GuiReq::GetInstalledExtensionDetail { id } => {
             let _ = ctx.ctl.send(HostCtl::GetInstalledExtensionDetail { id });
         }
-        // Install/uninstall MUTATE live daemon runtime state (`ext_manager`/
-        // `mcp_manager` + `AppConfig`), so — unlike browse/detail above — these stay
-        // DAEMON-forwarded, attached-only. With NO attached daemon (the home screen /
-        // swapper) this pushes a graceful `ExtensionOpResult{ok:false}` via
-        // `HostCtl::ExtNoSession` instead of silently dropping the request.
-        // `// TODO: global ext manager for pre-session install.`
+        // Install/uninstall MUTATE runtime state, so when ATTACHED they stay
+        // DAEMON-forwarded (`ext_manager`/`mcp_manager` + the live `AppConfig`). With NO
+        // attached daemon (the home screen / swapper) they run HOST-LOCAL instead of
+        // failing closed — see `HostCtl::InstallExtension`/`UninstallExtension` and
+        // `store_host::spawn_install`/`spawn_uninstall` for what that covers (and what it
+        // intentionally skips, since it self-heals on the next session start).
         GuiReq::InstallExtension { id, version } => {
             let forwarded = if let Ok(g) = ctx.req.lock() {
                 if let Some(tx) = g.as_ref() {
                     let _ = tx.send(ClientRequest::InstallExtension {
                         id: id.clone(),
-                        version,
+                        version: version.clone(),
                     });
                     true
                 } else {
@@ -746,7 +746,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 false
             };
             if !forwarded {
-                let _ = ctx.ctl.send(HostCtl::ExtNoSession { id });
+                let _ = ctx.ctl.send(HostCtl::InstallExtension { id, version });
             }
         }
         GuiReq::UninstallExtension { id } => {
@@ -761,7 +761,7 @@ pub(super) fn handle_gui_req(req: GuiReq, ctx: &GuiReqCtx) {
                 false
             };
             if !forwarded {
-                let _ = ctx.ctl.send(HostCtl::ExtNoSession { id });
+                let _ = ctx.ctl.send(HostCtl::UninstallExtension { id });
             }
         }
         // Extension PANEL bridge (W8): forward the panel's message to the attached daemon, which

@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -164,7 +164,7 @@ category = "DeveloperTool"
 # fragment's Start Menu shortcut icon would silently fall back to a flat PNG
 # instead of the multi-res ICO. The deb hicolor icon generator ignores
 # non-`.png` entries on its own, so listing icon.ico here does not affect it.
-icons = ["../assets/icon.ico", "../assets/icon*.png"]
+icons = ["../assets/icon.ico", "../assets/icon.icns", "../assets/icon*.png"]
 # CI runs `cargo packager --release` after `cargo build --release`; binaries and out-dir auto-detect from target/release
 
 [package.metadata.packager.deb]

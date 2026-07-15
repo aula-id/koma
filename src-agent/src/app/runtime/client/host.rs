@@ -32,8 +32,8 @@ use super::host_catalogue::{
 use super::host_config::{apply_swapper_config_mutation, push_swapper_config};
 use super::project::push_hub;
 use super::push_proto::{
-    push_agents_values, push_analytics, push_ext_no_session, push_file_diff, push_model_list,
-    push_oauth_state, push_route_list, push_settings_values, push_switching, push_usage_preview,
+    push_agents_values, push_analytics, push_file_diff, push_model_list, push_oauth_state,
+    push_route_list, push_settings_values, push_switching, push_usage_preview,
 };
 use super::store_host;
 use super::swapper::build_local_hub;
@@ -541,9 +541,17 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                 store_host::spawn_get_installed_detail(P::clone(push), id);
             }
             // Install/uninstall arrived with no session attached (always true in the
-            // swapper): push the graceful failure rather than silently dropping it.
-            Ok(HostCtl::ExtNoSession { id }) => {
-                push_ext_no_session(push, id);
+            // swapper): run them HOST-LOCAL rather than failing closed — see
+            // `store_host::spawn_install`/`spawn_uninstall` for what's covered (and what's
+            // intentionally skipped, since it self-heals on the next session start).
+            // `InstallExtension` needs the tokio runtime (`fresh_key`/the download are
+            // async); `UninstallExtension` is synchronous fs + a config save, so it gets
+            // its own plain thread like the browse/detail workers above.
+            Ok(HostCtl::InstallExtension { id, version }) => {
+                store_host::spawn_install(handle, P::clone(push), id, version);
+            }
+            Ok(HostCtl::UninstallExtension { id }) => {
+                store_host::spawn_uninstall(P::clone(push), id);
             }
             // GUI Usage panel opened while detached (StartScreen / swapper): the ledger is
             // a global file the host reads directly, so this never touches a daemon in

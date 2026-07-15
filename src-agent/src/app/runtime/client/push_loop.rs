@@ -23,7 +23,7 @@ use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
 use super::push_intercept;
 use super::push_proto::{
-    push_analytics, push_ext_no_session, push_file_diff, push_installed_extensions,
+    push_analytics, push_ext_op_result, push_file_diff, push_installed_extensions,
     push_store_catalogue, push_store_detail, push_switching, push_usage_preview,
 };
 use super::render::{advance_local_animations, FRAME_BUDGET};
@@ -777,11 +777,13 @@ pub(super) fn push_loop(
                     );
                 }
                 // Install/uninstall raced in with no daemon attached (in practice this
-                // can't happen here — an ATTACHED push_loop always has a live `req_tx`
-                // — but the arm must exist for the match to stay exhaustive; push the
-                // same graceful failure `host_swapper` would).
-                Ok(super::HostCtl::ExtNoSession { id }) => {
-                    push_ext_no_session(push, id);
+                // can't happen here — an ATTACHED push_loop always has a live `req_tx`,
+                // so `dispatch.rs` always forwards via `ClientRequest` instead of routing
+                // through `ctl` — but the arm must exist for the match to stay
+                // exhaustive; push a graceful failure rather than silently drop it).
+                Ok(super::HostCtl::InstallExtension { id, .. })
+                | Ok(super::HostCtl::UninstallExtension { id }) => {
+                    push_ext_op_result(push, id, false, Some("no active koma session".to_string()));
                 }
                 Ok(ctl @ super::HostCtl::FileTree { .. })
                 | Ok(ctl @ super::HostCtl::FileRead { .. })
