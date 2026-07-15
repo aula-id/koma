@@ -9,8 +9,13 @@
 //!    [`KOMA_EXT_SIGNING_PUBKEY`]. Either check failing is a hard stop — nothing
 //!    touches disk.
 //! 2. **Unpack** into `extensions/<id>/` (id parsed from the zip's `manifest.json`)
-//!    with a zip-slip guard: no absolute paths, no `..` components.
-//! 3. **`chmod +x`** the `bin/<exec>` on unix.
+//!    with a zip-slip guard: no absolute paths, no `..` components. Every entry's
+//!    unix permission bits are restored from the zip (masked to `0o777` — never
+//!    setuid/setgid) so ANY executable an extension ships keeps its exec bit, not
+//!    just the declared `runtime.exec` (e.g. a daemon that itself spawns a second,
+//!    unmentioned binary under `bin/`, like a standalone MCP stdio server).
+//! 3. **`chmod +x`** the `bin/<exec>` on unix — belt-and-suspenders on top of step 2
+//!    for the one path the manifest actually declares.
 //!
 //! The signed [`install_from_zip`] is the production path. [`install_dev_unsigned`]
 //! (debug-only) skips step 1 for local testing against the unsigned
@@ -134,15 +139,7 @@ pub fn install_dev_dir(src_dir: &Path) -> Result<InstalledExtension> {
     }
 
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(&exec_path)
-            .with_context(|| format!("stat {}", exec_path.display()))?;
-        let mut perms = meta.permissions();
-        perms.set_mode(perms.mode() | 0o755);
-        std::fs::set_permissions(&exec_path, perms)
-            .with_context(|| format!("chmod +x {}", exec_path.display()))?;
-    }
+    chmod_exec(&exec_path)?;
 
     Ok(InstalledExtension {
         id: manifest.id.clone(),
@@ -153,6 +150,39 @@ pub fn install_dev_dir(src_dir: &Path) -> Result<InstalledExtension> {
         kind: enum_wire(&manifest.kind),
         exec: manifest.runtime.exec.clone(),
     })
+}
+
+/// `chmod +x` a manifest-declared spawnable binary on unix. Shared by [`unpack`] (zip
+/// install) and [`install_dev_dir`] (dir install) — belt-and-suspenders on top of the
+/// zip-mode-preservation in [`unpack`]'s extraction loop, for the one path the
+/// manifest actually declares today: `runtime.exec`.
+///
+/// No other `Contributes` kind declares a spawnable command path as of this writing —
+/// `ToolDef`/`ModelDef`/`PanelDef`/`OAuthProviderDef` (see `src-extension/src/protocol.rs`)
+/// carry no path field. A `contributes.tools` entry is invoked IN-PROCESS on the
+/// extension's own `runtime.exec` daemon via `KomaMsg::Invoke`, not spawned as a
+/// separate binary. A genuinely separate stdio MCP server an extension ships (e.g. the
+/// Workflow extension's `bin/workflow-mcp`, shipped alongside `bin/office-daemon` by
+/// `bin/`-directory convention, not manifest declaration) is registered as its own
+/// `McpServerEntry` in `config.json` — a pre-existing, generic mechanism whose
+/// `command` can point ANYWHERE on disk, not just inside an extension's install dir, so
+/// chmod'ing it from here would be an odd (and unsafe) overreach. That binary's exec
+/// bit is instead covered by the zip-mode preservation below, which applies to every
+/// entry regardless of manifest declaration. If a future manifest field ever declares
+/// another spawnable path scoped to the extension dir, chmod it here too.
+///
+/// Propagates any failure instead of swallowing it — a silent chmod failure would only
+/// surface later as a confusing "permission denied" at first spawn.
+#[cfg(unix)]
+fn chmod_exec(exec_path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(exec_path)
+        .with_context(|| format!("stat {}", exec_path.display()))?;
+    let mut perms = meta.permissions();
+    perms.set_mode(perms.mode() | 0o755);
+    std::fs::set_permissions(exec_path, perms)
+        .with_context(|| format!("chmod +x {}", exec_path.display()))?;
+    Ok(())
 }
 
 /// Recursively copy `src`'s contents into `dst` (created if missing). Used by
@@ -308,6 +338,30 @@ fn unpack(zip_bytes: &[u8], dest_root: &Path) -> Result<InstalledExtension> {
                     MAX_TOTAL_UNPACKED_BYTES
                 );
             }
+
+            // Restore the entry's unix permission bits from the zip, masked to the
+            // standard rwx bits (never setuid/setgid/sticky). This is what actually
+            // fixes a SECOND binary an extension ships alongside its declared
+            // `runtime.exec` (e.g. a daemon that itself spawns a standalone MCP stdio
+            // server under `bin/`) — `std::fs::File::create` above wrote it with a
+            // plain umask-default mode, not the zip's recorded mode, so without this
+            // it would never be executable regardless of what the manifest declares.
+            // `unix_mode()` is `None` for a zip built on a non-unix host (e.g. plain
+            // `zip`/`unzip` on Windows, which records no unix attributes) — a no-op
+            // there, same as the runtime.exec chmod below.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = entry.unix_mode() {
+                    let mode = mode & 0o777;
+                    if mode != 0 {
+                        std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
+                            .with_context(|| {
+                                format!("restore permissions for {}", out_path.display())
+                            })?;
+                    }
+                }
+            }
         }
     }
 
@@ -327,19 +381,10 @@ fn unpack(zip_bytes: &[u8], dest_root: &Path) -> Result<InstalledExtension> {
         );
     }
 
-    // chmod +x the runtime exec on unix so it can actually be spawned. Propagate any
-    // failure instead of swallowing it — a silent chmod failure would only surface
-    // later as a confusing "permission denied" at first spawn.
+    // Belt-and-suspenders chmod of the one path the manifest actually declares, on top
+    // of the zip-mode preservation above.
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(&exec_path)
-            .with_context(|| format!("stat {}", exec_path.display()))?;
-        let mut perms = meta.permissions();
-        perms.set_mode(perms.mode() | 0o755);
-        std::fs::set_permissions(&exec_path, perms)
-            .with_context(|| format!("chmod +x {}", exec_path.display()))?;
-    }
+    chmod_exec(&exec_path)?;
 
     Ok(InstalledExtension {
         id: manifest.id.clone(),

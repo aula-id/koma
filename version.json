@@ -1,4 +1,4 @@
 {
-  "version": "0.3.1",
-  "message": "fix: MSI 'Launch koma' checkbox now opens the GUI; new app icon"
+  "version": "0.3.2",
+  "message": "fix: extension panels render on Windows; extension binaries keep exec bits (mac/linux MCP spawn); MCP daemon auto-restarts on version skew; store/detail views scroll"
 }

@@ -86,6 +86,20 @@ pub enum McpRequest {
     /// Per-server connection state, for the `/mcp` panel. Answered with
     /// [`McpResponse::Status`].
     Status,
+    /// Ask the daemon to report its build fingerprint
+    /// ([`crate::model::store::build_fingerprint`]) — the SAME daemon<->client
+    /// build-skew handshake concept task #142 uses for session daemons
+    /// (`Attach`/`Hello`), mirrored here because the GLOBAL MCP daemon has no attach
+    /// handshake of its own and can otherwise survive a binary upgrade indefinitely.
+    /// `manage::mcp::ensure_mcp_daemon_running` sends this ONLY when reusing an
+    /// ALREADY-running daemon (a freshly-spawned one is by definition current) and
+    /// treats a mismatch, an unexpected reply, or any transport/decode error on this
+    /// exchange as STALE — restarting the daemon fresh. Answered with
+    /// [`McpResponse::Fingerprint`]. Additive: an OLD (pre-#this-audit) daemon has no
+    /// arm for this variant, so it fails to decode the request frame and either
+    /// replies an `Error` or drops the connection — both land in the prober's "stale"
+    /// bucket, which is exactly the desired outcome.
+    Fingerprint,
     /// Ask the daemon to shut down GRACEFULLY (phase B2, Windows port). There is no
     /// `SIGTERM` on Windows, so `koma daemon kill` sends this to the mcp pipe instead:
     /// the daemon's request handler flips the SAME `shutting_down` flag a unix signal /
@@ -131,6 +145,10 @@ pub enum McpResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         global_error: Option<String>,
     },
+    /// Answer to [`McpRequest::Fingerprint`]: this daemon's build fingerprint
+    /// ([`crate::model::store::build_fingerprint`]), computed once at daemon startup
+    /// and constant for the process's lifetime.
+    Fingerprint(String),
     /// Answer to [`McpRequest::Reconnect`]: the reconnect was accepted (it runs in the
     /// background, so this acks receipt, not completion).
     Ack,

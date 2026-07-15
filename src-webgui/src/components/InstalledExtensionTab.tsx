@@ -142,6 +142,7 @@ export default function InstalledExtensionTab({ extId }: { extId: string }) {
   const provides = contributeLines(detail)
 
   return (
+    <div className="h-full overflow-y-auto">
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 p-5">
       {/* Header */}
       <div className="flex items-start gap-3">
@@ -335,6 +336,7 @@ export default function InstalledExtensionTab({ extId }: { extId: string }) {
           </ul>
         </section>
       )}
+    </div>
     </div>
   )
 }
