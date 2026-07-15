@@ -15,7 +15,7 @@ pub enum OAuthFlowState {
     /// [`crate::service::oauth::OAuthEvent`] lands.
     Starting,
     /// Provider picker: `0` = Codex (browser), `1` = Kilo Code (browser), `2` =
-    /// Codex (paste token). Inner `usize` is the cursor.
+    /// koma.run (browser), `3` = Codex (paste token). Inner `usize` is the cursor.
     Pick(usize),
     /// Codex browser flow: the loopback listener is up and `url` is the
     /// authorization URL (shown so the user can copy it if the browser didn't
