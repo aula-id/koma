@@ -954,31 +954,57 @@ itself.
   *next* `koma` session immediately; anything already running needs a restart to
   pick it up.
 
-### Uninstall — the full purge list
+### Uninstall — the complete nuke
 
-In order, all of the following happen (`requests_ext.rs::uninstall_extension` +
-`AppConfig::purge_extension`):
+Uninstall is a COMPLETE nuke — it leaves nothing behind, on disk or in memory, on this
+daemon or any other. Both paths run it: the attached daemon
+(`requests_ext.rs::uninstall_extension`) and the detached GUI host
+(`store_host.rs::spawn_uninstall`), differing only in the session-scoped steps a detached
+host has no live managers for (called out below). In order:
 
-1. Tool registration undone in the live MCP manager.
-2. The running child (if any) is stopped.
-3. `~/.koma/extensions/<id>/` is removed from disk.
-4. **`purge_extension(id)`** removes, atomically with the registry save:
-   - every key-backed provider this extension registered (`providers.register`
-     entries) and every OAuth connection it backed, by uuid;
-   - every model anchored to any of those (the same sweep
-     `providers.unregister`'s "host delete guard" uses);
-   - the extension's preferred-model record (`ext_preferred_models`).
-   - **Never touches** per-session `session_models` overrides — those live in
-     runtime `AppState`, not persisted `AppConfig`; a dangling session override
-     self-heals to the koma-free fallback at next dispatch instead.
-   - Returns whether the GLOBAL Main role was pointing at a now-dead model; if so,
-     a foreground toast reports it (Main isn't force-reassigned here — it self-heals
-     to koma-free at next dispatch, same as the session-override case above).
-5. The registry entry itself is removed and the whole thing is persisted in one
-   `config.save()`.
-6. In-memory-only state is cleared: the extension's published `context.set` blob,
-   any of its still-buffered `chat.prompt` entries across every session, and its
-   `ExtAgentRegistry`.
+1. **Snapshot the manifest** — its `contributes.sub_agents` names + `workspace_dir` are read
+   ONCE up front, because step 4 deletes the manifest they come from.
+2. **Stop the local child** (attached only) and **purge its contributed MCP tools** from the
+   live manager; clear its in-memory footprint — the published `context.set` blob, any
+   still-buffered `chat.prompt` entries across every session, and its `ExtAgentRegistry`.
+   Detached has no live managers, so this is skipped and self-heals on the next daemon boot.
+3. **Fan-out unload** — a fire-and-forget `UnloadExtension` is sent to EVERY OTHER live
+   session-daemon's socket so each drops the same in-memory footprint immediately instead of
+   at its next boot (best-effort; a daemon too old to know the verb error-replies or drops
+   the connection, and is ignored).
+4. **`~/.koma/extensions/<id>/` is removed** from disk (guarded against a path-escaping id).
+5. **`purge_extension(id)`** removes every key-backed provider this extension registered and
+   every OAuth connection it backed, every model anchored to those (the same sweep
+   `providers.unregister`'s "host delete guard" uses), and its `ext_preferred_models` record.
+   **`remove_ext_mcp_servers(id)`** additionally deregisters any configured MCP-server row
+   that belongs to the extension — one tagged with its id, OR whose command path lives under
+   `extensions/<id>/` (a bundled MCP-server binary, now a dead orphan). Never touches
+   per-session `session_models` overrides (they self-heal to koma-free at next dispatch); a
+   purged GLOBAL Main role is reported as a foreground toast (also self-healing, not
+   force-reassigned).
+6. **The registry entry is removed** and everything above is persisted in ONE `config.save()`,
+   followed by a live MCP reload so a removed orphan server's connection drops immediately:
+   the attached path reconnects its manager; the detached path bounces the global MCP daemon
+   so the next `ensure` respawns it off the new config.
+7. **Agent-override sweep** — for each snapshotted sub-agent name, `~/.koma/agents/<name>.md`
+   AND every `~/.koma/sessions/*/*/agents/<name>.md` override (a copy a user saved after
+   editing the extension's sub-agent) is deleted.
+
+   > **Same-name caveat**: the delete key is the sub-agent NAME (the registry is name-keyed
+   > and carries no ownership tag), so an UNRELATED user agent that happens to share a name
+   > with an uninstalled extension's sub-agent is swept too.
+8. **Workspace-dir nuke** — if the manifest declared a `workspace_dir`, that directory is
+   deleted (`remove_dir_all`) after being re-validated through the SAME policy install uses
+   (tilde-expand + strictly-under-`$HOME`, never `~/.koma` / `~/.ssh` / `~/.aws` / `~/.gnupg`
+   / `~/.config`'s root — enforced on the canonical path). A missing or policy-rejected dir is
+   skipped; a nonexistent dir is never created just to delete it. This is user data: the
+   GUI's uninstall confirm names this directory before the request is ever sent ("… and its
+   data directory (`<path>`). This cannot be undone.").
+9. **Reindex + rebuild the system prompt** (attached only, when a foreground session exists) so
+   the "# Extension workspaces" note drops the uninstalled extension immediately.
+
+The GUI never fires an uninstall without a two-step confirm (files, agents, MCP servers, and
+the data directory are all named) — it is genuinely irreversible.
 
 ### Daemon auto-start — four triggers
 

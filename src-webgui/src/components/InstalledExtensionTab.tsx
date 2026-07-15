@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Package, Blocks } from 'lucide-react'
 import { BrailleSpinner } from './BrailleSpinner'
 import { useKoma } from '../store/koma'
+import { UninstallExtensionConfirm } from './UninstallExtensionConfirm'
 
 // Shared helpers — same shapes as StoreTab for visual parity.
 function TierBadge({ tier }: { tier: string }) {
@@ -102,6 +103,8 @@ export default function InstalledExtensionTab({ extId }: { extId: string }) {
   const opResult = useKoma((s) => s.store.opResult)
   const openInstalledExtensionTab = useKoma((s) => s.openInstalledExtensionTab)
   const clearStoreNotice = useKoma((s) => s.clearStoreNotice)
+  // Two-step uninstall: the button ARMS the confirm; the shared dialog fires the request.
+  const [confirmUninstall, setConfirmUninstall] = useState(false)
 
   // Fire the request on mount (and when extId changes).
   useEffect(() => {
@@ -173,7 +176,7 @@ export default function InstalledExtensionTab({ extId }: { extId: string }) {
               installed
               pending={pendingOp === detail.id}
               onInstall={() => {}}
-              onUninstall={() => uninstallExtension(detail.id)}
+              onUninstall={() => setConfirmUninstall(true)}
             />
           ) : (
             <InstallButton
@@ -337,6 +340,14 @@ export default function InstalledExtensionTab({ extId }: { extId: string }) {
         </section>
       )}
     </div>
+    {confirmUninstall && (
+      <UninstallExtensionConfirm
+        name={displayName}
+        workspaceDir={detail.workspaceDir}
+        onConfirm={() => { uninstallExtension(detail.id); setConfirmUninstall(false) }}
+        onCancel={() => setConfirmUninstall(false)}
+      />
+    )}
     </div>
   )
 }

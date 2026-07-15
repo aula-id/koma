@@ -43,6 +43,9 @@ mod tests;
 
 pub use def::{AgentDef, AgentSource};
 pub use parse::load_agent_file;
+// Exposed for the extension-uninstall agent-override sweep, which validates each contributed
+// sub-agent name (the delete key) exactly as `save_agent` did when it wrote the file.
+pub(crate) use parse::validate_agent_name;
 pub use registry::{
     agents_dir, delete_agent, global_agents_dir, load_registry, save_agent, session_agents_dir,
     AgentRegistry, AgentScope,

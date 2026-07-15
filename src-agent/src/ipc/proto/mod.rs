@@ -475,6 +475,19 @@ pub enum ClientRequest {
     /// registry entry. Replies with a [`DaemonEvent::ExtensionOpResult`] then a fresh
     /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
     UninstallExtension { id: String },
+    /// FIRE-AND-FORGET cross-daemon in-memory unload of an extension — the uninstall
+    /// FAN-OUT. The one uninstalling side (a session-daemon OR the detached GUI host) sends
+    /// this to EVERY OTHER live session-daemon's keyed socket (over the blocking management
+    /// codec, like [`SpawnAgent`]/`Status` — never Attached, never streamed a snapshot) so
+    /// each drops the just-removed extension's LIVE footprint: its contributed MCP tools,
+    /// running child process, ext-agent containment registry, published context blob, and
+    /// buffered chat prompts. It touches NO config/disk (the uninstalling side already
+    /// persisted that removal); this is purely the in-memory half other daemons can't learn
+    /// about until their next boot. The receiver Acks, but the sender NEVER reads it
+    /// (fire-and-forget); a daemon too old to know the verb error-replies or drops the
+    /// connection, which the sender ignores (additive variant, like the MCP `Fingerprint`
+    /// probe). NOT gui-gated — it is daemon-internal and never sent by a GUI client.
+    UnloadExtension { id: String },
     /// Fetch the locally-installed extension registry (read-only): replies with a one-shot
     /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
     ListInstalledExtensions,

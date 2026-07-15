@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::ipc::frame::FrameReader;
 use crate::ipc::proto::{ClientRequest, DaemonEvent, SessionStatus};
 use crate::ipc::SyncIpcStream;
+use crate::model::store;
 
 /// Read timeout on the discovery probe socket. Short, because a discovery sweep may
 /// run synchronously in front of the picker and must stay snappy; a daemon that does
@@ -122,6 +123,69 @@ pub fn list_live_sessions() -> Vec<SessionStatus> {
     }
 
     out
+}
+
+/// FIRE-AND-FORGET fan-out of a [`ClientRequest::UnloadExtension`] to EVERY live
+/// session-daemon — the uninstall broadcast (step 3) that makes OTHER daemons drop a
+/// just-uninstalled extension's in-memory footprint (contributed MCP tools, running child,
+/// ext-agent registry, published context, buffered prompts) WITHOUT waiting for a restart.
+///
+/// Best-effort throughout, mirroring the Windows `send_shutdown_request` precedent: each
+/// live socket is connected, the ONE frame is written, and the stream is DROPPED without
+/// reading a reply — a `connect → write → close` contract (the tiny frame is delivered to
+/// the kernel buffer before close, so the daemon reads it even though we never wait for its
+/// Ack). A daemon too old to know the verb error-replies (never read) or drops the
+/// connection — ignored, exactly like the additive MCP `Fingerprint` probe. Every
+/// connect/write failure is logged and the sweep CONTINUES; this never fails, and never
+/// aborts the caller's uninstall.
+///
+/// It sends to EVERY live session (the sender's own daemon INCLUDED, when it has one — the
+/// receiver's unload is idempotent, so a self-send is harmless): the caller runs this OFF
+/// the event loop (a bare OS thread), so even a self-connect can never wedge the loop.
+/// Enumerates targets via [`list_live_sessions`], mapping each `session_id` to its keyed
+/// socket.
+pub fn broadcast_unload_extension(ext_id: &str) {
+    let req = ClientRequest::UnloadExtension {
+        id: ext_id.to_string(),
+    };
+    for status in list_live_sessions() {
+        let sock = match store::daemon_sock_path(&status.session_id) {
+            Ok(p) => p,
+            Err(e) => {
+                store::append_global_error_log(
+                    "ext-uninstall",
+                    &format!(
+                        "unload fan-out: no socket path for session {}: {e}",
+                        status.session_id
+                    ),
+                );
+                continue;
+            }
+        };
+        if let Err(e) = send_unload_frame(&sock, &req) {
+            store::append_global_error_log(
+                "ext-uninstall",
+                &format!("unload fan-out to session {} failed: {e}", status.session_id),
+            );
+        }
+    }
+}
+
+/// Connect ONE session socket, WRITE the fan-out frame, then drop it (fire-and-forget — no
+/// reply is read). A short write timeout ([`PROBE_TIMEOUT`]) bounds a wedged daemon; the
+/// tiny frame lands in the kernel buffer before close, so the daemon reads it even though we
+/// never wait for its Ack. Runtime-free blocking IO (same sync framing as the `Status`
+/// probe), so it is safe to call from a plain OS thread with no tokio runtime.
+fn send_unload_frame(sock: &Path, req: &ClientRequest) -> std::io::Result<()> {
+    let mut stream = SyncIpcStream::connect(sock)?;
+    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+    super::send_request(&mut stream, req).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            format!("write unload frame: {e:#}"),
+        )
+    })?;
+    Ok(())
 }
 
 /// The terminal reply of a cross-daemon [`spawn_into_session`] once the target daemon

@@ -145,7 +145,8 @@ pub(super) fn cmd_kill() -> Result<()> {
     // when it's live — a dead one just gets its stale files swept below via its own
     // not-running path.
     if mcp_live {
-        super::mcp::stop_mcp_daemon();
+        // `koma daemon kill` owns a terminal — print the outcome (not quiet).
+        super::mcp::stop_mcp_daemon(false);
     }
     // Catch any socket-less orphans the scan above couldn't see, regardless of whether
     // any keyed sockets were found live.
