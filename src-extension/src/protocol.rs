@@ -67,6 +67,14 @@ pub struct SubAgentDef {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Tool allow-list this sub-agent should be granted on install. Names must
+    /// match koma's selectable tool set (see `agent_selectable_tools()` on the
+    /// koma side); unknown names are dropped (not a hard failure) when merged
+    /// into the runtime `AgentDef`. Omitted/empty → koma's safe read-only
+    /// default (`read`, `grep`, `glob`, `dir_list`), same as before this field
+    /// existed. Serde-default so old manifests parse unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

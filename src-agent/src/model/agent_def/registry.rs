@@ -218,9 +218,20 @@ fn load_agents_from_dir(
 /// `model`/`effort` are copied through VERBATIM as the RAW slug/token the
 /// manifest declares — resolution (turning that slug into a concrete route) is
 /// a SPAWN-TIME concern (see [`crate::app::resolve::resolve_agent`]'s step 1c),
-/// never done here. `tools` is left at its default (safe read-only set). Each
-/// merged def also carries [`AgentDef::ext_id`] — the owning extension's
-/// manifest id — for a later wave's ext-scoped model lookup.
+/// never done here. `tools` is seeded from the manifest sub-agent's own `tools`
+/// list, filtered against [`crate::tool::agent_selectable_tools`] (unknown names
+/// are dropped with a logged warning, not a hard failure) and de-duplicated
+/// while preserving declaration order; an empty/absent manifest `tools` list
+/// leaves `AgentDef::tools` empty too, which [`AgentDef::effective_tools`] then
+/// falls back to the safe read-only default for — same as before this field
+/// existed. This is a MANIFEST-SEEDED DEFAULT ONLY: it is recomputed fresh on
+/// every `load()` call, so a user who saves an edited copy of this sub-agent
+/// (which persists as a `Session`-scope override — see
+/// `app::runtime::actions::agents::handle_save_agent`) has that override merged
+/// in AFTER this extension tier and wins outright; the manifest's `tools` never
+/// claws back a user's customization. Each merged def also carries
+/// [`AgentDef::ext_id`] — the owning extension's manifest id — for a later
+/// wave's ext-scoped model lookup.
 ///
 /// `InstalledExtension` only carries a flat projection of the manifest (id,
 /// version, tier, kind, exec, enabled) — NOT a cached `contributes` — so this
@@ -279,6 +290,7 @@ pub(crate) fn merge_extension_sub_agents(
                 .filter(|p| !p.is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| sub.description.clone());
+            let tools = validate_manifest_tools(&ext.id, &sub.name, &sub.tools);
             agents.insert(
                 name.clone(),
                 AgentDef {
@@ -288,6 +300,7 @@ pub(crate) fn merge_extension_sub_agents(
                     prompt,
                     model: sub.model.clone(),
                     effort: sub.effort.clone(),
+                    tools,
                     source: AgentSource::Extension,
                     ext_id: Some(ext.id.clone()),
                     ..AgentDef::default()
@@ -295,6 +308,41 @@ pub(crate) fn merge_extension_sub_agents(
             );
         }
     }
+}
+
+/// Filter+dedupe a manifest sub-agent's declared `tools` list against koma's
+/// selectable tool universe ([`crate::tool::agent_selectable_tools`]).
+///
+/// Unknown names are dropped (best-effort — a typo'd tool name in one
+/// extension's manifest must never break that extension's whole sub-agent, let
+/// alone the registry load) and logged via [`crate::model::store::append_global_error_log`].
+/// Order is preserved and duplicates collapsed to their first occurrence, so
+/// the resulting `AgentDef::tools` is deterministic across reloads.
+fn validate_manifest_tools(ext_id: &str, agent_name: &str, declared: &[String]) -> Vec<String> {
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let known = crate::tool::agent_selectable_tools();
+    let mut out = Vec::with_capacity(declared.len());
+    let mut unknown = Vec::new();
+    for name in declared {
+        if !known.iter().any(|k| k == name) {
+            unknown.push(name.clone());
+            continue;
+        }
+        if !out.contains(name) {
+            out.push(name.clone());
+        }
+    }
+    if !unknown.is_empty() {
+        crate::model::store::append_global_error_log(
+            "agent registry",
+            &format!(
+                "extension '{ext_id}': sub-agent '{agent_name}' declared unknown tool(s) {unknown:?}, dropped"
+            ),
+        );
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

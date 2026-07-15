@@ -314,7 +314,7 @@ an old manifest missing a field added in a later wave still parses (this is test
 
 | Array | Item shape |
 | --- | --- |
-| `sub_agents` | `{ "name": <string>, "description": <string>, "prompt"?: <string>, "model"?: <string>, "effort"?: <string> }` |
+| `sub_agents` | `{ "name": <string>, "description": <string>, "prompt"?: <string>, "model"?: <string>, "effort"?: <string>, "tools"?: [<string>] }` |
 | `models` | `{ "id": <string>, "display_name": <string> }` (declared shape only — see `models:contribute` in the grants reference for the runtime catalogue) |
 | `panels` | `{ "id": <string>, "title": <string>, "icon"?: <string, default "">  }` |
 | `tools` | `{ "name": <string>, "description": <string>, "input_schema"?: <JSON Schema value> }` |
@@ -351,6 +351,17 @@ SAME extension's models first, so a same-named model elsewhere in the user's
 catalogue can never hijack an extension's route — but the sub-agent still runs
 either way, just on Main until the extension's account is connected and its models
 are registered.
+
+**`sub_agents[].tools`** — the tool allow-list this sub-agent installs with. Names
+must match koma's selectable tool set (the same names the `/agents` editor's tool
+picker offers — things like `"read"`, `"grep"`, `"glob"`, `"dir_list"`, `"edit"`,
+`"write"`, `"bash"`; unknown names are dropped with a logged warning rather than
+failing the extension). Omitted or empty means koma's safe read-only default
+(`read`, `grep`, `glob`, `dir_list`) — the same behavior as before this field
+existed. This is a **seed, not a hard override**: it applies fresh from the
+manifest on every load, but the moment a user edits and saves that sub-agent from
+the `/agents` dashboard, their edit persists as a session-scope override that wins
+over the manifest from then on.
 
 **`oauth_providers`** (`OAuthProviderDef`) — each becomes a row in koma's OAuth
 picker (see "OAuth providers" below for the full flow):
