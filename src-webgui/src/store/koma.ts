@@ -20,7 +20,7 @@ import {
 
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
 export { fileKey, initialCoding } from './coding'
-import { postToPanel } from '../lib/panelBridge'
+import { postToPanel, broadcastThemeToPanels } from '../lib/panelBridge'
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
@@ -75,6 +75,11 @@ export type PaletteColors = {
   success: string
   info: string
   error: string
+  // Whether this palette reads as a dark theme (host-derived from `bg`'s
+  // relative luminance — see `push_rows.rs` `PushPalette::dark`). Optional so
+  // an older host build that hasn't started projecting it yet degrades
+  // gracefully (consumers fall back to `true`, the dark-default assumption).
+  dark?: boolean
 }
 
 // One named palette in the host's theme registry, WITH resolved colours (host
@@ -2278,6 +2283,7 @@ const initialPalette: PaletteColors = {
   success: '#00c853',
   info: '#50c8ff',
   error: '#ff3c3c',
+  dark: true,
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -2304,6 +2310,11 @@ function applyPaletteVars(palette: PaletteColors) {
   setVar('--koma-success', palette?.success)
   setVar('--koma-info', palette?.info)
   setVar('--koma-error', palette?.error)
+  // Extension panels (koma://extension iframes) are theme-aware: broadcast
+  // the freshly-applied palette to every registered panel right alongside
+  // the CSS-var repaint, so a live panel's colours track the daemon exactly
+  // like the chat chrome does (see docs/EXTENSIONS.md "Theme").
+  broadcastThemeToPanels(palette)
 }
 
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding
