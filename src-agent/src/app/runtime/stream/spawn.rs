@@ -243,6 +243,7 @@ fn spawn_task_with_id(
     task_text: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    ext_owned: bool,
     overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> Option<usize> {
     if client.is_none() || state.rest.sessions[sess_idx].session.is_none() {
@@ -324,6 +325,7 @@ fn spawn_task_with_id(
         task_text,
         tool_call_id,
         detached,
+        ext_owned,
         state.rest.agent_mode,
         overrides,
     )?;
@@ -358,11 +360,12 @@ pub(crate) fn spawn_task(
     task_text: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    ext_owned: bool,
     overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> Option<usize> {
     let id = state.rest.sessions[sess_idx].next_subagent_id;
     let spawned = spawn_task_with_id(
-        state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached, overrides,
+        state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached, ext_owned, overrides,
     )?;
     // Only consume the id on a successful spawn (a failed spawn leaves it free).
     state.rest.sessions[sess_idx].next_subagent_id += 1;
@@ -410,10 +413,11 @@ pub(crate) fn spawn_or_queue(
     task_text: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    ext_owned: bool,
     overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> SpawnOutcome {
     if running_subagents(state, sess_idx) < crate::app::subagent::MAX_SUBAGENTS {
-        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached, overrides) {
+        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached, ext_owned, overrides) {
             Some(id) => SpawnOutcome::Spawned(id),
             None => SpawnOutcome::Failed,
         }
@@ -433,6 +437,7 @@ pub(crate) fn spawn_or_queue(
                 prompt: task_text.to_string(),
                 tool_call_id,
                 detached,
+                ext_owned,
                 overrides,
             });
         SpawnOutcome::Queued(id)
@@ -481,6 +486,7 @@ pub(crate) fn try_start_pending(
             &pending.prompt,
             pending.tool_call_id.clone(),
             pending.detached,
+            pending.ext_owned,
             pending.overrides.clone(),
         );
         if started.is_none() {

@@ -122,6 +122,16 @@ pub struct SubAgent {
     /// injected EXACTLY ONCE even though the terminal-fold block runs every
     /// tick. Ignored for non-detached agents. Starts `false`.
     pub nudged: bool,
+    /// True when this sub-agent was spawned by an EXTENSION via the broker's
+    /// `agents.spawn` (see `app::ext::broker::broker_spawn`), as opposed to a human
+    /// `/task` command or a model `task` delegation. An ext-owned agent is
+    /// EXTENSION-INTERNAL: on terminal it stays COMPLETELY SILENT in the human chat
+    /// (no fold note, no nudge) — its spawner already receives the result via the
+    /// owned `agents.done` event (see [`crate::app::ext::events::emit_subagent_terminal`]).
+    /// `drain_subagents` skips the compact completion note when this is set, while
+    /// STILL recording usage + the persisted sub-agent record + firing `agents.done`.
+    /// `false` for every non-extension spawn path.
+    pub ext_owned: bool,
     /// Last-seen prompt tokens from [`AgentEvent::UsageReport`] (context size,
     /// not a cumulative sum). Zero until the report arrives.
     pub usage_tokens_in: u64,
@@ -191,6 +201,11 @@ pub struct PendingSubagent {
     /// detached (fires the completion nudge, never parks) once `try_start_pending`
     /// promotes it. `false` for a blocking delegation or a `/task` enqueue.
     pub detached: bool,
+    /// Carries the `ext_owned` origin flag across the queued→running promotion, so
+    /// an `agents.spawn` delegation enqueued while all slots were busy stays
+    /// extension-owned (silent on completion) once `try_start_pending` promotes it.
+    /// `false` for a `/task` enqueue or a model `task` delegation.
+    pub ext_owned: bool,
     /// Carries any per-call spawn overrides (model/effort) across the
     /// queued→running promotion, so a queued `agents.spawn` override survives
     /// the wait for a free slot exactly like `detached` does.

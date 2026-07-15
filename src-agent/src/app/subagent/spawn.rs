@@ -81,6 +81,7 @@ pub fn spawn_subagent(
     task: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    ext_owned: bool,
     mode: AgentMode,
     overrides: Option<SpawnOverrides>,
 ) -> Option<SubAgent> {
@@ -184,6 +185,7 @@ pub fn spawn_subagent(
         tool_call_id,
         detached,
         nudged: false,
+        ext_owned,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,

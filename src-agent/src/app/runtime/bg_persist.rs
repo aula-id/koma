@@ -165,6 +165,12 @@ pub(crate) fn restore_bg_records(
             // future non-terminal restore path fails safe (`nudged: false`, i.e.
             // still eligible for a nudge) instead of silently swallowing one.
             nudged: is_terminal,
+            // Restored records are dead AND already latched (`nudged` above), so the
+            // /task terminal fold and the `agents.done` Running->terminal edge can
+            // never re-fire on them — the origin flag is therefore INERT here and is
+            // deliberately NOT persisted (the `SubAgentRecord` carries no `ext_owned`
+            // column). `false` is the safe, behavior-neutral value.
+            ext_owned: false,
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,

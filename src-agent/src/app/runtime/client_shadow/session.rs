@@ -93,6 +93,10 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             // Detachment drives turn bookkeeping only (never rendered); the client
             // never advances a turn, so a shadow pending entry is left non-detached.
             detached: false,
+            // `ext_owned` drives the daemon-side completion-suppression only (never
+            // rendered); the client never runs the terminal fold, so a shadow pending
+            // entry keeps the inert default.
+            ext_owned: false,
             // Spawn overrides drive route RESOLUTION only (never rendered); the
             // client never spawns/resolves, so a shadow pending entry carries none.
             overrides: None,
@@ -214,6 +218,10 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         // nudge-latch is daemon-only bookkeeping, so it keeps its inert default.
         detached: sa.detached,
         nudged: false,
+        // Daemon-only bookkeeping (drives the terminal-fold suppression inside
+        // `drain_subagents`); the client shadow never runs that drain, so it keeps
+        // the inert default.
+        ext_owned: false,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,
