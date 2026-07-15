@@ -77,10 +77,14 @@ pub fn emit(state: &AppState, event: &str, params: &Value) {
 ///
 /// `session_uuid` is the sub-agent's stable session uuid; `local_id` its
 /// per-session sub-agent id — the pair [`ExtAgentRegistry::find_by_location`]
-/// correlates back to a spawner. `error` is `Some(text)` only when `status ==
-/// "error"` (the [`SubAgentStatus::Error`](crate::app::subagent::SubAgentStatus::Error)
-/// text) — carried into the `agents.done` payload as an ADDITIVE `"error"` field
-/// so a notify:true spawner learns WHY its sub-agent died without a separate
+/// correlates back to a spawner. `error` is `Some(text)` for an `"error"`
+/// settlement (the [`SubAgentStatus::Error`](crate::app::subagent::SubAgentStatus::Error)
+/// text) AND for a `"killed"` settlement that carries a REASON — the daemon-shutdown
+/// death notice (see `lifecycle::notify_ext_owned_subagents_on_shutdown`) passes
+/// `Some("daemon restart")` so a notify:true spawner can tell a host restart from a
+/// genuine kill (a user Ctrl+X kill via `broker_kill` passes `None`, so its payload is
+/// unchanged). It is carried into the `agents.done` payload as an ADDITIVE `"error"`
+/// field so a notify:true spawner learns WHY its sub-agent died without a separate
 /// `agents.result` round-trip. Old extensions that don't read the field are
 /// unaffected (they still see `agentId`/`status`); `agents.result` remains the
 /// pull path for the full terminal payload (including the `"output"` report on a
@@ -102,7 +106,13 @@ pub fn emit_subagent_terminal(
             find_terminal_owner(&state.rest.ext_agents, session_uuid, local_id)
         {
             let mut payload = json!({ "agentId": ext_agent_id, "status": status });
-            if status == "error" {
+            // The optional `error` reason rides along on an `"error"` settlement (the
+            // failure text) AND on a `"killed"` settlement that carries a reason — the
+            // daemon-shutdown death notice passes `Some("daemon restart")` so a
+            // notify:true spawner can tell a host restart from a real kill. A caller that
+            // passes `None` (e.g. `broker_kill`'s user Ctrl+X) adds no field, so its
+            // payload is unchanged.
+            if status == "error" || status == "killed" {
                 if let Some(e) = error {
                     payload["error"] = json!(e);
                 }
