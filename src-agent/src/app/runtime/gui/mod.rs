@@ -67,7 +67,20 @@ fn mime_for(path: &str) -> &'static str {
 /// both ride the same `koma` scheme. Empty path or `/` maps to `index.html`.
 fn handle_koma_request(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri = request.uri();
-    if uri.host() == Some("extension") {
+    // `extension` is the native authority (`koma://extension/...`). On Windows,
+    // WebView2/Chromium can't register a real custom scheme, so wry serves the
+    // `koma://` protocol over an http fake-domain: it navigates
+    // `koma://extension/...` as `http://koma.extension/...` (wry `webview2` mod
+    // `work_around_uri_prefix` = `{http_or_https}://{scheme}.`, and koma never
+    // calls `with_https_scheme`, so it's `http`). wry REVERTS that fake URL back
+    // to `koma://extension/...` before invoking this handler
+    // (`revert_uri_work_around` in `prepare_request`), so the native authority is
+    // what we actually see on every platform — which is why the main GUI
+    // (`koma://localhost`) already works on Windows. We ALSO accept the
+    // un-reverted fake authority `koma.extension` defensively, so a request that
+    // ever reaches here still in the work-around form routes to the extension UI
+    // instead of falling through into the host chrome tree.
+    if matches!(uri.host(), Some("extension" | "koma.extension")) {
         return handle_extension_request(uri.path());
     }
 

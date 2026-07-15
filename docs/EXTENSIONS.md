@@ -667,6 +667,14 @@ DIFFERENT origin from koma's own chrome (`koma://localhost/`). The iframe has no
 origin, does not inherit `window.ipc`/`window.__komaClient`, and has no documented
 host IPC beyond the bridge described here.
 
+The exact origin panels load from is **platform-dependent** — `koma://extension/<id>/…`
+on macOS/Linux, but `http://koma.extension/<id>/…` on Windows (WebView2 can't
+register a real custom scheme, so the host serves the same content over an http
+fake-domain). Never hardcode this origin in your panel: reference your own assets
+with **relative** paths (`<script src="koma-panel.js">`, not an absolute URL) and let
+the `koma-panel.js` helper handle host messaging (it posts to `window.parent` with
+`targetOrigin: '*'`, so it works unchanged on every platform).
+
 ### The envelope, both directions, verbatim
 
 Panel → host:
