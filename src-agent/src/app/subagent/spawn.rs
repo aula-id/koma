@@ -117,9 +117,27 @@ pub fn spawn_subagent(
     // would write the real per-directory `memory/TODO.md`, breaking plan-mode
     // read-only). This only ever NARROWS whatever the agent declared.
     let mut tools = agent.effective_tools();
+    // Inherit connected MCP tools automatically, exactly like the main agent does
+    // (no per-agent MCP picker): snapshot the shared manager's discovered tools —
+    // the wire `ToolDef`s to advertise, plus their namespaced names appended to
+    // this agent's allow-list so the execution gate in `run_agent_loop` keeps the
+    // model's calls to them. Mirrors `app::runtime::stream::run` (run.rs:447-456).
+    // With no MCP servers (or none connected yet) both are empty and the spawn is
+    // byte-identical to the pre-MCP path.
+    let mut mcp_tools: Vec<crate::dto::openrouter::ToolDef> = Vec::new();
+    if let Some(mgr) = ctx.mcp_manager.as_ref() {
+        let (defs, names) = mgr.advertise_cached();
+        tools.extend(names);
+        mcp_tools = defs;
+    }
     if mode == AgentMode::Plan {
+        // MCP tools ride through untouched — same precedent as the main advertise
+        // fold at run.rs:487 (the user explicitly wired those servers, so they own
+        // that risk), otherwise `tool_allowed_in_plan` would strip every mcp__*
+        // name since it knows nothing about them.
         tools.retain(|n| {
-            crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "checklist")
+            (crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "checklist"))
+                || n.starts_with("mcp__")
         });
     }
     let convo = context::build_seed(agent, awareness, memory_md, task);
@@ -144,6 +162,7 @@ pub fn spawn_subagent(
         config,
         settings,
         tools,
+        mcp_tools,
         ctx,
         convo,
         task_intent,

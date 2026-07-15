@@ -238,6 +238,7 @@ pub async fn run_agent_loop(
     config: AppConfig,
     settings: Settings,
     tools: Vec<String>,
+    mcp_tools: Vec<crate::dto::openrouter::ToolDef>,
     ctx: ToolCtx,
     mut convo: Conversation,
     task_intent: String,
@@ -263,7 +264,7 @@ pub async fn run_agent_loop(
         // 1. Stream one model reply on a fresh per-step channel, then drain it.
         //    Advertise ONLY this agent's allow-list to the model (the execution
         //    gate below stays as a backstop).
-        let outcome = stream_step(&client, &resolved, convo.history(), &tools, &tx).await;
+        let outcome = stream_step(&client, &resolved, convo.history(), &tools, &mcp_tools, &tx).await;
 
         // Fold this step's usage into the running totals (best-effort: a step
         // with no Usage chunk simply contributes nothing). tokens_in is
@@ -483,6 +484,7 @@ async fn stream_step(
     resolved: &Resolved,
     history: Vec<crate::dto::chat::ChatMessage>,
     tools: &[String],
+    mcp_tools: &[crate::dto::openrouter::ToolDef],
     tx: &UnboundedSender<AgentEvent>,
 ) -> StreamOutcome {
     let (inner_tx, mut inner_rx) = mpsc::unbounded_channel();
@@ -506,6 +508,9 @@ async fn stream_step(
     let install_id = resolved.install_id.clone();
     // Advertise only this agent's allow-list (owned clone moved into the task).
     let advertise = tools.to_vec();
+    // Owned clone of the inherited MCP tool defs, moved into the task alongside
+    // `advertise` (same pattern — see doc comment above `stream_step`).
+    let mcp_tools = mcp_tools.to_vec();
     let send = tokio::spawn(async move {
         let conn = crate::service::openrouter::Conn {
             endpoint: &endpoint,
@@ -515,11 +520,13 @@ async fn stream_step(
             oauth_uuid: &oauth_uuid,
             install_id: &install_id,
         };
-        // Sub-agents advertise only their own allow-list and receive NO MCP tools
-        // (kept simple — MCP is a main-agent capability for now), so pass an empty
-        // `mcp_tools` slice.
+        // Sub-agents advertise their own allow-list PLUS any connected MCP tools,
+        // inherited automatically from the shared manager (see `spawn_subagent`) —
+        // exactly like the main agent's advertise fold (run.rs:447-456).
         let _ = c
-            .stream_complete(conn, &model_id, &provider, &effort, history, &advertise, &[], None, inner_tx)
+            .stream_complete(
+                conn, &model_id, &provider, &effort, history, &advertise, &mcp_tools, None, inner_tx,
+            )
             .await;
     });
 
