@@ -225,10 +225,12 @@ pub(super) fn drain_subagents(
         // task-tool delivery happen EXACTLY ONCE (the id is removed after the
         // loop, so later ticks skip it).
         //
-        // `chat_fold` carries the /task chat-fold note; `defer` carries the
-        // (call_id, result) for the task-tool deferred delivery; `nudge` carries
-        // the (id, agent, status_label) for a DETACHED sub-agent's one-shot
-        // completion nudge (buffered, injected when idle — mirrors bg-bash).
+        // `chat_fold` carries the /task COMPACT completion note (a
+        // BASH_NUDGE_MARK-prefixed User body; `None` for an ext-owned agent, which
+        // stays silent — Tier B); `defer` carries the (call_id, result) for the
+        // task-tool deferred delivery; `nudge` carries the (id, agent, status_label)
+        // for a DETACHED sub-agent's one-shot completion nudge (buffered, injected
+        // when idle — mirrors bg-bash).
         // `sub_usage` carries (model_id, tokens_in, tokens_out, cost) to merge+record
         // when the sub-agent reaches any terminal state. At most one of chat_fold /
         // defer / nudge is Some (blocking-task-tool, /task, and detached are mutually
@@ -302,33 +304,48 @@ pub(super) fn drain_subagents(
                         // twice regardless of `nudged`.
                         (None, result.map(|r| (call_id.clone(), r)), None, carry_usage, false)
                     }
-                    // /task command path (tool_call_id == None): on Done, build the
-                    // FULL, untruncated report note (injected as an assistant turn
-                    // below). Restored/live records are NOT pruned once terminal (the
-                    // list only ever grows, see below), so this arm would otherwise
-                    // re-fire on every tick forever. Gated on `!sa.nudged` and latches
-                    // via `mark_nudged` (applied to `sa.nudged` right after the match)
-                    // so it fires exactly once, mirroring the detached arm above.
-                    (None, SubAgentStatus::Done(result)) if !sa.nudged => (
+                    // /task command path (tool_call_id == None), HUMAN-spawned (not
+                    // ext-owned): on Done, fold the report into a COMPACT completion
+                    // note — a BASH_NUDGE_MARK-prefixed body whose line 1 is the terse
+                    // `[sub-agent #N name] finished` summary the transcript renders (a
+                    // dim green ✓), while the FULL report on the following lines is what
+                    // the model reads (the mark is stripped on the wire, so no text is
+                    // lost). Mirrors the detached-completion nudge (deferred.rs) and the
+                    // bg-bash nudge: same mark, same compact render, full text preserved
+                    // for the model. Restored/live records are NOT pruned once terminal
+                    // (the list only ever grows, see below), so this arm would otherwise
+                    // re-fire on every tick forever; gated on `!sa.nudged` and latched
+                    // via `mark_nudged` (applied to `sa.nudged` right after the match) so
+                    // it fires exactly once, mirroring the detached arm above. An
+                    // EXT-OWNED agent (Tier B) SKIPS this arm via `!sa.ext_owned` and
+                    // falls through to the silent usage-only arm below — its spawner
+                    // already gets the result via `agents.done`, so it must never
+                    // interrupt the human's chat.
+                    (None, SubAgentStatus::Done(result)) if !sa.nudged && !sa.ext_owned => (
                         Some(format!(
-                            "[sub-agent #{} {}] finished: {result}",
-                            sa.id, sa.agent_name
+                            "{}[sub-agent #{} {}] finished\n{result}",
+                            crate::dto::chat::BASH_NUDGE_MARK,
+                            sa.id,
+                            sa.agent_name
                         )),
                         None,
                         None,
                         usage_tuple,
                         true,
                     ),
-                    // /task command path: Killed or Error — no chat-fold note (the
-                    // turn is dead), but still carry accumulated usage so cost is
-                    // not silently lost.
-                    // Latched the same as the Done arm above: without `!sa.nudged`,
-                    // a terminated-but-kept record would re-add its usage every tick.
-                    (None, SubAgentStatus::Killed | SubAgentStatus::Error(_))
-                        if !sa.nudged =>
-                    {
-                        (None, None, None, usage_tuple, true)
-                    }
+                    // Terminal with NO chat-fold note, but still carry accumulated
+                    // usage so cost is never silently lost. Covers:
+                    // - an EXT-OWNED Done (Tier B — completely silent in the human chat;
+                    //   the spawner gets its `agents.done` callback instead), and
+                    // - a /task Killed or Error (the turn is dead — nothing to fold).
+                    // Latched the same as the Done arm above: without `!sa.nudged`, a
+                    // terminated-but-kept record would re-add its usage every tick.
+                    (
+                        None,
+                        SubAgentStatus::Done(_)
+                        | SubAgentStatus::Killed
+                        | SubAgentStatus::Error(_),
+                    ) if !sa.nudged => (None, None, None, usage_tuple, true),
                     _ => (None, None, None, None, false),
                 }
             }
@@ -350,17 +367,24 @@ pub(super) fn drain_subagents(
             dirty = true;
         }
         if let Some(note) = chat_fold {
-            // /task command path: append the full report as a display-only
-            // assistant turn so the session retains a complete record.
+            // /task command path: append the COMPACT completion note (a
+            // BASH_NUDGE_MARK-prefixed USER turn) so the transcript shows a dim green
+            // ✓ line while the model still reads the FULL report on its next turn (the
+            // mark is stripped on the wire). A USER turn — mirroring the detached /
+            // bg-bash nudges — so the transcript's mark render (User-gated,
+            // `render_bash_nudge_block`) and every wire builder's mark strip apply.
+            // Pushed as display-only history with NO stream kickoff, preserving the old
+            // fold's "sits in history, the model sees it on its next turn" behavior. The
+            // marked body is logged VERBATIM to sqlite (as deferred.rs does) so a reload
+            // renders the same compact line.
             if let Some(sess) = state.rest.sessions[idx].session.as_mut() {
-                // Log to sqlite (no usage/cost for a sub-agent fold).
                 let _ = crate::model::msglog::append(
                     &sess.path,
-                    crate::dto::chat::Role::Assistant,
+                    crate::dto::chat::Role::User,
                     &note,
                     None,
                 );
-                sess.conversation.push_assistant(note, None, false);
+                sess.conversation.push_user(note);
                 let _ = sess.save();
             }
         }

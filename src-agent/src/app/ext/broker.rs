@@ -546,8 +546,10 @@ fn active_session_idx(state: &AppState) -> Option<usize> {
 /// SAME `spawn_or_queue` path the model's `task` tool uses (respecting
 /// `MAX_SUBAGENTS` → queue when full), into the ACTIVE (foreground) session.
 /// `agent` defaults to [`DEFAULT_AGENT`]. Spawned NON-detached with no
-/// tool-call id (the `/task`-command shape) so completion records a display
-/// note + usage but never auto-wakes the chat model. The returned `agentId` is
+/// tool-call id (the `/task`-command shape) but marked `ext_owned`, so its
+/// completion is COMPLETELY SILENT in the human chat (no fold note, no nudge) —
+/// the spawner instead receives the result via the owned `agents.done` event.
+/// Usage + the persisted sub-agent record are still recorded. The returned `agentId` is
 /// an EXT-FACING id freshly allocated from this extension's own
 /// [`ExtAgentRegistry`] (never the raw per-session sub-agent id), permanently
 /// bound to the session's STABLE UUID — see the registry's doc for why that
@@ -609,7 +611,11 @@ fn broker_spawn(
     // foreground switch.
     let session_uuid = state.rest.sessions[sess_idx].id.clone();
 
-    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false, overrides) {
+    // `ext_owned = true`: this is an EXTENSION-INTERNAL agent. On terminal it stays
+    // COMPLETELY SILENT in the human chat (no fold note, no nudge) — the spawner
+    // receives the result via the owned `agents.done` event instead (see
+    // `emit_subagent_terminal`). Usage + the sub-agent record are still recorded.
+    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false, true, overrides) {
         SpawnOutcome::Spawned(local_id) => {
             let ext_agent_id = state
                 .rest
@@ -2134,6 +2140,7 @@ mod tests {
             tool_call_id: None,
             detached: false,
             nudged: false,
+            ext_owned: false,
             usage_tokens_in: 0,
             usage_tokens_out: 0,
             usage_cost: 0.0,

@@ -55,6 +55,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             &prompt,
             None,  // detached: not tied to a blocking call
             true,  // detached = true
+            false, // ext_owned: model-initiated, not an extension spawn
             None,  // no spawn overrides for a model-initiated task
         ) {
             crate::app::runtime::stream::spawn::SpawnOutcome::Spawned(id) => format!(
@@ -95,6 +96,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             &prompt,
             Some(call.id.clone()),
             false, // blocking delegation (parks the round)
+            false, // ext_owned: model-initiated, not an extension spawn
             None,  // no spawn overrides for a model-initiated task
         ) {
             crate::app::runtime::stream::spawn::SpawnOutcome::Spawned(_)

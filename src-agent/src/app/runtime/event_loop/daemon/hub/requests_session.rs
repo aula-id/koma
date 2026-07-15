@@ -127,7 +127,7 @@ impl DaemonHub {
             None
         };
 
-        match spawn_or_queue(state, sess_idx, client, handle, agent_name, task, None, false, overrides) {
+        match spawn_or_queue(state, sess_idx, client, handle, agent_name, task, None, false, false, overrides) {
             SpawnOutcome::Spawned(_) | SpawnOutcome::Queued(_) => {
                 self.send_to(idx, DaemonEvent::Ack)
             }
