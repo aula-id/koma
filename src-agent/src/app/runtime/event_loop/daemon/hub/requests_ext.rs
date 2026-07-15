@@ -62,7 +62,9 @@ impl DaemonHub {
             ClientRequest::InstallExtension { id, version } => {
                 self.install_extension(idx, state, handle, id, version)
             }
-            ClientRequest::UninstallExtension { id } => self.uninstall_extension(idx, state, id),
+            ClientRequest::UninstallExtension { id } => {
+                self.uninstall_extension(idx, state, handle, id)
+            }
             ClientRequest::UnloadExtension { id } => self.unload_extension(idx, state, id),
             ClientRequest::ListInstalledExtensions => self.list_installed_extensions(idx, state),
             ClientRequest::ExtPanelMsg {
@@ -281,7 +283,13 @@ impl DaemonHub {
     /// save + a live MCP reconnect (5/8); sweep same-named agent overrides (7); nuke the
     /// declared workspace_dir (9); and refresh the dir cache + system prompt (10). Replies
     /// with an [`DaemonEvent::ExtensionOpResult`] + a fresh [`DaemonEvent::InstalledExtensions`].
-    fn uninstall_extension(&mut self, idx: usize, state: &mut AppState, id: String) {
+    fn uninstall_extension(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        id: String,
+    ) {
         // (1) Snapshot the manifest ONCE — its sub-agent names + workspace_dir — BEFORE the
         // dir is deleted in step 6 (after which the manifest is unreadable).
         let snap = crate::app::ext::uninstall::snapshot_manifest(&id);
@@ -339,7 +347,7 @@ impl DaemonHub {
         // (8 + 5b) The SINGLE save covering all three mutations above, PLUS the live MCP
         // reconnect from the just-saved server set (which drops any removed orphan row's live
         // connection). `save_and_reload_mcp` IS the one save on this path.
-        if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state) {
+        if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state, handle) {
             store::append_global_error_log(
                 "ext-uninstall",
                 &format!("save/reload config after uninstall {id}: {e:#}"),
@@ -447,6 +455,7 @@ impl DaemonHub {
     pub(in crate::app::runtime::event_loop::daemon) fn drain_store_replies(
         &mut self,
         state: &mut AppState,
+        handle: &tokio::runtime::Handle,
     ) {
         while let Ok(reply) = self.store_rx.try_recv() {
             match reply {
@@ -476,7 +485,7 @@ impl DaemonHub {
                     signature,
                 } => {
                     if let Some(i) = self.clients.iter().position(|c| c.id == client_id) {
-                        self.finish_install(i, state, id, zip, sha256, signature);
+                        self.finish_install(i, state, handle, id, zip, sha256, signature);
                     }
                 }
                 StoreReply::InstallFailed {
@@ -570,6 +579,7 @@ impl DaemonHub {
         &mut self,
         idx: usize,
         state: &mut AppState,
+        handle: &tokio::runtime::Handle,
         id: String,
         zip: Vec<u8>,
         sha256: String,
@@ -609,7 +619,7 @@ impl DaemonHub {
                 // ONE save covering both the registry upsert and any registered MCP-server
                 // rows, plus a live MCP reconnect from the just-saved server set — mirrors
                 // `uninstall_extension`'s single `save_and_reload_mcp` call.
-                if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state) {
+                if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state, handle) {
                     store::append_global_error_log(
                         "ext-install",
                         &format!("save config after install {}: {e:#}", ext.id),

@@ -386,17 +386,17 @@ impl DaemonHub {
                 env,
                 url,
             } => {
-                self.set_mcp_server(idx, state, uuid, name, enabled, transport, command, args, env, url);
+                self.set_mcp_server(idx, state, handle, uuid, name, enabled, transport, command, args, env, url);
             }
 
             // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
             ClientRequest::DeleteMcpServer { uuid } => {
-                self.delete_mcp_server(idx, state, uuid);
+                self.delete_mcp_server(idx, state, handle, uuid);
             }
 
             // GUI MCP enable toggle: set the `enabled` flag by uuid, persist + reconnect.
             ClientRequest::EnableMcpServer { uuid, enabled } => {
-                self.enable_mcp_server(idx, state, uuid, enabled);
+                self.enable_mcp_server(idx, state, handle, uuid, enabled);
             }
 
             // GUI provider CRUD (Connector ProviderForm). Upsert by uuid via the
