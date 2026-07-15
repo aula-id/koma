@@ -4,7 +4,18 @@
 > shaped and will change until it is frozen at v1. This version reflects the
 > feature set landed through wave W12b (delegated OAuth, `models.register`,
 > `providers.register`, the full grants surface, the panel bridge, and event
-> fan-out) — everything described below is real and runnable today, not a
+> fan-out) plus everything landed since: manifest sub-agents can declare a
+> `tools` allow-list and now inherit connected MCP tools automatically; a
+> manifest can declare a `workspace_dir` — an extension-owned writable root
+> injected into every session; `models.invoke` takes `format: "json"` and its
+> timeouts were raised (every other verb gets a 120s wire timeout;
+> `models.invoke` alone gets 360s wire / 330s inner); `agents.send` lets an extension steer an
+> already-spawned sub-agent at its next turn boundary; sub-agents an
+> extension spawns via `agents.spawn` are completely silent in the human's
+> chat (the spawner gets the result through `agents.done` instead); panels
+> are theme-aware (`KomaPanel.onTheme`/`getTheme`); and `koma ext install
+> --dev` sideloads an unsigned local build with no store, no signature, no
+> sign-in — everything described below is real and runnable today, not a
 > proposal. For the byte-level wire contract (framing, timeouts, handshake
 > state machine) see `docs/ARCH_EXTENSION.md`; this document is the
 > capability reference — what an extension can do and exactly how, with
@@ -223,7 +234,8 @@ demo mode**: run any of them with `cargo run -p <name>` and, with no koma proces
 the other end, it prints the handshake and the scripted interaction it would have
 with koma, frame by frame, so the protocol's shape is visible without a host to talk
 to. Set `KOMA_EXT_SOCKET` (and `KOMA_EXT_TOKEN`) and a sample instead connects to a
-real koma over that unix socket and runs for real.
+real koma over that socket and runs for real — a unix socket path on Linux/macOS,
+or a `\\.\pipe\koma-ext-<id>` named pipe on Windows.
 
 Rust is the source of truth and the first SDK; a generated TypeScript version comes
 later.
@@ -399,7 +411,11 @@ failing the extension). Omitted or empty means koma's safe read-only default
 existed. This is a **seed, not a hard override**: it applies fresh from the
 manifest on every load, but the moment a user edits and saves that sub-agent from
 the `/agents` dashboard, their edit persists as a session-scope override that wins
-over the manifest from then on.
+over the manifest from then on. Separately from this allow-list, every sub-agent —
+manifest-declared or not — also inherits whatever MCP tools are currently
+connected, exactly like the main agent does (there is no per-agent MCP picker);
+this `tools` field only ever narrows koma's own built-in tools, it never affects
+MCP tool availability.
 
 **`oauth_providers`** (`OAuthProviderDef`) — each becomes a row in koma's OAuth
 picker (see "OAuth providers" below for the full flow):
@@ -625,6 +641,15 @@ spawn with `notify: false` (today's default) gets no `agents.done` — only the
 broadcast `subagent.done` others may also be subscribed to. See `event-watcher-daemon`
 for the subscribed-broadcast side and `fleet-board-daemon`/`orchestrator-daemon` for
 the `notify: true` side.
+
+Separately from delivery, every sub-agent an extension spawns through
+`agents.spawn` is marked ext-owned, and an ext-owned agent's completion is
+**completely silent in the human's chat** — no fold note, no nudge, nothing
+pushed to the transcript — regardless of `notify`. This is unlike a human-run
+`/task`, whose completion folds a compact checkmark line into the chat. The
+extension gets its result through `agents.result` / `agents.done` (when
+`notify: true`) instead; usage and the persisted sub-agent record are still
+tracked either way.
 
 No event payload ever carries a sub-agent's report text or transcript — only ids,
 names, and short status labels. There is no batching, coalescing, or rate-limiting
