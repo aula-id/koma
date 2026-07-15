@@ -1,4 +1,4 @@
 # Icons
 
-Placeholder art (solid #1a1a2e rounded square + simple "K" glyph). Regenerate with `python3 assets/gen-placeholder-icons.py`.
-Replace `icon.png` (and re-run derivations) with final branding when it's ready — packaging config points here.
+Real koma logo (512×512 source master, supplied 2026-07-15). Regenerate with `python3 assets/gen-icons.py <source.png>`.
+The gen-placeholder-icons.py is kept only for reference.
