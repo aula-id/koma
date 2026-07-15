@@ -86,6 +86,102 @@ pub fn install_dev_unsigned(zip_path: &Path) -> Result<InstalledExtension> {
     unpack(&bytes, &dest_root)
 }
 
+/// CLI dev-sideload (`koma ext install --dev <path>`): install an UNSIGNED zip from
+/// local disk, skipping integrity/signature verification exactly like
+/// [`install_dev_unsigned`]. Unlike that function this is reachable in EVERY build
+/// (not just `debug_assertions`) — it's an explicit, local, user-typed CLI action
+/// (the developer already has the file and typed `--dev`), not a silent fallback for
+/// an untrusted network response, so the release-build signature gate around the
+/// store path is unaffected.
+pub fn install_dev_zip(zip_path: &Path) -> Result<InstalledExtension> {
+    let bytes = std::fs::read(zip_path)
+        .with_context(|| format!("read extension zip {}", zip_path.display()))?;
+    let dest_root = store::extensions_dir()?;
+    unpack(&bytes, &dest_root)
+}
+
+/// CLI dev-sideload (`koma ext install --dev <path>`) from an already-unpacked
+/// directory (`manifest.json` + `bin/<exec>` etc. at its root): parse + validate the
+/// manifest exactly like [`unpack`], then COPY (never symlink — Windows has no
+/// reliable unprivileged symlink) the whole tree into `extensions/<id>/`. Same trust
+/// model as [`install_dev_zip`]: no signature, no store.
+pub fn install_dev_dir(src_dir: &Path) -> Result<InstalledExtension> {
+    let manifest_path = src_dir.join("manifest.json");
+    let bytes = std::fs::read(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let manifest: ExtensionManifest =
+        serde_json::from_slice(&bytes).context("parse manifest.json")?;
+    validate_id(&manifest.id)?;
+
+    let dest_root = store::extensions_dir()?;
+    let dest = dest_root.join(&manifest.id);
+    // Clean install, same rationale as `unpack`'s reinstall-clears-stale-files
+    // behaviour: `validate_id` has already rejected any id (e.g. `.`) that could
+    // make `dest` resolve to `dest_root` itself or an ancestor.
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest).with_context(|| format!("clear {}", dest.display()))?;
+    }
+    copy_dir_all(src_dir, &dest)?;
+
+    // Same exec-escape guard + existence check `unpack` applies to a zip install.
+    let exec_path = safe_exec_rel(&manifest.runtime.exec, &dest)?;
+    if !exec_path.is_file() {
+        bail!(
+            "extension manifest declares runtime.exec '{}' but it was not found under {} after copy",
+            manifest.runtime.exec,
+            dest.display()
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(&exec_path)
+            .with_context(|| format!("stat {}", exec_path.display()))?;
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o755);
+        std::fs::set_permissions(&exec_path, perms)
+            .with_context(|| format!("chmod +x {}", exec_path.display()))?;
+    }
+
+    Ok(InstalledExtension {
+        id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        tier: enum_wire(&manifest.tier),
+        granted: manifest.requires.iter().map(enum_wire).collect(),
+        enabled: true,
+        kind: enum_wire(&manifest.kind),
+        exec: manifest.runtime.exec.clone(),
+    })
+}
+
+/// Recursively copy `src`'s contents into `dst` (created if missing). Used by
+/// [`install_dev_dir`]. REAL file copies only — symlinks are skipped rather than
+/// followed-or-recreated, since a dev-staged extension directory has no business
+/// containing one and Windows has no reliable unprivileged symlink story.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).with_context(|| format!("create {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))? {
+        let entry = entry.with_context(|| format!("read dir entry under {}", src.display()))?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("stat {}", entry.path().display()))?;
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &dst_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &dst_path).with_context(|| {
+                format!(
+                    "copy {} -> {}",
+                    entry.path().display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Reject a zip whose SHA-256 differs from `expected_sha256`, or whose Ed25519
 /// `signature` over the 32 raw digest bytes does not verify against `pubkey_b64`.
 /// The signed message is the raw digest bytes (NOT the hex string).

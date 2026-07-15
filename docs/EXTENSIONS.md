@@ -167,6 +167,10 @@ identity, whether it is a free or paid extension, how koma should launch it, and
 its contributions and its requirements. That manifest is the whole agreement between
 koma and the extension in one place — the full field-by-field reference is next.
 
+Building your own extension? `koma ext install --dev <zip|dir>` sideloads it locally
+with no store, no signature, no sign-in — see "Dev install (offline, unsigned)"
+under Lifecycle below.
+
 ## How it looks in the app
 
 Installed extensions live in the sidebar, each with its own icon sitting next to
@@ -872,6 +876,41 @@ Verifies the zip's SHA-256 then an Ed25519 signature over it before any disk wri
 rejects unsafe zip paths; unpacks under `~/.koma/extensions/<id>/`; persists an
 enabled registry entry. `kind: "daemon"` extensions are started immediately after a
 successful install (one of four auto-start triggers — see below).
+
+### Dev install (offline, unsigned)
+
+`koma ext install --dev <zip|dir>` sideloads a LOCAL extension with none of the
+store's discipline — no signature, no koma.run sign-in, no network at all. It's the
+CLI-level escape hatch for iterating on an extension you're building: point it at the
+`.zip` `src-extension/pack.sh` produces, or at an already-staged directory (a
+`manifest.json` + `bin/<exec>` at its root — the same shape a zip unpacks to, e.g.
+what `pack.sh` stages before zipping). `koma ext` / `koma ext install` with no
+`--dev` just prints usage; there is no other CLI surface for install — the in-app
+store is the normal, signed path for anyone who isn't developing the extension
+itself.
+
+- **zip vs. dir**: a `.zip` goes through the same unpack pipeline as a signed
+  install, minus the integrity/signature check. A directory is validated
+  (`manifest.json` must be present and parse) then COPIED — never symlinked, since
+  Windows has no reliable unprivileged symlink — into `~/.koma/extensions/<id>/`.
+  Either way, `runtime.exec` must already resolve to a real file at the target
+  location — raw crate source (no `bin/` staging, no built binary) will fail with a
+  clear error rather than installing something that can't spawn.
+- **auto-grants**: every capability the manifest's `requires` lists is granted
+  automatically (dev installs skip any confirmation step), and each one is printed
+  to the terminal as it's granted (`[dev] granting agents:orchestrate ...`) so you
+  can see the surface you just gave the extension.
+- **tier marker**: the registry entry's `tier` is forced to `"dev"` (instead of
+  whatever the manifest declares) so it's visually distinguishable from a real
+  store install wherever tier is shown.
+- **reinstall**: installing the same id again replaces the existing entry in place
+  (`[dev] replacing existing <id> vX.Y.Z`) — install → test → reinstall is a normal
+  loop, not something you need to uninstall first.
+- **enabled by default**: a dev install is always `enabled: true` — it's for
+  testing right now, not sitting dormant.
+- Runs before the daemon starts, so a freshly-installed extension is live for the
+  *next* `koma` session immediately; anything already running needs a restart to
+  pick it up.
 
 ### Uninstall — the full purge list
 

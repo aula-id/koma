@@ -51,11 +51,13 @@ use crate::model::app_config::InstalledExtension;
 use crate::model::store;
 
 pub mod broker;
+pub mod dev_cli;
 pub mod events;
 pub mod install;
 pub mod register;
 mod wire;
 pub use broker::{ExtAgentRegistry, ExtCallRequest, ExtNotify};
+pub use dev_cli::{print_ext_usage, run_install_dev as run_ext_install_dev};
 use wire::{connect_and_handshake, reader_task, writer_task, Handshaked};
 
 /// A reply to a koma→ext `Invoke`: the extension's `result` value, or an error string
