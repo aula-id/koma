@@ -24,7 +24,7 @@
 // the binary, so its items are legitimately unreferenced until a later stage.
 #![allow(dead_code)]
 
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::AbortHandle;
 
 pub mod context;
@@ -91,6 +91,16 @@ pub struct SubAgent {
     /// Receiver end of the sub-agent's [`AgentEvent`] channel. Drained by the
     /// orchestrator; dropping it makes the task's emits no-ops.
     pub rx: UnboundedReceiver<AgentEvent>,
+    /// Sender end of the INJECTION channel: a follow-up user message pushed here
+    /// (via the broker `agents.send` verb or the main-agent `task_send` tool) is
+    /// drained by [`engine::run_agent_loop`] at the TOP of its next iteration and
+    /// folded into the sub-agent's isolated history as a fresh `user` turn — so a
+    /// human/extension/main-agent can STEER a running sub-agent, delivered at a
+    /// turn boundary (never mid-stream). Sending is best-effort: once the loop
+    /// ends its receiver closes and further sends are dropped (the next drain then
+    /// settles the agent). Restored/shadow records carry an inert sender nothing
+    /// drains. Not persisted (runtime-only, like `rx`/`abort`).
+    pub inject_tx: UnboundedSender<String>,
     /// Human-readable transcript lines accumulated from the event stream.
     pub transcript: Vec<String>,
     /// The sub-agent's structured conversation, replaced wholesale on each
@@ -210,4 +220,30 @@ pub struct PendingSubagent {
     /// queued→running promotion, so a queued `agents.spawn` override survives
     /// the wait for a free slot exactly like `detached` does.
     pub overrides: Option<SpawnOverrides>,
+    /// Follow-up user messages injected (via `agents.send` / `task_send`) while
+    /// this delegation was still QUEUED — it has no running loop / channel yet, so
+    /// they are stashed here in submit order and handed to the sub-agent's
+    /// injection channel at promotion time (`try_start_pending` →
+    /// `spawn_task_with_id`), delivered as its FIRST follow-ups right after the
+    /// task prompt. Empty for the common case (nothing steered a queued agent).
+    pub pending_injects: Vec<String>,
+}
+
+/// Outcome of injecting a follow-up user message into a sub-agent — the shared
+/// result of the broker `agents.send` verb and the main-agent `task_send` tool,
+/// which funnel through the SAME
+/// [`SessionRuntime::inject_into_subagent`](crate::app::state::SessionRuntime::inject_into_subagent)
+/// helper so the two surfaces steer identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectOutcome {
+    /// Handed to a RUNNING sub-agent's injection channel; the engine folds it into
+    /// history (and the viewer transcript) at its next turn boundary.
+    Sent,
+    /// Stashed on a QUEUED (not-yet-started) sub-agent; delivered when it is
+    /// promoted to running.
+    Queued,
+    /// The sub-agent is in a TERMINAL state (done/killed/error) — nothing delivered.
+    Terminal,
+    /// No sub-agent (running or queued) with that local id in this session.
+    Unknown,
 }

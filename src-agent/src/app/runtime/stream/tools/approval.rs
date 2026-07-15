@@ -401,6 +401,18 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        // Intercept the model-callable `task_send` tool: inject a follow-up user
+        // message into a sub-agent this session owns, delivered at its next turn
+        // boundary (via the shared `inject_into_subagent` helper — same core as the
+        // broker `agents.send` verb). Answers synchronously, never parks; a bad
+        // id / empty message returns an `error:` line surfaced to the model.
+        if call.function.name == "task_send" {
+            match intercepts::intercept_task_send(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         // Intercept the model-callable `cd` tool BEFORE the generic dispatch path.
         // `cd` must MUTATE session state (the live cwd + dir cache + awareness),
         // which a read-only `ToolCtx` can't do — so the tool's `run` only RESOLVES

@@ -66,7 +66,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
     matches!(name,
         "read" | "grep" | "glob" | "dir_list" | "dir_cache_update" | "recall"
         | "web_search" | "web_fetch" | "pong" | "cd" | "git_cred"
-        | "task" | "task_output" | "task_kill" | "bash_output" | "bash_kill"
+        | "task" | "task_output" | "task_kill" | "task_send" | "bash_output" | "bash_kill"
         | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "checklist")
 }
 
@@ -185,6 +185,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
+        Box::new(task::TaskSend),
         Box::new(todo::Checklist),
         Box::new(internet::WebFetch),
         Box::new(internet::WebSearch),
@@ -199,9 +200,11 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
 }
 
 /// Tool names the /agents editor's tool picker EXCLUDES from the selectable list —
-/// internal / infra tools a sub-agent should never be handed: `task` (the recursion
-/// guard), `pong` (a health no-op), and `dir_cache_update` (an internal reindex trigger).
-const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "pong", "dir_cache_update"];
+/// internal / infra tools a sub-agent should never be handed: `task` + `task_send`
+/// (the orchestration/recursion guard — a sub-agent neither spawns nor steers other
+/// sub-agents), `pong` (a health no-op), and `dir_cache_update` (an internal reindex
+/// trigger).
+const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "task_send", "pong", "dir_cache_update"];
 
 /// The user-selectable tool names for the /agents editor, in [`all_tools`] SOURCE ORDER
 /// (deterministic): every built-in tool name except [`AGENT_PICKER_EXCLUDED`].

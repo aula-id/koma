@@ -245,8 +245,8 @@ pub(crate) enum GateDecision {
 /// arm, so the gate reports [`GateDecision::UnknownMethod`] rather than a silent
 /// allow.
 ///
-/// `agents.spawn` / `agents.kill` MUTATE the fleet → require
-/// [`Grant::AgentsOrchestrate`]. `agents.list` / `agents.status` /
+/// `agents.spawn` / `agents.kill` / `agents.send` MUTATE or STEER the fleet →
+/// require [`Grant::AgentsOrchestrate`]. `agents.list` / `agents.status` /
 /// `agents.result` only READ → require [`Grant::AgentsRead`] (satisfied by
 /// orchestrate too; see [`is_granted`]). Each newer family requires its OWN grant,
 /// EXACT-MATCH — no cross-family or lattice implication (orchestrate⇒read stays the
@@ -261,7 +261,7 @@ pub(crate) enum GateDecision {
 /// koma drives the extension).
 fn required_grant(method: &str) -> Option<Grant> {
     match method {
-        "agents.spawn" | "agents.kill" => Some(Grant::AgentsOrchestrate),
+        "agents.spawn" | "agents.kill" | "agents.send" => Some(Grant::AgentsOrchestrate),
         "agents.list" | "agents.status" | "agents.result" => Some(Grant::AgentsRead),
         "sessions.list" | "sessions.create" | "sessions.switch" | "sessions.spawn_into" => {
             Some(Grant::SessionsManage)
@@ -454,6 +454,9 @@ pub fn handle_ext_call(
         }
         "agents.kill" => {
             let _ = reply.send(broker_kill(state, &ext_id, &params));
+        }
+        "agents.send" => {
+            let _ = reply.send(broker_send(state, &ext_id, &params));
         }
         "chat.prompt" => {
             // Resolve the ACTIVE session (the same fallback `agents.spawn` uses), then
@@ -839,6 +842,65 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
         json!({ "killed": true })
     } else {
         json!({ "error": format!("unknown agentId: {ext_agent_id}") })
+    }
+}
+
+/// `agents.send { agentId, message }` → inject `message` as a follow-up USER turn
+/// into the sub-agent, delivered at its next TURN BOUNDARY (never mid-stream). The
+/// running sub-agent's loop folds it into its isolated history + viewer transcript
+/// on its next iteration. Resolved ONLY through THIS extension's own
+/// [`ExtAgentRegistry`] (same containment as `status`/`kill`), so an extension can
+/// never steer a sub-agent it didn't spawn.
+///
+/// Running → `{ "sent": true }`; QUEUED (over the cap, not yet started) → the
+/// message is stashed on the pending record and delivered at promotion, replying
+/// `{ "sent": true, "status": "queued" }`; TERMINAL (done/killed/error) →
+/// `{ "error": "agent is terminal" }`. Missing/empty `message` → its own error;
+/// missing `agentId` / unknown id / closed session mirror the `agents.status`
+/// error shapes exactly.
+fn broker_send(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
+    let Some(ext_agent_id) = parse_ext_agent_id(params) else {
+        return json!({ "error": "agents.send requires an 'agentId'" });
+    };
+    let message = params
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if message.is_empty() {
+        return json!({ "error": "agents.send requires a non-empty 'message'" });
+    }
+    let message = message.to_string();
+    // Resolve the ext-facing id through THIS extension's registry (clone the ref so
+    // the mutable session borrow below is unencumbered — mirrors `broker_kill`).
+    let Some(r) = state
+        .rest
+        .ext_agents
+        .get(ext_id)
+        .and_then(|reg| reg.get(ext_agent_id))
+        .cloned()
+    else {
+        return json!({ "error": format!("unknown agentId: {ext_agent_id}") });
+    };
+    let Some(sess_idx) = state
+        .rest
+        .sessions
+        .iter()
+        .position(|s| s.id == r.session_uuid && !s.closed)
+    else {
+        return json!({ "error": "session closed" });
+    };
+    // Funnel through the SAME core the `task_send` tool uses, so both surfaces
+    // steer identically.
+    use crate::app::subagent::InjectOutcome;
+    match state.rest.sessions[sess_idx].inject_into_subagent(r.local_subagent_id, message) {
+        InjectOutcome::Sent => json!({ "sent": true }),
+        InjectOutcome::Queued => json!({ "sent": true, "status": "queued" }),
+        InjectOutcome::Terminal => json!({ "error": "agent is terminal" }),
+        // The registry entry resolved but the sub-agent is neither in `subagents`
+        // nor `pending_subagents` (its session was cleared) — same shape as an
+        // unknown id, which is what it now effectively is.
+        InjectOutcome::Unknown => json!({ "error": format!("unknown agentId: {ext_agent_id}") }),
     }
 }
 
@@ -1918,7 +1980,7 @@ mod tests {
         use Grant::{AgentsOrchestrate as Orch, AgentsRead as Read};
 
         // Every recognised method partitioned by the grant it requires.
-        let orchestrate_methods = ["agents.spawn", "agents.kill"];
+        let orchestrate_methods = ["agents.spawn", "agents.kill", "agents.send"];
         let read_methods = ["agents.list", "agents.status", "agents.result"];
 
         // granted = []  → EVERYTHING denied.
@@ -2153,6 +2215,9 @@ mod tests {
     ) -> SubAgent {
         let abort = handle.spawn(std::future::ready(())).abort_handle();
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // A live injection sender the test can observe as "sent" for a Running
+        // fixture; its receiver is dropped, so the send is a harmless no-op.
+        let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
         SubAgent {
             id,
             agent_name: agent_name.to_string(),
@@ -2161,6 +2226,7 @@ mod tests {
             status,
             abort,
             rx,
+            inject_tx,
             transcript: Vec::new(),
             messages: Vec::new(),
             live_text: String::new(),
@@ -2269,6 +2335,120 @@ mod tests {
             err.contains("failed to spawn"),
             "with orchestrate granted the call reaches the spawn path (which fails for \
              lack of a client/session in the fixture), got {out}"
+        );
+    }
+
+    /// `agents.send` steers a RUNNING sub-agent (`sent:true`), stashes onto a
+    /// QUEUED one (`sent:true,status:queued` + the message lands in its
+    /// `pending_injects`), and REFUSES a TERMINAL one (`agent is terminal`).
+    /// Bad/absent params + unknown ids mirror the `agents.status` error shapes,
+    /// and the verb is orchestrate-gated (a read-only grant is denied). All ids
+    /// resolve through the extension's OWN registry, exactly like status/kill.
+    #[test]
+    fn send_steers_running_stashes_queued_refuses_terminal() {
+        let rt = tokio::runtime::Runtime::new().expect("build runtime");
+        let mut state = fixture_state();
+        let client: Option<Arc<OpenRouterClient>> = None;
+
+        // A running agent (steerable), a done agent (terminal), and a queued one.
+        state.rest.sessions[0]
+            .subagents
+            .push(inert_subagent(rt.handle(), 3, "general", SubAgentStatus::Running));
+        state.rest.sessions[0].subagents.push(inert_subagent(
+            rt.handle(),
+            4,
+            "researcher",
+            SubAgentStatus::Done("done".to_string()),
+        ));
+        state.rest.sessions[0]
+            .pending_subagents
+            .push_back(crate::app::subagent::PendingSubagent {
+                id: 5,
+                agent_name: "general".to_string(),
+                prompt: "queued task".to_string(),
+                tool_call_id: None,
+                detached: false,
+                ext_owned: false,
+                overrides: None,
+                pending_injects: Vec::new(),
+            });
+        let sess_uuid = state.rest.sessions[0].id.clone();
+        let registry = state.rest.ext_agents.entry("test.ext".to_string()).or_default();
+        let ext_running = registry.insert(sess_uuid.clone(), 3, false);
+        let ext_done = registry.insert(sess_uuid.clone(), 4, false);
+        let ext_queued = registry.insert(sess_uuid, 5, false);
+
+        // Running → delivered.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_running, "message": "focus on the parser" }),
+        );
+        assert_eq!(out.get("sent").and_then(|v| v.as_bool()), Some(true), "running send must report sent, got {out}");
+        assert!(out.get("status").is_none(), "a running send is not queued, got {out}");
+
+        // Queued → stashed + status:queued, and the message lands in pending_injects.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_queued, "message": "also check tests" }),
+        );
+        assert_eq!(out.get("sent").and_then(|v| v.as_bool()), Some(true), "queued send must report sent, got {out}");
+        assert_eq!(out.get("status").and_then(|v| v.as_str()), Some("queued"), "queued send must mark queued, got {out}");
+        let pend = state.rest.sessions[0]
+            .pending_subagents
+            .iter()
+            .find(|p| p.id == 5)
+            .expect("queued agent still present");
+        assert_eq!(pend.pending_injects, vec!["also check tests".to_string()], "queued send must stash the message");
+
+        // Terminal → refused (nothing delivered).
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_done, "message": "too late" }),
+        );
+        assert_eq!(out.get("error").and_then(|v| v.as_str()), Some("agent is terminal"), "terminal send must refuse, got {out}");
+
+        // Unknown ext id → unknown agentId.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": 9999, "message": "x" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown agentId")),
+            "unknown id must error, got {out}"
+        );
+
+        // Missing agentId / empty message → their own validation errors.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send", json!({ "message": "x" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires an 'agentId'")),
+            "missing agentId must error, got {out}"
+        );
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsOrchestrate], "agents.send",
+            json!({ "agentId": ext_running, "message": "   " }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'message'")),
+            "empty message must error, got {out}"
+        );
+
+        // Orchestrate-gated: a read-only grant is denied outright.
+        let out = call_broker(
+            &mut state, rt.handle(), &client, "test.ext",
+            &[Grant::AgentsRead], "agents.send",
+            json!({ "agentId": ext_running, "message": "x" }),
+        );
+        assert!(
+            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            "read-only grant must deny agents.send, got {out}"
         );
     }
 
