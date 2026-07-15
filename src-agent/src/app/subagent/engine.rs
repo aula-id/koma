@@ -245,6 +245,12 @@ pub async fn run_agent_loop(
     max_steps: Option<usize>,
     tx: UnboundedSender<AgentEvent>,
     mut inject_rx: UnboundedReceiver<String>,
+    // Display identity for this run, used ONLY for the `error.log` line below (a
+    // dead sub-agent otherwise leaves no trace outside its own — often unread —
+    // transcript). `agent_name` is the agent-def name (e.g. "general"); `agent_id`
+    // is the per-session sub-agent id assigned by the orchestrator at spawn.
+    agent_name: String,
+    agent_id: usize,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
     // runs out of steps before the model gives a no-tool reply.
@@ -308,8 +314,16 @@ pub async fn run_agent_loop(
             });
         }
 
-        // A fatal stream error ends the run immediately.
+        // A fatal stream error ends the run immediately. Beyond the in-memory
+        // `AgentEvent::Error` (folded into `sa.status`/transcript by the orchestrator),
+        // also record it to the global error.log — otherwise a sub-agent that dies
+        // unattended (no human watching the `$` panel) leaves no trace anywhere a
+        // human is likely to look.
         if let Some(err) = outcome.error {
+            crate::model::store::append_global_error_log(
+                "subagent",
+                &format!("agent '{agent_name}' #{agent_id} died: {err}"),
+            );
             emit(&tx, AgentEvent::Error(err));
             return;
         }

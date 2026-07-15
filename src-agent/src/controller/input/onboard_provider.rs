@@ -72,7 +72,8 @@ fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
             KeyCode::Enter => match cursor {
                 0 => Action::OAuthStart(OAuthProvider::Codex),
                 1 => Action::OAuthStart(OAuthProvider::Kilocode),
-                // Any other row (2) switches to the paste-token screen (no task).
+                2 => Action::OAuthStart(OAuthProvider::KomaRun),
+                // Any other row (3) switches to the paste-token screen (no task).
                 _ => {
                     s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
                     Action::None
@@ -81,9 +82,9 @@ fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
             _ => Action::None,
         },
         OAuthFlowState::CodexPaste { input } => match key.code {
-            // Discard the draft, back to the provider picker.
+            // Discard the draft, back to the provider picker (on the paste-token row).
             KeyCode::Esc => {
-                s.oauth_flow = OAuthFlowState::Pick(2);
+                s.oauth_flow = OAuthFlowState::Pick(3);
                 Action::None
             }
             KeyCode::Enter => {

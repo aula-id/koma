@@ -98,7 +98,8 @@
             <Directory Id="DesktopFolder" Name="Desktop">
                 <Component Id="ApplicationShortcutDesktop" Guid="*">
                     <!-- koma-vendored template diff (vs pristine cargo-packager v0.11.8 main.wxs): added Arguments="gui" so this Desktop shortcut launches `koma gui` (the desktop GUI), not bare koma.exe (the TUI). -->
-                    <Shortcut Id="ApplicationDesktopShortcut" Name="{{product_name}}" Description="Runs {{product_name}}" Target="[!Path]" Arguments="gui" WorkingDirectory="INSTALLDIR" />
+                    <!-- koma-vendored template diff (vs pristine cargo-packager v0.11.8 main.wxs): added the same Icon="ProductIcon" conditional the Start Menu shortcut below carries, so the Desktop shortcut doesn't fall back to a generic Windows placeholder icon. -->
+                    <Shortcut Id="ApplicationDesktopShortcut" Name="{{product_name}}" Description="Runs {{product_name}}" Target="[!Path]" Arguments="gui" {{#if icon_path}}Icon="ProductIcon"{{/if}} WorkingDirectory="INSTALLDIR" />
                     <RemoveFolder Id="DesktopFolder" On="uninstall" />
                     <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}" Name="Desktop Shortcut" Type="integer" Value="1" KeyPath="yes" />
                 </Component>

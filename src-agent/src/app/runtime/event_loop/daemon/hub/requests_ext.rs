@@ -63,6 +63,7 @@ impl DaemonHub {
                 self.install_extension(idx, state, handle, id, version)
             }
             ClientRequest::UninstallExtension { id } => self.uninstall_extension(idx, state, id),
+            ClientRequest::UnloadExtension { id } => self.unload_extension(idx, state, id),
             ClientRequest::ListInstalledExtensions => self.list_installed_extensions(idx, state),
             ClientRequest::ExtPanelMsg {
                 ext_id,
@@ -272,26 +273,39 @@ impl DaemonHub {
         });
     }
 
-    /// Uninstall `id` (synchronous — no network): purge its contributions from the live MCP
-    /// manager, stop its child process, remove its on-disk `extensions/<id>/` dir + registry
-    /// entry (persisted), and drop its ext-agent registry. Replies with an
-    /// [`DaemonEvent::ExtensionOpResult`] + a fresh [`DaemonEvent::InstalledExtensions`].
+    /// Uninstall `id` — the COMPLETE nuke (attached path, synchronous, no network), in the
+    /// audited order: snapshot the manifest before it's gone (1); unload THIS daemon's live
+    /// footprint (2/4 + in-memory clears); fan the same unload out to every OTHER live
+    /// session-daemon (3); remove the on-disk package dir (6); purge the extension's catalogue
+    /// contributions + deregister orphan MCP-server rows + drop the registry entry, then ONE
+    /// save + a live MCP reconnect (5/8); sweep same-named agent overrides (7); nuke the
+    /// declared workspace_dir (9); and refresh the dir cache + system prompt (10). Replies
+    /// with an [`DaemonEvent::ExtensionOpResult`] + a fresh [`DaemonEvent::InstalledExtensions`].
     fn uninstall_extension(&mut self, idx: usize, state: &mut AppState, id: String) {
-        // Clone the manager Arcs up front so the immutable borrow of `state.rest` ends before
-        // the `&mut` config / ext_agents mutations below.
-        let mcp = state.rest.mcp_manager.clone();
-        let ext_mgr = state.rest.ext_manager.clone();
+        // (1) Snapshot the manifest ONCE — its sub-agent names + workspace_dir — BEFORE the
+        // dir is deleted in step 6 (after which the manifest is unreadable).
+        let snap = crate::app::ext::uninstall::snapshot_manifest(&id);
 
-        // Undo the tool registration (a no-op when no MCP manager / no tools), then stop the
-        // running child (idempotent; absent extension is a no-op).
-        crate::app::ext::register::purge_contributions(&id, mcp.as_ref());
-        if let Some(mgr) = &ext_mgr {
-            mgr.stop(&id);
+        // (2/4 + footprint) Unload THIS daemon's live in-memory footprint: stop the child,
+        // purge its contributed MCP tools, drop its context blob / buffered prompts /
+        // ext-agent registry. Shared with the fan-out `unload_extension` handler.
+        unload_ext_footprint(state, &id);
+
+        // (3) Fan the same in-memory unload out to every OTHER live session-daemon, so none
+        // keeps serving a stale copy until its next boot. OFF the event loop (a bare OS
+        // thread): the blocking socket sweep — and the harmless self-connect it includes —
+        // must never wedge the loop. Best-effort; failures are logged inside, never fatal.
+        {
+            let ext_id = id.clone();
+            std::thread::spawn(move || {
+                crate::app::runtime::manage::broadcast_unload_extension(&ext_id);
+            });
         }
 
-        // Remove the unpacked package dir. Guard the id against a path-escape before joining
-        // (defense in depth — the id comes from the client): only a well-formed reverse-DNS
-        // id is a real installed dir name, and anything else can't match a registry entry.
+        // (6) Remove the unpacked package dir. Guard the id against a path-escape before
+        // joining (defense in depth — the id comes from the client): only a well-formed
+        // reverse-DNS id is a real installed dir name, and anything else can't match a
+        // registry entry.
         if is_safe_ext_id(&id) {
             if let Ok(dir) = store::extensions_dir() {
                 let target = dir.join(&id);
@@ -312,27 +326,37 @@ impl DaemonHub {
             );
         }
 
-        // W12b: PURGE the extension's CATALOGUE contributions (its key-backed providers, the
-        // models served by them or by its oauth conns, the oauth conns themselves, and its
-        // preferred-model record) BEFORE dropping the registry entry, so the single config save
-        // below persists everything at once. `main_reset` flags that a purged model held the
-        // GLOBAL Main role (resolution self-heals to koma-free; we toast the reset).
+        // (5a) Config mutations. W12b: PURGE the extension's CATALOGUE contributions (its
+        // key-backed providers, the models served by them or by its oauth conns, the conns,
+        // its preferred-model record). Then DEREGISTER orphan MCP-server rows (ext-owned, or
+        // whose command lives under extensions/<id>/ — a bundled MCP binary now deleted). Then
+        // DROP the registry entry. `main_reset` flags that a purged model held the GLOBAL Main
+        // role (resolution self-heals to koma-free; we toast the reset).
         let purge = state.rest.config.purge_extension(&id);
-        // Drop the registry entry + persist (one save covers the purge + the registry removal).
+        let _mcp_rows_removed = state.rest.config.remove_ext_mcp_servers(&id);
         state.rest.config.remove_extension_by_id(&id);
-        if let Err(e) = state.rest.config.save() {
+
+        // (8 + 5b) The SINGLE save covering all three mutations above, PLUS the live MCP
+        // reconnect from the just-saved server set (which drops any removed orphan row's live
+        // connection). `save_and_reload_mcp` IS the one save on this path.
+        if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state) {
             store::append_global_error_log(
                 "ext-uninstall",
-                &format!("save config after uninstall {id}: {e:#}"),
+                &format!("save/reload config after uninstall {id}: {e:#}"),
             );
         }
-        // Clear the extension's IN-MEMORY footprint: its published context blob, any buffered
-        // chat prompts in every session, and its ext-agent containment registry.
-        state.rest.ext_context.remove(&id);
-        for sess in state.rest.sessions.iter_mut() {
-            sess.pending_ext_prompts.retain(|(eid, _)| eid != &id);
+
+        // (7) Sweep same-named agent-override files (global + every session) left by a user
+        // who saved an edited copy of one of this extension's sub-agents. The same-name caveat
+        // is documented on the helper.
+        crate::app::ext::uninstall::sweep_agent_overrides(&snap.sub_agent_names);
+
+        // (9) Nuke the extension's declared workspace_dir (validated against the SAME policy
+        // as install; a missing/rejected dir is skipped). User-approved data deletion — the
+        // GUI confirm named this dir before the request was ever sent.
+        if let Some(ws) = snap.workspace_dir.as_deref() {
+            crate::model::ext_workspace::remove_workspace_dir(ws);
         }
-        state.rest.ext_agents.remove(&id);
 
         // Surface a purged Main-role assignment as a foreground toast (delivered via the
         // snapshot diff) — mirrors how a dangling Main provider is otherwise reported.
@@ -343,15 +367,41 @@ impl DaemonHub {
                 .set_toast_info(format!("main model reset: extension {id} uninstalled"));
         }
 
+        // (10) A workspace root may now point at a deleted dir; refresh the dir cache + the
+        // system prompt so the "# Extension workspaces" note drops the uninstalled extension
+        // (it is no longer in `installed_extensions`, so `rebuild_system` excludes it). The
+        // stale root string self-heals on the next boot's re-derive. Mirrors the install tail.
+        if state.rest.fg().session.is_some() {
+            if let Some(roots) = state.rest.fg().session.as_ref().map(|s| s.workdirs()) {
+                crate::tool::dircache::reindex(roots, state.rest.fg().dir_cache.clone());
+            }
+            if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                sess.rebuild_system();
+            }
+        }
+
         self.send_to(
             idx,
             DaemonEvent::ExtensionOpResult {
-                id,
+                id: id.clone(),
                 ok: true,
                 error: None,
             },
         );
         self.send_installed_extensions(idx, state);
+    }
+
+    /// FAN-OUT receiver ([`ClientRequest::UnloadExtension`]): another uninstalling daemon (or
+    /// the detached GUI host) asked THIS daemon to drop extension `id`'s LIVE in-memory
+    /// footprint — its contributed MCP tools, running child, ext-agent registry, context blob,
+    /// and buffered prompts. It touches NO config/disk (the uninstalling side already
+    /// persisted the removal); this is purely the in-memory half other daemons can't learn
+    /// about until their next boot. Idempotent (an absent extension is a no-op), so a
+    /// redundant or self-directed send is harmless. Acks — the fire-and-forget sender never
+    /// reads it, but the request→reply contract stays intact.
+    fn unload_extension(&mut self, idx: usize, state: &mut AppState, id: String) {
+        unload_ext_footprint(state, &id);
+        self.send_to(idx, DaemonEvent::Ack);
     }
 
     /// Reply with the current locally-installed extension registry (read-only).
@@ -378,6 +428,9 @@ impl DaemonHub {
                     enabled: e.enabled,
                     granted: e.granted.clone(),
                     panels,
+                    // Surfaced so the GUI uninstall confirm can name the data dir the nuke
+                    // deletes (read fresh off the installed manifest, like `panels`).
+                    workspace_dir: crate::model::ext_workspace::read_workspace_dir(&e.id),
                 }
             })
             .collect();
@@ -540,7 +593,23 @@ impl DaemonHub {
         match installed {
             Ok(ext) => {
                 state.rest.config.upsert_extension(ext.clone());
-                if let Err(e) = state.rest.config.save() {
+                // Auto-register any manifest-declared bundled MCP servers (e.g. a standalone
+                // `workflow-mcp` shipped alongside the extension's own daemon) BEFORE the
+                // single save+reload below, so a fresh install never needs the user to
+                // hand-add an McpServerEntry — see `register::register_mcp_servers`.
+                if let Err(e) = crate::app::ext::register::register_mcp_servers(
+                    &ext,
+                    &mut state.rest.config,
+                ) {
+                    store::append_global_error_log(
+                        "ext-install",
+                        &format!("register mcp servers for {}: {e:#}", ext.id),
+                    );
+                }
+                // ONE save covering both the registry upsert and any registered MCP-server
+                // rows, plus a live MCP reconnect from the just-saved server set — mirrors
+                // `uninstall_extension`'s single `save_and_reload_mcp` call.
+                if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state) {
                     store::append_global_error_log(
                         "ext-install",
                         &format!("save config after install {}: {e:#}", ext.id),
@@ -616,6 +685,34 @@ impl DaemonHub {
             }
         }
     }
+}
+
+/// Clear extension `id`'s LIVE in-memory footprint on THIS daemon (uninstall steps 2/4 + the
+/// in-memory clears): deregister its contributed MCP tools, stop its child process, and drop
+/// its published context blob, buffered chat prompts (every session), and ext-agent
+/// containment registry. Idempotent — an absent extension is a no-op everywhere — and touches
+/// NO config/disk. Shared by the local `uninstall_extension` (this daemon) and the
+/// `unload_extension` fan-out handler (every OTHER daemon), so the two can never drift.
+fn unload_ext_footprint(state: &mut AppState, id: &str) {
+    // Clone the manager Arcs up front so the immutable borrow of `state.rest` ends before the
+    // `&mut` mutations below.
+    let mcp = state.rest.mcp_manager.clone();
+    let ext_mgr = state.rest.ext_manager.clone();
+
+    // Undo the tool registration (a no-op when no MCP manager / no tools), then stop the
+    // running child (idempotent; absent extension is a no-op).
+    crate::app::ext::register::purge_contributions(id, mcp.as_ref());
+    if let Some(mgr) = &ext_mgr {
+        mgr.stop(id);
+    }
+
+    // Clear the extension's IN-MEMORY footprint: its published context blob, any buffered
+    // chat prompts in every session, and its ext-agent containment registry.
+    state.rest.ext_context.remove(id);
+    for sess in state.rest.sessions.iter_mut() {
+        sess.pending_ext_prompts.retain(|(eid, _)| eid != id);
+    }
+    state.rest.ext_agents.remove(id);
 }
 
 /// The auto-start decision for a `panel.msg` (W8 panel bridge), factored out as a PURE function

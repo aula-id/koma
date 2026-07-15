@@ -77,13 +77,25 @@ pub fn emit(state: &AppState, event: &str, params: &Value) {
 ///
 /// `session_uuid` is the sub-agent's stable session uuid; `local_id` its
 /// per-session sub-agent id — the pair [`ExtAgentRegistry::find_by_location`]
-/// correlates back to a spawner.
+/// correlates back to a spawner. `error` is `Some(text)` for an `"error"`
+/// settlement (the [`SubAgentStatus::Error`](crate::app::subagent::SubAgentStatus::Error)
+/// text) AND for a `"killed"` settlement that carries a REASON — the daemon-shutdown
+/// death notice (see `lifecycle::notify_ext_owned_subagents_on_shutdown`) passes
+/// `Some("daemon restart")` so a notify:true spawner can tell a host restart from a
+/// genuine kill (a user Ctrl+X kill via `broker_kill` passes `None`, so its payload is
+/// unchanged). It is carried into the `agents.done` payload as an ADDITIVE `"error"`
+/// field so a notify:true spawner learns WHY its sub-agent died without a separate
+/// `agents.result` round-trip. Old extensions that don't read the field are
+/// unaffected (they still see `agentId`/`status`); `agents.result` remains the
+/// pull path for the full terminal payload (including the `"output"` report on a
+/// `done` settlement, which never travels over this event).
 pub fn emit_subagent_terminal(
     state: &AppState,
     session_uuid: &str,
     local_id: usize,
     agent: &str,
     status: &str,
+    error: Option<&str>,
 ) {
     // 1. Owned agents.done callback -> the notify:true spawner only (if any). This
     //    is deliberately NOT gated on a `subagent.done` subscription: an extension
@@ -93,11 +105,19 @@ pub fn emit_subagent_terminal(
         if let Some((spawner_ext, ext_agent_id)) =
             find_terminal_owner(&state.rest.ext_agents, session_uuid, local_id)
         {
-            mgr.notify(
-                &spawner_ext,
-                "agents.done",
-                json!({ "agentId": ext_agent_id, "status": status }),
-            );
+            let mut payload = json!({ "agentId": ext_agent_id, "status": status });
+            // The optional `error` reason rides along on an `"error"` settlement (the
+            // failure text) AND on a `"killed"` settlement that carries a reason — the
+            // daemon-shutdown death notice passes `Some("daemon restart")` so a
+            // notify:true spawner can tell a host restart from a real kill. A caller that
+            // passes `None` (e.g. `broker_kill`'s user Ctrl+X) adds no field, so its
+            // payload is unchanged.
+            if status == "error" || status == "killed" {
+                if let Some(e) = error {
+                    payload["error"] = json!(e);
+                }
+            }
+            mgr.notify(&spawner_ext, "agents.done", payload);
         }
     }
 
@@ -152,7 +172,7 @@ mod tests {
         let state = AppState::new(Mode::Chat);
         emit(&state, "agent.turn_end", &json!({ "session": "s" }));
         emit(&state, "session.foreground_change", &json!({ "session": "s" }));
-        emit_subagent_terminal(&state, "s", 1, "general", "done");
+        emit_subagent_terminal(&state, "s", 1, "general", "done", None);
     }
 
     /// With an `ext_manager` present but NO running extensions,
@@ -165,7 +185,7 @@ mod tests {
         let mut state = AppState::new(Mode::Chat);
         state.rest.ext_manager = Some(crate::app::ext::ExtHostManager::new(rt.handle()));
         emit(&state, "subagent.done", &json!({ "session": "s", "subagentId": 1 }));
-        emit_subagent_terminal(&state, "s", 1, "general", "killed");
+        emit_subagent_terminal(&state, "s", 1, "general", "killed", None);
     }
 
     /// The correlation lookup that decides who gets the owned `agents.done`: build

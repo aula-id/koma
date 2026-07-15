@@ -216,7 +216,9 @@ pub fn ensure_mcp_daemon_running() -> Result<()> {
                 "mcp daemon fingerprint mismatch/undecodable - restarting (old {old}, new {my_fingerprint})"
             ),
         );
-        stop_mcp_daemon();
+        // Quiet: this runs on the headless daemon-boot ensure path (no user terminal), and
+        // the restart is already recorded by the log line above.
+        stop_mcp_daemon(true);
         return spawn_mcp_and_wait_until_alive(&path);
     }
     // Nothing live → spawn a detached MCP daemon and wait until it accepts. Freshly
@@ -298,18 +300,27 @@ fn send_mcp_shutdown_request() {
     let _ = stream.flush();
 }
 
-/// Stop the GLOBAL MCP daemon (best-effort), for `koma daemon kill`. The MCP daemon
-/// has NO graceful-quit IPC verb (its request protocol is the MCP proxy, not the
-/// session control protocol), so — unlike [`super::stop_session_daemon`] — this goes straight
-/// to signalling its pidfile PID: SIGTERM, wait, then SIGKILL. Finally unlinks its
-/// socket + pidfile. Prints one outcome line and never fails the caller.
+/// Stop the GLOBAL MCP daemon (best-effort). The MCP daemon has NO graceful-quit IPC verb
+/// (its request protocol is the MCP proxy, not the session control protocol), so — unlike
+/// [`super::stop_session_daemon`] — this goes straight to signalling its pidfile PID:
+/// SIGTERM, wait, then SIGKILL. Finally unlinks its socket + pidfile. Never fails the caller.
 ///
-/// `pub(super)` — called from `manage::commands::cmd_kill`.
-pub(super) fn stop_mcp_daemon() {
+/// When `quiet` is `true`, ALL terminal output is suppressed — pass `true` from any caller
+/// that owns no user terminal: the headless-daemon stale-fingerprint restart, and the
+/// extension-uninstall detached path (the TTY-less GUI host), which bounces the MCP daemon
+/// so the next `ensure_mcp_daemon_running` respawns it off the just-saved config (no
+/// per-session `McpManager` exists there to `reconnect`; the fingerprint handshake makes the
+/// respawn cheap/safe). `koma daemon kill` passes `false` — it prints its outcome line.
+///
+/// `pub` (re-exported as `manage::stop_mcp_daemon`) — called from `manage::commands::cmd_kill`,
+/// the local stale-restart above, and the detached extension-uninstall path.
+pub fn stop_mcp_daemon(quiet: bool) {
     if !mcp_daemon_alive() {
         // Sweep any leftover turds from a previous crash so the next start is clean.
         unlink_mcp_daemon_files();
-        println!("koma daemon: MCP daemon not running");
+        if !quiet {
+            println!("koma daemon: MCP daemon not running");
+        }
         return;
     }
 
@@ -317,10 +328,12 @@ pub(super) fn stop_mcp_daemon() {
     // can't signal, so just nuke the files.
     let Some(pid) = read_mcp_pidfile() else {
         unlink_mcp_daemon_files();
-        println!(
-            "koma daemon: MCP daemon still up but no pidfile to signal; removed stale \
-             socket/pidfile. If a process is still running, stop it manually."
-        );
+        if !quiet {
+            println!(
+                "koma daemon: MCP daemon still up but no pidfile to signal; removed stale \
+                 socket/pidfile. If a process is still running, stop it manually."
+            );
+        }
         return;
     };
 
@@ -334,7 +347,9 @@ pub(super) fn stop_mcp_daemon() {
     send_mcp_shutdown_request();
     if mcp_wait_until_dead(SIGNAL_GRACE) {
         unlink_mcp_daemon_files();
-        println!("koma daemon: stopped MCP daemon (SIGTERM to pid {pid})");
+        if !quiet {
+            println!("koma daemon: stopped MCP daemon (SIGTERM to pid {pid})");
+        }
         return;
     }
 
@@ -342,12 +357,14 @@ pub(super) fn stop_mcp_daemon() {
     super::send_signal(pid, StopSignal::Kill);
     let died = mcp_wait_until_dead(SIGNAL_GRACE);
     unlink_mcp_daemon_files();
-    if died {
-        println!("koma daemon: killed MCP daemon (SIGKILL to pid {pid})");
-    } else {
-        println!(
-            "koma daemon: sent SIGKILL to pid {pid} (MCP daemon) but the socket is still up; \
-             removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
-        );
+    if !quiet {
+        if died {
+            println!("koma daemon: killed MCP daemon (SIGKILL to pid {pid})");
+        } else {
+            println!(
+                "koma daemon: sent SIGKILL to pid {pid} (MCP daemon) but the socket is still up; \
+                 removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
+            );
+        }
     }
 }

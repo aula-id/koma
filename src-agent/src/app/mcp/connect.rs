@@ -41,6 +41,7 @@ impl McpManager {
             status_last_failed: std::sync::atomic::AtomicBool::new(false),
             advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
             advertise_cache_at: Mutex::new(None),
+            advertise_confirmed_empty_at: Mutex::new(None),
             ext_manager: Mutex::new(None),
         });
 
@@ -95,6 +96,7 @@ impl McpManager {
             status_last_failed: std::sync::atomic::AtomicBool::new(false),
             advertise_refreshing: std::sync::atomic::AtomicBool::new(false),
             advertise_cache_at: Mutex::new(None),
+            advertise_confirmed_empty_at: Mutex::new(None),
             ext_manager: Mutex::new(None),
         }))
     }

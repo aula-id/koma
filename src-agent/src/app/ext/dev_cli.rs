@@ -65,7 +65,16 @@ pub fn run_install_dev(path: &str) -> Result<()> {
 
     let id = ext.id.clone();
     let version = ext.version.clone();
-    config.upsert_extension(ext);
+    config.upsert_extension(ext.clone());
+
+    // Auto-register any manifest-declared bundled MCP servers (same as the store install
+    // paths) so a dev sideload doesn't need a hand-added McpServerEntry either.
+    let mcp_registered = crate::app::ext::register::register_mcp_servers(&ext, &mut config)
+        .context("register manifest mcp_servers")?;
+    if mcp_registered > 0 {
+        println!("[dev] registered {mcp_registered} mcp server(s)");
+    }
+
     config.save().context("save ~/.koma/config.json")?;
 
     println!(

@@ -435,6 +435,25 @@ pub fn handle_ext_call(
     // extension's own [`ExtAgentRegistry`] instead (never the foreground), so a
     // foreground switch between a spawn and a later poll can never redirect that poll
     // at a different session's sub-agent.
+    //
+    // KNOWN INLINE-BLOCKING WINDOW: unlike `models.invoke`/`sessions.*`, `agents.spawn`
+    // dispatches to `broker_spawn` SYNCHRONOUSLY on the event loop rather than moving
+    // the reply into a spawned task. This is deliberate, not an oversight — `broker_spawn`
+    // (via `spawn_or_queue`/`spawn_task`/`spawn_subagent`) mutates `AppState` directly
+    // (the session's `subagents`/`pending_subagents`/`next_subagent_id`, this extension's
+    // `ExtAgentRegistry`), and `AppState` is a unique `&mut` borrowed fresh each tick —
+    // there is no `Arc<Mutex<AppState>>` (or equivalent) for a detached task to move that
+    // work onto, so hoisting this off the loop would need a real architecture change
+    // (e.g. a state-mutation channel back to the loop), not just a `tokio::spawn`.
+    // The one blocking call on this path is `McpManager::advertise_cached` (via
+    // `spawn_subagent`'s MCP-tool inherit step), which on the `Proxy` backend can run an
+    // inline `McpRequest::List` bounded by `PROXY_IO_TIMEOUT` (65s) — but ONLY on a
+    // genuine cold start (empty cache, never yet confirmed empty). Once confirmed empty
+    // (see `McpManager::advertise_confirmed_empty_at`), that window is skipped for
+    // `STATUS_CACHE_TTL` and refreshed in the background instead, so in steady state this
+    // dispatch is a fast in-memory cache read. A worst-case 65s stall on a rare cold-start
+    // spawn was judged acceptable rather than reworking spawn's state-mutation semantics
+    // for a theoretical/rare stall.
     match method.as_str() {
         "agents.spawn" => {
             let v = match active_session_idx(state) {
@@ -837,7 +856,14 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
         // and the next `drain_subagents` tick won't re-emit (the agent is no longer
         // Running there, so its was-running edge is false).
         if let Some((session_uuid, local_id, agent)) = killed_transition {
-            super::events::emit_subagent_terminal(state, &session_uuid, local_id, &agent, "killed");
+            super::events::emit_subagent_terminal(
+                state,
+                &session_uuid,
+                local_id,
+                &agent,
+                "killed",
+                None,
+            );
         }
         json!({ "killed": true })
     } else {

@@ -671,6 +671,9 @@ export type InstalledExt = {
   enabled: boolean
   granted: string[]
   panels: ExtPanel[]
+  /** Declared `workspace_dir` (data directory), when the manifest declares one —
+   *  named in the uninstall confirm as the directory the nuke deletes. */
+  workspaceDir?: string
 }
 
 // Full detail of one locally-installed extension — registry fields PLUS on-disk
@@ -692,6 +695,9 @@ export type InstalledExtDetail = {
   subAgents: { name: string; description: string }[]
   /** Best-effort online store enrichment — absent on the initial local response. */
   storeDetail?: StoreDetail | null
+  /** Declared `workspace_dir` (data directory), when the manifest declares one —
+   *  named in the uninstall confirm as the directory the nuke deletes. */
+  workspaceDir?: string
 }
 
 // One editor tab over the main content column. tabs[0] is ALWAYS the permanent,

@@ -68,10 +68,10 @@ impl SettingsState {
         }
     }
 
-    /// Move the picker cursor down (clamps at the last option, index 2).
+    /// Move the picker cursor down (clamps at the last option, index 3).
     pub fn oauth_pick_down(&mut self) {
         if let OAuthFlowState::Pick(c) = &mut self.oauth_flow {
-            *c = (*c + 1).min(2);
+            *c = (*c + 1).min(3);
         }
     }
 

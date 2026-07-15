@@ -1,8 +1,17 @@
 [package]
 name = "agent"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 license = "Apache-2.0"
+
+[build-dependencies]
+# Embeds the app icon + version metadata into the koma.exe PE resource table
+# (see build.rs). Windows-only in effect (build.rs gates the actual call on
+# CARGO_CFG_TARGET_OS == "windows"), but listed unconditionally since Cargo
+# build-dependencies aren't per-target-gateable without a target-specific
+# table, and the crate itself is a no-op dependency cost on other hosts.
+# `winresource` is the maintained fork of the abandoned `winres`.
+winresource = "0.1"
 
 [dependencies]
 ratatui = "0.30.2"

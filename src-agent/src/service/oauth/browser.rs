@@ -26,6 +26,10 @@ pub fn copy_to_clipboard(text: &str) -> bool {
 /// (contrast `controller::input::clipboard`'s read side, which guards a
 /// potentially slow read with `recv_timeout`).
 fn write_via(cmd: &mut Command, text: &str) -> bool {
+    // No console flash on Windows (the `clip` arm below) — see
+    // `tool::shell::no_console_window`'s docs for the `FreeConsole()` causal
+    // chain this guards against. A no-op on the linux/macos arms.
+    crate::tool::shell::no_console_window(cmd);
     let mut child = match cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -95,13 +99,16 @@ fn spawn_opener(url: &str) -> std::io::Result<()> {
 #[cfg(target_os = "windows")]
 fn spawn_opener(url: &str) -> std::io::Result<()> {
     // cmd /c start splits unquoted URLs at '&'; rundll32 passes argv without shell parsing
-    Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", url])
+    let mut cmd = Command::new("rundll32");
+    cmd.args(["url.dll,FileProtocolHandler", url])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
+        .stderr(Stdio::null());
+    // rundll32 is a GUI-subsystem binary (no console of its own either way), but
+    // set this anyway for uniformity with every other Windows spawn in the crate —
+    // see `tool::shell::no_console_window`'s docs for the `FreeConsole()` chain.
+    crate::tool::shell::no_console_window(&mut cmd);
+    cmd.spawn().map(|_| ())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

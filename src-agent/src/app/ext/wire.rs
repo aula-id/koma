@@ -158,14 +158,18 @@ pub(super) async fn connect_and_handshake(
         Ok(p) => p,
         Err(e) => bail!("ext exec path rejected: {e:#}"),
     };
-    let mut child = tokio::process::Command::new(&exec_path)
-        .current_dir(install_dir)
+    let mut cmd = tokio::process::Command::new(&exec_path);
+    cmd.current_dir(install_dir)
         .env("KOMA_EXT_SOCKET", sock_path)
         .env("KOMA_EXT_TOKEN", token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // No console flash on Windows — see `tool::shell::no_console_window_tokio`'s
+    // docs for the `FreeConsole()` causal chain this guards against.
+    crate::tool::shell::no_console_window_tokio(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("spawn extension {}: {e}", exec_path.display()))?;
 

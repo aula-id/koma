@@ -44,8 +44,8 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
     let dir = crate::security::security_dir()
         .map_err(|e| format!("cannot locate security dir: {e}"))?;
 
-    let mut child = tokio::process::Command::new(&python)
-        .arg("-m")
+    let mut cmd = tokio::process::Command::new(&python);
+    cmd.arg("-m")
         .arg("koma_sec_daemon")
         .arg("--token")
         .arg(token)
@@ -53,7 +53,11 @@ pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // No console flash on Windows — see `tool::shell::no_console_window_tokio`'s
+    // docs for the `FreeConsole()` causal chain this guards against.
+    crate::tool::shell::no_console_window_tokio(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn koma_sec_daemon failed: {e}"))?;
 
