@@ -376,6 +376,8 @@ async fn respond(stream: &mut crate::ipc::IpcStream, resp: &McpResponse) -> std:
 ///   the model sees a tool error as a tool result, exactly like the in-process path.
 /// - `Reconnect` → apply the new server set (background) and `Ack`.
 /// - `Status` → per-server tool-count map.
+/// - `Fingerprint` → this process's [`store::build_fingerprint`], for the
+///   `manage::mcp::ensure_mcp_daemon_running` build-skew probe.
 /// - `Shutdown` → latch `shutting_down` (the Windows graceful-stop path) and `Ack`; the
 ///   accept loop observes the flag next tick and the normal teardown runs.
 async fn handle_request(
@@ -449,6 +451,11 @@ async fn handle_request(
                 .collect();
             McpResponse::Status { servers, global_error: None }
         }
+
+        // Build-skew probe: report the fingerprint computed once at this process's
+        // startup. See `McpRequest::Fingerprint`'s docs for why the global MCP daemon
+        // needs this (unlike a session daemon it has no Attach/Hello handshake).
+        McpRequest::Fingerprint => McpResponse::Fingerprint(store::build_fingerprint()),
 
         // Windows graceful-stop verb: latch the SAME flag a signal / the idle reaper
         // sets, so the accept loop returns next tick and the runtime is dropped (killing

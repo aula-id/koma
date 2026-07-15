@@ -218,6 +218,14 @@ pub struct McpManager {
     /// so N rapid callers (panel render + snapshot projection, both ~10Hz) don't each
     /// kick off their own blocking `server_status()` call.
     status_refreshing: std::sync::atomic::AtomicBool,
+    /// Whether the MOST RECENT [`Self::server_status_cached`] background `Proxy`
+    /// refresh failed (decode error / unreachable daemon). `server_status_cached` runs
+    /// on a ~[`STATUS_CACHE_TTL`]-gated cadence driven by up-to-10Hz callers, so
+    /// logging every failure would spam the error log; instead this flag gates the log
+    /// line to a false→true TRANSITION (entering the failure state) and is reset on
+    /// the next successful refresh (a true→false transition is not logged — recovery
+    /// is implicit in status returning to normal).
+    status_last_failed: std::sync::atomic::AtomicBool,
     /// Single-flight guard for the background advertise-cache refresh spawned by
     /// [`Self::advertise_cached`] on the `Proxy` backend (mirrors `status_refreshing`):
     /// only one `McpRequest::List` refresh may be in flight at a time.
@@ -402,12 +410,27 @@ impl McpManager {
             }
             // Proxy: ask the global daemon for the live per-server map. Best-effort —
             // any connect/decode failure (or an unexpected reply) reads as an EMPTY map
-            // so the `/mcp` panel degrades to "no live status" rather than erroring.
+            // so the `/mcp` panel degrades to "no live status" rather than erroring;
+            // the failure itself is still logged (this call path isn't the hot ~10Hz
+            // one — that's `server_status_cached` below — so no rate-limiting needed).
             McpBackend::Proxy { sock, .. } => match proxy_request(sock, &McpRequest::Status) {
                 Ok(McpResponse::Status { servers, .. }) => {
                     servers.into_iter().map(|(k, v)| (k, v.tool_count)).collect()
                 }
-                _ => std::collections::HashMap::new(),
+                Ok(other) => {
+                    crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: status probe got unexpected reply {other:?}"),
+                    );
+                    std::collections::HashMap::new()
+                }
+                Err(e) => {
+                    crate::model::store::append_global_error_log(
+                        "mcp",
+                        &format!("proxy: status probe failed: {e:#}"),
+                    );
+                    std::collections::HashMap::new()
+                }
             },
         }
     }
@@ -475,9 +498,39 @@ impl McpManager {
                                         if let Ok(mut ec) = proxy_errors.lock() {
                                             *ec = errs;
                                         }
+                                        // Recovered (if it was previously failing): reset the
+                                        // transition flag so a LATER failure logs again.
+                                        mgr.status_last_failed.store(false, Ordering::Release);
                                         (counts, ())
                                     }
-                                    _ => (std::collections::HashMap::new(), ()),
+                                    other => {
+                                        // Log only on a false→true transition into the
+                                        // failure state — this refresh is TTL-gated but
+                                        // still fires at up to ~10Hz caller cadence, so
+                                        // logging every occurrence would spam the log.
+                                        if mgr
+                                            .status_last_failed
+                                            .compare_exchange(
+                                                false,
+                                                true,
+                                                Ordering::AcqRel,
+                                                Ordering::Relaxed,
+                                            )
+                                            .is_ok()
+                                        {
+                                            let detail = match other {
+                                                Ok(resp) => format!("unexpected reply {resp:?}"),
+                                                Err(e) => format!("{e:#}"),
+                                            };
+                                            crate::model::store::append_global_error_log(
+                                                "mcp",
+                                                &format!(
+                                                    "proxy: status refresh failed, degrading to empty status: {detail}"
+                                                ),
+                                            );
+                                        }
+                                        (std::collections::HashMap::new(), ())
+                                    }
                                 }
                             }
                             _ => unreachable!(),

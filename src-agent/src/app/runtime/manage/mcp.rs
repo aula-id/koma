@@ -12,16 +12,27 @@
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::ipc::frame::FrameReader;
+use crate::ipc::mcp_proto::{McpRequest, McpResponse};
 use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
 use super::{StopSignal, SIGNAL_GRACE, SPAWN_CONNECT_TIMEOUT, SPAWN_POLL_INTERVAL};
+
+/// How long the build-skew fingerprint probe (an already-live daemon only) waits for
+/// the daemon's [`McpResponse::Fingerprint`] reply before treating the exchange as
+/// failed — folded into the same "stale" bucket as a mismatch or decode error. Kept
+/// short: this probe rides the already-live fast path of `ensure_mcp_daemon_running`
+/// and must stay cheap (connect-per-call, like every other sync MCP-management IO
+/// here).
+const FINGERPRINT_IO_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Whether the GLOBAL MCP daemon is currently ALIVE, by the same bind-as-oracle rule
 /// as [`super::daemon_alive`]: try to CONNECT to its singleton socket
@@ -106,19 +117,110 @@ fn spawn_mcp_and_wait_until_alive(path: &Path) -> Result<()> {
     }
 }
 
-/// Ensure the GLOBAL MCP daemon is RUNNING and accepting on its singleton socket,
-/// spawning a detached one if none is up. The MCP twin of [`super::ensure_daemon_running`]:
-/// probe [`store::mcp_daemon_sock_path`]; if a daemon is already live, return (a
-/// session-daemon proxy attaches to the existing one); otherwise clear any stale
-/// socket and spawn a detached `koma --mcp-daemon`, polling until it accepts. Bounded
-/// by [`SPAWN_CONNECT_TIMEOUT`]. Takes no session id — one MCP daemon serves every
-/// session.
+/// Send ONE [`McpRequest::Fingerprint`] to the ALREADY-live global MCP daemon at
+/// `path` and block for its single reply frame — the MCP twin of the session-daemon
+/// Attach/Hello build-skew handshake (`store::build_fingerprint`), just probed
+/// proactively here since the MCP daemon has no attach handshake of its own to piggy
+/// back on. Connect-per-call, bounded by [`FINGERPRINT_IO_TIMEOUT`] on both directions
+/// so a wedged daemon can never hang `ensure_mcp_daemon_running`.
+fn probe_mcp_fingerprint(path: &Path) -> Result<McpResponse> {
+    let mut stream = SyncIpcStream::connect(path)
+        .with_context(|| format!("connect to global MCP daemon socket {}", path.display()))?;
+    stream
+        .set_read_timeout(Some(FINGERPRINT_IO_TIMEOUT))
+        .context("set MCP fingerprint probe read timeout")?;
+    stream
+        .set_write_timeout(Some(FINGERPRINT_IO_TIMEOUT))
+        .context("set MCP fingerprint probe write timeout")?;
+
+    let payload =
+        serde_json::to_vec(&McpRequest::Fingerprint).context("serialise McpRequest::Fingerprint")?;
+    let prefix = (payload.len() as u32).to_be_bytes();
+    stream
+        .write_all(&prefix)
+        .context("write MCP fingerprint probe frame prefix")?;
+    stream
+        .write_all(&payload)
+        .context("write MCP fingerprint probe frame payload")?;
+    stream.flush().context("flush MCP fingerprint probe frame")?;
+
+    let mut reader = FrameReader::new();
+    loop {
+        if let Some(bytes) = reader
+            .next_frame()
+            .context("MCP fingerprint probe frame reassembly")?
+        {
+            return serde_json::from_slice(&bytes)
+                .context("decode McpResponse for fingerprint probe");
+        }
+        let mut chunk = [0u8; 8192];
+        let n = stream
+            .read(&mut chunk)
+            .context("read MCP fingerprint probe reply")?;
+        if n == 0 {
+            return Err(anyhow::anyhow!(
+                "global MCP daemon closed the connection mid-fingerprint-probe"
+            ));
+        }
+        reader.push(&chunk[..n]);
+    }
+}
+
+/// Ensure the GLOBAL MCP daemon is RUNNING, ACCEPTING on its singleton socket, AND on
+/// the CURRENT build, spawning/restarting one as needed. The MCP twin of
+/// [`super::ensure_daemon_running`], extended with the SAME build-skew concept the
+/// session-daemon Attach/Hello handshake uses (task #142, `client::attach_session`):
+/// unlike a session daemon, the global MCP daemon has no per-attach handshake of its
+/// own, so without this it would survive a binary upgrade indefinitely, serving stale
+/// code to every session that proxies to it.
+///
+/// 1. Probe [`store::mcp_daemon_sock_path`]. Nothing live → clear any stale socket and
+///    spawn a detached `koma --mcp-daemon`, polling until it accepts. A freshly spawned
+///    daemon is by definition current, so it is returned as-is — no fingerprint probe.
+/// 2. Already live → send [`McpRequest::Fingerprint`] and compare against
+///    [`store::build_fingerprint`]. A mismatch, an unexpected reply, or ANY
+///    transport/decode error on that exchange (an old pre-fingerprint daemon has no arm
+///    for the new request variant, so it fails to decode it and either replies an error
+///    or drops the connection — both land here) is treated as STALE: log one line via
+///    [`store::append_global_error_log`], [`stop_mcp_daemon`] it (existing
+///    SIGTERM→SIGKILL-by-pidfile escalation, Windows routed through the
+///    `McpRequest::Shutdown` cfg-split), then respawn fresh via
+///    [`spawn_mcp_and_wait_until_alive`].
+///
+/// Bounded by [`SPAWN_CONNECT_TIMEOUT`] (spawn path) and [`FINGERPRINT_IO_TIMEOUT`]
+/// (probe path). Takes no session id — one MCP daemon serves every session.
 pub fn ensure_mcp_daemon_running() -> Result<()> {
     let path = store::mcp_daemon_sock_path()?;
     if super::probe_or_clear(&path)? {
-        return Ok(()); // already live — proxy attaches to the existing one
+        // Already live: verify it's still running THIS build before reusing it.
+        let my_fingerprint = store::build_fingerprint();
+        let stale_reason = match probe_mcp_fingerprint(&path) {
+            Ok(McpResponse::Fingerprint(daemon_fingerprint)) => {
+                if daemon_fingerprint == my_fingerprint {
+                    None
+                } else {
+                    Some(daemon_fingerprint)
+                }
+            }
+            Ok(other) => Some(format!("unexpected reply {other:?}")),
+            Err(e) => Some(format!("probe failed: {e:#}")),
+        };
+
+        let Some(old) = stale_reason else {
+            return Ok(()); // already live and current — proxy attaches to the existing one
+        };
+
+        store::append_global_error_log(
+            "mcp",
+            &format!(
+                "mcp daemon fingerprint mismatch/undecodable - restarting (old {old}, new {my_fingerprint})"
+            ),
+        );
+        stop_mcp_daemon();
+        return spawn_mcp_and_wait_until_alive(&path);
     }
-    // Nothing live → spawn a detached MCP daemon and wait until it accepts.
+    // Nothing live → spawn a detached MCP daemon and wait until it accepts. Freshly
+    // spawned, so it is by definition current — no fingerprint probe needed.
     spawn_mcp_and_wait_until_alive(&path)
 }
 
