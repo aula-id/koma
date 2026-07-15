@@ -346,7 +346,7 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     loop — where it has `&mut state` + the managers. Same one-shot pattern as the
         //     drains above; the network fetch runs off-thread and can't advance the per-client
         //     seq itself.
-        hub.drain_store_replies(state);
+        hub.drain_store_replies(state, handle);
 
         // 3-sext. Broadcast the daemon→panel push outbox (`state.rest.ext_panel_pushes`), filled
         //     by the `drain_ext_notifies` global drain (run in `service_global` above) when an

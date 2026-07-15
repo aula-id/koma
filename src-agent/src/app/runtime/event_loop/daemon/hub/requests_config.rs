@@ -2,8 +2,11 @@
 //! `requests.rs` for file size (pure code motion, no behaviour change). Every
 //! method here is called from `requests.rs`'s `handle_controller_mutation` match,
 //! one method per moved `ClientRequest` variant, taking exactly the parameters the
-//! original arm body used (never `client`/`handle` — none of these arms touch the
-//! model client or the tokio handle).
+//! original arm body used (never `client` — none of these arms touch the model
+//! client). The three MCP arms (`set_mcp_server`/`delete_mcp_server`/
+//! `enable_mcp_server`) DO take `handle`: `save_and_reload_mcp` needs it to
+//! construct `mcp_manager` on demand when the daemon booted with zero MCP servers
+//! (see `actions::mcp::ensure_mcp_manager`).
 
 use crate::app::state::AppState;
 
@@ -22,6 +25,7 @@ impl DaemonHub {
         &mut self,
         idx: usize,
         state: &mut AppState,
+        handle: &tokio::runtime::Handle,
         uuid: Option<String>,
         name: String,
         enabled: bool,
@@ -48,14 +52,20 @@ impl DaemonHub {
             ext_id: None,
         };
         state.rest.config.upsert_mcp_server(entry);
-        let result = crate::app::runtime::actions::save_and_reload_mcp(state);
+        let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
         self.ack_or_error(idx, result);
     }
 
     // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
-    pub(super) fn delete_mcp_server(&mut self, idx: usize, state: &mut AppState, uuid: String) {
+    pub(super) fn delete_mcp_server(
+        &mut self,
+        idx: usize,
+        state: &mut AppState,
+        handle: &tokio::runtime::Handle,
+        uuid: String,
+    ) {
         state.rest.config.remove_mcp_server_by_uuid(&uuid);
-        let result = crate::app::runtime::actions::save_and_reload_mcp(state);
+        let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
         self.ack_or_error(idx, result);
     }
 
@@ -64,11 +74,12 @@ impl DaemonHub {
         &mut self,
         idx: usize,
         state: &mut AppState,
+        handle: &tokio::runtime::Handle,
         uuid: String,
         enabled: bool,
     ) {
         state.rest.config.set_mcp_enabled_by_uuid(&uuid, enabled);
-        let result = crate::app::runtime::actions::save_and_reload_mcp(state);
+        let result = crate::app::runtime::actions::save_and_reload_mcp(state, handle);
         self.ack_or_error(idx, result);
     }
 

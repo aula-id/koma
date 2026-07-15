@@ -229,15 +229,15 @@ pub(in crate::app::runtime) fn apply_action(
         }
 
         Action::CreateMcp => {
-            mcp::handle_create_mcp(state)?;
+            mcp::handle_create_mcp(state, handle)?;
         }
 
         Action::SaveMcp => {
-            mcp::handle_save_mcp(state)?;
+            mcp::handle_save_mcp(state, handle)?;
         }
 
         Action::DeleteMcp => {
-            mcp::handle_delete_mcp(state)?;
+            mcp::handle_delete_mcp(state, handle)?;
         }
 
         Action::CloseMcp => {
