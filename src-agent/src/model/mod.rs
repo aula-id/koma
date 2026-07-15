@@ -15,6 +15,7 @@ pub mod agent_def;
 pub mod app_config;
 pub mod attachment;
 pub mod conversation;
+pub mod ext_workspace;
 pub mod memory;
 pub mod msglog;
 /// Windows-only process liveness/termination helpers (phase B2), shared by
