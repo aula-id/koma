@@ -426,7 +426,7 @@ pub fn handle_ext_call(
     // reply INLINE; the ones that touch the network / other daemons' sockets
     // (`models.invoke`, `sessions.list`/`create`/`spawn_into`-cross) validate + resolve on
     // the loop then MOVE the reply oneshot into a spawned task so the event loop never blocks
-    // — each inner-bounded well under the reader's 30s cap.
+    // — each inner-bounded well under the reader's 120s cap.
     //
     // `agents.spawn` ALONE resolves the ACTIVE (foreground) session — spawning into
     // "whatever chat session is in front of the user right now" is the intended
@@ -468,7 +468,7 @@ pub fn handle_ext_call(
         }
         "models.invoke" => {
             // Validates + resolves ON the loop, then either replies a sync error
-            // inline OR moves `reply` into a spawned one-shot task (25s < the 30s
+            // inline OR moves `reply` into a spawned one-shot task (110s < the 120s
             // reader cap) that answers on completion — so the model call never
             // blocks the event loop. OWNS the reply from here.
             broker_models_invoke(state, handle, client, &params, reply);
@@ -499,7 +499,7 @@ pub fn handle_ext_call(
         "sessions.list" => {
             // No sync state needed: enumerate the session registry + probe live daemons OFF
             // the loop (sqlite read + blocking per-socket probes), then reply the merged array.
-            // The reader task caps this Call at 30s; the probe sweep is inner-bounded far below.
+            // The reader task caps this Call at 120s; the probe sweep is inner-bounded far below.
             handle.spawn_blocking(move || {
                 let rows = crate::model::session_registry::list_all().unwrap_or_default();
                 let live = list_live_sessions();
@@ -926,8 +926,8 @@ fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, param
 ///
 /// Once validated, an owned `Resolved` + an `Arc` clone of the client + the reply
 /// oneshot MOVE into a spawned task (the `spawn_awareness_recompute` pattern) that
-/// runs `complete_with` under a 25s `tokio::time::timeout` — 25s deliberately
-/// UNDERCUTS the reader task's 30s `EXT_CALL_TIMEOUT` so the extension always
+/// runs `complete_with` under a 110s `tokio::time::timeout` — 110s deliberately
+/// UNDERCUTS the reader task's 120s `EXT_CALL_TIMEOUT` so the extension always
 /// receives a value rather than a transport timeout. Reply `{ "output": <text>,
 /// "model": <id> }` on success, `{ "error": "model call failed: <e>" }` on a call
 /// error, or `{ "error": "model call timed out" }`. The event loop never blocks.
@@ -1022,9 +1022,9 @@ fn broker_models_invoke(
             crate::dto::chat::Role::User,
             prompt_owned,
         ));
-        // 25s < the 30s reader cap: the extension always gets a value back.
+        // 110s < the 120s reader cap: the extension always gets a value back.
         let out = tokio::time::timeout(
-            std::time::Duration::from_secs(25),
+            std::time::Duration::from_secs(110),
             client_task.complete_with(route.conn(), &route.model_id, route.provider(), messages),
         )
         .await;
@@ -1727,7 +1727,7 @@ fn broker_sessions_switch(
 /// the uuid, capture the optional `name`. Then MOVE the reply into a `spawn_blocking` that
 /// calls [`ensure_daemon_running`](crate::app::runtime::ensure_daemon_running) (blocking:
 /// spawn a detached `koma --daemon --session <uuid>` and poll-connect until it accepts,
-/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 30s cap, so no
+/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 120s cap, so no
 /// extra outer timer is needed). On success, best-effort set the display `name` (the daemon
 /// registers its registry row during startup, which can lag the socket coming up, so retry
 /// once after a short sleep if the row isn't there yet; a failure to name is NOT an error).
