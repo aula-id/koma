@@ -30,6 +30,49 @@ pub(crate) enum ShellExit {
     Early,
 }
 
+/// Suppress the console window Windows would otherwise allocate for a freshly
+/// spawned child process.
+///
+/// Causal chain: on a shortcut launch, `koma.exe`'s GUI calls `FreeConsole()` to
+/// detach from whatever console it inherited (so the app window doesn't flash a
+/// terminal behind it). A process with NO console of its own is a "console-less
+/// parent" in Windows' eyes, and `CreateProcess` allocates a FRESH console for any
+/// child spawned from one UNLESS the spawn opts out via `CREATE_NO_WINDOW` — so
+/// without this, every background child (the extension host, an MCP stdio server, a
+/// `git`/`ssh-keygen` subprocess, …) pops a visible black console window even though
+/// nothing about the child needs one. `unix` has no such concept, so this is a no-op
+/// there.
+///
+/// This is THE shared choke point for that flag: every `std::process::Command` spawn
+/// that runs headlessly (never one that must show a window, and never a DETACHED
+/// daemon spawn — those use `DETACHED_PROCESS` instead, a stronger flag that already
+/// implies no console) should go through this rather than setting
+/// `creation_flags(CREATE_NO_WINDOW)` by hand. See [`no_console_window_tokio`] for
+/// the `tokio::process::Command` twin (its `creation_flags` is a same-signature
+/// inherent method, not this trait, so it can't share this exact function).
+#[cfg(windows)]
+pub(crate) fn no_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(unix)]
+pub(crate) fn no_console_window(_cmd: &mut Command) {}
+
+/// [`no_console_window`]'s `tokio::process::Command` twin, for the async child
+/// spawns (the extension host, stdio MCP servers, the security daemon) that build a
+/// [`tokio::process::Command`] instead of a [`std::process::Command`]. Same
+/// `CREATE_NO_WINDOW` flag, same causal chain — see [`no_console_window`]'s docs.
+#[cfg(windows)]
+pub(crate) fn no_console_window_tokio(cmd: &mut tokio::process::Command) {
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(unix)]
+pub(crate) fn no_console_window_tokio(_cmd: &mut tokio::process::Command) {}
+
 /// Build a [`Command`] that runs `command` through the platform's shell: unix
 /// `sh -c <command>` (exactly as every caller ran it before this helper existed);
 /// Windows prefers a Git-Bash-compatible `bash -c <command>` (same quoting/
@@ -49,9 +92,6 @@ pub(crate) fn os_shell_command(command: &str) -> Command {
 
 #[cfg(windows)]
 pub(crate) fn os_shell_command(command: &str) -> Command {
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
-
     let mut cmd = match find_git_bash() {
         // Plain `-c`, NOT a login shell (`-lc`) — matches unix `sh -c` semantics
         // exactly (no profile/rc sourcing), so behavior stays as close to unix as
@@ -68,7 +108,7 @@ pub(crate) fn os_shell_command(command: &str) -> Command {
         }
     };
     // No console flash when the daemon/gui spawns a shell headlessly.
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    no_console_window(&mut cmd);
     cmd
 }
 
@@ -128,7 +168,10 @@ fn bash_candidates(git_root: &Path) -> Option<PathBuf> {
 /// install) — walk up three parents to `<git-root>`.
 #[cfg(windows)]
 fn find_git_bash_via_exec_path() -> Option<PathBuf> {
-    let output = Command::new("git").arg("--exec-path").output().ok()?;
+    let mut cmd = Command::new("git");
+    cmd.arg("--exec-path");
+    no_console_window(&mut cmd);
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -148,10 +191,10 @@ fn find_git_bash_via_exec_path() -> Option<PathBuf> {
 /// `REG_SZ` and take whatever follows it as the install path.
 #[cfg(windows)]
 fn find_git_bash_via_registry() -> Option<PathBuf> {
-    let output = Command::new("reg")
-        .args(["query", r"HKLM\SOFTWARE\GitForWindows", "/v", "InstallPath"])
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("reg");
+    cmd.args(["query", r"HKLM\SOFTWARE\GitForWindows", "/v", "InstallPath"]);
+    no_console_window(&mut cmd);
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }

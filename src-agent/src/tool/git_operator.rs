@@ -186,6 +186,10 @@ impl Tool for GitOperator {
             cmd.env("GIT_SSH_COMMAND", ssh_cmd);
         }
 
+        // No console flash on Windows — see `tool::shell::no_console_window`'s
+        // docs for the `FreeConsole()` causal chain this guards against.
+        super::shell::no_console_window(&mut cmd);
+
         let child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return Ok(format!("error: failed to spawn git: {e}")),
