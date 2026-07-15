@@ -3,7 +3,8 @@ Categories={{categories}}
 {{#if comment}}
 Comment={{comment}}
 {{/if}}
-Exec={{exec}} gui
+# Absolute path: a curl-installed TUI-only ~/.local/bin/koma can shadow bare 'koma' in the desktop session PATH (deb installs to /usr/bin).
+Exec=/usr/bin/{{exec}} gui
 Icon={{icon}}
 Name={{name}}
 Terminal=false

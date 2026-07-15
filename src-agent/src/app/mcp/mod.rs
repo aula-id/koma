@@ -236,6 +236,16 @@ pub struct McpManager {
     /// and the first [`Self::advertise_cached`] call kicks a refresh. Local backends
     /// ignore this (they serve live).
     advertise_cache_at: Mutex<Option<std::time::Instant>>,
+    /// When the `Proxy` advertise cache was last CONFIRMED empty by a completed
+    /// [`McpRequest::List`] (inline or background) that came back with zero tools.
+    /// `None` means "not confirmed" — either never fetched (genuine cold start) or the
+    /// last confirmation is older than [`STATUS_CACHE_TTL`]. [`Self::advertise_cached`]
+    /// only pays the blocking inline `List` on an empty cache when this is `None`; while
+    /// `Some(at)` with `at.elapsed() < STATUS_CACHE_TTL`, an empty cache is treated as
+    /// WARM (like a non-empty stale cache) and served immediately, refreshed only via
+    /// the single-flight BACKGROUND path. Cleared (`None`) the moment a List — inline or
+    /// background — comes back non-empty. Local backends ignore this (they serve live).
+    advertise_confirmed_empty_at: Mutex<Option<std::time::Instant>>,
     /// The extension host manager, set by [`Self::register_extension_tools`] so
     /// [`Self::execute_blocking`] can route an `Extension`-sourced tool's call
     /// through `ExtHostManager::invoke`. `None` until the first extension tool is
@@ -296,15 +306,24 @@ impl McpManager {
     /// - **Local** — the snapshot walk is pure in-memory, so serve it live.
     /// - **Proxy** — the `(defs, names)` cache primed at `connect_proxy` races the
     ///   global daemon's own (background) server connect and can be seeded EMPTY. An
-    ///   empty cache is exactly the cold-start window (first run, or a freshly spawned
-    ///   session daemon on `/new`) where the model needs the tools THIS turn, so on an
-    ///   empty cache we pay a single blocking live `McpRequest::List` INLINE (the
-    ///   daemon answers a List straight from its snapshot, so it is fast; bounded by
-    ///   `proxy_request`'s IO timeout). Once the daemon has connected its servers this
-    ///   returns them immediately; while it is still connecting it returns empty and we
-    ///   simply retry inline next turn. A NON-empty cache is served immediately and, if
-    ///   stale, refreshed by a single-flight BACKGROUND `List` (never blocking the warm
-    ///   path) so a later-added/removed server is eventually reflected.
+    ///   empty cache with NO prior confirmed-empty marker is the cold-start window
+    ///   (first run, or a freshly spawned session daemon on `/new`) where the model
+    ///   needs the tools THIS turn, so we pay a single blocking live `McpRequest::List`
+    ///   INLINE (the daemon answers a List straight from its snapshot, so it is fast;
+    ///   bounded by `proxy_request`'s IO timeout). Once the daemon has connected its
+    ///   servers this returns them immediately; while it is still connecting it returns
+    ///   empty and we simply retry inline next turn.
+    ///
+    ///   Once an inline (or background) `List` CONFIRMS the cache is empty (the server
+    ///   set is legitimately empty or every server is dead), [`Self::advertise_confirmed_empty_at`]
+    ///   is armed for [`STATUS_CACHE_TTL`]: for that window a further empty-cache call is
+    ///   treated exactly like a non-empty stale cache — served immediately, refreshed only
+    ///   by the single-flight BACKGROUND `List` below — instead of re-paying the blocking
+    ///   inline round-trip on every single call forever. A NON-empty cache (or a
+    ///   confirmed-empty-and-warm one) is served immediately and, if stale, refreshed by a
+    ///   single-flight BACKGROUND `List` (never blocking the warm path) so a
+    ///   later-added/removed server is eventually reflected; a non-empty result there
+    ///   clears the confirmed-empty marker.
     pub fn advertise_cached(self: &Arc<Self>) -> (Vec<ToolDef>, Vec<String>) {
         use std::sync::atomic::Ordering;
 
@@ -319,34 +338,66 @@ impl McpManager {
             (c.0.clone(), c.1.clone(), c.0.is_empty())
         };
 
-        // Empty cache: cold-start window — fetch live INLINE so the tools are on the
-        // wire this turn instead of a turn later.
         if empty {
-            if let McpBackend::Proxy { sock, cache, .. } = &self.backend {
-                match proxy_request(sock, &McpRequest::List) {
-                    Ok(McpResponse::Tools { defs, names }) => {
-                        *cache.lock().unwrap_or_else(|p| p.into_inner()) =
-                            (defs.clone(), names.clone());
-                        *self
-                            .advertise_cache_at
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
-                        return (defs, names);
+            // Confirmed-empty-and-warm: a PRIOR List already came back empty within the
+            // last STATUS_CACHE_TTL, so this is NOT the cold-start window — fall through
+            // to the same stale/background-refresh handling a non-empty cache gets,
+            // instead of re-running the blocking inline List.
+            let confirmed_empty_and_warm = matches!(
+                *self
+                    .advertise_confirmed_empty_at
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()),
+                Some(at) if at.elapsed() < STATUS_CACHE_TTL
+            );
+            if !confirmed_empty_and_warm {
+                // Cold-start window (never confirmed, or the confirmation itself has
+                // gone stale): fetch live INLINE so the tools are on the wire this turn
+                // instead of a turn later.
+                if let McpBackend::Proxy { sock, cache, .. } = &self.backend {
+                    match proxy_request(sock, &McpRequest::List) {
+                        Ok(McpResponse::Tools { defs, names }) => {
+                            *cache.lock().unwrap_or_else(|p| p.into_inner()) =
+                                (defs.clone(), names.clone());
+                            *self
+                                .advertise_cache_at
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner()) =
+                                Some(std::time::Instant::now());
+                            // Arm (or clear) the confirmed-empty marker from THIS List's
+                            // outcome so a genuinely-empty server set stops paying the
+                            // inline round-trip for the next STATUS_CACHE_TTL window; a
+                            // non-empty answer clears any (now moot) stale marker.
+                            *self
+                                .advertise_confirmed_empty_at
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner()) = if defs.is_empty() {
+                                Some(std::time::Instant::now())
+                            } else {
+                                None
+                            };
+                            return (defs, names);
+                        }
+                        Ok(_) => {}
+                        Err(e) => crate::model::store::append_global_error_log(
+                            "mcp",
+                            &format!("proxy: inline advertise List failed: {e:#}"),
+                        ),
                     }
-                    Ok(_) => {}
-                    Err(e) => crate::model::store::append_global_error_log(
-                        "mcp",
-                        &format!("proxy: inline advertise List failed: {e:#}"),
-                    ),
                 }
+                // Daemon not ready yet (or a transient error) — return the empty cache;
+                // the next turn retries inline (the confirmed-empty marker is never
+                // armed on a failed/incomplete List, so this can't get stuck warm on
+                // a genuinely cold/broken daemon).
+                return (defs, names);
             }
-            // Daemon not ready yet (or a transient error) — return the empty cache;
-            // the next turn retries inline.
-            return (defs, names);
+            // Confirmed empty and still warm: serve `(defs, names)` (both empty) via
+            // the shared stale/background-refresh path below.
         }
 
-        // Non-empty cache: serve it now; if stale, kick a single-flight BACKGROUND
-        // refresh so a later config change is eventually reflected without blocking.
+        // Non-empty cache, or a confirmed-empty-and-warm one: serve it now; if stale,
+        // kick a single-flight BACKGROUND refresh so a later config change is
+        // eventually reflected without blocking.
         let stale = match *self.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) {
             Some(at) => at.elapsed() >= STATUS_CACHE_TTL,
             None => true,
@@ -363,7 +414,21 @@ impl McpManager {
                 if let McpBackend::Proxy { sock, cache, .. } = &mgr.backend {
                     match proxy_request(sock, &McpRequest::List) {
                         Ok(McpResponse::Tools { defs, names }) => {
+                            let now_empty = defs.is_empty();
                             *cache.lock().unwrap_or_else(|p| p.into_inner()) = (defs, names);
+                            // Keep the confirmed-empty marker in lock-step with this
+                            // background refresh's own outcome too, so a genuinely-empty
+                            // server set stays warm indefinitely via repeated background
+                            // refreshes (never falling back to the blocking inline path),
+                            // and a server that comes back online promptly clears it.
+                            *mgr
+                                .advertise_confirmed_empty_at
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner()) = if now_empty {
+                                Some(std::time::Instant::now())
+                            } else {
+                                None
+                            };
                         }
                         Ok(_) => {}
                         Err(e) => crate::model::store::append_global_error_log(
@@ -794,6 +859,10 @@ async fn connect_one(
                     for (k, v) in &env {
                         c.env(k, v);
                     }
+                    // No console flash on Windows — see
+                    // `tool::shell::no_console_window_tokio`'s docs for the
+                    // `FreeConsole()` causal chain this guards against.
+                    crate::tool::shell::no_console_window_tokio(c);
                 });
                 let transport = TokioChildProcess::new(cmd)
                     .map_err(|e| format!("spawn '{}' failed: {e}", server.command))?;

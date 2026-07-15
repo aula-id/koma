@@ -3,6 +3,7 @@ import { ArrowLeft, Download, Trash2, Check, RefreshCw, Search, Package, Blocks,
 import { useKoma } from '../store/koma'
 import type { StoreItem, StoreDetail } from '../store/koma'
 import { BrailleSpinner } from './BrailleSpinner'
+import { UninstallExtensionConfirm } from './UninstallExtensionConfirm'
 
 function grantLabel(g: string): string {
   switch (g) {
@@ -101,6 +102,11 @@ export default function StoreTab() {
   const clearStoreNotice = useKoma((s) => s.clearStoreNotice)
   const openInstalledExtensionTab = useKoma((s) => s.openInstalledExtensionTab)
   const [query, setQuery] = useState('')
+  // Two-step uninstall: a click ARMS this (never fires immediately); the shared confirm
+  // dialog resolves the declared data dir from the installed registry by id, then fires.
+  const [pendingUninstall, setPendingUninstall] = useState<{ id: string; name: string; workspaceDir?: string } | null>(null)
+  const armUninstall = (id: string, name: string) =>
+    setPendingUninstall({ id, name, workspaceDir: installed.find((e) => e.id === id)?.workspaceDir })
 
   useEffect(() => { browseStore(); refreshInstalled() }, [])
 
@@ -120,7 +126,7 @@ export default function StoreTab() {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {detail !== null ? (
-          <DetailView detail={detail} installed={installedIds.has(detail.id)} pending={pendingOp === detail.id} error={error} opResult={opResult} onBack={closeStoreDetail} onInstall={() => installExtension(detail.id)} onUninstall={() => uninstallExtension(detail.id)} onDismissNotice={clearStoreNotice} />
+          <DetailView detail={detail} installed={installedIds.has(detail.id)} pending={pendingOp === detail.id} error={error} opResult={opResult} onBack={closeStoreDetail} onInstall={() => installExtension(detail.id)} onUninstall={() => armUninstall(detail.id, detail.name || detail.id)} onDismissNotice={clearStoreNotice} />
         ) : busy && catalogue.length === 0 ? (
           <div className="flex h-full items-center justify-center text-koma-dim"><BrailleSpinner size={18} className="opacity-70" /></div>
         ) : (
@@ -135,7 +141,7 @@ export default function StoreTab() {
                     <button onClick={() => openInstalledExtensionTab(ext.id)} className="min-w-0 flex-1 truncate text-left text-[12px] text-koma-fg hover:underline" title={ext.id}>{ext.name || ext.id}</button>
                     <span className="flex-none text-[10px] text-koma-dim opacity-70">v{ext.version}</span>
                     <TierBadge tier={ext.tier} />
-                    <InstallButton id={ext.id} installed pending={pendingOp === ext.id} onInstall={() => installExtension(ext.id)} onUninstall={() => uninstallExtension(ext.id)} />
+                    <InstallButton id={ext.id} installed pending={pendingOp === ext.id} onInstall={() => installExtension(ext.id)} onUninstall={() => armUninstall(ext.id, ext.name || ext.id)} />
                   </li>
                 ))}</ul>
               </section>
@@ -143,12 +149,20 @@ export default function StoreTab() {
             <section>
               <div className="mb-2 text-[10px] uppercase tracking-wider text-koma-dim opacity-60">Browse</div>
               {catalogue.length === 0 ? <div className="py-8 text-center text-[12px] text-koma-dim opacity-70">{error ? 'Could not reach the store.' : 'No extensions found.'}</div> : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{catalogue.map((item) => <StoreCard key={item.id} item={item} installed={installedIds.has(item.id)} pending={pendingOp === item.id} onOpen={() => openStoreDetail(item.id)} onInstall={() => installExtension(item.id)} onUninstall={() => uninstallExtension(item.id)} />)}</div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{catalogue.map((item) => <StoreCard key={item.id} item={item} installed={installedIds.has(item.id)} pending={pendingOp === item.id} onOpen={() => openStoreDetail(item.id)} onInstall={() => installExtension(item.id)} onUninstall={() => armUninstall(item.id, item.name || item.id)} />)}</div>
               )}
             </section>
           </div>
         )}
       </div>
+      {pendingUninstall && (
+        <UninstallExtensionConfirm
+          name={pendingUninstall.name}
+          workspaceDir={pendingUninstall.workspaceDir}
+          onConfirm={() => { uninstallExtension(pendingUninstall.id); setPendingUninstall(null) }}
+          onCancel={() => setPendingUninstall(null)}
+        />
+      )}
     </div>
   )
 }

@@ -195,5 +195,5 @@ fn emit_subagent_terminal_with_manager_and_registry_entry_does_not_panic() {
         .entry("ext.a".to_string())
         .or_default()
         .insert("S".to_string(), 3, true);
-    emit_subagent_terminal(&state, "S", 3, "general", "done");
+    emit_subagent_terminal(&state, "S", 3, "general", "done", None);
 }

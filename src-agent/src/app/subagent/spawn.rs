@@ -185,6 +185,8 @@ pub fn spawn_subagent(
         max_steps,
         tx,
         inject_rx,
+        agent_name.clone(),
+        id,
     ));
 
     Some(SubAgent {

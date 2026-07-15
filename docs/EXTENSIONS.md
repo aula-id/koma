@@ -322,6 +322,7 @@ startup, so a bad manifest fails loudly instead of silently drifting from the co
 | `contributes` | object | omitted → `{}` | See below. |
 | `requires` | `[Grant]` | omitted → `[]` | Wire strings, e.g. `"agents:orchestrate"`. See the grants reference. |
 | `workspace_dir` | string | omitted → none | An extension-owned state directory koma creates and injects as a session workspace root. Must resolve strictly under `$HOME`. See "`workspace_dir`" below. |
+| `mcp_servers` | `[ManifestMcpServer]` | omitted → `[]` | Bundled stdio MCP servers auto-registered into koma's MCP catalogue at install time. See "`mcp_servers`" below. |
 
 ### `workspace_dir`
 
@@ -355,6 +356,55 @@ can't slip past. Injection happens at daemon/TUI startup, and again the moment a
 extension is installed at runtime (no restart needed). It is in-memory and re-derived
 from the currently **enabled** extension set on every start, so disabling or uninstalling
 an extension drops its workspace root on the next start.
+
+### `mcp_servers`
+
+A bundled stdio MCP server an extension ships is a genuinely SEPARATE binary from its own
+`runtime.exec` daemon — e.g. the Workflow extension's `bin/workflow-mcp`, spawned
+alongside `bin/office-daemon`. Before this field, koma had no way to learn about it: the
+binary unpacked (its exec bit preserved by the zip-mode-preservation step of install), but
+nothing ever registered it as an `McpServerEntry`, so a fresh install showed "No MCP
+servers" until the user hand-added one through the MCP settings.
+
+`mcp_servers` closes that gap — declare each one and koma auto-registers it at install
+time:
+
+```json
+{
+  "mcp_servers": [
+    { "name": "workflow", "exec": "bin/workflow-mcp", "args": [] }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Display name; becomes the registered `McpServerEntry.name` (and thus the `mcp__<name>__<tool>` advertise prefix) unless it collides with a row this extension doesn't already own, in which case koma prefixes it with the extension's own id (`"<ext_id>:<name>"`) to disambiguate. |
+| `exec` | string | Path to the stdio MCP server executable, RELATIVE to the package root — the SAME containment discipline as `runtime.exec`: no `..`/absolute escape, and it must exist under the extension's install dir after unpack, or the WHOLE registration fails closed (no partial/broken rows). |
+| `args` | `[string]`, optional | Arguments passed to `exec` at spawn. Defaults to `[]`. |
+
+**Registration is an UPSERT, keyed on `(ext_id, name)`.** `app::ext::register::register_mcp_servers`
+runs at every install (fresh, reinstall, or upgrade) and:
+
+- **replaces its own entries in place** — a row this SAME extension registered under the
+  same declared name keeps its `uuid` (so it doesn't lose its identity) and its `enabled`
+  flag (so a user who disabled it stays disabled across an upgrade); only `command`/`args`/
+  `env` move to match the new version;
+- **drops stale rows** — a name this extension declared before but no longer does is
+  removed, so an upgrade that stops shipping a server doesn't leave a dead orphan behind;
+- **never touches a user-created row** (`ext_id: None`) or a row belonging to a DIFFERENT
+  extension — provenance-tagged (`McpServerEntry.ext_id`) exactly like every other
+  ext-owned config row.
+
+`command` is always resolved to an ABSOLUTE path under `extensions/<id>/` via a plain
+`PathBuf::join` (platform-native separators — no hardcoded `/`, so this is Windows-safe
+without any special-casing). Uninstall's complete nuke removes these rows the same way it
+removes a hand-added one — see step 5 of "Uninstall" below.
+
+**Enable/disable**: there is no extension-level enable/disable GUI flow today (only whole-
+extension install/uninstall) — a registered `McpServerEntry` can still be individually
+toggled through the existing MCP settings UI (`set_mcp_enabled_by_uuid`), and that toggle
+survives a reinstall as described above.
 
 ### `contributes`
 
@@ -634,13 +684,26 @@ and a not-currently-running extension simply doesn't get it (no queueing).
 
 **`agents.done`** is a related but DIFFERENT mechanism, worth calling out
 separately: `{ "agentId": <u64, the EXT-FACING id from agents.spawn>, "status":
-"done"\|"error"\|"killed" }`, delivered ONLY to the single extension that spawned
-that agent with `agents.spawn { "notify": true }` — and delivered regardless of
-whether `"agents.done"` appears in that extension's `contributes.events` at all. A
-spawn with `notify: false` (today's default) gets no `agents.done` — only the
-broadcast `subagent.done` others may also be subscribed to. See `event-watcher-daemon`
-for the subscribed-broadcast side and `fleet-board-daemon`/`orchestrator-daemon` for
-the `notify: true` side.
+"done"\|"error"\|"killed", "error"?: <string> }`, delivered ONLY to the single
+extension that spawned that agent with `agents.spawn { "notify": true }` — and
+delivered regardless of whether `"agents.done"` appears in that extension's
+`contributes.events` at all. A spawn with `notify: false` (today's default) gets no
+`agents.done` — only the broadcast `subagent.done` others may also be subscribed to.
+See `event-watcher-daemon` for the subscribed-broadcast side and
+`fleet-board-daemon`/`orchestrator-daemon` for the `notify: true` side.
+
+The `"error"` field is ADDITIVE. It is present when `"status": "error"` — carrying
+the sub-agent's failure text (the same string `agents.status`/`agents.result` would
+report), so a `notify: true` spawner learns *why* its sub-agent died without a
+separate poll — and ALSO on a `"killed"` event when the daemon is shutting down
+(including the build-skew auto-restart after an upgrade), where it reads
+`"error": "daemon restart"`: an extension that wants restart-resilience should treat
+that reason as RESPAWNABLE (re-spawn the agent once reconnected to the fresh daemon)
+rather than as a real failure. A `"done"` payload never carries the field, and a
+`"killed"` from an explicit `agents.kill` carries none either. Older extensions that
+don't read the field are unaffected; the full terminal payload — including a `"done"`
+sub-agent's report text, which never travels over this event — remains available via
+the `agents.result` pull path.
 
 Separately from delivery, every sub-agent an extension spawns through
 `agents.spawn` is marked ext-owned, and an ext-owned agent's completion is
@@ -652,9 +715,10 @@ extension gets its result through `agents.result` / `agents.done` (when
 tracked either way.
 
 No event payload ever carries a sub-agent's report text or transcript — only ids,
-names, and short status labels. There is no batching, coalescing, or rate-limiting
-on delivery; each trigger fans out individually and synchronously at the point of
-the state transition.
+names, short status labels, and (on `agents.done` with `"status": "error"`, or a
+daemon-shutdown `"status": "killed"`) the short reason string described above. There is no batching, coalescing, or
+rate-limiting on delivery; each trigger fans out individually and synchronously at
+the point of the state transition.
 
 ---
 
@@ -908,7 +972,21 @@ error modes inline.
 Verifies the zip's SHA-256 then an Ed25519 signature over it before any disk write;
 rejects unsafe zip paths; unpacks under `~/.koma/extensions/<id>/`; persists an
 enabled registry entry. `kind: "daemon"` extensions are started immediately after a
-successful install (one of four auto-start triggers — see below).
+successful install (one of four auto-start triggers — see below). Any declared
+`mcp_servers[]` are auto-registered into the MCP catalogue (see "`mcp_servers`" above)
+in the SAME config mutation as the registry upsert, before the live reload:
+
+- **Attached daemon** (`requests_ext.rs::finish_install`) — one `save_and_reload_mcp`
+  call persists both the registry entry and the registered server rows, then
+  reconnects the LIVE session `McpManager` from the just-saved set.
+- **Detached GUI host** (`store_host.rs::finish_install_detached`) — no live
+  per-session `McpManager` exists pre-session, so after the save it BOUNCES the
+  GLOBAL MCP daemon instead (`stop_mcp_daemon(true)`); the next session's
+  `ensure_mcp_daemon_running` respawns it fresh off the new config, cheaply and
+  safely via the build-skew fingerprint handshake.
+- **CLI dev install** (`koma ext install --dev`) — registers + saves inline, no live
+  daemon to reload (it runs pre-daemon); picked up by the next `koma` session like
+  everything else a dev install touches.
 
 ### Dev install (offline, unsigned)
 
@@ -939,37 +1017,66 @@ itself.
 - **reinstall**: installing the same id again replaces the existing entry in place
   (`[dev] replacing existing <id> vX.Y.Z`) — install → test → reinstall is a normal
   loop, not something you need to uninstall first.
+- **`mcp_servers`**: any declared bundled MCP servers are registered/upserted the same
+  as a store install (`[dev] registered N mcp server(s)`), so iterating on a manifest
+  that declares one doesn't need a hand-added `McpServerEntry` either.
 - **enabled by default**: a dev install is always `enabled: true` — it's for
   testing right now, not sitting dormant.
 - Runs before the daemon starts, so a freshly-installed extension is live for the
   *next* `koma` session immediately; anything already running needs a restart to
   pick it up.
 
-### Uninstall — the full purge list
+### Uninstall — the complete nuke
 
-In order, all of the following happen (`requests_ext.rs::uninstall_extension` +
-`AppConfig::purge_extension`):
+Uninstall is a COMPLETE nuke — it leaves nothing behind, on disk or in memory, on this
+daemon or any other. Both paths run it: the attached daemon
+(`requests_ext.rs::uninstall_extension`) and the detached GUI host
+(`store_host.rs::spawn_uninstall`), differing only in the session-scoped steps a detached
+host has no live managers for (called out below). In order:
 
-1. Tool registration undone in the live MCP manager.
-2. The running child (if any) is stopped.
-3. `~/.koma/extensions/<id>/` is removed from disk.
-4. **`purge_extension(id)`** removes, atomically with the registry save:
-   - every key-backed provider this extension registered (`providers.register`
-     entries) and every OAuth connection it backed, by uuid;
-   - every model anchored to any of those (the same sweep
-     `providers.unregister`'s "host delete guard" uses);
-   - the extension's preferred-model record (`ext_preferred_models`).
-   - **Never touches** per-session `session_models` overrides — those live in
-     runtime `AppState`, not persisted `AppConfig`; a dangling session override
-     self-heals to the koma-free fallback at next dispatch instead.
-   - Returns whether the GLOBAL Main role was pointing at a now-dead model; if so,
-     a foreground toast reports it (Main isn't force-reassigned here — it self-heals
-     to koma-free at next dispatch, same as the session-override case above).
-5. The registry entry itself is removed and the whole thing is persisted in one
-   `config.save()`.
-6. In-memory-only state is cleared: the extension's published `context.set` blob,
-   any of its still-buffered `chat.prompt` entries across every session, and its
-   `ExtAgentRegistry`.
+1. **Snapshot the manifest** — its `contributes.sub_agents` names + `workspace_dir` are read
+   ONCE up front, because step 4 deletes the manifest they come from.
+2. **Stop the local child** (attached only) and **purge its contributed MCP tools** from the
+   live manager; clear its in-memory footprint — the published `context.set` blob, any
+   still-buffered `chat.prompt` entries across every session, and its `ExtAgentRegistry`.
+   Detached has no live managers, so this is skipped and self-heals on the next daemon boot.
+3. **Fan-out unload** — a fire-and-forget `UnloadExtension` is sent to EVERY OTHER live
+   session-daemon's socket so each drops the same in-memory footprint immediately instead of
+   at its next boot (best-effort; a daemon too old to know the verb error-replies or drops
+   the connection, and is ignored).
+4. **`~/.koma/extensions/<id>/` is removed** from disk (guarded against a path-escaping id).
+5. **`purge_extension(id)`** removes every key-backed provider this extension registered and
+   every OAuth connection it backed, every model anchored to those (the same sweep
+   `providers.unregister`'s "host delete guard" uses), and its `ext_preferred_models` record.
+   **`remove_ext_mcp_servers(id)`** additionally deregisters any configured MCP-server row
+   that belongs to the extension — one tagged with its id, OR whose command path lives under
+   `extensions/<id>/` (a bundled MCP-server binary, now a dead orphan). Never touches
+   per-session `session_models` overrides (they self-heal to koma-free at next dispatch); a
+   purged GLOBAL Main role is reported as a foreground toast (also self-healing, not
+   force-reassigned).
+6. **The registry entry is removed** and everything above is persisted in ONE `config.save()`,
+   followed by a live MCP reload so a removed orphan server's connection drops immediately:
+   the attached path reconnects its manager; the detached path bounces the global MCP daemon
+   so the next `ensure` respawns it off the new config.
+7. **Agent-override sweep** — for each snapshotted sub-agent name, `~/.koma/agents/<name>.md`
+   AND every `~/.koma/sessions/*/*/agents/<name>.md` override (a copy a user saved after
+   editing the extension's sub-agent) is deleted.
+
+   > **Same-name caveat**: the delete key is the sub-agent NAME (the registry is name-keyed
+   > and carries no ownership tag), so an UNRELATED user agent that happens to share a name
+   > with an uninstalled extension's sub-agent is swept too.
+8. **Workspace-dir nuke** — if the manifest declared a `workspace_dir`, that directory is
+   deleted (`remove_dir_all`) after being re-validated through the SAME policy install uses
+   (tilde-expand + strictly-under-`$HOME`, never `~/.koma` / `~/.ssh` / `~/.aws` / `~/.gnupg`
+   / `~/.config`'s root — enforced on the canonical path). A missing or policy-rejected dir is
+   skipped; a nonexistent dir is never created just to delete it. This is user data: the
+   GUI's uninstall confirm names this directory before the request is ever sent ("… and its
+   data directory (`<path>`). This cannot be undone.").
+9. **Reindex + rebuild the system prompt** (attached only, when a foreground session exists) so
+   the "# Extension workspaces" note drops the uninstalled extension immediately.
+
+The GUI never fires an uninstall without a two-step confirm (files, agents, MCP servers, and
+the data directory are all named) — it is genuinely irreversible.
 
 ### Daemon auto-start — four triggers
 

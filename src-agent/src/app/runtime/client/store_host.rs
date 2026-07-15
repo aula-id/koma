@@ -203,12 +203,28 @@ fn finish_install_detached(
         Ok(ext) => {
             let mut cfg = AppConfig::load();
             cfg.upsert_extension(ext.clone());
+            // Auto-register any manifest-declared bundled MCP servers — same as the attached
+            // daemon's `finish_install`, so a store install through the detached GUI host
+            // never leaves the user needing to hand-add an McpServerEntry either.
+            if let Err(e) = crate::app::ext::register::register_mcp_servers(&ext, &mut cfg) {
+                store::append_global_error_log(
+                    "ext-install",
+                    &format!("register mcp servers for {}: {e:#}", ext.id),
+                );
+            }
             if let Err(e) = cfg.save() {
                 store::append_global_error_log(
                     "ext-install",
                     &format!("save config after install {}: {e:#}", ext.id),
                 );
             }
+            // No live per-session `McpManager` exists pre-session to reconnect from the
+            // just-saved server set, so BOUNCE the GLOBAL MCP daemon instead — mirrors
+            // `spawn_uninstall`'s reload strategy: the next session's
+            // `ensure_mcp_daemon_running` respawns it fresh off the new config (picking up
+            // any newly-registered row), cheaply and safely via the build-skew fingerprint
+            // handshake. Quiet — the GUI host owns no user terminal.
+            crate::app::runtime::manage::stop_mcp_daemon(true);
             super::push_proto::push_ext_op_result(push, ext.id.clone(), true, None);
             super::push_proto::push_installed_extensions(push, installed_extensions());
         }
@@ -222,15 +238,35 @@ fn finish_install_detached(
     }
 }
 
-/// `HostCtl::UninstallExtension` while detached — same host-local reasoning as
-/// [`spawn_install`]: purges the on-disk package + registry entry + persists. Synchronous
-/// (fs + a config save, like `uninstall_extension`'s daemon twin), so this runs on a plain
-/// thread, NOT the tokio runtime.
+/// `HostCtl::UninstallExtension` while detached — the COMPLETE nuke's detached arm, mirroring
+/// the daemon's `uninstall_extension` MINUS the session-scoped in-memory steps that don't
+/// exist pre-session (see the module doc above). Synchronous (fs + a config save + a socket
+/// fan-out), so this runs on a plain thread, NOT the tokio runtime. Order matches the audit:
+/// snapshot the manifest (1); fan the in-memory unload out to every live session-daemon (3);
+/// remove the on-disk package dir (6); purge catalogue contributions + deregister orphan
+/// MCP-server rows + drop the registry entry, then ONE save (5a/8); bounce the global MCP
+/// daemon so the next ensure respawns it off the new config (5b); sweep same-named agent
+/// overrides (7); nuke the declared workspace_dir (9).
 pub(super) fn spawn_uninstall(push: impl Fn(String) + Send + 'static, id: String) {
     std::thread::spawn(move || {
-        // Remove the unpacked package dir. Guard the id against a path-escape before
-        // joining (defense in depth — the id comes from the client), mirroring the
-        // daemon's `uninstall_extension`.
+        // (1) Snapshot the manifest ONCE — its sub-agent names + workspace_dir — BEFORE the
+        // dir is deleted below (after which the manifest is unreadable).
+        let snap = crate::app::ext::uninstall::snapshot_manifest(&id);
+
+        // (2 + 4) SKIPPED here by design: detached has no live `ext_manager`/`mcp_manager` to
+        // stop the child or purge the in-memory MCP snapshot — that state doesn't exist
+        // pre-session, and a fresh daemon re-derives it from the (now-reduced) config on its
+        // next boot (see the module-level doc on the self-healing tail).
+
+        // (3) Fan the in-memory unload out to every live session-daemon (all "other" — the
+        // detached host owns no daemon of its own), so a daemon already serving this extension
+        // drops it now instead of at its next boot. Synchronous is fine: this worker thread is
+        // not an event loop, so the blocking socket sweep can't wedge anything. Best-effort.
+        crate::app::runtime::manage::broadcast_unload_extension(&id);
+
+        // (6) Remove the unpacked package dir. Guard the id against a path-escape before
+        // joining (defense in depth — the id comes from the client), mirroring the daemon's
+        // `uninstall_extension`.
         if is_safe_ext_id(&id) {
             if let Ok(dir) = store::extensions_dir() {
                 let target = dir.join(&id);
@@ -250,12 +286,14 @@ pub(super) fn spawn_uninstall(push: impl Fn(String) + Send + 'static, id: String
             );
         }
 
+        // (5a + 8) Config mutations, then ONE save. Purge the extension's catalogue
+        // contributions (key-backed providers/models/oauth conns) — `main_reset` drives a
+        // foreground toast in the daemon twin, skipped here (no session to toast; a purged
+        // Main role self-heals on the next resolve). Deregister orphan MCP-server rows
+        // (ext-owned, or whose command lives under extensions/<id>/). Drop the registry entry.
         let mut cfg = AppConfig::load();
-        // Purge the extension's catalogue contributions (key-backed providers/models/oauth
-        // conns) BEFORE dropping the registry entry, same ordering as the daemon twin. The
-        // `main_reset` flag drives a foreground toast there — skipped here (no session /
-        // foreground to toast; a purged Main role just self-heals on the next resolve).
         let _purge = cfg.purge_extension(&id);
+        let _mcp_rows_removed = cfg.remove_ext_mcp_servers(&id);
         cfg.remove_extension_by_id(&id);
         if let Err(e) = cfg.save() {
             store::append_global_error_log(
@@ -263,6 +301,28 @@ pub(super) fn spawn_uninstall(push: impl Fn(String) + Send + 'static, id: String
                 &format!("save config after uninstall {id}: {e:#}"),
             );
         }
+
+        // (5b, detached variant) No per-session `McpManager` exists pre-session to `reconnect`
+        // from the just-saved server set, so instead BOUNCE the GLOBAL MCP daemon: the next
+        // session's `ensure_mcp_daemon_running` respawns it fresh off the new config (dropping
+        // any removed orphan row's connection). The build-skew fingerprint handshake makes
+        // that respawn cheap + safe. Quiet — the GUI host owns no user terminal.
+        crate::app::runtime::manage::stop_mcp_daemon(true);
+
+        // (7) Sweep same-named agent-override files (global + every session) left by a user
+        // who saved an edited copy of one of this extension's sub-agents. The same-name caveat
+        // is documented on the helper.
+        crate::app::ext::uninstall::sweep_agent_overrides(&snap.sub_agent_names);
+
+        // (9) Nuke the extension's declared workspace_dir (validated against the SAME policy
+        // as install; a missing/rejected dir is skipped). User-approved data deletion — the
+        // GUI confirm named this dir before the request was sent.
+        if let Some(ws) = snap.workspace_dir.as_deref() {
+            crate::model::ext_workspace::remove_workspace_dir(ws);
+        }
+
+        // (10) SKIPPED: no foreground session here to reindex / rebuild the system prompt for;
+        // a fresh daemon re-derives its workspace roots + prompt on boot.
 
         super::push_proto::push_ext_op_result(&push, id, true, None);
         super::push_proto::push_installed_extensions(&push, installed_extensions());
@@ -564,6 +624,9 @@ fn installed_extensions() -> Vec<InstalledExtWire> {
                 enabled: e.enabled,
                 granted: e.granted.clone(),
                 panels,
+                // Surfaced so the GUI uninstall confirm can name the data dir the nuke
+                // deletes (read fresh off the installed manifest, like `panels`).
+                workspace_dir: crate::model::ext_workspace::read_workspace_dir(&e.id),
             }
         })
         .collect()
@@ -635,6 +698,8 @@ fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String
         models,
         sub_agents,
         store_detail: None,
+        // Named in the GUI uninstall confirm as the data dir the nuke deletes.
+        workspace_dir: crate::model::ext_workspace::read_workspace_dir(id),
     })
 }
 
@@ -976,6 +1041,7 @@ mod tests {
                     enabled: e.enabled,
                     granted: e.granted.clone(),
                     panels,
+                    workspace_dir: None,
                 }
             })
             .collect();
@@ -1021,6 +1087,7 @@ mod tests {
             enabled: true,
             granted: vec![],
             panels: vec![],
+            workspace_dir: None,
         };
         let json = serde_json::to_value(&wire).unwrap();
         assert_eq!(json["name"], "Hello World");
@@ -1046,6 +1113,7 @@ mod tests {
             models: vec![],
             sub_agents: vec![],
             store_detail: None,
+            workspace_dir: None,
         };
         let json = serde_json::to_value(&wire).unwrap();
         // serde skips None Option by default with #[serde(default)]

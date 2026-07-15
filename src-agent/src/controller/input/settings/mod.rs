@@ -248,8 +248,8 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
 ///   (`Action::OAuthCopyUrl`/`Action::OAuthOpenUrl` — no-ops in `Starting`,
 ///   which has no URL yet); everything else is ignored (a spinner screen with
 ///   nothing else to type).
-/// - `Pick`: Up/Down move the cursor; Enter on Codex/Kilo Code kicks off that
-///   provider's flow (`Action::OAuthStart`), Enter on "paste token" switches
+/// - `Pick`: Up/Down move the cursor; Enter on Codex/Kilo Code/koma.run kicks off
+///   that provider's flow (`Action::OAuthStart`), Enter on "paste token" switches
 ///   straight to `CodexPaste` (no task involved); Esc returns to `Idle`.
 /// - `CodexPaste`: chars/backspace edit the draft; Enter with a non-empty draft
 ///   saves it (`Action::OAuthPaste`); Esc discards back to `Idle`.
@@ -280,6 +280,7 @@ fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
                     return match cursor {
                         0 => Action::OAuthStart(OAuthProvider::Codex),
                         1 => Action::OAuthStart(OAuthProvider::Kilocode),
+                        2 => Action::OAuthStart(OAuthProvider::KomaRun),
                         _ => {
                             s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
                             Action::None

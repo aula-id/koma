@@ -276,14 +276,16 @@ fn run_git(args: &[&str], cwd: &Path, timeout_ms: u64) -> String {
     if !cwd.is_dir() {
         return format!("error: git working directory '{}' does not exist", cwd.display());
     }
-    let child = match Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .spawn()
-    {
+        .env("GIT_TERMINAL_PROMPT", "0");
+    // No console flash on Windows — see `tool::shell::no_console_window`'s docs
+    // for the `FreeConsole()` causal chain this guards against.
+    super::shell::no_console_window(&mut cmd);
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return format!("error: failed to spawn git: {e}"),
     };

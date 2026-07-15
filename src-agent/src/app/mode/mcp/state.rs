@@ -267,6 +267,8 @@ impl McpState {
             args: parse_args(&self.draft_args),
             env: parse_env(&self.draft_env),
             url: self.draft_url.trim().to_string(),
+            // A dashboard-edited server is user-owned — no extension provenance.
+            ext_id: None,
         }
     }
 }

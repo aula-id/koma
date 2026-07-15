@@ -641,6 +641,7 @@ impl DaemonHub {
             | ClientRequest::StoreDetail { .. }
             | ClientRequest::InstallExtension { .. }
             | ClientRequest::UninstallExtension { .. }
+            | ClientRequest::UnloadExtension { .. }
             | ClientRequest::ListInstalledExtensions
             | ClientRequest::ExtPanelMsg { .. } => self.ext(idx, req, state, handle),
 
