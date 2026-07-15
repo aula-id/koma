@@ -129,6 +129,7 @@ pub(super) fn build_host_agents_values() -> (
             model: ag.model.clone(),
             tools: ag.tools.clone(),
             prompt: ag.prompt.clone(),
+            ext_id: ag.ext_id.clone(),
         })
         .collect();
     let cfg = crate::model::app_config::AppConfig::load();

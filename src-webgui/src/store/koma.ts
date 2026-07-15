@@ -379,7 +379,7 @@ export type AgentEntry = {
   name: string
   description: string
   conditions: string
-  source: 'session' | 'global' | 'builtin'
+  source: 'session' | 'global' | 'builtin' | 'extension'
   modelUuid: string | null
   // Host-resolved display name for `modelUuid` (informational only — the
   // Agents panel/tab re-resolve `modelUuid` against `catalogueModels`/
@@ -388,6 +388,11 @@ export type AgentEntry = {
   model: string | null
   tools: string[]
   prompt: string
+  // The owning extension's manifest id, set only when `source === 'extension'`
+  // (host `ext_id`, mirrors `AgentDef::ext_id`) — cross-referenced against the
+  // extensions slice's `installed` list for a display name; falls back to the
+  // raw id when not (yet) resolvable. `null` for every other source.
+  extId: string | null
 }
 
 // One file entry in a GitStatus's staged/unstaged list — mirrors the host's
@@ -1014,6 +1019,7 @@ export type PushEnvelope =
         model: string | null
         tools: string[]
         prompt: string
+        ext_id?: string | null
       }[]
       catalogueModels: { uuid: string; name: string; model_id: string; provider_uuid: string }[]
       catalogueProviders: { uuid: string; name: string; endpoint: string }[]
@@ -2723,11 +2729,15 @@ export const useKoma = create<KomaState>((set, get) => ({
           name: a.name,
           description: a.description,
           conditions: a.conditions,
-          source: a.source === 'global' || a.source === 'builtin' ? a.source : 'session',
+          source:
+            a.source === 'global' || a.source === 'builtin' || a.source === 'extension'
+              ? a.source
+              : 'session',
           modelUuid: a.model_uuid,
           model: a.model,
           tools: a.tools,
           prompt: a.prompt,
+          extId: a.source === 'extension' ? (a.ext_id ?? null) : null,
         }))
         const catalogueModels: CatalogueModelEntry[] = env.catalogueModels.map((m) => ({
           uuid: m.uuid,
