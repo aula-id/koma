@@ -202,6 +202,7 @@ fn subagent_def_edge_values_empty_strings_and_unicode() {
         prompt: Some(String::new()),
         model: Some(String::new()),
         effort: Some("".to_string()),
+        tools: Vec::new(),
     };
     let wire = serde_json::to_value(&def).expect("serializes");
     // Present-but-empty optional strings serialize as `""`, not omitted / null.
