@@ -32,6 +32,18 @@ pub struct ExtensionManifest {
     /// predating this field parses unchanged. See `docs/EXTENSIONS.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
+    /// Bundled stdio MCP servers this extension ships (e.g. a standalone MCP binary
+    /// spawned alongside its own `runtime.exec` daemon, like the Workflow extension's
+    /// `bin/workflow-mcp`) that koma should AUTO-REGISTER into the global MCP catalogue
+    /// at install time. Without this, a bundled MCP server needs the user to hand-add
+    /// an `McpServerEntry` through the MCP settings after every install — a fresh
+    /// install otherwise shows "No MCP servers". See [`ManifestMcpServer`] and
+    /// `app::ext::register::register_mcp_servers` on the koma side. Serde-default so a
+    /// manifest predating this field parses unchanged, and omitted from the JSON when
+    /// empty so an extension with none round-trips byte-identical. See
+    /// `docs/EXTENSIONS.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<ManifestMcpServer>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +57,26 @@ pub enum ExtensionKind { Daemon, Oneshot }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Runtime {
     pub exec: String,             // path to the executable, relative to the package root
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// One bundled stdio MCP server declared on [`ExtensionManifest::mcp_servers`] — a
+/// standalone MCP binary an extension ships (distinct from `runtime.exec`, which is the
+/// extension's own daemon/oneshot process) that koma should register into its MCP
+/// catalogue automatically at install time, instead of the user hand-adding it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestMcpServer {
+    /// Display name — becomes the registered `McpServerEntry.name` (and thus the
+    /// `mcp__<name>__<tool>` advertise prefix), unless it collides with an existing
+    /// entry this extension doesn't already own, in which case koma prefixes it with
+    /// this extension's id to disambiguate.
+    pub name: String,
+    /// Path to the stdio MCP server executable, RELATIVE to the package root — the SAME
+    /// containment discipline as [`Runtime::exec`] applies: no traversal (`..`, absolute
+    /// paths), and it must exist under the extension's install dir after unpack.
+    pub exec: String,
+    /// Arguments passed to `exec` at spawn.
     #[serde(default)]
     pub args: Vec<String>,
 }

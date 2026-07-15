@@ -162,14 +162,18 @@ pub fn install_dev_dir(src_dir: &Path) -> Result<InstalledExtension> {
 /// carry no path field. A `contributes.tools` entry is invoked IN-PROCESS on the
 /// extension's own `runtime.exec` daemon via `KomaMsg::Invoke`, not spawned as a
 /// separate binary. A genuinely separate stdio MCP server an extension ships (e.g. the
-/// Workflow extension's `bin/workflow-mcp`, shipped alongside `bin/office-daemon` by
-/// `bin/`-directory convention, not manifest declaration) is registered as its own
-/// `McpServerEntry` in `config.json` — a pre-existing, generic mechanism whose
-/// `command` can point ANYWHERE on disk, not just inside an extension's install dir, so
-/// chmod'ing it from here would be an odd (and unsafe) overreach. That binary's exec
-/// bit is instead covered by the zip-mode preservation below, which applies to every
-/// entry regardless of manifest declaration. If a future manifest field ever declares
-/// another spawnable path scoped to the extension dir, chmod it here too.
+/// Workflow extension's `bin/workflow-mcp`, shipped alongside `bin/office-daemon`) is
+/// registered as its own `McpServerEntry` in `config.json` — via either of two routes:
+/// UNDECLARED (bundled by `bin/`-directory convention only, hand-added by the user
+/// through the MCP settings, `command` free to point ANYWHERE on disk), or DECLARED on
+/// the manifest's `mcp_servers[]` field (`ManifestMcpServer`) and AUTO-registered at
+/// install time by `app::ext::register::register_mcp_servers`, whose `exec` is resolved
+/// through the SAME [`safe_exec_rel`] containment guard `runtime.exec` gets below —
+/// scoped to this extension's own install dir. Either way, chmod'ing it from HERE would
+/// be redundant at best (for a declared one) or unsafe overreach (for a hand-added one
+/// pointing outside the install dir): that binary's exec bit is instead covered by the
+/// zip-mode preservation below, which applies to every entry regardless of manifest
+/// declaration.
 ///
 /// Propagates any failure instead of swallowing it — a silent chmod failure would only
 /// surface later as a confusing "permission denied" at first spawn.
