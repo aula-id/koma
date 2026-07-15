@@ -189,6 +189,10 @@ pub(super) struct PushPalette {
     pub(super) success: String,
     pub(super) info: String,
     pub(super) error: String,
+    /// Whether this palette reads as a dark theme (derived from `bg`'s relative
+    /// luminance — see `project_config::palette_is_dark`), so panel iframes and other
+    /// theme-aware consumers can pick a dark/light variant without parsing `bg` hex.
+    pub(super) dark: bool,
 }
 
 /// One named palette in the [`PushEnvelope::Config`] `palettes` catalogue — the GUI

@@ -736,6 +736,72 @@ when the matching `reply` envelope arrives (or on timeout), and `onPush()`
 registers a handler fanned out on every `push` envelope. See
 `fleet-board-daemon/ui/index.html` for it wired up to a real "Spawn card" button.
 
+### Theme
+
+Panels are theme-aware: the GUI host pushes the current palette to every registered
+panel automatically, and a panel can also pull it on demand. This is a THIRD,
+distinct sub-contract on top of the `msg`/`push` envelopes above — its own `kind`
+values, so a panel never confuses a theme repaint with an extension-originated
+push.
+
+Host → panel, unsolicited (a live palette change, AND once immediately when the
+panel iframe registers — so a panel opened mid-session doesn't have to wait for the
+next theme switch to paint itself correctly):
+```json
+{ "koma": "host", "v": 1, "kind": "theme", "payload": { "palette": { /* roles */ }, "name": "<string>", "dark": <bool> } }
+```
+
+Panel → host, one-shot query (works even detached — no active koma session
+required, since theme is a pure UI concern):
+```json
+{ "koma": "panel", "v": 1, "kind": "theme?", "reqId": "<string>" }
+```
+answered as an ordinary `reply` envelope with the same `{ palette, name, dark }`
+payload shape.
+
+`palette` carries the same nine roles the chat chrome itself paints with (host
+`PushPalette`, `src-agent/src/app/runtime/client/push_rows.rs`), each a `#rrggbb`
+string:
+
+| Role | Meaning |
+| --- | --- |
+| `bg` | Canvas background |
+| `fg` | Primary text |
+| `accent` | Highlights — rails, active state, primary buttons |
+| `dim` | Muted text / secondary borders |
+| `panel` | Raised surface — cards, bands, overlays |
+| `warn` | Amber warning cues |
+| `success` | Green success cues |
+| `info` | Blue info cues |
+| `error` | Red error cues |
+
+`name` is the active entry's key in the host's named-palette registry
+(`view::theme::PALETTES` — round-trips as a `SetTheme { name }` request from the
+Settings tab, not something a panel sends). `dark` is a bool the host derives from
+`bg`'s relative luminance (`project_config.rs`'s `palette_is_dark`) — cheaper than
+every panel re-deriving it from a hex string, and guaranteed to agree with the
+host's own dark/light classification.
+
+`koma-panel.js` wraps both directions:
+
+```js
+KomaPanel.onTheme(theme => {
+  // theme = { palette: {...}, name: 'dark', dark: true }
+  document.documentElement.style.setProperty('--koma-bg', theme.palette.bg);
+  document.documentElement.style.setProperty('--koma-fg', theme.palette.fg);
+});
+
+KomaPanel.getTheme()               // -> Promise<{ palette, name, dark }>, default 15s timeout
+  .then(theme => /* ... */);
+```
+
+`onTheme()` fires on every host `theme` push (register-time delivery + live
+changes) AND once on the module's own initial `getTheme()` query it fires on load —
+so a handler registered any time after the script loads still gets the CURRENT
+theme immediately, not just the next change. See `fleet-board-daemon/ui/index.html`
+for it wired up to `--koma-*` CSS custom properties with the panel's original
+hardcoded colours kept as fallbacks.
+
 ---
 
 ## OAuth providers (delegated flow)
