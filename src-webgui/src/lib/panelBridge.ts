@@ -1,6 +1,7 @@
 // GUI-side half of the W8/W9 extension panel bridge. Panel iframes all load
-// off the SINGLE origin `koma://extension` (see ExtensionPanelFrame.tsx's
-// no-sandbox comment) — the extId is a path segment, not a separate
+// off a SINGLE panel origin (`PANEL_ORIGIN` below — `koma://extension`, or
+// `http://koma.extension` on Windows; see ExtensionPanelFrame.tsx's no-sandbox
+// comment) — the extId is a path segment, not a separate
 // authority — so a hostile or buggy panel could claim to be ANY extId/panelId
 // in its message payload. Attribution therefore NEVER trusts message
 // content: every inbound `message` event is resolved through `bySource`,
@@ -55,13 +56,44 @@ export function unregisterPanelFrame(extId: string, panelId: string): void {
   byKey.delete(key)
 }
 
-// Nominal targetOrigin for panel postMessage calls. WebKitGTK's handling of
-// custom-scheme targetOrigin matching against `koma://extension/<extId>/…`
-// frames is unverified — it may or may not match. '*' is the sanctioned
-// fallback specifically BECAUSE the target Window comes out of our own
-// registry (never off message content), so a wildcard target can't leak
-// this postMessage to an attacker-controlled frame.
-const PANEL_TARGET_ORIGIN = 'koma://extension'
+// The two legitimate origins a panel iframe can load from. On macOS/Linux
+// (WKWebView / WebKitGTK) wry registers `koma://` as a real custom scheme, so
+// panels load from `koma://extension` directly. On Windows, WebView2/Chromium
+// can't register a real custom scheme, so wry serves the `koma://` protocol
+// over an http fake-domain: it navigates `koma://extension/...` as
+// `http://koma.extension/...` (wry `webview2` mod work-around prefix
+// `{http_or_https}://{scheme}.`; koma never calls `with_https_scheme`, so it's
+// `http`, not `https`). wry reverts that fake URL back to `koma://...` before
+// the Rust protocol handler sees it, so this split only affects the
+// browser-visible URL/origin — the iframe `src`, `postMessage` targets, and
+// inbound `event.origin` — never the host-side dispatch.
+const NATIVE_PANEL_ORIGIN = 'koma://extension'
+const WINDOWS_PANEL_ORIGIN = 'http://koma.extension'
+
+// The origin the iframe actually loads from on THIS platform. `window.__komaOS`
+// is injected by the Rust host (`std::env::consts::OS`) before any page script
+// runs, so it's already set by the time this module evaluates. Exported so
+// ExtensionPanelFrame builds the iframe `src` from the exact same value the
+// postMessage target uses — the two can never disagree.
+export const PANEL_ORIGIN =
+  typeof window !== 'undefined' && window.__komaOS === 'windows'
+    ? WINDOWS_PANEL_ORIGIN
+    : NATIVE_PANEL_ORIGIN
+
+// Allowlist for inbound `event.origin` validation (see handlePanelMessage).
+// BOTH legitimate forms are accepted regardless of platform — a real panel can
+// only ever originate from one of them, both are our own host-served origins,
+// and an exact-membership check (never a substring/prefix match, which would
+// also admit `koma://extension.evil.example`) keeps everything else out.
+const PANEL_ORIGIN_ALLOWLIST: readonly string[] = [NATIVE_PANEL_ORIGIN, WINDOWS_PANEL_ORIGIN]
+
+// Nominal targetOrigin for panel postMessage calls — the platform-correct panel
+// origin. WebKitGTK's handling of custom-scheme targetOrigin matching against
+// `koma://extension/<extId>/…` frames is unverified — it may or may not match.
+// '*' is the sanctioned fallback specifically BECAUSE the target Window comes
+// out of our own registry (never off message content), so a wildcard target
+// can't leak this postMessage to an attacker-controlled frame.
+const PANEL_TARGET_ORIGIN = PANEL_ORIGIN
 // Once a `*` retry has succeeded, stop bothering with the scheme origin —
 // remember it module-wide rather than re-probing every call.
 let useWildcardTarget = false
@@ -148,7 +180,12 @@ export function handlePanelMessage(event: PanelMessageEventLike): void {
   // chrome's own origin (not expected, but not evidence of spoofing either).
   const chromeOrigin = typeof window !== 'undefined' && window.location ? window.location.origin : ''
   if (event.origin && event.origin !== chromeOrigin) {
-    if (!event.origin.startsWith('koma://extension')) {
+    // STRICT exact-membership check against the two legitimate panel origins
+    // (`koma://extension` and, on Windows, `http://koma.extension`) — never a
+    // prefix/substring match, which would also admit `koma://extension.evil…`.
+    // Falsy origins are already tolerated by the guard above (WebKitGTK reports
+    // an empty origin for the custom `koma:` scheme).
+    if (!PANEL_ORIGIN_ALLOWLIST.includes(event.origin)) {
       if (!warnedOrigins.has(event.origin)) {
         warnedOrigins.add(event.origin)
         console.warn(`panelBridge: dropped message with unexpected origin: ${event.origin}`)

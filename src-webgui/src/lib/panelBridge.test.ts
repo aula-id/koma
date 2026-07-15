@@ -159,8 +159,11 @@ function fakeWindow(): { postMessage: (msg: unknown, targetOrigin: string) => vo
   ipcCalls.length = 0
 
   handlePanelMessage({
+    // A real origin carries no path — the panel origin is exactly
+    // `koma://extension` (or `http://koma.extension` on Windows); the strict
+    // allowlist in handlePanelMessage matches the bare origin, not a prefix.
     source: win as unknown as Window,
-    origin: 'koma://extension/ext6',
+    origin: 'koma://extension',
     data: { koma: 'panel', v: 1, kind: 'msg', reqId: 'r5', payload: { a: 1 } },
   })
 
