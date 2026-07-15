@@ -6,27 +6,30 @@
     fragment-paths       = ["../packaging/windows/path-and-shortcut.wxs"]
     component-group-refs = ["KomaPathAndShortcut"]
 
-  cargo-packager's own built-in main.wxs template already ships a Desktop
-  shortcut and a Start Menu shortcut, but both launch "[!Path]" bare - i.e.
-  plain `koma.exe` with no arguments, which starts the ratatui TUI, not the
-  GUI. It also declares a "PATH Environment Variable" *Feature* (Id
-  "Environment"), but that feature only gates whether the exe file itself
-  gets installed - it never actually writes an Environment table entry, so
-  INSTALLDIR is never added to PATH. This fragment fills both gaps:
+  koma vendors the full WiX main template (packaging/windows/main.wxs, wired via
+  the wix.template config key). That vendored template adds Arguments="gui" to
+  the *default* Desktop + Start Menu shortcuts, so they launch `koma gui` (the
+  desktop GUI) instead of bare koma.exe (the ratatui TUI) — the shortcut side is
+  handled there, not in this fragment. This fragment now fills only the one
+  remaining gap the built-in template leaves:
 
     - KomaPathEnvComponent: adds [INSTALLDIR] to the current *user's* PATH
       (HKCU-scoped, System="no") so `koma` is runnable from any shell after
       install, without requiring elevation for the env var propagation.
-    - KomaGuiShortcutComponent: an additional Start Menu shortcut
-      ("koma GUI") that explicitly passes `gui` as an argument, launching
-      `koma gui` instead of the bare CLI/TUI binary.
 
-  Both DirectoryRef targets (INSTALLDIR, ApplicationProgramsFolder) and the
-  "ProductIcon" Icon Id are declared by cargo-packager's own generated
-  main.wxs; DirectoryRef/Icon references across separate candle.exe
-  compilation units resolve at light.exe link time, so no re-declaration is
-  needed here. Note: "ProductIcon" only exists when the packager config's
-  `icons` list resolves to at least one file (it does - see Cargo.toml).
+  (An extra "koma GUI" Start Menu shortcut used to live here; it was removed once
+  the vendored main.wxs made the default shortcuts launch the GUI directly — a
+  separate entry would just duplicate them.)
+
+  cargo-packager's built-in template declares a "PATH Environment Variable"
+  *Feature* (Id "Environment"), but that feature only gates whether the exe file
+  itself gets installed - it never actually writes an Environment table entry, so
+  INSTALLDIR is never added to PATH. That is exactly what KomaPathEnvComponent
+  fixes.
+
+  The DirectoryRef target INSTALLDIR is declared by the (koma-vendored) main.wxs;
+  DirectoryRef references across separate candle.exe compilation units resolve at
+  light.exe link time, so no re-declaration is needed here.
 
   `$(var.Win64)` is intentionally NOT used here: it is a `<?define?>`
   preprocessor symbol local to main.wxs's own candle.exe pass (each .wxs
@@ -45,24 +48,11 @@
       </Component>
     </DirectoryRef>
 
-    <!-- Extra Start Menu shortcut that launches the GUI explicitly. -->
-    <DirectoryRef Id="ApplicationProgramsFolder">
-      <Component Id="KomaGuiShortcutComponent" Guid="C60C5DC4-86D5-479F-AA05-67989139FE96">
-        <Shortcut Id="KomaGuiShortcut"
-                  Name="koma GUI"
-                  Description="Launch the koma desktop GUI"
-                  Target="[INSTALLDIR]koma.exe"
-                  Arguments="gui"
-                  Icon="ProductIcon"
-                  WorkingDirectory="INSTALLDIR" />
-        <RemoveFolder Id="KomaGuiShortcutRemoveFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" Key="Software\koma" Name="GuiShortcut" Type="integer" Value="1" KeyPath="yes" />
-      </Component>
-    </DirectoryRef>
-
+    <!-- Must keep the Id "KomaPathAndShortcut" (referenced by Cargo.toml's
+         component-group-refs); it holds a single component now that the GUI
+         shortcut lives in the vendored main.wxs. -->
     <ComponentGroup Id="KomaPathAndShortcut">
       <ComponentRef Id="KomaPathEnvComponent" />
-      <ComponentRef Id="KomaGuiShortcutComponent" />
     </ComponentGroup>
 
   </Fragment>

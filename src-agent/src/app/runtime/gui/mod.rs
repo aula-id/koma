@@ -255,6 +255,29 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     use super::client::{run_host_relay, HostCtl};
     use crate::ipc::proto::ClientRequest;
 
+    // --- 0. Windows: drop the orphan console on shortcut / double-click launch ---
+    // koma.exe is a console-subsystem binary, so launching it from a Start Menu /
+    // Desktop shortcut (or a double-click) makes Windows allocate a fresh console
+    // that pops up as an empty window behind the GUI. `GetConsoleProcessList` with a
+    // 2-slot buffer reports how many processes are attached to THIS console: exactly
+    // 1 (only us) means Windows created the console solely for this launch — i.e. a
+    // shortcut / double-click — so we `FreeConsole` to make it vanish. More than 1
+    // (our parent shell is attached too) means we were launched from a real terminal,
+    // where the user wants their console output kept, so we leave it alone. Runs
+    // before any terminal / webview setup. (After detaching, runtime logging goes
+    // through `store::append_global_error_log` per repo convention — never
+    // println!/eprintln!, which a detached console would swallow anyway.)
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+        let mut pids = [0u32; 2];
+        // Count of processes attached to the current console (0 on failure → skip).
+        let attached = GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32);
+        if attached == 1 {
+            FreeConsole();
+        }
+    }
+
     // WebKitGTK rasterizes text inside GPU-composited scroll layers through a
     // different (stem-darkened) path — any overflowing container renders its text
     // visibly BOLDER than the rest of the app, and the cached layer tile never
@@ -384,7 +407,33 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
     };
 
     // --- 3. WebView + ipc handler ----------------------------------------------
-    let wv_builder = WebViewBuilder::new()
+    // Windows: WebView2 defaults its user-data folder to a directory beside the
+    // exe. When koma is installed under Program Files (not user-writable), creating
+    // that folder fails, the WebView2 environment never comes up, and the GUI dies
+    // at startup. wry 0.52's `WebContext { data_directory }` is the documented fix —
+    // its own docs call it "useful in Windows when a bundled application can't have
+    // the webview data inside Program Files" (wry-0.52.1 src/web_context.rs), and the
+    // webview2 backend feeds that path straight into
+    // `CreateCoreWebView2EnvironmentWithOptions` as the userDataFolder
+    // (wry-0.52.1 src/webview2/mod.rs::create_environment). Point it at a writable
+    // dir under ~/.koma. Bound here because the builder borrows it until `.build()`;
+    // left entirely untouched on Linux/macOS (no WebContext), so their webview data
+    // handling is exactly as before.
+    #[cfg(target_os = "windows")]
+    let mut web_context = {
+        let dir = crate::model::store::base_dir()?.join("gui-webdata");
+        // ~/.koma already exists (ensure_dirs); create_dir_all is mkdir -p, so an
+        // already-present dir is not an error — only a genuine IO failure propagates.
+        std::fs::create_dir_all(&dir).context("failed to create GUI webview data dir")?;
+        wry::WebContext::new(Some(dir))
+    };
+
+    #[cfg(target_os = "windows")]
+    let base_builder = WebViewBuilder::new_with_web_context(&mut web_context);
+    #[cfg(not(target_os = "windows"))]
+    let base_builder = WebViewBuilder::new();
+
+    let wv_builder = base_builder
         .with_devtools(true)
         // Palette now rides `Snapshot.palette` (pushed live), so only the platform
         // hint the React chrome reads at boot is injected here.
