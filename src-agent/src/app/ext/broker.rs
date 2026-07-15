@@ -426,7 +426,8 @@ pub fn handle_ext_call(
     // reply INLINE; the ones that touch the network / other daemons' sockets
     // (`models.invoke`, `sessions.list`/`create`/`spawn_into`-cross) validate + resolve on
     // the loop then MOVE the reply oneshot into a spawned task so the event loop never blocks
-    // — each inner-bounded well under the reader's 360s cap.
+    // — each inner-bounded well under the reader's verb-scoped cap (360s for `models.invoke`,
+    // 120s `EXT_CALL_TIMEOUT` default for every other verb — see `wire.rs`).
     //
     // `agents.spawn` ALONE resolves the ACTIVE (foreground) session — spawning into
     // "whatever chat session is in front of the user right now" is the intended
@@ -468,9 +469,10 @@ pub fn handle_ext_call(
         }
         "models.invoke" => {
             // Validates + resolves ON the loop, then either replies a sync error
-            // inline OR moves `reply` into a spawned one-shot task (330s < the 360s
-            // reader cap) that answers on completion — so the model call never
-            // blocks the event loop. OWNS the reply from here.
+            // inline OR moves `reply` into a spawned one-shot task (330s < the
+            // reader's 360s `EXT_MODELS_CALL_TIMEOUT` verb cap for this method)
+            // that answers on completion — so the model call never blocks the
+            // event loop. OWNS the reply from here.
             broker_models_invoke(state, handle, client, &params, reply);
         }
         "models.register" => {
@@ -499,7 +501,8 @@ pub fn handle_ext_call(
         "sessions.list" => {
             // No sync state needed: enumerate the session registry + probe live daemons OFF
             // the loop (sqlite read + blocking per-socket probes), then reply the merged array.
-            // The reader task caps this Call at 360s; the probe sweep is inner-bounded far below.
+            // The reader task caps this Call at the 120s `EXT_CALL_TIMEOUT` default (this is
+            // not `models.invoke`); the probe sweep is inner-bounded far below that.
             handle.spawn_blocking(move || {
                 let rows = crate::model::session_registry::list_all().unwrap_or_default();
                 let live = list_live_sessions();
@@ -917,8 +920,9 @@ fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, param
     json!({ "queued": buf.len() })
 }
 
-/// `models.invoke { role?, system?, prompt }` → a ONE-SHOT completion against the
-/// resolved model for `role` (default `"main"`), run OFF the event loop.
+/// `models.invoke { role?, system?, prompt, format? }` → a ONE-SHOT completion
+/// against the resolved model for `role` (default `"main"`), run OFF the event
+/// loop.
 ///
 /// Validated + resolved SYNCHRONOUSLY on the loop: `prompt` non-empty and
 /// `<= 32768` bytes; `role` one of `main`/`awareness`/`safeguard`/`compactor`/
@@ -930,13 +934,23 @@ fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, param
 /// / [`is_usable`](crate::app::resolve::Resolved::is_usable); a client must exist.
 /// Any of these fail → a sync `{"error": ...}` reply and NO task is spawned.
 ///
+/// `format`: when the string `"json"`, the request pins OpenAI-dialect strict
+/// `response_format: {"type":"json_object"}` (threaded through
+/// [`OpenRouterClient::complete_with`]'s `json_mode` flag); any other value, or
+/// the field absent, is today's free-form-text behavior. The flag is DIALECT-
+/// GATED: `complete_with` only honours it on the chat-completions branch
+/// (`OpenAiCompatible`/`KomaFree`) — the Codex and Anthropic-compatible dialects
+/// have no `json_object` wire equivalent, so `format:"json"` is silently ignored
+/// (never an error) when the resolved route speaks either of those.
+///
 /// Once validated, an owned `Resolved` + an `Arc` clone of the client + the reply
 /// oneshot MOVE into a spawned task (the `spawn_awareness_recompute` pattern) that
 /// runs `complete_with` under a 330s `tokio::time::timeout` — 330s deliberately
-/// UNDERCUTS the reader task's 360s `EXT_CALL_TIMEOUT` so the extension always
-/// receives a value rather than a transport timeout. Reply `{ "output": <text>,
-/// "model": <id> }` on success, `{ "error": "model call failed: <e>" }` on a call
-/// error, or `{ "error": "model call timed out" }`. The event loop never blocks.
+/// UNDERCUTS the reader task's 360s `EXT_MODELS_CALL_TIMEOUT` verb cap (see
+/// `wire.rs`) so the extension always receives a value rather than a transport
+/// timeout. Reply `{ "output": <text>, "model": <id> }` on success,
+/// `{ "error": "model call failed: <e>" }` on a call error, or
+/// `{ "error": "model call timed out" }`. The event loop never blocks.
 fn broker_models_invoke(
     state: &AppState,
     handle: &tokio::runtime::Handle,
@@ -971,6 +985,11 @@ fn broker_models_invoke(
             return;
         }
     };
+    // Optional structured-output request: only the literal "json" opts in
+    // (threaded to `complete_with`'s `json_mode`, dialect-gated there — see the
+    // doc comment above). Any other value, or the field absent, is today's
+    // free-form behavior.
+    let json_mode = params.get("format").and_then(|v| v.as_str()) == Some("json");
     // Optional system prompt (absent / blank → no System message prepended).
     let system = params
         .get("system")
@@ -1028,10 +1047,17 @@ fn broker_models_invoke(
             crate::dto::chat::Role::User,
             prompt_owned,
         ));
-        // 330s < the 360s reader cap: the extension always gets a value back.
+        // 330s < the reader's 360s `EXT_MODELS_CALL_TIMEOUT` verb cap: the
+        // extension always gets a value back.
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(330),
-            client_task.complete_with(route.conn(), &route.model_id, route.provider(), messages),
+            client_task.complete_with(
+                route.conn(),
+                &route.model_id,
+                route.provider(),
+                messages,
+                json_mode,
+            ),
         )
         .await;
         let v = match out {
@@ -1733,8 +1759,9 @@ fn broker_sessions_switch(
 /// the uuid, capture the optional `name`. Then MOVE the reply into a `spawn_blocking` that
 /// calls [`ensure_daemon_running`](crate::app::runtime::ensure_daemon_running) (blocking:
 /// spawn a detached `koma --daemon --session <uuid>` and poll-connect until it accepts,
-/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 360s cap, so no
-/// extra outer timer is needed). On success, best-effort set the display `name` (the daemon
+/// bounded by its own `SPAWN_CONNECT_TIMEOUT` of 3s — well under the reader's 120s
+/// `EXT_CALL_TIMEOUT` default cap (this is not `models.invoke`), so no extra outer
+/// timer is needed). On success, best-effort set the display `name` (the daemon
 /// registers its registry row during startup, which can lag the socket coming up, so retry
 /// once after a short sleep if the row isn't there yet; a failure to name is NOT an error).
 /// Reply `{ id }` on success, `{ error }` on a spawn failure.

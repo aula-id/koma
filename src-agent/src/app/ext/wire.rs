@@ -32,11 +32,27 @@ use super::{broker, ExtCallRequest, ExtHostManager, ExtNotify, PendingMap, CONNE
 pub(super) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 /// How long the reader task waits for the event loop's grant broker to answer one
-/// `agents.*` `Call` before replying an error to the extension (so a stalled/absent
-/// drain can never leave the extension's `call()` hanging). Comfortably shorter than
-/// the extension SDK's own 120s `host_call` timeout, and generous versus the broker's
-/// real cost (one event-loop tick — the broker itself never blocks).
-const EXT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(360);
+/// broker-family `Call` before replying an error to the extension (so a stalled/
+/// absent drain can never leave the extension's `call()` hanging), for every verb
+/// EXCEPT `models.invoke`. Generous versus the broker's real cost for these verbs
+/// (one event-loop tick, or a bounded `spawn_blocking`/socket probe well under this
+/// — the broker itself never blocks the loop).
+///
+/// Verb-scoped: `models.invoke` alone gets the longer
+/// [`EXT_MODELS_CALL_TIMEOUT`] below (it runs a real upstream model completion,
+/// which can legitimately take minutes) — every other verb (`agents.*`,
+/// `chat.prompt`, `sessions.*`, `context.*`, `models.register`/`.unregister`,
+/// `providers.*`) is cheap local work and would otherwise wait up to 6 minutes on
+/// a wedged extension for no reason. See the verb dispatch in [`reader_task`]
+/// below for where the cap is selected.
+const EXT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// `models.invoke`'s dedicated reader-task cap — long enough to cover a real
+/// upstream model completion (the broker's own inner `tokio::time::timeout` on the
+/// call is 330s, deliberately UNDERCUTTING this 360s so the extension always gets
+/// a value back rather than hitting this transport timeout first). Every other
+/// verb uses the shorter [`EXT_CALL_TIMEOUT`] default above.
+const EXT_MODELS_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(360);
 
 /// Why [`read_capped_line`] failed: distinguishes "the frame is too big" (fatal —
 /// the caller should kill the connection/child rather than keep reading a desynced
@@ -384,6 +400,18 @@ pub(super) async fn reader_task(
                                 Some(tx) => {
                                     let granted = mgr.granted_for(&ext_id);
                                     let (reply_tx, reply_rx) = oneshot::channel::<serde_json::Value>();
+                                    // Verb-scoped cap, selected while `method` is still in
+                                    // scope (it's about to move into `req` below):
+                                    // `models.invoke` alone gets the longer
+                                    // `EXT_MODELS_CALL_TIMEOUT` (360s, undercutting the
+                                    // broker's own inner 330s timeout so the extension
+                                    // always gets a value back); every other verb keeps the
+                                    // 120s `EXT_CALL_TIMEOUT` default.
+                                    let call_timeout = if method == "models.invoke" {
+                                        EXT_MODELS_CALL_TIMEOUT
+                                    } else {
+                                        EXT_CALL_TIMEOUT
+                                    };
                                     let req = ExtCallRequest {
                                         ext_id: ext_id.clone(),
                                         granted,
@@ -402,7 +430,7 @@ pub(super) async fn reader_task(
                                         let writer_reply = writer.clone();
                                         tokio::spawn(async move {
                                             let result = match tokio::time::timeout(
-                                                EXT_CALL_TIMEOUT,
+                                                call_timeout,
                                                 reply_rx,
                                             )
                                             .await
