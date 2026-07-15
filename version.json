@@ -1,4 +1,4 @@
 {
-  "version": "0.3.0",
-  "message": "feat: Windows support (TUI+GUI), deb/AppImage/msi packaging, extension platform wave (manifest tools, MCP for sub-agents, agents.send steering, workspace_dir, theme-aware panels, dev install)"
+  "version": "0.3.1",
+  "message": "fix: MSI 'Launch koma' checkbox now opens the GUI; new app icon"
 }

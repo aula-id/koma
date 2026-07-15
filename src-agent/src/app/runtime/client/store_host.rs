@@ -26,7 +26,7 @@ use crate::ipc::proto::{
     InstalledExtensionDetailWire, InstalledExtWire, InstalledModelWire, InstalledSubAgentWire,
     InstalledToolWire, PanelWire, StoreContributesWire, StoreDetailWire, StoreItemWire,
 };
-use crate::model::app_config::AppConfig;
+use crate::model::app_config::{AppConfig, InstalledExtension, OAuthProvider};
 use crate::model::store;
 
 /// Base URL of the koma.run extension store API (contract v0) — same constant as the
@@ -95,6 +95,380 @@ pub(super) fn spawn_get_installed_detail(push: impl Fn(String) + Send + 'static,
             }
         }
     });
+}
+
+// ─── DETACHED install/uninstall (StartScreen / swapper) ───
+//
+// Install/uninstall MUTATE persisted state (`~/.koma/config.json` + the on-disk
+// `extensions/<id>/` package), which — unlike browse/detail/list-installed above — isn't
+// read-only. But it doesn't need a LIVE daemon either: the KomaRun bearer lives in the
+// GLOBAL `AppConfig`, and `app::ext::install::install_from_zip` is a pure verify+unpack
+// over the downloaded zip. What genuinely NEEDS a live daemon runtime is the
+// SESSION-SCOPED tail an ATTACHED install/uninstall also does — MCP tool registration
+// (`register::register_contributions`), ext-daemon auto-start (`ExtHostManager::ensure_started`),
+// and workspace-root injection (`ext_workspace::inject_extension_workspaces`) — none of
+// which exist pre-session (no `ext_manager`/`mcp_manager`/foreground session), so that
+// part is intentionally SKIPPED here. It self-heals: `lifecycle::build_startup` re-runs
+// `ensure_started` + `register_contributions` for every enabled daemon-kind extension on
+// EVERY daemon boot, and re-derives the workspace-root injection from the CURRENT enabled
+// set on every boot too; a daemon-kind extension that hasn't auto-started yet also lazily
+// starts on its first opened panel (see `requests_ext::panel_start_decision`). Mirrors the
+// daemon's `requests_ext::install_extension`/`finish_install`/`uninstall_extension`
+// field-for-field, minus that tail.
+
+/// `HostCtl::InstallExtension` while detached. Runs on the TOKIO runtime (`fresh_key` +
+/// the download are async), unlike the plain-thread browse/detail workers above.
+pub(super) fn spawn_install(
+    handle: &tokio::runtime::Handle,
+    push: impl Fn(String) + Send + 'static,
+    id: String,
+    version: Option<String>,
+) {
+    handle.spawn(async move {
+        let Some(platform) = detect_platform() else {
+            store::append_global_error_log(
+                "ext install",
+                &format!("no platform for extension {id} (unsupported host os/arch)"),
+            );
+            super::push_proto::push_ext_op_result(
+                &push,
+                id,
+                false,
+                Some("extensions are not available for this platform".to_string()),
+            );
+            return;
+        };
+
+        // Same KomaRun sign-in check the daemon's `install_extension` runs — the bearer
+        // lives in the GLOBAL config, not anything session-scoped.
+        let cfg = AppConfig::load();
+        let Some(conn) = cfg
+            .oauth_conns
+            .iter()
+            .find(|c| c.provider == OAuthProvider::KomaRun)
+        else {
+            store::append_global_error_log(
+                "ext install",
+                &format!("no koma.run OAuth connection for extension {id} (platform {platform})"),
+            );
+            super::push_proto::push_ext_op_result(
+                &push,
+                id,
+                false,
+                Some("sign in to koma.run to install".to_string()),
+            );
+            return;
+        };
+        let oauth_uuid = conn.uuid.clone();
+
+        let (bearer, _account) = crate::service::oauth::manager::fresh_key(&oauth_uuid, "").await;
+        if bearer.trim().is_empty() {
+            store::append_global_error_log(
+                "ext install",
+                &format!("koma.run bearer empty/expired for extension {id} (platform {platform})"),
+            );
+            super::push_proto::push_ext_op_result(
+                &push,
+                id,
+                false,
+                Some("koma.run session expired — sign in again".to_string()),
+            );
+            return;
+        }
+
+        match fetch_install_artifact(&id, version.as_deref(), platform, &bearer).await {
+            Ok((zip, sha256, signature)) => finish_install_detached(&push, id, zip, sha256, signature),
+            Err(e) => super::push_proto::push_ext_op_result(&push, id, false, Some(e)),
+        }
+    });
+}
+
+/// The detached tail of an install: verify + unpack (fail-closed, same pipeline as the
+/// daemon's `finish_install`), upsert the registry entry + persist, then reply — see the
+/// module-level doc above for what's intentionally skipped here.
+fn finish_install_detached(
+    push: &(impl Fn(String) + Send + 'static),
+    id: String,
+    zip: Vec<u8>,
+    sha256: String,
+    signature: Option<String>,
+) {
+    let installed: anyhow::Result<InstalledExtension> =
+        match (&signature, sha256.trim().is_empty()) {
+            (Some(sig), false) => crate::app::ext::install::install_from_zip(&zip, &sha256, sig),
+            _ => install_unsigned_fallback(&id, &zip),
+        };
+
+    match installed {
+        Ok(ext) => {
+            let mut cfg = AppConfig::load();
+            cfg.upsert_extension(ext.clone());
+            if let Err(e) = cfg.save() {
+                store::append_global_error_log(
+                    "ext-install",
+                    &format!("save config after install {}: {e:#}", ext.id),
+                );
+            }
+            super::push_proto::push_ext_op_result(push, ext.id.clone(), true, None);
+            super::push_proto::push_installed_extensions(push, installed_extensions());
+        }
+        Err(e) => {
+            store::append_global_error_log(
+                "ext install",
+                &format!("verify/unpack failed for extension {id}: {e:#}"),
+            );
+            super::push_proto::push_ext_op_result(push, id, false, Some(format!("{e:#}")));
+        }
+    }
+}
+
+/// `HostCtl::UninstallExtension` while detached — same host-local reasoning as
+/// [`spawn_install`]: purges the on-disk package + registry entry + persists. Synchronous
+/// (fs + a config save, like `uninstall_extension`'s daemon twin), so this runs on a plain
+/// thread, NOT the tokio runtime.
+pub(super) fn spawn_uninstall(push: impl Fn(String) + Send + 'static, id: String) {
+    std::thread::spawn(move || {
+        // Remove the unpacked package dir. Guard the id against a path-escape before
+        // joining (defense in depth — the id comes from the client), mirroring the
+        // daemon's `uninstall_extension`.
+        if is_safe_ext_id(&id) {
+            if let Ok(dir) = store::extensions_dir() {
+                let target = dir.join(&id);
+                if let Err(e) = std::fs::remove_dir_all(&target) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        store::append_global_error_log(
+                            "ext-uninstall",
+                            &format!("remove {}: {e}", target.display()),
+                        );
+                    }
+                }
+            }
+        } else {
+            store::append_global_error_log(
+                "ext-uninstall",
+                &format!("refusing to remove dir for unsafe extension id {id:?}"),
+            );
+        }
+
+        let mut cfg = AppConfig::load();
+        // Purge the extension's catalogue contributions (key-backed providers/models/oauth
+        // conns) BEFORE dropping the registry entry, same ordering as the daemon twin. The
+        // `main_reset` flag drives a foreground toast there — skipped here (no session /
+        // foreground to toast; a purged Main role just self-heals on the next resolve).
+        let _purge = cfg.purge_extension(&id);
+        cfg.remove_extension_by_id(&id);
+        if let Err(e) = cfg.save() {
+            store::append_global_error_log(
+                "ext-uninstall",
+                &format!("save config after uninstall {id}: {e:#}"),
+            );
+        }
+
+        super::push_proto::push_ext_op_result(&push, id, true, None);
+        super::push_proto::push_installed_extensions(&push, installed_extensions());
+    });
+}
+
+/// The DEBUG-only unsigned install fallback — duplicate of the daemon's
+/// `requests_ext::install_unsigned_fallback` (see this module's doc comment on
+/// duplication). Writes the zip to a temp file and installs it via
+/// [`crate::app::ext::install::install_dev_unsigned`] (skips signature verification), so
+/// the end-to-end store→install flow is testable before koma.run's signing infra is live.
+/// LOUDLY logged. A release build has no such path.
+#[cfg(debug_assertions)]
+fn install_unsigned_fallback(id: &str, zip: &[u8]) -> anyhow::Result<InstalledExtension> {
+    store::append_global_error_log(
+        "ext-install",
+        &format!("UNSIGNED dev install of {id} (koma.run sent no signature — debug build only)"),
+    );
+    let tmp = std::env::temp_dir().join(format!("koma-ext-dl-{}.zip", uuid::Uuid::new_v4()));
+    std::fs::write(&tmp, zip)
+        .map_err(|e| anyhow::anyhow!("write temp zip {}: {e}", tmp.display()))?;
+    let r = crate::app::ext::install::install_dev_unsigned(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    r
+}
+
+/// Release builds reject an unsigned artifact — same gate as the daemon twin.
+#[cfg(not(debug_assertions))]
+fn install_unsigned_fallback(_id: &str, _zip: &[u8]) -> anyhow::Result<InstalledExtension> {
+    anyhow::bail!("extension artifact is unsigned; refusing to install")
+}
+
+/// Detect this build's store platform token — duplicate of the daemon's
+/// `requests_ext::detect_platform` (see this module's doc comment on duplication).
+fn detect_platform() -> Option<&'static str> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        return Some("linux-x64");
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        return Some("linux-arm64");
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        return Some("darwin-x64");
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return Some("darwin-arm64");
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        return Some("windows-x64");
+    }
+    #[allow(unreachable_code)]
+    {
+        None
+    }
+}
+
+/// Whether `id` is a well-formed reverse-DNS extension id safe to use as a directory name
+/// under `extensions/` — duplicate of the daemon's `requests_ext::is_safe_ext_id` (see this
+/// module's doc comment on duplication).
+fn is_safe_ext_id(id: &str) -> bool {
+    let all_allowed = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    let has_alnum = id.chars().any(|c| c.is_ascii_alphanumeric());
+    let dot_wrapped = id.starts_with('.') || id.ends_with('.');
+    all_allowed && has_alnum && !dot_wrapped
+}
+
+/// `GET /extensions/{id}/download?version&platform` with the account Bearer — duplicate of
+/// the daemon's ASYNC `requests_ext::fetch_install_artifact` (see this module's doc comment
+/// on duplication; the blocking `fetch_catalogue`/`fetch_detail` above stay separate since
+/// THIS caller already runs on the tokio runtime via `spawn_install`'s `handle.spawn`).
+/// Resolves the store contract's TWO artifact shapes (302 redirect + integrity body, or a
+/// direct 200 stream with integrity headers); returns `(zip_bytes, sha256, signature)`.
+async fn fetch_install_artifact(
+    id: &str,
+    version: Option<&str>,
+    platform: &str,
+    bearer: &str,
+) -> std::result::Result<(Vec<u8>, String, Option<String>), String> {
+    let no_redirect = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
+
+    let mut pairs: Vec<(&str, &str)> = vec![("platform", platform)];
+    if let Some(v) = version {
+        if !v.is_empty() {
+            pairs.push(("version", v));
+        }
+    }
+    let url = reqwest::Url::parse_with_params(&format!("{STORE_API_BASE}/{id}/download"), &pairs)
+        .map_err(|e| format!("bad download url: {e}"))?;
+
+    let resp = no_redirect
+        .get(url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = format!("download request failed: {e}");
+            store::append_global_error_log(
+                "ext download",
+                &format!("{id} (platform {platform}): {msg}"),
+            );
+            msg
+        })?;
+    let status = resp.status();
+
+    if status.is_redirection() {
+        // 302: Location -> signed URI; body echoes the integrity fields.
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                let msg = "download redirect missing Location header".to_string();
+                store::append_global_error_log(
+                    "ext download",
+                    &format!("{id} (platform {platform}): {msg}"),
+                );
+                msg
+            })?;
+        let body = resp.text().await.unwrap_or_default();
+        let (sha256, signature) = parse_integrity_json(&body);
+
+        // The signed URI is public (auth is in the query signature) — a plain follow.
+        let zresp = reqwest::Client::new()
+            .get(&location)
+            .send()
+            .await
+            .map_err(|e| format!("signed download failed: {e}"))?;
+        if !zresp.status().is_success() {
+            let signed_status = zresp.status().as_u16();
+            store::append_global_error_log(
+                "ext download",
+                &format!(
+                    "{id} (platform {platform}): signed download returned HTTP {signed_status}"
+                ),
+            );
+            return Err(format!("signed download returned HTTP {signed_status}"));
+        }
+        let bytes = zresp
+            .bytes()
+            .await
+            .map_err(|e| format!("reading artifact failed: {e}"))?
+            .to_vec();
+        Ok((bytes, sha256, signature))
+    } else if status.is_success() {
+        // Direct stream: integrity in headers, body IS the zip.
+        let sha256 = header_str(&resp, "x-koma-sha256").unwrap_or_default();
+        let signature = header_str(&resp, "x-koma-signature").filter(|s| !s.is_empty());
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("reading artifact failed: {e}"))?
+            .to_vec();
+        Ok((bytes, sha256, signature))
+    } else {
+        let code = status.as_u16();
+        let msg = match code {
+            401 => "koma.run rejected the session — sign in again".to_string(),
+            402 => "this extension needs an active koma.run entitlement".to_string(),
+            404 => "extension not found for this version/platform".to_string(),
+            429 => "koma.run is rate limiting — try again shortly".to_string(),
+            other => format!("download failed (HTTP {other})"),
+        };
+        store::append_global_error_log(
+            "ext download",
+            &format!("{id} (platform {platform}): HTTP {code}: {msg}"),
+        );
+        Err(msg)
+    }
+}
+
+/// Read a response header as a `String`, or `None` if absent / non-ASCII — duplicate of
+/// the daemon's `requests_ext::header_str`.
+fn header_str(resp: &reqwest::Response, name: &str) -> Option<String> {
+    resp.headers()
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+/// Pull `{ sha256, signature }` out of a 302 integrity body (best-effort) — duplicate of
+/// the daemon's `requests_ext::parse_integrity_json`. A malformed/empty body yields
+/// `(String::new(), None)` — the caller then treats it as unsigned.
+fn parse_integrity_json(body: &str) -> (String, Option<String>) {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return (String::new(), None),
+    };
+    let sha = str_field(&v, "sha256");
+    let sig = v
+        .get("signature")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+    (sha, sig)
 }
 
 // ─── ATTACHED (push_loop): reply over an mpsc channel, drained by the fold loop ───
