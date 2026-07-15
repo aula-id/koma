@@ -277,6 +277,22 @@ fn build_startup(
     }
     state.rest.ext_manager = Some(ext);
 
+    // Widen the active session's workspace roots with every ENABLED extension's declared
+    // `workspace_dir` (validated + created), so agent writes into an extension's state dir
+    // pass the harness. In `--daemon` mode there is NO session here yet (install_daemon_session
+    // sets it and re-runs this same injection), so this only fires for the TUI returning-user
+    // path. In-memory only (no save): the roots are re-derived from the CURRENT enabled set on
+    // every boot, and `warm_session` below reindexes the dir cache over the widened roots.
+    if state.rest.fg().session.is_some() {
+        let installed = state.rest.config.installed_extensions.clone();
+        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+            crate::model::ext_workspace::inject_extension_workspaces(
+                &installed,
+                &mut sess.settings.workdir,
+            );
+        }
+    }
+
     // Capture the process launch directory for the harness workspace check (WC).
     // This folder is always an allowed workspace regardless of the allow-list.
     if let Ok(cwd) = std::env::current_dir() {
@@ -458,6 +474,19 @@ fn install_daemon_session(
 
     // Seed this session's cumulative token counters from its own (possibly empty) ledger.
     state.rest.load_token_totals(0, &sess_path);
+
+    // Widen this daemon session's workspace roots with enabled extensions' `workspace_dir`s
+    // (see `build_startup` — this is the daemon-path equivalent, where the session finally
+    // exists). Done BEFORE `warm_session` so its reindex covers the new roots. In-memory only.
+    {
+        let installed = state.rest.config.installed_extensions.clone();
+        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+            crate::model::ext_workspace::inject_extension_workspaces(
+                &installed,
+                &mut sess.settings.workdir,
+            );
+        }
+    }
 
     if unconfigured {
         // Nothing configured yet — show the connection CHOOSER through the client. The

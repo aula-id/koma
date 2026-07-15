@@ -567,6 +567,29 @@ impl DaemonHub {
                         }
                     }
                 }
+                // Widen the ACTIVE session's workspace roots so writes into this extension's
+                // declared `workspace_dir` pass the harness WITHOUT a daemon restart (the same
+                // in-memory injection `build_startup` runs). When a root is added, reindex the
+                // dir cache (`@`/dir_list pick it up) and rebuild the system prompt so its
+                // "# Extension workspaces" note names the new root immediately.
+                {
+                    let installed = state.rest.config.installed_extensions.clone();
+                    let added = match state.rest.fg_mut().session.as_mut() {
+                        Some(sess) => crate::model::ext_workspace::inject_extension_workspaces(
+                            &installed,
+                            &mut sess.settings.workdir,
+                        ),
+                        None => Vec::new(),
+                    };
+                    if !added.is_empty() {
+                        if let Some(roots) = state.rest.fg().session.as_ref().map(|s| s.workdirs()) {
+                            crate::tool::dircache::reindex(roots, state.rest.fg().dir_cache.clone());
+                        }
+                        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                            sess.rebuild_system();
+                        }
+                    }
+                }
                 self.send_to(
                     idx,
                     DaemonEvent::ExtensionOpResult {

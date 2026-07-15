@@ -3,7 +3,7 @@
   "id": "run.koma.example.event-watcher-daemon",
   "name": "Event Watcher",
   "version": "0.0.0",
-  "description": "A minimal daemon extension that subscribes to every broadcast koma event and reports counts through a tool. The starter sample for contributes.events.",
+  "description": "A minimal daemon extension that subscribes to every broadcast koma event and reports counts through a tool. The starter sample for contributes.events, and for workspace_dir — an extension-owned state directory koma creates and injects as a session workspace root.",
   "tier": "free",
   "kind": "daemon",
   "runtime": {
@@ -20,5 +20,6 @@
     ],
     "events": ["subagent.done", "agent.turn_end", "session.foreground_change"]
   },
-  "requires": []
+  "requires": [],
+  "workspace_dir": "~/.event-watcher"
 }

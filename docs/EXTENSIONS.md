@@ -305,6 +305,40 @@ startup, so a bad manifest fails loudly instead of silently drifting from the co
 | `runtime` | object | required | `{ "exec": <string>, "args"?: [<string>] }` — `exec` is relative to the package root; `args` defaults to `[]`. |
 | `contributes` | object | omitted → `{}` | See below. |
 | `requires` | `[Grant]` | omitted → `[]` | Wire strings, e.g. `"agents:orchestrate"`. See the grants reference. |
+| `workspace_dir` | string | omitted → none | An extension-owned state directory koma creates and injects as a session workspace root. Must resolve strictly under `$HOME`. See "`workspace_dir`" below. |
+
+### `workspace_dir`
+
+An optional dedicated state directory the extension owns, declared as a path string —
+typically `"~/.<ext-name>"` (the `event-watcher-daemon` sample uses `"~/.event-watcher"`):
+
+```json
+{ "workspace_dir": "~/.event-watcher" }
+```
+
+When present, koma validates the path, **creates it if missing**, and injects its
+canonical form as an extra workspace root of every session. It appears as an `[N]` root
+alongside the launch directory, so the agent's file tools and `bash` may read and write
+there (an extension's own sub-agents can persist state that survives a restart) — it is
+exempt from the safety harness the same way any configured workspace root is, and is
+named in the system prompt's "Extension workspaces" note by its `[N]` index and owning
+extension id.
+
+**Validation rules.** A path that fails ANY rule is logged to `~/.koma/error.log` and
+skipped — it never blocks the extension from starting:
+
+- `~` / `~/…` expands to `$HOME` (`%USERPROFILE%` on Windows); a `~user` form is rejected.
+- The resolved path must be **strictly under `$HOME`** — `$HOME` itself is rejected, as is anything outside `$HOME`.
+- koma's own `~/.koma` tree is rejected.
+- The credential stores `~/.ssh`, `~/.aws`, `~/.gnupg` — and everything under them — are rejected.
+- `~/.config` **itself** is rejected, but its subdirectories (e.g. `~/.config/my-ext`) are allowed.
+- Any other `$HOME` subdirectory — including a dotdir like `~/.babalic-extension` — is allowed.
+
+Comparison is on canonicalized paths (symlinks and `..` resolved), so a symlinked escape
+can't slip past. Injection happens at daemon/TUI startup, and again the moment an
+extension is installed at runtime (no restart needed). It is in-memory and re-derived
+from the currently **enabled** extension set on every start, so disabling or uninstalling
+an extension drops its workspace root on the next start.
 
 ### `contributes`
 
