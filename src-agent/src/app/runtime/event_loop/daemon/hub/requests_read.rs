@@ -484,6 +484,7 @@ impl DaemonHub {
                 model: ag.model.clone(),
                 tools: ag.tools.clone(),
                 prompt: ag.prompt.clone(),
+                ext_id: ag.ext_id.clone(),
             })
             .collect();
 
