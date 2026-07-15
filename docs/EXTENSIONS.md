@@ -456,7 +456,17 @@ tool-call/tool-result ordering.
 
 | Verb | Params | Success | Limits / errors |
 | --- | --- | --- | --- |
-| `models.invoke` | `{ "prompt": <string, required non-empty>, "role"?: `"main"` \| `"awareness"` \| `"safeguard"` \| `"compactor"` \| `"planner"` (default `"main"`), "system"?: <string> }` | `{ "output": <string>, "model": <model id string> }` | **32KB cap** on `prompt` → `"prompt exceeds 32KB"`; unrecognized role → `"unknown role"` (never silently falls back to Main); no route → `"no usable route for role <role>"`; route not dispatchable → `"role <role> route is not dispatchable (Anthropic-compatible not wired)"`; no usable auth → `"role <role> route has no usable auth"`; no client → `"no llm client"`; stuck backend → `"model call timed out"` after koma's internal **25s** budget (deliberately under the 30s broker-call ceiling, so you always get a value back) |
+| `models.invoke` | `{ "prompt": <string, required non-empty>, "role"?: `"main"` \| `"awareness"` \| `"safeguard"` \| `"compactor"` \| `"planner"` (default `"main"`), "system"?: <string>, "format"?: `"json"` }` | `{ "output": <string>, "model": <model id string> }` | **32KB cap** on `prompt` → `"prompt exceeds 32KB"`; unrecognized role → `"unknown role"` (never silently falls back to Main); no route → `"no usable route for role <role>"`; route not dispatchable → `"role <role> route is not dispatchable (Anthropic-compatible not wired)"`; no usable auth → `"role <role> route has no usable auth"`; no client → `"no llm client"`; stuck backend → `"model call timed out"` after koma's internal **330s** budget (deliberately under the reader's **360s** verb-scoped cap for this method, so you always get a value back) |
+
+`format: "json"` pins strict OpenAI-dialect JSON output
+(`response_format: {"type":"json_object"}`) on the request. **Dialect caveat:**
+this only takes effect when the resolved `role`'s route speaks the
+OpenAI/OpenRouter chat-completions dialect. Routes on the Codex
+(ChatGPT-subscription Responses API) or Anthropic-compatible dialects have no
+`json_object` wire equivalent — for those, `format` is silently IGNORED (never
+an error), and you get today's free-form text back. Any value other than the
+literal string `"json"`, or the field absent, is also today's free-form
+behavior.
 
 ### `context:publish`
 
