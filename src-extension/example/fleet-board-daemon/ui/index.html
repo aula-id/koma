@@ -4,12 +4,17 @@
     <meta charset="utf-8" />
     <title>Fleet Board</title>
     <style>
+      /* --koma-* custom properties are the theme-aware hooks: KomaPanel.onTheme
+         below sets them live off the host's palette, and the value here after
+         the comma is just the FALLBACK — what you see before the first theme
+         push lands (or on a host build that predates theming). See
+         docs/EXTENSIONS.md's "Theme" section. */
       html, body {
         margin: 0;
         padding: 0;
         height: 100%;
-        background: #1e1e1e;
-        color: #e6e6e6;
+        background: var(--koma-bg, #1e1e1e);
+        color: var(--koma-fg, #e6e6e6);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       main {
@@ -28,7 +33,7 @@
       p.hint {
         margin: 0;
         font-size: 12px;
-        color: #9a9a9a;
+        color: var(--koma-dim, #9a9a9a);
         max-width: 40em;
       }
       p.hint code {
@@ -36,7 +41,7 @@
       }
       #spawn {
         align-self: flex-start;
-        background: #2d6cdf;
+        background: var(--koma-accent, #2d6cdf);
         color: white;
         border: none;
         border-radius: 4px;
@@ -59,13 +64,13 @@
       .row {
         border-left: 3px solid #444;
         padding: 4px 8px;
-        background: #262626;
+        background: var(--koma-panel, #262626);
         border-radius: 2px;
         word-break: break-word;
       }
-      .row.agent { border-left-color: #2d6cdf; }
+      .row.agent { border-left-color: var(--koma-accent, #2d6cdf); }
       .row.event { border-left-color: #b06fd6; }
-      .row.error { border-left-color: #d64545; }
+      .row.error { border-left-color: var(--koma-error, #d64545); }
     </style>
   </head>
   <body>
@@ -130,6 +135,22 @@
         } else {
           addRow('event', JSON.stringify(payload));
         }
+      });
+
+      // Theme sync: repaint the --koma-* CSS vars the stylesheet above
+      // reads, so this panel always matches the host's current theme. Fires
+      // once on load (KomaPanel's own initial getTheme() query) and again on
+      // every live palette change — see docs/EXTENSIONS.md's "Theme" section.
+      KomaPanel.onTheme(function (theme) {
+        var p = theme && theme.palette;
+        if (!p) return;
+        var root = document.documentElement.style;
+        if (p.bg) root.setProperty('--koma-bg', p.bg);
+        if (p.fg) root.setProperty('--koma-fg', p.fg);
+        if (p.dim) root.setProperty('--koma-dim', p.dim);
+        if (p.accent) root.setProperty('--koma-accent', p.accent);
+        if (p.panel) root.setProperty('--koma-panel', p.panel);
+        if (p.error) root.setProperty('--koma-error', p.error);
       });
     </script>
   </body>

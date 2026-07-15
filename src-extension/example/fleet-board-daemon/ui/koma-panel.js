@@ -15,10 +15,14 @@
 // Envelopes this listens for (host -> panel):
 //   { koma: 'host', v: 1, kind: 'reply', reqId, ok, payload?, error? }
 //   { koma: 'host', v: 1, kind: 'push', payload }
-// A 'reply' resolves/rejects the promise `send()` returned for that reqId.
-// A 'push' is unsolicited — sent by the daemon extension calling
+//   { koma: 'host', v: 1, kind: 'theme', payload: { palette, name, dark } }
+// A 'reply' resolves/rejects the promise `send()`/`getTheme()` returned for
+// that reqId. A 'push' is unsolicited — sent by the daemon extension calling
 // `Koma::panel_push` with no request behind it — and is fanned out to every
-// handler registered with `onPush()`.
+// handler registered with `onPush()`. A 'theme' is the host's own repaint
+// broadcast (distinct `kind` so it never collides with an extension's own
+// pushes) — fanned out to every handler registered with `onTheme()`. See
+// docs/EXTENSIONS.md's "Theme" section for the full spec.
 
 (function (global) {
   'use strict';
@@ -26,6 +30,8 @@
   var nextReqId = 1;
   var pending = new Map(); // reqId -> { resolve, reject, timer }
   var pushHandlers = [];
+  var themeHandlers = [];
+  var lastTheme = null;
 
   /**
    * Send `payload` to the daemon extension backing this panel and resolve
@@ -55,6 +61,45 @@
     pushHandlers.push(handler);
   }
 
+  /**
+   * Query the host for the CURRENT theme (`{ palette, name, dark }`) as a
+   * one-shot Promise — mirrors `send()`'s reqId/timeout machinery, but sends
+   * the distinct `kind: 'theme?'` envelope, which the host answers even when
+   * detached (no active session required).
+   */
+  function getTheme(timeoutMs) {
+    timeoutMs = timeoutMs || 15000;
+    var reqId = String(nextReqId++);
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () {
+        pending.delete(reqId);
+        reject(new Error('koma panel theme query timed out: ' + reqId));
+      }, timeoutMs);
+      pending.set(reqId, { resolve: resolve, reject: reject, timer: timer });
+      window.parent.postMessage(
+        { koma: 'panel', v: 1, kind: 'theme?', reqId: reqId },
+        '*'
+      );
+    });
+  }
+
+  /**
+   * Register a handler for theme changes (`{ palette, name, dark }`). Fires
+   * on every host 'theme' push (register-time delivery + live repaints) AND
+   * on this module's own initial `getTheme()` query below, so a handler
+   * registered any time after load still gets the current theme — not just
+   * the NEXT change.
+   */
+  function onTheme(handler) {
+    themeHandlers.push(handler);
+    if (lastTheme) handler(lastTheme);
+  }
+
+  function fanOutTheme(payload) {
+    lastTheme = payload;
+    for (var i = 0; i < themeHandlers.length; i++) themeHandlers[i](payload);
+  }
+
   window.addEventListener('message', function (event) {
     var data = event.data;
     if (!data || data.koma !== 'host' || data.v !== 1) return;
@@ -76,8 +121,22 @@
       for (var i = 0; i < pushHandlers.length; i++) {
         pushHandlers[i](data.payload);
       }
+      return;
+    }
+
+    if (data.kind === 'theme') {
+      fanOutTheme(data.payload);
     }
   });
 
-  global.KomaPanel = { send: send, onPush: onPush };
+  // Fire an initial theme query on load — belt-and-suspenders alongside the
+  // host's own register-time 'theme' push, so `onTheme()` handlers get a
+  // value even if they're registered in a race with that push (or against a
+  // future host build that only answers 'theme?' queries).
+  getTheme().then(fanOutTheme).catch(function () {
+    // Tolerate a host build that doesn't answer 'theme?' yet — onTheme
+    // handlers simply never fire until the next 'theme' push (if any).
+  });
+
+  global.KomaPanel = { send: send, onPush: onPush, getTheme: getTheme, onTheme: onTheme };
 })(window);

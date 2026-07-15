@@ -29,6 +29,22 @@ fn color_hex(c: ratatui::style::Color, fallback: &str) -> String {
     }
 }
 
+/// Whether a palette's `bg` reads as a dark background, via relative luminance
+/// (ITU-R BT.709 coefficients, threshold at the midpoint). Non-`Rgb` colours fall
+/// back to `true` (matches the dark-palette fallback `color_hex` uses for `bg`).
+/// This is the SINGLE place `PushPalette::dark` is derived from — both the
+/// Snapshot palette and the swapper Config palette route through
+/// `push_palette_from_config` below, so every consumer stays in sync automatically.
+fn palette_is_dark(bg: ratatui::style::Color) -> bool {
+    match bg {
+        ratatui::style::Color::Rgb(r, g, b) => {
+            let luminance = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
+            luminance < 128.0
+        }
+        _ => true,
+    }
+}
+
 /// The GUI-relevant slice of the daemon's authoritative config, cached by
 /// [`push_loop`] from each incoming full [`crate::ipc::proto::StateSnapshot`] so the
 /// `Config` envelope can be (re)built + diffed independently of the frame stream — e.g.
@@ -129,6 +145,7 @@ pub(super) fn push_palette_from_config(cfg: &crate::model::app_config::AppConfig
         success: color_hex(pal.success, "#00c853"),
         info: color_hex(pal.info, "#50c8ff"),
         error: color_hex(pal.error, "#ff3c3c"),
+        dark: palette_is_dark(pal.bg),
     }
 }
 

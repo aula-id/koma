@@ -88,29 +88,42 @@ impl OpenRouterClient {
     /// connection `conn` (its `endpoint` + `api_key`), reusing this client's http.
     /// provider "" = default routing.
     ///
-    /// Generic helper for secondary-model calls (project-awareness summaries
-    /// today; a future request classifier reuses the same path). Builds the
-    /// same body `complete` does — no tools, `stream: false`, usage on — but
-    /// with the caller's `model` and provider pin. Returns the assistant
-    /// content; clean errors, no panics.
+    /// Generic helper for secondary-model calls (project-awareness summaries,
+    /// the `models.invoke` extension broker verb). Builds the same body
+    /// `complete` does — no tools, `stream: false`, usage on — but with the
+    /// caller's `model` and provider pin.
+    ///
+    /// `json_mode` requests OpenAI-dialect strict JSON output (top-level
+    /// `response_format: {"type":"json_object"}`) — honoured ONLY on the
+    /// chat-completions branch below (`ApiType::OpenAiCompatible` / `KomaFree`,
+    /// which share that wire dialect). The Codex (Responses API) and
+    /// Anthropic-compatible dialects have no equivalent wire field for a bare
+    /// `json_object` directive, so `json_mode` is silently IGNORED (never an
+    /// error) on those two branches — same "gate by which request builder runs"
+    /// pattern `accepts_reasoning_exclude` uses for OpenRouter-only fields.
+    ///
+    /// Returns the assistant content; clean errors, no panics.
     pub async fn complete_with(
         &self,
         conn: Conn<'_>,
         model: &str,
         provider: &str,
         messages: Vec<ChatMessage>,
+        json_mode: bool,
     ) -> Result<String> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
         let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
         if conn.api_type == ApiType::Codex {
-            // Default effort (→ medium), no structured-output schema.
+            // Default effort (→ medium), no structured-output schema. `json_mode`
+            // has no Responses-API equivalent here — ignored, never errors.
             return self
                 .codex_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
         }
         if conn.api_type == ApiType::AnthropicCompatible {
-            // No effort/schema (plain text reply).
+            // No effort/schema (plain text reply). `json_mode` has no Anthropic
+            // wire equivalent here — ignored, never errors.
             return self
                 .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
@@ -127,8 +140,10 @@ impl OpenRouterClient {
             tools: None,
             // Secondary-model calls (awareness / classifier) don't think.
             reasoning: None,
-            // Free-form reply; structured output is classifier-only.
-            response_format: None,
+            // Free-form reply by default; `json_mode` (models.invoke's
+            // `format:"json"`) pins strict `{"type":"json_object"}` — otherwise
+            // structured output stays classifier-only.
+            response_format: json_mode.then(|| serde_json::json!({ "type": "json_object" })),
             // No cap: awareness summaries can be long.
             max_tokens: None,
         };

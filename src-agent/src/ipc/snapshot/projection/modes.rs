@@ -489,6 +489,7 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
                 model: ag.model.clone(),
                 tools: ag.tools.clone(),
                 prompt: ag.prompt.clone(),
+                ext_id: ag.ext_id.clone(),
             })
             .collect(),
         list_sel: a.list_sel,

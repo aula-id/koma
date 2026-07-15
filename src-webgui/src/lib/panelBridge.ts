@@ -14,8 +14,18 @@
 //   panel -> host: { koma: 'panel', v: 1, kind: 'msg', reqId: string, payload: unknown }
 //   host -> panel: { koma: 'host', v: 1, kind: 'reply', reqId: string | null, ok: boolean, payload?: unknown, error?: string }
 //   host -> panel: { koma: 'host', v: 1, kind: 'push', payload: unknown }
+//
+// Theme sub-contract (see docs/EXTENSIONS.md "Theme"): a DISTINCT top-level
+// `kind` (not 'push') so panels never confuse a host-initiated theme repaint
+// with an extension-originated push. Broadcast on every palette change AND
+// once on panel registration (a panel that mounts mid-session must not wait
+// for the next theme switch to paint itself correctly); also answerable as a
+// pure UI query, detached-tolerant (no active koma session required):
+//   host -> panel: { koma: 'host', v: 1, kind: 'theme', payload: { palette, name, dark } }
+//   panel -> host: { koma: 'panel', v: 1, kind: 'theme?', reqId: string }
+//   host -> panel: { koma: 'host', v: 1, kind: 'reply', reqId, ok: true, payload: { palette, name, dark } }
 
-import { useKoma } from '../store/koma'
+import { useKoma, type PaletteColors } from '../store/koma'
 
 const byKey = new Map<string, Window>()
 const bySource = new Map<Window, { extId: string; panelId: string }>()
@@ -32,6 +42,10 @@ export function registerPanelFrame(extId: string, panelId: string, win: Window):
   if (prev) bySource.delete(prev)
   byKey.set(key, win)
   bySource.set(win, { extId, panelId })
+  // Deliver the current theme immediately — a panel registered mid-session
+  // (opened after the last broadcast, or reloaded) must not wait for the
+  // next palette change to paint itself with the right colours.
+  postToPanel(extId, panelId, themePush())
 }
 
 export function unregisterPanelFrame(extId: string, panelId: string): void {
@@ -52,9 +66,11 @@ const PANEL_TARGET_ORIGIN = 'koma://extension'
 // remember it module-wide rather than re-probing every call.
 let useWildcardTarget = false
 
-export function postToPanel(extId: string, panelId: string, msg: unknown): boolean {
-  const win = byKey.get(keyOf(extId, panelId))
-  if (!win) return false
+// Shared postMessage-with-retry core — `postToPanel` looks a Window up by
+// key first; `broadcastThemeToPanels` already has the live Window objects
+// (from `byKey.values()`) and posts to them directly, skipping the
+// key round-trip (and the ':' key-format assumption `keyOf` makes).
+function sendToWindow(win: Window, msg: unknown): boolean {
   const targetOrigin = useWildcardTarget ? '*' : PANEL_TARGET_ORIGIN
   try {
     win.postMessage(msg, targetOrigin)
@@ -69,6 +85,37 @@ export function postToPanel(extId: string, panelId: string, msg: unknown): boole
       return false
     }
   }
+}
+
+export function postToPanel(extId: string, panelId: string, msg: unknown): boolean {
+  const win = byKey.get(keyOf(extId, panelId))
+  if (!win) return false
+  return sendToWindow(win, msg)
+}
+
+// Builds the { palette, name, dark } payload shared by the 'theme' push and
+// the 'theme?' query reply, reading whatever the store currently holds. Before
+// the first palette ever lands, `state.palette` is still `initialPalette`
+// (the store's dark default) — so an unpushed/never-attached panel gets a
+// sane default instead of `undefined`.
+function currentThemePayload(): { palette: PaletteColors; name: string; dark: boolean } {
+  const { palette, config } = useKoma.getState()
+  return { palette, name: config.theme, dark: palette.dark ?? true }
+}
+
+function themePush(): { koma: 'host'; v: 1; kind: 'theme'; payload: ReturnType<typeof currentThemePayload> } {
+  return { koma: 'host', v: 1, kind: 'theme', payload: currentThemePayload() }
+}
+
+// Broadcasts the current theme to every registered panel. Called from the
+// store's `applyPaletteVars` choke point (store/koma.ts) right after the CSS
+// vars are repainted, so live panels track the daemon's theme exactly like
+// the chat chrome does.
+export function broadcastThemeToPanels(palette: PaletteColors): void {
+  if (byKey.size === 0) return
+  const name = useKoma.getState().config.theme
+  const msg = { koma: 'host', v: 1, kind: 'theme', payload: { palette, name, dark: palette.dark ?? true } }
+  for (const win of byKey.values()) sendToWindow(win, msg)
 }
 
 // Panel request payloads are capped well under any reasonable IPC frame
@@ -118,16 +165,30 @@ export function handlePanelMessage(event: PanelMessageEventLike): void {
     | { koma?: unknown; v?: unknown; kind?: unknown; reqId?: unknown; payload?: unknown }
     | null
     | undefined
-  if (
-    !data ||
-    data.koma !== 'panel' ||
-    data.v !== 1 ||
-    data.kind !== 'msg' ||
-    typeof data.reqId !== 'string'
-  ) {
+  if (!data || data.koma !== 'panel' || data.v !== 1 || typeof data.reqId !== 'string') {
     return // not a recognized panel->host request — ignore
   }
   const reqId = data.reqId
+
+  // Pure UI query for the current theme — answered synchronously off the
+  // store, BEFORE the attached-session gate below: a panel on the detached
+  // welcome screen still needs to paint itself, and this never touches the
+  // daemon.
+  if (data.kind === 'theme?') {
+    postToPanel(extId, panelId, {
+      koma: 'host',
+      v: 1,
+      kind: 'reply',
+      reqId,
+      ok: true,
+      payload: currentThemePayload(),
+    })
+    return
+  }
+
+  if (data.kind !== 'msg') {
+    return // not a recognized panel->host request — ignore
+  }
   const payload = data.payload
 
   let payloadChars = 0

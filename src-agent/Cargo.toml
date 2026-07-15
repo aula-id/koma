@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-version = "0.2.28"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -93,6 +93,9 @@ libc = "0.2"
 #     GetExitCodeProcess/GetCurrentProcess (pid-liveness + kill), and the IO_COUNTERS the
 #     JobObjects extended-limit struct embeds.
 #   - System_JobObjects: the kill-on-close Job Object tree-kill safety net.
+#   - System_Console: GetConsoleProcessList + FreeConsole — the `koma gui`
+#     orphan-console drop (detach the console Windows allocates for a shortcut
+#     launch so it doesn't linger as an empty window behind the GUI). GUI path.
 # 0.59 is already in the tree (transitive), so this adds no new windows-sys version.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -101,6 +104,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Authorization",
     "Win32_System_Threading",
     "Win32_System_JobObjects",
+    "Win32_System_Console",
 ] }
 # Clipboard-image paste (controller/input/clipboard.rs): linux/macos shell out to
 # xclip/wl-paste/pngpaste/osascript; windows has no equivalent always-present CLI
@@ -173,6 +177,15 @@ section = "utils"
 desktop-template = "../packaging/linux/koma.desktop.hbs"
 
 [package.metadata.packager.wix]
+# koma vendors the full WiX main template: cargo-packager v0.11.8's built-in
+# template hardcodes the Desktop + Start Menu shortcuts with Target="[!Path]" and
+# no Arguments, so they launch bare koma.exe (the ratatui TUI) instead of `koma
+# gui`. A full custom template is the only override knob (no per-shortcut config
+# field exists), so this points at our vendored copy, which differs from the
+# pristine v0.11.8 template by exactly Arguments="gui" on those two app shortcuts
+# (see packaging/windows/main.wxs). Path is relative to this Cargo.toml's dir
+# (../), same as fragment-paths below.
+template = "../packaging/windows/main.wxs"
 fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
 # Must reference the actual ComponentGroup Id declared in the fragment above,
 # or the fragment's components are compiled but never added to the MSI's

@@ -55,6 +55,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             &prompt,
             None,  // detached: not tied to a blocking call
             true,  // detached = true
+            false, // ext_owned: model-initiated, not an extension spawn
             None,  // no spawn overrides for a model-initiated task
         ) {
             crate::app::runtime::stream::spawn::SpawnOutcome::Spawned(id) => format!(
@@ -95,6 +96,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
             &prompt,
             Some(call.id.clone()),
             false, // blocking delegation (parks the round)
+            false, // ext_owned: model-initiated, not an extension spawn
             None,  // no spawn overrides for a model-initiated task
         ) {
             crate::app::runtime::stream::spawn::SpawnOutcome::Spawned(_)
@@ -168,6 +170,61 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_output(
                 )
             }
         }
+    };
+    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
+
+/// Intercept the model-callable `task_send` tool: inject a follow-up user message
+/// into a sub-agent this session owns, delivered at its next turn boundary. Answers
+/// synchronously (never parks) — the actual delivery is a channel send / pending
+/// stash via the shared `SessionRuntime::inject_into_subagent` helper (the SAME
+/// core the broker `agents.send` verb uses). An empty message / missing or unknown
+/// `agent_id` returns an `error:` line surfaced to the model verbatim.
+pub(in crate::app::runtime::stream::tools) fn intercept_task_send(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &ToolCall,
+) -> InterceptFlow {
+    use crate::app::subagent::InjectOutcome;
+    let sanitized =
+        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let args: serde_json::Value =
+        serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
+    let id_arg = args.get("agent_id").cloned().unwrap_or(serde_json::Value::Null);
+    let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let result = if message.is_empty() {
+        "error: task_send requires a non-empty 'message'.".to_string()
+    } else if let Some(id) = parse_subagent_id(&id_arg) {
+        match state.rest.sessions[sess_idx].inject_into_subagent(id, message.to_string()) {
+            InjectOutcome::Sent => format!(
+                "sent your follow-up to sub-agent #{id}. It will see it as a new user \
+                 message at its next turn boundary — no need to poll; its full report is \
+                 still delivered to you automatically when it finishes."
+            ),
+            InjectOutcome::Queued => format!(
+                "sub-agent #{id} is queued (waiting for a free slot). Your message is saved \
+                 and delivered as its first follow-up when it starts."
+            ),
+            InjectOutcome::Terminal => format!(
+                "error: sub-agent #{id} has already finished — nothing to steer. Delegate a \
+                 fresh task with `task` if you need more work."
+            ),
+            InjectOutcome::Unknown => format!(
+                "error: no sub-agent with id {id}. Use the id returned when you delegated, \
+                 e.g. task_send({{\"agent_id\": 0, \"message\": \"...\"}})."
+            ),
+        }
+    } else if id_arg.is_null() {
+        "error: task_send needs a numeric agent_id, e.g. \
+         task_send({\"agent_id\": 0, \"message\": \"...\"})."
+            .to_string()
+    } else {
+        format!(
+            "error: no sub-agent with id {id_arg}. Call task_send with a valid numeric \
+             agent_id, e.g. task_send({{\"agent_id\": 0, \"message\": \"...\"}})."
+        )
     };
     state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;

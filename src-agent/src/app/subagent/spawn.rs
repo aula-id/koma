@@ -66,6 +66,10 @@ fn truncate_label(s: &str, max: usize) -> String {
 /// every other input derived from it below (tools, prompt, steps), is
 /// untouched. `None` (the overwhelming common case — every non-extension spawn
 /// path passes it) resolves the agent exactly as before.
+///
+/// `initial_injects` seeds the sub-agent's injection channel with follow-up user
+/// messages captured while it was QUEUED (empty for a live spawn); they arrive as
+/// its first follow-ups on the first loop iteration, right after the task prompt.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_subagent(
     client: &Arc<OpenRouterClient>,
@@ -81,8 +85,10 @@ pub fn spawn_subagent(
     task: &str,
     tool_call_id: Option<String>,
     detached: bool,
+    ext_owned: bool,
     mode: AgentMode,
     overrides: Option<SpawnOverrides>,
+    initial_injects: Vec<String>,
 ) -> Option<SubAgent> {
     // Look the agent up; a missing name is a no-op for the caller.
     let agent = registry.get(agent_name)?;
@@ -117,9 +123,27 @@ pub fn spawn_subagent(
     // would write the real per-directory `memory/TODO.md`, breaking plan-mode
     // read-only). This only ever NARROWS whatever the agent declared.
     let mut tools = agent.effective_tools();
+    // Inherit connected MCP tools automatically, exactly like the main agent does
+    // (no per-agent MCP picker): snapshot the shared manager's discovered tools —
+    // the wire `ToolDef`s to advertise, plus their namespaced names appended to
+    // this agent's allow-list so the execution gate in `run_agent_loop` keeps the
+    // model's calls to them. Mirrors `app::runtime::stream::run` (run.rs:447-456).
+    // With no MCP servers (or none connected yet) both are empty and the spawn is
+    // byte-identical to the pre-MCP path.
+    let mut mcp_tools: Vec<crate::dto::openrouter::ToolDef> = Vec::new();
+    if let Some(mgr) = ctx.mcp_manager.as_ref() {
+        let (defs, names) = mgr.advertise_cached();
+        tools.extend(names);
+        mcp_tools = defs;
+    }
     if mode == AgentMode::Plan {
+        // MCP tools ride through untouched — same precedent as the main advertise
+        // fold at run.rs:487 (the user explicitly wired those servers, so they own
+        // that risk), otherwise `tool_allowed_in_plan` would strip every mcp__*
+        // name since it knows nothing about them.
         tools.retain(|n| {
-            crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "checklist")
+            (crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "checklist"))
+                || n.starts_with("mcp__")
         });
     }
     let convo = context::build_seed(agent, awareness, memory_md, task);
@@ -138,17 +162,29 @@ pub fn spawn_subagent(
     // Save the model_id before `resolved` is moved into run_agent_loop.
     let spawned_model_id = resolved.model_id.clone();
     let (tx, rx) = mpsc::unbounded_channel();
+    // The INJECTION channel: `inject_tx` is stored on the returned `SubAgent` so
+    // the broker / `task_send` can steer this agent; `inject_rx` is drained at each
+    // turn boundary by `run_agent_loop`. Any `initial_injects` (follow-ups stashed
+    // while this delegation was QUEUED) are seeded now — buffered by the unbounded
+    // channel and delivered as the sub-agent's first follow-ups on its first
+    // iteration, right after the seed task prompt.
+    let (inject_tx, inject_rx) = mpsc::unbounded_channel();
+    for msg in initial_injects {
+        let _ = inject_tx.send(msg);
+    }
     let jh = handle.spawn(run_agent_loop(
         client_arc,
         resolved,
         config,
         settings,
         tools,
+        mcp_tools,
         ctx,
         convo,
         task_intent,
         max_steps,
         tx,
+        inject_rx,
     ));
 
     Some(SubAgent {
@@ -159,12 +195,14 @@ pub fn spawn_subagent(
         status: SubAgentStatus::Running,
         abort: jh.abort_handle(),
         rx,
+        inject_tx,
         transcript: Vec::new(),
         messages: Vec::new(),
         live_text: String::new(),
         tool_call_id,
         detached,
         nudged: false,
+        ext_owned,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,

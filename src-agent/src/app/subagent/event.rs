@@ -31,6 +31,13 @@ pub enum AgentEvent {
     /// The loop entered step `usize` (0-based), i.e. it is about to make the
     /// `usize`-th model call.
     Step(usize),
+    /// A follow-up user message was INJECTED into this sub-agent (via the broker
+    /// `agents.send` verb or the main-agent `task_send` tool) and folded into the
+    /// isolated history at a turn boundary. `String` is the injected text. Emitted
+    /// so the orchestrator records it in the flat viewer transcript (the paired
+    /// [`Snapshot`](AgentEvent::Snapshot) that follows carries the structured
+    /// history), letting a human watching the `$` panel see the steer.
+    Injected(String),
     /// A full snapshot of the sub-agent's structured conversation after a turn
     /// was committed. Emitted once per turn (and right before `Done`) so the UI
     /// always holds the sub-agent's complete structured history for later

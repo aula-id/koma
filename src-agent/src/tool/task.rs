@@ -123,3 +123,46 @@ impl Tool for TaskKill {
         Ok("error: task_kill must be handled by the runtime".into())
     }
 }
+
+/// Send a follow-up user message into a RUNNING sub-agent, delivered at its next
+/// turn boundary.
+///
+/// Like [`Task`] / [`TaskOutput`] / [`TaskKill`], this tool is advertised to the
+/// MAIN model but NEVER dispatched through [`Tool::run`]: the runtime
+/// (`app::runtime::stream::process_tools`) intercepts a `task_send` call BEFORE
+/// the generic dispatch path, folds the message into the sub-agent's isolated
+/// history via the shared `SessionRuntime::inject_into_subagent` helper, and
+/// answers synchronously (never parks). The `run` impl exists only to satisfy the
+/// [`Tool`] trait and must never be reached.
+pub struct TaskSend;
+impl Tool for TaskSend {
+    fn name(&self) -> &'static str { "task_send" }
+    fn description(&self) -> &'static str {
+        "Send a follow-up user message to a running sub-agent (one you delegated \
+         with task). It is delivered as a new user turn at the sub-agent's NEXT \
+         turn boundary — use it to add context, correct course, or answer a \
+         question the sub-agent raised, without killing and re-delegating. The \
+         sub-agent's full report is still delivered to you automatically when it \
+         finishes."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": ["integer", "string"],
+                    "description": "The sub-agent id returned when you delegated the task (e.g. 3)."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The follow-up instruction/context to inject as a new user message for the sub-agent."
+                }
+            },
+            "required": ["agent_id", "message"]
+        })
+    }
+    fn run(&self, _ctx: &ToolCtx, _args: &Value) -> Result<String> {
+        // Intercepted by the runtime before dispatch; never actually called.
+        Ok("error: task_send must be handled by the runtime".into())
+    }
+}

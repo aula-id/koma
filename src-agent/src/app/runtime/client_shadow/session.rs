@@ -93,9 +93,16 @@ pub(crate) fn shadow_session_runtime(s: &SessionSnapshot) -> SessionRuntime {
             // Detachment drives turn bookkeeping only (never rendered); the client
             // never advances a turn, so a shadow pending entry is left non-detached.
             detached: false,
+            // `ext_owned` drives the daemon-side completion-suppression only (never
+            // rendered); the client never runs the terminal fold, so a shadow pending
+            // entry keeps the inert default.
+            ext_owned: false,
             // Spawn overrides drive route RESOLUTION only (never rendered); the
             // client never spawns/resolves, so a shadow pending entry carries none.
             overrides: None,
+            // Queued injects drive daemon-side promotion delivery only (never
+            // rendered); the client never promotes, so a shadow entry carries none.
+            pending_injects: Vec::new(),
         })
         .collect();
     // Reconstruct the running/finished sub-agents (plain data + an inert handle/rx)
@@ -181,6 +188,10 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
     // Fresh receiver the client never drains (the daemon folds real events; a shadow
     // sub-agent's content arrives wholesale via the next snapshot's `messages`).
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    // Inert injection sender: the client never steers a sub-agent (it forwards
+    // every key to the daemon, which owns the real loop + injection channel), so
+    // this sender is never drained — present only to satisfy the field's type.
+    let (inject_tx, _inject_rx) = tokio::sync::mpsc::unbounded_channel();
     // Re-attach the display-only reasoning the wire carried out-of-band:
     // `ChatMessage::reasoning` is `#[serde(skip)]`, so every deserialised message
     // arrives with `reasoning: None`. The side-channel is index-aligned with
@@ -202,6 +213,7 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         status: shadow_subagent_status(&sa.status),
         abort,
         rx,
+        inject_tx,
         transcript: sa.transcript.clone(),
         messages,
         // Carry the projected live in-progress report text so the full-screen
@@ -214,6 +226,10 @@ pub(crate) fn shadow_subagent(sa: &SubAgentSnapshot) -> SubAgent {
         // nudge-latch is daemon-only bookkeeping, so it keeps its inert default.
         detached: sa.detached,
         nudged: false,
+        // Daemon-only bookkeeping (drives the terminal-fold suppression inside
+        // `drain_subagents`); the client shadow never runs that drain, so it keeps
+        // the inert default.
+        ext_owned: false,
         usage_tokens_in: 0,
         usage_tokens_out: 0,
         usage_cost: 0.0,

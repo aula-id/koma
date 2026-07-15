@@ -372,6 +372,23 @@ impl Session {
             scratch_path.display()
         ));
 
+        // Extension workspaces: when an enabled extension owns an injected workspace root
+        // (see `ext_workspace::inject_extension_workspaces`), name it so the model knows it
+        // may write there for that extension's tasks. Read-only: reads the live extension
+        // registry + this session's current workdir roots (creates nothing, no side effects).
+        let ext_ws = crate::model::ext_workspace::active_extension_workspaces(
+            &crate::model::app_config::AppConfig::load().installed_extensions,
+            &self.settings.workdir,
+        );
+        if !ext_ws.is_empty() {
+            sys.push_str("\n\n# Extension workspaces");
+            for (idx, ext_id) in &ext_ws {
+                sys.push_str(&format!(
+                    "\nWorkspace [{idx}] is an extension-owned state dir for '{ext_id}' — write there when that extension's tasks require it."
+                ));
+            }
+        }
+
         // Plan mode: append a soft nudge (no MUST, no protocol walls — weak
         // models over-obey rigid instructions). `plan_mode_hint` is mirrored in
         // from `AppStateRest::set_agent_mode` right before it calls this method.

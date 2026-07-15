@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::app::resolve::Resolved;
 use crate::dto::chat::ToolCall;
@@ -238,11 +238,13 @@ pub async fn run_agent_loop(
     config: AppConfig,
     settings: Settings,
     tools: Vec<String>,
+    mcp_tools: Vec<crate::dto::openrouter::ToolDef>,
     ctx: ToolCtx,
     mut convo: Conversation,
     task_intent: String,
     max_steps: Option<usize>,
     tx: UnboundedSender<AgentEvent>,
+    mut inject_rx: UnboundedReceiver<String>,
 ) {
     // The most-recent assistant text, surfaced as the final answer if the loop
     // runs out of steps before the model gives a no-tool reply.
@@ -258,12 +260,36 @@ pub async fn run_agent_loop(
 
     let mut step: usize = 0;
     loop {
+        // Injection drain (turn-boundary steering): fold any messages pushed onto
+        // this sub-agent's injection channel since the last turn into the isolated
+        // history as fresh `user` turns BEFORE this step streams, so the model sees
+        // them on its NEXT model call (never mid-stream). Non-blocking: `try_recv`
+        // until empty/closed. Each is mirrored to the orchestrator as an `Injected`
+        // event (flat transcript) and, once any landed, a single `Snapshot` (the
+        // structured viewer history), so a human watching the `$` panel sees the
+        // steer. A closed channel (the sender dropped) simply drains nothing.
+        let mut injected_any = false;
+        loop {
+            match inject_rx.try_recv() {
+                Ok(msg) => {
+                    convo.push_user(msg.clone());
+                    emit(&tx, AgentEvent::Injected(msg));
+                    injected_any = true;
+                }
+                // Empty (nothing queued) or Disconnected (sender gone): stop draining.
+                Err(_) => break,
+            }
+        }
+        if injected_any {
+            emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
+        }
+
         emit(&tx, AgentEvent::Step(step));
 
         // 1. Stream one model reply on a fresh per-step channel, then drain it.
         //    Advertise ONLY this agent's allow-list to the model (the execution
         //    gate below stays as a backstop).
-        let outcome = stream_step(&client, &resolved, convo.history(), &tools, &tx).await;
+        let outcome = stream_step(&client, &resolved, convo.history(), &tools, &mcp_tools, &tx).await;
 
         // Fold this step's usage into the running totals (best-effort: a step
         // with no Usage chunk simply contributes nothing). tokens_in is
@@ -483,6 +509,7 @@ async fn stream_step(
     resolved: &Resolved,
     history: Vec<crate::dto::chat::ChatMessage>,
     tools: &[String],
+    mcp_tools: &[crate::dto::openrouter::ToolDef],
     tx: &UnboundedSender<AgentEvent>,
 ) -> StreamOutcome {
     let (inner_tx, mut inner_rx) = mpsc::unbounded_channel();
@@ -506,6 +533,9 @@ async fn stream_step(
     let install_id = resolved.install_id.clone();
     // Advertise only this agent's allow-list (owned clone moved into the task).
     let advertise = tools.to_vec();
+    // Owned clone of the inherited MCP tool defs, moved into the task alongside
+    // `advertise` (same pattern — see doc comment above `stream_step`).
+    let mcp_tools = mcp_tools.to_vec();
     let send = tokio::spawn(async move {
         let conn = crate::service::openrouter::Conn {
             endpoint: &endpoint,
@@ -515,11 +545,13 @@ async fn stream_step(
             oauth_uuid: &oauth_uuid,
             install_id: &install_id,
         };
-        // Sub-agents advertise only their own allow-list and receive NO MCP tools
-        // (kept simple — MCP is a main-agent capability for now), so pass an empty
-        // `mcp_tools` slice.
+        // Sub-agents advertise their own allow-list PLUS any connected MCP tools,
+        // inherited automatically from the shared manager (see `spawn_subagent`) —
+        // exactly like the main agent's advertise fold (run.rs:447-456).
         let _ = c
-            .stream_complete(conn, &model_id, &provider, &effort, history, &advertise, &[], None, inner_tx)
+            .stream_complete(
+                conn, &model_id, &provider, &effort, history, &advertise, &mcp_tools, None, inner_tx,
+            )
             .await;
     });
 

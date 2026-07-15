@@ -20,7 +20,7 @@ import {
 
 export type { CodingSlice, CodingFileState, DirState, FileTreeEntry } from './coding'
 export { fileKey, initialCoding } from './coding'
-import { postToPanel } from '../lib/panelBridge'
+import { postToPanel, broadcastThemeToPanels } from '../lib/panelBridge'
 
 // ---- Bridge contract types (Rust -> JS push envelopes) ----------------
 
@@ -75,6 +75,11 @@ export type PaletteColors = {
   success: string
   info: string
   error: string
+  // Whether this palette reads as a dark theme (host-derived from `bg`'s
+  // relative luminance — see `push_rows.rs` `PushPalette::dark`). Optional so
+  // an older host build that hasn't started projecting it yet degrades
+  // gracefully (consumers fall back to `true`, the dark-default assumption).
+  dark?: boolean
 }
 
 // One named palette in the host's theme registry, WITH resolved colours (host
@@ -374,7 +379,7 @@ export type AgentEntry = {
   name: string
   description: string
   conditions: string
-  source: 'session' | 'global' | 'builtin'
+  source: 'session' | 'global' | 'builtin' | 'extension'
   modelUuid: string | null
   // Host-resolved display name for `modelUuid` (informational only — the
   // Agents panel/tab re-resolve `modelUuid` against `catalogueModels`/
@@ -383,6 +388,11 @@ export type AgentEntry = {
   model: string | null
   tools: string[]
   prompt: string
+  // The owning extension's manifest id, set only when `source === 'extension'`
+  // (host `ext_id`, mirrors `AgentDef::ext_id`) — cross-referenced against the
+  // extensions slice's `installed` list for a display name; falls back to the
+  // raw id when not (yet) resolvable. `null` for every other source.
+  extId: string | null
 }
 
 // One file entry in a GitStatus's staged/unstaged list — mirrors the host's
@@ -1013,6 +1023,7 @@ export type PushEnvelope =
         model: string | null
         tools: string[]
         prompt: string
+        ext_id?: string | null
       }[]
       catalogueModels: { uuid: string; name: string; model_id: string; provider_uuid: string }[]
       catalogueProviders: { uuid: string; name: string; endpoint: string }[]
@@ -2288,6 +2299,7 @@ const initialPalette: PaletteColors = {
   success: '#00c853',
   info: '#50c8ff',
   error: '#ff3c3c',
+  dark: true,
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -2314,6 +2326,11 @@ function applyPaletteVars(palette: PaletteColors) {
   setVar('--koma-success', palette?.success)
   setVar('--koma-info', palette?.info)
   setVar('--koma-error', palette?.error)
+  // Extension panels (koma://extension iframes) are theme-aware: broadcast
+  // the freshly-applied palette to every registered panel right alongside
+  // the CSS-var repaint, so a live panel's colours track the daemon exactly
+  // like the chat chrome does (see docs/EXTENSIONS.md "Theme").
+  broadcastThemeToPanels(palette)
 }
 
 // Basename of a path — a diff tab's title (TabBar disambiguates colliding
@@ -2724,11 +2741,15 @@ export const useKoma = create<KomaState>((set, get) => ({
           name: a.name,
           description: a.description,
           conditions: a.conditions,
-          source: a.source === 'global' || a.source === 'builtin' ? a.source : 'session',
+          source:
+            a.source === 'global' || a.source === 'builtin' || a.source === 'extension'
+              ? a.source
+              : 'session',
           modelUuid: a.model_uuid,
           model: a.model,
           tools: a.tools,
           prompt: a.prompt,
+          extId: a.source === 'extension' ? (a.ext_id ?? null) : null,
         }))
         const catalogueModels: CatalogueModelEntry[] = env.catalogueModels.map((m) => ({
           uuid: m.uuid,

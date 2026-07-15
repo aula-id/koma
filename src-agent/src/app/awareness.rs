@@ -97,7 +97,8 @@ pub async fn summarize(
     // route (session override > config > legacy inherit/dedicated fields).
     // `complete_with` treats an empty provider as default routing.
     // Best-effort: any error (no key, network, bad provider) → no summary.
-    match client.complete_with(conn, model, provider, messages).await {
+    // Free-form text — no JSON mode.
+    match client.complete_with(conn, model, provider, messages, false).await {
         Ok(s) => {
             let s = s.trim();
             if s.is_empty() {
@@ -163,8 +164,8 @@ pub async fn summarize_with_fallback(
         ChatMessage::new(Role::User, corpus),
     ];
 
-    // Primary attempt.
-    match client.complete_with(conn, model, provider, messages.clone()).await {
+    // Primary attempt. Free-form text — no JSON mode.
+    match client.complete_with(conn, model, provider, messages.clone(), false).await {
         Ok(s) => {
             let s = s.trim();
             if s.is_empty() {
@@ -180,7 +181,7 @@ pub async fn summarize_with_fallback(
                 fallback_model == model && fallback_conn.endpoint == conn.endpoint;
             if !same {
                 if let Ok(s) = client
-                    .complete_with(fallback_conn, fallback_model, fallback_provider, messages)
+                    .complete_with(fallback_conn, fallback_model, fallback_provider, messages, false)
                     .await
                 {
                     let s = s.trim();

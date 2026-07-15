@@ -14,6 +14,7 @@
 //! | `koma --resume` | open the session hub. |
 //! | `koma alone` | standalone no-daemon TUI ([`app::run`]); REFUSES if a daemon is already alive. The escape hatch (alias for `--local`). |
 //! | `koma daemon <status\|kill\|restart\|clean>` | daemon management CLI then exit. |
+//! | `koma ext install --dev <zip\|dir>` | sideload an unsigned local extension (offline, no koma.run account) then exit. |
 //! | `koma gui` | feature-gated (`--features gui`) desktop client — a wry webview hosting xterm.js that renders the real koma terminal client spawned in a PTY. |
 //! | `koma --internet-fullmode-install [--force]` | provision Python full-mode (browser) env then exit. |
 //! | `koma --internet-fullmode-uninstall` | remove Python full-mode env then exit. |
@@ -87,6 +88,25 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(app::print_daemon_usage());
             }
         }
+    }
+
+    // --- short-circuit: `koma ext install --dev <path>` (no TUI, no daemon) ---
+    // Pre-daemon, offline sideload: verify+unpack an unsigned local zip/dir straight
+    // into `~/.koma/extensions/<id>/` and the config registry. Mirrors the `daemon`
+    // subcommand short-circuit above — must work even when the TUI can't start.
+    if let Some(sub) = opts.ext.clone() {
+        return match sub {
+            cli::ExtCli::InstallDev(path) => match app::run_ext_install_dev(&path) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    std::process::exit(1);
+                }
+            },
+            cli::ExtCli::Usage => {
+                std::process::exit(app::print_ext_usage());
+            }
+        };
     }
 
     // --- upgrade migration: reap any pre-0.2.0 global daemon on first 0.2.0 launch ---
