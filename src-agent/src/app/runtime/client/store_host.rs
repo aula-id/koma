@@ -203,12 +203,28 @@ fn finish_install_detached(
         Ok(ext) => {
             let mut cfg = AppConfig::load();
             cfg.upsert_extension(ext.clone());
+            // Auto-register any manifest-declared bundled MCP servers — same as the attached
+            // daemon's `finish_install`, so a store install through the detached GUI host
+            // never leaves the user needing to hand-add an McpServerEntry either.
+            if let Err(e) = crate::app::ext::register::register_mcp_servers(&ext, &mut cfg) {
+                store::append_global_error_log(
+                    "ext-install",
+                    &format!("register mcp servers for {}: {e:#}", ext.id),
+                );
+            }
             if let Err(e) = cfg.save() {
                 store::append_global_error_log(
                     "ext-install",
                     &format!("save config after install {}: {e:#}", ext.id),
                 );
             }
+            // No live per-session `McpManager` exists pre-session to reconnect from the
+            // just-saved server set, so BOUNCE the GLOBAL MCP daemon instead — mirrors
+            // `spawn_uninstall`'s reload strategy: the next session's
+            // `ensure_mcp_daemon_running` respawns it fresh off the new config (picking up
+            // any newly-registered row), cheaply and safely via the build-skew fingerprint
+            // handshake. Quiet — the GUI host owns no user terminal.
+            crate::app::runtime::manage::stop_mcp_daemon(true);
             super::push_proto::push_ext_op_result(push, ext.id.clone(), true, None);
             super::push_proto::push_installed_extensions(push, installed_extensions());
         }

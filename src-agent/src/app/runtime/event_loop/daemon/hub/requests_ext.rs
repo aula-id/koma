@@ -593,7 +593,23 @@ impl DaemonHub {
         match installed {
             Ok(ext) => {
                 state.rest.config.upsert_extension(ext.clone());
-                if let Err(e) = state.rest.config.save() {
+                // Auto-register any manifest-declared bundled MCP servers (e.g. a standalone
+                // `workflow-mcp` shipped alongside the extension's own daemon) BEFORE the
+                // single save+reload below, so a fresh install never needs the user to
+                // hand-add an McpServerEntry — see `register::register_mcp_servers`.
+                if let Err(e) = crate::app::ext::register::register_mcp_servers(
+                    &ext,
+                    &mut state.rest.config,
+                ) {
+                    store::append_global_error_log(
+                        "ext-install",
+                        &format!("register mcp servers for {}: {e:#}", ext.id),
+                    );
+                }
+                // ONE save covering both the registry upsert and any registered MCP-server
+                // rows, plus a live MCP reconnect from the just-saved server set — mirrors
+                // `uninstall_extension`'s single `save_and_reload_mcp` call.
+                if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state) {
                     store::append_global_error_log(
                         "ext-install",
                         &format!("save config after install {}: {e:#}", ext.id),
