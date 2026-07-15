@@ -92,6 +92,72 @@ pub fn validate_workspace_dir(raw: &str) -> Result<PathBuf> {
     Ok(canon)
 }
 
+/// Uninstall-time NUKE (step 9) of an extension's declared `workspace_dir`. Validates the
+/// raw path through the SAME policy [`validate_workspace_dir`] enforces (tilde-expand + the
+/// strictly-under-$HOME / never-`~/.koma` / never-`~/.ssh`|`.aws`|`.gnupg` /
+/// never-`~/.config`-root rejections) — but, UNLIKE install-time validation, NEVER creates
+/// the directory: a path that does not exist is nothing to remove and is skipped (we never
+/// create-then-delete). Only a path that EXISTS and passes the policy on its CANONICAL
+/// (symlink-/`..`-resolved) form is `remove_dir_all`'d, so a symlinked or `..`-escaping
+/// `workspace_dir` can never be used to delete outside its sandbox. A `~user` form, a
+/// policy-rejected path, a missing dir, or any removal error is logged to
+/// `~/.koma/error.log` and skipped (best-effort — a bad `workspace_dir` never blocks the
+/// uninstall). Returns whether a directory was actually removed.
+///
+/// This is USER-APPROVED data deletion: the GUI uninstall confirm names this directory
+/// before the request is ever sent (see the extension uninstall confirm copy).
+pub fn remove_workspace_dir(raw: &str) -> bool {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    let Some(home) = dirs::home_dir() else {
+        store::append_global_error_log(
+            "ext-workspace",
+            "cannot resolve home directory — skipping workspace_dir nuke",
+        );
+        return false;
+    };
+    let expanded = match expand_tilde(raw, &home) {
+        Ok(p) => p,
+        Err(e) => {
+            store::append_global_error_log(
+                "ext-workspace",
+                &format!("workspace_dir '{raw}' rejected for removal: {e:#}"),
+            );
+            return false;
+        }
+    };
+    // Missing → nothing to remove. Do NOT create-then-delete (unlike install validation).
+    if !expanded.exists() {
+        return false;
+    }
+    // Authoritative policy on the CANONICAL path (symlinks + `..` resolved) — the same gate
+    // `validate_workspace_dir`'s phase 2 applies, so we refuse to remove $HOME, ~/.koma, a
+    // credential store, or ~/.config's root even via a symlink.
+    let canon = norm(&expanded);
+    let home_canon = norm(&home);
+    if let Some(reason) = policy_violation(&canon, &home_canon) {
+        store::append_global_error_log(
+            "ext-workspace",
+            &format!(
+                "workspace_dir '{raw}' {reason} — refusing to remove (after canonicalization)"
+            ),
+        );
+        return false;
+    }
+    match std::fs::remove_dir_all(&canon) {
+        Ok(()) => true,
+        Err(e) => {
+            store::append_global_error_log(
+                "ext-workspace",
+                &format!("remove workspace_dir '{}': {e}", canon.display()),
+            );
+            false
+        }
+    }
+}
+
 /// For every ENABLED installed extension that declares a valid `workspace_dir`, inject
 /// its canonical path into `workdir` (the session's [`crate::model::settings::Settings::workdir`]
 /// list). Idempotent: a root already present (by canonical equality) is skipped, so
@@ -167,7 +233,11 @@ pub fn active_extension_workspaces(
 /// Read `<extensions_dir>/<id>/manifest.json` and return a trimmed, non-empty
 /// `workspace_dir`, or `None` when the field is absent/blank or the manifest is
 /// missing/unparsable (best-effort — a bad manifest is simply "no workspace_dir").
-fn read_workspace_dir(id: &str) -> Option<String> {
+///
+/// `pub(crate)` so the installed-extension wire projections (the daemon's
+/// `send_installed_extensions` + the host's `installed_extensions`) can surface the same
+/// declared dir the GUI uninstall confirm names.
+pub(crate) fn read_workspace_dir(id: &str) -> Option<String> {
     let path = store::extensions_dir().ok()?.join(id).join("manifest.json");
     let bytes = std::fs::read(&path).ok()?;
     let manifest: ExtensionManifest = serde_json::from_slice(&bytes).ok()?;

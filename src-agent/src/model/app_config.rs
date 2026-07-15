@@ -531,6 +531,14 @@ pub struct McpServerEntry {
     /// Http transport: the streamable-HTTP MCP endpoint URL.
     #[serde(default)]
     pub url: String,
+    /// Provenance: the reverse-DNS id of the extension that registered this server, or
+    /// `None` for a user-configured / hand-written one. Added for FUTURE provenance so
+    /// [`AppConfig::remove_ext_mcp_servers`] can deregister exactly an extension's rows on
+    /// uninstall; a row with no provenance (every row today) is still matched by its
+    /// `command` path living under `extensions/<id>/`. `skip_serializing_if` keeps a
+    /// user-configured row's on-disk JSON byte-identical to before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ext_id: Option<String>,
 }
 
 /// One installed extension's persisted registry entry.
@@ -795,6 +803,37 @@ impl AppConfig {
     #[allow(dead_code)]
     pub fn remove_extension_by_id(&mut self, id: &str) {
         self.installed_extensions.retain(|e| e.id != id);
+    }
+
+    /// Deregister every configured MCP server that BELONGS to extension `ext_id` (uninstall
+    /// step 5): a row whose `ext_id` provenance matches, OR whose stdio `command` path lives
+    /// under `extensions/<ext_id>/` — an extension that bundled its own MCP-server binary,
+    /// now a dead orphan once that binary is deleted. Returns the count removed; the caller
+    /// persists via [`Self::save`] and triggers the live MCP reload afterwards.
+    ///
+    /// The path test is a LEXICAL, component-wise prefix ([`std::path::Path::starts_with`])
+    /// on the CONFIGURED command string — deliberately NOT canonicalized (the binary may
+    /// already be gone, so `canonicalize` would fail), and component-wise so
+    /// `extensions/<id>` can never match `extensions/<id>-other`. A blank command, or an
+    /// unresolved extensions dir, matches nothing (kept).
+    pub fn remove_ext_mcp_servers(&mut self, ext_id: &str) -> usize {
+        let ext_prefix = crate::model::store::extensions_dir()
+            .ok()
+            .map(|d| d.join(ext_id));
+        let before = self.mcp_servers.len();
+        self.mcp_servers.retain(|s| {
+            let by_provenance = s.ext_id.as_deref() == Some(ext_id);
+            let by_command_path = match &ext_prefix {
+                Some(prefix) => {
+                    let cmd = s.command.trim();
+                    !cmd.is_empty() && std::path::Path::new(cmd).starts_with(prefix)
+                }
+                None => false,
+            };
+            // Keep the row UNLESS it belongs to this extension by either signal.
+            !(by_provenance || by_command_path)
+        });
+        before - self.mcp_servers.len()
     }
 
     /// The installed extension with `id`, if any. Mirrors the `*_by_uuid` lookups.

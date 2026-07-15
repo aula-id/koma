@@ -106,6 +106,13 @@ pub struct InstalledExtWire {
     /// read).
     #[serde(default)]
     pub panels: Vec<PanelWire>,
+    /// This extension's declared `workspace_dir` (read fresh off its installed
+    /// `manifest.json`, trimmed + non-empty), when it declares one — surfaced so the
+    /// GUI's uninstall confirm can name the data directory the nuke will delete. `None`
+    /// for an extension that declares no workspace dir (or whose manifest couldn't be
+    /// read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
 }
 
 /// One contributed panel (a `contributes.panels[]` entry of an installed
@@ -153,6 +160,10 @@ pub struct InstalledExtensionDetailWire {
     /// disturbing the local data ownership of installed version/permissions.
     #[serde(default)]
     pub store_detail: Option<StoreDetailWire>,
+    /// This extension's declared `workspace_dir` (trimmed + non-empty) or `None` — the
+    /// data directory the uninstall nuke removes, named in the GUI's uninstall confirm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
 }
 
 /// One contributed tool from an installed extension's manifest.

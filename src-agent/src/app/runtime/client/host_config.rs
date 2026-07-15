@@ -285,6 +285,8 @@ fn apply_global_config_req(
                 args: crate::app::mode::mcp::parse_args(args),
                 env: crate::app::mode::mcp::parse_env(env),
                 url: url.trim().to_string(),
+                // A GUI-configured server is user-owned — no extension provenance.
+                ext_id: None,
             });
             true
         }
