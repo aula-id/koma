@@ -36,7 +36,7 @@ pub(super) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// drain can never leave the extension's `call()` hanging). Comfortably shorter than
 /// the extension SDK's own 120s `host_call` timeout, and generous versus the broker's
 /// real cost (one event-loop tick — the broker itself never blocks).
-const EXT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const EXT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(360);
 
 /// Why [`read_capped_line`] failed: distinguishes "the frame is too big" (fatal —
 /// the caller should kill the connection/child rather than keep reading a desynced
