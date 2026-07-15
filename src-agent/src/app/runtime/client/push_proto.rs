@@ -898,22 +898,14 @@ pub(super) fn push_installed_ext_detail(
     super::render::emit(push, &PushEnvelope::InstalledExtensionDetail { id, detail, error });
 }
 
-/// Emit a one-shot `ExtensionOpResult` envelope for the graceful PRE-SESSION install/
-/// uninstall failure (`GuiReq::InstallExtension`/`UninstallExtension` with NO attached
-/// daemon — see `HostCtl::ExtNoSession`). Install/uninstall mutate live daemon runtime
-/// state (`ext_manager`/`mcp_manager`), which needs a session to exist; there is no global
-/// (pre-session) ext manager yet — `// TODO: global ext manager for pre-session install` —
-/// so this fails LOUDLY (`ok: false` + a human-readable reason) instead of silently
-/// dropping the request, echoing `id` so the GUI clears that card's pending spinner.
-pub(super) fn push_ext_no_session(push: &dyn Fn(String), id: String) {
-    super::render::emit(
-        push,
-        &PushEnvelope::ExtensionOpResult {
-            id,
-            ok: false,
-            error: Some("open a session to install".to_string()),
-        },
-    );
+/// Emit a one-shot `ExtensionOpResult` envelope for the DETACHED (home screen / swapper)
+/// install/uninstall path — the reply to a `GuiReq::InstallExtension`/`UninstallExtension`
+/// run host-locally, echoing `id` so the GUI clears that card's pending spinner. The
+/// ATTACHED path's reply is a separate inline re-push of the daemon's own
+/// `DaemonEvent::ExtensionOpResult` (see `push_intercept`) — this is the detached twin, used
+/// by `store_host::spawn_install`/`spawn_uninstall`.
+pub(super) fn push_ext_op_result(push: &dyn Fn(String), id: String, ok: bool, error: Option<String>) {
+    super::render::emit(push, &PushEnvelope::ExtensionOpResult { id, ok, error });
 }
 
 /// Emit a one-shot `OAuthState` envelope for the streaming GUI OAuth surface. Shared by the
