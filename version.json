@@ -1,4 +1,4 @@
 {
-  "version": "0.3.4",
-  "message": "fix: MCP manager built on demand - adding the first MCP server to a live session daemon now advertises immediately, no restart needed"
+  "version": "0.3.5",
+  "message": "feat: workspace-scoped sub-agent spawns for extensions - desk worktrees become the worker's entire world"
 }
