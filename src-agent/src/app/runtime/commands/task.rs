@@ -68,8 +68,15 @@ pub(super) fn handle_task(
                 .set_toast_info(format!("queued sub-agent #{id} ({agent_name})"));
             state.rest.fg_mut().status = format!("queued sub-agent #{id} ({agent_name})");
         }
-        super::super::stream::SpawnOutcome::Failed => {
-            state.rest.fg_mut().status = format!("unknown agent: {agent_name}");
+        super::super::stream::SpawnOutcome::Failed(reason) => {
+            state.rest.fg_mut().status = match reason {
+                super::super::stream::SpawnFailReason::Unresolved => {
+                    format!("unknown agent: {agent_name}")
+                }
+                // Unreachable today (`/task` never sets `workspace`), but
+                // surfaced verbatim for exhaustiveness / future-proofing.
+                super::super::stream::SpawnFailReason::Workspace(msg) => msg,
+            };
         }
     }
     Ok(())

@@ -73,9 +73,17 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
                  (task_kill({{\"id\": {id}}}) to abort.)",
                 crate::app::subagent::MAX_SUBAGENTS
             ),
-            crate::app::runtime::stream::spawn::SpawnOutcome::Failed => {
-                format!("error: unknown agent '{agent}'")
-            }
+            crate::app::runtime::stream::spawn::SpawnOutcome::Failed(reason) => match reason {
+                crate::app::runtime::stream::spawn::SpawnFailReason::Unresolved => {
+                    format!("error: unknown agent '{agent}'")
+                }
+                // Unreachable today (a model-initiated `task` call never sets
+                // `workspace`), but surfaced verbatim for exhaustiveness /
+                // future-proofing.
+                crate::app::runtime::stream::spawn::SpawnFailReason::Workspace(msg) => {
+                    format!("error: {msg}")
+                }
+            },
         };
         state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
     } else {
@@ -113,11 +121,23 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
                 // stays as a (now-idempotent) backstop.
                 state.rest.sessions[sess_idx].awaiting_subagents = true;
             }
-            // Nothing started or queued (no client/session or unknown
-            // agent) → answer the call now so it isn't left dangling.
-            crate::app::runtime::stream::spawn::SpawnOutcome::Failed => state.rest.sessions[sess_idx]
-                .tool_results
-                .push((call.id.clone(), format!("error: unknown agent '{agent}'"))),
+            // Nothing started or queued (no client/session, unknown agent, or a
+            // rejected `workspace` override) → answer the call now so it isn't
+            // left dangling.
+            crate::app::runtime::stream::spawn::SpawnOutcome::Failed(reason) => {
+                let msg = match reason {
+                    crate::app::runtime::stream::spawn::SpawnFailReason::Unresolved => {
+                        format!("error: unknown agent '{agent}'")
+                    }
+                    // Unreachable today (a model-initiated `task` call never sets
+                    // `workspace`), but surfaced verbatim for exhaustiveness /
+                    // future-proofing.
+                    crate::app::runtime::stream::spawn::SpawnFailReason::Workspace(m) => {
+                        format!("error: {m}")
+                    }
+                };
+                state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), msg));
+            }
         }
     }
     state.rest.sessions[sess_idx].tool_idx += 1;

@@ -13,7 +13,7 @@ use crate::ipc::proto::DaemonEvent;
 use crate::service::openrouter::OpenRouterClient;
 
 use crate::app::runtime::actions::apply_action;
-use crate::app::runtime::{spawn_or_queue, SpawnOutcome};
+use crate::app::runtime::{spawn_or_queue, SpawnFailReason, SpawnOutcome};
 
 use super::core::DaemonHub;
 
@@ -122,7 +122,12 @@ impl DaemonHub {
         let norm = |s: Option<String>| s.map(|v| v.trim().to_string()).filter(|s| !s.is_empty());
         let (model, effort) = (norm(model), norm(effort));
         let overrides = if model.is_some() || effort.is_some() {
-            Some(crate::app::subagent::SpawnOverrides { model, effort })
+            // Cross-daemon `SpawnAgent` (this request) carries no `workspace` field
+            // (see `ipc::proto::ClientRequest::SpawnAgent`) — out of scope for the
+            // workspace-confinement feature, which only threads through the LOCAL
+            // `broker_spawn` path. `workspace: None` here is exactly current
+            // behavior for this request.
+            Some(crate::app::subagent::SpawnOverrides { model, effort, workspace: None })
         } else {
             None
         };
@@ -131,9 +136,14 @@ impl DaemonHub {
             SpawnOutcome::Spawned(_) | SpawnOutcome::Queued(_) => {
                 self.send_to(idx, DaemonEvent::Ack)
             }
-            SpawnOutcome::Failed => self.send_to(
+            SpawnOutcome::Failed(reason) => self.send_to(
                 idx,
-                DaemonEvent::Error(format!("failed to spawn agent '{agent_name}'")),
+                DaemonEvent::Error(match reason {
+                    SpawnFailReason::Unresolved => format!("failed to spawn agent '{agent_name}'"),
+                    // Unreachable today (this path never sets `workspace`), but
+                    // surface it verbatim for exhaustiveness / future-proofing.
+                    SpawnFailReason::Workspace(msg) => msg,
+                }),
             ),
         }
     }
