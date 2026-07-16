@@ -524,7 +524,7 @@ to the calling extension's OWN `ExtAgentRegistry` — never the raw session
 
 | Verb | Params | Success | Errors |
 | --- | --- | --- | --- |
-| `agents.spawn` | `{ "task": <string, required non-empty>, "agent"?: <string, default `"general"`>, "model"?: <string slug>, "effort"?: <string>, "notify"?: <bool, default false> }` | `{ "agentId": <u64, ext-facing>, "status": "spawned" }` or, once the 5-slot `MAX_SUBAGENTS` cap is full, `{ "agentId", "status": "queued" }` | empty task → `"agents.spawn requires a non-empty 'task'"`; no foreground session → `"no active session"`; unresolvable agent/client → `"failed to spawn agent '<agent>' (no client/session or unknown agent)"` |
+| `agents.spawn` | `{ "task": <string, required non-empty>, "agent"?: <string, default `"general"`>, "model"?: <string slug>, "effort"?: <string>, "workspace"?: <string, absolute path>, "notify"?: <bool, default false> }` | `{ "agentId": <u64, ext-facing>, "status": "spawned" }` or, once the 5-slot `MAX_SUBAGENTS` cap is full, `{ "agentId", "status": "queued" }` | empty task → `"agents.spawn requires a non-empty 'task'"`; no foreground session → `"no active session"`; unresolvable agent/client → `"failed to spawn agent '<agent>' (no client/session or unknown agent)"`; rejected `workspace` → `"workspace '<path>' could not be resolved: <io error>"` or `"workspace '<path>' is outside the session's allowed workspace root(s)"` |
 | `agents.kill` | `{ "agentId" }` | `{ "killed": true }` — idempotent; killing an already-terminal agent still returns `true` without re-firing a terminal event | missing/unknown/closed → same shapes as `agents.status` |
 | `agents.send` | `{ "agentId": <u64 or numeric string>, "message": <string, required non-empty> }` | `{ "sent": true }` — the message is injected as a follow-up USER turn, delivered at the sub-agent's next TURN BOUNDARY (never mid-stream); a still-queued agent stashes it and returns `{ "sent": true, "status": "queued" }` (delivered at promotion) | empty message → `"agents.send requires a non-empty 'message'"`; a terminal (done/killed/error) agent → `"agent is terminal"`; missing `agentId`/unknown id/closed session → same shapes as `agents.status` |
 
@@ -542,6 +542,22 @@ see "Events" below; this is independent of `contributes.events`. The returned
 stable session UUID — it is never reused across sessions or shared with any other
 extension.
 
+`workspace` (both `agents.spawn` and the LOCAL branch of `sessions.spawn_into` —
+see below) is an OPTIONAL absolute path that confines the spawned sub-agent's
+file tools + `bash` to a single directory INSTEAD OF the whole session
+checkout. **Absent = session default**: with no `workspace`, the sub-agent
+inherits the session's own workspace root(s) exactly as before this param
+existed. When present, koma canonicalizes it and requires it to resolve INSIDE
+(or equal to) one of the session's EXISTING workspace roots — checked by path
+component, never a raw string prefix, so a sibling directory whose name merely
+starts with a root's name (e.g. `/a/bc` against a root `/a/b`) is correctly
+rejected. This is a sandbox trust boundary: a `workspace` that fails to
+canonicalize (doesn't exist) or resolves outside every root REJECTS the whole
+spawn outright — koma never silently falls back to the wider session
+workspace. A typical use is a git-worktree "desk" per delegated task (e.g. the
+Workflow extension confining each worker under its own `~/.koma-workflow/...`
+subtree) rather than handing every sub-agent the full session tree.
+
 ### `sessions:manage`
 
 | Verb | Params | Success | Notes / errors |
@@ -549,7 +565,7 @@ extension.
 | `sessions.list` | `{}` | `[{ "id": <uuid>, "name": <string\|null>, "workdir": <string>, "live": <bool>, "working": <bool> }, ...]` | A registry snapshot merged with a live-daemon probe sweep — **v1 limit: no cross-daemon polling**, this is a point-in-time merge, not a subscription. |
 | `sessions.create` | `{ "workdir"?: <string>, "name"?: <string> }` | `{ "id": <uuid> }` | `workdir` absent/blank → daemon's own launch cwd; present → must be an absolute EXISTING path, else `"workdir must be an absolute existing path"`. Spawns a detached `koma --daemon --session <uuid>`, connect-polled with a 3s timeout. A `name` set failure (registry lag) is retried once after 500ms but never fails the create itself. |
 | `sessions.switch` | `{ "session": <string uuid, required non-empty> }` | Local (live in this daemon): `{ "ok": true, "delivery": "local" }`. Cross-daemon: latches a one-shot signal for attached clients → `{ "ok": true, "delivery": "signaled" }` (the actual attach is the CLIENT's job — GUI wires it, TUI may ignore it). | missing `session` → `"sessions.switch requires a 'session'"` |
-| `sessions.spawn_into` | `{ "session": <string, required>, "task": <string, required non-empty>, "agent"?, "model"?, "effort"?, "notify"? }` | Local session: identical shape to `agents.spawn`, and IS tracked in `ExtAgentRegistry`. Cross-process: `{ "status": "sent", "session": <uuid> }` — fire-and-forget, **NOT tracked**, no `agentId`, no polling possible. | missing `session` → `"sessions.spawn_into requires a 'session'"`; empty task → `"sessions.spawn_into requires a non-empty 'task'"`; target down → `"session not live"`; other transport error → `"target daemon incompatible or unavailable"` |
+| `sessions.spawn_into` | `{ "session": <string, required>, "task": <string, required non-empty>, "agent"?, "model"?, "effort"?, "workspace"?, "notify"? }` | Local session: identical shape to `agents.spawn` (including `workspace`, see above), and IS tracked in `ExtAgentRegistry`. Cross-process: `{ "status": "sent", "session": <uuid> }` — fire-and-forget, **NOT tracked**, no `agentId`, no polling possible; `workspace` is **not honored on the cross-process branch** (v1: only the LOCAL branch threads it through — a cross-daemon `workspace` is silently ignored, same as any other unrecognized field on that transport). | missing `session` → `"sessions.spawn_into requires a 'session'"`; empty task → `"sessions.spawn_into requires a non-empty 'task'"`; target down → `"session not live"`; other transport error → `"target daemon incompatible or unavailable"`; rejected `workspace` (local branch only) → same two messages as `agents.spawn` above |
 
 ### `chat:prompt`
 
