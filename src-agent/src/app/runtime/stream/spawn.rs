@@ -246,9 +246,9 @@ fn spawn_task_with_id(
     ext_owned: bool,
     overrides: Option<crate::app::subagent::SpawnOverrides>,
     initial_injects: Vec<String>,
-) -> Option<usize> {
+) -> Result<usize, SpawnFailReason> {
     if client.is_none() || state.rest.sessions[sess_idx].session.is_none() {
-        return None;
+        return Err(SpawnFailReason::Unresolved);
     }
     // Refresh global provider/model config at delegation time. Daemons can live
     // longer than config.json edits made by another window; a stale in-memory
@@ -262,7 +262,13 @@ fn spawn_task_with_id(
     // per-session inputs (workspace, session dir, settings, awareness, memory)
     // are baked from session `sess_idx`, so a sub-agent keeps ITS PARENT
     // session's context regardless of which session is foreground.
-    let ctx = build_tool_ctx(state, sess_idx);
+    let mut ctx = build_tool_ctx(state, sess_idx);
+    // A caller-supplied `workspace` override (extension `agents.spawn`/
+    // `sessions.spawn_into` only — every other spawn path passes `None`) narrows
+    // `ctx` to a single confined root INSTEAD of the whole session tree. This is a
+    // sandbox trust boundary: on any failure the spawn is rejected outright, never
+    // silently widened back to the session workspace.
+    narrow_ctx_to_workspace(&mut ctx, overrides.as_ref())?;
     let (session_dir, config, settings, awareness, memory_md) = {
         let rt = &state.rest.sessions[sess_idx];
         let sess = rt.session.as_ref().unwrap();
@@ -330,13 +336,14 @@ fn spawn_task_with_id(
         state.rest.agent_mode,
         overrides,
         initial_injects,
-    )?;
+    )
+    .ok_or(SpawnFailReason::Unresolved)?;
     state.rest.sessions[sess_idx].subagents.push(sub);
     // Persist the new sub-agent record so it survives close/reopen (#25). Covers
     // every spawn path (model `task`, `/task`, and queued→running promotion via
     // `try_start_pending`, all of which route through here).
     crate::app::runtime::bg_persist::persist_subagents(&state.rest.sessions[sess_idx]);
-    Some(id)
+    Ok(id)
 }
 
 /// Spawn a background sub-agent for `agent_name` running `task_text`, allocating
@@ -364,7 +371,7 @@ pub(crate) fn spawn_task(
     detached: bool,
     ext_owned: bool,
     overrides: Option<crate::app::subagent::SpawnOverrides>,
-) -> Option<usize> {
+) -> Result<usize, SpawnFailReason> {
     let id = state.rest.sessions[sess_idx].next_subagent_id;
     let spawned = spawn_task_with_id(
         state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached, ext_owned, overrides,
@@ -373,7 +380,26 @@ pub(crate) fn spawn_task(
     )?;
     // Only consume the id on a successful spawn (a failed spawn leaves it free).
     state.rest.sessions[sess_idx].next_subagent_id += 1;
-    Some(spawned)
+    Ok(spawned)
+}
+
+/// Why a spawn attempt failed outright (see [`SpawnOutcome::Failed`]).
+///
+/// `Unresolved` is the ORIGINAL (pre-workspace) failure mode: no live
+/// client/session, or the named agent doesn't resolve. Every existing caller
+/// already has its own agent-name-flavored wording for this case — matching on
+/// it preserves that wording byte-for-byte.
+///
+/// `Workspace` is new: a caller-supplied `workspace` override (see
+/// [`crate::app::subagent::SpawnOverrides::workspace`]) failed to canonicalize,
+/// or canonicalized outside every one of the session's workspace roots. This is
+/// a SANDBOX TRUST BOUNDARY — the carried `String` names the rejected path and
+/// is meant to be surfaced to the caller VERBATIM; there is no silent fallback
+/// to the wide session workspace.
+#[derive(Debug, Clone)]
+pub(crate) enum SpawnFailReason {
+    Unresolved,
+    Workspace(String),
 }
 
 /// Outcome of [`spawn_or_queue`]: the delegation was started immediately, parked
@@ -384,9 +410,10 @@ pub(crate) enum SpawnOutcome {
     /// All slots were busy — the delegation was queued under this id and will
     /// start when a slot frees.
     Queued(usize),
-    /// No client/session, or (for the immediate-spawn branch) the named agent
-    /// doesn't exist. Nothing was started or queued.
-    Failed,
+    /// No client/session, (for the immediate-spawn branch) the named agent
+    /// doesn't exist, or a `workspace` override failed containment — see
+    /// [`SpawnFailReason`]. Nothing was started or queued.
+    Failed(SpawnFailReason),
 }
 
 /// Accept a delegation: spawn it NOW if a slot is free, else ENQUEUE it.
@@ -422,14 +449,14 @@ pub(crate) fn spawn_or_queue(
 ) -> SpawnOutcome {
     if running_subagents(state, sess_idx) < crate::app::subagent::MAX_SUBAGENTS {
         match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached, ext_owned, overrides) {
-            Some(id) => SpawnOutcome::Spawned(id),
-            None => SpawnOutcome::Failed,
+            Ok(id) => SpawnOutcome::Spawned(id),
+            Err(reason) => SpawnOutcome::Failed(reason),
         }
     } else {
         // Over cap: enqueue (unlimited). Needs a client+session so the queued
         // delegation can eventually run and (for a task-tool call) unpark the turn.
         if client.is_none() || state.rest.sessions[sess_idx].session.is_none() {
-            return SpawnOutcome::Failed;
+            return SpawnOutcome::Failed(SpawnFailReason::Unresolved);
         }
         let id = state.rest.sessions[sess_idx].next_subagent_id;
         state.rest.sessions[sess_idx].next_subagent_id += 1;
@@ -499,22 +526,213 @@ pub(crate) fn try_start_pending(
             // its first injected messages (right after the task prompt).
             pending.pending_injects.clone(),
         );
-        if started.is_none() {
-            // The agent no longer resolves. Drop the entry; for a task-tool
+        if let Err(reason) = started {
+            // The agent no longer resolves, or (for an `agents.spawn` delegation
+            // queued with a `workspace` override) that override lost containment
+            // between enqueue and promotion. Drop the entry; for a task-tool
             // delegation, free its parked call so the round can't hang.
             if let Some(call_id) = pending.tool_call_id {
                 if state.rest.sessions[sess_idx].pending_subagent_calls.contains(&call_id) {
                     state.rest.sessions[sess_idx]
                         .pending_subagent_calls
                         .retain(|c| c != &call_id);
-                    state.rest.sessions[sess_idx].tool_results.push((
-                        call_id,
-                        format!("error: unknown agent '{}'", pending.agent_name),
-                    ));
+                    let msg = match reason {
+                        SpawnFailReason::Unresolved => {
+                            format!("error: unknown agent '{}'", pending.agent_name)
+                        }
+                        SpawnFailReason::Workspace(m) => format!("error: {m}"),
+                    };
+                    state.rest.sessions[sess_idx].tool_results.push((call_id, msg));
                 }
             }
             // Try the next queued entry within the same free slot.
             continue;
         }
+    }
+}
+
+/// Canonicalize `requested` and verify it is contained within (or equal to) one
+/// of `roots` — each of which is ALSO canonicalized for the comparison, so a
+/// symlinked workspace root still contains its real children. Containment is
+/// checked path-COMPONENT-wise via [`std::path::Path::starts_with`], never a raw
+/// string prefix, so a sibling whose name merely starts with a root's name
+/// (e.g. `/a/bc` against root `/a/b`) is correctly rejected.
+///
+/// This is a SANDBOX TRUST BOUNDARY: on any failure — `requested` can't be
+/// canonicalized (missing / IO error), or it canonicalizes but sits outside
+/// every root — this returns `Err` naming the rejected path. There is
+/// deliberately no fallback to the wide session workspace; the caller must fail
+/// the spawn outright.
+fn canonicalize_and_contain(
+    requested: &std::path::Path,
+    roots: &[std::path::PathBuf],
+) -> Result<std::path::PathBuf, String> {
+    let canon = requested
+        .canonicalize()
+        .map_err(|e| format!("workspace '{}' could not be resolved: {e}", requested.display()))?;
+    let contained = roots.iter().any(|root| {
+        root.canonicalize()
+            .map(|canon_root| canon.starts_with(&canon_root))
+            .unwrap_or(false)
+    });
+    if contained {
+        Ok(canon)
+    } else {
+        Err(format!(
+            "workspace '{}' is outside the session's allowed workspace root(s)",
+            canon.display()
+        ))
+    }
+}
+
+/// Apply a caller-supplied `workspace` override (see
+/// [`crate::app::subagent::SpawnOverrides::workspace`]) to `ctx`, if present.
+///
+/// `overrides` absent, or present with `workspace: None`, is a no-op — `ctx` is
+/// returned exactly as `build_tool_ctx` produced it (every non-extension spawn
+/// path, and the common `agents.spawn`/`sessions.spawn_into` call). When a
+/// `workspace` IS present, it is canonicalized and checked for containment
+/// within one of `ctx.workspaces`' EXISTING roots via [`canonicalize_and_contain`];
+/// on success both `ctx.workspace` and `ctx.workspaces` are replaced with the
+/// single canonicalized path (the sub-agent then sees ONLY that root). On
+/// failure `ctx` is left untouched and `Err` is returned — this is a sandbox
+/// trust boundary, so a rejected override never silently falls back to the wide
+/// session workspace.
+fn narrow_ctx_to_workspace(
+    ctx: &mut crate::tool::ToolCtx,
+    overrides: Option<&crate::app::subagent::SpawnOverrides>,
+) -> Result<(), SpawnFailReason> {
+    let Some(requested) = overrides.and_then(|o| o.workspace.as_ref()) else {
+        return Ok(());
+    };
+    match canonicalize_and_contain(requested, &ctx.workspaces) {
+        Ok(canon) => {
+            ctx.workspace = canon.clone();
+            ctx.workspaces = vec![canon];
+            Ok(())
+        }
+        Err(msg) => Err(SpawnFailReason::Workspace(msg)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, RwLock};
+
+    /// A minimal `ToolCtx` for tests, mirroring `tool::seqthink_test::test_ctx` —
+    /// the workspace-narrowing logic never touches any field besides
+    /// `workspace`/`workspaces`.
+    fn test_ctx(workspaces: Vec<std::path::PathBuf>) -> crate::tool::ToolCtx {
+        crate::tool::ToolCtx {
+            workspace: workspaces.first().cloned().unwrap_or_default(),
+            workspaces,
+            dir_cache: Arc::new(RwLock::new(crate::tool::DirCache::default())),
+            memory_dir: None,
+            worktrees_dir: None,
+            download_dir: None,
+            internet_mode: crate::model::settings::InternetMode::default(),
+            ssh_key: None,
+            mcp_manager: None,
+            sec_manager: None,
+            bash_saving: true,
+            bash_log_dir: None,
+            session_dir: None,
+        }
+    }
+
+    /// Absent override (either no `SpawnOverrides` at all, or one with
+    /// `workspace: None`) leaves `ctx` byte-identical to what `build_tool_ctx`
+    /// produced — no canonicalization, no narrowing.
+    #[test]
+    fn absent_workspace_leaves_ctx_unchanged() {
+        let root = std::env::temp_dir();
+        let mut ctx = test_ctx(vec![root.clone()]);
+        let before = (ctx.workspace.clone(), ctx.workspaces.clone());
+
+        assert!(narrow_ctx_to_workspace(&mut ctx, None).is_ok());
+        assert_eq!((ctx.workspace.clone(), ctx.workspaces.clone()), before);
+
+        let overrides = crate::app::subagent::SpawnOverrides::default();
+        assert!(narrow_ctx_to_workspace(&mut ctx, Some(&overrides)).is_ok());
+        assert_eq!((ctx.workspace, ctx.workspaces), before);
+    }
+
+    /// A requested path INSIDE one of the session's existing roots narrows
+    /// `ctx.workspace`/`ctx.workspaces` down to that single canonicalized path.
+    #[test]
+    fn containment_pass_narrows_ctx_to_single_root() {
+        let base = std::env::temp_dir().join(format!("koma-spawn-test-pass-{}", std::process::id()));
+        let child = base.join("desk-1");
+        std::fs::create_dir_all(&child).expect("create nested test dir");
+
+        let mut ctx = test_ctx(vec![base.clone()]);
+        let overrides = crate::app::subagent::SpawnOverrides {
+            workspace: Some(child.clone()),
+            ..Default::default()
+        };
+        narrow_ctx_to_workspace(&mut ctx, Some(&overrides)).expect("contained path must pass");
+
+        let canon_child = child.canonicalize().unwrap();
+        assert_eq!(ctx.workspace, canon_child);
+        assert_eq!(ctx.workspaces, vec![canon_child]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A requested path OUTSIDE every one of the session's roots is rejected —
+    /// `ctx` is left untouched and the spawn fails with a `Workspace` reason
+    /// naming the rejected path.
+    #[test]
+    fn containment_reject_when_outside_every_root() {
+        let root = std::env::temp_dir().join(format!("koma-spawn-test-root-{}", std::process::id()));
+        let outsider = std::env::temp_dir().join(format!("koma-spawn-test-outsider-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::create_dir_all(&outsider).expect("create outsider dir");
+
+        let mut ctx = test_ctx(vec![root.clone()]);
+        let before = (ctx.workspace.clone(), ctx.workspaces.clone());
+        let overrides = crate::app::subagent::SpawnOverrides {
+            workspace: Some(outsider.clone()),
+            ..Default::default()
+        };
+        let err = narrow_ctx_to_workspace(&mut ctx, Some(&overrides))
+            .expect_err("outsider path must be rejected");
+        match err {
+            SpawnFailReason::Workspace(msg) => assert!(
+                msg.contains(&outsider.canonicalize().unwrap().display().to_string()),
+                "error must name the rejected path: {msg}"
+            ),
+            SpawnFailReason::Unresolved => panic!("expected a Workspace failure reason"),
+        }
+        assert_eq!((ctx.workspace, ctx.workspaces), before, "ctx must be untouched on rejection");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outsider);
+    }
+
+    /// PREFIX TRAP: a sibling directory whose name merely starts with the root's
+    /// name must never pass a raw string-prefix check — containment is
+    /// component-wise. Build root `<base>/b` and requested `<base>/bc`: `bc` is
+    /// NOT a child of `b`, so this must be rejected even though the string
+    /// "…/b" is a literal prefix of "…/bc".
+    #[test]
+    fn containment_rejects_string_prefix_trap() {
+        let base = std::env::temp_dir().join(format!("koma-spawn-test-trap-{}", std::process::id()));
+        let root = base.join("b");
+        let sibling = base.join("bc");
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::create_dir_all(&sibling).expect("create sibling dir");
+
+        let mut ctx = test_ctx(vec![root.clone()]);
+        let overrides = crate::app::subagent::SpawnOverrides {
+            workspace: Some(sibling.clone()),
+            ..Default::default()
+        };
+        let err = narrow_ctx_to_workspace(&mut ctx, Some(&overrides))
+            .expect_err("string-prefix sibling must NOT pass containment");
+        assert!(matches!(err, SpawnFailReason::Workspace(_)));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
