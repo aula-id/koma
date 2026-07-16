@@ -175,6 +175,26 @@ pub struct SpawnOverrides {
     pub model: Option<String>,
     /// Overrides the agent's `effort` for this spawn only.
     pub effort: Option<String>,
+    /// Confines this spawn's [`crate::tool::ToolCtx`] to a single caller-supplied
+    /// workspace root instead of inheriting the whole session. `None` (every
+    /// non-extension spawn path, and the common `agents.spawn`/`sessions.spawn_into`
+    /// call) leaves `ctx.workspace`/`ctx.workspaces` exactly as the session's own
+    /// `build_tool_ctx` produced them.
+    ///
+    /// `Some(path)` is applied in
+    /// [`crate::app::runtime::stream::spawn::spawn_task_with_id`] (never here —
+    /// [`spawn::spawn_subagent`] receives an already-narrowed `ctx`): the path is
+    /// canonicalized and checked for CONTAINMENT within one of the session's
+    /// existing `ctx.workspaces` roots (also canonicalized, compared by path
+    /// COMPONENTS via `Path::starts_with`, never a raw string prefix — so `/a/bc`
+    /// never matches a root `/a/b`). On success `ctx.workspace` and
+    /// `ctx.workspaces` are BOTH replaced with the single canonicalized path — the
+    /// sub-agent then sees ONLY that root, never the wider session tree. On
+    /// failure (can't canonicalize, or resolves outside every root) the spawn is
+    /// REJECTED outright with an explicit error naming the rejected path — this is
+    /// a sandbox trust boundary, so it never silently falls back to the wide
+    /// workspace.
+    pub workspace: Option<std::path::PathBuf>,
 }
 
 /// A delegation that has been ACCEPTED but not yet started because all

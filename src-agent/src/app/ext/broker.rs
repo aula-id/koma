@@ -45,8 +45,8 @@ use serde_json::{json, Value};
 use koma_extension::protocol::Grant;
 
 use crate::app::runtime::{
-    handle_live_switch, list_live_sessions, spawn_into_session, spawn_or_queue, SpawnIntoReply,
-    SpawnOutcome,
+    handle_live_switch, list_live_sessions, spawn_into_session, spawn_or_queue, SpawnFailReason,
+    SpawnIntoReply, SpawnOutcome,
 };
 use crate::app::state::{AppState, SessionRuntime, EXT_TURN_BUDGET};
 use crate::app::subagent::SubAgentStatus;
@@ -583,7 +583,13 @@ fn active_session_idx(state: &AppState) -> Option<usize> {
 /// `model` / `effort` are optional per-call overrides (see
 /// [`crate::app::subagent::SpawnOverrides`]) that steer THIS spawn's route
 /// without touching the named agent's own definition; an empty string for
-/// either is treated as absent (not an override). `notify` (default `false`)
+/// either is treated as absent (not an override). `workspace` is an OPTIONAL
+/// per-call confinement (see [`crate::app::subagent::SpawnOverrides::workspace`]):
+/// when present it must canonicalize + resolve INSIDE one of the session's
+/// existing workspace roots or the spawn is rejected outright (a sandbox trust
+/// boundary — see [`crate::app::runtime::SpawnFailReason::Workspace`]);
+/// absent (the common case) leaves the sub-agent's workspace exactly as the
+/// session's own would be. `notify` (default `false`)
 /// records whether this extension wants an `agents.done` event when the
 /// sub-agent finishes (consumed by the W5 event wave via
 /// [`ExtAgentRegistry::find_by_location`]) — unused until then, but recorded
@@ -623,8 +629,15 @@ fn broker_spawn(
     };
     let model = non_empty_string("model");
     let effort = non_empty_string("effort");
-    let overrides = if model.is_some() || effort.is_some() {
-        Some(crate::app::subagent::SpawnOverrides { model, effort })
+    // OPTIONAL workspace confinement (see `SpawnOverrides::workspace`'s doc for the
+    // canonicalize + containment contract enforced downstream in
+    // `spawn_task_with_id`). Absent (the overwhelming common case) => `None`,
+    // exactly current behavior — this param didn't exist before this change, so an
+    // extension talking to an OLDER koma simply never had it read (unknown JSON
+    // fields are ignored, never rejected).
+    let workspace = non_empty_string("workspace").map(std::path::PathBuf::from);
+    let overrides = if model.is_some() || effort.is_some() || workspace.is_some() {
+        Some(crate::app::subagent::SpawnOverrides { model, effort, workspace })
     } else {
         None
     };
@@ -659,8 +672,15 @@ fn broker_spawn(
                 .insert(session_uuid, local_id, notify);
             json!({ "agentId": ext_agent_id, "status": "queued" })
         }
-        SpawnOutcome::Failed => json!({
-            "error": format!("failed to spawn agent '{agent}' (no client/session or unknown agent)")
+        SpawnOutcome::Failed(reason) => json!({
+            "error": match reason {
+                SpawnFailReason::Unresolved => {
+                    format!("failed to spawn agent '{agent}' (no client/session or unknown agent)")
+                }
+                // A sandbox containment failure — surface the specific, already
+                // path-naming message verbatim rather than the generic wording above.
+                SpawnFailReason::Workspace(msg) => msg,
+            }
         }),
     }
 }

@@ -87,7 +87,7 @@ pub(crate) use session_mgmt::{
 // the extension grant broker (`crate::app::ext::broker`, outside this module tree)
 // can drive the SAME `task`-tool spawn path. `stream` stays private; only these two
 // items are exposed.
-pub(crate) use stream::{spawn_or_queue, SpawnOutcome};
+pub(crate) use stream::{spawn_or_queue, SpawnFailReason, SpawnOutcome};
 
 // Re-export the live foreground-switch chokepoint at the `runtime` level so the extension
 // grant broker (`crate::app::ext::broker`, outside this module tree) can drive the SAME
