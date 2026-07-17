@@ -8,19 +8,14 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::app::mode::RewindState;
 use crate::app::state::AppStateRest;
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Handle a key press inside the message-rewind picker.
 ///
 /// `_rest` is accepted for handler-signature consistency with the other mode
-/// handlers but is unused here (the picker carries its own state). Ctrl+C is inert
-/// (koma disables it); Esc cancels back to Chat without changing the conversation.
+/// handlers but is unused here (the picker carries its own state). Esc cancels
+/// back to Chat without changing the conversation.
 pub fn handle_rewind(rw: &mut RewindState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    // Ctrl+C is fully inert (koma disables it); Esc still cancels back to Chat.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     // How far PageUp / PageDown jump through the list (clamped by move_up/move_down).
     const PAGE: usize = 10;
 

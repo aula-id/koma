@@ -2,7 +2,7 @@
 //!
 //! Tab toggles the focused pane (cooking <-> history); Up/Down move the selection
 //! within the focused pane; Enter acts on the focused pane's selection; Esc
-//! closes back to Chat without touching any session state (Ctrl+C is inert).
+//! closes back to Chat without touching any session state.
 //!
 //! - Enter on a COOKING row -> [`Action::LiveSwitch`] carrying that session's
 //!   `sessions` index (REUSES the `/swap` foreground-switch path verbatim).
@@ -34,20 +34,15 @@ fn new_session_action() -> Action {
 
 /// Handle a key press inside the session hub.
 ///
-/// Order matters (see the module docs): Ctrl+C is inert; a pending kill confirm
-/// short-circuits to confirm/cancel; Ctrl+X arms a kill on a cooking real-session
-/// row; then Esc/Tab/arrows/Enter; then Backspace + printable keys feed the
-/// history search (cooking-pane `n`/`N` stays the `/new` shortcut).
+/// Order matters (see the module docs): a pending kill confirm short-circuits to
+/// confirm/cancel; Ctrl+X arms a kill on a cooking real-session row; then
+/// Esc/Tab/arrows/Enter; then Backspace + printable keys feed the history search
+/// (cooking-pane `n`/`N` stays the `/new` shortcut).
 pub fn handle_session_hub(
     hub: &mut SessionHub,
     _rest: &mut AppStateRest,
     key: KeyEvent,
 ) -> Action {
-    // 1. Ctrl+C is fully inert (koma disables it); Esc still closes the hub back to Chat.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     // 2. CONFIRM MODE: while a kill is armed, accept ONLY confirm or cancel and
     //    return immediately — nothing else runs while confirming.
     if hub.pending_kill.is_some() {

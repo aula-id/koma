@@ -19,7 +19,7 @@ use crate::app::mode::{HelpKind, HelpState};
 use crate::app::state::AppStateRest;
 use crate::controller::command;
 
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Handle a key press inside the `/help` reference + launcher.
 ///
@@ -28,11 +28,6 @@ use super::{is_ctrl, Action};
 /// the Help screen mutates only its own [`HelpState`] and routes closes/launches
 /// through the returned [`Action`] (the runtime owns `state.mode`).
 pub fn handle_help(st: &mut HelpState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    // Ctrl+C is fully inert (koma disables it); Esc still closes back to Chat.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     match key.code {
         KeyCode::Esc => Action::CloseHelp,
 
@@ -63,7 +58,7 @@ pub fn handle_help(st: &mut HelpState, _rest: &mut AppStateRest, key: KeyEvent) 
         }
 
         // Printable input drives the search (ignore Ctrl-modified keys so chords
-        // like Ctrl+C above aren't typed into the query).
+        // aren't typed into the query).
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             st.query.push(c);
             st.refilter();
