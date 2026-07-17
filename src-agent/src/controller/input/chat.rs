@@ -121,10 +121,10 @@ fn user_messages(rest: &AppStateRest) -> Vec<String> {
 
 /// Handle a key press while the app is in Chat mode.
 ///
-/// Ctrl+C is fully inert (koma disables it). Esc interrupts an in-flight request
-/// (and auto-rewinds the prompt if the model is still thinking); when idle a
-/// double-Esc clears the composer or opens the rewind overlay. Ctrl+R re-sends the
-/// last message (idle only).
+/// Esc interrupts an in-flight request (and auto-rewinds the prompt if the model
+/// is still thinking); when idle a double-Esc clears the composer or opens the
+/// rewind overlay. Ctrl+R re-sends the last message (idle only). Ctrl+C is
+/// intercepted globally in [`super::handle_key`] before this handler ever sees it.
 pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // Any key other than Esc disarms a pending double-Esc: without this, a lone
     // Esc press arms a timer that a much-later Esc (beyond human double-tap pace,
@@ -255,11 +255,6 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // (e.g. sub-agent kill above) when there is nothing to cancel.
     if is_ctrl(&key, 'x') && !rest.fg().pending_steer.is_empty() {
         return Action::CancelSteers;
-    }
-    // Ctrl+C is fully inert everywhere (koma disables it): no quit, no detach,
-    // no interrupt. Esc handles interrupt/rewind now (see the Esc arm below).
-    if is_ctrl(&key, 'c') {
-        return Action::None;
     }
     // Ctrl+R: resend (only when idle).
     if is_ctrl(&key, 'r') {

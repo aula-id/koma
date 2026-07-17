@@ -57,11 +57,6 @@ use nav::{handle_models_nav, handle_providers_nav};
 pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     use crate::app::mode::SettingField;
 
-    // Ctrl+C is fully inert (koma disables it); Esc still saves/closes or backs out.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     // --- Role checkbox picker (DEEPEST level: a modal-on-modal over the model
     //     modal; intercepts ALL keys before the rest of the model-modal handling).
     //     Up/Down move the cursor, Space toggles the row, Enter commits the
@@ -71,18 +66,18 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
         return Action::None;
     }
 
-    // --- Add/edit-model modal (deepest level: intercepts ALL keys except Ctrl+C) ---
+    // --- Add/edit-model modal (deepest level: intercepts ALL keys) ---
     if s.model_modal.is_some() {
         return handle_model_modal(s, rest, key);
     }
 
-    // --- Add-provider modal (deepest level: intercepts ALL keys except Ctrl+C) ---
+    // --- Add-provider modal (deepest level: intercepts ALL keys) ---
     if s.prov_modal.is_some() {
         return handle_provider_modal(s, key);
     }
 
     // --- OAuth connect-flow overlay (deepest level while a flow is active:
-    //     intercepts ALL keys except Ctrl+C, exactly like the modals above) ---
+    //     intercepts ALL keys, exactly like the modals above) ---
     if s.is_oauth_category() && !matches!(s.oauth_flow, OAuthFlowState::Idle) {
         return handle_oauth_flow(s, key);
     }
@@ -241,7 +236,8 @@ pub fn handle_settings(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyE
 }
 
 /// Route a key press while the OAuth submenu's connect flow is active
-/// (`s.oauth_flow != Idle`). Ctrl+C was already handled as inert by the caller.
+/// (`s.oauth_flow != Idle`). Ctrl+C is intercepted globally in
+/// [`crate::controller::input::handle_key`] before this ever runs.
 ///
 /// - `Starting`/`CodexWait`/`KiloWait`: Esc aborts the background task
 ///   (`Action::OAuthCancel`); `c`/`o` copy/re-open the flow's URL

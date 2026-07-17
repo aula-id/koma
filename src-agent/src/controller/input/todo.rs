@@ -6,7 +6,6 @@
 //! Key map:
 //! - `Esc`           → `Action::CloseTodo` (return to Chat)
 //! - `Enter`         → reset selected item to pending (signals model to redo)
-//! - `Ctrl+C`        → `Action::None` (fully inert — koma disables Ctrl+C)
 //! - `Up`/`k`        → move the LIST cursor up
 //! - `Down`/`j`      → move the LIST cursor down
 
@@ -15,19 +14,13 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::app::mode::TodoState;
 use crate::app::state::AppStateRest;
 
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Handle a key press inside the `/todo` task-panel.
 ///
 /// Re-reads the todo list from the session's memory on each key so the panel
 /// stays current if the model writes new todos via the checklist tool.
 pub fn handle_todo(s: &mut TodoState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    // Ctrl+C is fully inert (koma disables it): swallow it here so it can't
-    // fall through to any close/quit. Esc still closes the panel.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     let action = match key.code {
         KeyCode::Esc => Action::CloseTodo,
         KeyCode::Enter => {

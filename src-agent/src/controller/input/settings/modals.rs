@@ -38,7 +38,8 @@ pub(super) fn handle_role_picker(s: &mut SettingsState, key: KeyEvent) {
 }
 
 /// Handle a key while the add/edit-model modal is open (deepest level besides
-/// the role picker: intercepts ALL keys except Ctrl+C, handled by the caller).
+/// the role picker: intercepts ALL keys — Ctrl+C is intercepted globally in
+/// [`crate::controller::input::handle_key`] before this ever runs).
 ///
 /// Three sub-shapes depending on the current field:
 /// - the Model field's omnisearch (once the user has typed something, for an
@@ -302,7 +303,8 @@ pub(super) fn handle_model_modal(s: &mut SettingsState, rest: &mut AppStateRest,
 }
 
 /// Handle a key while the add-provider modal is open (deepest level besides the
-/// model modal: intercepts ALL keys except Ctrl+C, handled by the caller).
+/// model modal: intercepts ALL keys — Ctrl+C is intercepted globally in
+/// [`crate::controller::input::handle_key`] before this ever runs).
 /// Always resolves to `Action::None`.
 pub(super) fn handle_provider_modal(s: &mut SettingsState, key: KeyEvent) -> Action {
     match key.code {
