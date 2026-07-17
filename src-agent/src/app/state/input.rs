@@ -18,6 +18,14 @@ impl AppStateRest {
         self.palette_sel = 0;
     }
 
+    /// Insert a whole string at the caret in one splice (foreground composer)
+    /// and reset the `/` palette selection. The bulk counterpart to
+    /// [`Self::push_char`] — see [`super::SessionRuntime::push_str`].
+    pub fn push_str(&mut self, s: &str) {
+        self.fg_mut().push_str(s);
+        self.palette_sel = 0;
+    }
+
     /// Delete the char BEFORE the caret and reset the `/` palette selection.
     /// See [`super::SessionRuntime::backspace`].
     pub fn backspace(&mut self) {

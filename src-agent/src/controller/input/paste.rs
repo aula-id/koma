@@ -49,10 +49,12 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                 // submit). NORMALIZE line endings first so bracketed paste that
                 // delivers breaks as CRLF or bare CR still lands as real newlines
                 // (a bare `\r` used to be dropped, collapsing the paste onto one line).
+                // Inserted in ONE splice via `push_str` (not a char-by-char
+                // `push_char` loop) — `push_char` locates the caret's byte offset
+                // with an O(N) scan, so looping it over a large paste is O(N^2)
+                // and visibly freezes the UI.
                 let cleaned = text.replace("\r\n", "\n").replace('\r', "\n");
-                for c in cleaned.chars() {
-                    state.rest.push_char(c);
-                }
+                state.rest.push_str(&cleaned);
             }
         }
         Mode::KeyInput(form) => {
