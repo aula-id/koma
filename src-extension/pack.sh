@@ -17,6 +17,7 @@ EXAMPLES=(
   "oauth-demo-daemon"
   "event-watcher-daemon"
   "orchestrator-daemon"
+  "tui-demo-daemon"
 )
 
 echo "=== Building extensions ==="

@@ -149,6 +149,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tui-demo-daemon"
+version = "0.0.0"
+dependencies = [
+ "koma-extension",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"

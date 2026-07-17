@@ -1,0 +1,19 @@
+{
+  "schema": "koma-extension/v0",
+  "id": "run.koma.example.tui-demo-daemon",
+  "name": "TUI Demo",
+  "version": "0.0.0",
+  "description": "A minimal daemon extension that drives a server-driven TUI screen (contributes.tui_screens): a counter with a menu (increment/reset/refresh/close) and a 5-second background ticker that pushes a live screen update.",
+  "tier": "free",
+  "kind": "daemon",
+  "runtime": {
+    "exec": "tui-demo-daemon",
+    "args": []
+  },
+  "contributes": {
+    "tui_screens": [
+      { "id": "demo", "title": "TUI Demo" }
+    ]
+  },
+  "requires": []
+}
