@@ -7,7 +7,8 @@
 //!     focus across the row (mutating `s.selected`); Enter activates the focused
 //!     button.
 //!   * DIRECT shortcuts: `k` close window (quit), `d` detach, `Esc` cancel — fire
-//!     their action immediately regardless of focus. (`Ctrl+C` is fully inert.)
+//!     their action immediately regardless of focus. (`Ctrl+C` is intercepted
+//!     globally in [`super::handle_key`] before this handler ever sees it.)
 //!
 //! NOTE: this LOCAL handler runs only in the single-process TUI (and the headless
 //! daemon, which never has a TTY in the overlay) — an ATTACHED client intercepts
@@ -25,7 +26,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::app::mode::QuitConfirmState;
 use crate::app::state::AppStateRest;
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Map a focused button index to its action. Order matches the view + the
 /// event-loop click hit-test: `0` = close window (quit), `1` = minimize (detach),
@@ -42,19 +43,13 @@ fn action_for(idx: usize) -> Action {
 ///
 /// Navigation (Left/Right, `h`/`l`, Tab/Shift+Tab) mutates `s.selected` and
 /// returns [`Action::None`]; Enter activates the focused button; the direct
-/// `k`/`d`/`Esc` shortcuts fire immediately (`Ctrl+C` is inert). Every other key is
-/// swallowed so a stray press can't leak into the chat input underneath or
-/// accidentally exit.
+/// `k`/`d`/`Esc` shortcuts fire immediately. Every other key is swallowed so a
+/// stray press can't leak into the chat input underneath or accidentally exit.
 pub fn handle_quit_confirm(
     s: &mut QuitConfirmState,
     _rest: &mut AppStateRest,
     key: KeyEvent,
 ) -> Action {
-    // Ctrl+C is fully inert (koma disables it); Esc still cancels the quit dialog.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     match key.code {
         // --- Navigate the button row (focus only; no action) ---
         KeyCode::Left | KeyCode::Char('h') => {

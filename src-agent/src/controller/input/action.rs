@@ -62,7 +62,7 @@ pub enum Action {
     /// session or no prior user message.
     OpenRewind,
     /// Esc in the message-rewind picker — discard it and return to Chat
-    /// unchanged (the conversation is untouched). Ctrl+C is inert.
+    /// unchanged (the conversation is untouched).
     RewindCancel,
     /// Enter in the message-rewind picker: rewind the conversation to just
     /// before the highlighted user message (vec index = the inner `usize`) and
@@ -119,7 +119,7 @@ pub enum Action {
     // --- Picker actions ---
     /// Esc in the session picker opened via /resume (an active session
     /// exists) — discard the picker and return to the unchanged Chat. The
-    /// --resume startup picker has no session, so it Quits instead. Ctrl+C is inert.
+    /// --resume startup picker has no session, so it Quits instead.
     CancelPickerToChat,
     /// Enter on the `--resume` startup session picker — open the highlighted
     /// session (non-destructive: append-or-swap).
@@ -155,7 +155,7 @@ pub enum Action {
     /// so it leaves HISTORY. No-op if nothing valid is pending.
     HubDeleteConfirm,
     /// Esc on the session hub — close it and return to the (unchanged) Chat
-    /// view. No session state is touched. Ctrl+C is inert.
+    /// view. No session state is touched.
     CloseSessionHub,
     // --- Settings actions ---
     /// Esc on the settings dashboard (while navigating) — apply every draft and

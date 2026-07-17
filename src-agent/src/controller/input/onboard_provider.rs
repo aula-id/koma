@@ -11,8 +11,6 @@
 //! - `ModelSelect` is a model omnisearch over the signed-in provider's catalogue
 //!   (`candidate_model_ids`); Enter commits the highlighted (or raw-typed) id via
 //!   [`Action::OnboardProviderSaveModel`].
-//!
-//! Ctrl+C is inert, exactly like every other koma mode.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -21,7 +19,7 @@ use crate::app::mode::settings::OAuthFlowState;
 use crate::app::state::AppStateRest;
 use crate::model::app_config::OAuthProvider;
 use crate::service::oauth::registry;
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Handle a key press while the guided provider wizard is active.
 pub fn handle_onboard_provider(
@@ -29,10 +27,6 @@ pub fn handle_onboard_provider(
     rest: &mut AppStateRest,
     key: KeyEvent,
 ) -> Action {
-    // Ctrl+C is fully inert (koma disables it); Esc is handled per-step below.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
     match s.step {
         OnboardProviderStep::Login => handle_login(s, key),
         OnboardProviderStep::ModelSelect => handle_model_select(s, rest, key),

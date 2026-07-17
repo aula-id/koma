@@ -3,7 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::mode::KeyInputForm;
 use crate::app::state::AppStateRest;
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Handle a key press while the first-run setup wizard is active.
 ///
@@ -27,11 +27,6 @@ use super::{is_ctrl, Action};
 /// 3. Otherwise → Esc cancels back to the existing Chat view.
 pub fn handle_key_input(form: &mut KeyInputForm, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     use crate::app::mode::filter_models;
-
-    // Ctrl+C is fully inert (koma disables it); Esc still walks back / cancels.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
 
     // --- Step 1 (model) on a fetchable endpoint: live catalogue omnisearch ---
     // This intercepts ALL keys for the model step so the search box + results list

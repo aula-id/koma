@@ -313,10 +313,18 @@ impl DaemonHub {
                 m,
             );
         }
-        // Reindex the dir cache against the changed workdirs (actions/settings.rs:
-        // 221-227), but ONLY when workdir was actually part of this update — a
-        // toggle/internet change never touches the workspace roots.
         if did_workdir {
+            // BUG FIX: the workdir write above may have just dropped the dir a
+            // live `/cd` (`active_cwd`) points at — leaving effective_cwd outside
+            // every allowed root, which would WC-deny every subsequent tool spawn
+            // until a manual `/cd`. Clamp it back to the primary workdir (`None`)
+            // when that happens, regardless of harness mode (mirrors
+            // actions/settings.rs's `handle_save_settings`).
+            let launch_dir = state.rest.launch_dir.clone();
+            state.rest.fg_mut().clamp_active_cwd(&launch_dir);
+            // Reindex the dir cache against the changed workdirs (actions/settings.rs:
+            // 221-227), but ONLY when workdir was actually part of this update — a
+            // toggle/internet change never touches the workspace roots.
             let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());
             let dir_cache = state.rest.fg().dir_cache.clone();
             if let Some(r) = roots {

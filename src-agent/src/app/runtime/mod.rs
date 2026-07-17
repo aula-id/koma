@@ -56,7 +56,7 @@ pub use client::client_run;
 // a detached daemon and wait until it accepts" primitive (the thin client then attaches).
 pub use manage::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
-    run_daemon_subcommand,
+    run_daemon_subcommand, run_doctor,
 };
 
 // Re-export the live-session discovery + cross-daemon spawn transport at the `runtime` level

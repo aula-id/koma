@@ -1,4 +1,4 @@
 {
-  "version": "0.3.6",
-  "message": "fix: global model-role assignment now also demotes a session-local role holder, since session_models wins resolution over config.models"
+  "version": "0.3.7",
+  "message": "0.3.7: --version/--help short-circuit, Ctrl+C opens the quit page, removing the active workspace resets the session cwd, new koma doctor readiness check"
 }
