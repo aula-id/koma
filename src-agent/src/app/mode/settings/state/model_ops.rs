@@ -291,12 +291,12 @@ impl SettingsState {
                 None => self.models.len(), // new entry — push
             };
 
-            // Per-role steal: drop each claimed role from every OTHER model of
-            // THE SAME SCOPE only. A session model must not strip roles from
-            // global models, and vice versa, so both a global main and a session
-            // main can coexist (with session winning via resolve_role).
+            // Per-role steal, directional: session_models wins resolution over
+            // config.models, so a global-scope assignment must also demote
+            // session-local holders; a session-local assignment must not demote
+            // global holders (they remain the fallback for other sessions).
             for (i, other) in self.models.iter_mut().enumerate() {
-                if i != target_idx && other.session_only == draft.session_only {
+                if i != target_idx && (!draft.session_only || other.session_only) {
                     other.roles.retain(|r| !draft.roles.contains(r));
                 }
             }
