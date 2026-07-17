@@ -1,4 +1,4 @@
 {
-  "version": "0.3.7",
-  "message": "0.3.7: --version/--help short-circuit, Ctrl+C opens the quit page, removing the active workspace resets the session cwd, new koma doctor readiness check"
+  "version": "0.3.8",
+  "message": "0.3.8: composer model label shows the real resolved model (was stuck on koma/apple in daemon mode), global model changes demote lingering session-local role holders"
 }
