@@ -31,7 +31,10 @@ pub struct VersionInfo {
 }
 
 /// The version endpoint hit on every session spawn.
-const VERSION_URL: &str = "https://koma.run/api/v1/version";
+///
+/// `pub(crate)` so `manage::doctor`'s `koma doctor` update check can reuse the
+/// SAME endpoint constant rather than hand-copying the URL.
+pub(crate) const VERSION_URL: &str = "https://koma.run/api/v1/version";
 
 /// HTTP timeout for the blocking version fetch. Short — this is a best-effort
 /// background poll that must never delay anything if the network is slow/down.
