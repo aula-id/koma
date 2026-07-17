@@ -258,8 +258,20 @@ fn detail_lines<'a>(st: &'a ExtStoreState, palette: &Palette, width: usize) -> V
     }
 
     lines.push(Line::from(""));
-    for chunk in wrap_chars(&detail.description, value_w.max(20)) {
-        lines.push(Line::from(Span::styled(chunk, Style::default().fg(palette.fg))));
+    // `detail.description` carries real paragraph breaks (blank lines after each
+    // stripped markdown heading — see `strip_markdown_headers`), so split on them
+    // FIRST and wrap each resulting line independently. Feeding the whole multi-line
+    // string straight into `wrap_chars` would char-chunk across the embedded `\n`s
+    // (they're just ordinary chars to it), gluing a heading straight onto the
+    // following prose instead of showing it on its own line.
+    for para_line in detail.description.split('\n') {
+        if para_line.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            for chunk in wrap_chars(para_line, value_w.max(20)) {
+                lines.push(Line::from(Span::styled(chunk, Style::default().fg(palette.fg))));
+            }
+        }
     }
 
     lines
