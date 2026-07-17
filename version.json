@@ -1,4 +1,4 @@
 {
-  "version": "0.3.5",
-  "message": "feat: workspace-scoped sub-agent spawns for extensions - desk worktrees become the worker's entire world"
+  "version": "0.3.6",
+  "message": "fix: global model-role assignment now also demotes a session-local role holder, since session_models wins resolution over config.models"
 }
