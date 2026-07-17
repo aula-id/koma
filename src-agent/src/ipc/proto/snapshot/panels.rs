@@ -38,6 +38,74 @@ pub struct McpSnapshot {
     pub status: std::collections::HashMap<String, usize>,
 }
 
+/// One TUI-screen row for [`ExtRowWire`] — a serde mirror of
+/// [`crate::app::mode::ExtTuiScreen`] (also the SDK `TuiScreenDef`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtTuiScreenWire {
+    pub id: String,
+    pub title: String,
+}
+
+/// A serde-safe projection of ONE installed-extension row — mirrors
+/// [`crate::app::mode::ExtRow`] field-for-field (all pure data: registry facts +
+/// manifest-derived counts/screens + the LIVE running flag), so a thin client rebuilds and
+/// renders the `/extension` dashboard faithfully instead of a blank Chat screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtRowWire {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub tier: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub running: bool,
+    pub description: String,
+    pub granted: Vec<String>,
+    pub tools: usize,
+    pub panels: usize,
+    pub sub_agents: usize,
+    pub models: usize,
+    pub tui_screens: Vec<ExtTuiScreenWire>,
+    pub workspace_dir: Option<String>,
+}
+
+/// A serde-safe projection of the `/extension` dashboard.
+///
+/// Mirrors [`crate::app::mode::ExtensionsState`]: the installed-extension rows + the LIST
+/// cursor + the sub-mode wire token (see `ext_submode_token` in `tokens.rs`) + the
+/// tui-screen cursor + any in-state error. The client rebuilds it verbatim and renders the
+/// same master/detail/confirm view; it never mutates it (keys forwarded to the daemon).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtensionsSnapshot {
+    pub rows: Vec<ExtRowWire>,
+    pub list_sel: usize,
+    /// Sub-mode wire token: "browse" | "detail" | "uninstall_confirm".
+    pub mode: String,
+    pub screen_sel: usize,
+    pub error: Option<String>,
+}
+
+/// A serde-safe projection of an OPEN extension-driven TUI screen.
+///
+/// Mirrors [`crate::app::mode::ExtScreenState`]: the ext/screen ids + declared title, the
+/// current `Screen` model (an OPAQUE `serde_json::Value` carried verbatim), the menu cursor,
+/// and the loading/error flags. A thin client rebuilds it and renders the same server-driven
+/// screen off the projection (the daemon owns the invoke + folds every reply/push).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtScreenSnapshot {
+    pub ext_id: String,
+    pub screen_id: String,
+    pub screen_title: String,
+    pub screen: Option<serde_json::Value>,
+    pub menu_cursor: usize,
+    pub waiting: bool,
+    pub error: Option<String>,
+}
+
 /// A serde-safe projection of one row in the `/help` reference.
 ///
 /// Mirrors [`crate::app::mode::help::HelpEntry`] field-for-field. The `kind` enum

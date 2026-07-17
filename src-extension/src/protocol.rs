@@ -101,6 +101,19 @@ pub struct Contributes {
     /// and the SDK docs). Requires the `oauth:contribute` grant.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub oauth_providers: Vec<OAuthProviderDef>,
+    /// TUI screens this extension drives via the server-driven TUI SCREEN PROTOCOL
+    /// (v1): koma's terminal UI renders each as a full-screen view on the extension's
+    /// behalf, exchanging `{ kind: "tui-open" | "tui-select" | "tui-close" }` payloads
+    /// over the SAME `panel.msg` invoke + `panel.push` notify verbs a GUI panel uses
+    /// (panelId = the screen id), so declaring one is wire-legal with zero protocol
+    /// change. Each becomes a selectable row in the `/extension` detail view; opening
+    /// it invokes `panel.msg { kind: "tui-open" }` and the extension replies with a
+    /// `Screen` to render. See the koma-side `app::ext::screen` module doc for the full
+    /// contract. Serde-default so a manifest predating this field parses unchanged, and
+    /// omitted from the JSON when empty so an extension with none round-trips
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tui_screens: Vec<TuiScreenDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +141,16 @@ pub struct ModelDef { pub id: String, pub display_name: String }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PanelDef { pub id: String, pub title: String, #[serde(default)] pub icon: String }
+
+/// One TUI screen an extension drives via the server-driven TUI SCREEN PROTOCOL (v1),
+/// declared on [`Contributes::tui_screens`]. `id` is the stable screen id koma passes
+/// back as the `panelId` on every `panel.msg` invoke (`tui-open` / `tui-select` /
+/// `tui-close`) and matches on incoming `panel.push` frames; `title` is the human-facing
+/// label shown as the selectable row in koma's `/extension` detail view (and the default
+/// header until the extension's first `Screen` supplies its own `title`). Mirrors
+/// [`PanelDef`]'s shape (both required).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuiScreenDef { pub id: String, pub title: String }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -264,6 +287,8 @@ mod tests {
         assert!(c.events.is_empty());
         // W11: a manifest predating `oauth_providers` still parses (additive/optional).
         assert!(c.oauth_providers.is_empty());
+        // A manifest predating `tui_screens` still parses (additive/optional).
+        assert!(c.tui_screens.is_empty());
     }
 
     /// (W11) An [`OAuthProviderDef`] round-trips through serde with the W12 fields

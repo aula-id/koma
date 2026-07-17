@@ -19,6 +19,11 @@ mod background;
 mod bash;
 mod todo;
 mod chat;
+// `pub(in crate::app::runtime)` so the daemon store hub (`event_loop::daemon::hub::
+// requests_ext`, within `runtime`) can call `uninstall_extension_core` — the shared,
+// hub-independent uninstall nuke the TUI `/extension` path also drives.
+pub(in crate::app::runtime) mod ext_uninstall;
+mod extensions;
 mod mcp;
 mod oauth;
 mod onboard;
@@ -242,6 +247,26 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::CloseMcp => {
             mcp::handle_close_mcp(state)?;
+        }
+
+        Action::CloseExtensions => {
+            extensions::handle_close_extensions(state)?;
+        }
+
+        Action::UninstallExtension => {
+            extensions::handle_uninstall_extension(state, handle)?;
+        }
+
+        Action::ExtScreenOpen => {
+            extensions::handle_ext_screen_open(state, handle)?;
+        }
+
+        Action::ExtScreenSelect => {
+            extensions::handle_ext_screen_select(state, handle)?;
+        }
+
+        Action::ExtScreenClose => {
+            extensions::handle_ext_screen_close(state, handle)?;
         }
 
         Action::CloseSecurity => {

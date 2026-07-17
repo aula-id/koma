@@ -26,6 +26,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
     ("/mcp", "Add, edit, or remove MCP servers"),
+    ("/extension", "Manage installed extensions (detail, uninstall, screens)"),
     ("/security", "Security daemon control panel"),
     ("/task", "Run an agent on a task, or open the sub-agents viewer (no args)"),
     ("/bash", "Manage background bash jobs"),
@@ -115,6 +116,8 @@ pub enum Command {
     Agents,
     /// Open the `/mcp` server management dashboard.
     Mcp,
+    /// Open the `/extension` installed-extension manager (alias: `/extensions`).
+    Extensions,
     /// Open the `/security` daemon control panel.
     Security,
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
@@ -188,6 +191,7 @@ pub fn parse(line: &str) -> Command {
         "settings" | "config" => Command::Settings,
         "agents" | "agent" => Command::Agents,
         "mcp" => Command::Mcp,
+        "extension" | "extensions" => Command::Extensions,
         "security" => Command::Security,
         "task" => Command::Task(rest.to_string()),
         "bash" => Command::Bash,

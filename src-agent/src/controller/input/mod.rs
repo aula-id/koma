@@ -18,6 +18,8 @@ mod bash;
 mod todo;
 mod chat;
 mod mcp;
+mod extensions;
+mod ext_screen;
 mod help;
 mod clipboard;
 mod key_input;
@@ -102,6 +104,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Settings(s) => handle_settings(s, &mut state.rest, key),
         Mode::Agents(a) => agents::handle_agents(a, &mut state.rest, key),
         Mode::Mcp(m) => mcp::handle_mcp(m, &mut state.rest, key),
+        Mode::Extensions(e) => extensions::handle_extensions(e, &mut state.rest, key),
+        Mode::ExtScreen(s) => ext_screen::handle_ext_screen(s, &mut state.rest, key),
         Mode::Security(s) => security::handle_security(s, &mut state.rest, key),
         Mode::Bash(b) => bash::handle_bash(b, &mut state.rest, key),
         Mode::Todo(t) => todo::handle_todo(t, &mut state.rest, key),

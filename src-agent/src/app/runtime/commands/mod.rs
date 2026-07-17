@@ -29,6 +29,10 @@ pub(crate) mod free;
 // mode and must show the identical status line.
 pub(crate) mod internet;
 mod mcp;
+// `pub(crate)` so `build_extensions_state` (the `/extension` row builder) is reachable from
+// `actions::extensions` (post-uninstall rebuild + ExtScreen pop-back) and the ext-screen
+// close drain, which all derive the installed-extension rows the SAME way.
+pub(crate) mod extensions;
 mod misc;
 pub(crate) mod new_session;
 // `pub(crate)` so the shared `kick_off_health_probe` helper is reachable from BOTH the
@@ -55,6 +59,7 @@ pub(super) fn apply_slash(
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,
         Command::Mcp => mcp::handle_mcp(state)?,
+        Command::Extensions => extensions::handle_extensions(state)?,
         Command::Security => security::handle_security(state)?,
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,

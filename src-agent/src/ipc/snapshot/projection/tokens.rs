@@ -1,4 +1,5 @@
 use crate::app::mode::agents::{AgentEditField, AgentScope, AgentSubMode};
+use crate::app::mode::extensions::ExtSubMode;
 use crate::app::mode::help::HelpKind;
 use crate::app::mode::mcp::{McpEditField, McpSubMode};
 use crate::app::mode::{UsageMetric, UsageView};
@@ -82,6 +83,14 @@ pub fn mcp_transport_token(t: McpTransport) -> &'static str {
     match t {
         McpTransport::Stdio => "stdio",
         McpTransport::Http => "http",
+    }
+}
+
+pub fn ext_submode_token(m: ExtSubMode) -> &'static str {
+    match m {
+        ExtSubMode::Browse => "browse",
+        ExtSubMode::Detail => "detail",
+        ExtSubMode::UninstallConfirm => "uninstall_confirm",
     }
 }
 
