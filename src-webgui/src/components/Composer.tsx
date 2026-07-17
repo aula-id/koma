@@ -188,7 +188,22 @@ export function Composer() {
   // `working` so a stale word never flashes on the next turn.
   const [thinkingWord, setThinkingWord] = useState('')
 
-  // Auto-grow the textarea with its content, up to a cap (then it scrolls).
+  // Tracks the textarea's width across ResizeObserver/window-resize firings so
+  // the reflow handler below only re-autosizes when the width actually
+  // changed (a height-only firing — e.g. the autosize effect's own mutation
+  // observed indirectly via the parent wrapper — would otherwise loop).
+  const lastWidthRef = useRef(0)
+
+  // Auto-grow the textarea to fit its content, up to a cap (then it scrolls).
+  // Shared by the [input] effect (every keystroke / programmatic change) and
+  // the reflow handler below (width changes with the SAME text).
+  const autosizeTextarea = () => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+  }
+
   // Runs on every input change (incl. programmatic clears + omnisearch inserts).
   // Also parks the caret at the END of the text when a history recall just
   // replaced it (caretToEndRef, set by recallHistory below) — a plain typed
@@ -196,8 +211,7 @@ export function Composer() {
   useEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+    autosizeTextarea()
     if (caretTargetRef.current !== null) {
       // Atomic chip-delete (below) requested a precise caret position — the
       // deleted token's start — rather than "end of text".
@@ -212,15 +226,35 @@ export function Composer() {
     syncOverlayScroll()
   }, [input])
 
-  // Keep the chip overlay glued to the textarea across window resizes / font
-  // reflows too — not just keystrokes (the [input] effect above) — since a
-  // resize can change the textarea's wrapped-line layout (and thus its
-  // scrollable range) without `input` itself changing. Fires once on mount as
-  // well, in case anything sizes late.
+  // Keep the composer correct across REFLOWS — not just keystrokes (the
+  // [input] effect above). A width change (window resize, sidebar
+  // collapse/expand) reflows the textarea's wrapped-line layout, which changes
+  // its natural `scrollHeight` for the SAME text — so the height set by the
+  // last autosize goes stale until the next keystroke recomputes it. A
+  // `ResizeObserver` on the PARENT wrapper (not the textarea itself — observing
+  // the element whose height this handler mutates would invite observer
+  // loops) catches that; the `window resize` listener stays as a fallback for
+  // environments where the observer doesn't fire. Both funnel through the same
+  // width-gated handler so a height-only firing (e.g. the autosize mutation
+  // itself, reflected onto the wrapper) is a no-op. Fires once on mount too,
+  // in case anything sizes late.
   useEffect(() => {
-    syncOverlayScroll()
-    window.addEventListener('resize', syncOverlayScroll)
-    return () => window.removeEventListener('resize', syncOverlayScroll)
+    const wrapper = textareaRef.current?.parentElement ?? null
+    const handleReflow = () => {
+      const width = wrapper?.clientWidth ?? 0
+      if (width === lastWidthRef.current) return
+      lastWidthRef.current = width
+      autosizeTextarea()
+      syncOverlayScroll()
+    }
+    handleReflow()
+    const observer = wrapper ? new ResizeObserver(handleReflow) : null
+    if (wrapper) observer?.observe(wrapper)
+    window.addEventListener('resize', handleReflow)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', handleReflow)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
