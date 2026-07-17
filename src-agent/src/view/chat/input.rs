@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
 use crate::app::state::AppStateRest;
@@ -69,6 +69,50 @@ pub(super) fn render_input(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, 
     }
 }
 
+/// Hard-wrap a run of styled cells (one `(char, Style)` per glyph) into rows of
+/// at most `width` chars each, merging consecutive same-style runs back into
+/// `Span`s so the output stays cheap to render. `cells` is never empty for a
+/// caller in this module (every logical line carries at least the 4-char
+/// prefix), so this always returns at least one row.
+///
+/// This is the ONLY place that turns "chars" into "visual rows" for the
+/// editor's `Paragraph`, and it uses exactly the same `width` (chars, not
+/// display columns) that `render_editor`'s row/caret math uses below — so the
+/// two can never disagree about where a row breaks. Chunking is by
+/// `char_indices` units throughout (never byte slicing), so multibyte input is
+/// safe; wide-glyph (CJK) display width is out of scope, same approximation
+/// as the row-count estimate.
+fn wrap_styled_cells(cells: &[(char, Style)], width: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut lines = Vec::with_capacity(cells.len().div_ceil(width).max(1));
+    let mut idx = 0;
+    while idx < cells.len() {
+        let end = (idx + width).min(cells.len());
+        let row = &cells[idx..end];
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut run = String::new();
+        let mut run_style = row[0].1;
+        for &(ch, style) in row {
+            if style == run_style {
+                run.push(ch);
+            } else {
+                spans.push(Span::styled(std::mem::take(&mut run), run_style));
+                run.push(ch);
+                run_style = style;
+            }
+        }
+        if !run.is_empty() {
+            spans.push(Span::styled(run, run_style));
+        }
+        lines.push(Line::from(spans));
+        idx = end;
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Vec::<Span>::new()));
+    }
+    lines
+}
+
 /// Render the multiline editor (the normal `[$] {input}` state) into `area`.
 ///
 /// Logical lines split on '\n'; the first carries the accent prompt, every
@@ -80,6 +124,13 @@ pub(super) fn render_input(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, 
 /// When the content exceeds the available height, the editor scrolls vertically
 /// to keep the caret visible (scroll-to-caret, bottom-anchored like a phone
 /// keyboard).
+///
+/// Rendering is HARD-wrapped (via [`wrap_styled_cells`]) at `inner_w` chars,
+/// not Ratatui's word-`Wrap` — word-wrap breaks at word boundaries, so its
+/// real row count silently diverges from the char-count estimate below after
+/// a long paste, pushing the caret/text outside the visible scroll window.
+/// Hard-wrapping in the SAME loop that computes `total_vis`/`caret_vis` makes
+/// the two impossible to disagree.
 fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &Palette) {
     let inner_w = (area.width as usize).max(1);
     let cursor = rest.fg().cursor;
@@ -149,7 +200,15 @@ fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &P
         }
 
         total_vis += rows;
-        input_lines.push(Line::from(spans));
+
+        // Flatten this logical line's spans into per-char styled cells, then
+        // hard-wrap them at `inner_w` chars — the exact units `rows` above was
+        // computed in — so the rendered row count always equals `rows`.
+        let cells: Vec<(char, Style)> = spans
+            .iter()
+            .flat_map(|s| s.content.chars().map(move |c| (c, s.style)))
+            .collect();
+        input_lines.extend(wrap_styled_cells(&cells, inner_w));
 
         // Advance accumulator: +1 for the '\n' separator between logical lines.
         char_start += line_chars + 1;
@@ -171,9 +230,7 @@ fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &P
     };
 
     frame.render_widget(
-        Paragraph::new(input_lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
+        Paragraph::new(input_lines).scroll((scroll, 0)),
         area,
     );
 }
