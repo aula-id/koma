@@ -12,7 +12,7 @@ carries the protocol types — the manifest, the handshake, the contribution
 and requirement shapes — plus a thin helper layer (`sdk.rs`) so that a sample
 doesn't have to hand-roll any of it.
 
-Next to the crate, `example/` holds seven small extensions. Each one is a
+Next to the crate, `example/` holds eight small extensions. Each one is a
 real, separately runnable binary that shows one corner of the protocol.
 Every sample ships a scripted **demo mode**: with no koma process on the
 other end (the default), it prints the handshake and the interaction it
@@ -108,7 +108,7 @@ the extension makes through the `Koma` handle the SDK hands it. A single
 extension can do both, but most samples here only exercise one direction at
 a time to keep the demonstration readable.
 
-## The seven samples
+## The eight samples
 
 | sample | kind | tier | what it teaches |
 | --- | --- | --- | --- |
@@ -119,6 +119,7 @@ a time to keep the demonstration readable.
 | `orchestrator-daemon` | daemon | free | documentation-as-code for the five grant-verbs that drive koma (`sessions.list`, `models.invoke`, `context.set`, `chat.prompt`, `agents.spawn`), every call commented with its real shape and every error mode |
 | `fleet-board-daemon` | daemon | paid | the live bridge demo: a real panel (`ui/index.html` + the copyable `ui/koma-panel.js` helper) driving a real sub-agent spawn through the cmd-channel pattern the DEADLOCK RULE forces on you |
 | `oauth-demo-daemon` | daemon | free | delegated OAuth (`oauth.begin`/`.poll`/`.cancel`), with teaching comments walking the full arc from a login to a resolvable model-provider gateway (`models.register` + `providers.register`) |
+| `tui-demo-daemon` | daemon | free | the reference sample for `contributes.tui_screens`: a server-driven terminal-UI screen (counter + menu) with a 5-second background ticker pushing a live update |
 
 ### Capability matrix
 
@@ -131,6 +132,7 @@ a time to keep the demonstration readable.
 | `orchestrator-daemon` | — | `agents:orchestrate`, `sessions:manage`, `chat:prompt`, `models:invoke`, `context:publish` |
 | `fleet-board-daemon` | panels, sub_agents, events | `agents:orchestrate` |
 | `oauth-demo-daemon` | oauth_providers | `oauth:contribute` |
+| `tui-demo-daemon` | tui_screens | — |
 
 Run any of them from `src-extension/`:
 
@@ -142,6 +144,7 @@ cargo run -p event-watcher-daemon
 cargo run -p orchestrator-daemon
 cargo run -p fleet-board-daemon
 cargo run -p oauth-demo-daemon
+cargo run -p tui-demo-daemon
 ```
 
 Each prints its manifest id, the `Hello` / `Welcome` handshake, and then the
@@ -159,7 +162,7 @@ replies.
 ## Packaging for distribution
 
 Once your extension is built, use `./pack.sh` to create distributable `.zip`
-packages. The script builds all seven examples in release mode and packages
+packages. The script builds all eight examples in release mode and packages
 each one into a zip archive containing the manifest, executable, and (if
 present) the extension's own `ui/` directory:
 

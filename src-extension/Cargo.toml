@@ -17,4 +17,5 @@ members = [
   "example/oauth-demo-daemon",
   "example/event-watcher-daemon",
   "example/orchestrator-daemon",
+  "example/tui-demo-daemon",
 ]
