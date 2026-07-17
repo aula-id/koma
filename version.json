@@ -1,4 +1,4 @@
 {
-  "version": "0.3.7",
-  "message": "0.3.7: --version/--help short-circuit, Ctrl+C opens the quit page, removing the active workspace resets the session cwd, new koma doctor readiness check"
+  "version": "0.3.8",
+  "message": "feat: /store and /extension in the TUI — extension marketplace, management, and extension-driven TUI screens"
 }
