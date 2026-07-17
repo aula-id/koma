@@ -123,7 +123,9 @@ fn spawn_mcp_and_wait_until_alive(path: &Path) -> Result<()> {
 /// proactively here since the MCP daemon has no attach handshake of its own to piggy
 /// back on. Connect-per-call, bounded by [`FINGERPRINT_IO_TIMEOUT`] on both directions
 /// so a wedged daemon can never hang `ensure_mcp_daemon_running`.
-fn probe_mcp_fingerprint(path: &Path) -> Result<McpResponse> {
+///
+/// `pub(super)` — also called from `manage::doctor`'s MCP-daemon build-skew check.
+pub(super) fn probe_mcp_fingerprint(path: &Path) -> Result<McpResponse> {
     let mut stream = SyncIpcStream::connect(path)
         .with_context(|| format!("connect to global MCP daemon socket {}", path.display()))?;
     stream
