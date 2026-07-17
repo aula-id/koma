@@ -53,6 +53,17 @@ mod tool;
 mod view;
 
 fn main() -> anyhow::Result<()> {
+    // --- short-circuit: `--version`/`-V`/`--help`/`-h` (#75) ---
+    // Must run BEFORE any side effect (legacy-dir migration, catalogue overlay init,
+    // daemon spawn) — these just print and exit, they must not touch disk or state.
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--version" | "-V" => std::process::exit(cli::print_version()),
+            "--help" | "-h" => std::process::exit(cli::print_help()),
+            _ => {}
+        }
+    }
+
     // Migrate legacy config dir (~/.simple-coder -> ~/.koma) before anything
     // reads base_dir(), so every entry path (TUI, --internet-fullmode-install,
     // --resume) sees the migrated directory.
