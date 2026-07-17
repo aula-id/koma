@@ -10,6 +10,9 @@
 //! - `koma ext install --dev <zip|dir>` — sideload an unsigned local extension
 //!   (dev-only; `koma ext`/`koma ext install` with no `--dev` prints usage — the
 //!   in-app store is the normal, signed install path).
+//! - `koma doctor [-v|--verbose]` — flutter-doctor-style readiness report
+//!   (config/daemons/models/GUI deps/extensions/optional subsystems/MCP/update);
+//!   strictly read-only, exits non-zero only on a hard failure.
 //! - `--internet-fullmode-install` — provision the Python full-mode (browser) environment and exit.
 //! - `--internet-fullmode-uninstall` — remove the Python full-mode environment and exit.
 //! - `--force`                     — modifier for `--internet-fullmode-install`: force a reinstall
@@ -162,6 +165,54 @@ pub struct Opts {
     /// When `true`, launch the feature-gated desktop GUI (`koma gui` positional verb):
     /// a wry webview hosting xterm.js that renders the real koma client in a PTY.
     pub gui: bool,
+    /// When `true`, run the flutter-doctor-style readiness report (`koma doctor`
+    /// positional verb) then exit. Read-only — never spawns/restarts/installs/kills
+    /// anything.
+    pub doctor: bool,
+    /// Modifier for `doctor`: `-v`/`--verbose` — always show every category's
+    /// sub-detail lines, not just the ones for [!]/[✗] categories.
+    pub doctor_verbose: bool,
+}
+
+/// Print `koma <version>` to STDOUT and return the process exit code (`0`).
+///
+/// Handles `--version`/`-V` (#75). Unlike [`crate::app::print_daemon_usage`] this is
+/// requested output, not error usage, so it goes to STDOUT with a zero exit code.
+pub fn print_version() -> i32 {
+    println!("koma {}", env!("CARGO_PKG_VERSION"));
+    0
+}
+
+/// Print the user-facing CLI usage block to STDOUT and return the process exit
+/// code (`0`).
+///
+/// Handles `--help`/`-h` (#75). Mirrors the module-level doc comment above (the
+/// "User-facing surface" / "Positional verbs" sections) — only the advertised
+/// surface, NOT the hidden plumbing flags (`--local`, `--daemon`, `--attach`,
+/// `--ipc-selftest`, `--daemon-selftest`, `--mcp-daemon`).
+pub fn print_help() -> i32 {
+    println!(
+        "koma — an agentic coding TUI\n\
+         \n\
+         usage: koma [command] [flags]\n\
+         \n\
+         commands:\n\
+         \x20 (none)                        default: spawn-or-attach the daemon, then run the client\n\
+         \x20 agents                         open the session hub (alias for --resume)\n\
+         \x20 alone                          standalone no-daemon TUI (alias for --local)\n\
+         \x20 gui                            launch the desktop GUI client\n\
+         \x20 update                         stop the daemon, fetch the latest release, then exit\n\
+         \x20 daemon <status|kill|restart|clean>  daemon management CLI\n\
+         \x20 ext install --dev <zip|dir>    sideload an unsigned local extension (dev-only)\n\
+         \x20 doctor [-v|--verbose]          readiness report (config/daemons/models/gui/…)\n\
+         \n\
+         flags:\n\
+         \x20 --resume                       open the session hub\n\
+         \x20 --session <id>                 bind this invocation to a specific session id\n\
+         \x20 --version, -V                  print the version and exit\n\
+         \x20 --help, -h                     print this help and exit"
+    );
+    0
 }
 
 /// Parse command-line arguments into [`Opts`].
@@ -237,6 +288,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
         Some("alone") => opts.local = true,
         Some("update") => opts.update = true,
         Some("gui") => opts.gui = true,
+        Some("doctor") => {
+            opts.doctor = true;
+            opts.doctor_verbose = all.iter().any(|a| a == "-v" || a == "--verbose");
+        }
         Some("daemon") => {
             opts.subcommand = Some(match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
                 Some(sub) => DaemonCli::Run(sub),

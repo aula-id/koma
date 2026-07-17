@@ -39,6 +39,29 @@ impl SessionRuntime {
         self.hist_idx = None;
     }
 
+    /// Insert a whole string at the caret in ONE splice and advance it past
+    /// the inserted run — the bulk counterpart to [`Self::push_char`].
+    ///
+    /// `push_char` locates the caret's byte offset with `char_indices().nth(idx)`
+    /// (an O(N) scan), so feeding a large paste through it one char at a time is
+    /// O(N^2) and visibly freezes the UI. This computes the byte offset ONCE,
+    /// does a single `String::insert_str`, and bumps `cursor` by the pasted
+    /// char count — same caret/history bookkeeping as `push_char`, just O(N)
+    /// total instead of O(N^2).
+    ///
+    /// Callers are responsible for any per-char filtering `push_char` doesn't
+    /// do itself (e.g. CRLF/CR -> `\n` normalization) — `s` is inserted
+    /// verbatim.
+    pub fn push_str(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        let at = self.byte_at(self.cursor);
+        self.input.insert_str(at, s);
+        self.cursor += s.chars().count();
+        self.hist_idx = None;
+    }
+
     /// Delete the char BEFORE the caret and retreat it; no-op at the start.
     pub fn backspace(&mut self) {
         if self.cursor == 0 {

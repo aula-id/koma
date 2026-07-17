@@ -4,7 +4,7 @@
 //! `mod.rs`; every method here was already `pub fn`, so this is a pure lift —
 //! no visibility bumps, no behaviour change.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::SessionRuntime;
 
@@ -309,5 +309,28 @@ impl SessionRuntime {
             .as_ref()
             .map(|s| s.workdir())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    }
+
+    /// Reset `active_cwd` back to `None` (fall back to the primary workdir) when
+    /// it has fallen outside every allowed root — e.g. the user just removed it
+    /// from `settings.workdir` on a save (TUI `/settings` or GUI
+    /// `SetSessionPrefs`). Removing the active workspace must not leave
+    /// [`effective_cwd`](Self::effective_cwd) outside the allow-set, or every
+    /// subsequent tool spawn fails the harness containment guard
+    /// (`workspace_allowed`) until a manual `/cd` — checked unconditionally,
+    /// regardless of `classifier_enabled` (a stale cwd is wrong either way).
+    ///
+    /// No-op (returns `false`) when there is no active override, no session, or
+    /// the override is still contained. Toasts on an actual reset so the user
+    /// knows why their cwd moved out from under them.
+    pub fn clamp_active_cwd(&mut self, launch_dir: &Path) -> bool {
+        let Some(cwd) = self.active_cwd.clone() else { return false };
+        let Some(sess) = self.session.as_ref() else { return false };
+        if crate::app::harness::workspace_allowed(&sess.settings, &cwd, launch_dir) {
+            return false;
+        }
+        self.active_cwd = None;
+        self.set_toast("active workspace no longer allowed — reset to primary workdir".into());
+        true
     }
 }

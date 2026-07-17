@@ -15,6 +15,7 @@
 //! | `koma alone` | standalone no-daemon TUI ([`app::run`]); REFUSES if a daemon is already alive. The escape hatch (alias for `--local`). |
 //! | `koma daemon <status\|kill\|restart\|clean>` | daemon management CLI then exit. |
 //! | `koma ext install --dev <zip\|dir>` | sideload an unsigned local extension (offline, no koma.run account) then exit. |
+//! | `koma doctor [-v\|--verbose]` | flutter-doctor-style readiness report, then exit. Read-only. |
 //! | `koma gui` | feature-gated (`--features gui`) desktop client — a wry webview hosting xterm.js that renders the real koma terminal client spawned in a PTY. |
 //! | `koma --internet-fullmode-install [--force]` | provision Python full-mode (browser) env then exit. |
 //! | `koma --internet-fullmode-uninstall` | remove Python full-mode env then exit. |
@@ -53,6 +54,17 @@ mod tool;
 mod view;
 
 fn main() -> anyhow::Result<()> {
+    // --- short-circuit: `--version`/`-V`/`--help`/`-h` (#75) ---
+    // Must run BEFORE any side effect (legacy-dir migration, catalogue overlay init,
+    // daemon spawn) — these just print and exit, they must not touch disk or state.
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--version" | "-V" => std::process::exit(cli::print_version()),
+            "--help" | "-h" => std::process::exit(cli::print_help()),
+            _ => {}
+        }
+    }
+
     // Migrate legacy config dir (~/.simple-coder -> ~/.koma) before anything
     // reads base_dir(), so every entry path (TUI, --internet-fullmode-install,
     // --resume) sees the migrated directory.
@@ -107,6 +119,14 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(app::print_ext_usage());
             }
         };
+    }
+
+    // --- short-circuit: `koma doctor [-v|--verbose]` readiness report (no TUI) ---
+    // Strictly read-only — never spawns/restarts/installs/kills anything. Runs before
+    // the legacy-daemon migration below since doctor must reflect the pre-migration
+    // on-disk state, and it needs no daemon/session of its own.
+    if opts.doctor {
+        std::process::exit(app::run_doctor(opts.doctor_verbose));
     }
 
     // --- upgrade migration: reap any pre-0.2.0 global daemon on first 0.2.0 launch ---

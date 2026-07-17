@@ -20,16 +20,11 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::mode::McpState;
 use crate::app::state::AppStateRest;
 
-use super::{is_ctrl, Action};
+use super::Action;
 
 /// Handle a key press inside the `/mcp` management dashboard.
 pub fn handle_mcp(s: &mut McpState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
     use crate::app::mode::McpSubMode;
-
-    // Ctrl+C is fully inert (koma disables it); Esc still closes/cancels.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
 
     match s.mode {
         // --- DeleteConfirm: modal y/n ---

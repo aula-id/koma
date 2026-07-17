@@ -83,6 +83,12 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     } else {
         key
     };
+    // Ctrl+C anywhere routes through the quit chokepoint (same as /quit):
+    // opens the working-aware QuitConfirm overlay, or exits directly on
+    // landing screens (see actions::quit::request_quit).
+    if is_ctrl(&key, 'c') {
+        return Action::Quit;
+    }
     // Take the foreground session's mode out so the arms can ALSO borrow `state.rest`
     // (the handlers need both); put it back below, carrying any in-place edits.
     let mut mode = state.take_mode();
@@ -114,14 +120,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
 ///
 /// Up/Down move the selection; Enter confirms the highlighted option (the
 /// runtime stores it, rebuilds the client, and returns to Chat); Esc cancels
-/// back to Chat; Ctrl+C is inert (koma disables it). `_rest` is accepted for
-/// handler-signature consistency but unused.
+/// back to Chat. `_rest` is accepted for handler-signature consistency but
+/// unused. Ctrl+C is intercepted globally in [`handle_key`] before dispatch.
 fn handle_effort(e: &mut EffortPickerState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
-    // Ctrl+C is fully inert (koma disables it); Esc still cancels the picker.
-    if is_ctrl(&key, 'c') {
-        return Action::None;
-    }
-
     match key.code {
         KeyCode::Esc => Action::EffortCancel,
         KeyCode::Up => {
