@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use crate::app::mode::agents::{
     AgentEditField, AgentScope, AgentSubMode, AgentsState, ModelPickerState, ToolPickerState,
 };
+use crate::app::mode::ext_screen::ExtScreenState;
+use crate::app::mode::extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
 use crate::app::mode::help::{HelpEntry, HelpKind, HelpState};
 use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
 use crate::app::mode::security::SecurityState;
@@ -22,7 +24,8 @@ use crate::app::mode::{
     SessionHub, SessionKind, UsageMetric, UsageNavState, UsageRange, UsageView, WarmStatus,
 };
 use crate::ipc::proto::{
-    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, HelpSnapshot,
+    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot,
+    ExtRowWire, ExtScreenSnapshot, ExtensionsSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot,
     OnboardProviderSnapshot, OnboardSnapshot, PickerSnapshot, RewindSnapshot,
     SecuritySnapshot, SessionHubSnapshot,
@@ -397,6 +400,74 @@ fn shadow_mcp_transport(t: &str) -> McpTransport {
     match t {
         "http" => McpTransport::Http,
         _ => McpTransport::Stdio,
+    }
+}
+
+/// Rebuild the `/extension` dashboard ([`ExtensionsState`]) from its projection.
+///
+/// Mirrors [`shadow_mcp`]: the rows are pure data moved in verbatim (per-row via
+/// [`shadow_ext_row`]); the sub-mode cursor decodes from its wire token. Render-only — every
+/// key is forwarded to the daemon, which owns the registry + uninstall path.
+pub(crate) fn shadow_extensions(s: ExtensionsSnapshot) -> ExtensionsState {
+    ExtensionsState {
+        rows: s.rows.into_iter().map(shadow_ext_row).collect(),
+        list_sel: s.list_sel,
+        sub_mode: shadow_ext_submode(&s.mode),
+        screen_sel: s.screen_sel,
+        error: s.error,
+    }
+}
+
+/// Rebuild ONE installed-extension row from its wire mirror (all pure data, moved verbatim).
+fn shadow_ext_row(w: ExtRowWire) -> ExtRow {
+    ExtRow {
+        id: w.id,
+        name: w.name,
+        version: w.version,
+        tier: w.tier,
+        kind: w.kind,
+        enabled: w.enabled,
+        running: w.running,
+        description: w.description,
+        granted: w.granted,
+        tools: w.tools,
+        panels: w.panels,
+        sub_agents: w.sub_agents,
+        models: w.models,
+        tui_screens: w
+            .tui_screens
+            .into_iter()
+            .map(|t| ExtTuiScreen {
+                id: t.id,
+                title: t.title,
+            })
+            .collect(),
+        workspace_dir: w.workspace_dir,
+    }
+}
+
+/// Map an `/extension` sub-mode wire token back to an [`ExtSubMode`] (unknown → Browse,
+/// the read-only default — never lost).
+fn shadow_ext_submode(m: &str) -> ExtSubMode {
+    match m {
+        "detail" => ExtSubMode::Detail,
+        "uninstall_confirm" => ExtSubMode::UninstallConfirm,
+        _ => ExtSubMode::Browse,
+    }
+}
+
+/// Rebuild an open extension screen ([`ExtScreenState`]) from its projection. The opaque
+/// `Screen` value moves in verbatim; the menu cursor + loading/error flags ride as-is.
+/// Render-only — keys are forwarded to the daemon, which owns the invoke + reply/push fold.
+pub(crate) fn shadow_ext_screen(s: ExtScreenSnapshot) -> ExtScreenState {
+    ExtScreenState {
+        ext_id: s.ext_id,
+        screen_id: s.screen_id,
+        screen_title: s.screen_title,
+        screen: s.screen,
+        menu_cursor: s.menu_cursor,
+        waiting: s.waiting,
+        error: s.error,
     }
 }
 

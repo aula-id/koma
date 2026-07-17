@@ -55,6 +55,8 @@ pub mod dev_cli;
 pub mod events;
 pub mod install;
 pub mod register;
+pub(crate) mod screen;
+pub(crate) mod store_api;
 pub mod uninstall;
 mod wire;
 pub use broker::{ExtAgentRegistry, ExtCallRequest, ExtNotify};

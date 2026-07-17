@@ -29,6 +29,8 @@ mod session_hub;
 pub mod settings;
 pub mod agents;
 pub mod mcp;
+pub mod extensions;
+pub mod ext_screen;
 pub mod help;
 pub mod editor;
 pub mod security;
@@ -37,6 +39,8 @@ pub mod todo;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
 pub use mcp::{McpEditField, McpState, McpSubMode};
+pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
+pub use ext_screen::ExtScreenState;
 pub use security::{SecSel, SecurityState};
 pub use bash::BashState;
 pub use todo::{parse_todo_file, TodoState};
@@ -206,6 +210,21 @@ pub enum Mode {
     /// of [`Self::Agents`] (no markdown files, no pickers, no body editor). Boxed to
     /// keep `Mode` small, consistent with `Agents`.
     Mcp(Box<McpState>),
+    /// In-app installed-extension manager (`/extension`): list installed extensions,
+    /// read one's detail (contributions / grants / declared TUI screens), and uninstall
+    /// it (with a `y`/`n` confirm). Read-only + one destructive action — a simpler sibling
+    /// of [`Self::Mcp`] with no editor. The inner [`ExtensionsState`] holds a rebuilt
+    /// snapshot of `config.installed_extensions` enriched from each on-disk manifest + the
+    /// live running status, plus the LIST/DETAIL cursor. Boxed to keep `Mode` small.
+    Extensions(Box<ExtensionsState>),
+    /// EXTENSION-DRIVEN full-screen TUI view (server-driven UI, TUI SCREEN PROTOCOL v1):
+    /// entered from an [`Self::Extensions`] detail row whose extension declares a TUI
+    /// screen. koma renders a `Screen` model the extension supplies over the `panel.msg`
+    /// invoke + `panel.push` notify verbs and owns only the menu cursor; Enter sends the
+    /// highlighted item back as a `tui-select`, Esc closes back to the detail view. The
+    /// inner [`ExtScreenState`] holds the ext/screen ids, the current `Screen` value, the
+    /// menu cursor, and the loading/error flags. Boxed to keep `Mode` small.
+    ExtScreen(Box<ExtScreenState>),
     /// Full-screen, searchable command/keybinding reference + launcher (`/help`):
     /// replaces the old floating help overlay. The inner [`HelpState`] aggregates
     /// every entry in the COMMANDS + KEYBINDINGS registries into one filterable

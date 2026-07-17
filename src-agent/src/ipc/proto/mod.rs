@@ -804,6 +804,8 @@ pub enum ModeSnapshot {
     Settings(Box<SettingsSnapshot>),
     Agents(Box<AgentsSnapshot>),
     Mcp(Box<McpSnapshot>),
+    Extensions(Box<ExtensionsSnapshot>),
+    ExtScreen(Box<ExtScreenSnapshot>),
     Security(Box<SecuritySnapshot>),
     Bash(Box<BashSnapshot>),
     Todo(Box<TodoSnapshot>),
