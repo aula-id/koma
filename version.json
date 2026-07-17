@@ -1,4 +1,4 @@
 {
-  "version": "0.3.6",
-  "message": "fix: global model-role assignment now also demotes a session-local role holder, since session_models wins resolution over config.models"
+  "version": "0.3.7",
+  "message": "fix: --version/--help short-circuit the CLI, and Ctrl+C now opens the quit page"
 }
