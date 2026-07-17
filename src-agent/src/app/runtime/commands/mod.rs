@@ -39,6 +39,11 @@ pub(crate) mod new_session;
 // `/security` command (panel open) and the input-path self-heal (controller), which must
 // start the non-blocking health probe with identical semantics.
 pub(crate) mod security;
+// `pub(crate)` so `store_row_from_item`/`store_detail_from_wire` (the `/store` row/detail
+// mappers) are reachable from `event_loop::global::drains::drain_store`, which folds a
+// landed catalogue/detail fetch into `Mode::ExtStore` the SAME way this module's own
+// `handle_store` seeds it.
+pub(crate) mod store;
 mod task;
 
 /// Apply a parsed slash command. Like [`apply_action`], it mutates state and
@@ -60,6 +65,7 @@ pub(super) fn apply_slash(
         Command::Agents => misc::handle_agents(state)?,
         Command::Mcp => mcp::handle_mcp(state)?,
         Command::Extensions => extensions::handle_extensions(state)?,
+        Command::Store => store::handle_store(state, handle)?,
         Command::Security => security::handle_security(state)?,
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,

@@ -211,6 +211,18 @@ pub enum Action {
     /// Esc in an open extension screen — fire a best-effort `tui-close` and pop back to the
     /// `/extension` detail view.
     ExtScreenClose,
+    // --- Store marketplace browser actions ---
+    /// Esc from the `/store` marketplace browser (Browse) — return to Chat.
+    CloseStore,
+    /// `r` in Browse while a fetch error is shown — reset the loading/error state and
+    /// re-kick the async catalogue fetch.
+    StoreRetryBrowse,
+    /// Enter on a row in Browse — open Detail for it and kick off the async detail
+    /// fetch.
+    StoreOpenDetail,
+    /// `y` in InstallConfirm (koma.run bearer present) — kick off the async install
+    /// download; the landed artifact runs the shared on-loop verify+install tail.
+    StoreInstallConfirm,
     // --- Security daemon control panel actions ---
     /// Esc from the `/security` panel — return to Chat.
     CloseSecurity,

@@ -806,6 +806,7 @@ pub enum ModeSnapshot {
     Mcp(Box<McpSnapshot>),
     Extensions(Box<ExtensionsSnapshot>),
     ExtScreen(Box<ExtScreenSnapshot>),
+    ExtStore(Box<ExtStoreSnapshot>),
     Security(Box<SecuritySnapshot>),
     Bash(Box<BashSnapshot>),
     Todo(Box<TodoSnapshot>),

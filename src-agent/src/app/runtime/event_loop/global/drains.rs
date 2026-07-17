@@ -530,6 +530,152 @@ pub(super) fn drain_ext_screen(state: &mut AppState) -> bool {
     dirty
 }
 
+/// Drain the NON-BLOCKING `/store` marketplace fetch/install lane (`store_rx`), mirroring
+/// `drain_ext_screen`. Only one `/store` network call is ever in flight at a time (Browse
+/// -> Detail -> InstallConfirm is strictly sequential), so — like `sec_health_rx` — a
+/// single `try_recv` per tick is enough: a delivered result (or a closed channel) ends the
+/// wait; otherwise the receiver is kept for the next tick.
+///
+/// * [`crate::app::ext::ext_store::StoreEvent::Catalogue`] folds into every open
+///   `Mode::ExtStore`'s Browse loading/error/rows (installed-ness is baked fresh off a
+///   snapshot of `config.installed_extensions` taken BEFORE the loop, so it never races a
+///   concurrent registry mutation mid-fold).
+/// * `Detail` folds into the Detail loading/error/data.
+/// * `InstallArtifact` runs the shared on-loop [`crate::app::runtime::actions::ext_install::
+///   install_extension_core`] — the EXACT tail the GUI store hub's `finish_install` runs —
+///   then, on success, re-bakes every row's `installed` flag (the just-installed id is now
+///   in the registry) and drops back to Detail; on failure the error surfaces in-state.
+/// * `InstallFailed` (a pre-install-core network/session failure) surfaces the same way.
+pub(super) fn drain_store(state: &mut AppState, handle: &tokio::runtime::Handle) -> bool {
+    use crate::app::ext::ext_store::StoreEvent;
+    use crate::app::mode::StoreSubMode;
+
+    let mut dirty = false;
+    if let Some(mut rx) = state.rest.store_rx.take() {
+        match rx.try_recv() {
+            Ok(StoreEvent::Catalogue(result)) => {
+                let installed_ids: std::collections::HashSet<String> = state
+                    .rest
+                    .config
+                    .installed_extensions
+                    .iter()
+                    .map(|e| e.id.clone())
+                    .collect();
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.loading = false;
+                        match &result {
+                            Ok(items) => {
+                                st.error = None;
+                                st.rows = items
+                                    .iter()
+                                    .map(|it| {
+                                        crate::app::runtime::commands::store::store_row_from_item(
+                                            it,
+                                            &installed_ids,
+                                        )
+                                    })
+                                    .collect();
+                            }
+                            Err(e) => st.error = Some(e.clone()),
+                        }
+                    }
+                }
+                dirty = true;
+            }
+            Ok(StoreEvent::Detail(result)) => {
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.detail_loading = false;
+                        match &result {
+                            Ok(d) => {
+                                st.detail = Some(
+                                    crate::app::runtime::commands::store::store_detail_from_wire(d),
+                                );
+                                st.detail_error = None;
+                            }
+                            Err(e) => {
+                                st.detail = None;
+                                st.detail_error = Some(e.clone());
+                            }
+                        }
+                    }
+                }
+                dirty = true;
+            }
+            Ok(StoreEvent::InstallArtifact { id, zip, sha256, signature }) => {
+                match crate::app::runtime::actions::ext_install::install_extension_core(
+                    state,
+                    handle,
+                    &id,
+                    &zip,
+                    &sha256,
+                    signature.as_deref(),
+                ) {
+                    Ok(ext) => {
+                        let installed_ids: std::collections::HashSet<String> = state
+                            .rest
+                            .config
+                            .installed_extensions
+                            .iter()
+                            .map(|e| e.id.clone())
+                            .collect();
+                        for s in state.rest.sessions.iter_mut() {
+                            if let Mode::ExtStore(st) = &mut s.mode {
+                                st.installing = false;
+                                st.install_error = None;
+                                st.sub_mode = StoreSubMode::Detail;
+                                for row in st.rows.iter_mut() {
+                                    row.installed = installed_ids.contains(&row.id);
+                                }
+                            }
+                        }
+                        state
+                            .rest
+                            .fg_mut()
+                            .set_toast_info(format!("extension installed: {}", ext.id));
+                    }
+                    Err(e) => {
+                        for s in state.rest.sessions.iter_mut() {
+                            if let Mode::ExtStore(st) = &mut s.mode {
+                                st.installing = false;
+                                st.install_error = Some(e.clone());
+                            }
+                        }
+                    }
+                }
+                dirty = true;
+            }
+            Ok(StoreEvent::InstallFailed { id: _, error }) => {
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.installing = false;
+                        st.install_error = Some(error.clone());
+                    }
+                }
+                dirty = true;
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                // Still in flight — keep the receiver for the next tick.
+                state.rest.store_rx = Some(rx);
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                // Sender dropped without sending (superseded by a fresh kick-off, or the
+                // task panicked) — end every spinner so nothing hangs.
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.loading = false;
+                        st.detail_loading = false;
+                        st.installing = false;
+                    }
+                }
+                dirty = true;
+            }
+        }
+    }
+    dirty
+}
+
 /// De-globalization helper: mutably borrow the [`crate::app::mode::ExtScreenState`] of EVERY
 /// session currently showing an extension screen (single window → at most one).
 fn ext_screen_states(

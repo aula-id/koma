@@ -356,6 +356,15 @@ pub struct AppStateRest {
     /// invoke; the client renders the folded result off the projected mode.
     pub ext_screen_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::screen::ExtScreenReply>>,
+    /// Receiver for an in-flight `/store` marketplace fetch/install (browse catalogue,
+    /// one extension's detail, or an install download). `Some` while an
+    /// `ext::ext_store::kick_off_store_browse`/`kick_off_store_detail`/`kick_off_store_install`
+    /// spawn is pending; drained each tick in `service_global`
+    /// (`drains::drain_store`) and folded into the open [`crate::app::mode::ExtStoreState`],
+    /// then cleared. Mirrors `ext_screen_rx`. `None` when no fetch/install is in flight. Kept
+    /// OUT of the IPC snapshot — only the daemon runs the fetch; the client renders the
+    /// folded result off the projected mode.
+    pub store_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ext_store::StoreEvent>>,
     /// Receiver for the in-flight `/settings` OAuth submenu connect flow (Codex
     /// browser login or Kilo Code device login). Mirrors `sec_health_rx`: opened
     /// by `Action::OAuthStart`'s handler, drained each tick in `service_global`
@@ -569,6 +578,7 @@ impl AppStateRest {
             version_rx: Some(vrx),
             sec_health_rx: None,
             ext_screen_rx: None,
+            store_rx: None,
             oauth_rx: None,
             oauth_task: None,
             oauth_gui_client: None,

@@ -27,6 +27,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/agents", "Create, modify, or delete agent definitions"),
     ("/mcp", "Add, edit, or remove MCP servers"),
     ("/extension", "Manage installed extensions (detail, uninstall, screens)"),
+    ("/store", "Browse and install extensions from the koma.run marketplace"),
     ("/security", "Security daemon control panel"),
     ("/task", "Run an agent on a task, or open the sub-agents viewer (no args)"),
     ("/bash", "Manage background bash jobs"),
@@ -118,6 +119,8 @@ pub enum Command {
     Mcp,
     /// Open the `/extension` installed-extension manager (alias: `/extensions`).
     Extensions,
+    /// Open the `/store` koma.run extension marketplace browser.
+    Store,
     /// Open the `/security` daemon control panel.
     Security,
     /// Run a named agent on a task in the background. Holds `<agent> <task>`.
@@ -192,6 +195,7 @@ pub fn parse(line: &str) -> Command {
         "agents" | "agent" => Command::Agents,
         "mcp" => Command::Mcp,
         "extension" | "extensions" => Command::Extensions,
+        "store" => Command::Store,
         "security" => Command::Security,
         "task" => Command::Task(rest.to_string()),
         "bash" => Command::Bash,
