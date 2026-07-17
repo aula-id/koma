@@ -75,19 +75,35 @@ pub(crate) fn store_detail_from_wire(d: &StoreDetailWire) -> StoreDetailData {
 /// Strip leading `#` markdown-header markers (`# `, `## `, …) from each line, leaving the
 /// heading text as a plain line — the "minimal" markdown stripping the `/store` detail
 /// view does instead of running a full markdown renderer.
+///
+/// A stripped heading is forced onto its OWN paragraph: a blank line is inserted right
+/// after it (unless one is already there, or it's the last line), so a heading glued
+/// directly to the following prose in the source (`"# Title\nBody..."`, no blank line
+/// between them) still reads as a distinct line once rendered — without this, the
+/// following text visually runs straight into the heading (see the `/store` detail
+/// view's paragraph-aware wrap in `view::store`, which splits on these `\n`s).
 fn strip_markdown_headers(md: &str) -> String {
-    md.lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            let stripped = trimmed.trim_start_matches('#');
-            if stripped.len() != trimmed.len() {
-                stripped.trim_start().to_string()
-            } else {
-                line.to_string()
+    let lines: Vec<&str> = md.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 1);
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let stripped = trimmed.trim_start_matches('#');
+        if stripped.len() != trimmed.len() {
+            out.push(stripped.trim_start().to_string());
+            // Force a paragraph break after the heading, unless the source already
+            // has one (or there's nothing left to separate it from).
+            let next_is_blank_or_absent = lines
+                .get(i + 1)
+                .map(|l| l.trim().is_empty())
+                .unwrap_or(true);
+            if !next_is_blank_or_absent {
+                out.push(String::new());
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n")
 }
 
 #[cfg(test)]
@@ -96,11 +112,36 @@ mod tests {
 
     #[test]
     fn strip_markdown_headers_strips_leading_hashes_only() {
+        // The `## Sub heading` line has NO blank line before its following prose in the
+        // source, so the fix must INSERT one (a heading with an already-blank line after
+        // it, like `# Title`, is left with just that one blank — no double blank).
         let md = "# Title\n\nSome body text.\n## Sub heading\nMore body, #not-a-header inline.";
         let out = strip_markdown_headers(md);
         assert_eq!(
             out,
-            "Title\n\nSome body text.\nSub heading\nMore body, #not-a-header inline."
+            "Title\n\nSome body text.\nSub heading\n\nMore body, #not-a-header inline."
         );
+    }
+
+    /// Regression test for the live-test-caught glue bug: a heading immediately
+    /// followed by body text with no blank line between them (`"# Hello World\nA
+    /// minimal reference..."`) used to strip to a single `\n`-separated string that the
+    /// view's naive char-wrap rendered as "Hello WorldA minimal reference..." — glued
+    /// together with no visible break at all. The fix forces a paragraph break (blank
+    /// line) after every stripped heading, so the heading always reads as its own line.
+    #[test]
+    fn strip_markdown_headers_separates_heading_glued_to_body() {
+        let md = "# Hello World\nA minimal reference to something.";
+        let out = strip_markdown_headers(md);
+        assert_eq!(out, "Hello World\n\nA minimal reference to something.");
+    }
+
+    /// A heading that is the LAST line (nothing to separate it from) must not grow a
+    /// trailing blank line.
+    #[test]
+    fn strip_markdown_headers_trailing_heading_has_no_trailing_blank() {
+        let md = "Some body.\n# Trailing Heading";
+        let out = strip_markdown_headers(md);
+        assert_eq!(out, "Some body.\nTrailing Heading");
     }
 }
