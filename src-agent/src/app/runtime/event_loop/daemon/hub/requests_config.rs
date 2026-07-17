@@ -182,8 +182,35 @@ impl DaemonHub {
                 Ok(()) // no foreground session to hold a local override
             }
         } else {
+            // BUG FIX (parity with the TUI settings modal's `save_model_modal`
+            // directional steal, PR#83 / commit f1c500f): `config.upsert_model`
+            // only steals the claimed roles from OTHER entries within
+            // `config.models` — it never touches `session_models`. But
+            // `resolve_role` checks a session's LOCAL overrides FIRST, so a
+            // session-local entry that already holds one of these roles would
+            // keep shadowing the new global assignment forever. Strip the
+            // claimed roles from every entry in the foreground session's local
+            // overrides too (both the `roles` vec and the legacy `role` field,
+            // via `strip_role`, so an old-format entry can't keep shadowing via
+            // its legacy field — mirrors `upsert_model_entry`'s own same-scope
+            // steal), then persist that session alongside the config. Entries
+            // left with zero roles are kept in place (not removed) — same as
+            // `strip_role`/`upsert_model_entry` and `save_model_modal` — so
+            // stripping can only ever narrow what an entry claims, never widen it.
+            let claimed = entry.effective_roles();
+            let session_result = if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                for other in sess.settings.session_models.iter_mut() {
+                    for role in &claimed {
+                        crate::model::app_config::strip_role(other, *role);
+                    }
+                }
+                sess.save()
+            } else {
+                Ok(()) // no foreground session to hold a local override
+            };
             state.rest.config.upsert_model(entry);
-            state.rest.config.save()
+            let config_result = state.rest.config.save();
+            session_result.and(config_result)
         };
         state.rest.reset_effort_if_main_changed(before_main);
         self.ack_or_error(idx, result);

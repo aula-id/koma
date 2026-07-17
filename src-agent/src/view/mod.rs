@@ -56,11 +56,39 @@ pub(crate) fn clear_and_fill(frame: &mut ratatui::Frame, rect: ratatui::layout::
 }
 
 fn resolved_main_model(rest: &AppStateRest) -> String {
-    rest.fg().session.as_ref()
-        .and_then(|s| resolve_turn_model(&rest.config, &s.settings, rest.agent_mode))
-        .map(|r| r.model_id)
-        .or_else(|| rest.fg().session.as_ref().map(|s| s.settings.model.clone()))
-        .unwrap_or_default()
+    let Some(session) = rest.fg().session.as_ref() else {
+        return String::new();
+    };
+    // The thin client's shadow clears `config.models`/`config.providers` every
+    // snapshot (`client/shadow.rs`) and never projects `settings.session_models`
+    // either (`client_shadow/session.rs::shadow_session` only seeds `name` +
+    // `model`), so `resolve_role`/`resolve_turn_model` can NEVER find an
+    // assignment there — `resolve_role_dispatch`'s last-resort koma-free
+    // substitute fires on EVERY call, silently masking the real model behind
+    // the free-tier route id. The daemon already precomputes the correct id
+    // (`resolved_model_id`, via plain `resolve_role` — see
+    // `ipc/snapshot/projection/core.rs`) and the client seeds it straight into
+    // `settings.model`, so that field is the trustworthy source there.
+    //
+    // Distinguish shadow-vs-standalone the same way `Mode::Mcp`'s arm above
+    // does: `rest.mcp_manager` is `None` ONLY for the thin client
+    // (`lifecycle::build_startup` leaves it `None` under `--daemon`, letting
+    // the daemon's own MCP manager own it) and always `Some` in the old
+    // standalone `--local`/`alone` TUI (`event_loop::run_loop`, the one other
+    // caller of this view — see `lifecycle/mod.rs`'s `if opts.daemon` branch).
+    // This is a direct mode discriminator, unlike inferring it from whether
+    // Main happens to resolve usably: a degraded standalone Main (deleted
+    // provider, expired OAuth) legitimately resolves to "not usable" too, and
+    // gating on usability would wrongly show the frozen `settings.model`
+    // instead of the live (koma-free) route dispatch actually uses —
+    // disagreeing with the `main_fallback_reason` toast for that exact case.
+    if rest.mcp_manager.is_none() {
+        return session.settings.model.clone();
+    }
+    if let Some(r) = resolve_turn_model(&rest.config, &session.settings, rest.agent_mode) {
+        return r.model_id;
+    }
+    session.settings.model.clone()
 }
 
 /// Render the entire terminal frame for the current application state.
