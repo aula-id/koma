@@ -19,6 +19,7 @@ pub mod chat;
 pub mod mcp;
 pub mod extensions;
 pub mod extscreen;
+pub mod store;
 pub mod security;
 pub mod help;
 pub mod effort;
@@ -123,6 +124,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         }
         Mode::Extensions(e) => extensions::draw(frame, e, &palette),
         Mode::ExtScreen(s) => extscreen::draw(frame, s, &palette),
+        Mode::ExtStore(s) => store::draw(frame, s, &palette),
         Mode::Security(s) => security::draw(frame, s, &palette),
         Mode::Bash(b) => {
             let resolved_model = resolved_main_model(&state.rest);

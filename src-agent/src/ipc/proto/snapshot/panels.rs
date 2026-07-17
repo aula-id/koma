@@ -248,6 +248,64 @@ pub struct TodoSnapshot {
     pub pwd_hash: String,
 }
 
+/// One catalogue row for the `/store` marketplace browser — a slimmed mirror of
+/// [`crate::ipc::proto::StoreItemWire`] plus the LOCALLY-baked `installed` flag (checked
+/// against `config.installed_extensions` at fetch time, since the store API itself has
+/// no notion of what's installed on THIS machine).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtStoreRowWire {
+    pub id: String,
+    pub name: String,
+    pub tagline: String,
+    pub tier: String,
+    pub kind: String,
+    pub latest_version: String,
+    pub author: String,
+    pub installed: bool,
+}
+
+/// The `/store` detail pane's data — a flattened mirror of
+/// [`crate::ipc::proto::StoreDetailWire`]: `description_md` pre-stripped of markdown
+/// headers (the TUI renders plain wrapped text, no full markdown renderer) and
+/// `contributes` flattened to its four counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtStoreDetailWire {
+    pub description: String,
+    pub contributes_models: u32,
+    pub contributes_panels: u32,
+    pub contributes_tools: u32,
+    pub contributes_sub_agents: u32,
+    pub requires: Vec<String>,
+    pub versions: Vec<String>,
+}
+
+/// A serde-safe projection of the `/store` marketplace browser.
+///
+/// Mirrors [`crate::app::mode::store::ExtStoreState`] field-for-field: the catalogue
+/// rows + LIST cursor + sub-mode wire token (see `store_submode_token` in `tokens.rs`),
+/// the Browse loading/error pair, the Detail loading/error pair + fetched detail, and
+/// the InstallConfirm install-in-flight/error pair + the koma.run connection flag. The
+/// client rebuilds it verbatim and renders the same browse/detail/confirm view; it
+/// never mutates it (keys forwarded to the daemon).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtStoreSnapshot {
+    pub rows: Vec<ExtStoreRowWire>,
+    pub list_sel: usize,
+    /// Sub-mode wire token: "browse" | "detail" | "install_confirm".
+    pub mode: String,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub detail: Option<ExtStoreDetailWire>,
+    pub detail_loading: bool,
+    pub detail_error: Option<String>,
+    pub installing: bool,
+    pub install_error: Option<String>,
+    pub komarun_connected: bool,
+}
+
 /// A serde-safe projection of the /agents dashboard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

@@ -491,10 +491,11 @@ impl DaemonHub {
     /// The on-loop tail of the install: verify + unpack the downloaded zip (fail-closed),
     /// upsert the registry entry + persist, register its contributions, spawn it if
     /// daemon-kind, then reply with [`DaemonEvent::ExtensionOpResult`] + a fresh
-    /// [`DaemonEvent::InstalledExtensions`]. A signature-verification or integrity failure is
-    /// a hard stop surfaced as `ok:false`. When the artifact is UNSIGNED (koma.run signing
-    /// infra may not be live yet), a DEBUG build falls back to `install_dev_unsigned` so the
-    /// end-to-end flow is testable now (loudly logged); a release build rejects it.
+    /// [`DaemonEvent::InstalledExtensions`]. Delegates the whole tail to the shared
+    /// [`crate::app::runtime::actions::ext_install::install_extension_core`] — the SAME
+    /// core the TUI `/store` path's install drain calls — so a signature-verification or
+    /// integrity failure (surfaced as `ok:false`) and the debug-only unsigned fallback
+    /// behave identically for both surfaces.
     fn finish_install(
         &mut self,
         idx: usize,
@@ -505,90 +506,15 @@ impl DaemonHub {
         sha256: String,
         signature: Option<String>,
     ) {
-        // Clone the manager Arcs so the later `&mut` config mutations don't overlap a
-        // `state.rest` borrow.
-        let mcp = state.rest.mcp_manager.clone();
-        let ext_mgr = state.rest.ext_manager.clone();
-
-        let installed: Result<crate::model::app_config::InstalledExtension> =
-            match (&signature, sha256.trim().is_empty()) {
-                // Signed + integrity present → the production fail-closed path.
-                (Some(sig), false) => {
-                    crate::app::ext::install::install_from_zip(&zip, &sha256, sig)
-                }
-                // No signature (or no advertised digest): koma.run signing not live yet.
-                _ => install_unsigned_fallback(&id, &zip),
-            };
-
-        match installed {
+        match crate::app::runtime::actions::ext_install::install_extension_core(
+            state,
+            handle,
+            &id,
+            &zip,
+            &sha256,
+            signature.as_deref(),
+        ) {
             Ok(ext) => {
-                state.rest.config.upsert_extension(ext.clone());
-                // Auto-register any manifest-declared bundled MCP servers (e.g. a standalone
-                // `workflow-mcp` shipped alongside the extension's own daemon) BEFORE the
-                // single save+reload below, so a fresh install never needs the user to
-                // hand-add an McpServerEntry — see `register::register_mcp_servers`.
-                if let Err(e) = crate::app::ext::register::register_mcp_servers(
-                    &ext,
-                    &mut state.rest.config,
-                ) {
-                    store::append_global_error_log(
-                        "ext-install",
-                        &format!("register mcp servers for {}: {e:#}", ext.id),
-                    );
-                }
-                // ONE save covering both the registry upsert and any registered MCP-server
-                // rows, plus a live MCP reconnect from the just-saved server set — mirrors
-                // `uninstall_extension`'s single `save_and_reload_mcp` call.
-                if let Err(e) = crate::app::runtime::actions::save_and_reload_mcp(state, handle) {
-                    store::append_global_error_log(
-                        "ext-install",
-                        &format!("save config after install {}: {e:#}", ext.id),
-                    );
-                }
-                // Register contributions (tools → live MCP snapshot) + auto-start a
-                // daemon-kind child. Both best-effort: a failure is logged, not fatal —
-                // the extension is installed on disk + in the registry regardless.
-                if let Some(mgr) = &ext_mgr {
-                    if let Err(e) =
-                        crate::app::ext::register::register_contributions(&ext, mcp.as_ref(), mgr)
-                    {
-                        store::append_global_error_log(
-                            "ext-install",
-                            &format!("register contributions for {}: {e:#}", ext.id),
-                        );
-                    }
-                    if ext.kind == "daemon" {
-                        if let Err(e) = mgr.ensure_started(&ext) {
-                            store::append_global_error_log(
-                                "ext-install",
-                                &format!("start extension {}: {e:#}", ext.id),
-                            );
-                        }
-                    }
-                }
-                // Widen the ACTIVE session's workspace roots so writes into this extension's
-                // declared `workspace_dir` pass the harness WITHOUT a daemon restart (the same
-                // in-memory injection `build_startup` runs). When a root is added, reindex the
-                // dir cache (`@`/dir_list pick it up) and rebuild the system prompt so its
-                // "# Extension workspaces" note names the new root immediately.
-                {
-                    let installed = state.rest.config.installed_extensions.clone();
-                    let added = match state.rest.fg_mut().session.as_mut() {
-                        Some(sess) => crate::model::ext_workspace::inject_extension_workspaces(
-                            &installed,
-                            &mut sess.settings.workdir,
-                        ),
-                        None => Vec::new(),
-                    };
-                    if !added.is_empty() {
-                        if let Some(roots) = state.rest.fg().session.as_ref().map(|s| s.workdirs()) {
-                            crate::tool::dircache::reindex(roots, state.rest.fg().dir_cache.clone());
-                        }
-                        if let Some(sess) = state.rest.fg_mut().session.as_mut() {
-                            sess.rebuild_system();
-                        }
-                    }
-                }
                 self.send_to(
                     idx,
                     DaemonEvent::ExtensionOpResult {
@@ -600,16 +526,12 @@ impl DaemonHub {
                 self.send_installed_extensions(idx, state);
             }
             Err(e) => {
-                store::append_global_error_log(
-                    "ext install",
-                    &format!("verify/unpack failed for extension {id}: {e:#}"),
-                );
                 self.send_to(
                     idx,
                     DaemonEvent::ExtensionOpResult {
                         id,
                         ok: false,
-                        error: Some(format!("{e:#}")),
+                        error: Some(e),
                     },
                 );
             }
@@ -726,31 +648,6 @@ fn run_panel_msg(
             }
         }
     }
-}
-
-/// The DEBUG-only unsigned install fallback: write the zip to a temp file and install it via
-/// [`crate::app::ext::install::install_dev_unsigned`] (which skips signature verification),
-/// so the end-to-end store→install flow is testable before koma.run's signing infra is live.
-/// LOUDLY logged. A release build has no such path — an unsigned artifact is rejected.
-#[cfg(debug_assertions)]
-fn install_unsigned_fallback(id: &str, zip: &[u8]) -> Result<crate::model::app_config::InstalledExtension> {
-    store::append_global_error_log(
-        "ext-install",
-        &format!("UNSIGNED dev install of {id} (koma.run sent no signature — debug build only)"),
-    );
-    let tmp = std::env::temp_dir().join(format!("koma-ext-dl-{}.zip", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, zip)
-        .map_err(|e| anyhow::anyhow!("write temp zip {}: {e}", tmp.display()))?;
-    let r = crate::app::ext::install::install_dev_unsigned(&tmp);
-    let _ = std::fs::remove_file(&tmp);
-    r
-}
-
-/// Release builds reject an unsigned artifact — the signature gate can never be bypassed in
-/// production (see `install::install_dev_unsigned`'s `cfg(debug_assertions)`).
-#[cfg(not(debug_assertions))]
-fn install_unsigned_fallback(_id: &str, _zip: &[u8]) -> Result<crate::model::app_config::InstalledExtension> {
-    anyhow::bail!("extension artifact is unsigned; refusing to install")
 }
 
 /// Read the manifest for extension `id` and extract both the friendly name and

@@ -18,6 +18,7 @@ use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
 use crate::app::mode::security::SecurityState;
 use crate::app::mode::bash::BashState;
 use crate::app::mode::editor::TextEditorState;
+use crate::app::mode::store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState,
     OnboardProviderState, OnboardProviderStep, OnboardState, PickerState, RewindEntry, RewindState,
@@ -25,7 +26,7 @@ use crate::app::mode::{
 };
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot,
-    ExtRowWire, ExtScreenSnapshot, ExtensionsSnapshot, HelpSnapshot,
+    ExtRowWire, ExtScreenSnapshot, ExtStoreRowWire, ExtStoreSnapshot, ExtensionsSnapshot, HelpSnapshot,
     KeyInputSnapshot, LoadingSnapshot, McpSnapshot,
     OnboardProviderSnapshot, OnboardSnapshot, PickerSnapshot, RewindSnapshot,
     SecuritySnapshot, SessionHubSnapshot,
@@ -468,6 +469,59 @@ pub(crate) fn shadow_ext_screen(s: ExtScreenSnapshot) -> ExtScreenState {
         menu_cursor: s.menu_cursor,
         waiting: s.waiting,
         error: s.error,
+    }
+}
+
+/// Rebuild ONE `/store` catalogue row from its wire mirror (all pure data, moved verbatim).
+fn shadow_store_row(w: ExtStoreRowWire) -> StoreRow {
+    StoreRow {
+        id: w.id,
+        name: w.name,
+        tagline: w.tagline,
+        tier: w.tier,
+        kind: w.kind,
+        latest_version: w.latest_version,
+        author: w.author,
+        installed: w.installed,
+    }
+}
+
+/// Map a `/store` sub-mode wire token back to a [`StoreSubMode`] (unknown → Browse, the
+/// read-only default — never lost).
+fn shadow_store_submode(m: &str) -> StoreSubMode {
+    match m {
+        "detail" => StoreSubMode::Detail,
+        "install_confirm" => StoreSubMode::InstallConfirm,
+        _ => StoreSubMode::Browse,
+    }
+}
+
+/// Rebuild the `/store` marketplace browser ([`ExtStoreState`]) from its projection.
+///
+/// Mirrors [`shadow_extensions`]: the rows are pure data moved in verbatim (per-row via
+/// [`shadow_store_row`]); the sub-mode cursor decodes from its wire token. Render-only —
+/// every key is forwarded to the daemon, which owns the network fetches + install path.
+pub(crate) fn shadow_ext_store(s: ExtStoreSnapshot) -> ExtStoreState {
+    ExtStoreState {
+        sub_mode: shadow_store_submode(&s.mode),
+        rows: s.rows.into_iter().map(shadow_store_row).collect(),
+        list_sel: s.list_sel,
+        loading: s.loading,
+        error: s.error,
+        detail: s.detail.map(|d| StoreDetailData {
+            description: d.description,
+            contributes_models: d.contributes_models,
+            contributes_panels: d.contributes_panels,
+            contributes_tools: d.contributes_tools,
+            contributes_sub_agents: d.contributes_sub_agents,
+            requires: d.requires,
+            versions: d.versions,
+        }),
+        detail_loading: s.detail_loading,
+        detail_error: s.detail_error,
+        installing: s.installing,
+        install_error: s.install_error,
+        komarun_connected: s.komarun_connected,
     }
 }
 

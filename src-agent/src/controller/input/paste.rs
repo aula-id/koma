@@ -197,6 +197,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         | Mode::Security(_)
         | Mode::Extensions(_)
         | Mode::ExtScreen(_)
+        | Mode::ExtStore(_)
         | Mode::Bash(_)
         | Mode::Todo(_) => {}
     }
