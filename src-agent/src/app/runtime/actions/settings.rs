@@ -261,6 +261,13 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         // swapped, and if so reset the stale `effort` (this call is its own
         // save, on top of (c)'s, but ONLY fires on an actual swap).
         state.rest.reset_effort_if_main_changed(before_main);
+        // c1b) BUG FIX: the workdir write above may have just dropped the dir
+        // `active_cwd` (a live `/cd`) points at — leaving effective_cwd outside
+        // every allowed root, which would WC-deny every subsequent tool spawn
+        // until a manual `/cd`. Clamp it back to the primary workdir (`None`)
+        // when that happens, regardless of harness mode.
+        let launch_dir = state.rest.launch_dir.clone();
+        state.rest.fg_mut().clamp_active_cwd(&launch_dir);
         // c2) Reindex the dir cache against the (possibly changed) workdirs.
         //     Spawns a background thread; non-blocking.
         let roots = state.rest.fg().session.as_ref().map(|s| s.workdirs());

@@ -1,4 +1,4 @@
 {
   "version": "0.3.7",
-  "message": "fix: --version/--help short-circuit the CLI, and Ctrl+C now opens the quit page"
+  "message": "fix: --version/--help short-circuit, Ctrl+C opens the quit page, removing the active workspace resets the session cwd"
 }
