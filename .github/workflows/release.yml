@@ -4,18 +4,15 @@ name: release
 # attach each one to the GitHub release. Asset names MUST match install.sh:
 #   koma-linux-x64, koma-linux-arm64, koma-darwin-arm64, koma-darwin-x64
 #
-# Linux raw binaries stay TUI-only (no `gui` feature) so they never hard-link
-# webkitgtk at load time and keep working on GTK-less servers. Darwin raw
-# binaries are built `--features gui` (wry uses the always-present system
-# WebKit), so `koma gui` works straight from the released binary. The raw
-# koma-windows-x64.exe (built in windows-package below) is likewise
-# default-features/TUI-only, mirroring the Linux raw-asset philosophy.
+# All builds ship the GUI feature by default (default = ["gui"] in Cargo.toml),
+# so `koma gui` works out of the box on every platform. Linux raw binaries
+# bundle webkit2gtk; Darwin uses the system WebKit; Windows uses WebView2.
 #
 # The linux-packages / windows-package jobs additionally publish desktop
 # installers under STABLE, VERSIONLESS names (hard-linked from the homepage via
 # /releases/latest/download/): koma-x64.deb, koma-arm64.deb, koma-x64.AppImage,
-# koma-arm64.AppImage, koma-x64.msi (this one IS gui-featured), plus the raw
-# koma-windows-x64.exe. These are NOT referenced by install.sh.
+# koma-arm64.AppImage, koma-x64.msi, plus the raw koma-windows-x64.exe.
+# These are NOT referenced by install.sh.
 on:
   push:
     tags:
@@ -32,29 +29,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ----- Linux (TUI-only: no gui feature, no Node) -----
+          # ----- Linux -----
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             asset: koma-linux-x64
             cross: false
-            features: ""
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             asset: koma-linux-arm64
             cross: true
-            features: ""
           # ----- macOS (Apple Silicon runner; x86_64 cross-compiles natively) -----
-          # gui-featured: wry uses the system WebKit, so `koma gui` works.
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: koma-darwin-arm64
             cross: false
-            features: "--features gui"
           - os: macos-latest
             target: x86_64-apple-darwin
             asset: koma-darwin-x64
             cross: false
-            features: "--features gui"
 
     steps:
       - name: Checkout
@@ -86,18 +78,21 @@ jobs:
             echo 'linker = "aarch64-linux-gnu-gcc"'
           } >> .cargo/config.toml
 
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
+
       # The gui feature's build.rs runs `npm install && npm run build` in
-      # src-webgui, so Node must be on PATH before `cargo build`. Only the
-      # darwin assets carry `--features gui`, so this step is skipped for the
-      # TUI-only Linux binaries (keeping them Node-free and webkitgtk-free).
-      - name: Install Node (gui builds)
-        if: contains(matrix.features, 'gui')
+      # src-webgui, so Node must be on PATH before `cargo build`.
+      - name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
       - name: Build release binary
-        run: cargo build --release -p agent --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo build --release -p agent --target ${{ matrix.target }}
 
       # The bin is named "koma" (see src-agent/Cargo.toml [[bin]]); rename to the
       # per-platform asset name so install.sh can fetch it directly.
@@ -208,16 +203,11 @@ jobs:
             koma-${{ matrix.arch }}.AppImage
 
   # ---------------------------------------------------------------------------
-  # Windows: raw koma-windows-x64.exe + the .msi installer (WiX). cargo-packager
-  # downloads the WiX toolset itself, so no separate WiX install step is needed.
-  # Rename/glob steps use `shell: bash` (Git Bash ships on the windows runner) to
-  # avoid mixing PowerShell and bash dialects.
-  #
-  # The raw exe is built default-features (TUI-only), mirroring the
-  # koma-linux-* raw assets philosophy — it must never carry `gui`, so it's
-  # built and staged out FIRST, before the gui-featured build below can
-  # overwrite target/release/koma.exe. The .msi stays the gui-featured
-  # product build.
+  # Windows: raw koma-windows-x64.exe + the .msi installer (WiX). Both are
+  # gui-featured (default = ["gui"]). cargo-packager downloads the WiX toolset
+  # itself, so no separate WiX install step is needed. Rename/glob steps use
+  # `shell: bash` (Git Bash ships on the windows runner) to avoid mixing
+  # PowerShell and bash dialects.
   # ---------------------------------------------------------------------------
   windows-package:
     name: package windows x64 (msi + exe)
@@ -238,16 +228,6 @@ jobs:
             target
           key: windows-packages-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      # Lean default-features build first (TUI-only, no gui feature). Staged
-      # out immediately so the gui build below can't contaminate it.
-      - name: Build release binary (default features)
-        run: cargo build --release -p agent
-
-      # Raw unpackaged binary, published alongside the installer.
-      - name: Stage raw exe
-        shell: bash
-        run: cp target/release/koma.exe koma-windows-x64.exe
-
       - name: Install Node
         uses: actions/setup-node@v4
         with:
@@ -256,11 +236,20 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --version 0.11.8 --locked
 
-      # gui-featured build for the .msi installer; this overwrites
-      # target/release/koma.exe, but the raw exe was already copied out above.
-      - name: Build release binary (gui)
-        run: cargo build --release -p agent --features gui
+      # Default features include gui; stage the raw exe before packaging
+      # overwrites target/release/koma.exe with the packager output.
+      - name: Build release binary
+        run: cargo build --release -p agent
 
+      - name: Stage raw exe
+        shell: bash
+        run: cp target/release/koma.exe koma-windows-x64.exe
+
+      # cargo-packager reads [package.metadata.packager] from src-agent/Cargo.toml
+      # via `cargo metadata`, auto-detects the single `koma` bin, locates it at
+      # target/release/koma.exe, and writes packages to target/release/. No
+      # --out-dir/--binaries flags are needed (verified against cargo-packager
+      # crates/packager/src/cli/config.rs::load_configs_from_cargo_workspace).
       - name: Package msi (wix)
         run: cargo packager --release --formats wix --verbose
 
