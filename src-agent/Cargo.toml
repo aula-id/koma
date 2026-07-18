@@ -146,6 +146,7 @@ objc2-app-kit = { version = "0.3", optional = true, default-features = false, fe
 muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
+default = ["gui"]
 gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 
 [[bin]]
