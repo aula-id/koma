@@ -393,6 +393,12 @@ pub(super) fn drain_ext_notifies(state: &mut AppState) -> bool {
     loop {
         match rx.try_recv() {
             Ok(notify) => {
+                // TUI SCREEN PROTOCOL v1: a `panel.push` carrying `{ kind: "tui-screen" }` is
+                // ALSO folded LIVE into any open `Mode::ExtScreen` (daemon-side, so the attached
+                // TUI sees it via the snapshot projection) — BEFORE the GUI fan-out below, and
+                // WITHOUT consuming the push (the GUI panel bridge still broadcasts it, harmlessly
+                // ignored by a GUI panel that doesn't understand the kind). Do not break either path.
+                fold_tui_screen_push(state, &notify);
                 route_ext_notify(&mut state.rest.ext_panel_pushes, notify);
                 dirty = true;
             }
@@ -405,6 +411,280 @@ pub(super) fn drain_ext_notifies(state: &mut AppState) -> bool {
     state.rest.ext_notify_rx = Some(rx);
     enforce_ext_panel_cap(&mut state.rest.ext_panel_pushes);
     dirty
+}
+
+/// Fold a `{ kind: "tui-screen" }` `panel.push` into every open `Mode::ExtScreen` whose
+/// `ext_id` + `screen_id` match the push (TUI SCREEN PROTOCOL v1's live-update lane). A
+/// non-`panel.push` notify, a malformed one, a non-tui-screen kind, or a missing `screen`
+/// is a no-op — the caller still routes it to the GUI outbox. De-globalized (C3): folds into
+/// whichever session(s) actually have the screen open (single window → one match).
+fn fold_tui_screen_push(state: &mut AppState, notify: &crate::app::ext::ExtNotify) {
+    if notify.name != "panel.push" {
+        return;
+    }
+    let Some((panel_id, payload)) = parse_panel_push(&notify.params) else {
+        return;
+    };
+    if payload.get("kind").and_then(|k| k.as_str()) != Some("tui-screen") {
+        return;
+    }
+    let Some(screen) = payload.get("screen") else {
+        return;
+    };
+    for s in state.rest.sessions.iter_mut() {
+        if let Mode::ExtScreen(es) = &mut s.mode {
+            if es.ext_id == notify.ext_id && es.screen_id == panel_id {
+                es.screen = Some(screen.clone());
+                es.waiting = false;
+                es.error = None;
+                es.clamp_menu();
+            }
+        }
+    }
+}
+
+/// Drain the NON-BLOCKING extension-screen invoke lane (`ext_screen_rx`), mirroring
+/// `drain_sec_health`. An `ext::screen::kick_off_ext_screen_msg` spawn sends exactly one
+/// [`crate::app::ext::screen::ExtScreenReply`]: fold its outcome into the matching open
+/// `Mode::ExtScreen` — `{ screen }` becomes the rendered screen (cursor clamped), `{ close:
+/// true }` pops back to the `/extension` detail view, an error becomes the one-line error —
+/// and clear the `waiting` spinner. Take() the receiver so the arms can mutate `state.mode`;
+/// put it back only while still Empty (a delivered result OR a closed channel ends the
+/// invoke). Non-blocking (try_recv).
+pub(super) fn drain_ext_screen(state: &mut AppState) -> bool {
+    let mut dirty = false;
+    if let Some(mut rx) = state.rest.ext_screen_rx.take() {
+        match rx.try_recv() {
+            Ok(reply) => {
+                // Fold the reply into every matching open screen; note if the extension asked
+                // to CLOSE (handled after the mutable borrow ends, since a pop-back rebuilds a
+                // whole new mode).
+                let mut close = false;
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtScreen(es) = &mut s.mode {
+                        if es.ext_id == reply.ext_id && es.screen_id == reply.screen_id {
+                            es.waiting = false;
+                            match &reply.result {
+                                Ok(v) => {
+                                    if v.get("close").and_then(|c| c.as_bool()) == Some(true) {
+                                        close = true;
+                                    } else if let Some(screen) = v.get("screen") {
+                                        es.screen = Some(screen.clone());
+                                        es.error = None;
+                                        es.clamp_menu();
+                                    } else {
+                                        // Neither `screen` nor `close` → soft error, keep the
+                                        // last screen so the view isn't blanked.
+                                        es.error =
+                                            Some("extension returned no screen".to_string());
+                                    }
+                                }
+                                Err(e) => es.error = Some(e.clone()),
+                            }
+                        }
+                    }
+                }
+                // `{ close: true }` → pop every matching screen back to the /extension detail
+                // (rebuilt off the live registry, exactly like the Esc close action).
+                if close {
+                    let ext_id = reply.ext_id.clone();
+                    let screen_id = reply.screen_id.clone();
+                    let idxs: Vec<usize> = state
+                        .rest
+                        .sessions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| {
+                            matches!(&s.mode, Mode::ExtScreen(es)
+                                if es.ext_id == ext_id && es.screen_id == screen_id)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                    for i in idxs {
+                        let detail =
+                            crate::app::runtime::commands::extensions::build_extensions_state(
+                                &state.rest,
+                                crate::app::mode::ExtSubMode::Detail,
+                                Some(&ext_id),
+                            );
+                        state.rest.sessions[i].mode = Mode::Extensions(Box::new(detail));
+                    }
+                }
+                dirty = true;
+                // Receiver consumed (one-shot result delivered) → don't put it back.
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                // Still in flight — keep the receiver for the next tick.
+                state.rest.ext_screen_rx = Some(rx);
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                // Sender dropped without sending (superseded by a fresh invoke, or task gone):
+                // end the spinner on every open screen so it doesn't hang.
+                for es in ext_screen_states(state) {
+                    es.waiting = false;
+                }
+                dirty = true;
+            }
+        }
+    }
+    dirty
+}
+
+/// Drain the NON-BLOCKING `/store` marketplace fetch/install lane (`store_rx`), mirroring
+/// `drain_ext_screen`. Only one `/store` network call is ever in flight at a time (Browse
+/// -> Detail -> InstallConfirm is strictly sequential), so — like `sec_health_rx` — a
+/// single `try_recv` per tick is enough: a delivered result (or a closed channel) ends the
+/// wait; otherwise the receiver is kept for the next tick.
+///
+/// * [`crate::app::ext::ext_store::StoreEvent::Catalogue`] folds into every open
+///   `Mode::ExtStore`'s Browse loading/error/rows (installed-ness is baked fresh off a
+///   snapshot of `config.installed_extensions` taken BEFORE the loop, so it never races a
+///   concurrent registry mutation mid-fold).
+/// * `Detail` folds into the Detail loading/error/data.
+/// * `InstallArtifact` runs the shared on-loop [`crate::app::runtime::actions::ext_install::
+///   install_extension_core`] — the EXACT tail the GUI store hub's `finish_install` runs —
+///   then, on success, re-bakes every row's `installed` flag (the just-installed id is now
+///   in the registry) and drops back to Detail; on failure the error surfaces in-state.
+/// * `InstallFailed` (a pre-install-core network/session failure) surfaces the same way.
+pub(super) fn drain_store(state: &mut AppState, handle: &tokio::runtime::Handle) -> bool {
+    use crate::app::ext::ext_store::StoreEvent;
+    use crate::app::mode::StoreSubMode;
+
+    let mut dirty = false;
+    if let Some(mut rx) = state.rest.store_rx.take() {
+        match rx.try_recv() {
+            Ok(StoreEvent::Catalogue(result)) => {
+                let installed_ids: std::collections::HashSet<String> = state
+                    .rest
+                    .config
+                    .installed_extensions
+                    .iter()
+                    .map(|e| e.id.clone())
+                    .collect();
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.loading = false;
+                        match &result {
+                            Ok(items) => {
+                                st.error = None;
+                                st.rows = items
+                                    .iter()
+                                    .map(|it| {
+                                        crate::app::runtime::commands::store::store_row_from_item(
+                                            it,
+                                            &installed_ids,
+                                        )
+                                    })
+                                    .collect();
+                            }
+                            Err(e) => st.error = Some(e.clone()),
+                        }
+                    }
+                }
+                dirty = true;
+            }
+            Ok(StoreEvent::Detail(result)) => {
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.detail_loading = false;
+                        match &result {
+                            Ok(d) => {
+                                st.detail = Some(
+                                    crate::app::runtime::commands::store::store_detail_from_wire(d),
+                                );
+                                st.detail_error = None;
+                            }
+                            Err(e) => {
+                                st.detail = None;
+                                st.detail_error = Some(e.clone());
+                            }
+                        }
+                    }
+                }
+                dirty = true;
+            }
+            Ok(StoreEvent::InstallArtifact { id, zip, sha256, signature }) => {
+                match crate::app::runtime::actions::ext_install::install_extension_core(
+                    state,
+                    handle,
+                    &id,
+                    &zip,
+                    &sha256,
+                    signature.as_deref(),
+                ) {
+                    Ok(ext) => {
+                        let installed_ids: std::collections::HashSet<String> = state
+                            .rest
+                            .config
+                            .installed_extensions
+                            .iter()
+                            .map(|e| e.id.clone())
+                            .collect();
+                        for s in state.rest.sessions.iter_mut() {
+                            if let Mode::ExtStore(st) = &mut s.mode {
+                                st.installing = false;
+                                st.install_error = None;
+                                st.sub_mode = StoreSubMode::Detail;
+                                for row in st.rows.iter_mut() {
+                                    row.installed = installed_ids.contains(&row.id);
+                                }
+                            }
+                        }
+                        state
+                            .rest
+                            .fg_mut()
+                            .set_toast_info(format!("extension installed: {}", ext.id));
+                    }
+                    Err(e) => {
+                        for s in state.rest.sessions.iter_mut() {
+                            if let Mode::ExtStore(st) = &mut s.mode {
+                                st.installing = false;
+                                st.install_error = Some(e.clone());
+                            }
+                        }
+                    }
+                }
+                dirty = true;
+            }
+            Ok(StoreEvent::InstallFailed { id: _, error }) => {
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.installing = false;
+                        st.install_error = Some(error.clone());
+                    }
+                }
+                dirty = true;
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                // Still in flight — keep the receiver for the next tick.
+                state.rest.store_rx = Some(rx);
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                // Sender dropped without sending (superseded by a fresh kick-off, or the
+                // task panicked) — end every spinner so nothing hangs.
+                for s in state.rest.sessions.iter_mut() {
+                    if let Mode::ExtStore(st) = &mut s.mode {
+                        st.loading = false;
+                        st.detail_loading = false;
+                        st.installing = false;
+                    }
+                }
+                dirty = true;
+            }
+        }
+    }
+    dirty
+}
+
+/// De-globalization helper: mutably borrow the [`crate::app::mode::ExtScreenState`] of EVERY
+/// session currently showing an extension screen (single window → at most one).
+fn ext_screen_states(
+    state: &mut AppState,
+) -> impl Iterator<Item = &mut crate::app::mode::ExtScreenState> {
+    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
+        Mode::ExtScreen(es) => Some(es.as_mut()),
+        _ => None,
+    })
 }
 
 /// Route ONE extension notify into the panel-push outbox (the per-notify body of

@@ -268,3 +268,66 @@ fn oauth_provider_def_edge_values_empty_and_unicode() {
     assert_eq!(back.name, "アカウント ログイン 🔐");
     assert_eq!(back.method, "");
 }
+
+/// A full [`ExtensionManifest`] declaring `contributes.tui_screens` round-trips: the
+/// `TuiScreenDef` list survives serialize→parse byte-for-shape (both fields, in order,
+/// multi-element), and — mirroring `oauth_providers`' omitted-when-empty behavior — a
+/// manifest with NO `tui_screens` entries serializes with the key OMITTED entirely (not an
+/// empty array on the wire), so an old reader predating this field sees byte-identical JSON.
+#[test]
+fn manifest_with_tui_screens_roundtrips() {
+    let raw = json!({
+        "schema": MANIFEST_SCHEMA,
+        "id": "run.koma.example.tui-demo-daemon",
+        "name": "TUI Demo",
+        "version": "0.0.0",
+        "tier": "free",
+        "kind": "daemon",
+        "runtime": { "exec": "tui-demo-daemon", "args": [] },
+        "contributes": {
+            "tui_screens": [
+                { "id": "demo", "title": "TUI Demo" },
+                { "id": "second", "title": "Second Screen" }
+            ]
+        },
+        "requires": [],
+    });
+    let manifest: ExtensionManifest =
+        serde_json::from_value(raw).expect("a manifest with tui_screens parses");
+    assert_eq!(manifest.contributes.tui_screens.len(), 2);
+    assert_eq!(manifest.contributes.tui_screens[0].id, "demo");
+    assert_eq!(manifest.contributes.tui_screens[0].title, "TUI Demo");
+    assert_eq!(manifest.contributes.tui_screens[1].id, "second");
+    assert_eq!(manifest.contributes.tui_screens[1].title, "Second Screen");
+
+    // Round-trip back through serde_json::Value and re-parse.
+    let wire = serde_json::to_value(&manifest).expect("serializes");
+    assert_eq!(wire["contributes"]["tui_screens"][0]["id"], "demo");
+    assert_eq!(wire["contributes"]["tui_screens"][1]["title"], "Second Screen");
+    let back: ExtensionManifest =
+        serde_json::from_value(wire).expect("re-parses after round-trip");
+    assert_eq!(back.contributes.tui_screens.len(), 2);
+    assert_eq!(back.contributes.tui_screens[1].id, "second");
+
+    // A manifest with an empty `tui_screens` (the default) omits the key entirely on the wire.
+    let empty = ExtensionManifest {
+        schema: MANIFEST_SCHEMA.to_string(),
+        id: "run.koma.example.no-screens".to_string(),
+        name: "No Screens".to_string(),
+        version: "0.0.0".to_string(),
+        description: String::new(),
+        tier: Tier::Free,
+        kind: ExtensionKind::Daemon,
+        runtime: Runtime { exec: "bin/x".to_string(), args: Vec::new() },
+        contributes: Contributes::default(),
+        requires: Vec::new(),
+        workspace_dir: None,
+        mcp_servers: Vec::new(),
+    };
+    let empty_wire = serde_json::to_value(&empty).expect("serializes");
+    assert_eq!(
+        empty_wire["contributes"].get("tui_screens"),
+        None,
+        "empty tui_screens must be omitted, not serialized as []"
+    );
+}

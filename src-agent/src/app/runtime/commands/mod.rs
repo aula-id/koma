@@ -29,12 +29,21 @@ pub(crate) mod free;
 // mode and must show the identical status line.
 pub(crate) mod internet;
 mod mcp;
+// `pub(crate)` so `build_extensions_state` (the `/extension` row builder) is reachable from
+// `actions::extensions` (post-uninstall rebuild + ExtScreen pop-back) and the ext-screen
+// close drain, which all derive the installed-extension rows the SAME way.
+pub(crate) mod extensions;
 mod misc;
 pub(crate) mod new_session;
 // `pub(crate)` so the shared `kick_off_health_probe` helper is reachable from BOTH the
 // `/security` command (panel open) and the input-path self-heal (controller), which must
 // start the non-blocking health probe with identical semantics.
 pub(crate) mod security;
+// `pub(crate)` so `store_row_from_item`/`store_detail_from_wire` (the `/store` row/detail
+// mappers) are reachable from `event_loop::global::drains::drain_store`, which folds a
+// landed catalogue/detail fetch into `Mode::ExtStore` the SAME way this module's own
+// `handle_store` seeds it.
+pub(crate) mod store;
 mod task;
 
 /// Apply a parsed slash command. Like [`apply_action`], it mutates state and
@@ -55,6 +64,8 @@ pub(super) fn apply_slash(
         Command::Settings => misc::handle_settings(state)?,
         Command::Agents => misc::handle_agents(state)?,
         Command::Mcp => mcp::handle_mcp(state)?,
+        Command::Extensions => extensions::handle_extensions(state)?,
+        Command::Store => store::handle_store(state, handle)?,
         Command::Security => security::handle_security(state)?,
         Command::Resume => new_session::handle_resume(state)?,
         Command::Select => misc::handle_select(state)?,

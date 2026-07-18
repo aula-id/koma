@@ -1,4 +1,4 @@
 {
-  "version": "0.3.8",
-  "message": "0.3.8: composer model label shows the real resolved model (was stuck on koma/apple in daemon mode), global model changes demote lingering session-local role holders"
+  "version": "0.3.9",
+  "message": "feat: /store and /extension in the TUI — extension marketplace, management, and extension-driven TUI screens"
 }

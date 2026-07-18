@@ -38,6 +38,74 @@ pub struct McpSnapshot {
     pub status: std::collections::HashMap<String, usize>,
 }
 
+/// One TUI-screen row for [`ExtRowWire`] — a serde mirror of
+/// [`crate::app::mode::ExtTuiScreen`] (also the SDK `TuiScreenDef`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtTuiScreenWire {
+    pub id: String,
+    pub title: String,
+}
+
+/// A serde-safe projection of ONE installed-extension row — mirrors
+/// [`crate::app::mode::ExtRow`] field-for-field (all pure data: registry facts +
+/// manifest-derived counts/screens + the LIVE running flag), so a thin client rebuilds and
+/// renders the `/extension` dashboard faithfully instead of a blank Chat screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtRowWire {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub tier: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub running: bool,
+    pub description: String,
+    pub granted: Vec<String>,
+    pub tools: usize,
+    pub panels: usize,
+    pub sub_agents: usize,
+    pub models: usize,
+    pub tui_screens: Vec<ExtTuiScreenWire>,
+    pub workspace_dir: Option<String>,
+}
+
+/// A serde-safe projection of the `/extension` dashboard.
+///
+/// Mirrors [`crate::app::mode::ExtensionsState`]: the installed-extension rows + the LIST
+/// cursor + the sub-mode wire token (see `ext_submode_token` in `tokens.rs`) + the
+/// tui-screen cursor + any in-state error. The client rebuilds it verbatim and renders the
+/// same master/detail/confirm view; it never mutates it (keys forwarded to the daemon).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtensionsSnapshot {
+    pub rows: Vec<ExtRowWire>,
+    pub list_sel: usize,
+    /// Sub-mode wire token: "browse" | "detail" | "uninstall_confirm".
+    pub mode: String,
+    pub screen_sel: usize,
+    pub error: Option<String>,
+}
+
+/// A serde-safe projection of an OPEN extension-driven TUI screen.
+///
+/// Mirrors [`crate::app::mode::ExtScreenState`]: the ext/screen ids + declared title, the
+/// current `Screen` model (an OPAQUE `serde_json::Value` carried verbatim), the menu cursor,
+/// and the loading/error flags. A thin client rebuilds it and renders the same server-driven
+/// screen off the projection (the daemon owns the invoke + folds every reply/push).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtScreenSnapshot {
+    pub ext_id: String,
+    pub screen_id: String,
+    pub screen_title: String,
+    pub screen: Option<serde_json::Value>,
+    pub menu_cursor: usize,
+    pub waiting: bool,
+    pub error: Option<String>,
+}
+
 /// A serde-safe projection of one row in the `/help` reference.
 ///
 /// Mirrors [`crate::app::mode::help::HelpEntry`] field-for-field. The `kind` enum
@@ -178,6 +246,64 @@ pub struct TodoSnapshot {
     pub items: Vec<TodoItemSnapshot>,
     pub selected: usize,
     pub pwd_hash: String,
+}
+
+/// One catalogue row for the `/store` marketplace browser — a slimmed mirror of
+/// [`crate::ipc::proto::StoreItemWire`] plus the LOCALLY-baked `installed` flag (checked
+/// against `config.installed_extensions` at fetch time, since the store API itself has
+/// no notion of what's installed on THIS machine).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtStoreRowWire {
+    pub id: String,
+    pub name: String,
+    pub tagline: String,
+    pub tier: String,
+    pub kind: String,
+    pub latest_version: String,
+    pub author: String,
+    pub installed: bool,
+}
+
+/// The `/store` detail pane's data — a flattened mirror of
+/// [`crate::ipc::proto::StoreDetailWire`]: `description_md` pre-stripped of markdown
+/// headers (the TUI renders plain wrapped text, no full markdown renderer) and
+/// `contributes` flattened to its four counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtStoreDetailWire {
+    pub description: String,
+    pub contributes_models: u32,
+    pub contributes_panels: u32,
+    pub contributes_tools: u32,
+    pub contributes_sub_agents: u32,
+    pub requires: Vec<String>,
+    pub versions: Vec<String>,
+}
+
+/// A serde-safe projection of the `/store` marketplace browser.
+///
+/// Mirrors [`crate::app::mode::store::ExtStoreState`] field-for-field: the catalogue
+/// rows + LIST cursor + sub-mode wire token (see `store_submode_token` in `tokens.rs`),
+/// the Browse loading/error pair, the Detail loading/error pair + fetched detail, and
+/// the InstallConfirm install-in-flight/error pair + the koma.run connection flag. The
+/// client rebuilds it verbatim and renders the same browse/detail/confirm view; it
+/// never mutates it (keys forwarded to the daemon).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ExtStoreSnapshot {
+    pub rows: Vec<ExtStoreRowWire>,
+    pub list_sel: usize,
+    /// Sub-mode wire token: "browse" | "detail" | "install_confirm".
+    pub mode: String,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub detail: Option<ExtStoreDetailWire>,
+    pub detail_loading: bool,
+    pub detail_error: Option<String>,
+    pub installing: bool,
+    pub install_error: Option<String>,
+    pub komarun_connected: bool,
 }
 
 /// A serde-safe projection of the /agents dashboard.

@@ -64,6 +64,8 @@ pub(super) fn service_global(
     dirty |= drains::drain_endpoints(state);
     dirty |= drains::drain_version(state);
     dirty |= drains::drain_sec_health(state);
+    dirty |= drains::drain_ext_screen(state);
+    dirty |= drains::drain_store(state, handle);
     dirty |= drains::drain_oauth(state, handle);
     dirty |= drains::drain_ext_calls(state, client, handle);
     dirty |= drains::drain_ext_notifies(state);

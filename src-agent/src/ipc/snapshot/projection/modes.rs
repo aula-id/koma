@@ -1,13 +1,16 @@
 use super::tokens::{
     agent_field_token, agent_scope_token, agent_submode_token, api_type_token,
-    help_kind_token, mcp_field_token, mcp_submode_token, mcp_transport_token, role_token,
-    theme_token, usage_metric_token, usage_view_token,
+    ext_submode_token, help_kind_token, mcp_field_token, mcp_submode_token, mcp_transport_token,
+    role_token, store_submode_token, theme_token, usage_metric_token, usage_view_token,
 };
 
 use crate::app::mode::agents::{AgentsState, ModelPickerState, ToolPickerState};
+use crate::app::mode::ext_screen::ExtScreenState;
+use crate::app::mode::extensions::{ExtRow, ExtensionsState};
 use crate::app::mode::help::HelpState;
 use crate::app::mode::mcp::McpState;
 use crate::app::mode::security::SecurityState;
+use crate::app::mode::store::{ExtStoreState, StoreRow};
 use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::settings::{ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
@@ -20,7 +23,9 @@ use crate::model::store::SessionMeta;
 
 use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
-    CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, HelpEntrySnapshot, HelpSnapshot,
+    CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, ExtRowWire, ExtScreenSnapshot,
+    ExtStoreDetailWire, ExtStoreRowWire, ExtStoreSnapshot, ExtTuiScreenWire, ExtensionsSnapshot,
+    HelpEntrySnapshot, HelpSnapshot,
     HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot,
     ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot,
     OnboardProviderSnapshot, OnboardSnapshot,
@@ -53,6 +58,19 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // per-server tool counts (the client owns no MCP manager), so a thin client
         // rebuilds and renders the dashboard faithfully instead of a blank Chat screen.
         Mode::Mcp(m) => ModeSnapshot::Mcp(Box::new(mcp_snapshot(m, state))),
+        // The `/extension` manager projects the installed-extension rows (registry + manifest
+        // facts + the LIVE running flag, baked at build time) + cursors + sub-mode token, so a
+        // thin client rebuilds + renders the dashboard instead of a blank Chat screen.
+        Mode::Extensions(e) => ModeSnapshot::Extensions(Box::new(extensions_snapshot(e))),
+        // An open extension screen projects the opaque `Screen` model verbatim + the menu
+        // cursor + loading/error flags, so a thin client renders the SAME server-driven view
+        // (the daemon owns the invoke + folds every reply/push).
+        Mode::ExtScreen(s) => ModeSnapshot::ExtScreen(Box::new(ext_screen_snapshot(s))),
+        // The `/store` marketplace browser projects the fetched catalogue rows + cursor +
+        // sub-mode token + the Browse/Detail/InstallConfirm loading/error/data fields, so
+        // a thin client rebuilds + renders the SAME browse/detail/confirm view instead of
+        // a blank Chat screen.
+        Mode::ExtStore(s) => ModeSnapshot::ExtStore(Box::new(ext_store_snapshot(s))),
         // The `/security` control panel projects a live status re-read from the
         // daemon manager (so the snapshot always reflects current daemon state after
         // start/stop, not just the state at mode-open time) plus the cursor.
@@ -627,6 +645,101 @@ pub fn mcp_snapshot(m: &McpState, state: &AppState) -> McpSnapshot {
             .as_ref()
             .map(|mgr| mgr.server_status_cached())
             .unwrap_or_default(),
+    }
+}
+
+/// Project ONE installed-extension row into its wire mirror (pure data — registry facts +
+/// manifest-derived counts/screens + the baked running flag, all cloned verbatim).
+fn ext_row_wire(r: &ExtRow) -> ExtRowWire {
+    ExtRowWire {
+        id: r.id.clone(),
+        name: r.name.clone(),
+        version: r.version.clone(),
+        tier: r.tier.clone(),
+        kind: r.kind.clone(),
+        enabled: r.enabled,
+        running: r.running,
+        description: r.description.clone(),
+        granted: r.granted.clone(),
+        tools: r.tools,
+        panels: r.panels,
+        sub_agents: r.sub_agents,
+        models: r.models,
+        tui_screens: r
+            .tui_screens
+            .iter()
+            .map(|t| ExtTuiScreenWire {
+                id: t.id.clone(),
+                title: t.title.clone(),
+            })
+            .collect(),
+        workspace_dir: r.workspace_dir.clone(),
+    }
+}
+
+/// Project the `/extension` dashboard: the installed-extension rows + cursors + sub-mode
+/// token + any in-state error.
+pub fn extensions_snapshot(st: &ExtensionsState) -> ExtensionsSnapshot {
+    ExtensionsSnapshot {
+        rows: st.rows.iter().map(ext_row_wire).collect(),
+        list_sel: st.list_sel,
+        mode: ext_submode_token(st.sub_mode).to_string(),
+        screen_sel: st.screen_sel,
+        error: st.error.clone(),
+    }
+}
+
+/// Project an open extension screen: the ids + declared title, the opaque `Screen` value
+/// (carried verbatim), the menu cursor, and the loading/error flags.
+pub fn ext_screen_snapshot(st: &ExtScreenState) -> ExtScreenSnapshot {
+    ExtScreenSnapshot {
+        ext_id: st.ext_id.clone(),
+        screen_id: st.screen_id.clone(),
+        screen_title: st.screen_title.clone(),
+        screen: st.screen.clone(),
+        menu_cursor: st.menu_cursor,
+        waiting: st.waiting,
+        error: st.error.clone(),
+    }
+}
+
+/// Project ONE `/store` catalogue row into its wire mirror (pure data, cloned verbatim).
+fn store_row_wire(r: &StoreRow) -> ExtStoreRowWire {
+    ExtStoreRowWire {
+        id: r.id.clone(),
+        name: r.name.clone(),
+        tagline: r.tagline.clone(),
+        tier: r.tier.clone(),
+        kind: r.kind.clone(),
+        latest_version: r.latest_version.clone(),
+        author: r.author.clone(),
+        installed: r.installed,
+    }
+}
+
+/// Project the `/store` marketplace browser: the fetched catalogue rows + cursor +
+/// sub-mode token + the Browse/Detail/InstallConfirm loading/error/data fields.
+pub fn ext_store_snapshot(st: &ExtStoreState) -> ExtStoreSnapshot {
+    ExtStoreSnapshot {
+        rows: st.rows.iter().map(store_row_wire).collect(),
+        list_sel: st.list_sel,
+        mode: store_submode_token(st.sub_mode).to_string(),
+        loading: st.loading,
+        error: st.error.clone(),
+        detail: st.detail.as_ref().map(|d| ExtStoreDetailWire {
+            description: d.description.clone(),
+            contributes_models: d.contributes_models,
+            contributes_panels: d.contributes_panels,
+            contributes_tools: d.contributes_tools,
+            contributes_sub_agents: d.contributes_sub_agents,
+            requires: d.requires.clone(),
+            versions: d.versions.clone(),
+        }),
+        detail_loading: st.detail_loading,
+        detail_error: st.detail_error.clone(),
+        installing: st.installing,
+        install_error: st.install_error.clone(),
+        komarun_connected: st.komarun_connected,
     }
 }
 

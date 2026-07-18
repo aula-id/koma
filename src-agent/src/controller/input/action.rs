@@ -194,6 +194,35 @@ pub enum Action {
     /// Esc from the MCP dashboard (Browse, LIST focused) — discard any drafts and
     /// return to Chat.
     CloseMcp,
+    // --- Extensions dashboard actions ---
+    /// Esc from the `/extension` dashboard (Browse) — return to Chat.
+    CloseExtensions,
+    /// `y` in the `/extension` uninstall confirm — run the shared uninstall nuke on the
+    /// selected extension, toast, and rebuild the Browse list. On error the message is
+    /// shown in-state and the dashboard returns to Detail.
+    UninstallExtension,
+    /// Enter on a tui-screen row in the `/extension` detail view — open the extension-driven
+    /// [`crate::app::mode::Mode::ExtScreen`], auto-start the extension if needed, and kick
+    /// off the async `tui-open` invoke.
+    ExtScreenOpen,
+    /// Enter on a menu row in an open extension screen — kick off the async `tui-select`
+    /// invoke for the highlighted item (waiting spinner; the reply folds the next screen).
+    ExtScreenSelect,
+    /// Esc in an open extension screen — fire a best-effort `tui-close` and pop back to the
+    /// `/extension` detail view.
+    ExtScreenClose,
+    // --- Store marketplace browser actions ---
+    /// Esc from the `/store` marketplace browser (Browse) — return to Chat.
+    CloseStore,
+    /// `r` in Browse while a fetch error is shown — reset the loading/error state and
+    /// re-kick the async catalogue fetch.
+    StoreRetryBrowse,
+    /// Enter on a row in Browse — open Detail for it and kick off the async detail
+    /// fetch.
+    StoreOpenDetail,
+    /// `y` in InstallConfirm (koma.run bearer present) — kick off the async install
+    /// download; the landed artifact runs the shared on-loop verify+install tail.
+    StoreInstallConfirm,
     // --- Security daemon control panel actions ---
     /// Esc from the `/security` panel — return to Chat.
     CloseSecurity,
