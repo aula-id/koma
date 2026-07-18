@@ -1,4 +1,4 @@
 {
-  "version": "0.3.9",
-  "message": "feat: /store and /extension in the TUI — extension marketplace, management, and extension-driven TUI screens"
+  "version": "0.3.10",
+  "message": "feat: koma.run OAuth as a shared provider — extensions can read your koma.run session via the oauth:read grant and oauth.token broker verb"
 }
