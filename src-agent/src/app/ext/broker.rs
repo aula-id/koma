@@ -278,6 +278,10 @@ fn required_grant(method: &str) -> Option<Grant> {
         // there is no separate `providers:contribute` scope).
         "providers.register" | "providers.unregister" => Some(Grant::ModelsContribute),
         "context.set" | "context.clear" => Some(Grant::ContextPublish),
+        // A general host-broker READ of the user's connected koma.run OAuth token. EXACT-MATCH
+        // `oauth:read` — distinct from `oauth:contribute` (which gates the host→ext delegation
+        // invokes and confers no broker `Call`); one grant never confers the other.
+        "oauth.token" => Some(Grant::OauthRead),
         _ => None,
     }
 }
@@ -305,6 +309,9 @@ fn is_granted(granted: &[Grant], required: Grant) -> bool {
         Grant::OauthContribute => granted.contains(&Grant::OauthContribute),
         // W12: exact-match — gates `models.register`/`models.unregister` only.
         Grant::ModelsContribute => granted.contains(&Grant::ModelsContribute),
+        // Exact-match — gates the `oauth.token` broker read only. No implication in or out
+        // (holding another grant never confers it, and it confers nothing else).
+        Grant::OauthRead => granted.contains(&Grant::OauthRead),
     }
 }
 
@@ -328,8 +335,8 @@ pub(crate) fn method_permitted(method: &str, granted: &[Grant]) -> GateDecision 
 /// `sessions.bogus`) flows to the broker and comes back as
 /// [`GateDecision::UnknownMethod`], never the wire stub.
 pub(crate) fn is_broker_method(method: &str) -> bool {
-    const PREFIXES: [&str; 6] =
-        ["agents.", "sessions.", "chat.", "models.", "providers.", "context."];
+    const PREFIXES: [&str; 7] =
+        ["agents.", "sessions.", "chat.", "models.", "providers.", "context.", "oauth."];
     PREFIXES.iter().any(|p| method.starts_with(p))
 }
 
@@ -345,6 +352,7 @@ fn grant_wire(g: Grant) -> &'static str {
         Grant::ContextPublish => "context:publish",
         Grant::OauthContribute => "oauth:contribute",
         Grant::ModelsContribute => "models:contribute",
+        Grant::OauthRead => "oauth:read",
     }
 }
 
@@ -363,6 +371,7 @@ pub(crate) fn parse_grants(wire: &[String]) -> Vec<Grant> {
             "context:publish" => Some(Grant::ContextPublish),
             "oauth:contribute" => Some(Grant::OauthContribute),
             "models:contribute" => Some(Grant::ModelsContribute),
+            "oauth:read" => Some(Grant::OauthRead),
             _ => None,
         })
         .collect()
@@ -547,10 +556,71 @@ pub fn handle_ext_call(
             // OWNS the reply either way.
             broker_sessions_spawn_into(state, &ext_id, client, handle, &params, reply);
         }
+        "oauth.token" => {
+            // General host-broker OAuth-token READ (gated by `oauth:read`). Dispatch on the
+            // `provider` param — an ECOSYSTEM primitive, so other koma.run-backed providers can
+            // reuse this SAME verb. Resolve the provider + find the connection ON the loop (where
+            // `state.rest.config` is live), snapshot the OWNED fields the reply needs, THEN move
+            // the reply into a spawned task that awaits `fresh_key` (which auto-refreshes an
+            // expired koma.run token — see `service::oauth::manager::fresh_key`; we never refresh
+            // ourselves). The token fetch is well under the reader's 120s `EXT_CALL_TIMEOUT`, so
+            // this verb uses the default cap. OWNS the reply from here.
+            let provider = params.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+            match provider {
+                // Accept the dotted contract id AND the `komarun` wire-id alias.
+                "koma.run" | "komarun" => {
+                    let Some(conn) = state
+                        .rest
+                        .config
+                        .oauth_conns
+                        .iter()
+                        .find(|c| c.provider == crate::model::app_config::OAuthProvider::KomaRun)
+                    else {
+                        let _ = reply.send(json!({ "error": "not_connected" }));
+                        return;
+                    };
+                    // Own the fields BEFORE the async move. The reply uses the CONNECTION's own
+                    // `email`/`expires_at` — the `account` `fresh_key` returns is empty for
+                    // KomaRun (account login only, not a model provider).
+                    let uuid = conn.uuid.clone();
+                    let email = conn.email.clone();
+                    let expires_at = conn.expires_at;
+                    handle.spawn(async move {
+                        let (bearer, _account) =
+                            crate::service::oauth::manager::fresh_key(&uuid, "").await;
+                        let _ =
+                            reply.send(build_oauth_token_reply(Some((email, expires_at)), &bearer));
+                    });
+                }
+                // Any other provider is EXPLICITLY unsupported (never a silent not_connected).
+                _ => {
+                    let _ = reply.send(json!({ "error": "unsupported_provider" }));
+                }
+            }
+        }
         // Unreachable: method_permitted already rejected anything else above.
         _ => {
             let _ = reply.send(json!({ "error": format!("unknown method: {method}") }));
         }
+    }
+}
+
+/// Build the `oauth.token` reply object from a connection's `(email, expires_at)` and a
+/// freshly-resolved `bearer`. PURE (no state / no I/O) so the reply SHAPE is unit-testable
+/// without an [`AppState`]. Returns `{ "error": "not_connected" }` when the connection is
+/// absent (`conn_email` is `None`) OR the `bearer` is empty/blank — the SAME shape for "no
+/// koma.run connection" and "connection present but its token could not be produced/refreshed"
+/// (an expired/unrecoverable session, where `fresh_key` yields an empty string). Otherwise the
+/// success object `{ access_token, expires_at, email }`, using the connection's OWN
+/// `email`/`expires_at` (snapshotted off the loop thread before the async token fetch).
+fn build_oauth_token_reply(conn_email: Option<(String, u64)>, bearer: &str) -> Value {
+    match conn_email {
+        Some((email, expires_at)) if !bearer.trim().is_empty() => json!({
+            "access_token": bearer,
+            "expires_at": expires_at,
+            "email": email,
+        }),
+        _ => json!({ "error": "not_connected" }),
     }
 }
 
@@ -2211,14 +2281,20 @@ mod tests {
             assert_eq!(parse_grants(&[grant_wire(*grant).to_string()]), vec![*grant]);
         }
 
-        // W11: `oauth:contribute` gates no broker verb, so the gate still treats every
-        // `oauth.*` method as UnknownMethod even when the grant is held (it is not a
-        // broker `Call` family at all — koma drives the extension, not the reverse).
+        // W11: `oauth:contribute` gates no broker verb — the host→ext delegation invokes
+        // (`oauth.begin`/`oauth.poll`/`oauth.cancel`) are driven BY koma, never `Call`ed by the
+        // extension — so the gate treats them as UnknownMethod even when the grant is held. (The
+        // later `oauth.token` READ verb, gated by the separate `oauth:read`, is the ONLY `oauth.*`
+        // a `Call` may name; `oauth.begin` stays gate-unknown regardless of routing.)
         assert_eq!(
             method_permitted("oauth.begin", &[Grant::OauthContribute]),
             GateDecision::UnknownMethod
         );
-        assert!(!is_broker_method("oauth.begin"));
+        // The `oauth.` FAMILY now prefix-routes to the broker (so the `oauth.token` verb reaches
+        // it), but an unrecognised `oauth.*` verb like `oauth.begin` still resolves to
+        // UnknownMethod at the gate above — routing keys on the family prefix; the
+        // allow/deny/unknown decision is `method_permitted`'s job (see `is_broker_method`'s doc).
+        assert!(is_broker_method("oauth.begin"));
     }
 
     /// `is_broker_method` recognises every broker family prefix (one representative
@@ -2240,6 +2316,75 @@ mod tests {
         for m in ["tool.call", "panel.msg", ""] {
             assert!(!is_broker_method(m), "{m:?} must NOT route to the broker");
         }
+    }
+
+    // ─── oauth.token broker verb + oauth:read grant (additive) ─────────────────────────────
+
+    /// `oauth:read` round-trips both mirror maps in lock-step: `grant_wire` emits the exact
+    /// wire string, and `parse_grants` maps it back to the variant (plus, defensively, the full
+    /// `parse_grants(&[grant_wire(g)]) == [g]` round-trip).
+    #[test]
+    fn oauth_read_grant_wire_roundtrips() {
+        assert_eq!(grant_wire(Grant::OauthRead), "oauth:read");
+        assert_eq!(parse_grants(&["oauth:read".to_string()]), vec![Grant::OauthRead]);
+        assert_eq!(
+            parse_grants(&[grant_wire(Grant::OauthRead).to_string()]),
+            vec![Grant::OauthRead]
+        );
+    }
+
+    /// The `oauth.token` verb requires `oauth:read`, routes to the broker (the `oauth.` family
+    /// prefix), and is gated EXACT-MATCH: `oauth:read` allows; the empty set is denied WITH the
+    /// required grant; an unrelated grant never confers it. `is_granted` (the lattice core)
+    /// exact-matches it too.
+    #[test]
+    fn oauth_token_gate_and_routing() {
+        assert_eq!(required_grant("oauth.token"), Some(Grant::OauthRead));
+        assert!(is_broker_method("oauth.token"), "oauth.token must route to the broker");
+
+        assert_eq!(
+            method_permitted("oauth.token", &[Grant::OauthRead]),
+            GateDecision::Allow
+        );
+        assert_eq!(
+            method_permitted("oauth.token", &[]),
+            GateDecision::Deny(Grant::OauthRead)
+        );
+        // Cross-family isolation: a neighbouring grant never confers oauth:read.
+        assert_eq!(
+            method_permitted("oauth.token", &[Grant::OauthContribute]),
+            GateDecision::Deny(Grant::OauthRead)
+        );
+
+        // `is_granted` exact-matches oauth:read: held ⇒ true, absent ⇒ false, unrelated ⇒ false.
+        assert!(is_granted(&[Grant::OauthRead], Grant::OauthRead));
+        assert!(!is_granted(&[], Grant::OauthRead));
+        assert!(!is_granted(&[Grant::OauthContribute], Grant::OauthRead));
+    }
+
+    /// [`build_oauth_token_reply`] is the PURE reply-shaper: `not_connected` when the connection
+    /// is absent OR the bearer is empty/blank; the success object (with the conn's own
+    /// email/expires_at) otherwise.
+    #[test]
+    fn oauth_token_reply_shape() {
+        let not_connected = json!({ "error": "not_connected" });
+
+        // No connection ⇒ not_connected, regardless of bearer.
+        assert_eq!(build_oauth_token_reply(None, "x"), not_connected);
+        // Connection present but an empty / blank bearer (expired/unrecoverable) ⇒ not_connected.
+        assert_eq!(
+            build_oauth_token_reply(Some(("a@b.co".to_string(), 123)), ""),
+            not_connected
+        );
+        assert_eq!(
+            build_oauth_token_reply(Some(("a@b.co".to_string(), 123)), "   "),
+            not_connected
+        );
+        // Connection + a real bearer ⇒ the success object with the conn's own email/expires_at.
+        assert_eq!(
+            build_oauth_token_reply(Some(("a@b.co".to_string(), 123)), "jwt"),
+            json!({ "access_token": "jwt", "expires_at": 123, "email": "a@b.co" })
+        );
     }
 
     /// Build a minimal single-session [`AppState`] fixture for the broker
