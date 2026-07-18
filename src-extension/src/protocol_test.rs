@@ -27,6 +27,7 @@ fn grant_wire_strings_exhaustive_canary() {
         Grant::ContextPublish,
         Grant::OauthContribute,
         Grant::ModelsContribute,
+        Grant::OauthRead,
     ];
 
     let wire_of = |g: Grant| -> &'static str {
@@ -40,6 +41,7 @@ fn grant_wire_strings_exhaustive_canary() {
             Grant::ContextPublish => "context:publish",
             Grant::OauthContribute => "oauth:contribute",
             Grant::ModelsContribute => "models:contribute",
+            Grant::OauthRead => "oauth:read",
         }
     };
 

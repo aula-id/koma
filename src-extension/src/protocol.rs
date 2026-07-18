@@ -230,6 +230,16 @@ pub enum Grant {
     /// conn), so an extension that registers models almost always requires BOTH.
     #[serde(rename = "models:contribute")]
     ModelsContribute,
+    /// Read the user's connected koma.run OAuth token over the general host-broker
+    /// `oauth.token` verb (dispatched on a `provider` param — `"koma.run"` today, other
+    /// koma.run-backed providers later). This is an ECOSYSTEM primitive: any extension built
+    /// on koma.run's service can hold it to read that connection's bearer / expiry / email.
+    /// Unlike [`Self::OauthContribute`] (which gates the host→ext delegation invokes and
+    /// confers NO broker `Call`), this DOES gate a broker `Call` verb — it has a
+    /// `required_grant` entry on koma's side (EXACT-MATCH, like every family grant: it neither
+    /// confers nor is conferred by any other).
+    #[serde(rename = "oauth:read")]
+    OauthRead,
 }
 
 // ---- duplex wire envelope ----

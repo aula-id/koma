@@ -663,6 +663,7 @@ fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String
             koma_extension::protocol::Grant::ContextPublish => "context:publish".to_string(),
             koma_extension::protocol::Grant::OauthContribute => "oauth:contribute".to_string(),
             koma_extension::protocol::Grant::ModelsContribute => "models:contribute".to_string(),
+            koma_extension::protocol::Grant::OauthRead => "oauth:read".to_string(),
         })
         .collect();
     let panels = manifest.contributes.panels.iter().map(|p| PanelWire {
