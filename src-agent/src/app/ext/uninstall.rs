@@ -11,6 +11,7 @@
 
 use koma_extension::protocol::ExtensionManifest;
 
+use crate::app::state::AppState;
 use crate::model::store;
 
 /// The one-shot manifest snapshot an uninstall takes BEFORE it deletes `extensions/<id>/`
@@ -149,4 +150,67 @@ fn read_subdirs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         }
     }
     out
+}
+
+/// Clear extension `id`'s LIVE in-memory footprint on THIS daemon (uninstall steps 2/4 + the
+/// in-memory clears): deregister its contributed MCP tools, stop its child process, and drop
+/// its published context blob, buffered chat prompts (every session), and ext-agent
+/// containment registry. Idempotent — an absent extension is a no-op everywhere — and touches
+/// NO config/disk. Shared by the local uninstall core
+/// ([`crate::app::runtime::actions::ext_uninstall::uninstall_extension_core`], this daemon) and
+/// the `unload_extension` fan-out handler (every OTHER daemon), so the two can never drift.
+pub(crate) fn unload_ext_footprint(state: &mut AppState, id: &str) {
+    // Clone the manager Arcs up front so the immutable borrow of `state.rest` ends before the
+    // `&mut` mutations below.
+    let mcp = state.rest.mcp_manager.clone();
+    let ext_mgr = state.rest.ext_manager.clone();
+
+    // Undo the tool registration (a no-op when no MCP manager / no tools), then stop the
+    // running child (idempotent; absent extension is a no-op).
+    crate::app::ext::register::purge_contributions(id, mcp.as_ref());
+    if let Some(mgr) = &ext_mgr {
+        mgr.stop(id);
+    }
+
+    // Clear the extension's IN-MEMORY footprint: its published context blob, any buffered
+    // chat prompts in every session, and its ext-agent containment registry.
+    state.rest.ext_context.remove(id);
+    for sess in state.rest.sessions.iter_mut() {
+        sess.pending_ext_prompts.retain(|(eid, _)| eid != id);
+    }
+    state.rest.ext_agents.remove(id);
+}
+
+/// Whether `id` is a well-formed reverse-DNS extension id safe to use as a directory name
+/// under `extensions/` — the SAME whitelist `install::validate_id` enforces (non-empty,
+/// only `[A-Za-z0-9._-]`, at least one alphanumeric, not `.`-wrapped). Belt-and-suspenders
+/// on the uninstall path, whose `id` comes from the client.
+pub(crate) fn is_safe_ext_id(id: &str) -> bool {
+    let all_allowed = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    let has_alnum = id.chars().any(|c| c.is_ascii_alphanumeric());
+    let dot_wrapped = id.starts_with('.') || id.ends_with('.');
+    all_allowed && has_alnum && !dot_wrapped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The id-safety guard mirrors `install::validate_id`: reverse-DNS ids pass; path-escape
+    /// / pure-punctuation ids are rejected (so the uninstall `remove_dir_all` can never
+    /// escape `extensions/`).
+    #[test]
+    fn safe_ext_id_rejects_path_escapes() {
+        assert!(is_safe_ext_id("run.koma.gateway"));
+        assert!(is_safe_ext_id("run.koma.example.echo-tool_daemon"));
+        assert!(!is_safe_ext_id(""));
+        assert!(!is_safe_ext_id("."));
+        assert!(!is_safe_ext_id(".."));
+        assert!(!is_safe_ext_id("../etc"));
+        assert!(!is_safe_ext_id("a/b"));
+        assert!(!is_safe_ext_id(".hidden"));
+    }
 }

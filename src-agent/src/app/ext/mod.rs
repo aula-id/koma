@@ -55,6 +55,12 @@ pub mod dev_cli;
 pub mod events;
 pub mod install;
 pub mod register;
+pub(crate) mod screen;
+// Named `ext_store` (not `store`) so this module doesn't collide with the pervasive
+// `use crate::model::store;` (the app-data-dir module) every `app::ext` file — this one
+// included — imports under the plain name `store`.
+pub(crate) mod ext_store;
+pub(crate) mod store_api;
 pub mod uninstall;
 mod wire;
 pub use broker::{ExtAgentRegistry, ExtCallRequest, ExtNotify};

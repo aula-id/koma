@@ -77,7 +77,7 @@ every sample in `src-extension/example/` exercises at least one direction of it.
 ## What an extension gives koma: contributions
 
 The things an extension adds to koma are called its *contributions*, declared under
-`contributes` in the manifest. There are five kinds today.
+`contributes` in the manifest. There are six kinds today.
 
 **Sub-agents** (`contributes.sub_agents`). An extension can ship its own agent
 descriptions — including a system prompt, a preferred model slug, and a default
@@ -112,7 +112,14 @@ never sees a client secret, and only stores the resulting token. See "OAuth
 providers" below for the full `oauth.begin`/`oauth.poll`/`oauth.cancel` contract and
 how a provider becomes a resolvable model gateway on top of that.
 
-**Events** (`contributes.events`) sit slightly apart from the four contribution
+**TUI screens** (`contributes.tui_screens`). An extension can drive a full-screen
+view koma's TERMINAL UI renders on its behalf — the same idea as a panel, but for
+someone running koma's TUI instead of the GUI, and it costs zero protocol change: it
+reuses the exact same `panel.msg`/`panel.push` verbs a panel already uses, just
+distinguished by a `kind` tag in the payload. See "TUI screens" below for the full
+`Screen`/`Node` model and the host-side navigation contract.
+
+**Events** (`contributes.events`) sit slightly apart from the five contribution
 arrays above — an extension doesn't *provide* an event, it *subscribes* to ones
 koma already emits. It's declared in the same `contributes` object because the
 mechanics are the same (an array in the manifest that changes what koma sends you),
@@ -202,6 +209,16 @@ profile page or dashboard; when you want to manage your account you follow a lin
 to the koma.run dashboard in your browser. One account is all it takes to unlock the
 store, and extensions borrow what they need from koma rather than each making you log
 in again.
+
+The terminal UI has the same two surfaces as its own modes rather than sidebar icons:
+`/extension` opens the browse/detail/uninstall flow (browse your installed
+extensions, Enter for an extension's detail — its permissions, its workspace
+directory if it has one, and, for an extension that declares
+`contributes.tui_screens`, a selectable row per screen that jumps straight into the
+extension-driven full-screen view described under "TUI screens" below), and `/store`
+mirrors the GUI's storefront browse for discovering new ones. Nothing here needs a
+panel's webview — the TUI never renders one — so `contributes.tui_screens` is a
+GUI-less extension's only route to a full-screen UI of its own.
 
 ## Two extensions to picture
 
@@ -420,6 +437,7 @@ an old manifest missing a field added in a later wave still parses (this is test
 | `tools` | `{ "name": <string>, "description": <string>, "input_schema"?: <JSON Schema value> }` |
 | `events` | `[<string>]` — event names this extension wants delivered to `on_event`. See "Events" below for the fixed vocabulary. |
 | `oauth_providers` | see below |
+| `tui_screens` | `{ "id": <string>, "title": <string> }` (`TuiScreenDef`) — a full-screen view koma's terminal UI renders for this extension. See "TUI screens" below. |
 
 **`sub_agents` and the model slug binding chain.** `prompt` becomes the sub-agent's
 system prompt; `model` and `effort` are a slug and an effort hint applied at spawn
@@ -918,6 +936,145 @@ so a handler registered any time after the script loads still gets the CURRENT
 theme immediately, not just the next change. See `fleet-board-daemon/ui/index.html`
 for it wired up to `--koma-*` CSS custom properties with the panel's original
 hardcoded colours kept as fallbacks.
+
+---
+
+## TUI screens (`contributes.tui_screens`)
+
+A panel needs a webview, and koma's terminal UI has none — so an extension that
+wants a full-screen view of its own when the user is running the TUI instead of the
+GUI declares `contributes.tui_screens` instead of (or alongside) `contributes.panels`.
+The whole exchange reuses the panel bridge's `panel.msg` invoke + `panel.push` notify
+verbs VERBATIM — the screen id rides as `panelId` — so this costs the wire protocol
+nothing new: a GUI panel message and a TUI screen message are the same bytes on the
+socket, distinguished only by a `kind` tag inside the opaque payload. The
+koma-side authority for everything in this section is the module doc comment on
+`src-agent/src/app/ext/screen.rs`; this section restates it for the SDK-facing side.
+
+### The manifest field
+
+```json
+"contributes": {
+  "tui_screens": [
+    { "id": "demo", "title": "TUI Demo" }
+  ]
+}
+```
+
+Each entry is a `TuiScreenDef { id: <string>, title: <string> }` (both required, no
+optional fields — see the manifest reference table above). `id` is the stable id
+koma passes back as `panelId` on every invoke for this screen and matches on every
+`panel.push` targeting it; `title` is the human-facing label — it's the row shown
+under the extension's entry in the terminal UI's `/extension` detail view, AND the
+header shown until (and unless) the extension's first `Screen` reply supplies its
+own `title`. Declaring more than one entry gives the user more than one selectable
+row; each is its own independent screen with its own `id`.
+
+### The payload envelopes
+
+Host → ext (koma invokes `panel.msg`, `panelId` = the screen's `id`):
+
+| verb | payload | when |
+| --- | --- | --- |
+| open | `{ "kind": "tui-open" }` | the screen is opened (the row was selected in `/extension` detail) |
+| select | `{ "kind": "tui-select", "item": "<menu item id>" }` | Enter on a menu row |
+| close | `{ "kind": "tui-close" }` | Esc, or the screen is otherwise torn down — best-effort; the reply is ignored |
+
+Ext → host reply (the `Result` value of the `panel.msg` invoke):
+
+- `{ "screen": <Screen> }` — render this screen.
+- `{ "close": true }` — pop back to the extension's detail view (the same
+  destination `tui-close` leads to, just extension-initiated instead of
+  user-initiated — see `tui-demo-daemon`'s "close" menu row for exactly this).
+
+Ext → host push (the extension calls `Koma::panel_push(screen_id, ...)` — a
+fire-and-forget `panel.push` notify, `panel_id` = the screen's `id`):
+
+- `{ "kind": "tui-screen", "screen": <Screen> }` — folded LIVE into the open screen,
+  no user action required. This is how a screen shows something changing on its own
+  (a counter ticking, a job finishing) instead of only reacting to input.
+
+### The `Screen` / `Node` model
+
+```text
+Screen = { "title"?: <string>, "body": [<Node>], "footer"?: <string> }
+Node   = { "t": "text",    "text": <string> }
+       | { "t": "kv",      "k": <string>, "v": <string> }
+       | { "t": "divider" }
+       | { "t": "menu",    "items": [ { "id": <string>, "label": <string> } ] }
+```
+
+`title` and `footer` are optional; `body` is the ordered list of content nodes koma
+renders top to bottom. A node with an unrecognized `"t"` is SKIPPED, not an error —
+forward-compat for a future node type an older extension SDK doesn't know about yet.
+There is no per-node styling; the terminal UI decides how each `t` paints.
+
+### Host-side navigation
+
+koma's terminal UI owns exactly one piece of state for an open screen: the menu
+cursor. It is NOT told which row means what — it just walks the UNION of every
+`{ "t": "menu" }` node's `items`, in body order, across every menu node in the
+screen (so a `Screen` with two menu nodes separated by a divider still has one
+continuous, ↑/↓-navigable list):
+
+- **↑ / ↓** move the cursor over that union, locally, with no round trip to the
+  extension.
+- **Enter** sends `tui-select` with the id of the item under the cursor, and shows a
+  one-line "loading…" state until the reply lands (Enter is inert while a reply is
+  already in flight, and inert on a screen with no menu at all).
+- **Esc** fires a best-effort `tui-close` (the reply is discarded either way) and
+  pops back to the extension's `/extension` detail view — the SAME thing a `{
+  "close": true }` reply does, just triggered by the user instead of the extension.
+
+Everything else — what the screen says, what the menu options mean, whether an
+action changes anything — is entirely up to the extension; koma has no opinion on
+it beyond rendering the `Node`s it's handed.
+
+### The push channel and its caps
+
+A screen's live-update push is the EXACT SAME `Koma::panel_push` a GUI panel uses
+(see "The size-cap chain" under "Panel bridge" above for the full three-layer
+byte-cap table and the 256-pending drop-oldest queue cap) — nothing about the caps
+changes just because the receiving surface is a terminal screen instead of a
+webview panel. The only TUI-specific rule sits above those caps: a push is only
+folded into a screen that's currently OPEN for that `(ext_id, screen_id)` pair; a
+push for a screen nobody has open is simply not applicable to any client-side state
+and has nowhere to land.
+
+Round-trip budget: `tui-open`/`tui-select` are each bounded at **30s** (shorter than
+the 120s default `panel.msg` timeout elsewhere — a screen redraw should be prompt,
+and a hung extension must not leave the terminal UI spinning for two minutes). Same
+auto-start rule as a panel: opening a screen implies user intent, so a not-yet-running
+ENABLED daemon extension is started lazily on the first `tui-open`; a disabled
+extension, a `oneshot`-kind extension (no persistent backend to hold a screen's
+state against), or an extension that isn't installed at all all surface as the
+screen's one-line error `"extension not available"` instead.
+
+### No screens declared: detail + uninstall only
+
+An extension with an empty (or absent) `contributes.tui_screens` shows nothing extra
+in `/extension`'s detail view beyond its own info and the uninstall action — no
+screen list, no ↑/↓-selectable rows, no cursor. This is the same additive/optional
+shape every other `contributes` array gets: an extension predating this field, or
+one that simply has no use for a full-screen view, parses and runs completely
+unchanged.
+
+### Walkthrough: `tui-demo-daemon`
+
+`src-extension/example/tui-demo-daemon` is the runnable reference for everything
+above: one screen (`id: "demo"`) showing a counter as three `kv` rows (`counter`,
+`last action`, `uptime`), a `divider`, and a `menu` with four items — `increment`,
+`reset`, `refresh`, `close`. Opening it (`tui-open`) shows the current state without
+changing it; selecting a menu item mutates a small shared `State` behind a
+`std::sync::Mutex` and replies with the freshly-built `Screen`; selecting `close`
+replies `{ "close": true }`. A driver thread — the same thread shape
+`fleet-board-daemon` uses for the reasons the deadlock rule forces — sleeps 5
+seconds at a time and calls `Koma::panel_push("demo", { "kind": "tui-screen",
+"screen": ... })`, so the `uptime` row visibly advances even if nobody touches the
+menu. Run `cargo run -p tui-demo-daemon` for the demo transcript (a scripted
+`tui-open` plus one immediate push, since the demo harness has no live socket to
+keep a 5-second loop meaningful against); install it for real and open the "TUI
+Demo" row from its `/extension` detail view to see the live screen for real.
 
 ---
 
