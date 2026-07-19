@@ -15,6 +15,7 @@ export type ProviderSavePayload = { id: string; name: string; endpoint: string; 
 // `/inference/v1`, DeepInfra `/v1/openai`, Mimo token-plan host). "Custom" is
 // handled separately (blank manual form).
 export const PREDEFINED: { name: string; endpoint: string }[] = [
+  { name: 'Koma', endpoint: 'https://koma.run/api/v1/koma-gateway' },
   { name: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1' },
   { name: 'DeepSeek', endpoint: 'https://api.deepseek.com' },
   { name: 'Mimo (token plan)', endpoint: 'https://token-plan-sgp.xiaomimimo.com/v1' },
