@@ -67,7 +67,9 @@ fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
                 0 => Action::OAuthStart(OAuthProvider::Codex),
                 1 => Action::OAuthStart(OAuthProvider::Kilocode),
                 2 => Action::OAuthStart(OAuthProvider::KomaRun),
-                // Any other row (3) switches to the paste-token screen (no task).
+                3 => Action::OAuthStart(OAuthProvider::Xai),
+                4 => Action::OAuthStart(OAuthProvider::ClaudeAI),
+                // Any other row (5) switches to the paste-token screen (no task).
                 _ => {
                     s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
                     Action::None
