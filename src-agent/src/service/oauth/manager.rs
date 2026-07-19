@@ -61,6 +61,8 @@ impl TokenSnap {
             OAuthProvider::ClaudeAI => String::new(),
             // koma.run account login has no org/account header concept either.
             OAuthProvider::KomaRun => String::new(),
+            // Koma Premium: same as KomaRun — no org/account header.
+            OAuthProvider::KomaPremium => String::new(),
             // W11: an ext-backed conn is not a model provider in v1, so it has no
             // send-time account/org header. (It never reaches send-time either — no
             // ModelEntry resolves to it — but stay exhaustive + inert.)
@@ -139,6 +141,7 @@ fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
         OAuthProvider::Xai => Some((XAI_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::ClaudeAI => Some((CLAUDE_REFRESH_LEAD_SECS, CLAUDE_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::KomaRun => Some((KOMA_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS)),
+        OAuthProvider::KomaPremium => Some((KOMA_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::Kilocode => None,
         // W12: an ext-backed token MAY be refreshable (when its manifest declared a refresh
         // descriptor). Use a generic short lead + no age cap; a stale token only actually
@@ -287,6 +290,7 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         OAuthProvider::Codex => codex::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::ClaudeAI => claude::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::KomaRun => komarun::refresh(http_client(), &snap.refresh_token).await,
+        OAuthProvider::KomaPremium => komarun::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
         // W12: refresh via the manifest-declared generic OAuth2 `refresh_token` endpoint,
         // gated on the conn carrying BOTH a non-empty `refresh_token` AND a

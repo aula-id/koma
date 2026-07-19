@@ -68,5 +68,13 @@
       "id": "deepseek-chat",
       "pricing": { "input": 0.27, "cached": 0.07, "output": 1.1 }
     }
+  ],
+  "https://koma.run/api/v1/koma-premium": [
+    {
+      "id": "koma/peach",
+      "reasoning": { "mandatory": false, "supported_efforts": ["low", "medium", "high"] },
+      "context_length": 200000,
+      "pricing": { "input": 0.0, "cached": 0.0, "output": 0.0 }
+    }
   ]
 }

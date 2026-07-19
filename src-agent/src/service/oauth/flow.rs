@@ -27,6 +27,7 @@ pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedS
         OAuthProvider::Xai => run_xai_flow(tx).await,
         OAuthProvider::ClaudeAI => run_claude_flow(tx).await,
         OAuthProvider::KomaRun => run_komarun_flow(tx).await,
+        OAuthProvider::KomaPremium => run_komarun_flow(tx).await,
         // W11: an extension-delegated flow is NEVER driven through here — it runs
         // off-loop in the daemon hub (`requests_oauth::run_ext_oauth_delegate`), keyed
         // by an `ext:<id>:<provider>` picker id, and never via `Action::OAuthStart`

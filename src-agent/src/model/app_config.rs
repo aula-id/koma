@@ -130,6 +130,9 @@ pub enum OAuthProvider {
     /// shape but against koma.run's native-client OAuth endpoints (form-encoded token
     /// exchange, no client_id/scope). Account login only — not a model provider yet.
     KomaRun,
+    /// Koma Premium (koma/peach): uses KomaRun OAuth tokens but routes to the
+    /// premium endpoint (`/api/v1/koma-premium`) for paid subscribers.
+    KomaPremium,
     /// W11: a token stored by an EXTENSION-delegated OAuth flow. The actual provider
     /// identity lives in the connection's `ext_id`/`provider_id` fields, not this enum
     /// (which stays `Copy` + closed) — this variant is just the "backed by an extension"
@@ -150,6 +153,7 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xAI",
             OAuthProvider::ClaudeAI => "Claude",
             OAuthProvider::KomaRun => "Koma",
+            OAuthProvider::KomaPremium => "Koma Premium",
             // W11: generic marker label; a real ext-backed conn's picker row uses the
             // extension manifest's provider `name`, never this (see
             // `requests_oauth::ext_oauth_rows_for`).
@@ -168,6 +172,7 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xai",
             OAuthProvider::ClaudeAI => "claudeai",
             OAuthProvider::KomaRun => "komarun",
+            OAuthProvider::KomaPremium => "komapremium",
             // W11: stamped as the `provider` on an ext-backed conn's tokenless wire
             // projection (so the webview sees a stable marker); the connection's real
             // identity is its `ext_id`/`provider_id`. NOT a `from_wire_id` input.
@@ -194,6 +199,7 @@ impl OAuthProvider {
             "xai" => Some(OAuthProvider::Xai),
             "claudeai" => Some(OAuthProvider::ClaudeAI),
             "komarun" => Some(OAuthProvider::KomaRun),
+            "komapremium" => Some(OAuthProvider::KomaPremium),
             _ => None,
         }
     }
@@ -210,6 +216,7 @@ impl OAuthProvider {
             OAuthProvider::Xai => "device",
             OAuthProvider::ClaudeAI => "pkce",
             OAuthProvider::KomaRun => "pkce",
+            OAuthProvider::KomaPremium => "pkce",
             // W11: never surfaced through the enum-driven `oauth_providers()` list (ext
             // rows carry their own kind, mapped from the manifest `method` — see
             // `requests_oauth::method_to_kind`), so this value is exhaustiveness-only and
