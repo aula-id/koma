@@ -160,10 +160,10 @@ pub struct OAuthProviderMeta {
 /// `"device"` / `"paste"`).
 ///
 /// Derived from the [`OAuthProvider`] enum (each variant's `wire_id`/`label`/`flow_kind`),
-/// plus the Codex paste-token option — a third login choice that reuses Codex's connection
+/// plus the Codex paste-token option — a sixth login choice that reuses Codex's connection
 /// shape and so has no enum variant of its own. The TUI's hardcoded picker OPTIONS array
-/// (`app::mode::settings` / `app::mode::onboard`) stays as-is this wave; folding it onto
-/// this same source is a future dedup.
+/// (`app::mode::settings` / `app::mode::onboard`) mirrors all five native providers but
+/// remains hardcoded; folding it onto this same source is a future dedup.
 pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
     let mut providers: Vec<(&'static str, &'static str, &'static str)> = [
         OAuthProvider::Codex,

@@ -163,7 +163,7 @@ fn draw_list(frame: &mut Frame, st: &SettingsState, palette: &Palette, area: Rec
 ///
 /// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
 pub(crate) fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) {
-    const OPTIONS: [&str; 4] = ["Codex", "Kilo Code", "koma.run", "Codex (paste token)"];
+    const OPTIONS: [&str; 6] = ["Codex", "Kilo Code", "koma.run", "xAI", "Claude", "Codex (paste token)"];
     let lines: Vec<Line> = OPTIONS
         .iter()
         .enumerate()
