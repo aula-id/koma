@@ -372,14 +372,24 @@ pub fn draw(
         let is_or = st.mm_provider_is_openrouter();
         // Codex has no network catalogue: substitute the synthetic CODEX_MODELS
         // list (always "matches") so the existing renderer serves it unchanged.
+        // Other OAuth providers with an empty catalogue_endpoint (ClaudeAI,
+        // KomaRun, Extension) get the same treatment from the curated
+        // catalogue_overlay table — see `mm_selected_is_static_overlay`/
+        // `mm_static_overlay_catalogue`. Marking `cache_matches` true for both
+        // means the renderer's "searching models…" branch is never reached for
+        // these providers; an empty overlay list instead falls through to the
+        // renderer's normal "no models — type an id" state.
         let is_codex = st.mm_selected_is_codex();
-        let codex_cache = if is_codex {
+        let is_static_overlay = st.mm_selected_is_static_overlay();
+        let static_cache = if is_codex {
             crate::service::oauth::registry::codex_static_catalogue()
+        } else if is_static_overlay {
+            st.mm_static_overlay_catalogue()
         } else {
             Vec::new()
         };
-        let (cache, cache_matches): (&[crate::dto::openrouter::ModelInfo], bool) = if is_codex {
-            (&codex_cache, true)
+        let (cache, cache_matches): (&[crate::dto::openrouter::ModelInfo], bool) = if is_codex || is_static_overlay {
+            (&static_cache, true)
         } else {
             // Does the cache hold THIS provider's catalogue? (endpoint match)
             let cm = st
