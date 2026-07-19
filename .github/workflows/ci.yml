@@ -39,9 +39,6 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
 
       # ----- root workspace (src-agent) -----
-      # Default features only: the TUI build needs no system libraries, so we
-      # avoid the webkit2gtk / gtk apt install that the gui build requires.
-      #
       # fmt/clippy are non-gating for now: the existing tree is not rustfmt- or
       # clippy-clean, so gating on them would fail before the tests run. Tests
       # are the real gate. Drop the `|| true` on fmt once `cargo fmt --all` has
@@ -50,14 +47,14 @@ jobs:
         run: cargo fmt --all --check || true
 
       - name: Tests
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --no-default-features --all-targets
 
       # Informational for now: the tree has not been clippy-audited, so this is
       # non-gating to keep the first CI run green. Flip to
-      #   cargo clippy --workspace --all-targets -- -D warnings
+      #   cargo clippy --workspace --no-default-features --all-targets -- -D warnings
       # once the existing warnings are cleared.
       - name: Clippy (non-gating)
-        run: cargo clippy --workspace --all-targets || true
+        run: cargo clippy --workspace --no-default-features --all-targets || true
 
       # ----- src-extension (separate workspace, excluded from the root one) -----
       - name: Formatting (src-extension, non-gating)
