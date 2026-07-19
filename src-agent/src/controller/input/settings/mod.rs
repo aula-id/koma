@@ -277,6 +277,8 @@ fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
                         0 => Action::OAuthStart(OAuthProvider::Codex),
                         1 => Action::OAuthStart(OAuthProvider::Kilocode),
                         2 => Action::OAuthStart(OAuthProvider::KomaRun),
+                        3 => Action::OAuthStart(OAuthProvider::Xai),
+                        4 => Action::OAuthStart(OAuthProvider::ClaudeAI),
                         _ => {
                             s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
                             Action::None
