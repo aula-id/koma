@@ -113,6 +113,14 @@ pub const KOMA_REVOKE_URL: &str = "https://koma.run/api/v1/auth/oauth/revoke";
 pub const KOMA_REDIRECT: &str = "http://127.0.0.1:51004/cb";
 pub const KOMA_PORT: u16 = 51004;
 
+/// The premium-tier catalogue-overlay endpoint key (`models.json`), holding models
+/// (e.g. `koma/peach`) reserved for paid koma.run subscribers. A `KomaRun` connection
+/// authenticates against BOTH this and the base [`KOMA_AUTHORIZE_URL`]-issued endpoint
+/// with the SAME OAuth tokens — see `catalogue_overlay::models_for_provider` (lists
+/// both) and `app::resolve::from_entry` (routes a premium model id's request here
+/// instead of the base chat endpoint).
+pub const KOMA_PREMIUM_CHAT_ENDPOINT: &str = "https://koma.run/api/v1/koma-premium";
+
 /// Refresh lead / max-refresh-age windows for koma.run's rotating refresh token.
 /// koma.run access tokens are short-lived (24h, see the token response's
 /// `expires_in`), so a tighter lead than Codex's multi-day one (5 min, matching
@@ -163,7 +171,6 @@ pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
         OAuthProvider::Xai,
         OAuthProvider::ClaudeAI,
         OAuthProvider::KomaRun,
-        OAuthProvider::KomaPremium,
     ]
     .iter()
     .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
@@ -198,12 +205,6 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
         // extension wires koma.run as an actual chat/catalogue backend.
         OAuthProvider::KomaRun => OAuthProviderMeta {
             chat_endpoint: "https://koma.run/api/v1",
-            catalogue_endpoint: "",
-        },
-        // Koma Premium (koma/peach): uses the same OAuth tokens as KomaRun but routes
-        // to the premium endpoint for paid subscribers.
-        OAuthProvider::KomaPremium => OAuthProviderMeta {
-            chat_endpoint: "https://koma.run/api/v1/koma-premium",
             catalogue_endpoint: "",
         },
         // W12: extension-backed conns are resolved DATA-DRIVEN from the conn's OWN stored

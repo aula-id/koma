@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 use crate::dto::openrouter::ModelInfo;
+use crate::model::app_config::OAuthProvider;
 use model::OverlayTable;
 
 /// The live in-memory overlay table. `OnceLock` because it's initialized
@@ -151,6 +152,36 @@ pub fn models_for(endpoint: &str) -> Vec<ModelInfo> {
         .get(endpoint)
         .map(|v| v.iter().map(|m| m.to_model_info()).collect())
         .unwrap_or_default()
+}
+
+/// All overlay entries for `provider`, the OAuth-provider-aware counterpart of
+/// [`models_for`]: for [`OAuthProvider::KomaRun`] a SINGLE connection's tokens are
+/// valid against BOTH koma.run catalogue-overlay endpoint keys (the base chat
+/// endpoint AND `registry::KOMA_PREMIUM_CHAT_ENDPOINT`, which carries the
+/// premium-tier models like `koma/peach`) — see `service::oauth::registry::meta`'s
+/// docs on the two endpoints. This merges both lists (base first, premium
+/// appended, deduped by model id in case a future overlay update lists the same
+/// id under both keys) into ONE candidate catalogue, so every koma model is
+/// reachable from the one KomaRun OAuth login. Every other provider is a
+/// pass-through to [`models_for`] on its single `registry::meta(provider).chat_endpoint`.
+///
+/// The single merge implementation every candidate-list call site (onboard model
+/// select, the GUI Connector model picker, the daemon `ListModels` handler, the
+/// `/effort` capability lookup) should call instead of `models_for(meta(p).chat_endpoint)`
+/// directly, so a future third koma tier only needs a change here.
+pub fn models_for_provider(provider: OAuthProvider) -> Vec<ModelInfo> {
+    let base = crate::service::oauth::registry::meta(provider).chat_endpoint;
+    if provider != OAuthProvider::KomaRun {
+        return models_for(base);
+    }
+    let mut models = models_for(base);
+    let seen: std::collections::HashSet<String> = models.iter().map(|m| m.id.clone()).collect();
+    for m in models_for(crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT) {
+        if !seen.contains(&m.id) {
+            models.push(m);
+        }
+    }
+    models
 }
 
 #[cfg(test)]

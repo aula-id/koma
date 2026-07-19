@@ -317,12 +317,9 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         // xAI is a plain OpenAI-compatible chat endpoint (bearer JWT).
         OAuthProvider::Xai => ApiType::OpenAiCompatible,
         OAuthProvider::ClaudeAI => ApiType::AnthropicCompatible,
-        // Account login only — not a model provider yet (a future extension will
-        // wire koma.run as an actual chat backend). Safe placeholder wire type;
-        // never actually hit today since no ModelEntry references this conn.
+        // koma.run speaks a plain OpenAI-compatible chat endpoint (both the base and
+        // premium — see the endpoint routing below — wire tiers).
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
-        // Koma Premium: uses KomaRun OAuth tokens with the premium endpoint.
-        OAuthProvider::KomaPremium => ApiType::OpenAiCompatible,
         // W11: an ext-backed conn is not a model provider in v1 — no ModelEntry
         // references it, so this `find` never yields one and this arm never runs.
         // Placeholder wire type; W12 sources the real api_type from the extension
@@ -341,15 +338,31 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::ClaudeAI => String::new(),
         // Koma account login has no org/account header concept either.
         OAuthProvider::KomaRun => String::new(),
-        // Koma Premium: same as KomaRun — no org/account header.
-        OAuthProvider::KomaPremium => String::new(),
         // W11: ext-backed conns carry no send-time account/org header (not a model
         // provider in v1). Empty, same as the account-login providers.
         OAuthProvider::Extension => String::new(),
     };
+    // A single KomaRun connection's OAuth tokens are valid against BOTH koma.run
+    // catalogue-overlay endpoints (the base one and the premium one, e.g.
+    // `koma/peach`) — see `catalogue_overlay::models_for_provider`, which lists
+    // models from both under this one connection. Route THIS model's request to
+    // whichever endpoint actually serves it: the premium endpoint when the model
+    // id is one of its entries, else the base endpoint. Every other OAuth provider
+    // is unaffected (single endpoint, `meta.chat_endpoint` as before).
+    let endpoint = if conn.provider == OAuthProvider::KomaRun
+        && crate::service::catalogue_overlay::models_for(
+            crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT,
+        )
+        .iter()
+        .any(|m| m.id == entry.model_id)
+    {
+        crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT.to_string()
+    } else {
+        meta.chat_endpoint.to_string()
+    };
     Some(Resolved {
         model_id: entry.model_id.clone(),
-        endpoint: meta.chat_endpoint.to_string(),
+        endpoint,
         api_key: conn.access_token.clone(),
         api_type,
         route: entry.route.clone(),

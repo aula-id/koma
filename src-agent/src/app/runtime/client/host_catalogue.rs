@@ -9,12 +9,12 @@
 /// swapper): load the GLOBAL config and resolve the provider by uuid. A `config.providers`
 /// entry gets a live `GET {endpoint}/models`, falling back to the curated `catalogue_overlay`
 /// if that comes back empty; a `config.oauth_conns` entry (Codex/Claude/xAI) has no live
-/// fetch worth making and resolves straight to the overlay via
-/// `registry::meta(conn.provider).chat_endpoint`. Returns an EMPTY list on an unknown
-/// provider OR any fetch error — the caller ALWAYS pushes a reply, so the React picker's
-/// spinner clears. Mirrors the daemon's attached-path `ClientRequest::ListModels` handler
-/// (`hub::requests_read`), but sources the provider from disk since the swapper holds no
-/// in-memory `AppConfig`.
+/// fetch worth making and resolves via `catalogue_overlay::models_for_provider(conn.provider)`
+/// (for KomaRun this merges the base and koma-premium catalogue keys). Returns an EMPTY list
+/// on an unknown provider OR any fetch error — the caller ALWAYS pushes a reply, so the React
+/// picker's spinner clears. Mirrors the daemon's attached-path `ClientRequest::ListModels`
+/// handler (`hub::requests_read`), but sources the provider from disk since the swapper holds
+/// no in-memory `AppConfig`.
 pub(super) async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
     let cfg = crate::model::app_config::AppConfig::load();
     if let Some(p) = cfg.providers.iter().find(|p| p.uuid == provider) {
@@ -41,8 +41,7 @@ pub(super) async fn fetch_models_for_provider(provider: &str) -> Vec<String> {
         return models;
     }
     if let Some(conn) = cfg.oauth_conns.iter().find(|c| c.uuid == provider) {
-        let endpoint = crate::service::oauth::registry::meta(conn.provider).chat_endpoint;
-        return crate::service::catalogue_overlay::models_for(endpoint)
+        return crate::service::catalogue_overlay::models_for_provider(conn.provider)
             .into_iter()
             .map(|m| m.id)
             .collect();
