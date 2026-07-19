@@ -34,6 +34,9 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.0.0-cache-rust"
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # ----- root workspace (src-agent) -----
       # Default features only: the TUI build needs no system libraries, so we
