@@ -1,0 +1,61 @@
+name: ci
+
+# Runs the existing test suite, formatting and lint checks on every push to
+# main and on pull requests. Uses only standard GitHub-hosted runners, which
+# are free and unmetered for public repositories, so this does not touch the
+# Actions minute allotment used by the release workflow.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref so we never pay for stale work.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test + fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # ----- root workspace (src-agent) -----
+      # Default features only: the TUI build needs no system libraries, so we
+      # avoid the webkit2gtk / gtk apt install that the gui build requires.
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Tests
+        run: cargo test --workspace --all-targets
+
+      # Informational for now: the tree has not been clippy-audited, so this is
+      # non-gating to keep the first CI run green. Flip to
+      #   cargo clippy --workspace --all-targets -- -D warnings
+      # once the existing warnings are cleared.
+      - name: Clippy (non-gating)
+        run: cargo clippy --workspace --all-targets || true
+
+      # ----- src-extension (separate workspace, excluded from the root one) -----
+      - name: Formatting (src-extension)
+        working-directory: src-extension
+        run: cargo fmt --all --check
+
+      - name: Tests (src-extension)
+        working-directory: src-extension
+        run: cargo test --workspace --all-targets
