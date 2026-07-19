@@ -159,7 +159,7 @@ pub fn candidate_model_ids(
         Vec::new()
     } else {
         provider
-            .map(|p| crate::service::catalogue_overlay::models_for(registry::meta(p).chat_endpoint))
+            .map(crate::service::catalogue_overlay::models_for_provider)
             .unwrap_or_default()
     };
     let cache: &[ModelInfo] = if cache_matches { models_cache } else { &overlay_cache };
