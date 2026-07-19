@@ -105,6 +105,46 @@ impl SettingsState {
         )
     }
 
+    /// `true` when the model modal's selected provider is an OAuth draft whose
+    /// `registry::meta(provider).catalogue_endpoint` is empty (no network
+    /// catalogue) and it is NOT the Codex case (Codex has its own dedicated
+    /// static-list mechanism — [`Self::mm_selected_is_codex`] /
+    /// `codex_static_catalogue`). Gates the curated
+    /// `catalogue_overlay::models_for_provider` short-circuit for the OTHER
+    /// empty-catalogue-endpoint OAuth providers (currently ClaudeAI, KomaRun,
+    /// Extension): same idea as Codex's static list — an instant local
+    /// candidate list, no network fetch, no "searching models…" spinner.
+    pub fn mm_selected_is_static_overlay(&self) -> bool {
+        match self.mm_selected_provider() {
+            Some(SelectedProvider::OAuth(d)) => {
+                d.provider != crate::model::app_config::OAuthProvider::Codex
+                    && crate::service::oauth::registry::meta(d.provider)
+                        .catalogue_endpoint
+                        .is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    /// The curated overlay catalogue for the model modal's currently selected
+    /// provider, when [`Self::mm_selected_is_static_overlay`] is true; an empty
+    /// vec otherwise. Mirrors `codex_static_catalogue()`'s role for Codex, but
+    /// sourced from the shared `models.json` curated table
+    /// (`catalogue_overlay::models_for_provider`) instead of a hardcoded list.
+    ///
+    /// An empty result here (the overlay has no entries for this provider) is a
+    /// legitimate "no matches" state, NOT "still fetching" — callers must treat
+    /// a static-overlay provider's cache as always resolved (matched), same as
+    /// they do for Codex.
+    pub fn mm_static_overlay_catalogue(&self) -> Vec<crate::dto::openrouter::ModelInfo> {
+        match self.mm_selected_provider() {
+            Some(SelectedProvider::OAuth(d)) if self.mm_selected_is_static_overlay() => {
+                crate::service::catalogue_overlay::models_for_provider(d.provider)
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Display label for provider index `idx` as stored on a `ModelDraft`/`ModelEntry`
     /// (`provider_idx`, independent of any open modal): a real provider's name (em-
     /// dash if blank), or an OAuth draft's label when `idx` is beyond the providers
