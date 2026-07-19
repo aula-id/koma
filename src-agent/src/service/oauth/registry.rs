@@ -163,6 +163,7 @@ pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
         OAuthProvider::Xai,
         OAuthProvider::ClaudeAI,
         OAuthProvider::KomaRun,
+        OAuthProvider::KomaPremium,
     ]
     .iter()
     .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
@@ -197,6 +198,12 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
         // extension wires koma.run as an actual chat/catalogue backend.
         OAuthProvider::KomaRun => OAuthProviderMeta {
             chat_endpoint: "https://koma.run/api/v1",
+            catalogue_endpoint: "",
+        },
+        // Koma Premium (koma/peach): uses the same OAuth tokens as KomaRun but routes
+        // to the premium endpoint for paid subscribers.
+        OAuthProvider::KomaPremium => OAuthProviderMeta {
+            chat_endpoint: "https://koma.run/api/v1/koma-premium",
             catalogue_endpoint: "",
         },
         // W12: extension-backed conns are resolved DATA-DRIVEN from the conn's OWN stored
