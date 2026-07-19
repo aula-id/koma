@@ -1,4 +1,4 @@
 {
-  "version": "0.3.10",
-  "message": "feat: koma.run OAuth as a shared provider — extensions can read your koma.run session via the oauth:read grant and oauth.token broker verb"
+  "version": "0.3.11",
+  "message": "feat: add koma/peach premium model support"
 }
