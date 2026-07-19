@@ -161,8 +161,8 @@ impl DaemonHub {
     //    `catalogue_overlay` for that endpoint.
     //  - A `config.oauth_conns` entry (Codex/Claude/xAI): these have no live
     //    `/models` fetch worth making (Codex/Claude expose none at all; xAI's ids
-    //    are curated too) — resolve straight to the `catalogue_overlay` keyed by
-    //    `registry::meta(conn.provider).chat_endpoint`, no network call needed.
+    //    are curated too) — resolve via `catalogue_overlay::models_for_provider(conn.provider)`
+    //    (for KomaRun this merges the base and koma-premium catalogue keys), no network call needed.
     //  - Neither: unknown provider uuid — reply with an EMPTY list so the picker's
     //    spinner clears instead of hanging with no answer.
     // Every branch ships a `ListModelsReply` over the hub's channel, which
@@ -215,9 +215,8 @@ impl DaemonHub {
             state.rest.config.oauth_conns.iter().find(|c| c.uuid == provider)
         {
             // OAuth-conn provider: no live fetch — resolve straight to the curated
-            // catalogue overlay for this provider's chat endpoint.
-            let endpoint = crate::service::oauth::registry::meta(conn.provider).chat_endpoint;
-            let models = crate::service::catalogue_overlay::models_for(endpoint)
+            // catalogue overlay for this provider's chat endpoint(s).
+            let models = crate::service::catalogue_overlay::models_for_provider(conn.provider)
                 .into_iter()
                 .map(|m| m.id)
                 .collect();
