@@ -189,9 +189,9 @@ pub fn to_conn(tokens: TokenResponse) -> OAuthConn {
         api_type: None,
         refresh_token_url: None,
         refresh_client_id: None,
+        commandcode_chat: None,
     }
 }
-
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

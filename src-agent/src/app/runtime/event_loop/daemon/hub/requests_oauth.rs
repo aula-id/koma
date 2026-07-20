@@ -724,6 +724,7 @@ fn build_ext_conn(
         api_type,
         refresh_token_url,
         refresh_client_id,
+        commandcode_chat: None,
     }
 }
 

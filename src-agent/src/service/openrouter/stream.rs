@@ -154,7 +154,7 @@ impl OpenRouterClient {
             // signed chain-of-thought across tool calls; stripped elsewhere (safe
             // regenerate default). Same endpoint gate `reasoning_config` uses below.
             messages: to_wire_with_images(
-                messages,
+                messages.clone(),
                 image_ctx.as_ref(),
                 is_openrouter(conn.endpoint),
             ),
@@ -223,11 +223,57 @@ impl OpenRouterClient {
                 );
                 return Ok(());
             }
+            // Command Code API-first: on a Go-plan 403 against provider/v1, remember
+            // NDJSON and retry once via `/alpha/generate` so the user never sees the
+            // plan error on a first chat after OAuth.
+            if !conn.oauth_uuid.is_empty()
+                && crate::service::oauth::commandcode::is_provider_api_denied(status, &text)
+                && conn
+                    .endpoint
+                    .contains("api.commandcode.ai/provider/v1")
+            {
+                crate::service::oauth::commandcode::remember_chat_pref(
+                    conn.oauth_uuid,
+                    crate::service::oauth::commandcode::CHAT_NDJSON,
+                );
+                let ndjson_endpoint =
+                    crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
+                let ndjson_conn = Conn {
+                    endpoint: ndjson_endpoint,
+                    api_key: conn.api_key,
+                    api_type: ApiType::CommandCode,
+                    account_id: conn.account_id,
+                    oauth_uuid: conn.oauth_uuid,
+                    install_id: conn.install_id,
+                };
+                return self
+                    .commandcode_stream_complete(
+                        ndjson_conn,
+                        &bearer,
+                        model,
+                        messages,
+                        advertise,
+                        mcp_tools,
+                        image_ctx,
+                        tx,
+                    )
+                    .await;
+            }
             emit(
                 &tx,
                 StreamEvent::Error(clean_error(status, &text)),
             );
             return Ok(());
+        }
+
+        // Command Code provider/v1 succeeded — remember so we keep hitting it.
+        if !conn.oauth_uuid.is_empty()
+            && conn.endpoint.contains("api.commandcode.ai/provider/v1")
+        {
+            crate::service::oauth::commandcode::remember_chat_pref(
+                conn.oauth_uuid,
+                crate::service::oauth::commandcode::CHAT_PROVIDER_V1,
+            );
         }
 
         let mut stream = resp.bytes_stream();

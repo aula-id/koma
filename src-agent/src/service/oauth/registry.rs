@@ -161,10 +161,11 @@ pub const COMMANDCODE_PORT_START: u16 = 5959;
 pub const COMMANDCODE_PORT_RANGE: u16 = 10;
 pub const COMMANDCODE_AUTH_TIMEOUT_SECS: u64 = 120;
 /// NDJSON chat base: `POST {base}/alpha/generate`.
-/// Used by the Go-plan OAuth users (the provider/v1 chat-completions 403s).
+/// Used when a Command Code conn's remembered transport is NDJSON (Go plan).
 pub const COMMANDCODE_CHAT_BASE: &str = "https://api.commandcode.ai";
-/// OpenAI-compatible catalogue base: `GET {base}/models`.
-/// Distinct from the Studio auth origin and from pi's NDJSON `/alpha/generate`.
+/// OpenAI-compatible base: `GET {base}/models`, `POST {base}/chat/completions`.
+/// API-first default for Command Code; Go-plan keys 403 on chat and fall back
+/// to [`COMMANDCODE_CHAT_BASE`] NDJSON, with the winner remembered on the conn.
 pub const COMMANDCODE_API_BASE: &str = "https://api.commandcode.ai/provider/v1";
 
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
@@ -253,10 +254,11 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: "https://api.cline.bot/api/v1",
             catalogue_endpoint: "https://api.cline.bot/api/v1",
         },
-        // Command Code: NDJSON `/alpha/generate` for chat (Go-plan OAuth);
-        // catalogue via the OpenAI-compatible `provider/v1/models` endpoint.
+        // Command Code: API-first default is the OpenAI-compat provider/v1 base
+        // (chat + catalogue). Resolution may override chat to COMMANDCODE_CHAT_BASE
+        // when the conn's remembered transport is NDJSON.
         OAuthProvider::CommandCode => OAuthProviderMeta {
-            chat_endpoint: COMMANDCODE_CHAT_BASE,
+            chat_endpoint: COMMANDCODE_API_BASE,
             catalogue_endpoint: COMMANDCODE_API_BASE,
         },
     }

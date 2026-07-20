@@ -16,6 +16,54 @@ use super::helpers::{
 use super::client::OpenRouterClient;
 use super::types::Conn;
 
+/// Shared Command Code API-first fallback for oneshot paths: if `provider/v1`
+/// rejects the key as Go-plan, remember NDJSON and collect via `/alpha/generate`.
+/// Returns `Some(text)` when the fallback ran (Ok or Err from collect is
+/// propagated); `None` when the status is not a plan denial (caller should
+/// surface the original error).
+async fn commandcode_oneshot_fallback(
+    client: &OpenRouterClient,
+    conn: Conn<'_>,
+    bearer: &str,
+    model: &str,
+    messages: Vec<ChatMessage>,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> Result<Option<String>> {
+    if conn.oauth_uuid.is_empty()
+        || !conn.endpoint.contains("api.commandcode.ai/provider/v1")
+        || !crate::service::oauth::commandcode::is_provider_api_denied(status, body)
+    {
+        return Ok(None);
+    }
+    crate::service::oauth::commandcode::remember_chat_pref(
+        conn.oauth_uuid,
+        crate::service::oauth::commandcode::CHAT_NDJSON,
+    );
+    let ndjson_conn = Conn {
+        endpoint: crate::service::oauth::registry::COMMANDCODE_CHAT_BASE,
+        api_key: conn.api_key,
+        api_type: ApiType::CommandCode,
+        account_id: conn.account_id,
+        oauth_uuid: conn.oauth_uuid,
+        install_id: conn.install_id,
+    };
+    Ok(Some(
+        client
+            .commandcode_collect(ndjson_conn, bearer, model, messages)
+            .await?,
+    ))
+}
+
+fn remember_commandcode_provider_v1(conn: &Conn<'_>) {
+    if !conn.oauth_uuid.is_empty() && conn.endpoint.contains("api.commandcode.ai/provider/v1") {
+        crate::service::oauth::commandcode::remember_chat_pref(
+            conn.oauth_uuid,
+            crate::service::oauth::commandcode::CHAT_PROVIDER_V1,
+        );
+    }
+}
+
 impl OpenRouterClient {
     /// Non-stream completion (used by /compact). Returns assistant content.
     ///
@@ -55,7 +103,7 @@ impl OpenRouterClient {
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
-            messages: to_wire(messages),
+            messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
@@ -78,8 +126,15 @@ impl OpenRouterClient {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            if let Some(out) =
+                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
+                    .await?
+            {
+                return Ok(out);
+            }
             return Err(anyhow!("{}", clean_error(status, &text)));
         }
+        remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
         chat_response
@@ -143,7 +198,7 @@ impl OpenRouterClient {
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
-            messages: to_wire(messages),
+            messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
@@ -168,8 +223,15 @@ impl OpenRouterClient {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            if let Some(out) =
+                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
+                    .await?
+            {
+                return Ok(out);
+            }
             return Err(anyhow!("{}", clean_error(status, &text)));
         }
+        remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
         chat_response
@@ -290,7 +352,7 @@ impl OpenRouterClient {
         });
         let body = ChatRequest {
             model: model.to_string(),
-            messages: to_wire(messages),
+            messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
@@ -330,8 +392,19 @@ impl OpenRouterClient {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            if let Some(out) =
+                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
+                    .await?
+            {
+                let trimmed = out.trim();
+                if trimmed.is_empty() {
+                    return Err(anyhow!("empty classifier reply"));
+                }
+                return Ok(trimmed.to_string());
+            }
             return Err(anyhow!("{}", clean_error(status, &text)));
         }
+        remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
         let message = chat_response
@@ -448,7 +521,7 @@ impl OpenRouterClient {
         });
         let body = ChatRequest {
             model: model.to_string(),
-            messages: to_wire(messages),
+            messages: to_wire(messages.clone()),
             stream: false,
             // `provider_routing_for` treats "" as default routing; a `None`
             // provider behaves the same (no pin).
@@ -484,8 +557,15 @@ impl OpenRouterClient {
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
+            if let Some(out) =
+                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
+                    .await?
+            {
+                return parse_summary(&out);
+            }
             return Err(anyhow!("{}", clean_error(status, &text)));
         }
+        remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
         let message = chat_response
@@ -617,7 +697,7 @@ impl OpenRouterClient {
         });
         let body = ChatRequest {
             model: model.to_string(),
-            messages: to_wire(messages),
+            messages: to_wire(messages.clone()),
             stream: false,
             provider: provider_routing_for(provider),
             usage: UsageRequest { include: true },
@@ -654,8 +734,17 @@ impl OpenRouterClient {
         };
 
         if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            if let Ok(Some(out)) =
+                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
+                    .await
+            {
+                return Ok(parse_blob_ids(&out));
+            }
             return Ok(Vec::new());
         }
+        remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = match response.json().await {
             Ok(r) => r,

@@ -1,11 +1,105 @@
 //! Command Code OAuth: browser-assisted API key retrieval via localhost POST
 //! callback (NOT PKCE). The Studio website POSTs the API key back to a local
 //! loopback server. Also supports static API key paste. Flow kind: "callback".
-//! Chat rides the OpenAI-compatible surface at api.commandcode.ai/provider/v1
-//! (not the pi package's NDJSON /alpha/generate path).
+//!
+//! Chat transport is discovered per-connection: try OpenAI-compat
+//! `provider/v1/chat/completions` first (Provider+ plans); on plan rejection
+//! fall back to NDJSON `POST /alpha/generate` (Go plan). The winner is stored
+//! on [`OAuthConn::commandcode_chat`] so subsequent requests skip the probe.
+
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 use super::registry::{COMMANDCODE_AUTH_PATH, COMMANDCODE_STUDIO_BASE};
-use crate::model::app_config::{new_uuid, OAuthConn, OAuthProvider};
+use crate::model::app_config::{new_uuid, AppConfig, OAuthConn, OAuthProvider};
+
+/// Remembered chat transport: OpenAI-compat `/provider/v1/chat/completions`.
+pub const CHAT_PROVIDER_V1: &str = "provider_v1";
+/// Remembered chat transport: NDJSON `POST /alpha/generate`.
+pub const CHAT_NDJSON: &str = "ndjson";
+
+fn chat_pref_cache() -> &'static RwLock<HashMap<String, String>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Seed the process-wide chat-transport preference from a just-loaded/login conn.
+pub fn seed_chat_pref(conn: &OAuthConn) {
+    if conn.provider != OAuthProvider::CommandCode {
+        return;
+    }
+    if let Some(pref) = conn.commandcode_chat.as_deref() {
+        if let Ok(mut g) = chat_pref_cache().write() {
+            g.insert(conn.uuid.clone(), pref.to_string());
+        }
+    }
+}
+
+/// Look up the remembered chat transport for `oauth_uuid` (cache, then disk).
+/// Returns [`CHAT_PROVIDER_V1`], [`CHAT_NDJSON`], or `None` (not yet probed).
+pub fn chat_pref(oauth_uuid: &str) -> Option<String> {
+    if oauth_uuid.is_empty() {
+        return None;
+    }
+    if let Ok(g) = chat_pref_cache().read() {
+        if let Some(p) = g.get(oauth_uuid) {
+            return Some(p.clone());
+        }
+    }
+    let config = AppConfig::load();
+    let pref = config
+        .oauth_conns
+        .iter()
+        .find(|c| c.uuid == oauth_uuid)
+        .and_then(|c| c.commandcode_chat.clone());
+    if let Some(ref p) = pref {
+        if let Ok(mut g) = chat_pref_cache().write() {
+            g.insert(oauth_uuid.to_string(), p.clone());
+        }
+    }
+    pref
+}
+
+/// Remember the working chat transport for this Command Code conn (cache + disk).
+/// No-op if uuid empty, conn missing, or the value is already set to `mode`.
+pub fn remember_chat_pref(oauth_uuid: &str, mode: &str) {
+    if oauth_uuid.is_empty() {
+        return;
+    }
+    if mode != CHAT_PROVIDER_V1 && mode != CHAT_NDJSON {
+        return;
+    }
+    if let Ok(mut g) = chat_pref_cache().write() {
+        g.insert(oauth_uuid.to_string(), mode.to_string());
+    }
+    let mut config = AppConfig::load();
+    let Some(idx) = config.oauth_index_by_uuid(oauth_uuid) else {
+        return;
+    };
+    let conn = &mut config.oauth_conns[idx];
+    if conn.provider != OAuthProvider::CommandCode {
+        return;
+    }
+    if conn.commandcode_chat.as_deref() == Some(mode) {
+        return;
+    }
+    conn.commandcode_chat = Some(mode.to_string());
+    let _ = config.save();
+}
+
+/// Whether an HTTP error body indicates the key lacks Provider API access
+/// (Go plan 403 on `/provider/v1/chat/completions`).
+pub fn is_provider_api_denied(status: reqwest::StatusCode, body: &str) -> bool {
+    if status != reqwest::StatusCode::FORBIDDEN && status.as_u16() != 402 {
+        return false;
+    }
+    let b = body.to_ascii_lowercase();
+    b.contains("doesn't include api access")
+        || b.contains("does not include api access")
+        || b.contains("upgrade to provider")
+        || b.contains("go plan")
+        || (b.contains("api access") && b.contains("upgrade"))
+}
 
 /// Build the Command Code Studio authorization URL. The browser opens this;
 /// after authentication, the Studio website POSTs the API key to
@@ -58,6 +152,7 @@ pub fn to_conn(api_key: &str, user_name: &str, user_id: &str) -> OAuthConn {
         api_type: None,
         refresh_token_url: None,
         refresh_client_id: None,
+        commandcode_chat: None,
     }
 }
 
@@ -93,5 +188,23 @@ mod tests {
         assert_eq!(conn.account_id, "user_123");
         assert_eq!(conn.email, "Alice");
         assert!(conn.name.contains("Alice"));
+        assert!(conn.commandcode_chat.is_none());
+    }
+
+    #[test]
+    fn detects_go_plan_403() {
+        let body = r#"{"error":"403 Forbidden: Your Go plan doesn't include API access. Upgrade to Provider or higher at https://commandcode.ai/billing"}"#;
+        assert!(is_provider_api_denied(
+            reqwest::StatusCode::FORBIDDEN,
+            body
+        ));
+        assert!(!is_provider_api_denied(
+            reqwest::StatusCode::UNAUTHORIZED,
+            body
+        ));
+        assert!(!is_provider_api_denied(
+            reqwest::StatusCode::FORBIDDEN,
+            "rate limited"
+        ));
     }
 }

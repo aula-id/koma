@@ -329,9 +329,9 @@ pub fn to_conn(tokens: TokenResponse) -> OAuthConn {
         api_type: None,
         refresh_token_url: None,
         refresh_client_id: None,
+        commandcode_chat: None,
     }
 }
-
 fn truncate(s: &str, max: usize) -> String {
     let trimmed = s.trim();
     if trimmed.len() <= max {
