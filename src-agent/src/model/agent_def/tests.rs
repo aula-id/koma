@@ -104,7 +104,17 @@ fn builtins_present_with_expected_shape() {
     assert_eq!(explore.source, AgentSource::Builtin);
     assert!(explore.model.is_none()); // inherit
     assert_eq!(explore.steps, Some(80));
-    assert_eq!(explore.tools, vec!["read", "grep", "glob", "dir_list"]);
+    assert_eq!(
+        explore.tools,
+        vec![
+            "read",
+            "grep",
+            "glob",
+            "dir_list",
+            "web_search",
+            "web_fetch"
+        ]
+    );
     assert!(!explore.prompt.trim().is_empty());
 
     let general = builtins.iter().find(|a| a.name == "general").unwrap();

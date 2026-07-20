@@ -146,7 +146,7 @@ fn plan_shimmer_spans(text: &str, elapsed_ms: u128, palette: &Palette) -> Vec<Sp
 pub(super) fn render_model_row(
     frame: &mut Frame,
     chunk: Rect,
-    rest: &AppStateRest,
+    _rest: &AppStateRest,
     resolved_model: &str,
     palette: &Palette,
 ) {
