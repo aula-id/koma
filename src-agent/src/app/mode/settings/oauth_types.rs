@@ -18,8 +18,8 @@ pub enum OAuthFlowState {
     Starting,
     /// Provider picker cursor. Indices (must match TUI OPTIONS in
     /// `view/settings/oauth.rs`):
-    /// 0 Codex, 1 Kilo Code, 2 koma.run, 3 xAI, 4 Claude, 5 ClinePass,
-    /// 6 Command Code, 7 Codex paste, 8 ClinePass paste, 9 Command Code paste.
+    /// 0 Codex, 1 Kilo Code, 2 koma.run, 3 xAI, 4 Claude,
+    /// 5 Command Code, 6 Codex paste, 7 Command Code paste.
     Pick(usize),
     /// Codex browser flow: the loopback listener is up and `url` is the
     /// authorization URL (shown so the user can copy it if the browser didn't
@@ -28,8 +28,8 @@ pub enum OAuthFlowState {
     /// the view can show a one-shot confirmation line.
     CodexWait { url: String, frame: u8, copied: bool },
     /// Codex manual flow: the user is typing/pasting a raw access token.
-    /// `provider` tracks which provider the paste is for (Codex, ClinePass,
-    /// or CommandCode) so the handler builds the correct conn type.
+    /// `provider` tracks which provider the paste is for (Codex or CommandCode)
+    /// so the handler builds the correct conn type.
     CodexPaste {
         input: String,
         provider: OAuthProvider,

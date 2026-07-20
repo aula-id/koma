@@ -69,23 +69,15 @@ fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
                 2 => Action::OAuthStart(OAuthProvider::KomaRun),
                 3 => Action::OAuthStart(OAuthProvider::Xai),
                 4 => Action::OAuthStart(OAuthProvider::ClaudeAI),
-                5 => Action::OAuthStart(OAuthProvider::ClinePass),
-                6 => Action::OAuthStart(OAuthProvider::CommandCode),
-                7 => {
+                5 => Action::OAuthStart(OAuthProvider::CommandCode),
+                6 => {
                     s.oauth_flow = OAuthFlowState::CodexPaste {
                         input: String::new(),
                         provider: OAuthProvider::Codex,
                     };
                     Action::None
                 }
-                8 => {
-                    s.oauth_flow = OAuthFlowState::CodexPaste {
-                        input: String::new(),
-                        provider: OAuthProvider::ClinePass,
-                    };
-                    Action::None
-                }
-                9 => {
+                7 => {
                     s.oauth_flow = OAuthFlowState::CodexPaste {
                         input: String::new(),
                         provider: OAuthProvider::CommandCode,

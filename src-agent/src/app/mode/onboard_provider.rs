@@ -76,10 +76,10 @@ impl OnboardProviderState {
         }
     }
 
-    /// Move the picker cursor down (no-op off `Pick`; clamps at the last option, 9).
+    /// Move the picker cursor down (no-op off `Pick`; clamps at the last option, 7).
     pub fn pick_down(&mut self) {
         if let OAuthFlowState::Pick(c) = &mut self.oauth_flow {
-            *c = (*c + 1).min(9);
+            *c = (*c + 1).min(7);
         }
     }
 
