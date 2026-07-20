@@ -131,7 +131,7 @@ fn draw_login(frame: &mut Frame, flow: &OAuthFlowState, palette: &Palette, area:
             Some(url),
             *copied,
         ),
-        OAuthFlowState::CodexPaste { input } => draw_paste(frame, input, palette, area),
+        OAuthFlowState::CodexPaste { input, .. } => draw_paste(frame, input, palette, area),
         OAuthFlowState::KiloWait {
             user_code,
             verification_url,

@@ -27,6 +27,7 @@ pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedS
         OAuthProvider::Xai => run_xai_flow(tx).await,
         OAuthProvider::ClaudeAI => run_claude_flow(tx).await,
         OAuthProvider::KomaRun => run_komarun_flow(tx).await,
+        OAuthProvider::CommandCode => run_commandcode_flow(tx).await,
         // W11: an extension-delegated flow is NEVER driven through here — it runs
         // off-loop in the daemon hub (`requests_oauth::run_ext_oauth_delegate`), keyed
         // by an `ext:<id>:<provider>` picker id, and never via `Action::OAuthStart`
@@ -204,4 +205,39 @@ async fn run_xai_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     };
     let conn = super::xai::to_conn(tokens);
     let _ = tx.send(OAuthEvent::Success { conn });
+}
+
+/// Command Code browser flow: start a POST loopback server, open the
+/// authorization URL in the browser, wait for the Studio website to POST the
+/// API key back. Sends exactly one terminal event after an initial `CodexUrl`
+/// (reused as the generic browser-URL carrier).
+async fn run_commandcode_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+    let state = super::commandcode::generate_state();
+    let timeout = super::registry::COMMANDCODE_AUTH_TIMEOUT_SECS;
+
+    let (port, callback_fut) = match super::loopback_post::catch_post_callback(&state, timeout)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+            return;
+        }
+    };
+
+    let auth_url = super::commandcode::build_auth_url(port, &state);
+    let _ = tx.send(OAuthEvent::CodexUrl {
+        url: auth_url.clone(),
+    });
+    super::browser::open_in_browser(&auth_url);
+
+    match callback_fut.await {
+        Ok(cb) => {
+            let conn = super::commandcode::to_conn(&cb.api_key, &cb.user_name, &cb.user_id);
+            let _ = tx.send(OAuthEvent::Success { conn });
+        }
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+        }
+    }
 }

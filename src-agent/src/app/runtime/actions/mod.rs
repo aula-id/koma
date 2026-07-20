@@ -352,8 +352,8 @@ pub(in crate::app::runtime) fn apply_action(
             oauth::handle_oauth_cancel(state)?;
         }
 
-        Action::OAuthPaste(input) => {
-            oauth::handle_oauth_paste(input, state, handle)?;
+        Action::OAuthPaste { provider, token } => {
+            oauth::handle_oauth_paste(provider, token, state, handle)?;
         }
 
         Action::OAuthDelete(uuid) => {

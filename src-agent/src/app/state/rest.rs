@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::model::app_config::AppConfig;
+use crate::model::app_config::{AppConfig, OAuthProvider};
 use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
 use super::types::{AgentMode, CataloguePending, TranscriptCache};
@@ -400,6 +400,9 @@ pub struct AppStateRest {
     /// supersede/cancel signal the loop checks each iteration. `None` when no ext flow is
     /// in flight (every native flow leaves this `None`).
     pub oauth_ext_flow: Option<ExtOAuthFlow>,
+    /// Which provider the GUI paste screen is for (defaults to Codex for back-compat).
+    /// Set when a `StartOAuth` with a `*_paste` id arrives; cleared on submit/cancel.
+    pub oauth_paste_provider: OAuthProvider,
     /// Dedicated lane for OFF-THREAD awareness recomputes triggered by `cd`
     /// (`apply_workspace_change`) and post-`/compact` (`apply_compaction_result`).
     /// Carries `(session_id, summary)` pairs. Deliberately SEPARATE from `warm_rx`:
@@ -584,6 +587,7 @@ impl AppStateRest {
             oauth_gui_client: None,
             oauth_pushes: Vec::new(),
             oauth_ext_flow: None,
+            oauth_paste_provider: OAuthProvider::Codex,
             awareness_rx: None,
             awareness_tx: None,
             ext_call_tx,

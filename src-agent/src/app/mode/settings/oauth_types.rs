@@ -2,6 +2,8 @@
 //! submenu's connect flow (Codex browser login, Codex pasted token, or Kilo
 //! Code device login).
 
+use crate::model::app_config::OAuthProvider;
+
 /// Where the OAuth "connect" flow currently is. Lives on [`super::SettingsState`]
 /// as `oauth_flow`; `Idle` means the OAuth category screen shows the plain
 /// connection list (no overlay).
@@ -14,8 +16,10 @@ pub enum OAuthFlowState {
     /// swapped for `CodexWait`/`KiloWait` the moment the corresponding
     /// [`crate::service::oauth::OAuthEvent`] lands.
     Starting,
-    /// Provider picker: `0` = Codex (browser), `1` = Kilo Code (browser), `2` =
-    /// koma.run (browser), `3` = xAI (browser), `4` = Claude (browser), `5` = Codex (paste token). Inner `usize` is the cursor.
+    /// Provider picker cursor. Indices (must match TUI OPTIONS in
+    /// `view/settings/oauth.rs`):
+    /// 0 Codex, 1 Kilo Code, 2 koma.run, 3 xAI, 4 Claude,
+    /// 5 Command Code, 6 Codex paste, 7 Command Code paste.
     Pick(usize),
     /// Codex browser flow: the loopback listener is up and `url` is the
     /// authorization URL (shown so the user can copy it if the browser didn't
@@ -24,7 +28,12 @@ pub enum OAuthFlowState {
     /// the view can show a one-shot confirmation line.
     CodexWait { url: String, frame: u8, copied: bool },
     /// Codex manual flow: the user is typing/pasting a raw access token.
-    CodexPaste { input: String },
+    /// `provider` tracks which provider the paste is for (Codex or CommandCode)
+    /// so the handler builds the correct conn type.
+    CodexPaste {
+        input: String,
+        provider: OAuthProvider,
+    },
     /// Kilo Code device flow: waiting for the user to approve `user_code` at
     /// `verification_url`. `frame` drives the braille spinner. `copied` flips
     /// to `true` after a successful `c` (copy-url) press.

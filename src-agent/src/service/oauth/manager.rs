@@ -61,6 +61,8 @@ impl TokenSnap {
             OAuthProvider::ClaudeAI => String::new(),
             // koma.run account login has no org/account header concept either.
             OAuthProvider::KomaRun => String::new(),
+            // Command Code: login-only; no org/account header.
+            OAuthProvider::CommandCode => String::new(),
             // W11: an ext-backed conn is not a model provider in v1, so it has no
             // send-time account/org header. (It never reaches send-time either — no
             // ModelEntry resolves to it — but stay exhaustive + inert.)
@@ -110,6 +112,9 @@ pub async fn seed(conn: &OAuthConn) {
         .write()
         .await
         .insert(conn.uuid.clone(), TokenSnap::from_conn(conn));
+    // Command Code: also seed the remembered chat-transport preference so the
+    // next resolve/stream path skips a re-probe after restart.
+    crate::service::oauth::commandcode::seed_chat_pref(conn);
 }
 
 /// Drop the cache entry for `uuid`. Called when the `/settings` OAuth
@@ -139,6 +144,8 @@ fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
         OAuthProvider::Xai => Some((XAI_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::ClaudeAI => Some((CLAUDE_REFRESH_LEAD_SECS, CLAUDE_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::KomaRun => Some((KOMA_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS)),
+        // Command Code keys never expire.
+        OAuthProvider::CommandCode => None,
         OAuthProvider::Kilocode => None,
         // W12: an ext-backed token MAY be refreshable (when its manifest declared a refresh
         // descriptor). Use a generic short lead + no age cap; a stale token only actually
@@ -287,6 +294,8 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         OAuthProvider::Codex => codex::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::ClaudeAI => claude::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::KomaRun => komarun::refresh(http_client(), &snap.refresh_token).await,
+        // Command Code keys never expire — always return cached.
+        OAuthProvider::CommandCode => return (snap.access_token.clone(), snap.account.clone()),
         OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
         // W12: refresh via the manifest-declared generic OAuth2 `refresh_token` endpoint,
         // gated on the conn carrying BOTH a non-empty `refresh_token` AND a

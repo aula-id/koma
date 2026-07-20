@@ -279,8 +279,26 @@ fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
                         2 => Action::OAuthStart(OAuthProvider::KomaRun),
                         3 => Action::OAuthStart(OAuthProvider::Xai),
                         4 => Action::OAuthStart(OAuthProvider::ClaudeAI),
+                        5 => Action::OAuthStart(OAuthProvider::CommandCode),
+                        6 => {
+                            s.oauth_flow = OAuthFlowState::CodexPaste {
+                                input: String::new(),
+                                provider: OAuthProvider::Codex,
+                            };
+                            Action::None
+                        }
+                        7 => {
+                            s.oauth_flow = OAuthFlowState::CodexPaste {
+                                input: String::new(),
+                                provider: OAuthProvider::CommandCode,
+                            };
+                            Action::None
+                        }
                         _ => {
-                            s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
+                            s.oauth_flow = OAuthFlowState::CodexPaste {
+                                input: String::new(),
+                                provider: OAuthProvider::Codex,
+                            };
                             Action::None
                         }
                     };
@@ -289,14 +307,14 @@ fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
             }
             Action::None
         }
-        OAuthFlowState::CodexPaste { input } => {
+        OAuthFlowState::CodexPaste { ref input, provider } => {
             match key.code {
                 KeyCode::Esc => {
                     s.oauth_flow = OAuthFlowState::Idle;
                 }
                 KeyCode::Enter => {
                     if !input.trim().is_empty() {
-                        return Action::OAuthPaste(input);
+                        return Action::OAuthPaste { provider, token: input.clone() };
                     }
                 }
                 KeyCode::Backspace => {

@@ -65,7 +65,7 @@ pub(super) fn draw_oauth(
             Some(url),
             *copied,
         ),
-        OAuthFlowState::CodexPaste { input } => draw_paste(frame, input, palette, area),
+        OAuthFlowState::CodexPaste { input, .. } => draw_paste(frame, input, palette, area),
         OAuthFlowState::KiloWait {
             user_code,
             verification_url,
@@ -163,7 +163,16 @@ fn draw_list(frame: &mut Frame, st: &SettingsState, palette: &Palette, area: Rec
 ///
 /// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
 pub(crate) fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) {
-    const OPTIONS: [&str; 6] = ["Codex", "Kilo Code", "koma.run", "xAI", "Claude", "Codex (paste token)"];
+    const OPTIONS: [&str; 8] = [
+        "Codex",
+        "Kilo Code",
+        "koma.run",
+        "xAI",
+        "Claude",
+        "Command Code",
+        "Codex (paste token)",
+        "Command Code (paste key)",
+    ];
     let lines: Vec<Line> = OPTIONS
         .iter()
         .enumerate()

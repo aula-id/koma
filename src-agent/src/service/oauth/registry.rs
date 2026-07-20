@@ -141,6 +141,21 @@ pub const KOMA_MAX_REFRESH_AGE_SECS: u64 = 20 * 3_600;
 /// per-provider knowledge of an extension token's maximum silent-retry window.
 pub const EXT_REFRESH_LEAD_SECS: u64 = 300;
 
+// --- Command Code OAuth ---
+
+pub const COMMANDCODE_STUDIO_BASE: &str = "https://commandcode.ai";
+pub const COMMANDCODE_AUTH_PATH: &str = "/studio/auth/cli";
+pub const COMMANDCODE_PORT_START: u16 = 5959;
+pub const COMMANDCODE_PORT_RANGE: u16 = 10;
+pub const COMMANDCODE_AUTH_TIMEOUT_SECS: u64 = 120;
+/// NDJSON chat base: `POST {base}/alpha/generate`.
+/// Used when a Command Code conn's remembered transport is NDJSON (Go plan).
+pub const COMMANDCODE_CHAT_BASE: &str = "https://api.commandcode.ai";
+/// OpenAI-compatible base: `GET {base}/models`, `POST {base}/chat/completions`.
+/// API-first default for Command Code; Go-plan keys 403 on chat and fall back
+/// to [`COMMANDCODE_CHAT_BASE`] NDJSON, with the winner remembered on the conn.
+pub const COMMANDCODE_API_BASE: &str = "https://api.commandcode.ai/provider/v1";
+
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
 /// into the chat-request resolution boundary.
 pub struct OAuthProviderMeta {
@@ -171,11 +186,13 @@ pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
         OAuthProvider::Xai,
         OAuthProvider::ClaudeAI,
         OAuthProvider::KomaRun,
+        OAuthProvider::CommandCode,
     ]
     .iter()
     .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
     .collect();
     providers.push(("codex_paste", "Codex paste", "paste"));
+    providers.push(("commandcode_paste", "Command Code paste", "paste"));
     providers
 }
 
@@ -217,6 +234,13 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
         OAuthProvider::Extension => OAuthProviderMeta {
             chat_endpoint: "",
             catalogue_endpoint: "",
+        },
+        // Command Code: API-first default is the OpenAI-compat provider/v1 base
+        // (chat + catalogue). Resolution may override chat to COMMANDCODE_CHAT_BASE
+        // when the conn's remembered transport is NDJSON.
+        OAuthProvider::CommandCode => OAuthProviderMeta {
+            chat_endpoint: COMMANDCODE_API_BASE,
+            catalogue_endpoint: COMMANDCODE_API_BASE,
         },
     }
 }

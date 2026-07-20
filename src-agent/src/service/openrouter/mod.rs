@@ -30,6 +30,7 @@ mod oneshot;
 mod catalogue;
 mod codex;
 mod anthropic;
+mod commandcode;
 mod think_split;
 
 // Re-export the entire public surface so every external path is unchanged.
