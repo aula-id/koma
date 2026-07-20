@@ -9,7 +9,7 @@
 //! `/rename [session] <name>`, `/settings` (alias `/config`),
 //! `/resume` (alias `/sessions`), `/task <agent> <task>`,
 //! `/cd <path>`, `/adddir <path>`,
-//! `/internet [simple|full]`, `/help`, `/quit` (aliases: `/q`, `/exit`).
+//! `/internet [simple|full]`, `/clear`, `/help`, `/quit` (aliases: `/q`, `/exit`).
 
 use crate::model::settings::InternetMode;
 
@@ -35,6 +35,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),
+    ("/clear", "Clear the chat history (keeps system prompt + archive)"),
     ("/usage", "Show the cost and token usage dashboard"),
     ("/rename", "Rename the current session"),
     ("/select", "Dump history to the terminal to copy/paste"),
@@ -96,6 +97,9 @@ pub enum NewMode {
 pub enum Command {
     /// Compact the conversation history to save context window space.
     Compact,
+    /// Destructively clear the live chat transcript (system prompt kept;
+    /// `messages.sqlite` archive kept; short-send rolling summary reset).
+    Clear,
     /// Spawn a fresh PARALLEL session. `NewMode` controls whether the previous
     /// foreground is kept running (`Swap`) or tombstoned (`Kill`).
     New(NewMode),
@@ -176,6 +180,7 @@ pub fn parse(line: &str) -> Command {
 
     match head_lc.as_str() {
         "compact" => Command::Compact,
+        "clear" => Command::Clear,
         "new" => {
             let mode = match rest.split_whitespace().next().unwrap_or("").to_lowercase().as_str() {
                 "kill" => NewMode::Kill,
@@ -215,5 +220,24 @@ pub fn parse(line: &str) -> Command {
             Command::Rename(name.trim().to_string())
         }
         other => Command::Unknown(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_clear() {
+        assert_eq!(parse("/clear"), Command::Clear);
+        assert_eq!(parse("/CLEAR"), Command::Clear);
+        assert_eq!(parse("  /clear  "), Command::Clear);
+    }
+
+    #[test]
+    fn palette_lists_clear() {
+        assert!(COMMANDS.iter().any(|(n, _)| *n == "/clear"));
+        let matches = palette_matches("/cl");
+        assert!(matches.iter().any(|(n, _)| *n == "/clear"));
     }
 }

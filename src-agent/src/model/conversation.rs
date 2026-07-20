@@ -386,6 +386,22 @@ impl Conversation {
         self.messages.truncate(idx);
     }
 
+    /// Drop every non-system turn. Keeps `messages[0]` when it is System;
+    /// otherwise empties the vec entirely (caller should re-seed via
+    /// `set_system` / `Session::rebuild_system`). Used by `/clear`.
+    pub fn clear_body(&mut self) {
+        if self
+            .messages
+            .first()
+            .map(|m| m.role == Role::System)
+            .unwrap_or(false)
+        {
+            self.messages.truncate(1);
+        } else {
+            self.messages.clear();
+        }
+    }
+
     /// Pop all trailing `Assistant` messages (used before a resend so the
     /// model doesn't see its own previous partial reply as context).
     ///
@@ -455,5 +471,37 @@ impl Conversation {
             .collect();
         picked.reverse();
         picked.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod clear_body_tests {
+    use super::*;
+
+    #[test]
+    fn clear_body_keeps_system_drops_rest() {
+        let mut c = Conversation::new("sys");
+        c.push_user("hi");
+        c.push_assistant("hello", None, false);
+        c.clear_body();
+        assert_eq!(c.messages().len(), 1);
+        assert_eq!(c.messages()[0].role, Role::System);
+        assert_eq!(c.messages()[0].content, "sys");
+    }
+
+    #[test]
+    fn clear_body_empties_when_no_system() {
+        let mut c = Conversation::from_messages(vec![]);
+        c.push_user("hi");
+        c.push_assistant("hello", None, false);
+        c.clear_body();
+        assert!(c.messages().is_empty());
+    }
+
+    #[test]
+    fn clear_body_on_empty_is_noop() {
+        let mut c = Conversation::from_messages(vec![]);
+        c.clear_body();
+        assert!(c.messages().is_empty());
     }
 }
