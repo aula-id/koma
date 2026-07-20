@@ -839,3 +839,65 @@ fn ext_agent_binds_to_its_own_model_over_same_named_global() {
         "preferred-set present but no match falls to the general pass"
     );
 }
+
+// ---------------------------------------------------------------------------
+// main_fallback_reason — free-tier auto-route diagnosis
+// ---------------------------------------------------------------------------
+
+#[test]
+fn main_fallback_unconfigured_when_no_main_and_no_usable_legacy() {
+    // Empty catalogue + empty legacy key → dispatch will auto-route to koma/apple.
+    let config = AppConfig::default();
+    let settings = Settings::default(); // model = DEFAULT_MODEL, api_key empty
+    assert_eq!(
+        main_fallback_reason(&config, &settings),
+        Some(MainFallback::Unconfigured)
+    );
+    // And dispatch itself lands on koma/apple.
+    let d = resolve_role_dispatch(&config, &settings, ModelRole::Main).expect("dispatch");
+    assert_eq!(d.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+    assert_eq!(d.api_type, ApiType::KomaFree);
+}
+
+#[test]
+fn main_fallback_none_when_user_explicitly_chose_koma_free() {
+    // A deliberate koma-free Main is usable — no fallback warning.
+    let mut config = AppConfig::default();
+    config.providers.push(ProviderConn {
+        uuid: "prov-koma".to_string(),
+        name: "koma free".to_string(),
+        api_type: ApiType::KomaFree,
+        endpoint: crate::service::koma_free::KOMA_FREE_ENDPOINT.to_string(),
+        api_key: String::new(),
+        ext_id: None,
+    });
+    config.models.push(ModelEntry {
+        uuid: "model-koma".to_string(),
+        name: "koma free".to_string(),
+        model_id: crate::service::koma_free::KOMA_FREE_MODEL.to_string(),
+        provider_uuid: "prov-koma".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    let settings = Settings::default();
+    assert_eq!(main_fallback_reason(&config, &settings), None);
+}
+
+#[test]
+fn main_fallback_provider_removed_when_main_provider_dangling() {
+    let mut config = AppConfig::default();
+    config.models.push(ModelEntry {
+        uuid: "model-main".to_string(),
+        name: "Main".to_string(),
+        model_id: "vendor/x".to_string(),
+        provider_uuid: "gone".to_string(),
+        roles: vec![ModelRole::Main],
+        ..ModelEntry::default()
+    });
+    // Empty legacy key so resolve_role is unusable → dispatch substitutes.
+    let settings = Settings::default();
+    assert_eq!(
+        main_fallback_reason(&config, &settings),
+        Some(MainFallback::ProviderRemoved)
+    );
+}

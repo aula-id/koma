@@ -90,6 +90,10 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
                 name: m.name,
                 model_id: m.model_id,
                 provider_idx: m.provider_idx,
+                // Display-only client shadow: the snapshot does not carry
+                // provider_uuid (daemon owns the authoritative draft). Empty here
+                // is fine — this shadow is never persisted via handle_save_settings.
+                provider_uuid: String::new(),
                 roles: m.roles.iter().map(|r| shadow_role(r)).collect(),
                 route: m.route,
                 session_only: m.session_only,
