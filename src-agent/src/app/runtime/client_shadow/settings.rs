@@ -207,6 +207,8 @@ pub(super) fn shadow_oauth_provider(t: &str) -> crate::model::app_config::OAuthP
         "xai" => crate::model::app_config::OAuthProvider::Xai,
         "claudeai" => crate::model::app_config::OAuthProvider::ClaudeAI,
         "komarun" => crate::model::app_config::OAuthProvider::KomaRun,
+        "clinepass" => crate::model::app_config::OAuthProvider::ClinePass,
+        "commandcode" => crate::model::app_config::OAuthProvider::CommandCode,
         _ => crate::model::app_config::OAuthProvider::Codex,
     }
 }
@@ -233,7 +235,10 @@ pub(super) fn shadow_oauth_flow(s: crate::ipc::proto::OAuthFlowSnapshot) -> OAut
         "starting" => OAuthFlowState::Starting,
         "pick" => OAuthFlowState::Pick(s.cursor),
         "codex_wait" => OAuthFlowState::CodexWait { url: s.url, frame: s.frame, copied: s.copied },
-        "codex_paste" => OAuthFlowState::CodexPaste { input: s.input },
+        "codex_paste" => OAuthFlowState::CodexPaste {
+            input: s.input,
+            provider: crate::model::app_config::OAuthProvider::default(),
+        },
         "kilo_wait" => OAuthFlowState::KiloWait {
             user_code: s.user_code,
             verification_url: s.url,

@@ -76,10 +76,10 @@ impl OnboardProviderState {
         }
     }
 
-    /// Move the picker cursor down (no-op off `Pick`; clamps at the last option, 5).
+    /// Move the picker cursor down (no-op off `Pick`; clamps at the last option, 9).
     pub fn pick_down(&mut self) {
         if let OAuthFlowState::Pick(c) = &mut self.oauth_flow {
-            *c = (*c + 1).min(5);
+            *c = (*c + 1).min(9);
         }
     }
 
@@ -87,14 +87,14 @@ impl OnboardProviderState {
 
     /// Append `c` to the paste-token draft (no-op off `CodexPaste`).
     pub fn paste_push_char(&mut self, c: char) {
-        if let OAuthFlowState::CodexPaste { input } = &mut self.oauth_flow {
+        if let OAuthFlowState::CodexPaste { input, .. } = &mut self.oauth_flow {
             input.push(c);
         }
     }
 
     /// Delete the last char of the paste-token draft (no-op off `CodexPaste`).
     pub fn paste_backspace(&mut self) {
-        if let OAuthFlowState::CodexPaste { input } = &mut self.oauth_flow {
+        if let OAuthFlowState::CodexPaste { input, .. } = &mut self.oauth_flow {
             input.pop();
         }
     }

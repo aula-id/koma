@@ -83,19 +83,50 @@ pub(super) fn handle_oauth_cancel(state: &mut AppState) -> Result<()> {
 
 /// Handle `Action::OAuthPaste`: build a connection straight from a hand-pasted
 /// raw access token (no refresh/id token, no known expiry) and persist it via
-/// the same path a completed browser/device flow uses.
+/// the same path a completed browser/device flow uses. The `provider` field
+/// determines which conn constructor to use (Codex, ClinePass, CommandCode).
 pub(super) fn handle_oauth_paste(
-    input: String,
+    provider: OAuthProvider,
+    token: String,
     state: &mut AppState,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    let tokens = crate::service::oauth::codex::TokenResponse {
-        access_token: input.trim().to_string(),
-        refresh_token: String::new(),
-        id_token: String::new(),
-        expires_in: None,
+    let conn = match provider {
+        OAuthProvider::Codex => {
+            let tokens = crate::service::oauth::codex::TokenResponse {
+                access_token: token.trim().to_string(),
+                refresh_token: String::new(),
+                id_token: String::new(),
+                expires_in: None,
+            };
+            crate::service::oauth::codex::to_conn(tokens)
+        }
+        OAuthProvider::ClinePass => {
+            crate::service::oauth::clinepass::to_conn_api_key(token.trim())
+        }
+        OAuthProvider::CommandCode => {
+            crate::service::oauth::commandcode::to_conn(token.trim(), "", "")
+        }
+        other => {
+            // Unsupported paste provider — set a failed message and return.
+            match state.mode_mut() {
+                Mode::Settings(s) => {
+                    s.oauth_flow = OAuthFlowState::Failed(format!(
+                        "paste not supported for {:?}",
+                        other
+                    ));
+                }
+                Mode::OnboardProvider(op) => {
+                    op.oauth_flow = OAuthFlowState::Failed(format!(
+                        "paste not supported for {:?}",
+                        other
+                    ));
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
     };
-    let conn = crate::service::oauth::codex::to_conn(tokens);
     apply_login_result(&mut state.rest, conn, handle);
     Ok(())
 }

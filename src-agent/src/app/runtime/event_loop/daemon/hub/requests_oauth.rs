@@ -116,12 +116,14 @@ impl DaemonHub {
     ) {
         let client_id = self.clients[idx].id;
         match provider.as_str() {
-            "codex" | "kilocode" | "xai" | "claudeai" | "komarun" => {
+            "codex" | "kilocode" | "xai" | "claudeai" | "komarun" | "clinepass" | "commandcode" => {
                 let p = match provider.as_str() {
                     "kilocode" => OAuthProvider::Kilocode,
                     "xai" => OAuthProvider::Xai,
                     "claudeai" => OAuthProvider::ClaudeAI,
                     "komarun" => OAuthProvider::KomaRun,
+                    "clinepass" => OAuthProvider::ClinePass,
+                    "commandcode" => OAuthProvider::CommandCode,
                     _ => OAuthProvider::Codex,
                 };
                 // W11: a native start also supersedes any in-flight DELEGATED ext flow.
@@ -141,6 +143,15 @@ impl DaemonHub {
                 self.send_oauth_state(idx, state, "starting", None, None, None, None);
             }
             "codex_paste" => {
+                state.rest.oauth_paste_provider = OAuthProvider::Codex;
+                self.send_oauth_state(idx, state, "paste", None, None, None, None);
+            }
+            "clinepass_paste" => {
+                state.rest.oauth_paste_provider = OAuthProvider::ClinePass;
+                self.send_oauth_state(idx, state, "paste", None, None, None, None);
+            }
+            "commandcode_paste" => {
+                state.rest.oauth_paste_provider = OAuthProvider::CommandCode;
                 self.send_oauth_state(idx, state, "paste", None, None, None, None);
             }
             // W11: an `ext:<extension_id>:<provider_id>` picker id delegates the whole
@@ -270,7 +281,9 @@ impl DaemonHub {
             self.send_oauth_state(idx, state, "paste", None, None, None, None);
             return;
         }
-        let _ = apply_action(Action::OAuthPaste(token), state, client, handle);
+        let provider = state.rest.oauth_paste_provider;
+        state.rest.oauth_paste_provider = OAuthProvider::Codex; // reset after use
+        let _ = apply_action(Action::OAuthPaste { provider, token }, state, client, handle);
         self.send_oauth_state(idx, state, "success", None, None, None, None);
     }
 
@@ -305,6 +318,7 @@ impl DaemonHub {
             }
         }
         let _ = apply_action(Action::OAuthCancel, state, client, handle);
+        state.rest.oauth_paste_provider = OAuthProvider::Codex; // reset on cancel
         self.send_oauth_state(idx, state, "idle", None, None, None, None);
     }
 

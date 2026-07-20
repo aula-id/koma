@@ -27,6 +27,8 @@ pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedS
         OAuthProvider::Xai => run_xai_flow(tx).await,
         OAuthProvider::ClaudeAI => run_claude_flow(tx).await,
         OAuthProvider::KomaRun => run_komarun_flow(tx).await,
+        OAuthProvider::ClinePass => run_clinepass_flow(tx).await,
+        OAuthProvider::CommandCode => run_commandcode_flow(tx).await,
         // W11: an extension-delegated flow is NEVER driven through here — it runs
         // off-loop in the daemon hub (`requests_oauth::run_ext_oauth_delegate`), keyed
         // by an `ext:<id>:<provider>` picker id, and never via `Action::OAuthStart`
@@ -204,4 +206,106 @@ async fn run_xai_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     };
     let conn = super::xai::to_conn(tokens);
     let _ = tx.send(OAuthEvent::Success { conn });
+}
+
+/// ClinePass auto flow: try WorkOS credentials from disk (Cline CLI reuse); if
+/// found and near-expiry, refresh; build conn. If no credentials found, surface
+/// a failure message directing the user to use the paste row or open the
+/// dashboard. Does NOT hang waiting for interactive paste — paste is a separate
+/// picker row.
+async fn run_clinepass_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+    use super::registry::{CLINE_DASHBOARD_URL, CLINE_REFRESH_LEAD_SECS};
+
+    match super::clinepass::resolve_workos_from_disk() {
+        Some((access, refresh, expires_at, email)) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // Near-expiry OR unknown expiry (0) with a refresh token → refresh first.
+            // Unknown expiry is treated as stale so we never serve a possibly-dead
+            // WorkOS access token without trying the refresh endpoint.
+            let needs_refresh = !refresh.is_empty()
+                && (expires_at == 0 || now + CLINE_REFRESH_LEAD_SECS > expires_at);
+            if needs_refresh {
+                let http = reqwest::Client::new();
+                match super::clinepass::refresh(&http, &refresh).await {
+                    Ok(tokens) => {
+                        let new_expires = tokens
+                            .expires_in
+                            .map(|secs| now + secs)
+                            .unwrap_or(expires_at);
+                        let conn = super::clinepass::to_conn_workos(
+                            tokens.access_token,
+                            if tokens.refresh_token.is_empty() {
+                                refresh
+                            } else {
+                                tokens.refresh_token
+                            },
+                            new_expires,
+                            email,
+                        );
+                        let _ = tx.send(OAuthEvent::Success { conn });
+                    }
+                    Err(e) => {
+                        // Fall through to dashboard + paste guidance (mirror pi's
+                        // auto → manual fallback) rather than leaving the user
+                        // stuck on a dead WorkOS refresh token.
+                        super::browser::open_in_browser(CLINE_DASHBOARD_URL);
+                        let _ = tx.send(OAuthEvent::Failed {
+                            error: format!(
+                                "WorkOS refresh failed: {e}. Use ClinePass paste, or create an API key at {CLINE_DASHBOARD_URL}."
+                            ),
+                        });
+                    }
+                }
+            } else {
+                let conn = super::clinepass::to_conn_workos(access, refresh, expires_at, email);
+                let _ = tx.send(OAuthEvent::Success { conn });
+            }
+        }
+        None => {
+            super::browser::open_in_browser(CLINE_DASHBOARD_URL);
+            let _ = tx.send(OAuthEvent::Failed {
+                error: format!(
+                    "No Cline CLI login found. Use ClinePass paste, or run `cline auth` and retry. API keys: {CLINE_DASHBOARD_URL}"
+                ),
+            });
+        }
+    }
+}
+
+/// Command Code browser flow: start a POST loopback server, open the
+/// authorization URL in the browser, wait for the Studio website to POST the
+/// API key back. Sends exactly one terminal event after an initial `CodexUrl`
+/// (reused as the generic browser-URL carrier).
+async fn run_commandcode_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+    let state = super::commandcode::generate_state();
+    let timeout = super::registry::COMMANDCODE_AUTH_TIMEOUT_SECS;
+
+    let (port, callback_fut) = match super::loopback_post::catch_post_callback(&state, timeout)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+            return;
+        }
+    };
+
+    let auth_url = super::commandcode::build_auth_url(port, &state);
+    let _ = tx.send(OAuthEvent::CodexUrl {
+        url: auth_url.clone(),
+    });
+    super::browser::open_in_browser(&auth_url);
+
+    match callback_fut.await {
+        Ok(cb) => {
+            let conn = super::commandcode::to_conn(&cb.api_key, &cb.user_name, &cb.user_id);
+            let _ = tx.send(OAuthEvent::Success { conn });
+        }
+        Err(e) => {
+            let _ = tx.send(OAuthEvent::Failed { error: e });
+        }
+    }
 }

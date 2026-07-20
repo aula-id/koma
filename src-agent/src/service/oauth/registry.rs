@@ -141,6 +141,26 @@ pub const KOMA_MAX_REFRESH_AGE_SECS: u64 = 20 * 3_600;
 /// per-provider knowledge of an extension token's maximum silent-retry window.
 pub const EXT_REFRESH_LEAD_SECS: u64 = 300;
 
+// --- ClinePass OAuth ---
+
+pub const CLINE_API_BASE: &str = "https://api.cline.bot";
+pub const CLINE_REFRESH_PATH: &str = "/api/v1/auth/refresh";
+pub const CLINE_DASHBOARD_URL: &str = "https://app.cline.bot/settings/api-keys";
+pub const CLINE_REFRESH_LEAD_SECS: u64 = 300;
+/// Long-lived refresh token (like xAI's `offline_access`); `0` disables the
+/// "too old since last refresh" age cap.
+pub const CLINE_MAX_REFRESH_AGE_SECS: u64 = 0;
+pub const CLINE_WORKOS_TOKEN_PREFIX: &str = "workos:";
+pub const CLINE_WORKOS_TOKEN_LIFETIME_SECS: u64 = 55 * 60;
+
+// --- Command Code OAuth ---
+
+pub const COMMANDCODE_STUDIO_BASE: &str = "https://commandcode.ai";
+pub const COMMANDCODE_AUTH_PATH: &str = "/studio/auth/cli";
+pub const COMMANDCODE_PORT_START: u16 = 5959;
+pub const COMMANDCODE_PORT_RANGE: u16 = 10;
+pub const COMMANDCODE_AUTH_TIMEOUT_SECS: u64 = 120;
+
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
 /// into the chat-request resolution boundary.
 pub struct OAuthProviderMeta {
@@ -171,11 +191,15 @@ pub fn oauth_providers() -> Vec<(&'static str, &'static str, &'static str)> {
         OAuthProvider::Xai,
         OAuthProvider::ClaudeAI,
         OAuthProvider::KomaRun,
+        OAuthProvider::ClinePass,
+        OAuthProvider::CommandCode,
     ]
     .iter()
     .map(|p| (p.wire_id(), p.label(), p.flow_kind()))
     .collect();
     providers.push(("codex_paste", "Codex paste", "paste"));
+    providers.push(("clinepass_paste", "ClinePass paste", "paste"));
+    providers.push(("commandcode_paste", "Command Code paste", "paste"));
     providers
 }
 
@@ -215,6 +239,16 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
         // `catalogue_endpoint` also means the OAuth success drain never fires a catalogue
         // fetch for an ext conn.
         OAuthProvider::Extension => OAuthProviderMeta {
+            chat_endpoint: "",
+            catalogue_endpoint: "",
+        },
+        // ClinePass: OpenAI-compatible chat endpoint; catalogue fetchable if API supports /models.
+        OAuthProvider::ClinePass => OAuthProviderMeta {
+            chat_endpoint: "https://api.cline.bot/api/v1",
+            catalogue_endpoint: "https://api.cline.bot/api/v1",
+        },
+        // Command Code: login-only (no chat transport this PR); empty meta like account-only KomaRun.
+        OAuthProvider::CommandCode => OAuthProviderMeta {
             chat_endpoint: "",
             catalogue_endpoint: "",
         },

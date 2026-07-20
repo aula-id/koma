@@ -20,11 +20,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 
 use super::registry::{
-    CLAUDE_MAX_REFRESH_AGE_SECS, CLAUDE_REFRESH_LEAD_SECS, CODEX_MAX_REFRESH_AGE_SECS,
-    CODEX_REFRESH_LEAD_SECS, EXT_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS,
-    KOMA_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS, XAI_REFRESH_LEAD_SECS,
+    CLAUDE_MAX_REFRESH_AGE_SECS, CLAUDE_REFRESH_LEAD_SECS, CLINE_MAX_REFRESH_AGE_SECS,
+    CLINE_REFRESH_LEAD_SECS, CODEX_MAX_REFRESH_AGE_SECS, CODEX_REFRESH_LEAD_SECS,
+    EXT_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS, KOMA_REFRESH_LEAD_SECS,
+    XAI_MAX_REFRESH_AGE_SECS, XAI_REFRESH_LEAD_SECS,
 };
-use super::{claude, codex, komarun, xai};
+use super::{claude, clinepass, codex, komarun, xai};
 use crate::model::app_config::{AppConfig, OAuthConn, OAuthProvider};
 
 #[derive(Clone)]
@@ -61,6 +62,10 @@ impl TokenSnap {
             OAuthProvider::ClaudeAI => String::new(),
             // koma.run account login has no org/account header concept either.
             OAuthProvider::KomaRun => String::new(),
+            // ClinePass: no org/account header — keep empty.
+            OAuthProvider::ClinePass => String::new(),
+            // Command Code: login-only; no org/account header.
+            OAuthProvider::CommandCode => String::new(),
             // W11: an ext-backed conn is not a model provider in v1, so it has no
             // send-time account/org header. (It never reaches send-time either — no
             // ModelEntry resolves to it — but stay exhaustive + inert.)
@@ -139,6 +144,11 @@ fn refresh_window(provider: OAuthProvider) -> Option<(u64, u64)> {
         OAuthProvider::Xai => Some((XAI_REFRESH_LEAD_SECS, XAI_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::ClaudeAI => Some((CLAUDE_REFRESH_LEAD_SECS, CLAUDE_MAX_REFRESH_AGE_SECS)),
         OAuthProvider::KomaRun => Some((KOMA_REFRESH_LEAD_SECS, KOMA_MAX_REFRESH_AGE_SECS)),
+        // ClinePass WorkOS tokens refresh via the custom endpoint; long-lived
+        // refresh, no age cap (same as xAI offline_access).
+        OAuthProvider::ClinePass => Some((CLINE_REFRESH_LEAD_SECS, CLINE_MAX_REFRESH_AGE_SECS)),
+        // Command Code keys never expire.
+        OAuthProvider::CommandCode => None,
         OAuthProvider::Kilocode => None,
         // W12: an ext-backed token MAY be refreshable (when its manifest declared a refresh
         // descriptor). Use a generic short lead + no age cap; a stale token only actually
@@ -287,6 +297,19 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         OAuthProvider::Codex => codex::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::ClaudeAI => claude::refresh(http_client(), &snap.refresh_token).await,
         OAuthProvider::KomaRun => komarun::refresh(http_client(), &snap.refresh_token).await,
+        // ClinePass: if the access token starts with "workos:", use the custom
+        // refresh endpoint; otherwise it's a static API key — serve cached.
+        OAuthProvider::ClinePass => {
+            if clinepass::is_workos_token(&snap.access_token)
+                && !snap.refresh_token.is_empty()
+            {
+                clinepass::refresh(http_client(), &snap.refresh_token).await
+            } else {
+                return (snap.access_token.clone(), snap.account.clone());
+            }
+        }
+        // Command Code keys never expire — always return cached.
+        OAuthProvider::CommandCode => return (snap.access_token.clone(), snap.account.clone()),
         OAuthProvider::Kilocode => return (snap.access_token.clone(), snap.account.clone()),
         // W12: refresh via the manifest-declared generic OAuth2 `refresh_token` endpoint,
         // gated on the conn carrying BOTH a non-empty `refresh_token` AND a

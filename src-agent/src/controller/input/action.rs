@@ -283,10 +283,14 @@ pub enum Action {
     /// Esc while a Codex/Kilo Code flow is waiting (`CodexWait`/`KiloWait`):
     /// abort the background task and return the submenu to `Idle`.
     OAuthCancel,
-    /// Enter on the Codex "paste token" screen with a non-empty draft: build a
+    /// Enter on a paste-token screen with a non-empty draft: build a
     /// connection from the pasted raw access token and persist it immediately
-    /// (no background task — this path is synchronous).
-    OAuthPaste(String),
+    /// (no background task — this path is synchronous). Inner struct carries
+    /// the provider and token so the handler builds the correct conn type.
+    OAuthPaste {
+        provider: OAuthProvider,
+        token: String,
+    },
     /// Second Ctrl+X confirming a delete on the OAuth connections list: remove
     /// the connection (by `uuid`) from `config.oauth_conns`, persist, and evict
     /// its token-refresh cache entry.

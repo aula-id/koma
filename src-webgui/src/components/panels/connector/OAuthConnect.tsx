@@ -81,7 +81,15 @@ function Picker({
               >
                 <span className="text-left">{p.label}</span>
                 <span className="text-[10px] uppercase tracking-wide text-koma-fg opacity-40">
-                  {p.kind === 'device' ? 'device code' : p.kind === 'paste' ? 'paste token' : 'browser'}
+                  {p.kind === 'device'
+                    ? 'device code'
+                    : p.kind === 'paste'
+                      ? 'paste token'
+                      : p.kind === 'reuse'
+                        ? 'reuse login'
+                        : p.kind === 'callback'
+                          ? 'browser callback'
+                          : 'browser'}
                 </span>
               </button>
             ))}
