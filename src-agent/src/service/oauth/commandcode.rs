@@ -1,7 +1,8 @@
 //! Command Code OAuth: browser-assisted API key retrieval via localhost POST
 //! callback (NOT PKCE). The Studio website POSTs the API key back to a local
 //! loopback server. Also supports static API key paste. Flow kind: "callback".
-//! LOGIN/TOKEN ONLY — no NDJSON chat transport this PR.
+//! Chat rides the OpenAI-compatible surface at api.commandcode.ai/provider/v1
+//! (not the pi package's NDJSON /alpha/generate path).
 
 use super::registry::{COMMANDCODE_AUTH_PATH, COMMANDCODE_STUDIO_BASE};
 use crate::model::app_config::{new_uuid, OAuthConn, OAuthProvider};

@@ -160,6 +160,9 @@ pub const COMMANDCODE_AUTH_PATH: &str = "/studio/auth/cli";
 pub const COMMANDCODE_PORT_START: u16 = 5959;
 pub const COMMANDCODE_PORT_RANGE: u16 = 10;
 pub const COMMANDCODE_AUTH_TIMEOUT_SECS: u64 = 120;
+/// OpenAI-compatible base: `GET {base}/models`, `POST {base}/chat/completions`.
+/// Distinct from the Studio auth origin and from pi's NDJSON `/alpha/generate`.
+pub const COMMANDCODE_API_BASE: &str = "https://api.commandcode.ai/provider/v1";
 
 /// Per-provider metadata needed to wire an [`OAuthConn`](crate::model::app_config::OAuthConn)
 /// into the chat-request resolution boundary.
@@ -247,10 +250,12 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: "https://api.cline.bot/api/v1",
             catalogue_endpoint: "https://api.cline.bot/api/v1",
         },
-        // Command Code: login-only (no chat transport this PR); empty meta like account-only KomaRun.
+        // Command Code: same API base the pi package uses for catalogue
+        // (`GET {base}/models`). Chat uses OpenAI-compatible
+        // `POST {base}/chat/completions` (not pi's NDJSON `/alpha/generate`).
         OAuthProvider::CommandCode => OAuthProviderMeta {
-            chat_endpoint: "",
-            catalogue_endpoint: "",
+            chat_endpoint: COMMANDCODE_API_BASE,
+            catalogue_endpoint: COMMANDCODE_API_BASE,
         },
     }
 }
