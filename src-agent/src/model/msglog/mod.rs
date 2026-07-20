@@ -52,4 +52,4 @@ pub use records::{
     read_bash_jobs, read_file_baseline, read_file_changes, read_subagents, record_file_baseline,
     record_file_change, write_bash_jobs, write_subagents,
 };
-pub use summary::{read_summary, write_summary};
+pub use summary::{clear_rolling_summary, read_summary, write_summary};

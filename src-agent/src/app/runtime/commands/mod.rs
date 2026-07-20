@@ -9,6 +9,7 @@ use crate::controller::command::Command;
 use crate::service::openrouter::OpenRouterClient;
 
 mod bash;
+mod clear;
 mod todo;
 mod cd;
 // `pub(crate)` so the plan-approval compaction rail (deferred/idle drain) can call
@@ -56,6 +57,7 @@ pub(super) fn apply_slash(
 ) -> Result<()> {
     match cmd {
         Command::Compact => compact::handle_compact(state, client, handle, None)?,
+        Command::Clear => clear::handle_clear(state)?,
         Command::New(mode) => new_session::handle_new(state, client, handle, mode)?,
         Command::Mode(arg) => misc::handle_mode(state, arg)?,
         Command::Effort => effort::handle_effort(state, client)?,
