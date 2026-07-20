@@ -340,8 +340,10 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         if let Err(e) = state.rest.config.save() {
             state.rest.fg_mut().status = format!("config save failed: {e}");
         } else if !dead_models.is_empty() || !removed_providers.is_empty() {
+            let cfg = state.rest.config.clone();
             let report = crate::app::cascade::rebind_consumers_after_model_removal(
                 Some(state),
+                &cfg,
                 &dead_models,
                 &removed_providers,
                 main_reset,

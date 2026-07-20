@@ -306,6 +306,7 @@ pub(super) fn spawn_uninstall(push: impl Fn(String) + Send + 'static, id: String
             let dead_providers: HashSet<String> = purge.dead_anchors.iter().cloned().collect();
             let _ = crate::app::cascade::rebind_consumers_after_model_removal(
                 None,
+                &cfg,
                 &dead_models,
                 &dead_providers,
                 purge.main_reset,
