@@ -249,6 +249,11 @@ impl SettingsState {
     /// two models ever share a role.
     pub fn save_model_modal(&mut self, session_only: bool) {
         if let Some(m) = self.model_modal.take() {
+            // Resolve the modal's positional provider_idx back to a uuid NOW,
+            // against the live providers+oauth cycle. This is the only place a
+            // user-driven provider change is committed onto the draft; save later
+            // prefers this uuid over a stale index (see actions/settings::to_entry).
+            let provider_uuid = self.provider_uuid_at(m.provider_idx).unwrap_or_default();
             let mut draft = ModelDraft {
                 // Preserve the carried identity (edit) or the freshly minted one
                 // (add); mint as a last resort if it somehow arrived empty.
@@ -260,6 +265,7 @@ impl SettingsState {
                 name: m.name.trim().to_string(),
                 model_id: m.model_id.trim().to_string(),
                 provider_idx: m.provider_idx,
+                provider_uuid,
                 roles: m.roles.clone(),
                 route: m.route.clone(),
                 session_only,

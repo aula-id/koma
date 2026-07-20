@@ -1,4 +1,4 @@
 {
-  "version": "0.3.14",
-  "message": "fix: track additive per-step subagent cost"
+  "version": "0.3.15",
+  "message": "fix: hard-warn + error.log when Main auto-routes to koma/apple"
 }

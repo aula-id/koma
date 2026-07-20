@@ -139,42 +139,62 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 None => provider_conns.push(ep.clone()),
             }
         }
-        // Map model drafts -> persisted ModelEntry, resolving the draft's
-        // positional `provider_idx` back to a `provider_uuid` against the
-        // FRESHLY built provider_conns (so a model added in this same edit
-        // session that points at a brand-new provider still resolves). A
-        // dangling idx yields an empty provider_uuid (surfaces for re-pick).
-        // Resolve `provider_idx` back to a `provider_uuid` via the SAME
-        // providers-then-oauth-offset merge as the load side: a real provider's
-        // uuid when the idx is within `provider_conns`, else the OAuth draft's uuid
-        // (idx offset by `provider_conns.len()`). A dangling idx yields an empty
-        // provider_uuid (surfaces for re-pick). `oauth_drafts` is passed in so the
-        // OAuth catalogue never leaks into `config.providers`.
-        let to_entry = |d: &crate::app::mode::settings::ModelDraft, oauth_drafts: &[crate::app::mode::settings::OAuthDraft]| ModelEntry {
-            uuid: if d.uuid.is_empty() {
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                d.uuid.clone()
-            },
-            name: d.name.clone(),
-            model_id: d.model_id.clone(),
-            provider_uuid: if d.provider_idx < provider_conns.len() {
-                provider_conns.get(d.provider_idx).map(|p| p.uuid.clone()).unwrap_or_default()
+        // Map model drafts -> persisted ModelEntry.
+        //
+        // Provider binding priority (CRITICAL — OAuth drift fix):
+        // 1. Resolve `provider_idx` against the FRESHLY built providers-then-oauth
+        //    cycle (so a model whose provider was navigated/added in this edit
+        //    session still resolves).
+        // 2. If the index resolves AND agrees with the draft's carried
+        //    `provider_uuid` (or the draft carries none), take the index result.
+        //    Modal edits always re-sync `provider_uuid` from the navigated index
+        //    (see save_model_modal), so an intentional provider change still wins.
+        // 3. If the index resolves to a *different* uuid than the draft carries —
+        //    the classic load-fallback case: dangling/oauth miss → idx 0 (koma
+        //    free) while `provider_uuid` still holds the real OAuth conn — KEEP
+        //    the carried uuid. Never silently rebind OAuth models onto
+        //    providers[0] on Esc/save.
+        // 4. If the index does not resolve at all, keep the carried uuid.
+        let to_entry = |d: &crate::app::mode::settings::ModelDraft, oauth_drafts: &[crate::app::mode::settings::OAuthDraft]| {
+            let from_idx = if d.provider_idx < provider_conns.len() {
+                provider_conns.get(d.provider_idx).map(|p| p.uuid.clone())
             } else {
                 oauth_drafts
-                    .get(d.provider_idx - provider_conns.len())
+                    .get(d.provider_idx.saturating_sub(provider_conns.len()))
                     .map(|o| o.uuid.clone())
-                    .unwrap_or_default()
-            },
-            route: d.route.clone(),
-            // Persist the multi-role list; leave the legacy single-role
-            // field None so it stops being serialized (migration on save).
-            roles: d.roles.clone(),
-            role: None,
-            // Preserve the clone-source identity through the save so a /settings save
-            // that never opened this override keeps the GUI picker's exact match
-            // (a modal edit re-authors the draft to None — see save_model_modal).
-            source_uuid: d.source_uuid.clone(),
+            };
+            let provider_uuid = match from_idx {
+                Some(uuid)
+                    if d.provider_uuid.is_empty() || d.provider_uuid == uuid =>
+                {
+                    uuid
+                }
+                Some(_) | None => {
+                    // Index miss, OR index disagrees with the carried binding.
+                    // Prefer the authoritative uuid loaded from disk / committed
+                    // by the modal — never providers[0] by accident.
+                    d.provider_uuid.clone()
+                }
+            };
+            ModelEntry {
+                uuid: if d.uuid.is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    d.uuid.clone()
+                },
+                name: d.name.clone(),
+                model_id: d.model_id.clone(),
+                provider_uuid,
+                route: d.route.clone(),
+                // Persist the multi-role list; leave the legacy single-role
+                // field None so it stops being serialized (migration on save).
+                roles: d.roles.clone(),
+                role: None,
+                // Preserve the clone-source identity through the save so a /settings save
+                // that never opened this override keeps the GUI picker's exact match
+                // (a modal edit re-authors the draft to None — see save_model_modal).
+                source_uuid: d.source_uuid.clone(),
+            }
         };
         // Global catalogue: session_only == false. Session override layer:
         // session_only == true (persisted to settings.json, never config).

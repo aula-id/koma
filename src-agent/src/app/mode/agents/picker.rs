@@ -134,13 +134,28 @@ impl ToolPickerState {
 /// Resolve a [`ModelEntry`]'s provider connection to a human-readable name for
 /// the model picker / browse rows: the provider's `name` (falling back to its
 /// `endpoint`) looked up in `config.providers` by the entry's `provider_uuid`,
-/// or `"?"` when the connection is missing/blank.
+/// then `config.oauth_conns` (OAuth-backed providers use the same uuid key as
+/// runtime resolution — missing that lookup was the `"@ ?"` display bug), or
+/// `"?"` when neither catalogue has a match.
 fn entry_provider_name(config: &AppConfig, entry: &ModelEntry) -> String {
-    match config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
-        Some(p) if !p.name.trim().is_empty() => p.name.clone(),
-        Some(p) if !p.endpoint.trim().is_empty() => p.endpoint.clone(),
-        _ => "?".to_string(),
+    if let Some(p) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+        if !p.name.trim().is_empty() {
+            return p.name.clone();
+        }
+        if !p.endpoint.trim().is_empty() {
+            return p.endpoint.clone();
+        }
     }
+    if let Some(c) = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid) {
+        // Prefer the stored display name; fall back to provider kind + short uuid.
+        if !c.name.trim().is_empty() {
+            return c.name.clone();
+        }
+        let kind = c.provider.label();
+        let short: String = c.uuid.chars().take(8).collect();
+        return format!("{kind} ({short})");
+    }
+    "?".to_string()
 }
 
 /// One-line label for a registered model in the picker / browse row:
