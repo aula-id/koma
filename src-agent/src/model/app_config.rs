@@ -85,16 +85,17 @@ pub enum ApiType {
     /// via the first-run chooser / `/free` toggle, never user-selectable in the
     /// providers modal (serde `"koma_free"`).
     KomaFree,
+    /// Command Code's `/alpha/generate` NDJSON transport. The Go-plan API key
+    /// (`user_…`) does NOT have access to the OpenAI-compatible
+    /// `provider/v1/chat/completions` endpoint (403); instead it works against
+    /// `POST https://api.commandcode.ai/alpha/generate` with NDJSON streaming.
+    /// Set only via OAuth resolution for `OAuthProvider::CommandCode`, never
+    /// user-selectable (serde `"command_code"`).
+    CommandCode,
 }
 
 impl ApiType {
     /// Whether the runtime can actually dispatch a request against this wire type.
-    /// `OpenAiCompatible` and `KomaFree` speak the OpenAI chat-completions contract
-    /// (`KomaFree` is that wire with keyless dual-header auth); `Codex` speaks the
-    /// OpenAI Responses API; `AnthropicCompatible` speaks the native Anthropic
-    /// Messages API — all four have real transports (see the `codex` / `anthropic`
-    /// submodules). The single source of truth shared by the resolution-boundary
-    /// gate (`Resolved::is_routable`) and the UI affordance.
     pub fn is_routable(self) -> bool {
         matches!(
             self,
@@ -102,6 +103,7 @@ impl ApiType {
                 | ApiType::AnthropicCompatible
                 | ApiType::Codex
                 | ApiType::KomaFree
+                | ApiType::CommandCode
         )
     }
 }
@@ -134,8 +136,8 @@ pub enum OAuthProvider {
     /// Chat endpoint: https://api.cline.bot/api/v1 (OpenAI-compatible). Flow kind: "reuse".
     ClinePass,
     /// Command Code: browser posts API key to localhost callback (NOT auth-code PKCE).
-    /// Chat/catalogue: OpenAI-compatible at https://api.commandcode.ai/provider/v1
-    /// (NDJSON /alpha/generate is unused — we ride the provider/v1 surface).
+    /// Chat endpoint: https://api.commandcode.ai (NDJSON `/alpha/generate`).
+    /// Catalogue: https://api.commandcode.ai/provider/v1 (OpenAI-compatible `/models`).
     /// Flow kind: "callback".
     CommandCode,
     /// W11: a token stored by an EXTENSION-delegated OAuth flow. The actual provider

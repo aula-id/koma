@@ -322,8 +322,8 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
         // ClinePass: OpenAI-compatible chat endpoint (bearer WorkOS token or API key).
         OAuthProvider::ClinePass => ApiType::OpenAiCompatible,
-        // Command Code: OpenAI-compatible at api.commandcode.ai/provider/v1.
-        OAuthProvider::CommandCode => ApiType::OpenAiCompatible,
+        // Command Code: NDJSON `/alpha/generate` transport (Go-plan OAuth).
+        OAuthProvider::CommandCode => ApiType::CommandCode,
         // W11: an ext-backed conn is not a model provider in v1 — no ModelEntry
         // references it, so this `find` never yields one and this arm never runs.
         // Placeholder wire type; W12 sources the real api_type from the extension

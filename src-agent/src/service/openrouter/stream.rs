@@ -94,6 +94,23 @@ impl OpenRouterClient {
                 .await;
         }
 
+        // Command Code speaks the `/alpha/generate` NDJSON wire — a different
+        // protocol from chat-completions. `provider` is meaningless there.
+        if conn.api_type == ApiType::CommandCode {
+            return self
+                .commandcode_stream_complete(
+                    conn,
+                    &bearer,
+                    model,
+                    messages,
+                    advertise,
+                    mcp_tools,
+                    image_ctx,
+                    tx,
+                )
+                .await;
+        }
+
         // The plan-word steer is now injected into the System message upstream in
         // `start_stream_task`, BEFORE the volatile project-files/awareness tail and
         // ahead of the `CACHE_SPLIT_MARK` boundary, so it stays inside the cached
