@@ -13,12 +13,15 @@
 
 pub mod browser;
 pub mod claude;
+pub mod clinepass;
 pub mod codex;
+pub mod commandcode;
 pub mod flow;
 pub mod jwt;
 pub mod kilo;
 pub mod komarun;
 pub mod loopback;
+pub mod loopback_post;
 pub mod manager;
 pub mod pkce;
 pub mod registry;

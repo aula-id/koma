@@ -130,6 +130,12 @@ pub enum OAuthProvider {
     /// shape but against koma.run's native-client OAuth endpoints (form-encoded token
     /// exchange, no client_id/scope). Account login only — not a model provider yet.
     KomaRun,
+    /// ClinePass: WorkOS credential reuse from Cline CLI + custom refresh, or static API key paste.
+    /// Chat endpoint: https://api.cline.bot/api/v1 (OpenAI-compatible). Flow kind: "reuse".
+    ClinePass,
+    /// Command Code: browser posts API key to localhost callback (NOT auth-code PKCE).
+    /// LOGIN/TOKEN ONLY this PR (no NDJSON chat transport). Flow kind: "callback".
+    CommandCode,
     /// W11: a token stored by an EXTENSION-delegated OAuth flow. The actual provider
     /// identity lives in the connection's `ext_id`/`provider_id` fields, not this enum
     /// (which stays `Copy` + closed) — this variant is just the "backed by an extension"
@@ -150,6 +156,8 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xAI",
             OAuthProvider::ClaudeAI => "Claude",
             OAuthProvider::KomaRun => "Koma",
+            OAuthProvider::ClinePass => "ClinePass",
+            OAuthProvider::CommandCode => "Command Code",
             // W11: generic marker label; a real ext-backed conn's picker row uses the
             // extension manifest's provider `name`, never this (see
             // `requests_oauth::ext_oauth_rows_for`).
@@ -168,6 +176,8 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xai",
             OAuthProvider::ClaudeAI => "claudeai",
             OAuthProvider::KomaRun => "komarun",
+            OAuthProvider::ClinePass => "clinepass",
+            OAuthProvider::CommandCode => "commandcode",
             // W11: stamped as the `provider` on an ext-backed conn's tokenless wire
             // projection (so the webview sees a stable marker); the connection's real
             // identity is its `ext_id`/`provider_id`. NOT a `from_wire_id` input.
@@ -194,6 +204,8 @@ impl OAuthProvider {
             "xai" => Some(OAuthProvider::Xai),
             "claudeai" => Some(OAuthProvider::ClaudeAI),
             "komarun" => Some(OAuthProvider::KomaRun),
+            "clinepass" => Some(OAuthProvider::ClinePass),
+            "commandcode" => Some(OAuthProvider::CommandCode),
             _ => None,
         }
     }
@@ -210,6 +222,8 @@ impl OAuthProvider {
             OAuthProvider::Xai => "device",
             OAuthProvider::ClaudeAI => "pkce",
             OAuthProvider::KomaRun => "pkce",
+            OAuthProvider::ClinePass => "reuse",
+            OAuthProvider::CommandCode => "callback",
             // W11: never surfaced through the enum-driven `oauth_providers()` list (ext
             // rows carry their own kind, mapped from the manifest `method` — see
             // `requests_oauth::method_to_kind`), so this value is exhaustiveness-only and
@@ -1058,6 +1072,8 @@ mod oauth_provider_wire_tests {
             OAuthProvider::Xai,
             OAuthProvider::ClaudeAI,
             OAuthProvider::KomaRun,
+            OAuthProvider::ClinePass,
+            OAuthProvider::CommandCode,
         ] {
             assert_eq!(OAuthProvider::from_wire_id(p.wire_id()), Some(p));
         }
@@ -1067,8 +1083,10 @@ mod oauth_provider_wire_tests {
     /// provider — it must resolve to `None` so callers route it to the paste path
     /// instead of mistaking it for (or falling back to) a real provider.
     #[test]
-    fn from_wire_id_rejects_codex_paste_and_unknown() {
+    fn from_wire_id_rejects_paste_variants_and_unknown() {
         assert_eq!(OAuthProvider::from_wire_id("codex_paste"), None);
+        assert_eq!(OAuthProvider::from_wire_id("clinepass_paste"), None);
+        assert_eq!(OAuthProvider::from_wire_id("commandcode_paste"), None);
         assert_eq!(OAuthProvider::from_wire_id("not_a_provider"), None);
         assert_eq!(OAuthProvider::from_wire_id(""), None);
         // W11: the `extension` storage marker is NOT a from_wire_id input — ext flows

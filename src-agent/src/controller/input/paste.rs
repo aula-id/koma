@@ -177,7 +177,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                 }
                 // Login: only the paste-token field accepts text.
                 OnboardProviderStep::Login => {
-                    if let OAuthFlowState::CodexPaste { input } = &mut op.oauth_flow {
+                    if let OAuthFlowState::CodexPaste { input, .. } = &mut op.oauth_flow {
                         paste_single_line(text, |c| input.push(c));
                     }
                 }
