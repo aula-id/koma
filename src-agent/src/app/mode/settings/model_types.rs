@@ -134,8 +134,19 @@ pub struct ModelDraft {
     pub name: String,
     /// Concrete model identifier, e.g. `"openai/gpt-4o-mini"`.
     pub model_id: String,
-    /// Index into [`SettingsState::providers`] — which API provider serves it.
+    /// Index into the merged providers-then-oauth cycle used by the model modal.
+    /// Convenience for UI navigation only — the authoritative binding is
+    /// [`Self::provider_uuid`]. A dangling / unknown provider loads as `0` for
+    /// display but must NEVER be written back as `providers[0]` on save; save
+    /// prefers `provider_uuid` when the index no longer resolves.
     pub provider_idx: usize,
+    /// Authoritative provider / OAuth-connection uuid this model is bound to.
+    /// Loaded from [`crate::model::app_config::ModelEntry::provider_uuid`] and
+    /// re-synced whenever the modal changes `provider_idx`. Carried through the
+    /// load→save round-trip so Esc/save cannot silently rebind an OAuth model
+    /// onto `providers[0]` (historically koma free) when the positional index
+    /// is stale or unresolved.
+    pub provider_uuid: String,
     /// Role slots assigned to this model; empty = unassigned. A model may hold
     /// several roles (each role is globally unique across models).
     pub roles: Vec<ModelRole>,

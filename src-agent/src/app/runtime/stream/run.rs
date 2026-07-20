@@ -323,17 +323,46 @@ over sec_remote (stateful socket).\n",
     };
     if let Some(reason) = fallback {
         let msg = match reason {
+            crate::app::resolve::MainFallback::Unconfigured => {
+                "WARNING: no Main model configured — using free tier koma/apple. \
+                 Set a Main model in /settings (or /free to pin free tier on purpose)."
+            }
             crate::app::resolve::MainFallback::ProviderRemoved => {
-                "selected model's provider was removed — using koma free"
+                "WARNING: selected model's provider was removed — using free tier koma/apple. \
+                 Fix the model binding in /settings."
             }
             crate::app::resolve::MainFallback::NoKey => {
-                "selected model has no API key — using koma free"
+                "WARNING: selected model has no API key — using free tier koma/apple. \
+                 Add a key in /settings or sign in via OAuth."
             }
             crate::app::resolve::MainFallback::NotSignedIn => {
-                "selected model needs sign-in — using koma free"
+                "WARNING: selected model needs sign-in — using free tier koma/apple. \
+                 Re-authenticate the OAuth connection in /settings."
             }
         };
+        // Hard warning toast (error style, ~6s).
         state.rest.sessions[sess_idx].set_toast(msg.to_string());
+        // Mirror into error.log so the free-tier auto-route is auditable after
+        // the toast disappears. Prefer the session log; also stamp the global
+        // log so operators who only tail ~/.koma/error.log still see it.
+        let detail = match reason {
+            crate::app::resolve::MainFallback::Unconfigured => {
+                "no Main model assigned; dispatch auto-routed to koma/apple (free tier)"
+            }
+            crate::app::resolve::MainFallback::ProviderRemoved => {
+                "Main provider_uuid missing from providers/oauth_conns; dispatch auto-routed to koma/apple"
+            }
+            crate::app::resolve::MainFallback::NoKey => {
+                "Main provider api_key empty; dispatch auto-routed to koma/apple"
+            }
+            crate::app::resolve::MainFallback::NotSignedIn => {
+                "Main OAuth access_token empty; dispatch auto-routed to koma/apple"
+            }
+        };
+        if let Some(sess) = state.rest.sessions[sess_idx].session.as_ref() {
+            crate::model::store::append_error_log(&sess.path, "main fallback → koma/apple", detail);
+        }
+        crate::model::store::append_global_error_log("main fallback → koma/apple", detail);
     }
 
     // 1. Window: the model's context-window size in tokens, from the cached

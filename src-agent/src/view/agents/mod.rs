@@ -81,11 +81,30 @@ pub(crate) fn model_display(
                 .or_else(|| config.models.iter().find(|e| &e.uuid == uuid));
             match entry {
                 Some(e) => {
-                    let provider = match config.providers.iter().find(|p| p.uuid == e.provider_uuid)
+                    // Mirror runtime resolution: static providers first, then
+                    // oauth_conns. Looking only at providers made every OAuth-
+                    // backed model render as "name @ ?" in the agents UI.
+                    let provider = if let Some(p) =
+                        config.providers.iter().find(|p| p.uuid == e.provider_uuid)
                     {
-                        Some(p) if !p.name.trim().is_empty() => p.name.clone(),
-                        Some(p) if !p.endpoint.trim().is_empty() => p.endpoint.clone(),
-                        _ => "?".to_string(),
+                        if !p.name.trim().is_empty() {
+                            p.name.clone()
+                        } else if !p.endpoint.trim().is_empty() {
+                            p.endpoint.clone()
+                        } else {
+                            "?".to_string()
+                        }
+                    } else if let Some(c) =
+                        config.oauth_conns.iter().find(|c| c.uuid == e.provider_uuid)
+                    {
+                        if !c.name.trim().is_empty() {
+                            c.name.clone()
+                        } else {
+                            let short: String = c.uuid.chars().take(8).collect();
+                            format!("{} ({short})", c.provider.label())
+                        }
+                    } else {
+                        "?".to_string()
                     };
                     (format!("{} @ {}", e.name, provider), true)
                 }
