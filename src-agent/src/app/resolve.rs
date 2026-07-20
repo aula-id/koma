@@ -322,8 +322,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
         // ClinePass: OpenAI-compatible chat endpoint (bearer WorkOS token or API key).
         OAuthProvider::ClinePass => ApiType::OpenAiCompatible,
-        // Command Code: login-only (no chat transport this PR). Empty meta means
-        // resolution won't route models to it — same as Extension account-login-only.
+        // Command Code: OpenAI-compatible at api.commandcode.ai/provider/v1.
         OAuthProvider::CommandCode => ApiType::OpenAiCompatible,
         // W11: an ext-backed conn is not a model provider in v1 — no ModelEntry
         // references it, so this `find` never yields one and this arm never runs.
@@ -345,7 +344,7 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::KomaRun => String::new(),
         // ClinePass: no org/account header.
         OAuthProvider::ClinePass => String::new(),
-        // Command Code: login-only; no org/account header.
+        // Command Code: no org/account header.
         OAuthProvider::CommandCode => String::new(),
         // W11: ext-backed conns carry no send-time account/org header (not a model
         // provider in v1). Empty, same as the account-login providers.

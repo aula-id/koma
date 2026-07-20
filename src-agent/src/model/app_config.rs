@@ -134,7 +134,9 @@ pub enum OAuthProvider {
     /// Chat endpoint: https://api.cline.bot/api/v1 (OpenAI-compatible). Flow kind: "reuse".
     ClinePass,
     /// Command Code: browser posts API key to localhost callback (NOT auth-code PKCE).
-    /// LOGIN/TOKEN ONLY this PR (no NDJSON chat transport). Flow kind: "callback".
+    /// Chat/catalogue: OpenAI-compatible at https://api.commandcode.ai/provider/v1
+    /// (NDJSON /alpha/generate is unused — we ride the provider/v1 surface).
+    /// Flow kind: "callback".
     CommandCode,
     /// W11: a token stored by an EXTENSION-delegated OAuth flow. The actual provider
     /// identity lives in the connection's `ext_id`/`provider_id` fields, not this enum
