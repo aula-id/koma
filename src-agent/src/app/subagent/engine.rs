@@ -96,7 +96,8 @@ fn is_stall(text: &str) -> bool {
 
 /// One drained stream result: the assistant text, any requested tool calls,
 /// a fatal error if the stream failed, and the optional usage tuple from the
-/// final `StreamEvent::Usage` chunk (prompt_tokens, completion_tokens, cost).
+/// final `StreamEvent::Usage` chunk (prompt_tokens, completion_tokens,
+/// cached_tokens, cost).
 #[derive(Default)]
 struct StreamOutcome {
     text: String,
@@ -109,9 +110,10 @@ struct StreamOutcome {
     reasoning_details: Vec<crate::dto::chat::ReasoningDetail>,
     tool_calls: Vec<ToolCall>,
     error: Option<String>,
-    /// Last-seen usage chunk: (prompt_tokens, completion_tokens, cost).
+    /// Last-seen usage chunk: (prompt_tokens, completion_tokens, cached_tokens, cost).
     /// `None` when the provider emitted no Usage event for this step.
-    usage: Option<(u64, u64, f64)>,
+    /// `cost` is overlay-corrected when the provider reports 0.0 (see [`stream_step`]).
+    usage: Option<(u64, u64, u64, f64)>,
 }
 
 /// Clean a sub-agent's raw final text into a deliverable report, mirroring the
@@ -301,15 +303,24 @@ pub async fn run_agent_loop(
         // with no Usage chunk simply contributes nothing). tokens_in is
         // reported as-is (current context size), tokens_out and cost are summed.
         // Emit a UsageReport after EVERY step so the SubAgent struct always
-        // holds the latest accumulated spend — on kill/abort the drain can
-        // still record what was captured so far (loses at most one step).
-        if let Some((pt, ct, c)) = outcome.usage {
-            acc_tokens_out += ct;
-            acc_cost += c;
+        // holds the latest accumulated spend — on kill/abort the orchestrator
+        // has already rolled each prior step into the parent counters + ledger
+        // (loses at most the in-flight step whose Usage chunk never arrived).
+        if let Some((pt, ct, cached, c)) = outcome.usage {
+            let (next_out, next_cost) =
+                super::usage_math::accumulate_step(acc_tokens_out, acc_cost, ct, c);
+            acc_tokens_out = next_out;
+            acc_cost = next_cost;
             emit(&tx, AgentEvent::UsageReport {
                 model_id: resolved.model_id.clone(),
                 tokens_in: pt,
                 tokens_out: acc_tokens_out,
+                // Per-step completion tokens + cost (not cumulative) so the
+                // orchestrator can ledger each step independently and survive
+                // a mid-run kill without losing earlier steps.
+                step_tokens_out: ct,
+                step_tokens_cached: cached,
+                step_cost: c,
                 cost: acc_cost,
             });
         }
@@ -534,6 +545,10 @@ async fn stream_step(
     let provider = resolved.provider().to_string();
     let effort = resolved.effort.clone();
     let endpoint = resolved.endpoint.clone();
+    // Overlay lookup copies — kept on this side of the spawn so Usage handling
+    // can price a 0.0 provider cost without racing the moved task locals.
+    let overlay_model_id = model_id.clone();
+    let overlay_endpoint = endpoint.clone();
     let api_key = resolved.api_key.clone();
     // OAuth identity + wire type, threaded so a sub-agent resolved onto a Codex /
     // Kilo OAuth route dispatches through the right transport with a refreshable
@@ -585,8 +600,27 @@ async fn stream_step(
                 outcome.error = Some(e);
             }
             // Capture the usage chunk so the caller can accumulate spend.
-            StreamEvent::Usage { prompt_tokens, completion_tokens, cost, .. } => {
-                outcome.usage = Some((prompt_tokens, completion_tokens, cost));
+            // When the provider hardcodes / omits cost (Codex, Claude, many
+            // direct APIs → 0.0), fall back to the curated catalogue overlay —
+            // same rule the main interactive loop applies in `turn.rs`. Without
+            // this, multi-step sub-agents always report $0 and the parent
+            // footer / ledger never see the spend.
+            StreamEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
+                cost,
+            } => {
+                let eff_cost = super::usage_math::effective_step_cost(
+                    &overlay_endpoint,
+                    &overlay_model_id,
+                    prompt_tokens,
+                    cached_tokens,
+                    completion_tokens,
+                    cost,
+                );
+                outcome.usage =
+                    Some((prompt_tokens, completion_tokens, cached_tokens, eff_cost));
             }
             // Accumulate the model's thinking into a parallel buffer so the
             // committed assistant message carries it (the viewer renders it as a

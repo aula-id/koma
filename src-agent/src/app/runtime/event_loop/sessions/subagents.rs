@@ -94,6 +94,10 @@ pub(super) fn drain_subagents(
         // --- apply phase: fold events onto the sub-agent ---
         // The task-tool path delivers its result via `deferred_results`
         // (computed from the settled status below), not here.
+        // `step_rollups` collects per-step spend to merge into the PARENT
+        // session + usage ledger AFTER the `&mut sa` borrow ends (can't
+        // touch `sessions[idx].cost` while holding a field reborrow).
+        let mut step_rollups: Vec<(String, String, u64, u64, u64, f64)> = Vec::new();
         if !events.is_empty() {
             dirty = true;
             let sa = &mut state.rest.sessions[idx].subagents[i];
@@ -221,16 +225,71 @@ pub(super) fn drain_subagents(
                         sa.status = SubAgentStatus::Error(e);
                         status_changed = true;
                     }
-                    AgentEvent::UsageReport { model_id, tokens_in, tokens_out, cost } => {
-                        // Overwrite with the final report's values; the loop
-                        // emits exactly one UsageReport (just before Done).
-                        sa.model_id = model_id;
+                    AgentEvent::UsageReport {
+                        model_id,
+                        tokens_in,
+                        tokens_out,
+                        step_tokens_out,
+                        step_tokens_cached,
+                        step_cost,
+                        cost,
+                    } => {
+                        // Keep running totals on the SubAgent for UI; queue this
+                        // step's delta for parent + ledger AFTER the sa borrow.
+                        // Per-step (not terminal-only) so kill/cancel keeps every
+                        // finished step's price.
+                        sa.model_id = model_id.clone();
                         sa.usage_tokens_in = tokens_in;
                         sa.usage_tokens_out = tokens_out;
                         sa.usage_cost = cost;
+                        if step_tokens_out > 0 || step_cost > 0.0 {
+                            step_rollups.push((
+                                model_id,
+                                sa.agent_name.clone(),
+                                tokens_in,
+                                step_tokens_cached,
+                                step_tokens_out,
+                                step_cost,
+                            ));
+                        }
                     }
                 }
             }
+        }
+        // Apply per-step spend against the OWNING session (sa borrow released).
+        if !step_rollups.is_empty() {
+            let (sess_uuid, pwd_hash) = state
+                .rest
+                .sessions[idx]
+                .session
+                .as_ref()
+                .map(|s| (s.id.clone(), s.pwd_hash.clone()))
+                .unwrap_or_default();
+            for (model_id, sa_name, tokens_in, step_cached, step_out, step_cost) in step_rollups {
+                // Live parent rollup: cost + tokens_out are cumulative; tokens_in
+                // is the main-context gauge and is intentionally untouched.
+                // Shared pure helper so tests lock the kill/cancel additive rule.
+                if let Some((c, o)) = crate::app::subagent::usage_math::fold_parent_spend(
+                    state.rest.sessions[idx].cost,
+                    state.rest.sessions[idx].tokens_out,
+                    step_out,
+                    step_cost,
+                ) {
+                    state.rest.sessions[idx].cost = c;
+                    state.rest.sessions[idx].tokens_out = o;
+                    crate::model::usage::record_usage(
+                        &model_id,
+                        &format!("sub:{sa_name}"),
+                        &sess_uuid,
+                        &pwd_hash,
+                        tokens_in,
+                        step_cached,
+                        step_out,
+                        step_cost,
+                    );
+                }
+            }
+            dirty = true;
         }
 
         // --- terminal delivery / fold ---
@@ -248,28 +307,16 @@ pub(super) fn drain_subagents(
         // task-tool deferred delivery; `nudge` carries the (id, agent, status_label)
         // for a DETACHED sub-agent's one-shot completion nudge (buffered, injected
         // when idle — mirrors bg-bash).
-        // `sub_usage` carries (model_id, tokens_in, tokens_out, cost) to merge+record
-        // when the sub-agent reaches any terminal state. At most one of chat_fold /
-        // defer / nudge is Some (blocking-task-tool, /task, and detached are mutually
-        // exclusive). sub_usage is Some whenever the status is terminal and usage > 0.
+        // Spend is already rolled into the parent + ledger per UsageReport step
+        // above (so a kill keeps every finished step). Terminal handling below is
+        // delivery-only — no second cost pass.
         // `mark_nudged` is true whenever this tick consumed a one-shot arm gated on
         // `!sa.nudged` (the detached nudge arm, or either /task-path terminal arm
         // below) — applied to `sa.nudged` right after the match closes, so that same
         // arm's guard blocks it on every later tick (terminated records are kept as
         // history, never pruned, so without this they would re-fire forever).
-        let (chat_fold, defer, nudge, sub_usage, mark_nudged) = {
+        let (chat_fold, defer, nudge, mark_nudged) = {
             let sa = &state.rest.sessions[idx].subagents[i];
-            // Capture usage once; only carry it if there is something to record.
-            let usage_tuple = if sa.usage_tokens_out > 0 || sa.usage_cost > 0.0 {
-                Some((
-                    sa.model_id.clone(),
-                    sa.usage_tokens_in,
-                    sa.usage_tokens_out,
-                    sa.usage_cost,
-                ))
-            } else {
-                None
-            };
             // DETACHED (task run_in_background) path FIRST: it carries
             // tool_call_id == None (so it would otherwise fall into the /task
             // arms below), but it must NOT chat-fold — instead it fires a ONE-shot
@@ -283,19 +330,18 @@ pub(super) fn drain_subagents(
                     SubAgentStatus::Running => None,
                 };
                 match outcome {
-                    // Terminal + not yet nudged: carry the nudge + usage.
+                    // Terminal + not yet nudged: carry the nudge.
                     // The 3rd element of the tuple is the FULL outcome/report text,
                     // not a short status label — it is injected verbatim into the
                     // wake-nudge user turn so the model receives the complete result
                     // without needing to poll task_output.
                     Some(outcome) if !sa.nudged => {
-                        (None, None, Some((sa.id, sa.agent_name.clone(), outcome)), usage_tuple, true)
+                        (None, None, Some((sa.id, sa.agent_name.clone(), outcome)), true)
                     }
-                    // Terminal but already nudged: nothing to do (usage already
-                    // recorded on the first terminal tick).
-                    Some(_) => (None, None, None, None, false),
+                    // Terminal but already nudged: nothing to do.
+                    Some(_) => (None, None, None, false),
                     // Still running: nothing this tick.
-                    None => (None, None, None, None, false),
+                    None => (None, None, None, false),
                 }
             } else {
                 match (&sa.tool_call_id, &sa.status) {
@@ -313,13 +359,11 @@ pub(super) fn drain_subagents(
                             // Still running: nothing to deliver this tick.
                             SubAgentStatus::Running => None,
                         };
-                        // Only carry usage on a terminal transition (result is Some).
-                        let carry_usage = if result.is_some() { usage_tuple } else { None };
                         // Not gated on `sa.nudged` — this path's one-shot delivery is
                         // already latched by removing `call_id` from
                         // `pending_subagent_calls` after the loop, so it never fires
                         // twice regardless of `nudged`.
-                        (None, result.map(|r| (call_id.clone(), r)), None, carry_usage, false)
+                        (None, result.map(|r| (call_id.clone(), r)), None, false)
                     }
                     // /task command path (tool_call_id == None), HUMAN-spawned (not
                     // ext-owned): on Done, fold the report into a COMPACT completion
@@ -335,7 +379,7 @@ pub(super) fn drain_subagents(
                     // via `mark_nudged` (applied to `sa.nudged` right after the match) so
                     // it fires exactly once, mirroring the detached arm above. An
                     // EXT-OWNED agent (Tier B) SKIPS this arm via `!sa.ext_owned` and
-                    // falls through to the silent usage-only arm below — its spawner
+                    // falls through to the silent latch-only arm below — its spawner
                     // already gets the result via `agents.done`, so it must never
                     // interrupt the human's chat.
                     (None, SubAgentStatus::Done(result)) if !sa.nudged && !sa.ext_owned => (
@@ -347,23 +391,22 @@ pub(super) fn drain_subagents(
                         )),
                         None,
                         None,
-                        usage_tuple,
                         true,
                     ),
-                    // Terminal with NO chat-fold note, but still carry accumulated
-                    // usage so cost is never silently lost. Covers:
+                    // Terminal with NO chat-fold note. Covers:
                     // - an EXT-OWNED Done (Tier B — completely silent in the human chat;
                     //   the spawner gets its `agents.done` callback instead), and
                     // - a /task Killed or Error (the turn is dead — nothing to fold).
                     // Latched the same as the Done arm above: without `!sa.nudged`, a
-                    // terminated-but-kept record would re-add its usage every tick.
+                    // terminated-but-kept record would re-fire every tick.
+                    // Spend already landed per UsageReport step above.
                     (
                         None,
                         SubAgentStatus::Done(_)
                         | SubAgentStatus::Killed
                         | SubAgentStatus::Error(_),
-                    ) if !sa.nudged => (None, None, None, usage_tuple, true),
-                    _ => (None, None, None, None, false),
+                    ) if !sa.nudged => (None, None, None, true),
+                    _ => (None, None, None, false),
                 }
             }
         };
@@ -376,7 +419,7 @@ pub(super) fn drain_subagents(
             dirty = true;
         }
         // Latch the /task-path terminal arms (Done chat-fold, Killed/Error
-        // usage-only) the same way the detached arm just latched above: once
+        // silent) the same way the detached arm just latched above: once
         // consumed, `nudged` flips to true so their `!sa.nudged` guard skips
         // them on every later tick.
         if mark_nudged {
@@ -405,39 +448,9 @@ pub(super) fn drain_subagents(
                 let _ = sess.save();
             }
         }
-        // Merge sub-agent spend into the OWNING session's totals + record a
-        // ledger row. Done for BOTH paths (chat_fold = /task, defer = task-tool)
-        // at the single point where a terminal status is first observed.
-        // Non-fatal: skipped when no usage was ever reported (provider omits it).
-        // The spend credits THIS session (`sessions[idx]`), never a global, so
-        // each tab's counters reflect only its own (and its sub-agents') usage.
-        if let Some((sub_model_id, sub_ti, sub_to, sub_cost)) = sub_usage {
-            // Merge into THIS session's counters: cost and tokens_out are
-            // cumulative (summed); tokens_in is the main-context gauge and must
-            // NOT be touched (adding sub-agent prompt size would corrupt the
-            // context-window display).
-            state.rest.sessions[idx].cost += sub_cost;
-            state.rest.sessions[idx].tokens_out += sub_to;
-            // Record one ledger row per sub-agent completion (best-effort).
-            let (sess_uuid, pwd_hash) = state
-                .rest
-                .sessions[idx]
-                .session
-                .as_ref()
-                .map(|s| (s.id.clone(), s.pwd_hash.clone()))
-                .unwrap_or_default();
-            let sa_name = state.rest.sessions[idx].subagents[i].agent_name.clone();
-            crate::model::usage::record_usage(
-                &sub_model_id,
-                &format!("sub:{sa_name}"),
-                &sess_uuid,
-                &pwd_hash,
-                sub_ti,
-                0, // sub-agents never receive cached-tokens data
-                sub_to,
-                sub_cost,
-            );
-        }
+        // Spend merge is NOT done here: each UsageReport step already rolled
+        // its delta into the parent counters + wrote a ledger row. Terminal
+        // delivery is pure chat-fold / defer / nudge.
         if let Some(pair) = defer {
             deferred_results.push(pair);
         }
