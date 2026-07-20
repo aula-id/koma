@@ -178,16 +178,85 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         };
         // Global catalogue: session_only == false. Session override layer:
         // session_only == true (persisted to settings.json, never config).
-        let model_entries: Vec<ModelEntry> = model_drafts
+        let mut model_entries: Vec<ModelEntry> = model_drafts
             .iter()
             .filter(|d| !d.session_only)
             .map(|d| to_entry(d, &oauth_drafts))
             .collect();
-        let session_model_entries: Vec<ModelEntry> = model_drafts
+        let mut session_model_entries: Vec<ModelEntry> = model_drafts
             .iter()
             .filter(|d| d.session_only)
             .map(|d| to_entry(d, &oauth_drafts))
             .collect();
+
+        // Cascade: providers/models dropped from drafts vs the previous catalogue
+        // must also drop orphaned models and rebind agents → inherit.
+        use std::collections::HashSet;
+        let prev_provider_uuids: HashSet<String> = state
+            .rest
+            .config
+            .providers
+            .iter()
+            .map(|p| p.uuid.clone())
+            .collect();
+        let new_provider_uuids: HashSet<String> =
+            provider_conns.iter().map(|p| p.uuid.clone()).collect();
+        let removed_providers: HashSet<String> = prev_provider_uuids
+            .difference(&new_provider_uuids)
+            .cloned()
+            .collect();
+        let prev_model_uuids: HashSet<String> = state
+            .rest
+            .config
+            .models
+            .iter()
+            .map(|m| m.uuid.clone())
+            .collect();
+        let new_model_uuids: HashSet<String> =
+            model_entries.iter().map(|m| m.uuid.clone()).collect();
+        let mut dead_models: HashSet<String> = prev_model_uuids
+            .difference(&new_model_uuids)
+            .cloned()
+            .collect();
+        // Drop draft models still referencing a removed provider.
+        for m in model_entries.iter().filter(|m| removed_providers.contains(&m.provider_uuid)) {
+            dead_models.insert(m.uuid.clone());
+        }
+        model_entries.retain(|m| !removed_providers.contains(&m.provider_uuid));
+        // Prev session-layer uuids (for agent rebind of deleted session models).
+        let prev_session_model_uuids: HashSet<String> = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| {
+                s.settings
+                    .session_models
+                    .iter()
+                    .map(|m| m.uuid.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        session_model_entries.retain(|m| !removed_providers.contains(&m.provider_uuid));
+        let new_session_uuids: HashSet<String> =
+            session_model_entries.iter().map(|m| m.uuid.clone()).collect();
+        dead_models.extend(
+            prev_session_model_uuids
+                .difference(&new_session_uuids)
+                .cloned(),
+        );
+        // Models in the PREVIOUS global list that pointed at removed providers.
+        for m in &state.rest.config.models {
+            if removed_providers.contains(&m.provider_uuid) {
+                dead_models.insert(m.uuid.clone());
+            }
+        }
+        let main_reset = state.rest.config.models.iter().any(|m| {
+            dead_models.contains(&m.uuid)
+                && m.effective_roles()
+                    .contains(&crate::model::app_config::ModelRole::Main)
+        });
+
         // Capture old internet mode before overwriting, so we can toast only
         // on actual change (avoids a spurious toast on every settings save).
         let old_internet = state.rest.fg().session.as_ref().map(|s| s.settings.internet_mode);
@@ -236,6 +305,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             sess.rebuild_system();
             // Session-only models live in the per-session override layer,
             // never in the global config. Persisted via sess.save() below.
+            // Already cascade-filtered against removed providers above.
             sess.settings.session_models = session_model_entries;
         }
         // b) Apply global theme/accent + the provider/model catalogue and
@@ -249,6 +319,18 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         state.rest.config.models = model_entries;
         if let Err(e) = state.rest.config.save() {
             state.rest.fg_mut().status = format!("config save failed: {e}");
+        } else if !dead_models.is_empty() || !removed_providers.is_empty() {
+            let report = crate::app::cascade::rebind_consumers_after_model_removal(
+                Some(state),
+                &dead_models,
+                &removed_providers,
+                main_reset,
+            );
+            if report.agents_cleared > 0 || report.main_reset {
+                state.rest.fg_mut().set_toast_info(
+                    crate::app::cascade::cascade_status_line("provider/model", &report),
+                );
+            }
         }
         // c) Persist the session's settings.json.
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
