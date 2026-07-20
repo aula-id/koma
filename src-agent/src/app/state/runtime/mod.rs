@@ -167,8 +167,10 @@ pub struct SessionRuntime {
     /// direct APIs like DeepSeek may omit it entirely). `None` only before the
     /// very first send of a session.
     pub pending_dispatch_endpoint: Option<String>,
-    /// THIS session's cumulative token/cost totals (summed from its own
-    /// messages.sqlite on open via `load_token_totals`, incremented per response).
+    /// THIS session's cumulative token/cost totals (seeded on open via
+    /// `load_token_totals` from msglog + the global usage ledger — the ledger
+    /// is preferred for cost/tokens_out because it includes every per-step
+    /// `sub:*` row, then incremented live per main + sub-agent response).
     /// Per-session so each tab tracks only its own usage — switching foreground
     /// just renders the active session's counters, never the sum. Survive /compact.
     /// `tokens_in` is the CURRENT context size (latest prompt), not a running sum;

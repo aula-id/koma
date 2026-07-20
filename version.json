@@ -1,4 +1,4 @@
 {
-  "version": "0.3.13",
-  "message": "fix: TUI add-model search for koma/Claude + xAI and Claude OAuth in TUI picker"
+  "version": "0.3.14",
+  "message": "fix: track additive per-step subagent cost"
 }

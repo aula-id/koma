@@ -767,11 +767,28 @@ impl AppStateRest {
     /// Seed session `sess_idx`'s cumulative token/cost counters from its sqlite
     /// log (0 if absent). Called when that session is loaded/created so its OWN
     /// counters reflect prior usage; never touches any other session's totals.
+    ///
+    /// Source of truth:
+    /// - `tokens_in` — latest assistant prompt from the per-session msglog
+    ///   (context-window gauge; not a sum).
+    /// - `tokens_out` / `cost` — prefer the global usage ledger when it has
+    ///   rows for this session UUID, because that ledger includes overlay-
+    ///   corrected main turns AND every per-step `sub:*` row. Falling back to
+    ///   msglog alone drops sub-agent spend on reload (sub-agent steps never
+    ///   write into messages.sqlite).
     pub fn load_token_totals(&mut self, sess_idx: usize, session_dir: &std::path::Path) {
         let (i, o, c) = crate::model::msglog::totals(session_dir).unwrap_or((0, 0, 0.0));
         let rt = &mut self.sessions[sess_idx];
         rt.tokens_in = i;
         rt.tokens_out = o;
         rt.cost = c;
+        if let Some(uuid) = rt.session.as_ref().map(|s| s.id.clone()) {
+            let lt = crate::model::usage::session_totals(&uuid);
+            if lt.calls > 0 {
+                // Ledger is cumulative for this session (main + every sub step).
+                rt.tokens_out = lt.tokens_out.max(0) as u64;
+                rt.cost = lt.cost;
+            }
+        }
     }
 }
