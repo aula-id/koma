@@ -130,20 +130,29 @@ impl DaemonHub {
         }
         let purge = state.rest.config.cascade_remove_provider(&uuid);
         let result = state.rest.config.save();
-        if result.is_ok() && (!purge.models_removed.is_empty() || purge.main_reset) {
+        // Always rebind agent .md → inherit main when a provider went away (heals
+        // orphans even if this provider had zero catalogue models).
+        if result.is_ok() {
             use std::collections::HashSet;
             let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
             let mut dead_providers = HashSet::new();
             dead_providers.insert(uuid.clone());
+            let cfg = state.rest.config.clone();
             let report = crate::app::cascade::rebind_consumers_after_model_removal(
                 Some(state),
+                &cfg,
                 &dead_models,
                 &dead_providers,
                 purge.main_reset,
             );
-            state.rest.fg_mut().set_toast_info(
-                crate::app::cascade::cascade_status_line("provider", &report),
-            );
+            if !purge.models_removed.is_empty()
+                || report.agents_cleared > 0
+                || purge.main_reset
+            {
+                state.rest.fg_mut().set_toast_info(
+                    crate::app::cascade::cascade_status_line("provider", &report),
+                );
+            }
         }
         self.ack_or_error(idx, result);
     }
@@ -248,8 +257,9 @@ impl DaemonHub {
                 sess.settings.session_models.retain(|m| m.uuid != uuid);
                 let save = sess.save();
                 if save.is_ok() {
+                    let cfg = state.rest.config.clone();
                     let _ = crate::app::cascade::rebind_after_local_model_removal(
-                        state, &path, &uuid,
+                        state, &cfg, &path, &uuid,
                     );
                 }
                 save
@@ -264,8 +274,10 @@ impl DaemonHub {
             if save.is_ok() && !purge.models_removed.is_empty() {
                 let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
                 let empty = HashSet::new();
+                let cfg = state.rest.config.clone();
                 let report = crate::app::cascade::rebind_consumers_after_model_removal(
                     Some(state),
+                    &cfg,
                     &dead_models,
                     &empty,
                     purge.main_reset,

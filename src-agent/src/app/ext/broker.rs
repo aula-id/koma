@@ -1679,8 +1679,10 @@ fn broker_providers_unregister(state: &mut AppState, ext_id: &str, params: &Valu
         } else if !model_purge.models_removed.is_empty() || !dead_providers.is_empty() {
             let dead_models: HashSet<String> =
                 model_purge.models_removed.iter().cloned().collect();
+            let cfg = state.rest.config.clone();
             let _ = crate::app::cascade::rebind_consumers_after_model_removal(
                 Some(state),
+                &cfg,
                 &dead_models,
                 &dead_providers,
                 model_purge.main_reset,

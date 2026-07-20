@@ -2,8 +2,13 @@
 //!
 //! When a provider, oauth conn, or model is deleted from the global catalogue (or a
 //! session-local model is dropped), every consumer that held the dead model uuid is
-//! nudged back to **inherit** (`model_uuid = None`) rather than left dangling as
+//! nudged back to **inherit main** (`model_uuid = None`) rather than left dangling as
 //! `name @ ?`. Session-local model rows whose provider anchor vanished are dropped.
+//!
+//! Agent `.md` files (`~/.koma/agents/*.md` and `<session>/agents/*.md`) are rewritten
+//! whenever their `model_uuid` is absent from the **live** catalogue (global models ∪
+//! that session's `session_models`) — not only when the uuid is in the just-deleted set.
+//! That way a missing model always falls back to inherit main on disk.
 //!
 //! Pure best-effort: a single bad agent/session file is logged and skipped.
 
@@ -13,6 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::app::mode::Mode;
 use crate::app::state::AppState;
 use crate::model::agent_def::{load_agent_file, AgentSource};
+use crate::model::app_config::AppConfig;
 use crate::model::settings::Settings;
 use crate::model::store;
 
@@ -26,12 +32,18 @@ pub struct CascadeReport {
 }
 
 /// After models have been removed from config (and config saved or about to be),
-/// rewrite every consumer of `dead_model_uuids` back to inherit. Also drops
+/// rewrite every consumer of dead models back to **inherit main**. Also drops
 /// session_models rows whose `provider_uuid` is in `dead_provider_uuids`.
+///
+/// `config` must already reflect the post-removal catalogue — agent `.md` files
+/// whose `model_uuid` is not in `config.models` (∪ the relevant session's
+/// `session_models`) are cleared to inherit even if that uuid was not listed in
+/// `dead_model_uuids` (repairs pre-existing dangling bindings).
 ///
 /// When `state` is `None` (pre-session host path), only the on-disk walk runs.
 pub fn rebind_consumers_after_model_removal(
     state: Option<&mut AppState>,
+    config: &AppConfig,
     dead_model_uuids: &HashSet<String>,
     dead_provider_uuids: &HashSet<String>,
     main_reset: bool,
@@ -45,6 +57,8 @@ pub fn rebind_consumers_after_model_removal(
         };
     }
 
+    let alive_global = alive_model_set(config, None);
+
     let mut report = CascadeReport {
         models_removed: dead_model_uuids.iter().cloned().collect(),
         agents_cleared: 0,
@@ -54,6 +68,8 @@ pub fn rebind_consumers_after_model_removal(
 
     // Paths already handled in-memory — skip on the disk walk to avoid double-write races.
     let mut skip_session_paths: HashSet<PathBuf> = HashSet::new();
+    // Per-session alive model sets (global ∪ session_models) after retain, for agent rebind.
+    let mut session_alive: Vec<(PathBuf, HashSet<String>)> = Vec::new();
 
     if let Some(state) = state {
         // A. Open sessions (in-memory)
@@ -63,7 +79,8 @@ pub fn rebind_consumers_after_model_removal(
             };
             let before = sess.settings.session_models.len();
             sess.settings.session_models.retain(|m| {
-                !dead_model_uuids.contains(&m.uuid) && !dead_provider_uuids.contains(&m.provider_uuid)
+                !dead_model_uuids.contains(&m.uuid)
+                    && !dead_provider_uuids.contains(&m.provider_uuid)
             });
             let models_changed = sess.settings.session_models.len() != before;
             if models_changed {
@@ -76,23 +93,38 @@ pub fn rebind_consumers_after_model_removal(
                     report.sessions_touched += 1;
                 }
             }
+            let mut alive = alive_global.clone();
+            for m in &sess.settings.session_models {
+                alive.insert(m.uuid.clone());
+            }
+            session_alive.push((sess.path.clone(), alive));
             skip_session_paths.insert(sess.path.clone());
         }
 
         // C (in-memory). Agents mode draft + list, if open on any session.
         for sess_rt in state.rest.sessions.iter_mut() {
+            let sess_path = sess_rt.session.as_ref().map(|s| s.path.clone());
+            let alive_for_sess = sess_path
+                .as_ref()
+                .and_then(|p| {
+                    session_alive
+                        .iter()
+                        .find(|(path, _)| path == p)
+                        .map(|(_, a)| a)
+                })
+                .unwrap_or(&alive_global);
+
             if let Mode::Agents(agents) = &mut sess_rt.mode {
                 if let Some(u) = agents.draft_model_uuid.as_ref() {
-                    if dead_model_uuids.contains(u) {
+                    if model_binding_is_dead(u, dead_model_uuids, alive_for_sess) {
                         agents.draft_model_uuid = None;
+                        agents.draft_model_legacy = None;
                     }
                 }
                 for a in agents.agents.iter_mut() {
                     if let Some(u) = a.model_uuid.as_ref() {
-                        if dead_model_uuids.contains(u) {
-                            a.model_uuid = None;
-                            a.model = None;
-                            a.provider_uuid = None;
+                        if model_binding_is_dead(u, dead_model_uuids, alive_for_sess) {
+                            clear_agent_model_to_inherit(a);
                             report.agents_cleared += 1;
                         }
                     }
@@ -108,17 +140,22 @@ pub fn rebind_consumers_after_model_removal(
         &skip_session_paths,
     );
 
-    // C. Agent files on disk → inherit
-    report.agents_cleared += rebind_agent_files(dead_model_uuids, None);
+    // C. Agent files on disk → inherit main when model no longer exists
+    report.agents_cleared += rebind_agent_files(
+        dead_model_uuids,
+        &alive_global,
+        None,
+        &session_alive,
+    );
 
     report
 }
 
-/// Scoped rebind for a session-local model delete: only that session's agents dir +
-/// in-memory agents for that session. Does not walk the global agents tree or other
-/// sessions (a session-local model uuid is only meaningful inside that session).
+/// Scoped rebind for a session-local model delete: that session's agents dir +
+/// in-memory agents. A session-local model uuid is only meaningful inside that session.
 pub fn rebind_after_local_model_removal(
     state: &mut AppState,
+    config: &AppConfig,
     session_path: &Path,
     dead_model_uuid: &str,
 ) -> CascadeReport {
@@ -132,8 +169,20 @@ pub fn rebind_after_local_model_removal(
         main_reset: false,
     };
 
-    // In-memory: the open session that matches this path (session_models already
-    // retained by the caller) + its agents mode draft if open.
+    let mut alive = alive_model_set(config, None);
+    // Fold this session's remaining session_models into alive.
+    for sess_rt in state.rest.sessions.iter() {
+        if let Some(sess) = sess_rt.session.as_ref() {
+            if sess.path == session_path {
+                for m in &sess.settings.session_models {
+                    alive.insert(m.uuid.clone());
+                }
+                break;
+            }
+        }
+    }
+
+    // In-memory agents mode for this session.
     for sess_rt in state.rest.sessions.iter_mut() {
         let Some(sess) = sess_rt.session.as_ref() else {
             continue;
@@ -142,23 +191,59 @@ pub fn rebind_after_local_model_removal(
             continue;
         }
         if let Mode::Agents(agents) = &mut sess_rt.mode {
-            if agents.draft_model_uuid.as_deref() == Some(dead_model_uuid) {
-                agents.draft_model_uuid = None;
+            if let Some(u) = agents.draft_model_uuid.as_ref() {
+                if model_binding_is_dead(u, &dead_models, &alive) {
+                    agents.draft_model_uuid = None;
+                    agents.draft_model_legacy = None;
+                }
             }
             for a in agents.agents.iter_mut() {
-                if a.model_uuid.as_deref() == Some(dead_model_uuid) {
-                    a.model_uuid = None;
-                    a.model = None;
-                    a.provider_uuid = None;
-                    report.agents_cleared += 1;
+                if let Some(u) = a.model_uuid.as_ref() {
+                    if model_binding_is_dead(u, &dead_models, &alive) {
+                        clear_agent_model_to_inherit(a);
+                        report.agents_cleared += 1;
+                    }
                 }
             }
         }
     }
 
-    // Disk: only this session's agents/
-    report.agents_cleared += rebind_agent_files(&dead_models, Some(session_path));
+    // Disk: only this session's agents/ — inherit main when model missing.
+    let session_alive = vec![(session_path.to_path_buf(), alive.clone())];
+    report.agents_cleared += rebind_agent_files(
+        &dead_models,
+        &alive_model_set(config, None),
+        Some(session_path),
+        &session_alive,
+    );
     report
+}
+
+/// True when `uuid` should be cleared to inherit: explicitly dead, or absent from alive.
+fn model_binding_is_dead(
+    uuid: &str,
+    dead: &HashSet<String>,
+    alive: &HashSet<String>,
+) -> bool {
+    dead.contains(uuid) || !alive.contains(uuid)
+}
+
+/// Strip model binding fields so the agent inherits Main.
+fn clear_agent_model_to_inherit(agent: &mut crate::model::agent_def::AgentDef) {
+    agent.model_uuid = None;
+    agent.model = None;
+    agent.provider_uuid = None;
+    agent.provider = None;
+}
+
+fn alive_model_set(config: &AppConfig, extra: Option<&[crate::model::app_config::ModelEntry]>) -> HashSet<String> {
+    let mut s: HashSet<String> = config.models.iter().map(|m| m.uuid.clone()).collect();
+    if let Some(extra) = extra {
+        for m in extra {
+            s.insert(m.uuid.clone());
+        }
+    }
+    s
 }
 
 /// Walk every offline session's `settings.json` and drop dead session_models rows.
@@ -209,32 +294,65 @@ fn rebind_offline_sessions(
     touched
 }
 
-/// Rewrite agent `.md` files so dead `model_uuid` becomes inherit (`None`).
+/// Rewrite agent `.md` files so a missing/dead `model_uuid` becomes inherit main (`None`).
 ///
 /// - `session_scope = None`: global agents + every session's `agents/`.
 /// - `session_scope = Some(path)`: only `<path>/agents/`.
-fn rebind_agent_files(dead_models: &HashSet<String>, session_scope: Option<&Path>) -> usize {
+///
+/// For session agents, alive = that session's entry in `session_alive` if present,
+/// else `alive_global` plus models loaded from that session's `settings.json`.
+fn rebind_agent_files(
+    dead_models: &HashSet<String>,
+    alive_global: &HashSet<String>,
+    session_scope: Option<&Path>,
+    session_alive: &[(PathBuf, HashSet<String>)],
+) -> usize {
     let mut cleared = 0;
 
     match session_scope {
         Some(session_dir) => {
+            let alive = session_alive
+                .iter()
+                .find(|(p, _)| p == session_dir)
+                .map(|(_, a)| a.clone())
+                .unwrap_or_else(|| {
+                    let mut a = alive_global.clone();
+                    extend_alive_from_session_settings(&mut a, session_dir);
+                    a
+                });
             cleared += rebind_agents_in_dir(
                 &session_dir.join("agents"),
                 AgentSource::Session,
                 dead_models,
+                &alive,
             );
         }
         None => {
             if let Ok(dir) = crate::model::agent_def::global_agents_dir() {
-                cleared += rebind_agents_in_dir(&dir, AgentSource::Global, dead_models);
+                cleared += rebind_agents_in_dir(
+                    &dir,
+                    AgentSource::Global,
+                    dead_models,
+                    alive_global,
+                );
             }
             if let Ok(sessions_root) = store::sessions_dir() {
                 for bucket in read_subdirs(&sessions_root) {
                     for session_dir in read_subdirs(&bucket) {
+                        let alive = session_alive
+                            .iter()
+                            .find(|(p, _)| p == &session_dir)
+                            .map(|(_, a)| a.clone())
+                            .unwrap_or_else(|| {
+                                let mut a = alive_global.clone();
+                                extend_alive_from_session_settings(&mut a, &session_dir);
+                                a
+                            });
                         cleared += rebind_agents_in_dir(
                             &session_dir.join("agents"),
                             AgentSource::Session,
                             dead_models,
+                            &alive,
                         );
                     }
                 }
@@ -244,10 +362,20 @@ fn rebind_agent_files(dead_models: &HashSet<String>, session_scope: Option<&Path
     cleared
 }
 
+fn extend_alive_from_session_settings(alive: &mut HashSet<String>, session_dir: &Path) {
+    let path = session_dir.join("settings.json");
+    if let Ok(settings) = Settings::load(&path) {
+        for m in settings.session_models {
+            alive.insert(m.uuid);
+        }
+    }
+}
+
 fn rebind_agents_in_dir(
     dir: &Path,
     source: AgentSource,
     dead_models: &HashSet<String>,
+    alive_models: &HashSet<String>,
 ) -> usize {
     if !dir.is_dir() {
         return 0;
@@ -275,14 +403,11 @@ fn rebind_agents_in_dir(
         let Some(u) = agent.model_uuid.as_ref() else {
             continue;
         };
-        if !dead_models.contains(u) {
+        if !model_binding_is_dead(u, dead_models, alive_models) {
             continue;
         }
-        agent.model_uuid = None;
-        // Full clean: legacy slug/provider fields that went with the binding.
-        agent.model = None;
-        agent.provider_uuid = None;
-        agent.provider = None;
+        // Model no longer exists → inherit main.
+        clear_agent_model_to_inherit(&mut agent);
         match std::fs::write(&path, agent.to_markdown()) {
             Ok(()) => cleared += 1,
             Err(e) => store::append_global_error_log(
@@ -311,7 +436,7 @@ fn read_subdirs(dir: &Path) -> Vec<PathBuf> {
 pub fn cascade_status_line(label: &str, report: &CascadeReport) -> String {
     let n = report.models_removed.len();
     let m = report.agents_cleared;
-    let mut s = format!("removed {label} · {n} models · {m} agents → inherit");
+    let mut s = format!("removed {label} · {n} models · {m} agents → inherit main");
     if report.main_reset {
         s.push_str(" · main model reset");
     }
@@ -361,16 +486,34 @@ mod cascade_test {
 
         let mut dead = HashSet::new();
         dead.insert("dead-model".into());
-        let n = rebind_agents_in_dir(&agents, AgentSource::Global, &dead);
+        let mut alive = HashSet::new();
+        alive.insert("keep-model".into());
+        let n = rebind_agents_in_dir(&agents, AgentSource::Global, &dead, &alive);
         assert_eq!(n, 1);
 
         let cleared = load_agent_file(&agents.join("explore.md"), AgentSource::Global).unwrap();
-        assert!(cleared.model_uuid.is_none());
+        assert!(cleared.model_uuid.is_none(), "must inherit main");
         assert!(cleared.model.is_none());
         assert!(cleared.provider_uuid.is_none());
 
         let kept = load_agent_file(&agents.join("general.md"), AgentSource::Global).unwrap();
         assert_eq!(kept.model_uuid.as_deref(), Some("keep-model"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn agent_md_missing_from_alive_catalogue_inherits_even_without_dead_set() {
+        // The model was already gone before this cascade run — still rewrite to inherit.
+        let tmp = scratch("orphan");
+        let agents = tmp.join("agents");
+        write_agent(&agents, "explore", Some("already-gone"));
+
+        let dead = HashSet::new(); // empty dead set
+        let alive = HashSet::new(); // nothing alive
+        let n = rebind_agents_in_dir(&agents, AgentSource::Global, &dead, &alive);
+        assert_eq!(n, 1, "orphan model_uuid must clear to inherit main");
+        let cleared = load_agent_file(&agents.join("explore.md"), AgentSource::Global).unwrap();
+        assert!(cleared.model_uuid.is_none());
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -427,13 +570,16 @@ mod cascade_test {
 
         let mut dead = HashSet::new();
         dead.insert("local-m".into());
-        let n = rebind_agent_files(&dead, Some(&sess_a));
+        // Only sess_a is in scope; alive global is empty so local-m is dead there.
+        let alive_global = HashSet::new();
+        let session_alive = vec![(sess_a.clone(), HashSet::new())];
+        let n = rebind_agent_files(&dead, &alive_global, Some(&sess_a), &session_alive);
         assert_eq!(n, 1);
 
         let a = load_agent_file(&sess_a.join("agents/explore.md"), AgentSource::Session).unwrap();
-        assert!(a.model_uuid.is_none());
+        assert!(a.model_uuid.is_none(), "sess_a must inherit main");
         let b = load_agent_file(&sess_b.join("agents/explore.md"), AgentSource::Session).unwrap();
-        assert_eq!(b.model_uuid.as_deref(), Some("local-m"));
+        assert_eq!(b.model_uuid.as_deref(), Some("local-m"), "sess_b untouched");
         let _ = fs::remove_dir_all(&tmp);
     }
 }

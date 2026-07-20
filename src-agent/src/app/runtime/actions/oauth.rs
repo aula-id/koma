@@ -256,20 +256,25 @@ pub(super) fn handle_oauth_delete(
     // `HashSet` used below for rebind + draft filter.
     if let Err(e) = state.rest.config.save() {
         state.rest.fg_mut().status = format!("config save failed: {e}");
-    } else if !purge.models_removed.is_empty() || purge.main_reset {
+    } else {
+        // Always walk agent .md files → inherit main for any model that no longer exists.
         let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
         let mut dead_providers = HashSet::new();
         dead_providers.insert(uuid.clone());
+        let cfg = state.rest.config.clone();
         let report = crate::app::cascade::rebind_consumers_after_model_removal(
             Some(state),
+            &cfg,
             &dead_models,
             &dead_providers,
             purge.main_reset,
         );
-        state
-            .rest
-            .fg_mut()
-            .set_toast_info(crate::app::cascade::cascade_status_line("oauth", &report));
+        if !purge.models_removed.is_empty() || report.agents_cleared > 0 || purge.main_reset {
+            state
+                .rest
+                .fg_mut()
+                .set_toast_info(crate::app::cascade::cascade_status_line("oauth", &report));
+        }
     }
     let drafts = crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);
     if let Mode::Settings(s) = state.mode_mut() {

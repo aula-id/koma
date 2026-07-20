@@ -224,6 +224,7 @@ fn apply_global_config_req(
                     dead_providers.insert(uuid.clone());
                     let _ = crate::app::cascade::rebind_consumers_after_model_removal(
                         None,
+                        cfg,
                         &dead_models,
                         &dead_providers,
                         purge.main_reset,
@@ -282,6 +283,7 @@ fn apply_global_config_req(
                 let empty = HashSet::new();
                 let _ = crate::app::cascade::rebind_consumers_after_model_removal(
                     None,
+                    cfg,
                     &dead_models,
                     &empty,
                     purge.main_reset,

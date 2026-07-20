@@ -97,8 +97,10 @@ pub(crate) fn uninstall_extension_core(
         use std::collections::HashSet;
         let dead_models: HashSet<String> = purge.model_uuids.iter().cloned().collect();
         let dead_providers: HashSet<String> = purge.dead_anchors.iter().cloned().collect();
+        let cfg = state.rest.config.clone();
         let report = crate::app::cascade::rebind_consumers_after_model_removal(
             Some(state),
+            &cfg,
             &dead_models,
             &dead_providers,
             purge.main_reset,
