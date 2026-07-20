@@ -46,6 +46,12 @@ impl OpenRouterClient {
                 .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
                 .await;
         }
+        if conn.api_type == ApiType::CommandCode {
+            // Command Code: drain NDJSON inline, no tools/schema.
+            return self
+                .commandcode_collect(conn, &bearer, model, messages)
+                .await;
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         let body = ChatRequest {
             model: model.to_string(),
@@ -126,6 +132,12 @@ impl OpenRouterClient {
             // wire equivalent here — ignored, never errors.
             return self
                 .anthropic_collect(conn, &bearer, effective_account, model, "", messages, None)
+                .await;
+        }
+        if conn.api_type == ApiType::CommandCode {
+            // Command Code: drain NDJSON inline, no tools/schema.
+            return self
+                .commandcode_collect(conn, &bearer, model, messages)
                 .await;
         }
         let url = format!("{}/chat/completions", conn.endpoint);
@@ -247,6 +259,17 @@ impl OpenRouterClient {
                     messages,
                     Some(schema.clone()),
                 )
+                .await?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow!("empty classifier reply"));
+            }
+            return Ok(trimmed.to_string());
+        }
+        if conn.api_type == ApiType::CommandCode {
+            // Command Code: plain text collect, no structured output.
+            let raw = self
+                .commandcode_collect(conn, &bearer, model, messages)
                 .await?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
@@ -405,6 +428,13 @@ impl OpenRouterClient {
                 .await?;
             return parse_summary(&raw);
         }
+        if conn.api_type == ApiType::CommandCode {
+            // Command Code: plain text collect.
+            let raw = self
+                .commandcode_collect(conn, &bearer, model, messages)
+                .await?;
+            return parse_summary(&raw);
+        }
         let url = format!("{}/chat/completions", conn.endpoint);
         // `strict: true` + `additionalProperties: false` force the model to emit
         // exactly the summary object and nothing else.
@@ -556,6 +586,17 @@ impl OpenRouterClient {
                     messages,
                     Some(schema.clone()),
                 )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            };
+            return Ok(parse_blob_ids(&raw));
+        }
+        if conn.api_type == ApiType::CommandCode {
+            // Best-effort: any failure → empty selection.
+            let raw = match self
+                .commandcode_collect(conn, &bearer, model, messages)
                 .await
             {
                 Ok(r) => r,

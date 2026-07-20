@@ -194,6 +194,7 @@ pub(crate) fn shadow_api_type(t: &str) -> ApiType {
         "anthropic" => ApiType::AnthropicCompatible,
         "codex" => ApiType::Codex,
         "koma_free" => ApiType::KomaFree,
+        "command_code" => ApiType::CommandCode,
         _ => ApiType::OpenAiCompatible,
     }
 }

@@ -160,7 +160,10 @@ pub const COMMANDCODE_AUTH_PATH: &str = "/studio/auth/cli";
 pub const COMMANDCODE_PORT_START: u16 = 5959;
 pub const COMMANDCODE_PORT_RANGE: u16 = 10;
 pub const COMMANDCODE_AUTH_TIMEOUT_SECS: u64 = 120;
-/// OpenAI-compatible base: `GET {base}/models`, `POST {base}/chat/completions`.
+/// NDJSON chat base: `POST {base}/alpha/generate`.
+/// Used by the Go-plan OAuth users (the provider/v1 chat-completions 403s).
+pub const COMMANDCODE_CHAT_BASE: &str = "https://api.commandcode.ai";
+/// OpenAI-compatible catalogue base: `GET {base}/models`.
 /// Distinct from the Studio auth origin and from pi's NDJSON `/alpha/generate`.
 pub const COMMANDCODE_API_BASE: &str = "https://api.commandcode.ai/provider/v1";
 
@@ -250,11 +253,10 @@ pub fn meta(p: OAuthProvider) -> OAuthProviderMeta {
             chat_endpoint: "https://api.cline.bot/api/v1",
             catalogue_endpoint: "https://api.cline.bot/api/v1",
         },
-        // Command Code: same API base the pi package uses for catalogue
-        // (`GET {base}/models`). Chat uses OpenAI-compatible
-        // `POST {base}/chat/completions` (not pi's NDJSON `/alpha/generate`).
+        // Command Code: NDJSON `/alpha/generate` for chat (Go-plan OAuth);
+        // catalogue via the OpenAI-compatible `provider/v1/models` endpoint.
         OAuthProvider::CommandCode => OAuthProviderMeta {
-            chat_endpoint: COMMANDCODE_API_BASE,
+            chat_endpoint: COMMANDCODE_CHAT_BASE,
             catalogue_endpoint: COMMANDCODE_API_BASE,
         },
     }
