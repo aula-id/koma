@@ -49,9 +49,9 @@ pub fn to_conn_workos(
         api_type: None,
         refresh_token_url: None,
         refresh_client_id: None,
+        commandcode_chat: None,
     }
 }
-
 /// Build an [`OAuthConn`] from a static API key (paste path). No refresh, no
 /// expiry (`expires_at = 0`).
 pub fn to_conn_api_key(key: &str) -> OAuthConn {
@@ -74,9 +74,9 @@ pub fn to_conn_api_key(key: &str) -> OAuthConn {
         api_type: None,
         refresh_token_url: None,
         refresh_client_id: None,
+        commandcode_chat: None,
     }
 }
-
 /// Refresh a WorkOS access token via ClinePass's custom refresh endpoint.
 /// POST JSON `{ granttype: "refresh_token", refreshToken: "..." }`. Returns
 /// the shared [`super::codex::TokenResponse`] shape so the manager's

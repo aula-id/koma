@@ -322,8 +322,19 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
         // ClinePass: OpenAI-compatible chat endpoint (bearer WorkOS token or API key).
         OAuthProvider::ClinePass => ApiType::OpenAiCompatible,
-        // Command Code: NDJSON `/alpha/generate` transport (Go-plan OAuth).
-        OAuthProvider::CommandCode => ApiType::CommandCode,
+        // Command Code: API-first (provider/v1 OpenAI-compat). A remembered
+        // `commandcode_chat = "ndjson"` preference (Go plan) switches to the
+        // NDJSON `/alpha/generate` transport; unknown → try provider/v1 first.
+        OAuthProvider::CommandCode => {
+            let pref = conn
+                .commandcode_chat
+                .clone()
+                .or_else(|| crate::service::oauth::commandcode::chat_pref(&conn.uuid));
+            match pref.as_deref() {
+                Some(crate::service::oauth::commandcode::CHAT_NDJSON) => ApiType::CommandCode,
+                _ => ApiType::OpenAiCompatible,
+            }
+        }
         // W11: an ext-backed conn is not a model provider in v1 — no ModelEntry
         // references it, so this `find` never yields one and this arm never runs.
         // Placeholder wire type; W12 sources the real api_type from the extension
@@ -357,6 +368,11 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
     // whichever endpoint actually serves it: the premium endpoint when the model
     // id is one of its entries, else the base endpoint. Every other OAuth provider
     // is unaffected (single endpoint, `meta.chat_endpoint` as before).
+    //
+    // Command Code: when the remembered transport is NDJSON, chat hits the
+    // host root (`COMMANDCODE_CHAT_BASE` + `/alpha/generate`); otherwise the
+    // OpenAI-compat catalogue/API base (`COMMANDCODE_API_BASE` + `/chat/completions`).
+    // `meta().chat_endpoint` stays the API base (API-first default).
     let endpoint = if conn.provider == OAuthProvider::KomaRun
         && crate::service::catalogue_overlay::models_for(
             crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT,
@@ -365,6 +381,16 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         .any(|m| m.id == entry.model_id)
     {
         crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT.to_string()
+    } else if conn.provider == OAuthProvider::CommandCode {
+        let pref = conn
+            .commandcode_chat
+            .clone()
+            .or_else(|| crate::service::oauth::commandcode::chat_pref(&conn.uuid));
+        if pref.as_deref() == Some(crate::service::oauth::commandcode::CHAT_NDJSON) {
+            crate::service::oauth::registry::COMMANDCODE_CHAT_BASE.to_string()
+        } else {
+            crate::service::oauth::registry::COMMANDCODE_API_BASE.to_string()
+        }
     } else {
         meta.chat_endpoint.to_string()
     };

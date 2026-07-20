@@ -115,6 +115,9 @@ pub async fn seed(conn: &OAuthConn) {
         .write()
         .await
         .insert(conn.uuid.clone(), TokenSnap::from_conn(conn));
+    // Command Code: also seed the remembered chat-transport preference so the
+    // next resolve/stream path skips a re-probe after restart.
+    crate::service::oauth::commandcode::seed_chat_pref(conn);
 }
 
 /// Drop the cache entry for `uuid`. Called when the `/settings` OAuth
