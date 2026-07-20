@@ -508,7 +508,10 @@ impl DaemonHub {
                 provider_uuid: e.provider_uuid.clone(),
             });
         }
-        let catalogue_providers = config
+        // Include OAuth conns alongside static providers so OAuth-backed models
+        // (xAI / Codex / koma.run / …) resolve to `name @ provider` in /agents,
+        // not `name @ ?`. Projected KEYLESS (uuid + display name only).
+        let mut catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot> = config
             .providers
             .iter()
             .map(|p| crate::ipc::proto::CatalogueProviderSnapshot {
@@ -517,6 +520,18 @@ impl DaemonHub {
                 endpoint: p.endpoint.clone(),
             })
             .collect();
+        for c in &config.oauth_conns {
+            let name = if !c.name.trim().is_empty() {
+                c.name.clone()
+            } else {
+                c.provider.label().to_string()
+            };
+            catalogue_providers.push(crate::ipc::proto::CatalogueProviderSnapshot {
+                uuid: c.uuid.clone(),
+                name,
+                endpoint: String::new(),
+            });
+        }
 
         self.send_to(
             idx,

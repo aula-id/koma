@@ -292,13 +292,24 @@ pub(super) fn spawn_uninstall(push: impl Fn(String) + Send + 'static, id: String
         // Main role self-heals on the next resolve). Deregister orphan MCP-server rows
         // (ext-owned, or whose command lives under extensions/<id>/). Drop the registry entry.
         let mut cfg = AppConfig::load();
-        let _purge = cfg.purge_extension(&id);
+        let purge = cfg.purge_extension(&id);
         let _mcp_rows_removed = cfg.remove_ext_mcp_servers(&id);
         cfg.remove_extension_by_id(&id);
         if let Err(e) = cfg.save() {
             store::append_global_error_log(
                 "ext-uninstall",
                 &format!("save config after uninstall {id}: {e:#}"),
+            );
+        } else if !purge.model_uuids.is_empty() || !purge.dead_anchors.is_empty() {
+            use std::collections::HashSet;
+            let dead_models: HashSet<String> = purge.model_uuids.iter().cloned().collect();
+            let dead_providers: HashSet<String> = purge.dead_anchors.iter().cloned().collect();
+            let _ = crate::app::cascade::rebind_consumers_after_model_removal(
+                None,
+                &cfg,
+                &dead_models,
+                &dead_providers,
+                purge.main_reset,
             );
         }
 

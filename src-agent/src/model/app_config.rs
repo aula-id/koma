@@ -606,16 +606,31 @@ pub struct InstalledExtension {
 /// uninstall removed, and whether the removal reset the GLOBAL Main role (so the uninstall
 /// handler can surface the "main model reset" toast). Purely a report; the mutation already
 /// happened on the `config`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExtPurge {
     /// Key-backed `providers` (ext-owned) removed.
     pub providers_removed: usize,
     /// `models` removed because their `provider_uuid` pointed at a dead ext anchor.
     pub models_removed: usize,
+    /// UUIDs of the models removed (for consumer rebind → inherit).
+    pub model_uuids: Vec<String>,
     /// `oauth_conns` (ext-owned) removed.
     pub conns_removed: usize,
+    /// Dead provider/oauth anchor uuids (for scrubbing session_models by provider).
+    pub dead_anchors: Vec<String>,
     /// A removed model held the GLOBAL Main role → Main is now unassigned (self-heals to
     /// koma-free at dispatch). The caller toasts the reset.
+    pub main_reset: bool,
+}
+
+/// Result of cascading a provider / oauth-conn / model removal through the global catalogue.
+/// Callers pass [`CascadePurge::models_removed`] into the consumer-rebind helper so agents
+/// and session overrides fall back to inherit instead of dangling.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CascadePurge {
+    /// Model uuids that were dropped from `config.models`.
+    pub models_removed: Vec<String>,
+    /// A removed model held the GLOBAL Main role.
     pub main_reset: bool,
 }
 
@@ -793,9 +808,66 @@ impl AppConfig {
         upsert_model_entry(&mut self.models, entry);
     }
 
-    /// Remove the global model with `uuid` (no-op if none matches).
+    /// Remove the global model with `uuid` (no-op if none matches). Catalogue-only —
+    /// callers that need agents/sessions nudged back to inherit should use
+    /// [`Self::cascade_remove_models`] + the app-level consumer rebind.
+    #[allow(dead_code)] // public catalogue primitive; cascade path is preferred at call sites
     pub fn remove_model_by_uuid(&mut self, uuid: &str) {
         self.models.retain(|m| m.uuid != uuid);
+    }
+
+    /// Drop every model whose uuid is in `dead`. Returns the uuids that actually existed
+    /// and whether any held global Main. Catalogue-only; pair with consumer rebind.
+    pub fn cascade_remove_models(
+        &mut self,
+        dead: &std::collections::HashSet<String>,
+    ) -> CascadePurge {
+        if dead.is_empty() {
+            return CascadePurge::default();
+        }
+        let main_reset = self.models.iter().any(|m| {
+            dead.contains(&m.uuid) && m.effective_roles().contains(&ModelRole::Main)
+        });
+        let mut models_removed = Vec::new();
+        self.models.retain(|m| {
+            if dead.contains(&m.uuid) {
+                models_removed.push(m.uuid.clone());
+                false
+            } else {
+                true
+            }
+        });
+        CascadePurge {
+            models_removed,
+            main_reset,
+        }
+    }
+
+    /// Remove provider `provider_uuid` and every model whose `provider_uuid` points at it.
+    /// No-op if the provider is missing. Catalogue-only; pair with consumer rebind.
+    pub fn cascade_remove_provider(&mut self, provider_uuid: &str) -> CascadePurge {
+        if !self.providers.iter().any(|p| p.uuid == provider_uuid) {
+            return CascadePurge::default();
+        }
+        let mut dead = std::collections::HashSet::new();
+        dead.insert(provider_uuid.to_string());
+        let purge = self.remove_models_by_providers(&dead);
+        self.providers.retain(|p| p.uuid != provider_uuid);
+        purge
+    }
+
+    /// Remove oauth connection `conn_uuid` and every model whose `provider_uuid` points
+    /// at it (models can anchor on oauth uuids). No-op if the conn is missing.
+    /// Catalogue-only; pair with consumer rebind.
+    pub fn cascade_remove_oauth_conn(&mut self, conn_uuid: &str) -> CascadePurge {
+        if !self.oauth_conns.iter().any(|c| c.uuid == conn_uuid) {
+            return CascadePurge::default();
+        }
+        let mut dead = std::collections::HashSet::new();
+        dead.insert(conn_uuid.to_string());
+        let purge = self.remove_models_by_providers(&dead);
+        self.oauth_conns.retain(|c| c.uuid != conn_uuid);
+        purge
     }
 
     /// Upsert an API provider by uuid (the GUI Connector ProviderForm). A `Some(uuid)`
@@ -840,11 +912,11 @@ impl AppConfig {
         });
     }
 
-    /// Remove the provider with `uuid` (no-op if none matches). Models referencing the
-    /// removed provider keep their now-dangling `provider_uuid` (surfaces empty in the
-    /// UI for re-pick), matching the TUI Settings-save behaviour — no cascade.
+    /// Remove the provider with `uuid` and cascade-drop every model that pointed at it.
+    /// No-op if none matches. Catalogue-only; callers that also need agents/sessions
+    /// rewritten to inherit should follow with the app-level consumer rebind helper.
     pub fn remove_provider_by_uuid(&mut self, uuid: &str) {
-        self.providers.retain(|p| p.uuid != uuid);
+        let _ = self.cascade_remove_provider(uuid);
     }
 
     /// Upsert an MCP server by uuid: replace the entry whose uuid matches, else append.
@@ -925,16 +997,33 @@ impl AppConfig {
     }
 
     /// Remove every model whose `provider_uuid` is in `dead` (orphan prevention when the
-    /// serving provider/conn is removed), returning the count removed. The SINGLE sweep shared
-    /// by the `providers.unregister` broker verb and [`Self::purge_extension`], so a removed
+    /// serving provider/conn is removed). The SINGLE sweep shared by the
+    /// `providers.unregister` broker verb, [`Self::cascade_remove_provider`],
+    /// [`Self::cascade_remove_oauth_conn`], and [`Self::purge_extension`], so a removed
     /// anchor never leaves a model pointing at a vanished provider.
     pub(crate) fn remove_models_by_providers(
         &mut self,
         dead: &std::collections::HashSet<String>,
-    ) -> usize {
-        let before = self.models.len();
-        self.models.retain(|m| !dead.contains(&m.provider_uuid));
-        before - self.models.len()
+    ) -> CascadePurge {
+        if dead.is_empty() {
+            return CascadePurge::default();
+        }
+        let main_reset = self.models.iter().any(|m| {
+            dead.contains(&m.provider_uuid) && m.effective_roles().contains(&ModelRole::Main)
+        });
+        let mut models_removed = Vec::new();
+        self.models.retain(|m| {
+            if dead.contains(&m.provider_uuid) {
+                models_removed.push(m.uuid.clone());
+                false
+            } else {
+                true
+            }
+        });
+        CascadePurge {
+            models_removed,
+            main_reset,
+        }
     }
 
     /// W12b: purge every trace of extension `ext_id` from the global catalogue, on-loop, as one
@@ -967,13 +1056,8 @@ impl AppConfig {
                 .filter(|c| c.ext_id.as_deref() == Some(ext_id))
                 .map(|c| c.uuid.clone()),
         );
-        // Did a model holding the GLOBAL Main role reference a dead anchor? (Compute before the
-        // sweep removes it.) Session-local Main overrides self-heal at dispatch (koma-free), same
-        // as any dangling provider — see `resolve::main_fallback_reason`.
-        let main_reset = self.models.iter().any(|m| {
-            dead.contains(&m.provider_uuid) && m.effective_roles().contains(&ModelRole::Main)
-        });
-        let models_removed = self.remove_models_by_providers(&dead);
+        // Model sweep (also computes main_reset from dead anchors).
+        let model_purge = self.remove_models_by_providers(&dead);
         let before_providers = self.providers.len();
         self.providers.retain(|p| p.ext_id.as_deref() != Some(ext_id));
         let providers_removed = before_providers - self.providers.len();
@@ -983,9 +1067,11 @@ impl AppConfig {
         self.ext_preferred_models.remove(ext_id);
         ExtPurge {
             providers_removed,
-            models_removed,
+            models_removed: model_purge.models_removed.len(),
+            model_uuids: model_purge.models_removed,
             conns_removed,
-            main_reset,
+            dead_anchors: dead.into_iter().collect(),
+            main_reset: model_purge.main_reset,
         }
     }
 
@@ -1320,6 +1406,7 @@ mod provider_conn_serde_tests {
 #[cfg(test)]
 mod ext_purge_tests {
     use super::*;
+    use std::collections::HashSet;
 
     /// A key-backed ext provider owned by `ext_id`.
     fn ext_provider(uuid: &str, ext_id: &str) -> ProviderConn {
@@ -1331,6 +1418,103 @@ mod ext_purge_tests {
             api_key: "k".to_string(),
             ext_id: Some(ext_id.to_string()),
         }
+    }
+
+    fn native_provider(uuid: &str) -> ProviderConn {
+        ProviderConn {
+            uuid: uuid.to_string(),
+            name: uuid.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cascade_remove_provider_drops_matching_models_and_flags_main() {
+        let mut config = AppConfig::default();
+        config.providers.push(native_provider("p1"));
+        config.providers.push(native_provider("p2"));
+        config.models.push(ModelEntry {
+            uuid: "m-main".into(),
+            provider_uuid: "p1".into(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m-other".into(),
+            provider_uuid: "p2".into(),
+            ..Default::default()
+        });
+        let report = config.cascade_remove_provider("p1");
+        assert_eq!(report.models_removed, vec!["m-main".to_string()]);
+        assert!(report.main_reset);
+        assert!(config.providers.iter().all(|p| p.uuid != "p1"));
+        assert!(config.models.iter().all(|m| m.uuid != "m-main"));
+        assert!(config.models.iter().any(|m| m.uuid == "m-other"));
+        // Missing provider is a no-op.
+        let empty = config.cascade_remove_provider("nope");
+        assert!(empty.models_removed.is_empty());
+        assert!(!empty.main_reset);
+    }
+
+    #[test]
+    fn cascade_remove_oauth_conn_drops_matching_models() {
+        let mut config = AppConfig::default();
+        config.oauth_conns.push(OAuthConn {
+            uuid: "oauth-1".into(),
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m-oauth".into(),
+            provider_uuid: "oauth-1".into(),
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m-keep".into(),
+            provider_uuid: "other".into(),
+            ..Default::default()
+        });
+        let report = config.cascade_remove_oauth_conn("oauth-1");
+        assert_eq!(report.models_removed, vec!["m-oauth".to_string()]);
+        assert!(!report.main_reset);
+        assert!(config.oauth_conns.is_empty());
+        assert!(config.models.iter().all(|m| m.uuid != "m-oauth"));
+        assert!(config.models.iter().any(|m| m.uuid == "m-keep"));
+    }
+
+    #[test]
+    fn cascade_remove_models_drops_by_uuid_and_flags_main() {
+        let mut config = AppConfig::default();
+        config.models.push(ModelEntry {
+            uuid: "m1".into(),
+            roles: vec![ModelRole::Main],
+            ..Default::default()
+        });
+        config.models.push(ModelEntry {
+            uuid: "m2".into(),
+            ..Default::default()
+        });
+        let mut dead = HashSet::new();
+        dead.insert("m1".into());
+        dead.insert("missing".into());
+        let report = config.cascade_remove_models(&dead);
+        assert_eq!(report.models_removed, vec!["m1".to_string()]);
+        assert!(report.main_reset);
+        assert!(config.models.iter().all(|m| m.uuid != "m1"));
+        assert!(config.models.iter().any(|m| m.uuid == "m2"));
+    }
+
+    #[test]
+    fn remove_provider_by_uuid_cascades_models() {
+        let mut config = AppConfig::default();
+        config.providers.push(native_provider("p1"));
+        config.models.push(ModelEntry {
+            uuid: "m1".into(),
+            provider_uuid: "p1".into(),
+            ..Default::default()
+        });
+        config.remove_provider_by_uuid("p1");
+        assert!(config.providers.is_empty());
+        assert!(config.models.is_empty(), "thin wrapper must cascade");
     }
 
     /// `purge_extension` removes the extension's providers + oauth conns + orphaned models +

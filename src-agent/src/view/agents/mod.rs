@@ -63,6 +63,32 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Resolve a model entry's `provider_uuid` to a human label.
+///
+/// Checks `config.providers` first (static-key connections), then
+/// `config.oauth_conns` (OAuth-backed models like xAI / Codex / koma.run).
+/// Returns `None` only when neither catalogue holds the uuid.
+fn provider_label(config: &AppConfig, provider_uuid: &str) -> Option<String> {
+    if let Some(p) = config.providers.iter().find(|p| p.uuid == provider_uuid) {
+        return Some(if !p.name.trim().is_empty() {
+            p.name.clone()
+        } else if !p.endpoint.trim().is_empty() {
+            p.endpoint.clone()
+        } else {
+            "?".to_string()
+        });
+    }
+    if let Some(c) = config.oauth_conns.iter().find(|c| c.uuid == provider_uuid) {
+        return Some(if !c.name.trim().is_empty() {
+            c.name.clone()
+        } else {
+            let short: String = c.uuid.chars().take(8).collect();
+            format!("{} ({short})", c.provider.label())
+        });
+    }
+    None
+}
+
 /// The display label for the agent's chosen registered model in a detail/browse
 /// row: the entry's `name @ provider` when `model_uuid` resolves to a registered
 /// model, an `(unknown model)` note when the uuid dangles, or `(inherit main)`
@@ -80,34 +106,11 @@ pub(crate) fn model_display(
                 .and_then(|s| s.session_models.iter().find(|e| &e.uuid == uuid))
                 .or_else(|| config.models.iter().find(|e| &e.uuid == uuid));
             match entry {
-                Some(e) => {
-                    // Mirror runtime resolution: static providers first, then
-                    // oauth_conns. Looking only at providers made every OAuth-
-                    // backed model render as "name @ ?" in the agents UI.
-                    let provider = if let Some(p) =
-                        config.providers.iter().find(|p| p.uuid == e.provider_uuid)
-                    {
-                        if !p.name.trim().is_empty() {
-                            p.name.clone()
-                        } else if !p.endpoint.trim().is_empty() {
-                            p.endpoint.clone()
-                        } else {
-                            "?".to_string()
-                        }
-                    } else if let Some(c) =
-                        config.oauth_conns.iter().find(|c| c.uuid == e.provider_uuid)
-                    {
-                        if !c.name.trim().is_empty() {
-                            c.name.clone()
-                        } else {
-                            let short: String = c.uuid.chars().take(8).collect();
-                            format!("{} ({short})", c.provider.label())
-                        }
-                    } else {
-                        "?".to_string()
-                    };
-                    (format!("{} @ {}", e.name, provider), true)
-                }
+                Some(e) => match provider_label(config, &e.provider_uuid) {
+                    Some(provider) => (format!("{} @ {}", e.name, provider), true),
+                    // Model entry exists but its provider was deleted — dangling.
+                    None => ("(unknown model)".to_string(), true),
+                },
                 None => ("(unknown model)".to_string(), true),
             }
         }

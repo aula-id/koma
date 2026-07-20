@@ -24,6 +24,7 @@
 
 pub mod awareness;
 pub mod bgbash;
+pub mod cascade;
 pub mod ext;
 pub mod harness;
 pub mod mcp;

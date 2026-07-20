@@ -142,7 +142,10 @@ pub(super) fn build_host_agents_values() -> (
             provider_uuid: e.provider_uuid.clone(),
         })
         .collect();
-    let catalogue_providers = cfg
+    // Include OAuth conns alongside static providers so OAuth-backed models
+    // (xAI / Codex / koma.run / …) resolve to `name @ provider` in /agents,
+    // not `name @ ?`. Projected KEYLESS (uuid + display name only).
+    let mut catalogue_providers: Vec<crate::ipc::proto::CatalogueProviderSnapshot> = cfg
         .providers
         .iter()
         .map(|p| crate::ipc::proto::CatalogueProviderSnapshot {
@@ -151,6 +154,18 @@ pub(super) fn build_host_agents_values() -> (
             endpoint: p.endpoint.clone(),
         })
         .collect();
+    for c in &cfg.oauth_conns {
+        let name = if !c.name.trim().is_empty() {
+            c.name.clone()
+        } else {
+            c.provider.label().to_string()
+        };
+        catalogue_providers.push(crate::ipc::proto::CatalogueProviderSnapshot {
+            uuid: c.uuid.clone(),
+            name,
+            endpoint: String::new(),
+        });
+    }
     (agents, catalogue_models, catalogue_providers)
 }
 

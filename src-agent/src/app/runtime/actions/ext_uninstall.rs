@@ -92,6 +92,29 @@ pub(crate) fn uninstall_extension_core(
             "ext-uninstall",
             &format!("save/reload config after uninstall {id}: {e:#}"),
         );
+    } else if !purge.model_uuids.is_empty() || !purge.dead_anchors.is_empty() {
+        // Cascade consumer rebind: agents + session_models holding purged models → inherit.
+        use std::collections::HashSet;
+        let dead_models: HashSet<String> = purge.model_uuids.iter().cloned().collect();
+        let dead_providers: HashSet<String> = purge.dead_anchors.iter().cloned().collect();
+        let cfg = state.rest.config.clone();
+        let report = crate::app::cascade::rebind_consumers_after_model_removal(
+            Some(state),
+            &cfg,
+            &dead_models,
+            &dead_providers,
+            purge.main_reset,
+        );
+        if purge.main_reset {
+            state.rest.fg_mut().set_toast_info(format!(
+                "main model reset: extension {id} uninstalled · {} agents → inherit",
+                report.agents_cleared
+            ));
+        } else if report.agents_cleared > 0 {
+            state.rest.fg_mut().set_toast_info(
+                crate::app::cascade::cascade_status_line(&format!("extension {id}"), &report),
+            );
+        }
     }
 
     // (7) Sweep same-named agent-override files (global + every session) left by a user
@@ -107,8 +130,9 @@ pub(crate) fn uninstall_extension_core(
     }
 
     // Surface a purged Main-role assignment as a foreground toast (delivered via the
-    // snapshot diff) — mirrors how a dangling Main provider is otherwise reported.
-    if purge.main_reset {
+    // snapshot diff) — only if the cascade block above didn't already toast (main_reset
+    // path toasts there; this is the legacy fallback when no models were rebound).
+    if purge.main_reset && purge.model_uuids.is_empty() {
         state
             .rest
             .fg_mut()
