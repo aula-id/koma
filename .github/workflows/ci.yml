@@ -1,0 +1,94 @@
+name: ci
+
+# Runs the test suite across every OS/arch koma ships for, plus non-gating
+# formatting and lint checks, on pushes to main and on pull requests. Uses only
+# standard GitHub-hosted runners, which are free and unmetered for public
+# repositories, so this does not touch the Actions minute allotment used by the
+# release workflow.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref so we never pay for stale work.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+          - name: macos-arm64 (darwin)
+            os: macos-latest
+          - name: macos-x64 (intel)
+            os: macos-26-intel
+          - name: windows-x64
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.0.0-cache-rust"
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Tests (agent)
+        run: cargo test --workspace --no-default-features --all-targets
+
+      # src-extension is a separate workspace (serde-only, no GUI/OS deps).
+      - name: Tests (src-extension)
+        working-directory: src-extension
+        run: cargo test --workspace --all-targets
+
+  lint:
+    name: fmt + clippy (non-gating)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.0.0-cache-rust-lint"
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      # Non-gating for now: the tree is not rustfmt- or clippy-clean yet, so
+      # these report in the logs but do not fail the build. Drop the `|| true`
+      # on fmt once `cargo fmt --all` has been run, and on clippy (adding
+      # `-- -D warnings`) once its warnings are cleared.
+      - name: Formatting
+        run: cargo fmt --all --check || true
+
+      - name: Formatting (src-extension)
+        working-directory: src-extension
+        run: cargo fmt --all --check || true
+
+      - name: Clippy
+        run: cargo clippy --workspace --no-default-features --all-targets || true

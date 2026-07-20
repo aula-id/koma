@@ -982,8 +982,12 @@ mod tests {
         assert!(!v["error"].is_null());
 
         // Unconfigured root.
+        let unconfigured = std::env::temp_dir()
+            .join("koma-unconfigured-root")
+            .to_string_lossy()
+            .into_owned();
         assert!(!file_create(
-            "/not/configured",
+            &unconfigured,
             "x.txt",
             "file",
             "req-bad-root",
