@@ -89,9 +89,32 @@ fn resolved_main_model(rest: &AppStateRest) -> String {
         return session.settings.model.clone();
     }
     if let Some(r) = resolve_turn_model(&rest.config, &session.settings, rest.agent_mode) {
+        // Standalone: trust the live resolver. Suppress only the pure soft-
+        // fallback case where the answer is still the unused serde default
+        // (`openai/gpt-4o-mini`) AND a real Main ModelEntry exists in the
+        // catalogue — that means the entry's provider is dangling and the
+        // legacy string is lying about the active model. Prefer empty over a
+        // phantom gpt label the user never configured.
+        if r.model_id == crate::config::DEFAULT_MODEL
+            && session.settings.model == crate::config::DEFAULT_MODEL
+        {
+            let has_main_entry = session
+                .settings
+                .session_models
+                .iter()
+                .chain(rest.config.models.iter())
+                .any(|e| {
+                    e.effective_roles()
+                        .contains(&crate::model::app_config::ModelRole::Main)
+                });
+            if has_main_entry {
+                return String::new();
+            }
+        }
         return r.model_id;
     }
-    session.settings.model.clone()
+    // No resolution at all — do NOT fall back to the dead DEFAULT_MODEL string.
+    String::new()
 }
 
 /// Render the entire terminal frame for the current application state.

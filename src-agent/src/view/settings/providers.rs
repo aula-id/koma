@@ -296,8 +296,8 @@ pub(super) fn draw_models(
         } else {
             truncate(&m.model_id, col_model_w as usize)
         };
-        let prov_str = st.provider_label_at(m.provider_idx).unwrap_or("\u{2014}");
-        let prov_str = truncate(prov_str, col_prov_w as usize);
+        let prov_str = st.provider_label_for_draft(m);
+        let prov_str = truncate(&prov_str, col_prov_w as usize);
 
         Row::new(vec![
             Cell::from(name_line),
