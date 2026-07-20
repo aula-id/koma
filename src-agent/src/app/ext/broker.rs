@@ -1668,12 +1668,24 @@ fn apply_providers_register(config: &mut AppConfig, ext_id: &str, params: &Value
 /// prevention — the SAME [`AppConfig::remove_models_by_providers`] sweep the uninstall purge
 /// uses). Reply `{ "removed": n }` (providers removed), persisting only when something changed.
 fn broker_providers_unregister(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
-    let reply = apply_providers_unregister(&mut state.rest.config, ext_id, params);
+    let (reply, model_purge, dead_providers) =
+        apply_providers_unregister(&mut state.rest.config, ext_id, params);
     if reply.get("removed").and_then(Value::as_u64).is_some_and(|n| n > 0) {
         if let Err(e) = state.rest.config.save() {
             store::append_global_error_log(
                 "ext providers",
                 &format!("[{ext_id}] providers.unregister save failed: {e:#}"),
+            );
+        } else if !model_purge.models_removed.is_empty() || !dead_providers.is_empty() {
+            let dead_models: HashSet<String> =
+                model_purge.models_removed.iter().cloned().collect();
+            let cfg = state.rest.config.clone();
+            let _ = crate::app::cascade::rebind_consumers_after_model_removal(
+                Some(state),
+                &cfg,
+                &dead_models,
+                &dead_providers,
+                model_purge.main_reset,
             );
         }
     }
@@ -1682,7 +1694,12 @@ fn broker_providers_unregister(state: &mut AppState, ext_id: &str, params: &Valu
 
 /// PURE core of [`broker_providers_unregister`]: apply the removal + orphan-model sweep. Does
 /// NOT persist. See that function for the full contract.
-fn apply_providers_unregister(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
+/// Returns `(reply, model_purge, dead_provider_uuids)`.
+fn apply_providers_unregister(
+    config: &mut AppConfig,
+    ext_id: &str,
+    params: &Value,
+) -> (Value, crate::model::app_config::CascadePurge, HashSet<String>) {
     // Optional id filter (uuid OR name, case-insensitive). Absent → remove all owned.
     let id_filter: Option<Vec<String>> = params.get("ids").and_then(|v| v.as_array()).map(|a| {
         a.iter()
@@ -1707,13 +1724,18 @@ fn apply_providers_unregister(config: &mut AppConfig, ext_id: &str, params: &Val
         .map(|p| p.uuid.clone())
         .collect();
     if dead.is_empty() {
-        return json!({ "removed": 0 });
+        return (
+            json!({ "removed": 0 }),
+            crate::model::app_config::CascadePurge::default(),
+            HashSet::new(),
+        );
     }
     // Orphan prevention: drop models served by a removed provider FIRST (shared sweep), then
     // the providers themselves.
-    config.remove_models_by_providers(&dead);
+    let model_purge = config.remove_models_by_providers(&dead);
+    let removed_n = dead.len();
     config.providers.retain(|p| !dead.contains(&p.uuid));
-    json!({ "removed": dead.len() })
+    (json!({ "removed": removed_n }), model_purge, dead)
 }
 
 /// W12b: whether `endpoint` is a well-formed http(s) URL — the endpoint gate for
@@ -3823,19 +3845,19 @@ mod tests {
         }
 
         // ext A can never remove B's or native providers (ownership wall).
-        let blocked = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["p-b", "p-native"] }));
+        let (blocked, _, _) = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["p-b", "p-native"] }));
         assert_eq!(blocked["removed"], json!(0));
         assert_eq!(config.providers.len(), 4);
 
         // ext A remove by NAME (case-insensitive) → removes A1 + its orphaned model only.
-        let by_name = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["a1"] }));
+        let (by_name, _, _) = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["a1"] }));
         assert_eq!(by_name["removed"], json!(1));
         assert!(config.providers.iter().all(|p| p.uuid != "p-a1"));
         assert!(config.models.iter().all(|m| m.provider_uuid != "p-a1"), "orphaned model swept");
         assert!(config.models.iter().any(|m| m.uuid == "m-a2"), "A2's model survives");
 
         // ext A remove ALL (ids absent) → removes A2 + its model; B + native untouched.
-        let all_a = apply_providers_unregister(&mut config, "ext.a", &json!({}));
+        let (all_a, _, _) = apply_providers_unregister(&mut config, "ext.a", &json!({}));
         assert_eq!(all_a["removed"], json!(1));
         assert!(config.providers.iter().all(|p| p.ext_id.as_deref() != Some("ext.a")));
         assert!(config.providers.iter().any(|p| p.uuid == "p-b"), "B untouched");

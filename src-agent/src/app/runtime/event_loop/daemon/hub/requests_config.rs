@@ -105,7 +105,8 @@ impl DaemonHub {
         self.ack_or_error(idx, result);
     }
 
-    // GUI provider delete: drop by uuid + persist (models keep any dangling ref).
+    // GUI provider delete: cascade-drop models that pointed at it, rebind consumers
+    // (agents/sessions → inherit), persist.
     //
     // W12b HOST-ENFORCED GUARD: an EXTENSION-managed key-backed provider
     // (`ProviderConn::ext_id` set) can never be deleted by the user — only uninstalling the
@@ -127,8 +128,32 @@ impl DaemonHub {
             );
             return;
         }
-        state.rest.config.remove_provider_by_uuid(&uuid);
+        let purge = state.rest.config.cascade_remove_provider(&uuid);
         let result = state.rest.config.save();
+        // Always rebind agent .md → inherit main when a provider went away (heals
+        // orphans even if this provider had zero catalogue models).
+        if result.is_ok() {
+            use std::collections::HashSet;
+            let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
+            let mut dead_providers = HashSet::new();
+            dead_providers.insert(uuid.clone());
+            let cfg = state.rest.config.clone();
+            let report = crate::app::cascade::rebind_consumers_after_model_removal(
+                Some(state),
+                &cfg,
+                &dead_models,
+                &dead_providers,
+                purge.main_reset,
+            );
+            if !purge.models_removed.is_empty()
+                || report.agents_cleared > 0
+                || purge.main_reset
+            {
+                state.rest.fg_mut().set_toast_info(
+                    crate::app::cascade::cascade_status_line("provider", &report),
+                );
+            }
+        }
         self.ack_or_error(idx, result);
     }
 
@@ -216,7 +241,8 @@ impl DaemonHub {
         self.ack_or_error(idx, result);
     }
 
-    // GUI model delete: remove by uuid from the addressed scope + persist.
+    // GUI model delete: remove by uuid from the addressed scope, rebind consumers → inherit,
+    // persist.
     pub(super) fn delete_model(
         &mut self,
         idx: usize,
@@ -224,16 +250,45 @@ impl DaemonHub {
         uuid: String,
         scope: String,
     ) {
+        use std::collections::HashSet;
         let result = if scope == "local" {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
+                let path = sess.path.clone();
                 sess.settings.session_models.retain(|m| m.uuid != uuid);
-                sess.save()
+                let save = sess.save();
+                if save.is_ok() {
+                    let cfg = state.rest.config.clone();
+                    let _ = crate::app::cascade::rebind_after_local_model_removal(
+                        state, &cfg, &path, &uuid,
+                    );
+                }
+                save
             } else {
                 Ok(())
             }
         } else {
-            state.rest.config.remove_model_by_uuid(&uuid);
-            state.rest.config.save()
+            let mut dead = HashSet::new();
+            dead.insert(uuid.clone());
+            let purge = state.rest.config.cascade_remove_models(&dead);
+            let save = state.rest.config.save();
+            if save.is_ok() && !purge.models_removed.is_empty() {
+                let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
+                let empty = HashSet::new();
+                let cfg = state.rest.config.clone();
+                let report = crate::app::cascade::rebind_consumers_after_model_removal(
+                    Some(state),
+                    &cfg,
+                    &dead_models,
+                    &empty,
+                    purge.main_reset,
+                );
+                if purge.main_reset || report.agents_cleared > 0 {
+                    state.rest.fg_mut().set_toast_info(
+                        crate::app::cascade::cascade_status_line("model", &report),
+                    );
+                }
+            }
+            save
         };
         self.ack_or_error(idx, result);
     }

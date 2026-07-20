@@ -244,22 +244,52 @@ pub(super) fn handle_oauth_open_url(state: &mut AppState) -> Result<()> {
 }
 
 /// Handle `Action::OAuthDelete`: remove the connection from `config.oauth_conns`,
-/// persist, evict its token-refresh cache entry, and rebuild `oauth_drafts` in
-/// the open submenu.
+/// cascade-drop models that pointed at it, rebind consumers → inherit, persist,
+/// evict its token-refresh cache entry, and rebuild `oauth_drafts` in the open submenu.
 pub(super) fn handle_oauth_delete(
     uuid: String,
     state: &mut AppState,
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    state.rest.config.oauth_conns.retain(|c| c.uuid != uuid);
+    use std::collections::HashSet;
+    let purge = state.rest.config.cascade_remove_oauth_conn(&uuid);
+    // `HashSet` used below for rebind + draft filter.
     if let Err(e) = state.rest.config.save() {
         state.rest.fg_mut().status = format!("config save failed: {e}");
+    } else {
+        // Always walk agent .md files → inherit main for any model that no longer exists.
+        let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
+        let mut dead_providers = HashSet::new();
+        dead_providers.insert(uuid.clone());
+        let cfg = state.rest.config.clone();
+        let report = crate::app::cascade::rebind_consumers_after_model_removal(
+            Some(state),
+            &cfg,
+            &dead_models,
+            &dead_providers,
+            purge.main_reset,
+        );
+        if !purge.models_removed.is_empty() || report.agents_cleared > 0 || purge.main_reset {
+            state
+                .rest
+                .fg_mut()
+                .set_toast_info(crate::app::cascade::cascade_status_line("oauth", &report));
+        }
     }
     let drafts = crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);
     if let Mode::Settings(s) = state.mode_mut() {
         s.oauth_drafts = drafts;
         s.oauth_sel = s.oauth_sel.min(s.oauth_drafts.len());
         s.oauth_armed = None;
+        // Drop model drafts whose provider_uuid was the deleted oauth conn (or a
+        // cascaded-away model uuid) so the open settings view matches disk.
+        if !purge.models_removed.is_empty() {
+            let dead: HashSet<String> = purge.models_removed.iter().cloned().collect();
+            s.models.retain(|m| {
+                // ModelDraft has uuid + provider resolved at load; filter by uuid.
+                !dead.contains(&m.uuid)
+            });
+        }
     }
     handle.spawn(async move {
         crate::service::oauth::manager::evict(&uuid).await;
