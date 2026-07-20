@@ -48,15 +48,27 @@ pub enum AgentEvent {
     Done(String),
     /// The loop aborted on a fatal stream error; `String` is the cause.
     Error(String),
-    /// Accumulated token/cost spend across all steps. Emitted once, immediately
-    /// before [`Done`](AgentEvent::Done), so the orchestrator can merge it into
-    /// the session total and record a ledger row. `model_id` is the resolved
-    /// model the loop ran against. Non-fatal: if no Usage chunk was ever received
-    /// (e.g. the provider omits them) all three counters are 0/0.0.
+    /// Token/cost spend report emitted after EVERY completed model step (not just
+    /// once before Done). Running totals (`tokens_out`, `cost`) let the UI show
+    /// cumulative spend; per-step deltas (`step_tokens_out`, `step_tokens_cached`,
+    /// `step_cost`) let the orchestrator ledger each step independently so a
+    /// kill/cancel mid-run still keeps every finished step's price.
+    ///
+    /// `model_id` is the resolved model the loop ran against. Non-fatal: if no
+    /// Usage chunk was received for a step, that step contributes no report.
     UsageReport {
         model_id: String,
+        /// Latest prompt size (context-window gauge for this step).
         tokens_in: u64,
+        /// Cumulative completion tokens across all steps finished so far.
         tokens_out: u64,
+        /// Completion tokens for THIS step only (for per-step ledger rows).
+        step_tokens_out: u64,
+        /// Cached prompt tokens for THIS step only (overlay pricing input).
+        step_tokens_cached: u64,
+        /// Overlay-corrected USD cost for THIS step only.
+        step_cost: f64,
+        /// Cumulative USD cost across all steps finished so far.
         cost: f64,
     },
 }

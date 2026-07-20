@@ -31,6 +31,7 @@ pub mod context;
 pub mod engine;
 pub mod event;
 pub mod spawn;
+pub(crate) mod usage_math;
 
 // Re-exports form the intended public surface for the later wiring stage. The
 // loop + spawn entry points are not referenced yet, so silence the unused-import
@@ -139,7 +140,8 @@ pub struct SubAgent {
     /// (no fold note, no nudge) — its spawner already receives the result via the
     /// owned `agents.done` event (see [`crate::app::ext::events::emit_subagent_terminal`]).
     /// `drain_subagents` skips the compact completion note when this is set, while
-    /// STILL recording usage + the persisted sub-agent record + firing `agents.done`.
+    /// STILL keeping per-step usage (rolled run-live into parent + ledger) + the
+    /// persisted sub-agent record + firing `agents.done`.
     /// `false` for every non-extension spawn path.
     pub ext_owned: bool,
     /// Last-seen prompt tokens from [`AgentEvent::UsageReport`] (context size,
