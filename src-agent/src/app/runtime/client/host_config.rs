@@ -214,7 +214,21 @@ fn apply_global_config_req(
                 );
                 false
             } else {
-                cfg.remove_provider_by_uuid(uuid);
+                let purge = cfg.cascade_remove_provider(uuid);
+                // Disk-only consumer rebind (no AppState sessions pre-session).
+                if !purge.models_removed.is_empty() {
+                    use std::collections::HashSet;
+                    let dead_models: HashSet<String> =
+                        purge.models_removed.iter().cloned().collect();
+                    let mut dead_providers = HashSet::new();
+                    dead_providers.insert(uuid.clone());
+                    let _ = crate::app::cascade::rebind_consumers_after_model_removal(
+                        None,
+                        &dead_models,
+                        &dead_providers,
+                        purge.main_reset,
+                    );
+                }
                 true
             }
         }
@@ -259,7 +273,20 @@ fn apply_global_config_req(
             if scope == "local" {
                 return false;
             }
-            cfg.remove_model_by_uuid(uuid);
+            use std::collections::HashSet;
+            let mut dead = HashSet::new();
+            dead.insert(uuid.clone());
+            let purge = cfg.cascade_remove_models(&dead);
+            if !purge.models_removed.is_empty() {
+                let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
+                let empty = HashSet::new();
+                let _ = crate::app::cascade::rebind_consumers_after_model_removal(
+                    None,
+                    &dead_models,
+                    &empty,
+                    purge.main_reset,
+                );
+            }
             true
         }
         ClientRequest::SetMcpServer {
