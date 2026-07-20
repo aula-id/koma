@@ -704,6 +704,13 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Load from `~/.koma/config.json`.
     ///
+    /// Strips any `clinepass` OAuth conns + orphaned models (whose `provider_uuid`
+    /// referenced one of those stripped conns) on load — ClinePass was only usable
+    /// with an existing CLI login (no browser authorize/callback) and is now removed.
+    /// The migration runs at the JSON level so the enum variant can still deserialize
+    /// (it hasn't been deleted yet). If anything was stripped the cleaned config is
+    /// persisted; otherwise the file is left untouched.
+    ///
     /// Returns `AppConfig::default()` on ANY error (file absent, parse failure,
     /// etc.) so startup is never blocked by a missing or corrupt config file.
     pub fn load() -> Self {
@@ -715,7 +722,63 @@ impl AppConfig {
             Ok(b) => b,
             Err(_) => return AppConfig::default(),
         };
-        serde_json::from_slice(&bytes).unwrap_or_default()
+        // --- clinepass migration: strip before enum deserialization ---
+        let mut val: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        let stripped = Self::strip_clinepass(&mut val);
+        let config: AppConfig =
+            serde_json::from_value(val).unwrap_or_default();
+        if stripped {
+            // Persist the cleaned config so we don't re-strip on every boot.
+            // Ignore save errors (best-effort migration; the stripped in-memory
+            // config is still valid for the session).
+            let _ = config.save();
+        }
+        config
+    }
+
+    /// Remove every OAuth conn whose `provider` field is `"clinepass"` and every
+    /// model whose `provider_uuid` matches one of the stripped conn uuids. Operates
+    /// on a `serde_json::Value` so it runs BEFORE enum deserialization (the
+    /// `ClinePass` variant still exists in the type-level enum — this only strips
+    /// it from the JSON document). Returns `true` if anything was removed.
+    fn strip_clinepass(doc: &mut serde_json::Value) -> bool {
+        let mut stripped_uuids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        // 1) Strip clinepass oauth conns; collect their uuids.
+        if let Some(conns) = doc.get_mut("oauth_conns").and_then(|c| c.as_array_mut()) {
+            let before = conns.len();
+            conns.retain(|c| {
+                let is_clinepass = c
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |p| p == "clinepass");
+                if is_clinepass {
+                    if let Some(uuid) = c.get("uuid").and_then(|v| v.as_str()) {
+                        stripped_uuids.insert(uuid.to_string());
+                    }
+                }
+                !is_clinepass
+            });
+            if conns.len() == before {
+                return false; // nothing stripped; no need to check models
+            }
+        } else {
+            return false; // no oauth_conns key at all
+        }
+
+        // 2) Strip orphaned models whose provider_uuid referenced a stripped conn.
+        if let Some(models) = doc.get_mut("models").and_then(|m| m.as_array_mut()) {
+            models.retain(|m| {
+                let uuid = m
+                    .get("provider_uuid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                !stripped_uuids.contains(uuid)
+            });
+        }
+
+        true
     }
 
     /// Index of the provider whose `uuid` matches, if any. Used by the
@@ -1355,6 +1418,101 @@ mod ext_purge_tests {
         assert_eq!(report.providers_removed, 1);
         assert_eq!(report.models_removed, 1);
         assert!(!report.main_reset, "no removed model held Main");
+    }
+}
+
+#[cfg(test)]
+mod clinepass_migration_tests {
+    use super::AppConfig;
+
+    /// `strip_clinepass` removes a clinepass conn + orphaned model, leaves
+    /// a codex conn + its model untouched.
+    #[test]
+    fn strips_clinepass_and_orphan_models() {
+        let json = serde_json::json!({
+            "palette": "tokyo-night",
+            "oauth_conns": [
+                {
+                    "uuid": "c1",
+                    "provider": "clinepass",
+                    "access_token": "wp:dead",
+                    "name": "ClinePass account",
+                    "email": "u@cline.bot"
+                },
+                {
+                    "uuid": "c2",
+                    "provider": "codex",
+                    "access_token": "good",
+                    "name": "Codex account",
+                    "email": "u@codex.io"
+                }
+            ],
+            "models": [
+                {
+                    "uuid": "m1",
+                    "model_id": "gpt-4",
+                    "provider_uuid": "c1",
+                    "roles": ["Main"]
+                },
+                {
+                    "uuid": "m2",
+                    "model_id": "codex-default",
+                    "provider_uuid": "c2",
+                    "roles": ["Main"]
+                }
+            ]
+        });
+
+        let mut val = serde_json::to_value(&json).unwrap();
+        let stripped = AppConfig::strip_clinepass(&mut val);
+        assert!(stripped, "should report a strip");
+
+        let conns = val["oauth_conns"].as_array().unwrap();
+        assert_eq!(conns.len(), 1, "only codex conn survives");
+        assert_eq!(conns[0]["provider"], "codex");
+
+        let models = val["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1, "only the codex model survives");
+        assert_eq!(models[0]["provider_uuid"], "c2");
+    }
+
+    /// When there are no clinepass conns, `strip_clinepass` returns false
+    /// and the JSON is unchanged (no model sweep runs).
+    #[test]
+    fn no_clinepass_no_strip() {
+        let json = serde_json::json!({
+            "oauth_conns": [
+                {
+                    "uuid": "c1",
+                    "provider": "codex",
+                    "access_token": "good"
+                }
+            ],
+            "models": [
+                {
+                    "uuid": "m1",
+                    "provider_uuid": "c1"
+                }
+            ]
+        });
+
+        let mut val = serde_json::to_value(&json).unwrap();
+        let stripped = AppConfig::strip_clinepass(&mut val);
+        assert!(!stripped, "no clinepass → no strip");
+        assert_eq!(val["oauth_conns"].as_array().unwrap().len(), 1);
+        assert_eq!(val["models"].as_array().unwrap().len(), 1);
+    }
+
+    /// A JSON document with no `oauth_conns` key at all is a no-op.
+    #[test]
+    fn no_oauth_conns_key() {
+        let json = serde_json::json!({
+            "palette": "tokyo-night",
+            "models": []
+        });
+        let mut val = serde_json::to_value(&json).unwrap();
+        let stripped = AppConfig::strip_clinepass(&mut val);
+        assert!(!stripped);
     }
 }
 
