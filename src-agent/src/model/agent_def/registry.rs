@@ -61,7 +61,7 @@ pub(crate) fn builtin_agents() -> Vec<AgentDef> {
                 "explore",
                 "Read-only code locator: find where things are defined and used",
                 include_str!("../../../../src-misc/agent-explore-prompt.txt"),
-                tools(&["read", "grep", "glob", "dir_list"]),
+                tools(&["read", "grep", "glob", "dir_list", "web_search", "web_fetch"]),
             )
         },
         AgentDef {
