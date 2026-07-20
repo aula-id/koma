@@ -61,3 +61,22 @@ pub fn write_summary(
     )?;
     Ok(())
 }
+
+/// After `/clear`: wipe the rolling short-send summary text and advance the
+/// watermark to the current archive tip so the fold step will not re-summarise
+/// pre-clear history into a fresh chat. Leaves `messages`/`blobs` untouched
+/// (the archive stays). Wrote as empty `text`; short-send `shape` treats empty
+/// summary text as absent and skips injection/recall.
+pub fn clear_rolling_summary(session_dir: &Path) -> Result<()> {
+    let max_id = super::query::max_message_id(session_dir);
+    // Empty archive → delete the summary row if present so a new session starts
+    // with no summary at all.
+    if max_id <= 0 {
+        let conn = open(session_dir)?;
+        conn.execute("DELETE FROM summary WHERE id = 1", [])?;
+        return Ok(());
+    }
+    // Archive retained: freeze the watermark at the tip + empty the body so fold
+    // has nothing new to merge until post-clear tools/messages append past max_id.
+    write_summary(session_dir, "", max_id, max_id.saturating_add(1))
+}

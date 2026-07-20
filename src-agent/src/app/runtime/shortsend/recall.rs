@@ -163,9 +163,15 @@ pub async fn shape(
     }
 
     // 4. No summary yet → nothing to compress against; send the full history.
+    //    Empty text is treated the same as absent: `/clear` freezes the watermark
+    //    with a blank body so pre-clear archive content cannot re-enter the wire
+    //    via fold/blob recall while still leaving `messages`/`blobs` intact.
     let Some(sum) = msglog::read_summary(session_dir) else {
         return history;
     };
+    if sum.text.trim().is_empty() {
+        return history;
+    }
 
     // Everything newer than the summary boundary must stay verbatim: that span is
     // the current (in-progress) exchange plus any completed tail the fold hasn't
