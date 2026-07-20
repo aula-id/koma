@@ -649,9 +649,12 @@ pub fn resolve_role_dispatch(config: &AppConfig, settings: &Settings, role: Mode
 
 /// Why a Main turn is being silently downgraded to the keyless koma-free tier by
 /// [`resolve_role_dispatch`] — the diagnosis a user-facing "you're on the free
-/// tier" toast needs. Each variant is a DISTINCT, user-actionable state of the
-/// assigned Main model whose route came back unusable:
+/// tier" toast needs. Each variant is a DISTINCT, user-actionable state:
 ///
+/// - `Unconfigured` — no model holds the Main role (and the legacy soft-fallback
+///   is unusable), so dispatch auto-routes to keyless `koma/apple`. This is the
+///   free-tier safety net; surface a HARD warning so the user knows chat is not
+///   on a configured provider.
 /// - `ProviderRemoved` — the assigned model still points at a `provider_uuid` that
 ///   exists in NEITHER `providers` nor `oauth_conns` (its connection was deleted).
 /// - `NoKey` — the assigned model's static provider exists but its `api_key` is empty.
@@ -659,6 +662,7 @@ pub fn resolve_role_dispatch(config: &AppConfig, settings: &Settings, role: Mode
 ///   `access_token` is empty (never signed in / signed out / token cleared).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainFallback {
+    Unconfigured,
     ProviderRemoved,
     NoKey,
     NotSignedIn,
@@ -672,10 +676,11 @@ pub enum MainFallback {
 /// Mirrors [`resolve_role`]'s step-1 assignment lookup EXACTLY (session overrides
 /// win over the global catalogue) and its usability gate:
 ///
-/// - No model holds the Main role → `None`. This is the unconfigured / onboarding
-///   install, whose dispatch fallback routes the user to the first-run chooser, NOT
-///   a toast (see [`resolve_role_dispatch`]'s "do NOT call from a gate" note) — so
-///   warning here would be wrong.
+/// - No model holds the Main role AND the legacy soft-fallback is unusable →
+///   `Some(Unconfigured)`. Dispatch will auto-route to `koma/apple`; the stream
+///   seam shows a hard warning + logs to `error.log`. (If legacy IS usable, e.g.
+///   a still-valid first-run key on `settings.model`, returns `None` — nothing is
+///   being substituted.)
 /// - The assigned Main resolves to a USABLE route — a real key, a live OAuth token,
 ///   or a keyless koma-free provider the user chose themselves → `None`. Nothing is
 ///   downgraded (koma-free either isn't involved or WAS the deliberate choice).
@@ -686,8 +691,7 @@ pub enum MainFallback {
 pub fn main_fallback_reason(config: &AppConfig, settings: &Settings) -> Option<MainFallback> {
     // 1. The Main-assigned entry, resolved with the SAME precedence as
     //    `resolve_role` step 1: per-session overrides first, then the global
-    //    catalogue. Nothing holds Main → unconfigured install → never warn (that
-    //    path is onboarding, not a silent koma-free swap).
+    //    catalogue.
     let assigned = settings
         .session_models
         .iter()
@@ -697,7 +701,17 @@ pub fn main_fallback_reason(config: &AppConfig, settings: &Settings) -> Option<M
                 .models
                 .iter()
                 .find(|e| e.effective_roles().contains(&ModelRole::Main))
-        })?;
+        });
+
+    let Some(assigned) = assigned else {
+        // No Main holder. Dispatch substitutes koma/apple only when the plain
+        // resolve is missing/unusable (legacy soft-fallback empty key, etc.).
+        // If legacy IS usable, chat runs on that route — no free-tier swap, no warn.
+        if resolve_role(config, settings, ModelRole::Main).is_some_and(|r| r.is_usable()) {
+            return None;
+        }
+        return Some(MainFallback::Unconfigured);
+    };
 
     // 2. koma-free substitutes iff `resolve_role(Main)` is missing or unusable —
     //    the exact gate `resolve_role_dispatch` applies. A usable route (real key,
