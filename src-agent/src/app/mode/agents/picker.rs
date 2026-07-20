@@ -132,15 +132,27 @@ impl ToolPickerState {
 }
 
 /// Resolve a [`ModelEntry`]'s provider connection to a human-readable name for
-/// the model picker / browse rows: the provider's `name` (falling back to its
-/// `endpoint`) looked up in `config.providers` by the entry's `provider_uuid`,
-/// or `"?"` when the connection is missing/blank.
+/// the model picker / browse rows. Checks `config.providers` first (static-key
+/// connections), then `config.oauth_conns` (OAuth-backed models like xAI /
+/// Codex / koma.run). Falls back to `"?"` when neither catalogue holds the uuid.
 fn entry_provider_name(config: &AppConfig, entry: &ModelEntry) -> String {
-    match config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
-        Some(p) if !p.name.trim().is_empty() => p.name.clone(),
-        Some(p) if !p.endpoint.trim().is_empty() => p.endpoint.clone(),
-        _ => "?".to_string(),
+    if let Some(p) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+        return if !p.name.trim().is_empty() {
+            p.name.clone()
+        } else if !p.endpoint.trim().is_empty() {
+            p.endpoint.clone()
+        } else {
+            "?".to_string()
+        };
     }
+    if let Some(c) = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid) {
+        return if !c.name.trim().is_empty() {
+            c.name.clone()
+        } else {
+            c.provider.label().to_string()
+        };
+    }
+    "?".to_string()
 }
 
 /// One-line label for a registered model in the picker / browse row:
