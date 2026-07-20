@@ -13,7 +13,6 @@
 
 pub mod browser;
 pub mod claude;
-pub mod clinepass;
 pub mod codex;
 pub mod commandcode;
 pub mod flow;

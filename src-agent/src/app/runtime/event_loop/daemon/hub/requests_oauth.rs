@@ -116,13 +116,12 @@ impl DaemonHub {
     ) {
         let client_id = self.clients[idx].id;
         match provider.as_str() {
-            "codex" | "kilocode" | "xai" | "claudeai" | "komarun" | "clinepass" | "commandcode" => {
+            "codex" | "kilocode" | "xai" | "claudeai" | "komarun" | "commandcode" => {
                 let p = match provider.as_str() {
                     "kilocode" => OAuthProvider::Kilocode,
                     "xai" => OAuthProvider::Xai,
                     "claudeai" => OAuthProvider::ClaudeAI,
                     "komarun" => OAuthProvider::KomaRun,
-                    "clinepass" => OAuthProvider::ClinePass,
                     "commandcode" => OAuthProvider::CommandCode,
                     _ => OAuthProvider::Codex,
                 };
@@ -144,10 +143,6 @@ impl DaemonHub {
             }
             "codex_paste" => {
                 state.rest.oauth_paste_provider = OAuthProvider::Codex;
-                self.send_oauth_state(idx, state, "paste", None, None, None, None);
-            }
-            "clinepass_paste" => {
-                state.rest.oauth_paste_provider = OAuthProvider::ClinePass;
                 self.send_oauth_state(idx, state, "paste", None, None, None, None);
             }
             "commandcode_paste" => {

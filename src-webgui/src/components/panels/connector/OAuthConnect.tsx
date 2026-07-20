@@ -85,11 +85,9 @@ function Picker({
                     ? 'device code'
                     : p.kind === 'paste'
                       ? 'paste token'
-                      : p.kind === 'reuse'
-                        ? 'reuse login'
-                        : p.kind === 'callback'
-                          ? 'browser callback'
-                          : 'browser'}
+                      : p.kind === 'callback'
+                        ? 'browser callback'
+                        : 'browser'}
                 </span>
               </button>
             ))}
