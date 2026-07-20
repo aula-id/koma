@@ -158,6 +158,39 @@ impl SettingsState {
         }
     }
 
+    /// Label for a model draft's provider binding. Prefers the authoritative
+    /// `provider_uuid` (so an OAuth model whose load-time index fell back to 0
+    /// still shows the OAuth label, not `providers[0]` / koma free), then the
+    /// positional index, then an em-dash.
+    pub fn provider_label_for_draft(&self, m: &crate::app::mode::settings::ModelDraft) -> String {
+        if !m.provider_uuid.is_empty() {
+            if let Some(p) = self.providers.iter().find(|p| p.uuid == m.provider_uuid) {
+                if !p.name.is_empty() {
+                    return p.name.clone();
+                }
+            }
+            if let Some(d) = self.oauth_drafts.iter().find(|d| d.uuid == m.provider_uuid) {
+                return d.label.clone();
+            }
+        }
+        self.provider_label_at(m.provider_idx)
+            .unwrap_or("\u{2014}")
+            .to_string()
+    }
+
+    /// Resolve a positional provider index (merged providers-then-oauth cycle) to
+    /// the underlying provider / OAuth-connection uuid. `None` when `idx` is out
+    /// of range. Used when committing a model-modal edit so the draft's
+    /// authoritative `provider_uuid` stays in sync with the navigated index.
+    pub fn provider_uuid_at(&self, idx: usize) -> Option<String> {
+        let n = self.providers.len();
+        if idx < n {
+            self.providers.get(idx).map(|p| p.uuid.clone())
+        } else {
+            self.oauth_drafts.get(idx - n).map(|d| d.uuid.clone())
+        }
+    }
+
     /// Display label for the model modal's CURRENTLY selected provider (real name,
     /// em-dash placeholder, or OAuth draft label). `None` when no modal is open.
     pub fn mm_provider_label(&self) -> Option<String> {

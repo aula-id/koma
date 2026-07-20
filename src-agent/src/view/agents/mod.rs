@@ -82,7 +82,8 @@ fn provider_label(config: &AppConfig, provider_uuid: &str) -> Option<String> {
         return Some(if !c.name.trim().is_empty() {
             c.name.clone()
         } else {
-            c.provider.label().to_string()
+            let short: String = c.uuid.chars().take(8).collect();
+            format!("{} ({short})", c.provider.label())
         });
     }
     None

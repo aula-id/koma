@@ -132,25 +132,28 @@ impl ToolPickerState {
 }
 
 /// Resolve a [`ModelEntry`]'s provider connection to a human-readable name for
-/// the model picker / browse rows. Checks `config.providers` first (static-key
-/// connections), then `config.oauth_conns` (OAuth-backed models like xAI /
-/// Codex / koma.run). Falls back to `"?"` when neither catalogue holds the uuid.
+/// the model picker / browse rows: the provider's `name` (falling back to its
+/// `endpoint`) looked up in `config.providers` by the entry's `provider_uuid`,
+/// then `config.oauth_conns` (OAuth-backed providers use the same uuid key as
+/// runtime resolution — missing that lookup was the `"@ ?"` display bug), or
+/// `"?"` when neither catalogue has a match.
 fn entry_provider_name(config: &AppConfig, entry: &ModelEntry) -> String {
     if let Some(p) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
-        return if !p.name.trim().is_empty() {
-            p.name.clone()
-        } else if !p.endpoint.trim().is_empty() {
-            p.endpoint.clone()
-        } else {
-            "?".to_string()
-        };
+        if !p.name.trim().is_empty() {
+            return p.name.clone();
+        }
+        if !p.endpoint.trim().is_empty() {
+            return p.endpoint.clone();
+        }
     }
     if let Some(c) = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid) {
-        return if !c.name.trim().is_empty() {
-            c.name.clone()
-        } else {
-            c.provider.label().to_string()
-        };
+        // Prefer the stored display name; fall back to provider kind + short uuid.
+        if !c.name.trim().is_empty() {
+            return c.name.clone();
+        }
+        let kind = c.provider.label();
+        let short: String = c.uuid.chars().take(8).collect();
+        return format!("{kind} ({short})");
     }
     "?".to_string()
 }
