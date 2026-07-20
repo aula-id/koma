@@ -111,7 +111,6 @@ impl OAuthDraft {
                     OAuthProvider::Xai => "xai",
                     OAuthProvider::ClaudeAI => "claude",
                     OAuthProvider::KomaRun => "koma",
-                    OAuthProvider::ClinePass => "clinepass",
                     OAuthProvider::CommandCode => "commandcode",
                     // W11: ext-backed conns aren't authored via the TUI provider modal,
                     // but stay exhaustive with a generic short label.

@@ -320,8 +320,6 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         // koma.run speaks a plain OpenAI-compatible chat endpoint (both the base and
         // premium — see the endpoint routing below — wire tiers).
         OAuthProvider::KomaRun => ApiType::OpenAiCompatible,
-        // ClinePass: OpenAI-compatible chat endpoint (bearer WorkOS token or API key).
-        OAuthProvider::ClinePass => ApiType::OpenAiCompatible,
         // Command Code: API-first (provider/v1 OpenAI-compat). A remembered
         // `commandcode_chat = "ndjson"` preference (Go plan) switches to the
         // NDJSON `/alpha/generate` transport; unknown → try provider/v1 first.
@@ -353,8 +351,6 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         OAuthProvider::ClaudeAI => String::new(),
         // Koma account login has no org/account header concept either.
         OAuthProvider::KomaRun => String::new(),
-        // ClinePass: no org/account header.
-        OAuthProvider::ClinePass => String::new(),
         // Command Code: no org/account header.
         OAuthProvider::CommandCode => String::new(),
         // W11: ext-backed conns carry no send-time account/org header (not a model

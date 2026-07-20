@@ -84,7 +84,7 @@ pub(super) fn handle_oauth_cancel(state: &mut AppState) -> Result<()> {
 /// Handle `Action::OAuthPaste`: build a connection straight from a hand-pasted
 /// raw access token (no refresh/id token, no known expiry) and persist it via
 /// the same path a completed browser/device flow uses. The `provider` field
-/// determines which conn constructor to use (Codex, ClinePass, CommandCode).
+/// determines which conn constructor to use (Codex, CommandCode).
 pub(super) fn handle_oauth_paste(
     provider: OAuthProvider,
     token: String,
@@ -100,9 +100,6 @@ pub(super) fn handle_oauth_paste(
                 expires_in: None,
             };
             crate::service::oauth::codex::to_conn(tokens)
-        }
-        OAuthProvider::ClinePass => {
-            crate::service::oauth::clinepass::to_conn_api_key(token.trim())
         }
         OAuthProvider::CommandCode => {
             crate::service::oauth::commandcode::to_conn(token.trim(), "", "")

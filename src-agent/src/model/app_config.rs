@@ -131,9 +131,6 @@ pub enum OAuthProvider {
     /// shape but against koma.run's native-client OAuth endpoints (form-encoded token
     /// exchange, no client_id/scope). Account login only — not a model provider yet.
     KomaRun,
-    /// ClinePass: WorkOS credential reuse from Cline CLI + custom refresh, or static API key paste.
-    /// Chat endpoint: https://api.cline.bot/api/v1 (OpenAI-compatible). Flow kind: "reuse".
-    ClinePass,
     /// Command Code: browser posts API key to localhost callback (NOT auth-code PKCE).
     /// Chat: try OpenAI-compat `provider/v1` first; on plan rejection fall back to
     /// NDJSON `/alpha/generate` and remember the working transport on the conn.
@@ -160,7 +157,6 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xAI",
             OAuthProvider::ClaudeAI => "Claude",
             OAuthProvider::KomaRun => "Koma",
-            OAuthProvider::ClinePass => "ClinePass",
             OAuthProvider::CommandCode => "Command Code",
             // W11: generic marker label; a real ext-backed conn's picker row uses the
             // extension manifest's provider `name`, never this (see
@@ -180,7 +176,6 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xai",
             OAuthProvider::ClaudeAI => "claudeai",
             OAuthProvider::KomaRun => "komarun",
-            OAuthProvider::ClinePass => "clinepass",
             OAuthProvider::CommandCode => "commandcode",
             // W11: stamped as the `provider` on an ext-backed conn's tokenless wire
             // projection (so the webview sees a stable marker); the connection's real
@@ -208,7 +203,6 @@ impl OAuthProvider {
             "xai" => Some(OAuthProvider::Xai),
             "claudeai" => Some(OAuthProvider::ClaudeAI),
             "komarun" => Some(OAuthProvider::KomaRun),
-            "clinepass" => Some(OAuthProvider::ClinePass),
             "commandcode" => Some(OAuthProvider::CommandCode),
             _ => None,
         }
@@ -226,7 +220,6 @@ impl OAuthProvider {
             OAuthProvider::Xai => "device",
             OAuthProvider::ClaudeAI => "pkce",
             OAuthProvider::KomaRun => "pkce",
-            OAuthProvider::ClinePass => "reuse",
             OAuthProvider::CommandCode => "callback",
             // W11: never surfaced through the enum-driven `oauth_providers()` list (ext
             // rows carry their own kind, mapped from the manifest `method` — see
@@ -1147,7 +1140,6 @@ mod oauth_provider_wire_tests {
             OAuthProvider::Xai,
             OAuthProvider::ClaudeAI,
             OAuthProvider::KomaRun,
-            OAuthProvider::ClinePass,
             OAuthProvider::CommandCode,
         ] {
             assert_eq!(OAuthProvider::from_wire_id(p.wire_id()), Some(p));
