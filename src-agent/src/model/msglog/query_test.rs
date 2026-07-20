@@ -1,5 +1,6 @@
 use super::*;
 use crate::dto::chat::Role;
+use crate::model::msglog::{clear_rolling_summary, read_summary, write_summary};
 
 /// A unique path under the OS temp root for a single test, removed
 /// recursively on drop. Mirrors `app::bgbash::mod_test`'s `TempDir` helper —
@@ -57,4 +58,33 @@ fn message_count_is_a_plain_row_count() {
     append(dir.path(), Role::User, "hi", None).unwrap();
 
     assert_eq!(message_count(dir.path()), Some(2));
+}
+
+#[test]
+fn clear_rolling_summary_freezes_watermark_and_empties_text() {
+    let dir = TempDir::new("clear-summary");
+    append(dir.path(), Role::User, "hi", None).unwrap();
+    append(dir.path(), Role::Assistant, "hello", Some((10, 5, 0.0))).unwrap();
+    let tip = max_message_id(dir.path());
+    assert!(tip >= 2);
+    // Seed a non-empty summary covering the archive.
+    write_summary(dir.path(), "old summary of prior chat", tip, tip + 1).unwrap();
+    clear_rolling_summary(dir.path()).unwrap();
+
+    let sum = read_summary(dir.path()).expect("summary row kept");
+    assert!(sum.text.is_empty(), "body wiped so shape skips injection");
+    assert_eq!(sum.covers_up_to, tip, "watermark frozen at archive tip");
+    // Archive rows must remain.
+    assert_eq!(message_count(dir.path()), Some(2));
+}
+
+#[test]
+fn clear_rolling_summary_on_empty_archive_deletes_row() {
+    let dir = TempDir::new("clear-empty");
+    // Open schema by writing then... actually empty dir has no DB. Seed then
+    // delete via clear when max_id is 0 after truncate is awkward; write a
+    // summary against an empty DB first (open creates schema).
+    write_summary(dir.path(), "stale", 0, 1).unwrap();
+    clear_rolling_summary(dir.path()).unwrap();
+    assert!(read_summary(dir.path()).is_none());
 }
