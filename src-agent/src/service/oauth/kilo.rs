@@ -165,5 +165,6 @@ pub fn to_conn(token: String, org_id: String, email: String) -> OAuthConn {
         api_type: None,
         refresh_token_url: None,
         refresh_client_id: None,
+        commandcode_chat: None,
     }
 }

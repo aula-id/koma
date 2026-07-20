@@ -116,6 +116,7 @@ pub fn onboard_provider_snapshot(op: &OnboardProviderState) -> OnboardProviderSn
                 crate::model::app_config::OAuthProvider::Xai => "xai",
                 crate::model::app_config::OAuthProvider::ClaudeAI => "claudeai",
                 crate::model::app_config::OAuthProvider::KomaRun => "komarun",
+                crate::model::app_config::OAuthProvider::CommandCode => "commandcode",
                 // W11: ext-backed marker (a native TUI onboard flow never selects it).
                 crate::model::app_config::OAuthProvider::Extension => "extension",
             }
@@ -284,6 +285,7 @@ pub fn oauth_draft_snapshot(o: &OAuthDraft) -> OAuthDraftSnapshot {
             crate::model::app_config::OAuthProvider::Xai => "xai",
             crate::model::app_config::OAuthProvider::ClaudeAI => "claudeai",
             crate::model::app_config::OAuthProvider::KomaRun => "komarun",
+            crate::model::app_config::OAuthProvider::CommandCode => "commandcode",
             // W11: ext-backed marker.
             crate::model::app_config::OAuthProvider::Extension => "extension",
         }
@@ -321,7 +323,7 @@ pub fn oauth_flow_snapshot(
             copied: *copied,
             ..Default::default()
         },
-        OAuthFlowState::CodexPaste { input } => OAuthFlowSnapshot {
+        OAuthFlowState::CodexPaste { input, .. } => OAuthFlowSnapshot {
             kind: "codex_paste".to_string(),
             input: input.clone(),
             ..Default::default()

@@ -85,16 +85,16 @@ pub enum ApiType {
     /// via the first-run chooser / `/free` toggle, never user-selectable in the
     /// providers modal (serde `"koma_free"`).
     KomaFree,
+    /// Command Code's `/alpha/generate` NDJSON transport. Used when a Command Code
+    /// connection's remembered preference is `"ndjson"` (Go plan — provider/v1 chat
+    /// returns 403). Provider-plan keys stay on `OpenAiCompatible` against
+    /// `/provider/v1`. Set only via OAuth resolution, never user-selectable
+    /// (serde `"command_code"`).
+    CommandCode,
 }
 
 impl ApiType {
     /// Whether the runtime can actually dispatch a request against this wire type.
-    /// `OpenAiCompatible` and `KomaFree` speak the OpenAI chat-completions contract
-    /// (`KomaFree` is that wire with keyless dual-header auth); `Codex` speaks the
-    /// OpenAI Responses API; `AnthropicCompatible` speaks the native Anthropic
-    /// Messages API — all four have real transports (see the `codex` / `anthropic`
-    /// submodules). The single source of truth shared by the resolution-boundary
-    /// gate (`Resolved::is_routable`) and the UI affordance.
     pub fn is_routable(self) -> bool {
         matches!(
             self,
@@ -102,6 +102,7 @@ impl ApiType {
                 | ApiType::AnthropicCompatible
                 | ApiType::Codex
                 | ApiType::KomaFree
+                | ApiType::CommandCode
         )
     }
 }
@@ -130,6 +131,12 @@ pub enum OAuthProvider {
     /// shape but against koma.run's native-client OAuth endpoints (form-encoded token
     /// exchange, no client_id/scope). Account login only — not a model provider yet.
     KomaRun,
+    /// Command Code: browser posts API key to localhost callback (NOT auth-code PKCE).
+    /// Chat: try OpenAI-compat `provider/v1` first; on plan rejection fall back to
+    /// NDJSON `/alpha/generate` and remember the working transport on the conn.
+    /// Catalogue: https://api.commandcode.ai/provider/v1 (`/models`).
+    /// Flow kind: "callback".
+    CommandCode,
     /// W11: a token stored by an EXTENSION-delegated OAuth flow. The actual provider
     /// identity lives in the connection's `ext_id`/`provider_id` fields, not this enum
     /// (which stays `Copy` + closed) — this variant is just the "backed by an extension"
@@ -150,6 +157,7 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xAI",
             OAuthProvider::ClaudeAI => "Claude",
             OAuthProvider::KomaRun => "Koma",
+            OAuthProvider::CommandCode => "Command Code",
             // W11: generic marker label; a real ext-backed conn's picker row uses the
             // extension manifest's provider `name`, never this (see
             // `requests_oauth::ext_oauth_rows_for`).
@@ -168,6 +176,7 @@ impl OAuthProvider {
             OAuthProvider::Xai => "xai",
             OAuthProvider::ClaudeAI => "claudeai",
             OAuthProvider::KomaRun => "komarun",
+            OAuthProvider::CommandCode => "commandcode",
             // W11: stamped as the `provider` on an ext-backed conn's tokenless wire
             // projection (so the webview sees a stable marker); the connection's real
             // identity is its `ext_id`/`provider_id`. NOT a `from_wire_id` input.
@@ -194,6 +203,7 @@ impl OAuthProvider {
             "xai" => Some(OAuthProvider::Xai),
             "claudeai" => Some(OAuthProvider::ClaudeAI),
             "komarun" => Some(OAuthProvider::KomaRun),
+            "commandcode" => Some(OAuthProvider::CommandCode),
             _ => None,
         }
     }
@@ -210,6 +220,7 @@ impl OAuthProvider {
             OAuthProvider::Xai => "device",
             OAuthProvider::ClaudeAI => "pkce",
             OAuthProvider::KomaRun => "pkce",
+            OAuthProvider::CommandCode => "callback",
             // W11: never surfaced through the enum-driven `oauth_providers()` list (ext
             // rows carry their own kind, mapped from the manifest `method` — see
             // `requests_oauth::method_to_kind`), so this value is exhaustiveness-only and
@@ -292,6 +303,14 @@ pub struct OAuthConn {
     /// refresh token alone). `None` for every native conn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_client_id: Option<String>,
+    /// Command Code only: remembered working chat transport after the first successful
+    /// probe. `"provider_v1"` (OpenAI-compat `/provider/v1/chat/completions`, Provider+
+    /// plans) or `"ndjson"` (`POST /alpha/generate`, Go plan). `None` = unknown — try
+    /// provider/v1 first, fall back to NDJSON on plan/API rejection, and persist the
+    /// winner. `None` for every non-CommandCode conn; `skip_serializing_if` keeps their
+    /// on-disk JSON byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commandcode_chat: Option<String>,
 }
 
 impl OAuthConn {
@@ -678,6 +697,13 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Load from `~/.koma/config.json`.
     ///
+    /// Strips any `clinepass` OAuth conns + orphaned models (whose `provider_uuid`
+    /// referenced one of those stripped conns) on load — ClinePass was only usable
+    /// with an existing CLI login (no browser authorize/callback) and is now removed.
+    /// The migration runs at the JSON level so the enum variant can still deserialize
+    /// (it hasn't been deleted yet). If anything was stripped the cleaned config is
+    /// persisted; otherwise the file is left untouched.
+    ///
     /// Returns `AppConfig::default()` on ANY error (file absent, parse failure,
     /// etc.) so startup is never blocked by a missing or corrupt config file.
     pub fn load() -> Self {
@@ -689,7 +715,63 @@ impl AppConfig {
             Ok(b) => b,
             Err(_) => return AppConfig::default(),
         };
-        serde_json::from_slice(&bytes).unwrap_or_default()
+        // --- clinepass migration: strip before enum deserialization ---
+        let mut val: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        let stripped = Self::strip_clinepass(&mut val);
+        let config: AppConfig =
+            serde_json::from_value(val).unwrap_or_default();
+        if stripped {
+            // Persist the cleaned config so we don't re-strip on every boot.
+            // Ignore save errors (best-effort migration; the stripped in-memory
+            // config is still valid for the session).
+            let _ = config.save();
+        }
+        config
+    }
+
+    /// Remove every OAuth conn whose `provider` field is `"clinepass"` and every
+    /// model whose `provider_uuid` matches one of the stripped conn uuids. Operates
+    /// on a `serde_json::Value` so it runs BEFORE enum deserialization (the
+    /// `ClinePass` variant still exists in the type-level enum — this only strips
+    /// it from the JSON document). Returns `true` if anything was removed.
+    fn strip_clinepass(doc: &mut serde_json::Value) -> bool {
+        let mut stripped_uuids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        // 1) Strip clinepass oauth conns; collect their uuids.
+        if let Some(conns) = doc.get_mut("oauth_conns").and_then(|c| c.as_array_mut()) {
+            let before = conns.len();
+            conns.retain(|c| {
+                let is_clinepass = c
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |p| p == "clinepass");
+                if is_clinepass {
+                    if let Some(uuid) = c.get("uuid").and_then(|v| v.as_str()) {
+                        stripped_uuids.insert(uuid.to_string());
+                    }
+                }
+                !is_clinepass
+            });
+            if conns.len() == before {
+                return false; // nothing stripped; no need to check models
+            }
+        } else {
+            return false; // no oauth_conns key at all
+        }
+
+        // 2) Strip orphaned models whose provider_uuid referenced a stripped conn.
+        if let Some(models) = doc.get_mut("models").and_then(|m| m.as_array_mut()) {
+            models.retain(|m| {
+                let uuid = m
+                    .get("provider_uuid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                !stripped_uuids.contains(uuid)
+            });
+        }
+
+        true
     }
 
     /// Index of the provider whose `uuid` matches, if any. Used by the
@@ -1058,6 +1140,7 @@ mod oauth_provider_wire_tests {
             OAuthProvider::Xai,
             OAuthProvider::ClaudeAI,
             OAuthProvider::KomaRun,
+            OAuthProvider::CommandCode,
         ] {
             assert_eq!(OAuthProvider::from_wire_id(p.wire_id()), Some(p));
         }
@@ -1067,8 +1150,10 @@ mod oauth_provider_wire_tests {
     /// provider — it must resolve to `None` so callers route it to the paste path
     /// instead of mistaking it for (or falling back to) a real provider.
     #[test]
-    fn from_wire_id_rejects_codex_paste_and_unknown() {
+    fn from_wire_id_rejects_paste_variants_and_unknown() {
         assert_eq!(OAuthProvider::from_wire_id("codex_paste"), None);
+        assert_eq!(OAuthProvider::from_wire_id("clinepass_paste"), None);
+        assert_eq!(OAuthProvider::from_wire_id("commandcode_paste"), None);
         assert_eq!(OAuthProvider::from_wire_id("not_a_provider"), None);
         assert_eq!(OAuthProvider::from_wire_id(""), None);
         // W11: the `extension` storage marker is NOT a from_wire_id input — ext flows
@@ -1325,6 +1410,101 @@ mod ext_purge_tests {
         assert_eq!(report.providers_removed, 1);
         assert_eq!(report.models_removed, 1);
         assert!(!report.main_reset, "no removed model held Main");
+    }
+}
+
+#[cfg(test)]
+mod clinepass_migration_tests {
+    use super::AppConfig;
+
+    /// `strip_clinepass` removes a clinepass conn + orphaned model, leaves
+    /// a codex conn + its model untouched.
+    #[test]
+    fn strips_clinepass_and_orphan_models() {
+        let json = serde_json::json!({
+            "palette": "tokyo-night",
+            "oauth_conns": [
+                {
+                    "uuid": "c1",
+                    "provider": "clinepass",
+                    "access_token": "wp:dead",
+                    "name": "ClinePass account",
+                    "email": "u@cline.bot"
+                },
+                {
+                    "uuid": "c2",
+                    "provider": "codex",
+                    "access_token": "good",
+                    "name": "Codex account",
+                    "email": "u@codex.io"
+                }
+            ],
+            "models": [
+                {
+                    "uuid": "m1",
+                    "model_id": "gpt-4",
+                    "provider_uuid": "c1",
+                    "roles": ["Main"]
+                },
+                {
+                    "uuid": "m2",
+                    "model_id": "codex-default",
+                    "provider_uuid": "c2",
+                    "roles": ["Main"]
+                }
+            ]
+        });
+
+        let mut val = serde_json::to_value(&json).unwrap();
+        let stripped = AppConfig::strip_clinepass(&mut val);
+        assert!(stripped, "should report a strip");
+
+        let conns = val["oauth_conns"].as_array().unwrap();
+        assert_eq!(conns.len(), 1, "only codex conn survives");
+        assert_eq!(conns[0]["provider"], "codex");
+
+        let models = val["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1, "only the codex model survives");
+        assert_eq!(models[0]["provider_uuid"], "c2");
+    }
+
+    /// When there are no clinepass conns, `strip_clinepass` returns false
+    /// and the JSON is unchanged (no model sweep runs).
+    #[test]
+    fn no_clinepass_no_strip() {
+        let json = serde_json::json!({
+            "oauth_conns": [
+                {
+                    "uuid": "c1",
+                    "provider": "codex",
+                    "access_token": "good"
+                }
+            ],
+            "models": [
+                {
+                    "uuid": "m1",
+                    "provider_uuid": "c1"
+                }
+            ]
+        });
+
+        let mut val = serde_json::to_value(&json).unwrap();
+        let stripped = AppConfig::strip_clinepass(&mut val);
+        assert!(!stripped, "no clinepass → no strip");
+        assert_eq!(val["oauth_conns"].as_array().unwrap().len(), 1);
+        assert_eq!(val["models"].as_array().unwrap().len(), 1);
+    }
+
+    /// A JSON document with no `oauth_conns` key at all is a no-op.
+    #[test]
+    fn no_oauth_conns_key() {
+        let json = serde_json::json!({
+            "palette": "tokyo-night",
+            "models": []
+        });
+        let mut val = serde_json::to_value(&json).unwrap();
+        let stripped = AppConfig::strip_clinepass(&mut val);
+        assert!(!stripped);
     }
 }
 

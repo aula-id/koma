@@ -19,6 +19,7 @@ pub fn api_type_token(t: ApiType) -> &'static str {
         ApiType::AnthropicCompatible => "anthropic",
         ApiType::Codex => "codex",
         ApiType::KomaFree => "koma_free",
+        ApiType::CommandCode => "command_code",
     }
 }
 

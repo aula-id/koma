@@ -68,10 +68,10 @@ impl SettingsState {
         }
     }
 
-    /// Move the picker cursor down (clamps at the last option, index 5).
+    /// Move the picker cursor down (clamps at the last option, index 7).
     pub fn oauth_pick_down(&mut self) {
         if let OAuthFlowState::Pick(c) = &mut self.oauth_flow {
-            *c = (*c + 1).min(5);
+            *c = (*c + 1).min(7);
         }
     }
 
@@ -79,14 +79,14 @@ impl SettingsState {
 
     /// Append `c` to the paste-token draft (no-op off `CodexPaste`).
     pub fn oauth_paste_push_char(&mut self, c: char) {
-        if let OAuthFlowState::CodexPaste { input } = &mut self.oauth_flow {
+        if let OAuthFlowState::CodexPaste { input, .. } = &mut self.oauth_flow {
             input.push(c);
         }
     }
 
     /// Delete the last character of the paste-token draft (no-op off `CodexPaste`).
     pub fn oauth_paste_backspace(&mut self) {
-        if let OAuthFlowState::CodexPaste { input } = &mut self.oauth_flow {
+        if let OAuthFlowState::CodexPaste { input, .. } = &mut self.oauth_flow {
             input.pop();
         }
     }

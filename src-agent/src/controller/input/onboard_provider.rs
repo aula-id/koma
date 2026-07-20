@@ -69,25 +69,43 @@ fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
                 2 => Action::OAuthStart(OAuthProvider::KomaRun),
                 3 => Action::OAuthStart(OAuthProvider::Xai),
                 4 => Action::OAuthStart(OAuthProvider::ClaudeAI),
-                // Any other row (5) switches to the paste-token screen (no task).
+                5 => Action::OAuthStart(OAuthProvider::CommandCode),
+                6 => {
+                    s.oauth_flow = OAuthFlowState::CodexPaste {
+                        input: String::new(),
+                        provider: OAuthProvider::Codex,
+                    };
+                    Action::None
+                }
+                7 => {
+                    s.oauth_flow = OAuthFlowState::CodexPaste {
+                        input: String::new(),
+                        provider: OAuthProvider::CommandCode,
+                    };
+                    Action::None
+                }
+                // Fallback: switch to the paste-token screen (no task).
                 _ => {
-                    s.oauth_flow = OAuthFlowState::CodexPaste { input: String::new() };
+                    s.oauth_flow = OAuthFlowState::CodexPaste {
+                        input: String::new(),
+                        provider: OAuthProvider::Codex,
+                    };
                     Action::None
                 }
             },
             _ => Action::None,
         },
-        OAuthFlowState::CodexPaste { input } => match key.code {
+        OAuthFlowState::CodexPaste { input, provider } => match key.code {
             // Discard the draft, back to the provider picker (on the paste-token row).
             KeyCode::Esc => {
-                s.oauth_flow = OAuthFlowState::Pick(3);
+                s.oauth_flow = OAuthFlowState::Pick(7);
                 Action::None
             }
             KeyCode::Enter => {
                 if input.trim().is_empty() {
                     Action::None
                 } else {
-                    Action::OAuthPaste(input)
+                    Action::OAuthPaste { provider, token: input }
                 }
             }
             KeyCode::Backspace => {
