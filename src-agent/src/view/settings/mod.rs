@@ -1,23 +1,28 @@
-//! View – in-app settings dashboard (Settings mode).
+//! View – in-app settings overlay (Settings mode).
 //!
-//! PAGE-BASED layout (v2): a central menu with five numbered choices leads to
-//! independent full-screen pages. Provider and model create/edit screens are full
-//! pages rather than cramped modals. A breadcrumb header shows the current route;
-//! Esc always goes back one level. Only transient pickers (FS directory, role
-//! checkbox, OAuth flow states) render as overlays.
+//! Renders as a centered overlay popup on top of the chat view. The outer
+//! `render_overlay()` function computes a 90%x90% bordered popup and delegates
+//! content drawing to the inner `draw()` function. Page-based layout: a central
+//! menu with numbered choices leads to independent pages. Provider and model
+//! create/edit screens fill the popup body. A breadcrumb header shows the current
+//! route; Esc always goes back one level. Only transient pickers (FS directory,
+//! role checkbox, OAuth flow states) render as sub-overlays within the popup.
 //!
 //! Border convention (strict, matches project rules):
 //! - Header: `Borders::BOTTOM` only, with breadcrumb text.
 //! - Footer: inverse full-width hint bar.
 //! - No sidebar / dual-pane — every page fills the body area.
 //!
-//! Layout:
+//! Layout (inside popup):
 //! ```text
-//!  settings > Appearance
-//! ─────────────────────────────────────────────────────────
-//!                                                          (body: page-specific)
-//!
-//!  ↑↓ palette · enter apply · esc back
+//! ┌─ settings ──────────────────────────────────────────────┐
+//! │  settings > Appearance                                   │
+//! │──────────────────────────────────────────────────────────│
+//! │                                                          │
+//! │  (body: page-specific)                                   │
+//! │                                                          │
+//! │  ↑↓ palette · enter apply · esc back                     │
+//! └──────────────────────────────────────────────────────────┘
 //! ```
 
 mod utils;
@@ -39,7 +44,35 @@ use crate::model::app_config::ThemeMode;
 use crate::view::theme::Palette;
 use pickers::draw_role_picker;
 
-/// Render the settings dashboard for `st` using the given colour `palette`.
+/// Render the settings popup as a centered overlay on top of the chat view.
+/// Computes a 90%x90% bordered popup centered in the frame, clears its
+/// background, and delegates to [`draw`] for the content.
+pub fn render_overlay(
+    frame: &mut Frame,
+    rest: &AppStateRest,
+    st: &SettingsState,
+    models_cache: &[crate::dto::openrouter::ModelInfo],
+    cache_endpoint: Option<&str>,
+    palette: &Palette,
+) {
+    let full = frame.area();
+    let w = (full.width as f64 * 0.90) as u16;
+    let h = (full.height as f64 * 0.90) as u16;
+    let x = full.x + (full.width.saturating_sub(w)) / 2;
+    let y = full.y + (full.height.saturating_sub(h)) / 2;
+    let popup = Rect { x, y, width: w, height: h };
+
+    let block = Block::bordered()
+        .border_style(Style::default().fg(palette.dim))
+        .title(Span::styled(" settings ", Style::default().fg(palette.dim)));
+    let inner = block.inner(popup);
+    crate::view::clear_and_fill(frame, popup, palette.bg);
+    frame.render_widget(block, popup);
+
+    draw(frame, rest, st, models_cache, cache_endpoint, palette, inner);
+}
+
+/// Render the settings content inside the given `area` rect.
 pub fn draw(
     frame: &mut Frame,
     rest: &AppStateRest,
@@ -47,6 +80,7 @@ pub fn draw(
     models_cache: &[crate::dto::openrouter::ModelInfo],
     cache_endpoint: Option<&str>,
     palette: &Palette,
+    area: Rect,
 ) {
     let dark = st.theme == ThemeMode::Dark;
 
@@ -58,7 +92,7 @@ pub fn draw(
             Constraint::Min(0),    // body (page content)
             Constraint::Length(1), // footer key hints
         ])
-        .split(frame.area());
+        .split(area);
 
     // --- Breadcrumb header ---
     let breadcrumb = breadcrumb_text(st.page);
@@ -137,7 +171,7 @@ pub fn draw(
 
                 // Role checkbox picker overlay: drawn over the model form.
                 if let Some(picker) = modal.role_picker.as_ref() {
-                    draw_role_picker(frame, picker, palette, frame.area());
+                    draw_role_picker(frame, picker, palette, area);
                 }
             }
         }

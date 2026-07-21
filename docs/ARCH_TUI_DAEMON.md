@@ -230,7 +230,7 @@ View dispatch is mode-based:
 ```
 AppState.mode →
   Chat        → chat::draw (messages + input bar)
-  Settings    → settings::draw (in-app settings dashboard)
+  Settings    → settings::render_overlay (centered settings popup on chat)
   Agents      → agents::draw (sub-agent definitions)
   Mcp         → mcp::draw (MCP server config)
   KeyInput    → key_input::draw (credentials form)
