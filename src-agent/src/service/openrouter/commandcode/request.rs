@@ -19,7 +19,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::dto::chat::{ChatMessage, Role};
-use crate::dto::openrouter::ToolDef;
+use crate::dto::openrouter::{ImageWireCtx, ToolDef};
+use crate::dto::openrouter::request::data_url_for;
 
 /// Top-level `POST /alpha/generate` body.
 #[derive(Debug, Serialize)]
@@ -130,11 +131,11 @@ pub(super) fn extract_system(messages: &[ChatMessage]) -> String {
 /// Map koma messages into the CC wire format (JSON values).
 ///
 /// - System messages are EXCLUDED from the messages array (they go to `params.system`).
-/// - User → `{role: "user", content: string}`
+/// - User → `{role: "user", content: string}` or `{role: "user", content: [text, image_url, ...]}` when attachments present.
 /// - Assistant with text + tool calls → `{role: "assistant", content: [text, tool-call, ...]}`
 /// - Tool result → `{role: "tool", content: [tool-result]}`
 /// - Orphan tool calls (no matching tool result) are dropped.
-pub(super) fn build_messages(messages: &[ChatMessage]) -> Vec<Value> {
+pub(super) fn build_messages(messages: &[ChatMessage], image_ctx: Option<&ImageWireCtx>) -> Vec<Value> {
     let paired = complete_tool_call_ids(messages);
     let mut out = Vec::new();
 
@@ -143,7 +144,41 @@ pub(super) fn build_messages(messages: &[ChatMessage]) -> Vec<Value> {
             Role::System => {} // extracted to params.system
             Role::User => {
                 let text = strip_marks(&m.content);
-                if !text.trim().is_empty() {
+                if text.trim().is_empty() {
+                    continue;
+                }
+                // When attachments are present and the model can read images,
+                // emit content as an array of parts (text + image_url blocks).
+                let capable = image_ctx.map(|c| c.model_takes_images).unwrap_or(false);
+                if capable && !m.attachments.is_empty() {
+                    if let Some(ctx) = image_ctx {
+                        let mut content_parts: Vec<Value> = vec![json!({
+                            "type": "text",
+                            "text": text,
+                        })];
+                        for att in &m.attachments {
+                            if let Some(url) = data_url_for(&ctx.session_dir, att) {
+                                // Extract mime from the data URL itself —
+                                // data_url_for re-sniffs and may downscale
+                                // (PNG→JPEG), so att.mime could be stale.
+                                let mime = url
+                                    .strip_prefix("data:")
+                                    .and_then(|s| s.split_once(';'))
+                                    .map(|(m, _)| m.to_string())
+                                    .unwrap_or_else(|| att.mime.clone());
+                                content_parts.push(json!({
+                                    "type": "image",
+                                    "image": url,
+                                    "mediaType": mime,
+                                }));
+                            }
+                        }
+                        out.push(json!({
+                            "role": "user",
+                            "content": content_parts,
+                        }));
+                    }
+                } else {
                     out.push(json!({
                         "role": "user",
                         "content": text,
