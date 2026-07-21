@@ -30,7 +30,7 @@ pub(super) fn role_str(role: Role) -> &'static str {
 
 /// Open the session's SQLite archive and run migrations. Centralises the path
 /// join so every entry point hits the same file + schema.
-pub(super) fn open(session_dir: &Path) -> Result<Connection> {
+pub fn open(session_dir: &Path) -> Result<Connection> {
     let conn = Connection::open(session_dir.join("messages.sqlite"))?;
     ensure_schema(&conn)?;
     Ok(conn)
