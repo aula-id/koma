@@ -1,29 +1,16 @@
-//! View – in-app settings overlay (Settings mode).
+//! View – in-app settings (Settings mode).
 //!
-//! Renders as a centered overlay popup on top of the chat view. The outer
-//! `render_overlay()` function computes a 90%x90% bordered popup and delegates
-//! content drawing to the inner `draw()` function. Page-based layout: a central
-//! menu with numbered choices leads to independent pages. Provider and model
-//! create/edit screens fill the popup body. A breadcrumb header shows the current
-//! route; Esc always goes back one level. Only transient pickers (FS directory,
-//! role checkbox, OAuth flow states) render as sub-overlays within the popup.
+//! The menu page renders as a compact overlay anchored above the input bar,
+//! following the same pattern as bash/todo/commands overlays. Sub-pages
+//! (Appearance, Providers, Models, etc.) render fullscreen (no chat underneath).
+//! A breadcrumb header shows the current route; Esc always goes back one level.
+//! Only transient pickers (FS directory, role checkbox, OAuth flow states) render
+//! as sub-overlays within the current view.
 //!
 //! Border convention (strict, matches project rules):
 //! - Header: `Borders::BOTTOM` only, with breadcrumb text.
 //! - Footer: inverse full-width hint bar.
 //! - No sidebar / dual-pane — every page fills the body area.
-//!
-//! Layout (inside popup):
-//! ```text
-//! ┌─ settings ──────────────────────────────────────────────┐
-//! │  settings > Appearance                                   │
-//! │──────────────────────────────────────────────────────────│
-//! │                                                          │
-//! │  (body: page-specific)                                   │
-//! │                                                          │
-//! │  ↑↓ palette · enter apply · esc back                     │
-//! └──────────────────────────────────────────────────────────┘
-//! ```
 
 mod utils;
 pub(crate) mod oauth;
@@ -44,23 +31,22 @@ use crate::model::app_config::ThemeMode;
 use crate::view::theme::Palette;
 use pickers::draw_role_picker;
 
-/// Render the settings popup as a centered overlay on top of the chat view.
-/// Computes a 90%x90% bordered popup centered in the frame, clears its
-/// background, and delegates to [`draw`] for the content.
-pub fn render_overlay(
+/// Render the settings menu as a compact overlay anchored above the input bar,
+/// following the same pattern as bash/todo/commands overlays.
+pub fn render_menu_overlay(
     frame: &mut Frame,
     rest: &AppStateRest,
     st: &SettingsState,
     models_cache: &[crate::dto::openrouter::ModelInfo],
     cache_endpoint: Option<&str>,
     palette: &Palette,
+    input_chunk: Rect,
+    transcript_chunk: Rect,
 ) {
-    let full = frame.area();
-    let w = (full.width as f64 * 0.90) as u16;
-    let h = (full.height as f64 * 0.90) as u16;
-    let x = full.x + (full.width.saturating_sub(w)) / 2;
-    let y = full.y + (full.height.saturating_sub(h)) / 2;
-    let popup = Rect { x, y, width: w, height: h };
+    let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
+    let h = avail.max(3);
+    let y = input_chunk.y.saturating_sub(h);
+    let popup = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))

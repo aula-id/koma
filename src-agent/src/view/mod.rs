@@ -151,9 +151,15 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         Mode::SessionPicker(p) => session_picker::draw(frame, &state.rest, p, &palette),
         Mode::SessionHub(h) => session_hub::draw(frame, &state.rest, h, &palette),
         Mode::Settings(s) => {
-            let resolved_model = resolved_main_model(&state.rest);
-            chat::draw(frame, &state.rest, &resolved_model, &palette);
-            settings::render_overlay(frame, &state.rest, s, cache, cache_endpoint, &palette);
+            if s.page == crate::app::mode::settings::SettingsPage::Menu {
+                let resolved_model = resolved_main_model(&state.rest);
+                chat::draw(frame, &state.rest, &resolved_model, &palette);
+                let chunks = chat::layout_chunks(&state.rest, frame.area());
+                // chunks[4] = input box, chunks[1] = transcript (6-chunk layout)
+                settings::render_menu_overlay(frame, &state.rest, s, cache, cache_endpoint, &palette, chunks[4], chunks[1]);
+            } else {
+                settings::draw(frame, &state.rest, s, cache, cache_endpoint, &palette, frame.area());
+            }
         }
         Mode::Agents(a) => agents::draw(
             frame,
