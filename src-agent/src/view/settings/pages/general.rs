@@ -7,7 +7,6 @@ use ratatui::{
 };
 
 use crate::app::mode::{SettingField, SettingsState, GENERAL_FIELDS};
-use crate::model::app_config::ThemeMode;
 use crate::view::theme::{resolve_accent, Palette};
 
 use super::super::utils::truncate;
@@ -90,13 +89,6 @@ pub(crate) fn draw_general(
 
         // Value span(s).
         let value_spans: Vec<Span> = match f {
-            SettingField::Theme => {
-                let mode_str = match st.theme {
-                    ThemeMode::Dark  => "dark",
-                    ThemeMode::Light => "light",
-                };
-                vec![Span::styled(mode_str, Style::default().fg(palette.accent))]
-            }
             SettingField::Accent => {
                 let tint = resolve_accent(&st.accent, dark);
                 vec![Span::styled(st.accent.as_str(), Style::default().fg(tint))]
@@ -145,7 +137,6 @@ pub(crate) fn draw_general(
             _ => {
                 let raw: &str = match f {
                     SettingField::ApiKey   => st.api_key.as_str(),
-                    SettingField::Model    => st.model.as_str(),
                     SettingField::Provider => {
                         if st.provider.is_empty() {
                             ""

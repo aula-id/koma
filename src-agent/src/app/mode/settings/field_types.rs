@@ -4,13 +4,9 @@
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SettingField {
     ApiKey,
-    Model,
     Provider,
-    // deprecated: superseded by Palette
-    Theme,
-    // deprecated: superseded by Palette
     Accent,
-    /// Palette picker (Stage 4): arrow-cycles a named colour palette from
+    /// Palette picker: arrow-cycles a named colour palette from
     /// [`crate::view::theme::PALETTES`]; replaces the Theme + Accent rows.
     Palette,
     Name,
@@ -51,9 +47,7 @@ impl SettingField {
     pub fn label(self) -> &'static str {
         match self {
             SettingField::ApiKey            => "API key",
-            SettingField::Model             => "Model",
             SettingField::Provider          => "Provider",
-            SettingField::Theme             => "Theme",
             SettingField::Accent            => "Accent",
             SettingField::Palette           => "Theme",
             SettingField::Name              => "Session name",
