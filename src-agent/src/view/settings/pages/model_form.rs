@@ -156,7 +156,7 @@ pub(crate) fn draw_model_form(
                             };
                             let text = truncate(&text, row_w);
                             lines.push(Line::from(Span::styled(
-                                text,
+                                format!("{text:<row_w$}"),
                                 Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
                             )));
                         } else {
@@ -288,7 +288,10 @@ pub(crate) fn draw_model_form(
                             } else {
                                 Style::default().fg(palette.fg)
                             };
-                            lines.push(Line::from(Span::styled(text, style)));
+                            lines.push(Line::from(Span::styled(
+                                format!("{text:<row_w$}"),
+                                style,
+                            )));
                         }
                         if end < option_count {
                             lines.push(Line::from(Span::styled(

@@ -169,10 +169,19 @@ pub(crate) fn draw_models_page(
             Style::default().fg(palette.fg)
         };
 
-        let name_line = Line::from(vec![
-            Span::styled(glyph,     Style::default().fg(palette.dim)),
-            Span::styled(name_text, row_style),
-        ]);
+        let name_line = if selected {
+            // Single span padded to full width — sel_bg covers entire cell.
+            let full = format!("{glyph}{name_text:<name_text_w$}");
+            Line::from(Span::styled(
+                format!("{full:<w$}", w = col_name_w as usize),
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
+            ))
+        } else {
+            Line::from(vec![
+                Span::styled(glyph,     Style::default().fg(palette.dim)),
+                Span::styled(name_text, Style::default().fg(palette.fg)),
+            ])
+        };
 
         let role_str = if m.roles.is_empty() {
             "\u{2014}".to_string()
