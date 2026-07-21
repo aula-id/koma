@@ -7,11 +7,6 @@ use super::SettingsState;
 impl SettingsState {
     // --- API Providers screen helpers ---
 
-    /// `true` when the selected category is "API Providers".
-    pub fn is_providers_category(&self) -> bool {
-        super::super::SETTING_CATEGORIES[self.cat].name == "API Providers"
-    }
-
     /// Move selection up in the providers list; clears the delete-armed flag.
     pub fn prov_up(&mut self) {
         self.prov_sel = self.prov_sel.saturating_sub(1);

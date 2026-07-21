@@ -21,9 +21,11 @@ pub struct PathPickerSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SettingsSnapshot {
-    pub cat: usize,
+    /// Wire token for [`SettingsPage`]: "menu" / "appearance" / "general" /
+    /// "providers" / "provider_form" / "oauth" / "models" / "model_form".
+    #[serde(default)]
+    pub page: String,
     pub field: usize,
-    pub in_detail: bool,
     pub editing: bool,
     pub api_key: String,
     pub model: String,
@@ -84,6 +86,10 @@ pub struct SettingsSnapshot {
     /// `#[serde(default)]` keeps an older peer's snapshot decoding cleanly (→ 0).
     #[serde(default)]
     pub palette_sel: usize,
+    /// Cursor index on the menu page (0-4).
+    /// `#[serde(default)]` for older-client compatibility.
+    #[serde(default)]
+    pub menu_sel: usize,
 }
 
 // -- mode payload projections (stage 3: secondary full-screen views) -----------

@@ -10,10 +10,8 @@ use crate::view::theme::Palette;
 use super::super::utils::truncate;
 
 /// Render the add-provider modal overlay with a dimmed backdrop.
-///
-/// Mirrors the `draw_tool_picker` approach from `view/agents.rs`:
-/// walk `frame.buffer_mut()` to dim every cell outside the modal rect,
-/// then `Clear` + `Block::bordered()` + inner content.
+/// (Kept for reference; provider form is now a full page in pages/provider_form.rs.)
+#[allow(dead_code)]
 pub(in crate::view::settings) fn draw_provider_modal(
     frame: &mut Frame,
     modal: &ProviderModal,

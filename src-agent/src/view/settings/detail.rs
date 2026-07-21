@@ -39,7 +39,7 @@ pub(super) fn draw_field_list(
 ) {
     let mut detail_lines: Vec<Line> = Vec::new();
     for (i, &f) in cat_fields.iter().enumerate() {
-        let is_selected = st.in_detail && i == st.field;
+        let is_selected = i == st.field;
 
         // Marker: only shown when detail pane has focus.
         let marker = Span::styled(

@@ -1,7 +1,8 @@
 use super::tokens::{
     agent_field_token, agent_scope_token, agent_submode_token, api_type_token,
     ext_submode_token, help_kind_token, mcp_field_token, mcp_submode_token, mcp_transport_token,
-    role_token, store_submode_token, theme_token, usage_metric_token, usage_view_token,
+    role_token, settings_page_token, store_submode_token, theme_token, usage_metric_token,
+    usage_view_token,
 };
 
 use crate::app::mode::agents::{AgentsState, ModelPickerState, ToolPickerState};
@@ -207,9 +208,8 @@ pub fn history_entry_snapshot(e: &HistoryEntry) -> HistoryEntrySnapshot {
 
 pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
     SettingsSnapshot {
-        cat: st.cat,
+        page: settings_page_token(st.page).to_string(),
         field: st.field,
-        in_detail: st.in_detail,
         editing: st.editing,
         api_key: st.api_key.clone(),
         model: st.model.clone(),
@@ -261,6 +261,7 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
             crate::app::mode::settings::ModelFilterMode::Global => "global",
         }.to_string(),
         palette_sel: st.palette_sel,
+        menu_sel: st.menu_sel,
     }
 }
 
