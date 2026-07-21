@@ -239,20 +239,37 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
 
 /// Full-text search the session's message archive via the FTS5 index.
 ///
-/// `query` is the raw FTS5 expression passed straight to `MATCH` (multi-word,
-/// quoted phrases, etc. all work). Results are ranked by BM25 and capped at
-/// `limit`. Each result includes a snippet with match context from FTS5's
-/// `snippet()`. Best-effort: returns an empty vec on error or empty/whitespace
-/// query.
-pub fn search_messages(session_dir: &Path, query: &str, limit: i64) -> Vec<MessageMatch> {
-    let q = query.trim();
-    if q.is_empty() {
+/// `query` is a natural-language search string. Multi-word input is transformed
+/// into OR'd prefix terms so the model can search conversationally ("hello test
+/// thing" → any message matching "hello*" OR "test*" OR "thing*"). Each term has
+/// FTS5 syntax chars stripped and a `*` suffix appended for prefix matching.
+/// Results are ranked by BM25 and capped at `limit`. Each result includes a
+/// snippet with match context from FTS5's `snippet()`. Best-effort: returns an
+/// empty vec on error or empty/whitespace query.
+pub fn search_messages(session_dir: &Path, raw_query: &str, limit: i64) -> Vec<MessageMatch> {
+    let terms: Vec<String> = raw_query
+        .split_whitespace()
+        .map(|t| {
+            // Strip FTS5 syntax chars so a term like "hello*" or "(test"
+            // doesn't break the query. Keep alphanumerics + basic punctuation
+            // that carries meaning in natural-language search.
+            t.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("{}*", t))
+        .collect();
+    if terms.is_empty() {
         return Vec::new();
     }
+    let query = terms.join(" OR ");
+
     fn inner(session_dir: &Path, query: &str, limit: i64) -> anyhow::Result<Vec<MessageMatch>> {
         let conn = open(session_dir)?;
+        // Column 0 = content, column 1 = role. We want snippets from content.
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.role, snippet(messages_fts, 1, '', '', '…', 40) AS snip, m.created_at
+            "SELECT m.id, m.role, snippet(messages_fts, 0, '', '', '…', 64) AS snip, m.created_at
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
              WHERE messages_fts MATCH ?
@@ -273,7 +290,7 @@ pub fn search_messages(session_dir: &Path, query: &str, limit: i64) -> Vec<Messa
         }
         Ok(out)
     }
-    inner(session_dir, q, limit).unwrap_or_default()
+    inner(session_dir, &query, limit).unwrap_or_default()
 }
 
 #[cfg(test)]
