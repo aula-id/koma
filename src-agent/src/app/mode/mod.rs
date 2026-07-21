@@ -62,7 +62,7 @@ pub use quit_confirm::QuitConfirmState;
 pub use rewind::{RewindEntry, RewindState};
 pub use settings::{
     filter_models, SettingField, SettingsState, PICKER_MAX,
-    SETTING_CATEGORIES,
+    GENERAL_FIELDS,
 };
 
 // ── Usage dashboard nav state ────────────────────────────────────────────────

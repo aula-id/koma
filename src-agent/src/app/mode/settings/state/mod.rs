@@ -299,9 +299,9 @@ impl SettingsState {
     }
 
     /// Return the [`SettingField`] currently highlighted in the General page's
-    /// field list (the Session category, index 1 in SETTING_CATEGORIES).
+    /// field list.
     pub fn current_field(&self) -> SettingField {
-        super::SETTING_CATEGORIES[1].fields[self.field]
+        super::GENERAL_FIELDS[self.field]
     }
 
     /// Move the field cursor up (General page).
@@ -311,18 +311,10 @@ impl SettingsState {
 
     /// Move the field cursor down (General page).
     pub fn down(&mut self) {
-        let max = super::SETTING_CATEGORIES[1].fields.len().saturating_sub(1);
+        let max = super::GENERAL_FIELDS.len().saturating_sub(1);
         if self.field < max {
             self.field += 1;
         }
-    }
-
-    /// Exit editing/list/picker modes (called on Esc from a sub-state).
-    pub fn focus_sidebar(&mut self) {
-        self.editing = false;
-        self.list_editing = false;
-        self.list_sel = 0;
-        self.picker = None;
     }
 
     /// Act on Enter for the current field (General page).

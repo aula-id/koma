@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Padding, Paragraph},
     Frame,
 };
 use crate::app::mode::settings::SettingsPage;

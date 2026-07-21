@@ -17,7 +17,7 @@ mod provider_types;
 pub use picker::{PathPicker, PickerMode, PICKER_MAX};
 pub use state::SettingsState;
 
-pub use field_types::{SettingField, SETTING_CATEGORIES};
+pub use field_types::{SettingField, GENERAL_FIELDS};
 pub use model_types::{filter_models, ModelDraft, ModelField, ModelFilterMode, ModelModal, ModelRowSel, MODEL_CTRL_SLOTS, RolePickerState};
 pub use oauth_types::OAuthFlowState;
 pub use provider_types::{new_uuid, ModelRole, OAuthDraft, ProviderDraft, ProviderModal};
@@ -44,35 +44,7 @@ pub enum SettingsPage {
 }
 
 impl SettingsPage {
-    /// Human-readable label used in the menu.
-    pub fn menu_label(self) -> (&'static str, Option<u8>) {
-        match self {
-            Self::Menu       => ("Menu",       None),
-            Self::Appearance => ("Appearance", Some(1)),
-            Self::General    => ("General",    Some(2)),
-            Self::Providers  => ("Providers",  Some(3)),
-            Self::OAuth      => ("OAuth",      Some(4)),
-            Self::Models     => ("Models",     Some(5)),
-            Self::ProviderForm => ("Providers", None),
-            Self::ModelForm    => ("Models",    None),
-        }
-    }
-
-    /// Breadcrumb segment for the header.
-    pub fn breadcrumb(self) -> &'static str {
-        match self {
-            Self::Menu       => "Menu",
-            Self::Appearance => "Appearance",
-            Self::General    => "General",
-            Self::Providers  => "Providers",
-            Self::ProviderForm => "Add",
-            Self::OAuth      => "OAuth",
-            Self::Models     => "Models",
-            Self::ModelForm  => "Add",
-        }
-    }
-
-    /// The five selectable pages (Menu shortcuts 1-5).
+    /// The five selectable pages in menu order (shortcuts 1-5).
     pub const MENU_ORDER: &[SettingsPage] = &[
         SettingsPage::Appearance,
         SettingsPage::General,
@@ -80,18 +52,4 @@ impl SettingsPage {
         SettingsPage::OAuth,
         SettingsPage::Models,
     ];
-
-    /// The parent page for backward navigation.
-    pub fn parent(self) -> SettingsPage {
-        match self {
-            Self::Menu         => Self::Menu,
-            Self::Appearance   => Self::Menu,
-            Self::General      => Self::Menu,
-            Self::Providers    => Self::Menu,
-            Self::ProviderForm => Self::Providers,
-            Self::OAuth        => Self::Menu,
-            Self::Models       => Self::Menu,
-            Self::ModelForm    => Self::Models,
-        }
-    }
 }

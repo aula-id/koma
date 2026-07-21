@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::mode::{SettingField, SettingsState, SETTING_CATEGORIES};
+use crate::app::mode::{SettingField, SettingsState, GENERAL_FIELDS};
 use crate::model::app_config::ThemeMode;
 use crate::view::theme::{resolve_accent, Palette};
 
@@ -23,7 +23,7 @@ pub(crate) fn draw_general(
     dark: bool,
     area: Rect,
 ) {
-    let cat_fields = SETTING_CATEGORIES[1].fields;
+    let cat_fields = GENERAL_FIELDS;
     let detail_w = area.width as usize;
     let value_w = detail_w.saturating_sub(16);
 
