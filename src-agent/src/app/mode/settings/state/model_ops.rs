@@ -7,11 +7,6 @@ use super::SettingsState;
 impl SettingsState {
     // --- Models Select screen helpers ---
 
-    /// `true` when the selected category is "Models Select".
-    pub fn is_models_category(&self) -> bool {
-        super::super::SETTING_CATEGORIES[self.cat].name == "Models Select"
-    }
-
     /// Indices into `self.models` that pass the current filter, in order.
     pub fn visible_model_indices(&self) -> Vec<usize> {
         self.models

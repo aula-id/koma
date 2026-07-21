@@ -6,12 +6,7 @@ use super::super::OAuthFlowState;
 use super::SettingsState;
 
 impl SettingsState {
-    // --- OAuth screen: category predicate + list nav ---
-
-    /// `true` when the selected category is "OAuth".
-    pub fn is_oauth_category(&self) -> bool {
-        super::super::SETTING_CATEGORIES[self.cat].name == "OAuth"
-    }
+    // --- OAuth screen: list nav ---
 
     /// Move selection up in the connections list; clears the delete-armed flag.
     pub fn oauth_up(&mut self) {

@@ -1,8 +1,8 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 use crate::app::mode::SettingsState;
@@ -13,21 +13,15 @@ use crate::dto::openrouter::ModelInfo;
 use crate::view::theme::Palette;
 use super::super::utils::{price_per_million, truncate};
 
-/// Render the add/edit-model modal overlay with a dimmed backdrop.
-///
-/// Mirrors [`draw_provider_modal`] (backdrop dim + `Clear` + bordered accent
-/// box), but is taller because the Model field hosts a live omnisearch results
-/// list whenever the chosen provider has an endpoint to search.
+/// Render the add/edit-model form as a full page.
 ///
 /// - `omni` = `st.mm_provider_omnisearchable()` — the Model field is the live
 ///   omnisearch (any provider with a non-empty endpoint), not a plain text box.
 /// - `is_or` = `st.mm_provider_is_openrouter()` — gates the Route upstream-pin
 ///   section (OpenRouter-only).
 /// - `cache_matches` — whether `cache` was fetched for THIS provider's endpoint.
-///   When false the results area shows `searching models…` (still fetching);
-///   when true but the filter is empty it shows `no models — type an id`.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::view::settings) fn draw_model_modal(
+pub(crate) fn draw_model_form(
     frame: &mut Frame,
     rest: &AppStateRest,
     st: &SettingsState,
@@ -39,53 +33,7 @@ pub(in crate::view::settings) fn draw_model_modal(
     palette: &Palette,
     area: Rect,
 ) {
-    // Taller than the provider modal: it hosts a results list.
-    // OpenRouter mode adds a separate readout row + search field + rule (2 extra).
-    // The Role row renders unconditionally (Add and Edit alike), so the base
-    // already accounts for it; OpenRouter + model-selected adds a Route label row
-    // above the (now selectable) options list. Sized for the taller layout so the
-    // 8-row options list never clips.
-    //
-    // When the search query is EMPTY and a model is selected, the options list
-    // renders instead of the results dropdown (they're mutually exclusive). Sized
-    // for the taller of the two: a Route label + options header + up to 8 rows + a
-    // "+N more" line, which is why this base is generous enough that 8 rows never
-    // clip even with the extra Route label row.
-    const MODAL_W: u16 = 60;
-    const MODAL_H_BASE: u16 = 23;
-    let modal_h = MODAL_H_BASE + 1;
-    let w = MODAL_W.min(area.width.saturating_sub(2));
-    let h = modal_h.min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let popup = Rect { x, y, width: w, height: h };
-
-    // Dim everything outside the modal (preserve the bg-reset fix).
-    {
-        let buf = frame.buffer_mut();
-        for cy in area.top()..area.bottom() {
-            for cx in area.left()..area.right() {
-                if cx >= popup.x && cx < popup.right() && cy >= popup.y && cy < popup.bottom() {
-                    continue;
-                }
-                buf[(cx, cy)].set_fg(palette.dim).set_bg(Color::Reset);
-            }
-        }
-    }
-
-    let title = if modal.editing_idx.is_some() {
-        " Edit model "
-    } else {
-        " Add model "
-    };
-    let modal_block = Block::bordered()
-        .border_style(Style::default().fg(palette.accent))
-        .title(Span::styled(title, Style::default().fg(palette.accent)));
-    let inner = modal_block.inner(popup);
-
-    crate::view::clear_and_fill(frame, popup, palette.bg);
-    frame.render_widget(modal_block, popup);
-
+    let inner = area;
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -94,9 +42,6 @@ pub(in crate::view::settings) fn draw_model_modal(
     let val_w   = (inner.width as usize).saturating_sub(label_w + 1).max(4);
     let mut lines: Vec<Line> = Vec::new();
 
-    // Resolve the focused field through the computed field list (no hardcoded
-    // indices): `focused(f)` is true when the modal's `field` cursor points at
-    // `f` in the current layout. Name/Provider/Model are always the first three.
     let fields = st.model_modal_fields();
     let focused = |f: ModelField| fields.get(modal.field).copied() == Some(f);
 
@@ -126,15 +71,6 @@ pub(in crate::view::settings) fn draw_model_modal(
     }
 
     // Row(s): Model.
-    // Omnisearch layout (any provider with an endpoint):
-    //   1. Read-only selected model readout  (label "Model" + model_id / dim placeholder, NO cursor)
-    //   2. Search input line                 (indented to value column; query text + cursor when focused)
-    //   3. Gray ─ bottom rule                (dim, spans value column width)
-    //   4. Results dropdown / state          (when query is non-empty: searching / results / no models)
-    //   5. Route label + selectable options  (OpenRouter only, when query is empty + a model is selected)
-    // Plain (blank-endpoint) layout:
-    //   1. Plain editable model id           (label "Model" + model_id text + cursor when focused)
-    //   2. Gray ─ bottom rule
     {
         let active = focused(ModelField::Model);
         let lc = if active { palette.accent } else { palette.dim };
@@ -181,11 +117,6 @@ pub(in crate::view::settings) fn draw_model_modal(
             }
 
             // --- 4. Results dropdown / fetch-state (only when query is non-empty) ---
-            // The catalogue is fetched on demand for this provider's endpoint.
-            // Until the cache holds THIS endpoint (`cache_matches`), show a dim
-            // `searching models…`. Once it does: the dropdown, or a dim
-            // `no models — type an id` when the (terminal) catalogue is empty / the
-            // query matches nothing (the raw-query fallback still lets Enter commit).
             if !modal.query.is_empty() {
                 const MAX_VIS: usize = 8;
                 let results = if cache_matches {
@@ -205,8 +136,6 @@ pub(in crate::view::settings) fn draw_model_modal(
                     )));
                 } else {
                     let sel = modal.result_sel.min(results.len().saturating_sub(1));
-                    // Scrolloff window (persisted offset on rest — ModelModal is
-                    // rebuilt per client frame).
                     let (start, end) = crate::view::scroll::scroll_window(
                         &rest.model_modal_results_offset,
                         sel,
@@ -227,7 +156,7 @@ pub(in crate::view::settings) fn draw_model_modal(
                             };
                             let text = truncate(&text, row_w);
                             lines.push(Line::from(Span::styled(
-                                text,
+                                format!("{text:<row_w$}"),
                                 Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
                             )));
                         } else {
@@ -251,19 +180,12 @@ pub(in crate::view::settings) fn draw_model_modal(
                 }
             }
 
-            // --- 5. Route field: label row + selectable options list (OpenRouter
-            //        only — the upstream-pin list is OpenRouter-specific). Shown when
-            //        the search query is empty so it never stacks under the results
-            //        dropdown (the two are mutually exclusive). The Route field only
-            //        exists once a model is selected; until then the same area shows
-            //        loading / hint states. ---
+            // --- 5. Route field: label row + selectable options list (OpenRouter only) ---
             if is_or && modal.query.is_empty() {
                 let row_w = inner.width as usize;
                 let route_active = focused(ModelField::Route);
 
                 if !modal.model_id.is_empty() {
-                    // Route label row: shows the committed choice (Auto / pinned
-                    // provider name). Accent when the Route field is focused.
                     let lc = if route_active { palette.accent } else { palette.dim };
                     let rl = Span::styled(
                         format!("{:<width$}", "Route", width = label_w),
@@ -292,13 +214,8 @@ pub(in crate::view::settings) fn draw_model_modal(
                             Style::default().fg(palette.dim),
                         )));
                     } else {
-                        // The Route option list: row 0 = Auto, rows 1..=N = each
-                        // endpoint. `option_count` and the option `sel`/`pinned`
-                        // indices line up with the input-layer route handling.
                         let option_count = 1 + eps.len();
                         let sel = modal.route_sel.min(option_count - 1);
-                        // Which option is the committed route? Auto (0) when
-                        // `route` is None, else the endpoint whose name matches.
                         let pinned: usize = match modal.route.as_deref() {
                             None => 0,
                             Some(name) => eps
@@ -314,10 +231,7 @@ pub(in crate::view::settings) fn draw_model_modal(
                                 .unwrap_or(0),
                         };
 
-                        // Render Auto + up to 8 endpoint rows, windowed to keep
-                        // `sel` visible while the Route field is focused.
                         const MAX_EP: usize = 8;
-                        // Build the full option label list first (index 0 = Auto).
                         let mut opt_labels: Vec<String> = Vec::with_capacity(option_count);
                         opt_labels.push("Auto (OpenRouter routes)".to_string());
                         for ep in eps.iter() {
@@ -341,14 +255,9 @@ pub(in crate::view::settings) fn draw_model_modal(
                                 .uptime_last_30m
                                 .map(|v| format!("{v:.0}%"))
                                 .unwrap_or_default();
-                            // name left-padded to ~14, then price, then uptime.
                             opt_labels.push(format!("{name:<14} {price}  {uptime}"));
                         }
 
-                        // Window of MAX_EP+1 rows (Auto always counts as a row).
-                        // Persisted offset on rest — ModelModal is rebuilt per
-                        // client frame. Keep the unfocused-pane pin: only the
-                        // focused Route field scrolls to its cursor.
                         const VIS: usize = MAX_EP + 1;
                         let (start, end) = if route_active {
                             crate::view::scroll::scroll_window(
@@ -367,24 +276,22 @@ pub(in crate::view::settings) fn draw_model_modal(
                             .take(end)
                             .skip(start)
                         {
-                            // Persistent marker on the committed route regardless
-                            // of focus, so the pin is always visible.
                             let marker = if i == pinned { "\u{2023} " } else { "  " };
                             let text = truncate(
                                 &format!("{marker}{label}"),
                                 row_w,
                             );
                             let style = if route_active && i == sel {
-                                // Focused highlight on the cursor row.
                                 Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
                             } else if i == pinned {
-                                // Committed route stands out in accent even when
-                                // focus is elsewhere.
                                 Style::default().fg(palette.accent)
                             } else {
                                 Style::default().fg(palette.fg)
                             };
-                            lines.push(Line::from(Span::styled(text, style)));
+                            lines.push(Line::from(Span::styled(
+                                format!("{text:<row_w$}"),
+                                style,
+                            )));
                         }
                         if end < option_count {
                             lines.push(Line::from(Span::styled(
@@ -394,14 +301,11 @@ pub(in crate::view::settings) fn draw_model_modal(
                         }
                     }
                 } else if !modal.model_id.is_empty() {
-                    // Model set but endpoints not loaded yet (e.g. a fetch failed
-                    // to even start): a neutral hint rather than a blank gap.
                     lines.push(Line::from(Span::styled(
                         "loading routes\u{2026}",
                         Style::default().fg(palette.dim),
                     )));
                 } else {
-                    // No model selected yet.
                     lines.push(Line::from(Span::styled(
                         "pick a model to see providers",
                         Style::default().fg(palette.dim),
@@ -415,7 +319,6 @@ pub(in crate::view::settings) fn draw_model_modal(
             let vc = if active { palette.fg } else { palette.dim };
             lines.push(Line::from(vec![label, Span::styled(val, Style::default().fg(vc))]));
 
-            // Gray bottom rule (consistent input affordance).
             let rule_w = val_w.max(1);
             let rule_str = "\u{2500}".repeat(rule_w);
             lines.push(Line::from(vec![
@@ -425,10 +328,7 @@ pub(in crate::view::settings) fn draw_model_modal(
         }
     }
 
-    // Row: Role readout (edit mode only). A single labelled summary line — the
-    // comma-joined assigned role labels, or "none". Enter on this field opens the
-    // Role checkbox picker overlay (the actual multi-select UI). Accent label +
-    // fg value when the Role field is focused; dim otherwise.
+    // Row: Role readout (edit mode only).
     let active = focused(ModelField::Role);
     let lc     = if active { palette.accent } else { palette.dim };
     let label  = Span::styled(
@@ -455,10 +355,6 @@ pub(in crate::view::settings) fn draw_model_modal(
     lines.push(Line::from(""));
 
     // Button row: `[ Save ]  [ Cancel ]` centered.
-    // The save scope (global / session-local) is determined by which add button
-    // opened the modal (`modal.session_only`) — no separate Save session button.
-    // Only the chip text carries the highlight bg; inter-chip spacing uses plain
-    // style so the background does not bleed across the modal width.
     let save_text   = "[ Save ]";
     let cancel_text = "[ Cancel ]";
     let gap         = "  ";

@@ -115,7 +115,7 @@ pub(super) struct PushSubAgent {
     /// preview renders, `SubAgent::transcript`), so the stream tab matches the TUI.
     /// `Some` ONLY for the VIEWED sub-agent; `None` for every other row (kept off the wire
     /// + out of this Snapshot's fingerprint). `Some([])` = viewed but no lines yet (a
-    /// restored agent, or one that just started).
+    ///   restored agent, or one that just started).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) transcript: Option<Vec<String>>,
     /// The live in-progress report tail for the CURRENT (not-yet-committed) turn

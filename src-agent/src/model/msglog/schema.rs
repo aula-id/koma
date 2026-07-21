@@ -50,9 +50,9 @@ pub(super) fn now_secs() -> i64 {
 /// columns for fresh DBs; the ALTERs cover existing DBs and intentionally
 /// ignore the "duplicate column" error they raise once the columns exist.
 ///
-/// Also creates the Phase-1 side tables (`blobs`, `summary`). All statements
-/// are `IF NOT EXISTS`, so running this against a DB that already has the
-/// `messages` table (or already has the side tables) is a no-op.
+/// Also creates the Phase-1 side tables (`blobs`, `summary`) and the FTS5
+/// full-text search index (`messages_fts`). All statements are `IF NOT EXISTS`,
+/// so running this against a DB that already has the tables is a no-op.
 fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -108,6 +108,10 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             kind        TEXT NOT NULL,
             content     BLOB,
             captured_at INTEGER NOT NULL
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            content, role, tokenize='unicode61'
         );",
     )?;
     // Migrate older DBs (created before the usage columns existed). Errors here
@@ -124,5 +128,22 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         "ALTER TABLE messages ADD COLUMN cost REAL NOT NULL DEFAULT 0",
         [],
     );
+    // Backfill FTS index for existing DBs that predate the virtual table.
+    // The count check is cheap and makes this a one-shot: once populated,
+    // new messages enter FTS via `append()` so this never runs again.
+    let fts_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages_fts",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if fts_count == 0 {
+        let _ = conn.execute(
+            "INSERT INTO messages_fts(rowid, content, role)
+             SELECT id, content, role FROM messages",
+            [],
+        );
+    }
     Ok(())
 }

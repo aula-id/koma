@@ -388,7 +388,7 @@ Five modes, exactly one active at a time:
 | `KeyInput(KeyInputForm)` | `mode/key_input.rs` | Credentials form (api key, model, provider) |
 | `SessionPicker(PickerState)` | `mode/picker.rs` | `--resume` session list with live search |
 | `Chat` | — | Normal conversation view (no extra inline state) |
-| `Settings(Box<SettingsState>)` | `mode/settings/` | In-app `/settings` dashboard (boxed: large struct) |
+| `Settings(Box<SettingsState>)` | `mode/settings/` | In-app `/settings` overlay on chat (boxed: large struct) |
 | `Effort(Box<EffortPickerState>)` | `mode/effort.rs` | `/effort` reasoning-effort picker overlay (boxed) |
 
 Key transitions:
@@ -499,7 +499,7 @@ multiple workdirs are configured) is documented in `src-misc/system-tools.txt`.
 | View | `src-agent/src/view/chat.rs` | Chat transcript + status line + input bar |
 | View | `src-agent/src/view/markdown.rs` | Markdown block renderer (code fences, inline code, headings) |
 | View | `src-agent/src/view/theme.rs` | Colour palette from `AppConfig.theme` / `accent` |
-| View | `src-agent/src/view/settings.rs` | `/settings` dashboard layout |
+| View | `src-agent/src/view/settings.rs` | `/settings` overlay layout |
 | View | `src-agent/src/view/effort.rs` | `/effort` picker overlay |
 | View | `src-agent/src/view/key_input.rs` | Credentials form layout |
 | View | `src-agent/src/view/session_picker.rs` | Session list layout |

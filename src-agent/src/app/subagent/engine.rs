@@ -277,16 +277,10 @@ pub async fn run_agent_loop(
         // structured viewer history), so a human watching the `$` panel sees the
         // steer. A closed channel (the sender dropped) simply drains nothing.
         let mut injected_any = false;
-        loop {
-            match inject_rx.try_recv() {
-                Ok(msg) => {
+        while let Ok(msg) = inject_rx.try_recv() {
                     convo.push_user(msg.clone());
                     emit(&tx, AgentEvent::Injected(msg));
                     injected_any = true;
-                }
-                // Empty (nothing queued) or Disconnected (sender gone): stop draining.
-                Err(_) => break,
-            }
         }
         if injected_any {
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));

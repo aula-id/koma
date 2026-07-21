@@ -196,7 +196,7 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     }
     if let DaemonEvent::StoreItemDetail { detail, error } = &frame.event {
         let env = PushEnvelope::StoreItemDetail {
-            detail: detail.clone(),
+            detail: detail.as_ref().clone(),
             error: error.clone(),
         };
         if let Ok(json) = serde_json::to_string(&env) {

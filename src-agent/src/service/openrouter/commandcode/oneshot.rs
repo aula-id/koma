@@ -32,7 +32,7 @@ impl OpenRouterClient {
         let url = format!("{}/alpha/generate", conn.endpoint);
 
         let system = extract_system(&messages);
-        let cc_messages = build_messages(&messages);
+        let cc_messages = build_messages(&messages, None);
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();

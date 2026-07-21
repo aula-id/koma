@@ -1,11 +1,7 @@
-//! Settings modal overlays: add-provider and add/edit-model dialogs.
-//!
-//! Each modal dims the backdrop outside its rect, renders a bordered accent
-//! box, and draws its form fields inside. Neither modal owns state — they read
-//! from [`SettingsState`] and the relevant modal struct.
+//! Settings modal overlays: kept for reference. Provider and model forms are
+//! now full-page renderers in `pages/provider_form.rs` and `pages/model_form.rs`.
 
+#[allow(unused_imports)]
 mod provider;
+#[allow(unused_imports)]
 mod model;
-
-pub(super) use provider::draw_provider_modal;
-pub(super) use model::draw_model_modal;

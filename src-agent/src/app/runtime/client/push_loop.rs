@@ -30,6 +30,19 @@ use super::render::{advance_local_animations, FRAME_BUDGET};
 use super::shadow::apply_frame;
 use super::store_host;
 
+/// Snapshot of the full `Status` envelope payload.
+/// `(working, toast, toast_kind, tokens_in, tokens_cached, tokens_out, cost, mode)`.
+type StatusSnapshot = (
+    bool,
+    Option<String>,
+    Option<&'static str>,
+    u64,
+    u64,
+    u64,
+    f64,
+    String,
+);
+
 /// Per-connection dedup memory for the push pipeline: the last values pushed, so
 /// [`serialize_and_push`] / [`push_hub`] only emit an envelope when something
 /// actually changed (the fold loop calls them every ~16ms).
@@ -45,16 +58,7 @@ pub(super) struct PushState {
     /// mode flip, or a working/toast change each independently re-emit `Status`.
     /// `cost` is `f64`; plain `!=` (`PartialEq`, not `Eq`) is fine here — this tuple
     /// is only ever compared, never hashed or used as a map key.
-    pub(super) status: Option<(
-        bool,
-        Option<String>,
-        Option<&'static str>,
-        u64,
-        u64,
-        u64,
-        f64,
-        String,
-    )>,
+    pub(super) status: Option<StatusSnapshot>,
     /// Last serialised `Hub` JSON (the swapper is diffed as a whole).
     pub(super) hub_json: Option<String>,
     /// Last serialised `Config` JSON (the global config catalogue, diffed as a whole so
