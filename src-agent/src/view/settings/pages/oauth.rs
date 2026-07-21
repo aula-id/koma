@@ -170,6 +170,7 @@ fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) 
         "Command Code (paste key)",
     ];
     let full_w = area.width as usize;
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let lines: Vec<Line> = OPTIONS
         .iter()
         .enumerate()
