@@ -63,6 +63,7 @@ pub(crate) fn draw_message(
     url: Option<&str>,
     copied: bool,
 ) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let mut lines = vec![Line::from(Span::styled(
         headline.to_string(),
         Style::default().fg(palette.accent),
@@ -89,6 +90,7 @@ pub(crate) fn draw_message(
 ///
 /// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
 pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let line = Line::from(vec![
         Span::styled("token: ", Style::default().fg(palette.dim)),
         Span::styled(input.to_string(), Style::default().fg(palette.fg)),
@@ -101,6 +103,7 @@ pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area
 ///
 /// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
 pub(crate) fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let lines = vec![
         Line::from(Span::styled(msg.to_string(), Style::default().fg(palette.error))),
         Line::from(""),
