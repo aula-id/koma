@@ -548,7 +548,7 @@ impl McpManager {
                 McpBackend::Proxy { .. } => {
                     let mgr = Arc::clone(self);
                     std::thread::spawn(move || {
-                        let (fresh, errors) = match &mgr.backend {
+                        let (fresh, _errors) = match &mgr.backend {
                             McpBackend::Proxy { sock, proxy_errors, .. } => {
                                 match proxy_request(sock, &McpRequest::Status) {
                                     Ok(McpResponse::Status { servers, .. }) => {
@@ -600,7 +600,6 @@ impl McpManager {
                             }
                             _ => unreachable!(),
                         };
-                        let _ = errors; // drop the () sentinel
                         *mgr.status_cache.lock().unwrap_or_else(|p| p.into_inner()) =
                             (Some(std::time::Instant::now()), fresh);
                         mgr.status_refreshing.store(false, Ordering::Release);

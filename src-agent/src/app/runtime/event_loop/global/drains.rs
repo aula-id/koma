@@ -376,7 +376,7 @@ const EXT_PANEL_PUSH_CAP: usize = 256;
 /// panels; a malformed `panel.push` OR any unknown notify name is logged + dropped (never a
 /// panic). Mirrors [`drain_ext_calls`]'s take/put-back (the paired sender lives on `AppStateRest`
 /// + the manager's clone for the app's lifetime, so the channel never closes) and its
-/// drain-until-empty loop.
+///   drain-until-empty loop.
 ///
 /// After draining this tick's burst the outbox cap is enforced ONCE ([`enforce_ext_panel_cap`]):
 /// drop the OLDEST over-cap entries + log a SINGLE overflow line — not one per shed item, so a
@@ -587,7 +587,7 @@ pub(super) fn drain_store(state: &mut AppState, handle: &tokio::runtime::Handle)
                 for s in state.rest.sessions.iter_mut() {
                     if let Mode::ExtStore(st) = &mut s.mode {
                         st.detail_loading = false;
-                        match &result {
+                        match &*result {
                             Ok(d) => {
                                 st.detail = Some(
                                     crate::app::runtime::commands::store::store_detail_from_wire(d),

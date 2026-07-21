@@ -31,7 +31,7 @@ pub(crate) enum StoreEvent {
     /// A Browse catalogue fetch resolved (possibly with a network/parse error).
     Catalogue(Result<Vec<StoreItemWire>, String>),
     /// A Detail fetch for one extension id resolved.
-    Detail(Result<StoreDetailWire, String>),
+    Detail(Box<Result<StoreDetailWire, String>>),
     /// An install download resolved: the raw zip + its advertised integrity fields,
     /// ready for the on-loop verify+install tail. `id` is echoed for the drain's fold.
     InstallArtifact {
@@ -69,7 +69,7 @@ pub(crate) fn kick_off_store_detail(rest: &mut AppStateRest, handle: &Handle, id
     rest.store_rx = Some(rx);
     handle.spawn(async move {
         let result = fetch_detail(&id).await;
-        let _ = tx.send(StoreEvent::Detail(result));
+        let _ = tx.send(StoreEvent::Detail(Box::new(result)));
     });
 }
 

@@ -169,23 +169,25 @@ fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) 
         "Codex (paste token)",
         "Command Code (paste key)",
     ];
+    let full_w = area.width as usize;
     let lines: Vec<Line> = OPTIONS
         .iter()
         .enumerate()
         .map(|(i, label)| {
-            let (marker, style) = if i == cursor {
-                ("› ", Style::default().fg(palette.sel_fg).bg(palette.sel_bg))
+            if i == cursor {
+                // Single span padded to full width so sel_bg covers the
+                // entire row without trailing-bleed into unused cells.
+                let text = format!("› {label}");
+                Line::from(Span::styled(
+                    format!("{text:<full_w$}"),
+                    Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
+                ))
             } else {
-                ("  ", Style::default().fg(palette.fg))
-            };
-            Line::from(vec![
-                Span::styled(marker, if i == cursor {
-                    Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-                } else {
-                    Style::default().fg(palette.accent)
-                }),
-                Span::styled(*label, style),
-            ])
+                Line::from(vec![
+                    Span::styled("  ", Style::default().fg(palette.accent)),
+                    Span::styled(*label, Style::default().fg(palette.fg)),
+                ])
+            }
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);

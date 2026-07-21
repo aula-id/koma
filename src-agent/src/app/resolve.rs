@@ -794,11 +794,11 @@ pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMo
 ///
 /// 1. If the agent names a `model_uuid` that resolves to a registered
 ///    [`ModelEntry`], dispatch via that entry's own provider connection.
-/// 1b. Else, if the agent names a legacy `model` AND its `provider_uuid`
+///    1b. Else, if the agent names a legacy `model` AND its `provider_uuid`
 ///    resolves to a known provider connection, dispatch against THAT provider
 ///    (endpoint + key + wire type), pinning the agent's legacy `provider`
 ///    routing slug as the upstream route. This is the explicit-assignment path.
-/// 1c. Else, if the agent names a `model` slug with NO `provider_uuid` (the
+///    1c. Else, if the agent names a `model` slug with NO `provider_uuid` (the
 ///    shape an extension-contributed sub-agent's manifest `model:` field or an
 ///    `agents.spawn` override produces), look the slug up by model_id/name/uuid
 ///    against the registered catalogues (see [`find_model_entry_by_slug`]) and

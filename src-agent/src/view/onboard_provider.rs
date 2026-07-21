@@ -191,15 +191,19 @@ fn draw_model_list(
     // Scroll so the selection stays visible (bottom-anchored window).
     let start = if sel >= max_rows { sel + 1 - max_rows } else { 0 };
     for (row, i) in (start..ids.len()).take(max_rows).enumerate() {
-        let (marker, style) = if i == sel {
-            ("› ", Style::default().fg(palette.sel_fg).bg(palette.sel_bg))
+        let line = if i == sel {
+            let text = format!("› {}", ids[i]);
+            let w = body.width as usize;
+            Line::from(Span::styled(
+                format!("{text:<w$}"),
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
+            ))
         } else {
-            ("  ", Style::default().fg(palette.fg))
+            Line::from(vec![
+                Span::styled("  ", Style::default().fg(palette.accent)),
+                Span::styled(ids[i].clone(), Style::default().fg(palette.fg)),
+            ])
         };
-        let line = Line::from(vec![
-            Span::styled(marker, Style::default().fg(palette.accent)),
-            Span::styled(ids[i].clone(), style),
-        ]);
         put_line(frame, body, start_row + row as u16, line);
     }
 }

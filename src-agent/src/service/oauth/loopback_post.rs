@@ -280,7 +280,7 @@ fn field_str(v: &serde_json::Value, key: &str) -> String {
 fn build_cors_headers(origin: &str) -> String {
     // Mirror pi-commandcode: echo an allowed origin (or fall back to the first
     // configured one) so the Studio page's fetch() is not CORS-blocked.
-    let response_origin = if CORS_ORIGINS.iter().any(|o| *o == origin) {
+    let response_origin = if CORS_ORIGINS.contains(&origin) {
         origin
     } else {
         CORS_ORIGINS[0]

@@ -189,10 +189,10 @@ pub enum ClientRequest {
     /// {endpoint}/models/{model_id}/endpoints`) to populate the Connector ModelForm's
     /// ROUTE picker with the model's REAL routes (provider name + prompt/completion price
     /// + uptime) instead of the hardcoded demo list. `model_id` is the verbatim
-    /// `author/slug` id. Read-only + async like [`ListModels`]: the daemon gates on the
-    /// provider being an OpenRouter-style routable endpoint (non-OpenRouter → empty), spawns
-    /// the network GET, and replies out-of-band with a [`DaemonEvent::ModelRoutes`] on a
-    /// later tick. gui-gated.
+    ///   `author/slug` id. Read-only + async like [`ListModels`]: the daemon gates on the
+    ///   provider being an OpenRouter-style routable endpoint (non-OpenRouter → empty), spawns
+    ///   the network GET, and replies out-of-band with a [`DaemonEvent::ModelRoutes`] on a
+    ///   later tick. gui-gated.
     ListRoutes { provider: String, model_id: String },
     /// Set the active theme (the GUI onboarding theme step + the future Settings gear).
     /// `name` is a [`crate::view::theme::PALETTES`] registry key (an unknown name falls
@@ -714,7 +714,7 @@ pub enum DaemonEvent {
     /// `detail` is `None` (and `error` `Some`) when the fetch failed or the id was unknown.
     /// Same out-of-band delivery as [`StoreCatalogue`].
     StoreItemDetail {
-        detail: Option<StoreDetailWire>,
+        detail: Box<Option<StoreDetailWire>>,
         error: Option<String>,
     },
     /// The locally-installed extension registry — the reply to

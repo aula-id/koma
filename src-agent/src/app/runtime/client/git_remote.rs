@@ -43,6 +43,10 @@ use std::sync::{Mutex, OnceLock};
 use super::git::{git_cmd_env, git_failure, repo_root_for, with_git_transaction, GitOpResult};
 use super::keys::key_private_path;
 
+/// Repeated closure signature for host-side git command relays.
+type GitCmdFn<'a> =
+    &'a dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>;
+
 /// Process-lifetime monotonic counter folded into [`atomic_write`]'s temp
 /// filename alongside the PID — the PID alone is shared by every thread in
 /// this process, so two concurrent writers (the two host loops, or a fast
@@ -437,7 +441,7 @@ fn parse_status_headers(text: &str) -> (Option<String>, Option<String>) {
 }
 
 fn config_value(
-    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    git: GitCmdFn<'_>,
     root: &Path,
     key: &str,
 ) -> Option<String> {
@@ -445,7 +449,7 @@ fn config_value(
 }
 
 fn plan_target(
-    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    git: GitCmdFn<'_>,
     root: &Path,
 ) -> Result<PushTarget, String> {
     let status = output_text(git(root, &["status", "--porcelain=v2", "--branch"], None))
@@ -532,7 +536,7 @@ fn plan_target(
 }
 
 fn is_ancestor(
-    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    git: GitCmdFn<'_>,
     root: &Path,
     older: &str,
     newer: &str,
@@ -542,7 +546,7 @@ fn is_ancestor(
 }
 
 fn automatic_mode(
-    git: &dyn Fn(&Path, &[&str], Option<(&str, &str)>) -> Option<std::process::Output>,
+    git: GitCmdFn<'_>,
     root: &Path,
     target: &PushTarget,
 ) -> Result<GitPushMode, String> {

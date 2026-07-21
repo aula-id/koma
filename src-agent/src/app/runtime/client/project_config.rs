@@ -341,7 +341,7 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
             m.effective_roles()
                 .contains(&crate::model::app_config::ModelRole::Main)
                 && (cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
-                    || cfg.oauth_conn_uuids.iter().any(|u| *u == m.provider_uuid))
+                    || cfg.oauth_conn_uuids.contains(&m.provider_uuid))
         });
     let needs_onboarding = !has_usable_main;
 
