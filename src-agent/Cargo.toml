@@ -62,6 +62,10 @@ sha2 = "0.10"
 # MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
 # streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
+# SurrealDB embedded — turbo layer: mirrors SQLite as a secondary read layer
+# with graph edges + full-text + (future) vector search. In-memory for now;
+# rebuilds from SQLite on session load. NOT the canonical write path.
+surrealdb = { version = "3", features = ["kv-mem", "kv-surrealkv"] }
 
 # --- feature = "gui": xterm.js + wry desktop client. All optional; the default
 # build pulls NONE of these (headless-safe, lean `cargo install`). ---
