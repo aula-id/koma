@@ -79,7 +79,7 @@ pub(super) enum StoreReply {
     },
     Detail {
         client_id: u64,
-        detail: Option<crate::ipc::proto::StoreDetailWire>,
+        detail: Box<Option<crate::ipc::proto::StoreDetailWire>>,
         error: Option<String>,
     },
     /// A downloaded artifact ready for the on-loop verify+install step. `sha256` is the

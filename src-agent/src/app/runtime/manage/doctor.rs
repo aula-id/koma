@@ -326,10 +326,9 @@ fn check_daemons() -> CheckResult {
     };
 
     let headline = format!(
-        "Daemons ({} session daemon{}{}; {})",
+        "Daemons ({} session daemon{} live{builds_note}; {})",
         live.len(),
         if live.len() == 1 { "" } else { "s" },
-        format!(" live{builds_note}"),
         mcp_note
     );
 

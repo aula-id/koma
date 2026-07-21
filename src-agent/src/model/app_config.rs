@@ -760,7 +760,7 @@ impl AppConfig {
                 let is_clinepass = c
                     .get("provider")
                     .and_then(|v| v.as_str())
-                    .map_or(false, |p| p == "clinepass");
+                    == Some("clinepass");
                 if is_clinepass {
                     if let Some(uuid) = c.get("uuid").and_then(|v| v.as_str()) {
                         stripped_uuids.insert(uuid.to_string());
@@ -915,6 +915,7 @@ impl AppConfig {
     /// Remove the provider with `uuid` and cascade-drop every model that pointed at it.
     /// No-op if none matches. Catalogue-only; callers that also need agents/sessions
     /// rewritten to inherit should follow with the app-level consumer rebind helper.
+    #[allow(dead_code)]
     pub fn remove_provider_by_uuid(&mut self, uuid: &str) {
         let _ = self.cascade_remove_provider(uuid);
     }
