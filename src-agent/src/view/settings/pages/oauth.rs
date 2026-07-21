@@ -203,6 +203,7 @@ fn draw_message(
     url: Option<&str>,
     copied: bool,
 ) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let mut lines = vec![Line::from(Span::styled(
         headline.to_string(),
         Style::default().fg(palette.accent),
@@ -227,6 +228,7 @@ fn draw_message(
 
 /// The manual paste-token screen: a single input line with a trailing cursor.
 fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let line = Line::from(vec![
         Span::styled("token: ", Style::default().fg(palette.dim)),
         Span::styled(input.to_string(), Style::default().fg(palette.fg)),
@@ -237,6 +239,7 @@ fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
 
 /// Failure screen: the error line in red plus a dismiss hint.
 fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let lines = vec![
         Line::from(Span::styled(msg.to_string(), Style::default().fg(palette.error))),
         Line::from(""),
