@@ -1,11 +1,10 @@
-//! Chat history search tool: `message_find` queries the session's FTS5
-//! full-text index (`messages_fts`) so the model can look up past conversation
-//! turns that have scrolled out of the context window.
+//! Chat history search tool: `message_find` queries the session's chat
+//! history. Tries SurrealDB full-text search first (best-effort), falls
+//! back to SQLite FTS5.
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use super::{Tool, ToolCtx};
-use crate::model::msglog::search_messages;
 
 /// Search the session's `messages.sqlite` full-text index for past
 /// conversation turns matching the query. Returns ranked snippets.
@@ -50,27 +49,43 @@ impl Tool for MessageFind {
             None => bail!("no active session to search"),
         };
 
-        let matches = search_messages(session_dir, query, 10);
+        // Try SurrealDB first, fall back to SQLite FTS5.
+        let matches = {
+            let surreal_hits = crate::model::surreal::search_messages(session_dir, query, 10);
+            if !surreal_hits.is_empty() {
+                format_matches(
+                    surreal_hits
+                        .iter()
+                        .map(|m| (m.id, m.role.as_str(), m.snippet.as_str())),
+                )
+            } else {
+                let fts5_hits = crate::model::msglog::search_messages(session_dir, query, 10);
+                format_matches(
+                    fts5_hits
+                        .iter()
+                        .map(|m| (m.id, m.role.as_str(), m.snippet.as_str())),
+                )
+            }
+        };
 
         if matches.is_empty() {
             return Ok("(no matching messages found)".to_string());
         }
-
-        let mut out = String::new();
-        for m in &matches {
-            let role_prefix = match m.role.as_str() {
-                "user" => "user",
-                "assistant" => "assistant",
-                "tool" => "tool",
-                "system" => "system",
-                _ => "?",
-            };
-            // snippet() uses '' as markers (no highlighting), so we just show
-            // the context fragment. Trim whitespace for compact output.
-            let snip = m.snippet.trim();
-            out.push_str(&format!("[{}] {}: {}\n", m.id, role_prefix, snip));
-        }
-
-        Ok(out)
+        Ok(matches)
     }
+}
+
+fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str)>) -> String {
+    let mut out = String::new();
+    for (msg_id, role, snip) in matches {
+        let role_prefix = match role {
+            "user" => "user",
+            "assistant" => "assistant",
+            "tool" => "tool",
+            "system" => "system",
+            _ => "?",
+        };
+        out.push_str(&format!("[{}] {}: {}\n", msg_id, role_prefix, snip.trim()));
+    }
+    out
 }
