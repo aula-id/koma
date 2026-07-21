@@ -9,7 +9,9 @@
 use std::path::Path;
 
 /// Search messages via embedded SurrealDB full-text index.
-/// Best-effort: returns empty vec on any error.
+/// Best-effort: returns empty vec on any error AND logs the failure to
+/// the session's `error.log` so operators can see when SurrealDB is down
+/// and the caller fell back to SQLite FTS5.
 pub fn search_messages(session_dir: &Path, query: &str, limit: usize) -> Vec<MessageMatch> {
     let q = query.trim();
     if q.is_empty() || !session_dir.join("messages.sqlite").exists() {
@@ -24,12 +26,38 @@ pub fn search_messages(session_dir: &Path, query: &str, limit: usize) -> Vec<Mes
             .build()
         {
             Ok(rt) => rt,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                crate::model::store::append_error_log(
+                    &sd,
+                    "SurrealDB — tokio runtime build failed",
+                    &e.to_string(),
+                );
+                return Vec::new();
+            }
         };
-        rt.block_on(async { search_async(&sd, &q_owned, limit).await.unwrap_or_default() })
+        rt.block_on(async {
+            match search_async(&sd, &q_owned, limit).await {
+                Ok(results) => results,
+                Err(e) => {
+                    crate::model::store::append_error_log(
+                        &sd,
+                        "SurrealDB — search_async failed",
+                        &e.to_string(),
+                    );
+                    Vec::new()
+                }
+            }
+        })
     })
     .join()
-    .unwrap_or_default()
+    .unwrap_or_else(|_| {
+        crate::model::store::append_error_log(
+            session_dir,
+            "SurrealDB — background thread panicked",
+            "thread::spawn::join failed",
+        );
+        Vec::new()
+    })
 }
 
 async fn search_async(
