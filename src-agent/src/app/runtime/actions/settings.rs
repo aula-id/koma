@@ -27,12 +27,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.palette.clone(),
             s.workdir.clone(),
             s.awareness_enabled,
-            s.awareness_inherit,
-            s.awareness_model.clone(),
-            s.awareness_provider.clone(),
             s.classifier_enabled,
-            s.classifier_model.clone(),
-            s.classifier_provider.clone(),
             s.allowed_folders.clone(),
             s.short_send_enabled,
             s.sliding_cache,
@@ -55,12 +50,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         palette,
         workdir,
         awareness_enabled,
-        awareness_inherit,
-        awareness_model,
-        awareness_provider,
         classifier_enabled,
-        classifier_model,
-        classifier_provider,
         allowed_folders,
         short_send_enabled,
         sliding_cache,
@@ -294,16 +284,11 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             sess.settings.provider = provider;
             sess.settings.workdir = workdir_vec;
             sess.settings.awareness_enabled = awareness_enabled;
-            sess.settings.awareness_inherit = awareness_inherit;
-            sess.settings.awareness_model = awareness_model;
-            sess.settings.awareness_provider = awareness_provider;
             // Harness settings ride along here too; like awareness they
             // don't affect the chat client (the classifier uses
             // `complete_with` per invocation), so no client rebuild is
             // keyed off them.
             sess.settings.classifier_enabled = classifier_enabled;
-            sess.settings.classifier_model = classifier_model;
-            sess.settings.classifier_provider = classifier_provider;
             sess.settings.allowed_folders = allowed_folders_vec;
             // Short-send kill switch: no client rebuild needed; the
             // shape() call reads this flag per-send.

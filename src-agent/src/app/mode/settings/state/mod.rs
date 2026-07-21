@@ -68,19 +68,8 @@ pub struct SettingsState {
     pub workdir: Vec<String>,
     /// Draft: project-awareness summary enabled.
     pub awareness_enabled: bool,
-    /// Draft: awareness model source — `true` = inherit the session model,
-    /// `false` = use the dedicated awareness model/provider below.
-    pub awareness_inherit: bool,
-    /// Draft: dedicated awareness model (used when `awareness_inherit` is false).
-    pub awareness_model: String,
-    /// Draft: dedicated awareness provider (used when `awareness_inherit` is false).
-    pub awareness_provider: String,
     /// Draft: safety-harness master switch.
     pub classifier_enabled: bool,
-    /// Draft: safety-classifier model.
-    pub classifier_model: String,
-    /// Draft: safety-classifier provider slug.
-    pub classifier_provider: String,
     /// Draft: extra allowed folders as a managed path list. Seeded from
     /// `settings.allowed_folders` (or the launch cwd when empty) and written back
     /// to `Vec<String>` (trim, drop empties) on save.
@@ -265,12 +254,7 @@ impl SettingsState {
                 .unwrap_or(0),
             workdir,
             awareness_enabled: session.settings.awareness_enabled,
-            awareness_inherit: session.settings.awareness_inherit,
-            awareness_model: session.settings.awareness_model.clone(),
-            awareness_provider: session.settings.awareness_provider.clone(),
             classifier_enabled: session.settings.classifier_enabled,
-            classifier_model: session.settings.classifier_model.clone(),
-            classifier_provider: session.settings.classifier_provider.clone(),
             allowed_folders,
             short_send_enabled: session.settings.short_send_enabled,
             sliding_cache: session.settings.sliding_cache,
@@ -331,14 +315,6 @@ impl SettingsState {
             }
             SettingField::AwarenessEnabled => {
                 self.awareness_enabled = !self.awareness_enabled;
-            }
-            SettingField::AwarenessSource => {
-                self.awareness_inherit = !self.awareness_inherit;
-            }
-            SettingField::AwarenessModel | SettingField::AwarenessProvider => {
-                if !self.awareness_inherit {
-                    self.editing = true;
-                }
             }
             SettingField::ClassifierEnabled => {
                 self.classifier_enabled = !self.classifier_enabled;
