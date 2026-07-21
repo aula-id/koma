@@ -24,6 +24,7 @@ pub mod fs;
 pub mod git_cred;
 pub mod git_operator;
 pub mod git_worktree;
+pub mod history;
 pub mod internet;
 pub mod memory;
 pub mod plan;
@@ -65,6 +66,7 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
 pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
     matches!(name,
         "read" | "grep" | "glob" | "dir_list" | "dir_cache_update" | "recall"
+        | "message_find"
         | "web_search" | "web_fetch" | "pong" | "cd" | "git_cred"
         | "task" | "task_output" | "task_kill" | "task_send" | "bash_output" | "bash_kill"
         | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "checklist")
@@ -182,6 +184,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Remember),
         Box::new(memory::Forget),
         Box::new(memory::Recall),
+        Box::new(history::MessageFind),
         Box::new(task::Task),
         Box::new(task::TaskOutput),
         Box::new(task::TaskKill),
@@ -260,6 +263,7 @@ const INTERNAL_ONLY: &[&str] = &["seqthink", "plan_enter", "plan_ready"];
 pub const DEFERRED_TOOLS: &[&str] = &[
     "read", "write", "edit", "delete", "bash", "grep", "glob",
     "remember", "forget", "recall",
+    "message_find",
     "web_fetch", "web_search", "web_download",
     "git_operator",
 ];

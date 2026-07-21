@@ -173,6 +173,15 @@ forget — delete a saved memory by its "slug" (as listed in the memory index).
   Example:   forget({"slug": "deploy-uses-make-ship"})
   No-op if the slug doesn't exist.
 
+message_find — search the session's chat history (messages.sqlite) for past
+  conversation turns matching the query. Uses FTS5 full-text search. Returns up
+  to 10 ranked snippets with message id, role, and content context.
+  Arguments: { "query": "search terms" }
+  Example:   message_find({"query": "FS5"})
+  Use to recall past decisions, error messages, tradeoffs, or facts discussed
+  earlier in the conversation that may have scrolled out of the context window.
+  Supports FTS5 query syntax: multi-word AND, quoted phrases, wildcards.
+
 checklist — create and maintain a task/todo list for the current session. The user
   can view the list via `/todo` (a read-only overlay) and toggle item status with
   Enter. You manage the list via this tool.
