@@ -38,7 +38,7 @@ fn system_extracted_to_params_not_messages() {
     ];
     let system = extract_system(&msgs);
     assert_eq!(system, "You are helpful.");
-    let cc = build_messages(&msgs);
+    let cc = build_messages(&msgs, None);
     assert_eq!(cc.len(), 1);
     assert_eq!(cc[0]["role"], "user");
 }
@@ -63,7 +63,7 @@ fn system_cache_split_mark_stripped() {
 
 #[test]
 fn user_text_content() {
-    let cc = build_messages(&[user("Hello world")]);
+    let cc = build_messages(&[user("Hello world")], None);
     assert_eq!(cc.len(), 1);
     assert_eq!(cc[0]["role"], "user");
     assert_eq!(cc[0]["content"], "Hello world");
@@ -72,13 +72,13 @@ fn user_text_content() {
 #[test]
 fn shell_mark_stripped_from_user() {
     let marked = format!("{}$ ls\nfile.txt", crate::dto::chat::SHELL_MARK);
-    let cc = build_messages(&[user(&marked)]);
+    let cc = build_messages(&[user(&marked)], None);
     assert_eq!(cc[0]["content"], "$ ls\nfile.txt");
 }
 
 #[test]
 fn assistant_text_only() {
-    let cc = build_messages(&[assistant("Sure thing!")]);
+    let cc = build_messages(&[assistant("Sure thing!")], None);
     assert_eq!(cc.len(), 1);
     assert_eq!(cc[0]["role"], "assistant");
     let blocks = cc[0]["content"].as_array().unwrap();
@@ -94,7 +94,7 @@ fn assistant_with_paired_tool_call() {
         assistant_with_tools("let me check", vec![tc("c1", "read", r#"{"path":"x"}"#)]),
         tool_result("c1", "file contents"),
     ];
-    let cc = build_messages(&msgs);
+    let cc = build_messages(&msgs, None);
     assert_eq!(cc.len(), 3);
     assert_eq!(cc[0]["role"], "user");
     assert_eq!(cc[1]["role"], "assistant");
@@ -117,7 +117,7 @@ fn orphan_tool_call_dropped() {
         user("do something"),
         assistant_with_tools("", vec![tc("orphan", "read", "{}")]),
     ];
-    let cc = build_messages(&msgs);
+    let cc = build_messages(&msgs, None);
     // Orphan tool-call is dropped; empty assistant content means the whole
     // assistant message is omitted (only the user message remains).
     assert_eq!(cc.len(), 1);
@@ -126,7 +126,7 @@ fn orphan_tool_call_dropped() {
 
 #[test]
 fn empty_user_skipped() {
-    assert!(build_messages(&[user("")]).is_empty());
+    assert!(build_messages(&[user("")], None).is_empty());
 }
 
 #[test]

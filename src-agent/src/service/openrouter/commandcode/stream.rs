@@ -31,13 +31,13 @@ impl OpenRouterClient {
         messages: Vec<ChatMessage>,
         advertise: &[String],
         mcp_tools: &[ToolDef],
-        _image_ctx: Option<ImageWireCtx>,
+        image_ctx: Option<ImageWireCtx>,
         tx: UnboundedSender<StreamEvent>,
     ) -> Result<()> {
         let url = format!("{}/alpha/generate", conn.endpoint);
 
         let system = extract_system(&messages);
-        let cc_messages = build_messages(&messages);
+        let cc_messages = build_messages(&messages, image_ctx.as_ref());
         let tools = flatten_tools(advertise, mcp_tools);
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
