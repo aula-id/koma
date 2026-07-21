@@ -1,4 +1,4 @@
-mod menu;
+pub(crate) mod menu;
 mod appearance;
 mod general;
 mod providers;
