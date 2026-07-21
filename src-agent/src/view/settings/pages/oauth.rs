@@ -13,7 +13,7 @@ use ratatui::{
 use crate::app::mode::settings::OAuthFlowState;
 use crate::app::mode::SettingsState;
 use crate::view::theme::Palette;
-use super::utils::truncate;
+use super::super::utils::truncate;
 
 /// Braille spinner frames, matching the `/security` panel's in-flight probe glyph.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -31,8 +31,8 @@ fn account_of(label: &str) -> &str {
     }
 }
 
-/// Render the `/settings` OAuth submenu inside `area`.
-pub(super) fn draw_oauth(
+/// Render the `/settings` OAuth page inside `area`.
+pub(crate) fn draw_oauth_page(
     frame: &mut Frame,
     st: &SettingsState,
     palette: &Palette,
@@ -87,9 +87,7 @@ pub(super) fn draw_oauth(
     }
 }
 
-/// Idle screen: the connections table + `[+connect]` button, mirroring
-/// `draw_providers`'s shape (borderless table, inverse-highlighted selection,
-/// `DEL? ` prefix on the armed row).
+/// Idle screen: the connections table + `[+connect]` button.
 fn draw_list(frame: &mut Frame, st: &SettingsState, palette: &Palette, area: Rect) {
     let col_prov_w = 12u16;
     let col_status_w = 16u16;
@@ -160,9 +158,7 @@ fn draw_list(frame: &mut Frame, st: &SettingsState, palette: &Palette, area: Rec
 }
 
 /// Provider picker overlay: an inline 3-option list, cursor-highlighted.
-///
-/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
-pub(crate) fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) {
+fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, area: Rect) {
     const OPTIONS: [&str; 8] = [
         "Codex",
         "Kilo Code",
@@ -195,12 +191,8 @@ pub(crate) fn draw_picker(frame: &mut Frame, cursor: usize, palette: &Palette, a
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// A one-line status/spinner message plus an optional URL/code line beneath it —
-/// shared shape for `Starting`/`CodexWait`/`KiloWait`. `copied` shows a dim
-/// confirmation line under the URL after a successful `c` (copy-url) press.
-///
-/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
-pub(crate) fn draw_message(
+/// A one-line status/spinner message plus an optional URL/code line beneath it.
+fn draw_message(
     frame: &mut Frame,
     palette: &Palette,
     area: Rect,
@@ -231,9 +223,7 @@ pub(crate) fn draw_message(
 }
 
 /// The manual paste-token screen: a single input line with a trailing cursor.
-///
-/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
-pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
+fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
     let line = Line::from(vec![
         Span::styled("token: ", Style::default().fg(palette.dim)),
         Span::styled(input.to_string(), Style::default().fg(palette.fg)),
@@ -243,9 +233,7 @@ pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area
 }
 
 /// Failure screen: the error line in red plus a dismiss hint.
-///
-/// `pub(crate)` so the guided provider onboarding wizard reuses it for its Login step.
-pub(crate) fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
+fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(msg.to_string(), Style::default().fg(palette.error))),
         Line::from(""),
