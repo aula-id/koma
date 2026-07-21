@@ -2,6 +2,8 @@ import { FileText } from 'lucide-react'
 import { useKoma } from '../store/koma'
 import { relTime } from './GraphRow'
 import { BrailleSpinner } from './BrailleSpinner'
+import { baseName, dirName } from '../utils/path'
+
 
 // git status char -> badge tone (mirrors GitPanel's STATUS_TONE): A = added
 // (good), M = modified (accent), D = deleted (error), R/C = rename/copy (warn).
@@ -14,15 +16,6 @@ const FILE_TONE: Record<string, string> = {
 }
 function fileTone(status: string): string {
   return FILE_TONE[status.charAt(0)] ?? 'text-koma-dim'
-}
-function baseName(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
-}
-function dirName(path: string): string {
-  const parts = path.split('/')
-  parts.pop()
-  return parts.join('/')
 }
 
 // The commit-graph tab's detail pane (bottom split): full metadata + body +

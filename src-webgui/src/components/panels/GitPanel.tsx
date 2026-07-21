@@ -27,6 +27,8 @@ import { useKoma } from '../../store/koma'
 import type { GitFileEntry } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
 import { GitPushMenu } from '../GitPushMenu'
+import { baseName, dirName } from '../../utils/path'
+
 
 // git-porcelain status char -> badge tone. Mirrors ExplorePanel's FILE_STATUS
 // idiom (added = good, modified = accent, deleted = error): A/? = new
@@ -43,16 +45,6 @@ const STATUS_TONE: Record<string, string> = {
   U: 'text-koma-error',
 }
 
-function baseName(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
-}
-
-function dirName(path: string): string {
-  const parts = path.split('/')
-  parts.pop()
-  return parts.join('/')
-}
 
 // A subtle row-hover action button (stage/unstage/discard) — invisible until
 // the row is hovered/focused, mirroring VSCode's Source Control row actions.

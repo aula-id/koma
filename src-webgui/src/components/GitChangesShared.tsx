@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { FileText, Plus, Minus, Undo2, Check, X } from 'lucide-react'
 import type { GitFileEntry } from '../store/koma'
+import { baseName, dirName } from '../utils/path'
 
 // Shared presentational atoms for the two "Source Control"-flavoured
 // surfaces: the sidebar GitPanel and the graph tab's GraphChanges accordion
@@ -21,16 +22,7 @@ export const STATUS_TONE: Record<string, string> = {
   U: 'text-koma-error',
 }
 
-export function baseName(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
-}
-
-export function dirName(path: string): string {
-  const parts = path.split('/')
-  parts.pop()
-  return parts.join('/')
-}
+export { baseName, dirName }
 
 // A subtle row-hover action button (stage/unstage/discard) — invisible until
 // the row is hovered/focused, mirroring VSCode's Source Control row actions.

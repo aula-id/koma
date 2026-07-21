@@ -19,6 +19,8 @@ import { AccordionSection } from '../AccordionSection'
 import { Empty } from './helpers'
 import { useKoma, visiblePlanTodos } from '../../store/koma'
 import { BrailleSpinner } from '../BrailleSpinner'
+import { baseName } from '../../utils/path'
+
 
 // File-change status -> single-letter git-style badge + tone. added = new (good),
 // modified = touched (accent), deleted = removed (error/red).
@@ -26,12 +28,6 @@ const FILE_STATUS: Record<string, { letter: string; tone: string }> = {
   added: { letter: 'A', tone: 'text-koma-success' },
   modified: { letter: 'M', tone: 'text-koma-accent' },
   deleted: { letter: 'D', tone: 'text-koma-error' },
-}
-
-// Show just the basename in the main label; the full path rides the tooltip.
-function baseName(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
 }
 
 // Shared status -> icon/tone map for both the Agents and Bash rows. Mirrors

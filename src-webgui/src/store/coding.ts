@@ -2,6 +2,10 @@
 // Merged into the main koma store as `coding` (see store/koma.ts).
 // Actions live on KomaState; this module owns the state shape + push reducers.
 
+import { baseName, parentDirPath } from '../utils/path'
+
+export { baseName, parentDirPath }
+
 export type FileTreeEntry = {
   name: string
   path: string
@@ -54,16 +58,6 @@ export function mintRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function parentDirPath(path: string): string {
-  if (!path) return ''
-  const idx = path.lastIndexOf('/')
-  return idx <= 0 ? '' : path.slice(0, idx)
-}
-
-export function baseName(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] || path
-}
 
 export function emptyFileState(partial?: Partial<CodingFileState>): CodingFileState {
   return {
