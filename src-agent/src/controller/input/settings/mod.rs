@@ -116,7 +116,7 @@ fn handle_menu(s: &mut SettingsState, key: KeyEvent) -> Action {
         KeyCode::Char('3') => { s.page = SettingsPage::Providers;  Action::None }
         KeyCode::Char('4') => { s.page = SettingsPage::OAuth;      Action::None }
         KeyCode::Char('5') => { s.page = SettingsPage::Models;     Action::None }
-        _ => Action::None,
+        _ => Action::SaveSettings,
     }
 }
 
