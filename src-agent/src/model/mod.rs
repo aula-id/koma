@@ -18,6 +18,7 @@ pub mod conversation;
 pub mod ext_workspace;
 pub mod memory;
 pub mod msglog;
+pub mod surreal;
 /// Windows-only process liveness/termination helpers (phase B2), shared by
 /// `session_lock` and `app::runtime::manage`. Absent on unix (which uses `kill(2)`).
 #[cfg(windows)]

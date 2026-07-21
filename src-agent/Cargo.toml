@@ -65,7 +65,7 @@ rmcp = { version = "1.8", default-features = false, features = ["client", "trans
 # SurrealDB embedded — turbo layer: mirrors SQLite as a secondary read layer
 # with graph edges + full-text + (future) vector search. In-memory for now;
 # rebuilds from SQLite on session load. NOT the canonical write path.
-surrealdb = { version = "3", features = ["kv-mem", "kv-surrealkv"] }
+surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
 
 # --- feature = "gui": xterm.js + wry desktop client. All optional; the default
 # build pulls NONE of these (headless-safe, lean `cargo install`). ---
