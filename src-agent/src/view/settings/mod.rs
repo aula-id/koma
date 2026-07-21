@@ -21,11 +21,8 @@
 //! ```
 
 mod utils;
-mod providers;
 pub(crate) mod oauth;
 mod pickers;
-mod modals;
-mod detail;
 mod pages;
 
 use ratatui::{

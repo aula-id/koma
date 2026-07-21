@@ -1,9 +1,7 @@
-//! [`SettingField`] enum, its label helper, [`SettingCategory`] struct, and the
-//! canonical [`SETTING_CATEGORIES`] slice used by both the view and input handler.
+//! [`SettingField`] enum, its label helper, and the field list for the General page.
 
 /// A single editable/toggleable field within a settings category.
 #[derive(Clone, Copy, PartialEq, Debug)]
-#[allow(dead_code)]
 pub enum SettingField {
     ApiKey,
     Model,
@@ -77,41 +75,21 @@ impl SettingField {
     }
 }
 
-/// A named group of related settings fields shown in the sidebar.
-pub struct SettingCategory {
-    pub name: &'static str,
-    pub group: &'static str,
-    pub fields: &'static [SettingField],
-}
-
-/// All settings categories in sidebar display order.
-///
-/// Adding a new category or field here is sufficient — the view and input
-/// handler iterate over this slice generically.
-pub const SETTING_CATEGORIES: &[SettingCategory] = &[
-    SettingCategory {
-        name: "Appearance",
-        group: "general",
-        fields: &[SettingField::Palette],
-    },
-    SettingCategory {
-        name: "Session",
-        group: "general",
-        fields: &[SettingField::Name, SettingField::Workdir, SettingField::ShortSendEnabled, SettingField::SlidingCache, SettingField::BashSaving, SettingField::CodingAutosave, SettingField::InternetMode],
-    },
-    SettingCategory {
-        name: "API Providers",
-        group: "models",
-        fields: &[],
-    },
-    SettingCategory {
-        name: "OAuth",
-        group: "models",
-        fields: &[],
-    },
-    SettingCategory {
-        name: "Models Select",
-        group: "models",
-        fields: &[],
-    },
+/// The field list for the General page (session-level settings).
+pub const GENERAL_FIELDS: &[SettingField] = &[
+    SettingField::Name,
+    SettingField::Workdir,
+    SettingField::AwarenessEnabled,
+    SettingField::AwarenessSource,
+    SettingField::AwarenessModel,
+    SettingField::AwarenessProvider,
+    SettingField::ClassifierEnabled,
+    SettingField::ClassifierModel,
+    SettingField::ClassifierProvider,
+    SettingField::AllowedFolders,
+    SettingField::ShortSendEnabled,
+    SettingField::SlidingCache,
+    SettingField::BashSaving,
+    SettingField::CodingAutosave,
+    SettingField::InternetMode,
 ];
