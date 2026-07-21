@@ -121,19 +121,6 @@ pub(crate) fn draw_general(
                 let v = st.internet_mode.as_str();
                 vec![Span::styled(v, Style::default().fg(palette.accent))]
             }
-            SettingField::AwarenessSource => {
-                let v = if st.awareness_inherit {
-                    "inherit parent"
-                } else {
-                    "custom"
-                };
-                vec![Span::styled(v, Style::default().fg(palette.accent))]
-            }
-            SettingField::AwarenessModel | SettingField::AwarenessProvider
-                if st.awareness_inherit =>
-            {
-                vec![Span::styled("(inherited)", Style::default().fg(palette.dim))]
-            }
             _ => {
                 let raw: &str = match f {
                     SettingField::ApiKey   => st.api_key.as_str(),
@@ -145,10 +132,6 @@ pub(crate) fn draw_general(
                         }
                     }
                     SettingField::Name    => st.name.as_str(),
-                    SettingField::AwarenessModel    => st.awareness_model.as_str(),
-                    SettingField::AwarenessProvider => st.awareness_provider.as_str(),
-                    SettingField::ClassifierModel    => st.classifier_model.as_str(),
-                    SettingField::ClassifierProvider => st.classifier_provider.as_str(),
                     _ => "",
                 };
                 let editing_here = st.editing && is_selected;

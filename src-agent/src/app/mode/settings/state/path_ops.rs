@@ -15,22 +15,11 @@ impl SettingsState {
             SettingField::ApiKey   => Some(&mut self.api_key),
             SettingField::Provider => Some(&mut self.provider),
             SettingField::Name     => Some(&mut self.name),
-            SettingField::AwarenessModel if !self.awareness_inherit => {
-                Some(&mut self.awareness_model)
-            }
-            SettingField::AwarenessProvider if !self.awareness_inherit => {
-                Some(&mut self.awareness_provider)
-            }
-            SettingField::ClassifierModel    => Some(&mut self.classifier_model),
-            SettingField::ClassifierProvider => Some(&mut self.classifier_provider),
             SettingField::Workdir
             | SettingField::AllowedFolders
             | SettingField::Accent
             | SettingField::Palette
             | SettingField::AwarenessEnabled
-            | SettingField::AwarenessSource
-            | SettingField::AwarenessModel
-            | SettingField::AwarenessProvider
             | SettingField::ClassifierEnabled
             | SettingField::ShortSendEnabled
             | SettingField::SlidingCache

@@ -13,19 +13,8 @@ pub enum SettingField {
     Workdir,
     /// Toggle: whether the project-awareness summary is generated/injected.
     AwarenessEnabled,
-    /// Toggle: awareness model source — inherit the session model or use the
-    /// dedicated awareness model/provider.
-    AwarenessSource,
-    /// Text: dedicated awareness model (ignored when the source is "inherit").
-    AwarenessModel,
-    /// Text: dedicated awareness provider (ignored when the source is "inherit").
-    AwarenessProvider,
     /// Toggle: master switch for the safety harness ("Pass B").
     ClassifierEnabled,
-    /// Text: model used for the safety classifier.
-    ClassifierModel,
-    /// Text: provider slug (strict-pinned) for the safety classifier.
-    ClassifierProvider,
     /// Text: extra allowed folders (comma-separated) for the workspace check.
     AllowedFolders,
     /// Toggle: master kill-switch for the short-send token saver.
@@ -53,12 +42,7 @@ impl SettingField {
             SettingField::Name              => "Session name",
             SettingField::Workdir           => "Workdir",
             SettingField::AwarenessEnabled  => "Awareness",
-            SettingField::AwarenessSource   => "Model source",
-            SettingField::AwarenessModel    => "Aware model",
-            SettingField::AwarenessProvider => "Aware provider",
             SettingField::ClassifierEnabled  => "Harness",
-            SettingField::ClassifierModel    => "Class. model",
-            SettingField::ClassifierProvider => "Class. provider",
             SettingField::AllowedFolders     => "Allowed dirs",
             SettingField::ShortSendEnabled   => "Short-send",
             SettingField::SlidingCache       => "Sliding cache",
@@ -74,12 +58,7 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::Name,
     SettingField::Workdir,
     SettingField::AwarenessEnabled,
-    SettingField::AwarenessSource,
-    SettingField::AwarenessModel,
-    SettingField::AwarenessProvider,
     SettingField::ClassifierEnabled,
-    SettingField::ClassifierModel,
-    SettingField::ClassifierProvider,
     SettingField::AllowedFolders,
     SettingField::ShortSendEnabled,
     SettingField::SlidingCache,
