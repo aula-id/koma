@@ -320,12 +320,6 @@ impl SettingsState {
     /// Act on Enter for the current field (General page).
     pub fn enter(&mut self) {
         match self.current_field() {
-            SettingField::Theme => {
-                self.theme = match self.theme {
-                    ThemeMode::Dark  => ThemeMode::Light,
-                    ThemeMode::Light => ThemeMode::Dark,
-                };
-            }
             SettingField::Accent => {
                 // Accent is cycled with arrow keys; Enter is intentionally a no-op.
             }
