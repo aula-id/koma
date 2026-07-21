@@ -59,6 +59,11 @@ impl Tool for MessageFind {
                         .map(|m| (m.id, m.role.as_str(), m.snippet.as_str())),
                 )
             } else {
+                crate::model::store::append_error_log(
+                    session_dir,
+                    "message_find — SurrealDB returned empty, falling back to FTS5",
+                    &format!("query: {query}"),
+                );
                 let fts5_hits = crate::model::msglog::search_messages(session_dir, query, 10);
                 format_matches(
                     fts5_hits
