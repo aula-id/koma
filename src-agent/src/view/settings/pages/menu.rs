@@ -34,6 +34,7 @@ pub(crate) fn draw_menu(
         .border_style(Style::default().fg(palette.accent))
         .padding(Padding::horizontal(1));
     let inner = block.inner(popup);
+    let inner_w = inner.width as usize;
     frame.render_widget(block, popup);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -51,13 +52,22 @@ pub(crate) fn draw_menu(
         // row length: " " + chip + text + " "
         let row_len = 1 + chip_s.len() + label_s.len() + 1;
         let pad = (inner.width as usize).saturating_sub(row_len);
-        let chip = Span::styled(chip_s, style);
-        let text = Span::styled(label_s, style);
-        let mut spans = vec![Span::raw(" "), chip, text];
-        if pad > 0 {
-            spans.push(Span::raw(" ".repeat(pad)));
+        if is_selected {
+            // Single span padded to full width — sel_bg covers entire row.
+            let text = format!(" {chip_s}{label_s}{}", " ".repeat(pad));
+            lines.push(Line::from(Span::styled(
+                format!("{text:<inner_w$}"),
+                style,
+            )));
+        } else {
+            let chip = Span::styled(chip_s, style);
+            let text = Span::styled(label_s, style);
+            let mut spans = vec![Span::raw(" "), chip, text];
+            if pad > 0 {
+                spans.push(Span::raw(" ".repeat(pad)));
+            }
+            lines.push(Line::from(spans));
         }
-        lines.push(Line::from(spans));
     }
     // Bottom padding (1 blank line)
     lines.push(Line::from(""));

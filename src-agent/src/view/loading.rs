@@ -89,6 +89,7 @@ fn step_line<'a>(status: &'a WarmStatus, label: &'a str, frame: u64, palette: &P
 /// snapshot needed) — mirrors this module's `draw` layout but with a single line.
 pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) {
     let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -121,6 +122,7 @@ pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) 
 /// Render the loading splash for `state` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, state: &LoadingState, palette: &Palette) {
     let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
 
     // Vertical layout: an upper-third spacer pushes the title down to ~1/3, the
     // step block sits in the middle, and the footer pins to the bottom. The
