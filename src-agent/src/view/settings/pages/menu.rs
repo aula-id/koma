@@ -8,7 +8,7 @@ use ratatui::{
 use crate::app::mode::settings::SettingsPage;
 use crate::view::theme::Palette;
 
-const MENU_ITEMS: &[(u8, &str, SettingsPage)] = &[
+pub(crate) const MENU_ITEMS: &[(u8, &str, SettingsPage)] = &[
     (1, "Appearance", SettingsPage::Appearance),
     (2, "General",    SettingsPage::General),
     (3, "Providers",  SettingsPage::Providers),

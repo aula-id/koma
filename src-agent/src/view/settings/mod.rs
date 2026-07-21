@@ -32,30 +32,44 @@ use crate::view::theme::Palette;
 use pickers::draw_role_picker;
 
 /// Render the settings menu as a compact overlay anchored above the input bar,
-/// following the same pattern as bash/todo/commands overlays.
+/// following the same pattern as the slash-command palette.
 pub fn render_menu_overlay(
     frame: &mut Frame,
-    rest: &AppStateRest,
     st: &SettingsState,
-    models_cache: &[crate::dto::openrouter::ModelInfo],
-    cache_endpoint: Option<&str>,
     palette: &Palette,
     input_chunk: Rect,
     transcript_chunk: Rect,
 ) {
+    let rows: Vec<Line> = pages::menu::MENU_ITEMS
+        .iter()
+        .enumerate()
+        .map(|(i, (num, label, _page))| {
+            let is_selected = i == st.menu_sel;
+            let style = if is_selected {
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.fg)
+            };
+            let chip = Span::styled(format!("[{num}]"), if is_selected { style } else { Style::default().fg(palette.accent) });
+            let text = Span::styled(format!("  {label}"), style);
+            Line::from(vec![Span::raw(" "), chip, text])
+        })
+        .collect();
+
+    // Content-sized height (+2 for borders), clamped to available space.
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
-    let h = avail.max(3);
+    let h = ((rows.len() as u16) + 2).min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
     let popup = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
-        .title(Span::styled(" settings ", Style::default().fg(palette.dim)));
+        .title(Span::styled(" settings ", Style::default().fg(palette.dim)))
+        .padding(Padding::horizontal(1));
     let inner = block.inner(popup);
     crate::view::clear_and_fill(frame, popup, palette.bg);
     frame.render_widget(block, popup);
-
-    draw(frame, rest, st, models_cache, cache_endpoint, palette, inner);
+    frame.render_widget(Paragraph::new(rows), inner);
 }
 
 /// Render the settings content inside the given `area` rect.
