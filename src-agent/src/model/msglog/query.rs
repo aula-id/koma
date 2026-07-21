@@ -19,6 +19,18 @@ pub struct ArchivedMsg {
     pub content: String,
 }
 
+/// A match from the FTS5 full-text search index (`messages_fts`).
+/// Returned by [`search_messages`]; the `snippet` field is FTS5's own
+/// `snippet()` output with matching terms highlighted by the marker chars.
+#[derive(Debug, Clone)]
+pub struct MessageMatch {
+    pub id: i64,
+    pub role: String,
+    pub snippet: String,
+    #[allow(dead_code)]
+    pub created_at: i64,
+}
+
 /// Append one message to the session's SQLite log, creating the DB + tables on
 /// first use, and return the inserted `messages.id`. `session_dir` is the
 /// session directory (where messages.json lives). `usage` is
@@ -61,6 +73,12 @@ pub fn append(
             rusqlite::params![msg_id, kind, token_est, snippet, created_at],
         )?;
     }
+
+    // Keep the FTS5 index in sync: one row per message, keyed by rowid = msg_id.
+    tx.execute(
+        "INSERT INTO messages_fts(rowid, content, role) VALUES (?1, ?2, ?3)",
+        rusqlite::params![msg_id, content, role_str(role)],
+    )?;
 
     tx.commit()?;
     Ok(msg_id)
@@ -203,6 +221,7 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
     // Drop orphaned heavy-blob index rows first (FK-free, but keep it tidy), then
     // the messages themselves. `blobs.msg_id` mirrors `messages.id`.
     tx.execute("DELETE FROM blobs WHERE msg_id >= ?1", rusqlite::params![cut_id])?;
+    tx.execute("DELETE FROM messages_fts WHERE rowid >= ?1", rusqlite::params![cut_id])?;
     tx.execute("DELETE FROM messages WHERE id >= ?1", rusqlite::params![cut_id])?;
     // Rewind the summary watermark so it never references a dropped message. Clamp
     // both bookkeeping ids to the last surviving id (`cut_id - 1`, floored at 0).
@@ -216,6 +235,45 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
     )?;
     tx.commit()?;
     Ok(())
+}
+
+/// Full-text search the session's message archive via the FTS5 index.
+///
+/// `query` is the raw FTS5 expression passed straight to `MATCH` (multi-word,
+/// quoted phrases, etc. all work). Results are ranked by BM25 and capped at
+/// `limit`. Each result includes a snippet with match context from FTS5's
+/// `snippet()`. Best-effort: returns an empty vec on error or empty/whitespace
+/// query.
+pub fn search_messages(session_dir: &Path, query: &str, limit: i64) -> Vec<MessageMatch> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    fn inner(session_dir: &Path, query: &str, limit: i64) -> anyhow::Result<Vec<MessageMatch>> {
+        let conn = open(session_dir)?;
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.role, snippet(messages_fts, 1, '', '', '…', 40) AS snip, m.created_at
+             FROM messages_fts
+             JOIN messages m ON m.id = messages_fts.rowid
+             WHERE messages_fts MATCH ?
+             ORDER BY rank
+             LIMIT ?",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![query, limit], |r| {
+            Ok(MessageMatch {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                snippet: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+    inner(session_dir, q, limit).unwrap_or_default()
 }
 
 #[cfg(test)]
