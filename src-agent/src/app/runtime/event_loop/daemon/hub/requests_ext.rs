@@ -83,6 +83,7 @@ impl DaemonHub {
     /// The outcome ships back on the hub's `store_tx` as a [`StoreReply::PanelReply`] the per-tick
     /// `drain_store_replies` turns into a seq'd [`DaemonEvent::ExtPanelReply`] to the requester.
     /// A missing ext manager (no session runtime) replies `ok:false` synchronously (no task).
+    #[allow(clippy::too_many_arguments)]
     fn panel_msg(
         &mut self,
         idx: usize,
@@ -164,12 +165,12 @@ impl DaemonHub {
             let reply = match fetch_detail(&id).await {
                 Ok(detail) => StoreReply::Detail {
                     client_id,
-                    detail: Some(detail),
+                    detail: Box::new(Some(detail)),
                     error: None,
                 },
                 Err(e) => StoreReply::Detail {
                     client_id,
-                    detail: None,
+                    detail: Box::new(None),
                     error: Some(e),
                 },
             };
@@ -496,6 +497,7 @@ impl DaemonHub {
     /// core the TUI `/store` path's install drain calls — so a signature-verification or
     /// integrity failure (surfaced as `ok:false`) and the debug-only unsigned fallback
     /// behave identically for both surfaces.
+    #[allow(clippy::too_many_arguments)]
     fn finish_install(
         &mut self,
         idx: usize,
@@ -544,12 +546,12 @@ impl DaemonHub {
 /// a live manager. `running` is `mgr.is_running(&ext_id)`; `record` is the extension's registry
 /// entry (`None` = not installed). Returns:
 ///   - `Ok(true)`  → already running → invoke straight away (an already-live extension is used
-///                    regardless of its persisted `enabled` flag, which only gates auto-start).
+///     regardless of its persisted `enabled` flag, which only gates auto-start).
 ///   - `Ok(false)` → a daemon-kind, ENABLED, not-yet-running extension → `ensure_started` first
-///                    (a panel being open implies user intent; a blocking start is fine on the
-///                    pool).
+///     (a panel being open implies user intent; a blocking start is fine on the
+///     pool).
 ///   - `Err(msg)`  → not serviceable: MISSING / DISABLED / a ONESHOT-kind extension (spawned
-///                    per-invoke, so it has no live panel backend) → surfaced as the reply error.
+///     per-invoke, so it has no live panel backend) → surfaced as the reply error.
 fn panel_start_decision(running: bool, record: Option<&InstalledExtension>) -> Result<bool, String> {
     if running {
         return Ok(true);

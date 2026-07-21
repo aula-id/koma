@@ -610,7 +610,7 @@ fn looks_binary(bytes: &[u8]) -> bool {
 }
 
 fn is_excluded_dir(name: &str) -> bool {
-    EXCLUDED_DIRS.iter().any(|d| *d == name)
+    EXCLUDED_DIRS.contains(&name)
 }
 
 /// Directories first, then alphabetical by name (case-insensitive).

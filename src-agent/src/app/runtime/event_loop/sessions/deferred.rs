@@ -476,8 +476,8 @@ fn ext_prompts_ready(
 /// Build the injected user-turn body for buffered extension prompts: a leading
 /// [`EXT_PROMPT_MARK`](crate::dto::chat::EXT_PROMPT_MARK) (compact transcript render
 /// + wire strip), one `[ext:<id>] <text>` line per buffered prompt, then a trailing
-/// instruction line telling the model these are extension-injected user requests.
-/// Pure so the shape is unit-testable without the event loop.
+///   instruction line telling the model these are extension-injected user requests.
+///   Pure so the shape is unit-testable without the event loop.
 fn ext_prompt_body(prompts: &[(String, String)]) -> String {
     let mut body = String::from(crate::dto::chat::EXT_PROMPT_MARK);
     let lines = prompts

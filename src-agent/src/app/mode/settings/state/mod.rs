@@ -29,24 +29,20 @@ use super::{
 /// Working state for the in-app `/settings` dashboard.
 ///
 /// Holds editable *drafts* of every settable value; nothing is persisted until
-/// the user saves (Esc from the sidebar), at which point the runtime reads these
+/// the user saves (Esc from the menu), at which point the runtime reads these
 /// fields back out and applies them.
 ///
-/// Navigation is now THREE-level inside the detail pane for the path-list fields
-/// (Workdir, Allowed dirs): `cat` selects a category in the sidebar; `field`
-/// selects a row within the category's detail list; for a path-list field,
-/// `list_editing` enters per-entry management (`list_sel` highlights a row) and a
-/// `picker` overlay drives add/replace via the real filesystem. `in_detail`
-/// tracks which pane has keyboard focus. `editing` means typing into a plain
-/// text field.
+/// Navigation is now PAGE-BASED: `page` tracks which full-screen page is visible
+/// (Menu, Appearance, General, Providers, OAuth, Models, ProviderForm, ModelForm).
+/// Esc goes back one level; Esc from the menu saves and closes.
 #[derive(Debug, Clone)]
 pub struct SettingsState {
-    /// Selected category index into [`SETTING_CATEGORIES`](super::SETTING_CATEGORIES).
-    pub cat: usize,
-    /// Selected field index within `SETTING_CATEGORIES[cat].fields`.
+    /// Which page is currently shown.
+    pub page: super::SettingsPage,
+    /// Cursor index on the menu page (0-4, maps to SettingsPage::MENU_ORDER).
+    pub menu_sel: usize,
+    /// Selected field index within the General page field list.
     pub field: usize,
-    /// `false` = focus on the sidebar; `true` = focus on the detail field list.
-    pub in_detail: bool,
     /// `true` while typing into a text field; `false` while navigating.
     pub editing: bool,
     /// Draft API key (session-scoped).
@@ -72,19 +68,8 @@ pub struct SettingsState {
     pub workdir: Vec<String>,
     /// Draft: project-awareness summary enabled.
     pub awareness_enabled: bool,
-    /// Draft: awareness model source — `true` = inherit the session model,
-    /// `false` = use the dedicated awareness model/provider below.
-    pub awareness_inherit: bool,
-    /// Draft: dedicated awareness model (used when `awareness_inherit` is false).
-    pub awareness_model: String,
-    /// Draft: dedicated awareness provider (used when `awareness_inherit` is false).
-    pub awareness_provider: String,
     /// Draft: safety-harness master switch.
     pub classifier_enabled: bool,
-    /// Draft: safety-classifier model.
-    pub classifier_model: String,
-    /// Draft: safety-classifier provider slug.
-    pub classifier_provider: String,
     /// Draft: extra allowed folders as a managed path list. Seeded from
     /// `settings.allowed_folders` (or the launch cwd when empty) and written back
     /// to `Vec<String>` (trim, drop empties) on save.
@@ -250,9 +235,9 @@ impl SettingsState {
                 .map(|m| map_entry(m, true)),
         );
         Self {
-            cat: 0,
+            page: super::SettingsPage::Menu,
+            menu_sel: 0,
             field: 0,
-            in_detail: false,
             editing: false,
             api_key: session.settings.api_key.clone(),
             model: session.settings.model.clone(),
@@ -269,12 +254,7 @@ impl SettingsState {
                 .unwrap_or(0),
             workdir,
             awareness_enabled: session.settings.awareness_enabled,
-            awareness_inherit: session.settings.awareness_inherit,
-            awareness_model: session.settings.awareness_model.clone(),
-            awareness_provider: session.settings.awareness_provider.clone(),
             classifier_enabled: session.settings.classifier_enabled,
-            classifier_model: session.settings.classifier_model.clone(),
-            classifier_provider: session.settings.classifier_provider.clone(),
             allowed_folders,
             short_send_enabled: session.settings.short_send_enabled,
             sliding_cache: session.settings.sliding_cache,
@@ -302,82 +282,28 @@ impl SettingsState {
         }
     }
 
-    /// Return the [`SettingField`] currently highlighted in the detail pane.
+    /// Return the [`SettingField`] currently highlighted in the General page's
+    /// field list.
     pub fn current_field(&self) -> SettingField {
-        super::SETTING_CATEGORIES[self.cat].fields[self.field]
+        super::GENERAL_FIELDS[self.field]
     }
 
-    /// `true` when the selected category is "Appearance" (the palette picker).
-    /// Mirrors [`is_providers_category`](Self::is_providers_category) so the view
-    /// can short-circuit into the coolors-style palette list.
-    pub fn is_appearance_category(&self) -> bool {
-        super::SETTING_CATEGORIES[self.cat].name == "Appearance"
-    }
-
-    /// Move the cursor up.
+    /// Move the field cursor up (General page).
     pub fn up(&mut self) {
-        if self.in_detail {
-            self.field = self.field.saturating_sub(1);
-        } else {
-            let prev = self.cat;
-            self.cat = self.cat.saturating_sub(1);
-            if self.cat != prev {
-                self.field = 0;
-            }
-        }
+        self.field = self.field.saturating_sub(1);
     }
 
-    /// Move the cursor down.
+    /// Move the field cursor down (General page).
     pub fn down(&mut self) {
-        if self.in_detail {
-            let max = super::SETTING_CATEGORIES[self.cat].fields.len().saturating_sub(1);
-            if self.field < max {
-                self.field += 1;
-            }
-        } else {
-            let max = super::SETTING_CATEGORIES.len().saturating_sub(1);
-            if self.cat < max {
-                self.cat += 1;
-                self.field = 0;
-            }
+        let max = super::GENERAL_FIELDS.len().saturating_sub(1);
+        if self.field < max {
+            self.field += 1;
         }
     }
 
-    /// Move focus to the detail pane (only if the current category has fields,
-    /// or if the category is one of the special interactive screens — API
-    /// Providers / OAuth / Models Select — which carry no [`SettingField`] rows).
-    pub fn focus_detail(&mut self) {
-        if !super::SETTING_CATEGORIES[self.cat].fields.is_empty()
-            || self.is_providers_category()
-            || self.is_oauth_category()
-            || self.is_models_category()
-        {
-            self.in_detail = true;
-            self.field = 0;
-        }
-    }
-
-    /// Return focus to the sidebar; also exits editing/list/picker modes.
-    pub fn focus_sidebar(&mut self) {
-        self.in_detail = false;
-        self.editing = false;
-        self.list_editing = false;
-        self.list_sel = 0;
-        self.picker = None;
-    }
-
-    /// Act on Enter while in the detail pane.
+    /// Act on Enter for the current field (General page).
     pub fn enter(&mut self) {
-        if !self.in_detail {
-            return;
-        }
         match self.current_field() {
-            SettingField::Theme => {
-                self.theme = match self.theme {
-                    ThemeMode::Dark  => ThemeMode::Light,
-                    ThemeMode::Light => ThemeMode::Dark,
-                };
-            }
             SettingField::Accent => {
                 // Accent is cycled with arrow keys; Enter is intentionally a no-op.
             }
@@ -389,14 +315,6 @@ impl SettingsState {
             }
             SettingField::AwarenessEnabled => {
                 self.awareness_enabled = !self.awareness_enabled;
-            }
-            SettingField::AwarenessSource => {
-                self.awareness_inherit = !self.awareness_inherit;
-            }
-            SettingField::AwarenessModel | SettingField::AwarenessProvider => {
-                if !self.awareness_inherit {
-                    self.editing = true;
-                }
             }
             SettingField::ClassifierEnabled => {
                 self.classifier_enabled = !self.classifier_enabled;

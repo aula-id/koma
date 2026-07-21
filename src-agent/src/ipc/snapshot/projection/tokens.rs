@@ -2,9 +2,23 @@ use crate::app::mode::agents::{AgentEditField, AgentScope, AgentSubMode};
 use crate::app::mode::extensions::ExtSubMode;
 use crate::app::mode::help::HelpKind;
 use crate::app::mode::mcp::{McpEditField, McpSubMode};
+use crate::app::mode::settings::SettingsPage;
 use crate::app::mode::store::StoreSubMode;
 use crate::app::mode::{UsageMetric, UsageView};
 use crate::model::app_config::{ApiType, McpTransport, ModelRole, ThemeMode};
+
+pub fn settings_page_token(p: SettingsPage) -> &'static str {
+    match p {
+        SettingsPage::Menu         => "menu",
+        SettingsPage::Appearance   => "appearance",
+        SettingsPage::General      => "general",
+        SettingsPage::Providers    => "providers",
+        SettingsPage::ProviderForm => "provider_form",
+        SettingsPage::OAuth        => "oauth",
+        SettingsPage::Models       => "models",
+        SettingsPage::ModelForm    => "model_form",
+    }
+}
 
 pub fn theme_token(t: &ThemeMode) -> &'static str {
     match t {

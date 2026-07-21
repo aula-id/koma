@@ -7,7 +7,7 @@
 //! - [`chat`]           – the main conversation view (messages + input bar)
 //! - [`key_input`]      – the first-run / reconfigure credentials form
 //! - [`session_picker`] – the `--resume` session list with search bar
-//! - [`settings`]       – the in-app `/settings` dashboard
+//! - [`settings`]       – the in-app `/settings` overlay
 //! - [`effort`]         – the `/effort` reasoning-effort picker overlay
 //!
 //! No logic lives here; all rendering decisions belong to the sub-modules.
@@ -150,7 +150,16 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         Mode::KeyInput(form) => key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette),
         Mode::SessionPicker(p) => session_picker::draw(frame, &state.rest, p, &palette),
         Mode::SessionHub(h) => session_hub::draw(frame, &state.rest, h, &palette),
-        Mode::Settings(s) => settings::draw(frame, &state.rest, s, cache, cache_endpoint, &palette),
+        Mode::Settings(s) => {
+            if s.page == crate::app::mode::settings::SettingsPage::Menu {
+                let resolved_model = resolved_main_model(&state.rest);
+                chat::draw(frame, &state.rest, &resolved_model, &palette);
+                let chunks = chat::layout_chunks(&state.rest, frame.area());
+                settings::render_menu_overlay(frame, s, &palette, chunks[4], chunks[1]);
+            } else {
+                settings::draw(frame, &state.rest, s, cache, cache_endpoint, &palette, frame.area());
+            }
+        }
         Mode::Agents(a) => agents::draw(
             frame,
             &state.rest,

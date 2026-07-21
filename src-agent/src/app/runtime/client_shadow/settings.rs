@@ -10,7 +10,7 @@
 
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, OAuthDraft, OAuthFlowState, PathPicker, PickerMode, ProviderDraft,
-    ProviderModal, RolePickerState, SettingsState,
+    ProviderModal, RolePickerState, SettingsPage, SettingsState,
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot, SettingsSnapshot};
@@ -23,9 +23,9 @@ use crate::model::settings::{InternetMode, Settings};
 /// fields) renders exactly as the daemon's would.
 pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
     SettingsState {
-        cat: s.cat,
+        page: shadow_settings_page(&s.page),
+        menu_sel: s.menu_sel,
         field: s.field,
-        in_detail: s.in_detail,
         editing: s.editing,
         api_key: s.api_key,
         model: s.model,
@@ -36,12 +36,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         palette: s.palette,
         workdir: s.workdir,
         awareness_enabled: s.awareness_enabled,
-        awareness_inherit: s.awareness_inherit,
-        awareness_model: s.awareness_model,
-        awareness_provider: s.awareness_provider,
         classifier_enabled: s.classifier_enabled,
-        classifier_model: s.classifier_model,
-        classifier_provider: s.classifier_provider,
         allowed_folders: s.allowed_folders,
         short_send_enabled: s.short_send_enabled,
         sliding_cache: s.sliding_cache,
@@ -173,6 +168,20 @@ pub(crate) fn shadow_path_picker(p: PathPickerSnapshot) -> PathPicker {
             None => PickerMode::Add,
             Some(i) => PickerMode::Replace(i),
         },
+    }
+}
+
+/// Map a wire page token back to a [`SettingsPage`] (unknown → Menu).
+fn shadow_settings_page(t: &str) -> SettingsPage {
+    match t {
+        "appearance"    => SettingsPage::Appearance,
+        "general"       => SettingsPage::General,
+        "providers"     => SettingsPage::Providers,
+        "provider_form" => SettingsPage::ProviderForm,
+        "oauth"         => SettingsPage::OAuth,
+        "models"        => SettingsPage::Models,
+        "model_form"    => SettingsPage::ModelForm,
+        _               => SettingsPage::Menu,
     }
 }
 

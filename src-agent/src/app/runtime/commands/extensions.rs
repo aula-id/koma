@@ -83,6 +83,7 @@ pub(crate) fn build_extensions_state(
 /// The manifest-sourced half of one [`ExtRow`], read best-effort off
 /// `extensions/<id>/manifest.json`. The registry (`InstalledExtension`) carries no
 /// contributions/description/screens, so this is a fresh re-read on every build.
+#[derive(Default)]
 struct ExtManifestInfo {
     name: String,
     description: String,
@@ -92,21 +93,6 @@ struct ExtManifestInfo {
     models: usize,
     tui_screens: Vec<ExtTuiScreen>,
     workspace_dir: Option<String>,
-}
-
-impl Default for ExtManifestInfo {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            description: String::new(),
-            tools: 0,
-            panels: 0,
-            sub_agents: 0,
-            models: 0,
-            tui_screens: Vec::new(),
-            workspace_dir: None,
-        }
-    }
 }
 
 /// Read `extensions/<id>/manifest.json` and project the render-facing bits. A

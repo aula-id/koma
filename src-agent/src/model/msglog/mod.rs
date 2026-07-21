@@ -8,6 +8,13 @@
 //! Writes are best-effort: callers ignore the error so a DB hiccup never
 //! interrupts the chat.
 //!
+//! ## Full-text search (FTS5)
+//!
+//! The `messages_fts` virtual table indexes every message's `content` and `role`
+//! for full-text search via [`query::search_messages`]. It is populated on every
+//! `append()` and cleaned up on `truncate_after()`; existing DBs are backfilled
+//! once on first open. The `message_find` tool exposes this to the model.
+//!
 //! ## "Short-send" storage (Phase 1)
 //!
 //! Beyond the append-only `messages` table this archive also carries two
@@ -37,7 +44,7 @@ mod summary;
 
 // Public types
 pub use blobs::BlobRef;
-pub use query::ArchivedMsg;
+pub use query::{ArchivedMsg, MessageMatch};
 pub use records::{BashJobRecord, FileChange, SubAgentRecord};
 pub use summary::SummaryRow;
 
@@ -45,7 +52,7 @@ pub use summary::SummaryRow;
 pub use blobs::{fetch_blob_content, list_blobs, search_blobs};
 pub use query::{
     append, fetch_messages_since, max_message_id, message_count, totals, truncate_after,
-    user_message_ids,
+    user_message_ids, search_messages,
 };
 // Wave-5 per-session record persistence (file-change log + inert bash/sub-agent records).
 pub use records::{

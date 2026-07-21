@@ -50,8 +50,8 @@ const STEP_LABELS: [&str; 2] = ["indexing workspace", "reading project docs"];
 /// - `Skipped` → a dim `·` + dim ` skipped`.
 /// - `Failed`  → a dim `·` + dim ` failed`.
 fn step_line<'a>(status: &'a WarmStatus, label: &'a str, frame: u64, palette: &Palette) -> Line<'a> {
-    let accent = Style::default().fg(palette.accent);
-    let dim = Style::default().fg(palette.dim);
+    let accent = Style::default().fg(palette.accent).bg(palette.bg);
+    let dim = Style::default().fg(palette.dim).bg(palette.bg);
 
     // Marker + an optional trailing detail span (Done detail / skipped|failed word).
     let (marker, marker_style, detail): (String, Style, Option<Span>) = match status {
@@ -74,7 +74,7 @@ fn step_line<'a>(status: &'a WarmStatus, label: &'a str, frame: u64, palette: &P
     let mut spans = vec![
         Span::styled(marker, marker_style),
         Span::styled("  ", dim),
-        Span::styled(label, Style::default().fg(palette.fg)),
+        Span::styled(label, Style::default().fg(palette.fg).bg(palette.bg)),
     ];
     if let Some(d) = detail {
         spans.push(d);
@@ -89,6 +89,7 @@ fn step_line<'a>(status: &'a WarmStatus, label: &'a str, frame: u64, palette: &P
 /// snapshot needed) — mirrors this module's `draw` layout but with a single line.
 pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) {
     let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -102,18 +103,21 @@ pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) 
 
     let title = Paragraph::new(Line::from(Span::styled(
         "koma",
-        Style::default().fg(palette.accent),
+        Style::default().fg(palette.accent).bg(palette.bg),
     )))
+    .style(Style::default().bg(palette.bg))
     .alignment(Alignment::Center);
     frame.render_widget(title, chunks[1]);
 
     let glyph = SPINNER[(spinner_frame % 10) as usize];
     let line = Line::from(vec![
-        Span::styled(glyph, Style::default().fg(palette.accent)),
-        Span::styled("  reopening", Style::default().fg(palette.fg)),
+        Span::styled(glyph, Style::default().fg(palette.accent).bg(palette.bg)),
+        Span::styled("  reopening", Style::default().fg(palette.fg).bg(palette.bg)),
     ]);
     frame.render_widget(
-        Paragraph::new(line).alignment(Alignment::Center),
+        Paragraph::new(line)
+            .style(Style::default().bg(palette.bg))
+            .alignment(Alignment::Center),
         chunks[3],
     );
 }
@@ -121,6 +125,7 @@ pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) 
 /// Render the loading splash for `state` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, state: &LoadingState, palette: &Palette) {
     let area = frame.area();
+    crate::view::clear_and_fill(frame, area, palette.bg);
 
     // Vertical layout: an upper-third spacer pushes the title down to ~1/3, the
     // step block sits in the middle, and the footer pins to the bottom. The
@@ -142,8 +147,9 @@ pub fn draw(frame: &mut Frame, state: &LoadingState, palette: &Palette) {
     // --- Title: "koma" in accent, centered ---
     let title = Paragraph::new(Line::from(Span::styled(
         "koma",
-        Style::default().fg(palette.accent),
+        Style::default().fg(palette.accent).bg(palette.bg),
     )))
+    .style(Style::default().bg(palette.bg))
     .alignment(Alignment::Center);
     frame.render_widget(title, chunks[1]);
 
@@ -159,14 +165,20 @@ pub fn draw(frame: &mut Frame, state: &LoadingState, palette: &Palette) {
             step_line(status, label, state.frame, palette)
         })
         .collect();
-    frame.render_widget(Paragraph::new(steps).alignment(Alignment::Center), chunks[3]);
+    frame.render_widget(
+        Paragraph::new(steps)
+            .style(Style::default().bg(palette.bg))
+            .alignment(Alignment::Center),
+        chunks[3],
+    );
 
     // --- Footer: dim "warming up · {elapsed:.1}s   ·   esc to skip" ---
     let elapsed = state.started.elapsed().as_secs_f64();
     let footer = Paragraph::new(Line::from(Span::styled(
         format!("warming up · {elapsed:.1}s   ·   esc to skip"),
-        Style::default().fg(palette.dim),
+        Style::default().fg(palette.dim).bg(palette.bg),
     )))
+    .style(Style::default().bg(palette.bg))
     .alignment(Alignment::Center);
     frame.render_widget(footer, chunks[5]);
 }
