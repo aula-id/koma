@@ -10,7 +10,7 @@
 
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, OAuthDraft, OAuthFlowState, PathPicker, PickerMode, ProviderDraft,
-    ProviderModal, RolePickerState, SettingsState,
+    ProviderModal, RolePickerState, SettingsPage, SettingsState,
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
 use crate::ipc::proto::{ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot, SettingsSnapshot};
@@ -23,9 +23,9 @@ use crate::model::settings::{InternetMode, Settings};
 /// fields) renders exactly as the daemon's would.
 pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
     SettingsState {
-        cat: s.cat,
+        page: shadow_settings_page(&s.page),
+        menu_sel: s.menu_sel,
         field: s.field,
-        in_detail: s.in_detail,
         editing: s.editing,
         api_key: s.api_key,
         model: s.model,
@@ -173,6 +173,20 @@ pub(crate) fn shadow_path_picker(p: PathPickerSnapshot) -> PathPicker {
             None => PickerMode::Add,
             Some(i) => PickerMode::Replace(i),
         },
+    }
+}
+
+/// Map a wire page token back to a [`SettingsPage`] (unknown → Menu).
+fn shadow_settings_page(t: &str) -> SettingsPage {
+    match t {
+        "appearance"    => SettingsPage::Appearance,
+        "general"       => SettingsPage::General,
+        "providers"     => SettingsPage::Providers,
+        "provider_form" => SettingsPage::ProviderForm,
+        "oauth"         => SettingsPage::OAuth,
+        "models"        => SettingsPage::Models,
+        "model_form"    => SettingsPage::ModelForm,
+        _               => SettingsPage::Menu,
     }
 }
 
