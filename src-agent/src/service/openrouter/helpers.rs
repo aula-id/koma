@@ -337,6 +337,7 @@ pub(super) fn clean_error(status: reqwest::StatusCode, body: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod apply_tool_call_delta_tests {
     use super::*;
     use crate::dto::openrouter::FunctionDelta;

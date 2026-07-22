@@ -475,6 +475,7 @@ impl Conversation {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod clear_body_tests {
     use super::*;
 

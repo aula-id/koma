@@ -733,6 +733,7 @@ fn read_ext_panels(id: &str) -> Vec<PanelWire> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

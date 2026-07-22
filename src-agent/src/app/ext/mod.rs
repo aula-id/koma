@@ -597,6 +597,7 @@ fn read_events_best_effort(install_dir: &Path) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::wire;
     use super::*;

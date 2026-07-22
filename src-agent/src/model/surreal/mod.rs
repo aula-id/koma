@@ -14,6 +14,7 @@ mod search;
 
 // Phase 3-4 modules: fully implemented and tested.
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod graph;
 pub(crate) mod memory;
 
@@ -60,6 +61,7 @@ pub fn search_messages(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

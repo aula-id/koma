@@ -336,6 +336,7 @@ pub(crate) fn sanitize_id_part(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -157,6 +157,7 @@ pub fn to_conn(api_key: &str, user_name: &str, user_id: &str) -> OAuthConn {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

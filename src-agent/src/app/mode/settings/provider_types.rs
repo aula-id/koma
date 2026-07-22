@@ -162,6 +162,7 @@ pub fn oauth_status(c: &crate::model::app_config::OAuthConn) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod oauth_status_tests {
     use super::oauth_status;
     use crate::model::app_config::{OAuthConn, OAuthProvider};

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! W13 additional regression suite for `resolve.rs`'s ext-preferred slug-binding seam
 //! (`find_model_entry_by_slug` + `ext_preferred_provider_uuids`) — PURE ADDITION, a SEPARATE
 //! sibling module from the existing `resolve_test.rs` (never touched here; its own helpers
