@@ -518,6 +518,10 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     use std::sync::atomic::AtomicU64;
     use std::sync::{mpsc, Arc, Mutex};
 
+    fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     let socket = match std::env::var("KOMA_EXT_SOCKET") {
         Ok(s) => s,
         Err(_) => return,
@@ -607,7 +611,7 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
             }
             KomaMsg::Event { name, params } => ext.on_event(&name, params),
             KomaMsg::Result { id, result } => {
-                if let Some(tx) = pending.lock().unwrap().remove(&id) {
+                if let Some(tx) = lock(&pending).remove(&id) {
                     let _ = tx.send(result);
                 }
             }
@@ -627,17 +631,17 @@ fn host_call(h: &HostHandle, method: &str, params: serde_json::Value) -> serde_j
     use std::sync::atomic::Ordering;
     let id = h.next_id.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = std::sync::mpsc::channel();
-    h.pending.lock().unwrap().insert(id, tx);
+    lock(&h.pending).insert(id, tx);
 
     let call = ExtMsg::Call { id, method: method.to_string(), params };
     if write_line(&h.writer, &call).is_err() {
-        h.pending.lock().unwrap().remove(&id);
+        lock(&h.pending).remove(&id);
         return serde_json::json!({ "error": "koma call: write failed" });
     }
     match rx.recv_timeout(std::time::Duration::from_secs(120)) {
         Ok(v) => v,
         Err(_) => {
-            h.pending.lock().unwrap().remove(&id);
+            lock(&h.pending).remove(&id);
             serde_json::json!({ "error": "koma call: timed out" })
         }
     }
@@ -653,7 +657,7 @@ fn write_line<T: serde::Serialize>(
     use std::io::Write;
     let mut line = serde_json::to_string(msg).unwrap_or_default();
     line.push('\n');
-    let mut w = writer.lock().unwrap();
+    let mut w = lock(writer);
     w.write_all(line.as_bytes())?;
     w.flush()
 }
