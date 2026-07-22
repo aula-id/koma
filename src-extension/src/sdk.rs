@@ -476,7 +476,7 @@ fn handshake(manifest: &ExtensionManifest) {
     let hello = ExtMsg::Hello {
         protocol: PROTOCOL_VERSION.to_string(),
         token: "demo-token".to_string(),
-        manifest: manifest.clone(),
+        manifest: Box::new(manifest.clone()),
     };
     print_out("EXT->KOMA Hello", &to_value(&hello));
 
@@ -551,7 +551,7 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     let hello = ExtMsg::Hello {
         protocol: PROTOCOL_VERSION.to_string(),
         token,
-        manifest: ext.manifest(),
+        manifest: Box::new(ext.manifest()),
     };
     if write_line(&writer, &hello).is_err() {
         return;

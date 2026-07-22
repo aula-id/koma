@@ -247,7 +247,7 @@ pub enum Grant {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub enum ExtMsg {
-    Hello { protocol: String, token: String, manifest: ExtensionManifest },
+    Hello { protocol: String, token: String, manifest: Box<ExtensionManifest> },
     Call { id: u64, method: String, params: serde_json::Value },   // ext drives koma (requires)
     Result { id: u64, result: serde_json::Value },                 // reply to koma's Invoke
     Health { ok: bool },

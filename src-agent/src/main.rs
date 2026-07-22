@@ -39,7 +39,7 @@
 //!     → view::draw   (AppState → rendered Frame)
 //! ```
 
-#![deny(clippy::unwrap_used, clippy::expect_used)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
 mod cli;
@@ -48,10 +48,10 @@ mod controller;
 mod dto;
 mod internet;
 mod ipc;
-mod security;
 mod model;
 mod re_util;
 mod resources;
+mod security;
 mod service;
 mod tool;
 mod view;
@@ -77,9 +77,8 @@ fn main() -> anyhow::Result<()> {
                 .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                 .unwrap_or_else(|| "<unknown>".to_string());
             let backtrace = std::backtrace::Backtrace::force_capture();
-            let msg = format!(
-                "PANIC on thread '{thread_name}': {payload}\nat {location}\n{backtrace}"
-            );
+            let msg =
+                format!("PANIC on thread '{thread_name}': {payload}\nat {location}\n{backtrace}");
             crate::model::store::append_global_error_log("panic", &msg);
             // Also print to stderr in case it's visible (non-daemon invocations).
             eprintln!("FATAL: {msg}");
@@ -265,7 +264,9 @@ fn main() -> anyhow::Result<()> {
     }
     #[cfg(not(feature = "gui"))]
     if opts.gui {
-        eprintln!("koma was built without the `gui` feature. Rebuild with: cargo build --features gui");
+        eprintln!(
+            "koma was built without the `gui` feature. Rebuild with: cargo build --features gui"
+        );
         std::process::exit(1);
     }
 
