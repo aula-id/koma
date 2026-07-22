@@ -28,6 +28,7 @@ pub fn search_hybrid(session_dir: &Path, query: &str, limit: usize) -> Vec<Messa
             })
         }
     })
+    .unwrap_or_default()
 }
 
 async fn search_hybrid_async(
@@ -110,6 +111,7 @@ pub fn search_fts_only(session_dir: &Path, query: &str, limit: usize) -> Vec<Mes
             })
         }
     })
+    .unwrap_or_default()
 }
 
 async fn search_fts_only_async(

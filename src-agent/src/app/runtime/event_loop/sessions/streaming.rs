@@ -115,11 +115,12 @@ pub(super) fn drain_stream(
                         .map(|t| t.elapsed())
                         .unwrap_or(MIN_COMPACT_ANIM);
                     if elapsed < MIN_COMPACT_ANIM {
-                        let start = state.rest.sessions[idx].compact_anim_start.unwrap();
-                        state.rest.sessions[idx].compact_apply_at = Some(start + MIN_COMPACT_ANIM);
-                        state.rest.sessions[idx].compact_pending = Some((summary, kept_tail));
-                        // Keep `waiting` true so the 8ms poll + per-tick redraw keep
-                        // the animation running until the gate opens.
+                        if let Some(start) = state.rest.sessions[idx].compact_anim_start {
+                            state.rest.sessions[idx].compact_apply_at = Some(start + MIN_COMPACT_ANIM);
+                            state.rest.sessions[idx].compact_pending = Some((summary, kept_tail));
+                        } else {
+                            apply_compaction_result(state, idx, client, handle, summary, kept_tail);
+                        }
                     } else {
                         apply_compaction_result(state, idx, client, handle, summary, kept_tail);
                     }

@@ -129,6 +129,7 @@ pub fn get_agent_calls(session_dir: &Path, agent_id: &str) -> Vec<ToolCallRecord
                 })
         }
     })
+    .unwrap_or_default()
 }
 
 async fn get_agent_calls_async(

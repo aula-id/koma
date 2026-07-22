@@ -29,11 +29,25 @@ pub fn gather(
     user_query: &str,
 ) -> Option<KnowledgeFacts> {
     if !config.enabled || user_query.trim().is_empty() {
+        crate::model::store::append_global_error_log(
+            "knowledge-gather",
+            &format!("skipped: enabled={}, query_empty={}", config.enabled, user_query.trim().is_empty()),
+        );
         return None;
     }
-    let limit = (config.max_input_tokens / 500).max(3); // ~500 tokens per fact, min 3
+    let limit = (config.max_input_tokens / 500).max(3);
     let qv = crate::model::surreal::core::embed_one(user_query.trim());
     let facts = crate::model::surreal::memory::recall_memory(session_dir, &qv, limit);
+    crate::model::store::append_global_error_log(
+        "knowledge-gather",
+        &format!(
+            "session={}, query='{}', limit={}, found={}",
+            session_dir.display(),
+            &user_query[..user_query.len().min(60)],
+            limit,
+            facts.len(),
+        ),
+    );
     if facts.is_empty() {
         return None;
     }
@@ -106,18 +120,33 @@ pub async fn distill(
     Some(format!("\n\n[Knowledge context: {body}]"))
 }
 
-/// Mechanical top-3-by-trust fact listing (used when awareness model is
-/// disabled or unavailable).
-fn raw_note(facts: &KnowledgeFacts) -> String {
+/// Re-export of the quality filter for use by extraction code.
+pub(crate) fn is_quality_fact_static(content: &str) -> bool {
+    crate::model::surreal::memory::is_quality_fact(content)
+}
+/// disabled or unavailable). Deduplicates by content similarity.
+pub(crate) fn raw_note(facts: &KnowledgeFacts) -> String {
     let mut sorted: Vec<&Fact> = facts.facts.iter().collect();
     sorted.sort_by(|a, b| {
         b.trust
             .partial_cmp(&a.trust)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    sorted.truncate(3);
 
-    let lines: Vec<String> = sorted
+    // Dedup: skip facts whose first 40 chars already appeared.
+    let mut seen_prefixes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut unique: Vec<&Fact> = Vec::with_capacity(3);
+    for f in &sorted {
+        if unique.len() >= 3 {
+            break;
+        }
+        let prefix = f.content[..f.content.len().min(40)].to_lowercase();
+        if seen_prefixes.insert(prefix) {
+            unique.push(f);
+        }
+    }
+
+    let lines: Vec<String> = unique
         .iter()
         .map(|f| f.content.trim().to_string())
         .filter(|s: &String| !s.is_empty())

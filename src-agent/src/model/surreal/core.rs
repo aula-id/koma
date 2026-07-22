@@ -20,21 +20,33 @@ use surrealdb::engine::local::Db;
 
 pub type Embedding = Vec<f32>;
 
-static EMBEDDER: OnceLock<TextEmbedding> = OnceLock::new();
+static EMBEDDER: OnceLock<Option<TextEmbedding>> = OnceLock::new();
 
-fn get_embedder() -> &'static TextEmbedding {
-    EMBEDDER.get_or_init(|| {
-        TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15))
-            .expect("failed to initialise fastembed BGE-small-en-v1.5 model")
-    })
+fn get_embedder() -> Option<&'static TextEmbedding> {
+    EMBEDDER
+        .get_or_init(|| {
+            TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15))
+                .map_err(|e| {
+                    crate::model::store::append_global_error_log(
+                        "fastembed init failed",
+                        &e.to_string(),
+                    );
+                    e
+                })
+                .ok()
+        })
+        .as_ref()
 }
 
 pub(crate) fn embed_batch(texts: Vec<String>) -> Vec<Embedding> {
     if texts.is_empty() {
         return Vec::new();
     }
+    let Some(embedder) = get_embedder() else {
+        return Vec::new();
+    };
     let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    get_embedder().embed(refs, None).unwrap_or_default()
+    embedder.embed(refs, None).unwrap_or_default()
 }
 
 pub(crate) fn embed_one(text: &str) -> Embedding {
@@ -75,21 +87,49 @@ pub fn sync_state(session_dir: &Path) -> SyncState {
 // blocking_block
 // ---------------------------------------------------------------------------
 
-pub(crate) fn blocking_block<F, Fut, T>(f: F) -> T
+pub(crate) fn blocking_block<F, Fut, T>(f: F) -> Option<T>
 where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = T> + Send,
     T: Send + 'static,
 {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime build failed");
-        rt.block_on(f())
-    })
-    .join()
-    .expect("surreal blocking task panicked")
+    let handle = match std::thread::Builder::new()
+        .name("surreal-blocking".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    crate::model::store::append_global_error_log(
+                        "surreal: tokio runtime build failed",
+                        &e.to_string(),
+                    );
+                    return None;
+                }
+            };
+            Some(rt.block_on(f()))
+        }) {
+        Ok(h) => h,
+        Err(e) => {
+            crate::model::store::append_global_error_log(
+                "surreal: failed to spawn blocking thread",
+                &e.to_string(),
+            );
+            return None;
+        }
+    };
+    match handle.join() {
+        Ok(val) => val,
+        Err(_) => {
+            crate::model::store::append_global_error_log(
+                "surreal: blocking task panicked",
+                "a surreal blocking thread panicked; see stderr for backtrace",
+            );
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +270,7 @@ fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
     let total = rows.len();
 
     let sd = session_dir.to_path_buf();
-    blocking_block(move || {
+    match blocking_block(move || {
         let sd = sd.clone();
         async move {
             let db = open_db(&sd).await?;
@@ -255,7 +295,10 @@ fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
 
             Ok::<usize, anyhow::Error>(total)
         }
-    })
+    }) {
+        Some(result) => result,
+        None => Err(anyhow::anyhow!("surreal blocking_block failed in do_sync")),
+    }
 }
 
 // ---------------------------------------------------------------------------

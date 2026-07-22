@@ -420,6 +420,14 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     client today. Clear the flag before latching so a stray re-check this same
         //     tick reads it as already handled.
         if state.rest.should_quit {
+            crate::model::store::append_global_error_log(
+                "daemon-exit",
+                &format!(
+                    "door: should_quit sweep → request_shutdown [sessions={}, clients={}]",
+                    state.rest.sessions.len(),
+                    hub.client_count(),
+                ),
+            );
             state.rest.should_quit = false;
             hub.request_shutdown();
         }
@@ -458,6 +466,17 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     `Relaxed` is sufficient: this is a single boolean flag with no other
         //     memory it must publish/acquire — teardown reads only owned `state`.
         if hub.should_shutdown() || shutting_down.load(Ordering::Relaxed) {
+            let hub_reason = hub.should_shutdown();
+            let sig_reason = shutting_down.load(Ordering::Relaxed);
+            crate::model::store::append_global_error_log(
+                "daemon-exit",
+                &format!(
+                    "door: shutdown trigger [hub_shutdown={hub_reason}, signal={sig_reason}, sessions={}, clients={}, all_closed={}]",
+                    state.rest.sessions.len(),
+                    hub.client_count(),
+                    all_sessions_closed(state),
+                ),
+            );
             break;
         }
 
@@ -478,6 +497,13 @@ pub(in crate::app::runtime) fn daemon_loop(
                 // Final accept-drain: observe any connection that landed during grace.
                 hub.drain_inbound_only(state, client, handle);
                 if hub.client_count() == 0 {
+                    crate::model::store::append_global_error_log(
+                        "daemon-exit",
+                        &format!(
+                            "door: self-exit grace timer expired [quiesce_ticks={quiesce_ticks}, sessions={}]",
+                            state.rest.sessions.len(),
+                        ),
+                    );
                     break; // no client raced in → commit to self-exit + teardown
                 }
                 // A client connected during grace: abort the exit, serve it. Reset the

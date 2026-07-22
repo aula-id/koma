@@ -426,6 +426,10 @@ impl DaemonHub {
     /// flag) means [`should_shutdown`](Self::should_shutdown) — and every teardown
     /// path gated on it — behaves identically regardless of which source latched it.
     pub(in crate::app::runtime) fn request_shutdown(&mut self) {
+        crate::model::store::append_global_error_log(
+            "daemon-exit",
+            "door: request_shutdown called (latching hub.shutdown=true)",
+        );
         self.shutdown = true;
     }
 
