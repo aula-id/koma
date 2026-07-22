@@ -191,7 +191,7 @@ fn not_found_response() -> Response<Cow<'static, [u8]>> {
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(Cow::Borrowed(&b"not found"[..]))
-        .expect("static 404 response is valid")
+        .unwrap_or_else(|_| Response::new(Cow::Borrowed(&b"not found"[..])))
 }
 
 /// Shared 500 body for both `koma://` request kinds.
@@ -199,7 +199,7 @@ fn internal_error_response() -> Response<Cow<'static, [u8]>> {
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body(Cow::Borrowed(&[][..]))
-        .expect("static empty response is valid")
+        .unwrap_or_else(|_| Response::new(Cow::Borrowed(&[][..])))
 }
 
 #[cfg(test)]
