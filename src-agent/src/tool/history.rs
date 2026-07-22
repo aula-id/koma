@@ -24,9 +24,11 @@ impl Tool for MessageFind {
         "Search the current session's chat history (messages.sqlite) for past \
          conversation turns matching the query. Uses full-text search (FTS5). \
          Returns up to 10 ranked snippets with message id, role, and content \
-         context. Use this to recall past decisions, tradeoffs, error messages, \
-         or facts discussed earlier in the conversation that may have scrolled \
-         out of the context window."
+         context. Call this when you are confused or missing context about a \
+         past decision, error, tradeoff, or fact that may have scrolled out of \
+         the context window — before guessing. Also call it when the user \
+         explicitly asks you to recall, look up, find, or check something from \
+         earlier in the conversation."
     }
 
     fn parameters(&self) -> Value {
