@@ -60,6 +60,7 @@ pub use commands::print_daemon_usage;
 pub use doctor::run_doctor;
 // `stop_mcp_daemon` is re-exported for the detached extension-uninstall path (bounce the
 // global MCP daemon so the next ensure respawns it off the just-saved config).
+pub use knowledge::ensure_knowledge_daemon_running;
 pub use mcp::{ensure_mcp_daemon_running, stop_mcp_daemon};
 // `spawn_into_session` + `SpawnIntoReply` are the extension `sessions.spawn_into`
 // cross-process transport (W7), consumed by the grant broker outside this module tree.
