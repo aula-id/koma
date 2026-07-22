@@ -84,7 +84,7 @@ pub async fn distill(
 
     let conn = route.conn();
     let result = client
-        .complete_with(conn, &route.model_id, &route.provider(), messages, false)
+        .complete_with(conn, &route.model_id, route.provider(), messages, false)
         .await
         .ok()?;
 
