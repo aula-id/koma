@@ -138,7 +138,11 @@ impl ToolPickerState {
 /// runtime resolution — missing that lookup was the `"@ ?"` display bug), or
 /// `"?"` when neither catalogue has a match.
 fn entry_provider_name(config: &AppConfig, entry: &ModelEntry) -> String {
-    if let Some(p) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+    if let Some(p) = config
+        .providers
+        .iter()
+        .find(|p| p.uuid == entry.provider_uuid)
+    {
         if !p.name.trim().is_empty() {
             return p.name.clone();
         }
@@ -146,7 +150,11 @@ fn entry_provider_name(config: &AppConfig, entry: &ModelEntry) -> String {
             return p.endpoint.clone();
         }
     }
-    if let Some(c) = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid) {
+    if let Some(c) = config
+        .oauth_conns
+        .iter()
+        .find(|c| c.uuid == entry.provider_uuid)
+    {
         // Prefer the stored display name; fall back to provider kind + short uuid.
         if !c.name.trim().is_empty() {
             return c.name.clone();
@@ -198,13 +206,8 @@ impl ModelPickerState {
     /// The cursor lands on the row whose uuid equals `current` (or row 0 when
     /// `current` is `None` or no longer matches a registered entry).
     pub fn from_models(config: &AppConfig, settings: &Settings, current: &Option<String>) -> Self {
-        let mut options: Vec<(Option<String>, String)> =
-            vec![(None, "(inherit main)".to_string())];
-        for entry in settings
-            .session_models
-            .iter()
-            .chain(config.models.iter())
-        {
+        let mut options: Vec<(Option<String>, String)> = vec![(None, "(inherit main)".to_string())];
+        for entry in settings.session_models.iter().chain(config.models.iter()) {
             options.push((Some(entry.uuid.clone()), entry_label(config, entry)));
         }
         let cursor = match current {
@@ -232,8 +235,6 @@ impl ModelPickerState {
     /// The model uuid at the cursor: `None` for the "(inherit main)" row, else the
     /// chosen registered model's uuid.
     pub fn selected(&self) -> Option<String> {
-        self.options
-            .get(self.cursor)
-            .and_then(|(u, _)| u.clone())
+        self.options.get(self.cursor).and_then(|(u, _)| u.clone())
     }
 }

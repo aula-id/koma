@@ -180,8 +180,8 @@ pub fn install_dev_dir(src_dir: &Path) -> Result<InstalledExtension> {
 #[cfg(unix)]
 fn chmod_exec(exec_path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(exec_path)
-        .with_context(|| format!("stat {}", exec_path.display()))?;
+    let meta =
+        std::fs::metadata(exec_path).with_context(|| format!("stat {}", exec_path.display()))?;
     let mut perms = meta.permissions();
     perms.set_mode(perms.mode() | 0o755);
     std::fs::set_permissions(exec_path, perms)
@@ -205,11 +205,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
             copy_dir_all(&entry.path(), &dst_path)?;
         } else if file_type.is_file() {
             std::fs::copy(entry.path(), &dst_path).with_context(|| {
-                format!(
-                    "copy {} -> {}",
-                    entry.path().display(),
-                    dst_path.display()
-                )
+                format!("copy {} -> {}", entry.path().display(), dst_path.display())
             })?;
         }
     }
@@ -246,8 +242,8 @@ fn verify_integrity(
     let sig_bytes = base64::engine::general_purpose::STANDARD
         .decode(signature_b64.trim().as_bytes())
         .context("signature is not valid base64")?;
-    let sig =
-        Signature::from_slice(&sig_bytes).map_err(|e| anyhow!("invalid signature encoding: {e}"))?;
+    let sig = Signature::from_slice(&sig_bytes)
+        .map_err(|e| anyhow!("invalid signature encoding: {e}"))?;
 
     vk.verify(digest.as_slice(), &sig)
         .map_err(|_| anyhow!("extension signature verification failed"))?;

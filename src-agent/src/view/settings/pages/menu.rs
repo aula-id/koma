@@ -1,3 +1,5 @@
+use crate::app::mode::settings::SettingsPage;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -5,30 +7,28 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
     Frame,
 };
-use crate::app::mode::settings::SettingsPage;
-use crate::view::theme::Palette;
 
 pub(crate) const MENU_ITEMS: &[(u8, &str, SettingsPage)] = &[
     (1, "Appearance", SettingsPage::Appearance),
-    (2, "General",    SettingsPage::General),
-    (3, "Providers",  SettingsPage::Providers),
-    (4, "OAuth",      SettingsPage::OAuth),
-    (5, "Models",     SettingsPage::Models),
+    (2, "General", SettingsPage::General),
+    (3, "Providers", SettingsPage::Providers),
+    (4, "OAuth", SettingsPage::OAuth),
+    (5, "Models", SettingsPage::Models),
 ];
 
-pub(crate) fn draw_menu(
-    frame: &mut Frame,
-    menu_sel: usize,
-    palette: &Palette,
-    area: Rect,
-) {
+pub(crate) fn draw_menu(frame: &mut Frame, menu_sel: usize, palette: &Palette, area: Rect) {
     let content_w = area.width.saturating_sub(4);
     let content_h = area.height.saturating_sub(4);
     let box_w = 38u16.min(content_w);
     let box_h = (MENU_ITEMS.len() as u16 * 2 + 2).min(content_h);
     let x = area.x + (area.width.saturating_sub(box_w)) / 2;
     let y = area.y + (area.height.saturating_sub(box_h)) / 2;
-    let popup = Rect { x, y, width: box_w, height: box_h };
+    let popup = Rect {
+        x,
+        y,
+        width: box_w,
+        height: box_h,
+    };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.accent))
@@ -43,7 +43,10 @@ pub(crate) fn draw_menu(
     for (i, (num, label, _page)) in MENU_ITEMS.iter().enumerate() {
         let is_selected = i == menu_sel;
         let style = if is_selected {
-            Style::default().fg(palette.sel_fg).bg(palette.sel_bg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.sel_fg)
+                .bg(palette.sel_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.fg)
         };
@@ -55,10 +58,7 @@ pub(crate) fn draw_menu(
         if is_selected {
             // Single span padded to full width — sel_bg covers entire row.
             let text = format!(" {chip_s}{label_s}{}", " ".repeat(pad));
-            lines.push(Line::from(Span::styled(
-                format!("{text:<inner_w$}"),
-                style,
-            )));
+            lines.push(Line::from(Span::styled(format!("{text:<inner_w$}"), style)));
         } else {
             let chip = Span::styled(chip_s, style);
             let text = Span::styled(label_s, style);

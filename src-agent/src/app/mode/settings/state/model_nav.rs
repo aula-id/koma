@@ -62,7 +62,9 @@ impl SettingsState {
         match self.mm_selected_provider()? {
             SelectedProvider::Provider(p) => Some((p.endpoint.clone(), p.api_key.clone())),
             SelectedProvider::OAuth(d) => {
-                let ep = crate::service::oauth::registry::meta(d.provider).catalogue_endpoint.to_string();
+                let ep = crate::service::oauth::registry::meta(d.provider)
+                    .catalogue_endpoint
+                    .to_string();
                 Some((ep, d.key.clone()))
             }
         }
@@ -80,9 +82,7 @@ impl SettingsState {
         self.model_modal
             .as_ref()
             .and_then(|m| self.providers.get(m.provider_idx))
-            .map(|p| {
-                p.api_type.is_routable() && p.endpoint.to_lowercase().contains("openrouter")
-            })
+            .map(|p| p.api_type.is_routable() && p.endpoint.to_lowercase().contains("openrouter"))
             .unwrap_or(false)
     }
 
@@ -152,7 +152,10 @@ impl SettingsState {
     pub fn provider_label_at(&self, idx: usize) -> Option<&str> {
         let n = self.providers.len();
         if idx < n {
-            self.providers.get(idx).map(|p| p.name.as_str()).filter(|s| !s.is_empty())
+            self.providers
+                .get(idx)
+                .map(|p| p.name.as_str())
+                .filter(|s| !s.is_empty())
         } else {
             self.oauth_drafts.get(idx - n).map(|d| d.label.as_str())
         }
@@ -195,7 +198,11 @@ impl SettingsState {
     /// em-dash placeholder, or OAuth draft label). `None` when no modal is open.
     pub fn mm_provider_label(&self) -> Option<String> {
         match self.mm_selected_provider()? {
-            SelectedProvider::Provider(p) => Some(if p.name.is_empty() { "\u{2014}".to_string() } else { p.name.clone() }),
+            SelectedProvider::Provider(p) => Some(if p.name.is_empty() {
+                "\u{2014}".to_string()
+            } else {
+                p.name.clone()
+            }),
             SelectedProvider::OAuth(d) => Some(d.label.clone()),
         }
     }
@@ -262,8 +269,7 @@ impl SettingsState {
     /// index space are never touched, so `provider_idx → provider_uuid` saving
     /// (see `actions/settings.rs::to_entry`) stays correct.
     fn is_koma_free_at(&self, idx: usize) -> bool {
-        idx < self.providers.len()
-            && self.providers[idx].api_type == ApiType::KomaFree
+        idx < self.providers.len() && self.providers[idx].api_type == ApiType::KomaFree
     }
 
     /// Move left in the model modal, dispatching on the focused field:
@@ -559,7 +565,10 @@ impl SettingsState {
     /// The current omnisearch query (empty string when no modal is open). Lets
     /// the input handler compute the result set against the model cache.
     pub fn mm_query(&self) -> &str {
-        self.model_modal.as_ref().map(|m| m.query.as_str()).unwrap_or("")
+        self.model_modal
+            .as_ref()
+            .map(|m| m.query.as_str())
+            .unwrap_or("")
     }
 
     /// Move the omnisearch result cursor up (clamps at 0).
@@ -576,6 +585,4 @@ impl SettingsState {
             m.result_sel = (m.result_sel + 1).min(max);
         }
     }
-
 }
-

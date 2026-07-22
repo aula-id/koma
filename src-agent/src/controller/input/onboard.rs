@@ -7,9 +7,9 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::Action;
 use crate::app::mode::OnboardState;
 use crate::app::state::AppStateRest;
-use super::Action;
 
 /// Handle a key press while the first-run connection chooser is active.
 pub fn handle_onboard(state: &mut OnboardState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {

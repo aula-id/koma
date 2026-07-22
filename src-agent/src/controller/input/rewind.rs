@@ -5,10 +5,10 @@
 //! pre-selected); Esc cancels back to Chat unchanged; Enter selects the highlighted
 //! message to rewind to.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use super::Action;
 use crate::app::mode::RewindState;
 use crate::app::state::AppStateRest;
-use super::Action;
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 /// Handle a key press inside the message-rewind picker.
 ///

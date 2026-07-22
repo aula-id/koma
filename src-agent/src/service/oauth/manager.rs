@@ -302,7 +302,11 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         // `refresh_token_url`. Without both, koma cannot refresh (login-only, or the
         // extension owns the lifecycle) → serve the cached token verbatim, like Kilo Code.
         OAuthProvider::Extension => {
-            match snap.refresh_token_url.as_deref().filter(|u| !u.trim().is_empty()) {
+            match snap
+                .refresh_token_url
+                .as_deref()
+                .filter(|u| !u.trim().is_empty())
+            {
                 Some(url) if !snap.refresh_token.is_empty() => {
                     ext_refresh(
                         http_client(),
@@ -334,7 +338,10 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
 
             let bearer = updated.access_token.clone();
             let account = updated.account.clone();
-            cache().write().await.insert(oauth_uuid.to_string(), updated);
+            cache()
+                .write()
+                .await
+                .insert(oauth_uuid.to_string(), updated);
             (bearer, account)
         }
         Err(e) => {

@@ -103,7 +103,7 @@ pub fn list_dirs(query: &str, cwd: &Path, limit: usize) -> Vec<String> {
     // A trailing '/' means the whole thing is the parent and the prefix is empty.
     let (dir_part, prefix) = match raw.rfind('/') {
         Some(i) => (&raw[..=i], &raw[i + 1..]), // keep the slash on dir_part
-        None => ("", raw),                       // no slash: parent is cwd-relative root
+        None => ("", raw),                      // no slash: parent is cwd-relative root
     };
 
     // Resolve the parent directory on the real filesystem.

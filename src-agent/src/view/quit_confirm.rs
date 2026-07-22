@@ -17,6 +17,8 @@
 //! Navigation (Left/Right, Tab/Shift+Tab, Enter) plus the direct k / d / Esc
 //! shortcuts are handled in [`crate::controller::input::handle_quit_confirm`].
 
+use crate::app::mode::QuitConfirmState;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
@@ -24,8 +26,6 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::mode::QuitConfirmState;
-use crate::view::theme::Palette;
 
 /// The three button labels, left→right, in `button_rects`/`selected` index order
 /// (`0` = close window (quit), `1` = detach, `2` = cancel). The chip is the label wrapped
@@ -60,7 +60,12 @@ fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
     let h = h.min(area.height);
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect { x, y, width: w, height: h }
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 /// Render the quit-confirm overlay for `s` using the given colour `palette`.
@@ -135,7 +140,11 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
         Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
     )));
     if s.working > 0 {
-        let plural = if s.working == 1 { "session" } else { "sessions" };
+        let plural = if s.working == 1 {
+            "session"
+        } else {
+            "sessions"
+        };
         lines.push(Line::from(Span::styled(
             format!(
                 "{} {plural} still working — in-flight work will be lost.",
@@ -157,7 +166,10 @@ pub fn draw(frame: &mut Frame, s: &QuitConfirmState, palette: &Palette) {
     // body area so the dialog floats dead-center on screen. Height is derived
     // from the actual number of lines built above.
     let body = centered_rect(chunks[1], CONTENT_WIDTH, lines.len() as u16);
-    let inner = body.inner(Margin { horizontal: 1, vertical: 0 });
+    let inner = body.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     frame.render_widget(Paragraph::new(lines), inner);
 
     // On-screen width of a button chip: label plus the `[` and `]` bracket chars

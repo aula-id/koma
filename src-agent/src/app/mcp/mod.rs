@@ -212,7 +212,10 @@ pub struct McpManager {
     /// `None` timestamp means "never refreshed yet" (first call after construction).
     /// Guarded independently of the backend's own state so a refresh never contends
     /// with `tool_defs`/`execute_blocking`.
-    status_cache: Mutex<(Option<std::time::Instant>, std::collections::HashMap<String, usize>)>,
+    status_cache: Mutex<(
+        Option<std::time::Instant>,
+        std::collections::HashMap<String, usize>,
+    )>,
     /// Single-flight guard for the background refresh spawned by
     /// [`Self::server_status_cached`]: only one refresh may be in flight at a time,
     /// so N rapid callers (panel render + snapshot projection, both ~10Hz) don't each
@@ -398,7 +401,11 @@ impl McpManager {
         // Non-empty cache, or a confirmed-empty-and-warm one: serve it now; if stale,
         // kick a single-flight BACKGROUND refresh so a later config change is
         // eventually reflected without blocking.
-        let stale = match *self.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) {
+        let stale = match *self
+            .advertise_cache_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+        {
             Some(at) => at.elapsed() >= STATUS_CACHE_TTL,
             None => true,
         };
@@ -421,8 +428,7 @@ impl McpManager {
                             // server set stays warm indefinitely via repeated background
                             // refreshes (never falling back to the blocking inline path),
                             // and a server that comes back online promptly clears it.
-                            *mgr
-                                .advertise_confirmed_empty_at
+                            *mgr.advertise_confirmed_empty_at
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner()) = if now_empty {
                                 Some(std::time::Instant::now())
@@ -437,8 +443,9 @@ impl McpManager {
                         ),
                     }
                 }
-                *mgr.advertise_cache_at.lock().unwrap_or_else(|p| p.into_inner()) =
-                    Some(std::time::Instant::now());
+                *mgr.advertise_cache_at
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
                 mgr.advertise_refreshing.store(false, Ordering::Release);
             });
         }
@@ -479,9 +486,10 @@ impl McpManager {
             // the failure itself is still logged (this call path isn't the hot ~10Hz
             // one — that's `server_status_cached` below — so no rate-limiting needed).
             McpBackend::Proxy { sock, .. } => match proxy_request(sock, &McpRequest::Status) {
-                Ok(McpResponse::Status { servers, .. }) => {
-                    servers.into_iter().map(|(k, v)| (k, v.tool_count)).collect()
-                }
+                Ok(McpResponse::Status { servers, .. }) => servers
+                    .into_iter()
+                    .map(|(k, v)| (k, v.tool_count))
+                    .collect(),
                 Ok(other) => {
                     crate::model::store::append_global_error_log(
                         "mcp",
@@ -549,17 +557,21 @@ impl McpManager {
                     let mgr = Arc::clone(self);
                     std::thread::spawn(move || {
                         let (fresh, _errors) = match &mgr.backend {
-                            McpBackend::Proxy { sock, proxy_errors, .. } => {
+                            McpBackend::Proxy {
+                                sock, proxy_errors, ..
+                            } => {
                                 match proxy_request(sock, &McpRequest::Status) {
                                     Ok(McpResponse::Status { servers, .. }) => {
-                                        let counts: std::collections::HashMap<String, usize> = servers
-                                            .iter()
-                                            .map(|(k, v)| (k.clone(), v.tool_count))
-                                            .collect();
-                                        let errs: std::collections::HashMap<String, String> = servers
-                                            .into_iter()
-                                            .filter_map(|(k, v)| v.error.map(|e| (k, e)))
-                                            .collect();
+                                        let counts: std::collections::HashMap<String, usize> =
+                                            servers
+                                                .iter()
+                                                .map(|(k, v)| (k.clone(), v.tool_count))
+                                                .collect();
+                                        let errs: std::collections::HashMap<String, String> =
+                                            servers
+                                                .into_iter()
+                                                .filter_map(|(k, v)| v.error.map(|e| (k, e)))
+                                                .collect();
                                         if let Ok(mut ec) = proxy_errors.lock() {
                                             *ec = errs;
                                         }
@@ -624,9 +636,10 @@ impl McpManager {
                 let snap = snapshot.lock().unwrap_or_else(|p| p.into_inner());
                 snap.errors.clone()
             }
-            McpBackend::Proxy { proxy_errors, .. } => {
-                proxy_errors.lock().unwrap_or_else(|p| p.into_inner()).clone()
-            }
+            McpBackend::Proxy { proxy_errors, .. } => proxy_errors
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
         }
     }
 

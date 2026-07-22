@@ -20,9 +20,18 @@ fn finished_cargo_build_with_spam_gets_filtered_and_marked() {
     Finished dev [unoptimized + debuginfo] target(s) in 1.00s
 ";
     let (text, should_tee) = render_finished_output("cargo build", raw, 0, true);
-    assert!(text.contains("[filter: cargo-build,"), "expected a filter marker, got: {text}");
-    assert!(!text.contains("Compiling"), "noise should have been stripped, got: {text}");
-    assert!(should_tee, "a filter that changed the output should request a tee");
+    assert!(
+        text.contains("[filter: cargo-build,"),
+        "expected a filter marker, got: {text}"
+    );
+    assert!(
+        !text.contains("Compiling"),
+        "noise should have been stripped, got: {text}"
+    );
+    assert!(
+        should_tee,
+        "a filter that changed the output should request a tee"
+    );
 }
 
 #[test]
@@ -44,7 +53,10 @@ fn nonzero_exit_git_output_passes_through_unchanged() {
     // to the raw buffer even though `saving` is on.
     let raw = "fatal: not a git repository (or any of the parent directories): .git\n";
     let (text, should_tee) = render_finished_output("git status", raw, 128, true);
-    assert_eq!(text, raw, "a failed git command must pass through unfiltered");
+    assert_eq!(
+        text, raw,
+        "a failed git command must pass through unfiltered"
+    );
     // Non-zero exit still requests a tee even though the filter left the text
     // unchanged — mirrors `tool::shell::finalize_output`'s "might have lost
     // information" heuristic (a failing command is worth keeping the full log
@@ -57,7 +69,10 @@ fn unchanged_output_on_clean_exit_does_not_request_a_tee() {
     let raw = "hello world\n";
     let (text, should_tee) = render_finished_output("echo hi", raw, 0, true);
     assert_eq!(text, raw);
-    assert!(!should_tee, "an unchanged, clean-exit output has nothing worth teeing");
+    assert!(
+        !should_tee,
+        "an unchanged, clean-exit output has nothing worth teeing"
+    );
 }
 
 #[test]
@@ -78,7 +93,10 @@ fn ensure_tee_log_is_idempotent_and_reuses_the_same_path() {
     };
 
     let first = job.ensure_tee_log(dir.path(), "some output\n");
-    assert!(first.is_some(), "first tee should succeed and return a path");
+    assert!(
+        first.is_some(),
+        "first tee should succeed and return a path"
+    );
 
     // Write again with DIFFERENT content — the path must not change, and the
     // file on disk must not be rewritten (still holds the FIRST content).
@@ -86,7 +104,10 @@ fn ensure_tee_log_is_idempotent_and_reuses_the_same_path() {
     assert_eq!(first, second, "a second poll must reuse the same tee path");
 
     let on_disk = std::fs::read_to_string(first.unwrap()).unwrap();
-    assert_eq!(on_disk, "some output\n", "the tee file must not be rewritten on later polls");
+    assert_eq!(
+        on_disk, "some output\n",
+        "the tee file must not be rewritten on later polls"
+    );
 }
 
 /// A unique path under the OS temp root for a single test, removed
@@ -105,7 +126,9 @@ impl TempDir {
         ));
         TempDir(dir)
     }
-    fn path(&self) -> &std::path::Path { &self.0 }
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
 }
 impl Drop for TempDir {
     fn drop(&mut self) {

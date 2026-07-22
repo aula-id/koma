@@ -14,7 +14,9 @@ use super::super::helpers::{clean_error, emit, sanitize_tool_acc};
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::ndjson::{parse_line, CcEvent};
-use super::request::{build_messages, extract_system, flatten_tools, GenerateRequest, RequestConfig, RequestParams};
+use super::request::{
+    build_messages, extract_system, flatten_tools, GenerateRequest, RequestConfig, RequestParams,
+};
 
 impl OpenRouterClient {
     /// Streaming completion over the Command Code `/alpha/generate` NDJSON wire.

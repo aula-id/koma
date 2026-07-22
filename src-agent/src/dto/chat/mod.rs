@@ -17,8 +17,13 @@ mod tool;
 
 pub use attachment::Attachment;
 pub use message::{merge_reasoning_details, ChatMessage, ReasoningDetail};
-pub use role::{Role, BASH_NUDGE_MARK, CACHE_SPLIT_MARK, EXT_PROMPT_MARK, PLAN_NUDGE_MARK, SHELL_MARK};
-pub use tool::{extract_text_tool_calls, sanitize_tool_arguments, strip_ansi, strip_tool_call_tags, FunctionCall, ToolCall};
+pub use role::{
+    Role, BASH_NUDGE_MARK, CACHE_SPLIT_MARK, EXT_PROMPT_MARK, PLAN_NUDGE_MARK, SHELL_MARK,
+};
+pub use tool::{
+    extract_text_tool_calls, sanitize_tool_arguments, strip_ansi, strip_tool_call_tags,
+    FunctionCall, ToolCall,
+};
 
 // ---------------------------------------------------------------------------
 // Reasoning-tag wire escaping
@@ -62,7 +67,9 @@ fn reasoning_tag_re() -> &'static Regex {
 /// used to decode a model's echoed-back escaped tag before persistence.
 fn reasoning_entity_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| crate::re_util::static_re(r"(?i)&lt;\s*/?\s*(?:think|thinking|thought)\s*&gt;"))
+    RE.get_or_init(|| {
+        crate::re_util::static_re(r"(?i)&lt;\s*/?\s*(?:think|thinking|thought)\s*&gt;")
+    })
 }
 
 /// Escape whitelisted reasoning tags to HTML entities so they can't act as
@@ -116,15 +123,20 @@ mod escape_tests {
     #[test]
     fn all_whitelist_variants_roundtrip() {
         for raw in [
-            "<think>", "</think>",
-            "<thinking>", "</thinking>",
-            "<thought>", "</thought>",
+            "<think>",
+            "</think>",
+            "<thinking>",
+            "</thinking>",
+            "<thought>",
+            "</thought>",
         ] {
             let esc = escape_reasoning_tags(raw);
             // Fully escaped: entity brackets present, raw brackets gone.
             assert!(
-                esc.contains("&lt;") && esc.contains("&gt;")
-                    && !esc.contains('<') && !esc.contains('>'),
+                esc.contains("&lt;")
+                    && esc.contains("&gt;")
+                    && !esc.contains('<')
+                    && !esc.contains('>'),
                 "tag not fully escaped: {esc}"
             );
             assert_eq!(unescape_reasoning_tags(&esc), raw);
@@ -134,7 +146,14 @@ mod escape_tests {
     #[test]
     fn non_reasoning_angles_untouched() {
         // Generics, comparisons, and unrelated markup survive BOTH directions.
-        for s in ["Vec<String>", "a < b", "<div>", "if x > 0", "Vec<Vec<u8>>", "x <= y"] {
+        for s in [
+            "Vec<String>",
+            "a < b",
+            "<div>",
+            "if x > 0",
+            "Vec<Vec<u8>>",
+            "x <= y",
+        ] {
             assert_eq!(escape_reasoning_tags(s), s);
             assert_eq!(unescape_reasoning_tags(s), s);
         }
@@ -151,7 +170,10 @@ mod escape_tests {
     #[test]
     fn only_whitelisted_keywords_match() {
         // `<reason>` is NOT in the ThinkSplit whitelist → left as-is by both.
-        assert_eq!(escape_reasoning_tags("<reason>x</reason>"), "<reason>x</reason>");
+        assert_eq!(
+            escape_reasoning_tags("<reason>x</reason>"),
+            "<reason>x</reason>"
+        );
         // All three whitelisted keywords DO escape.
         assert_eq!(escape_reasoning_tags("<thought>"), "&lt;thought&gt;");
     }

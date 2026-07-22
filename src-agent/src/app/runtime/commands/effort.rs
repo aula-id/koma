@@ -85,10 +85,7 @@ pub(crate) enum EffortMenu {
 /// `models_cache` catalogue (OpenRouter) and the curated `catalogue_overlay`
 /// (non-OpenRouter). Keeps the option-list/note/preselect logic in one place
 /// so the two callers can't drift.
-fn ready_from_caps(
-    state: &AppState,
-    caps: &crate::service::openrouter::EffortCaps,
-) -> EffortMenu {
+fn ready_from_caps(state: &AppState, caps: &crate::service::openrouter::EffortCaps) -> EffortMenu {
     match build_effort_options(caps) {
         Some(options) => {
             let note = if caps.efforts.is_empty() {
@@ -189,12 +186,17 @@ pub(crate) fn effort_menu(
         // Only arm the fetch if we don't already have a pending/in-flight
         // request for this endpoint — prevents rapid /effort opens from
         // constantly pushing the debounce forward.
-        let already_pending = state.rest.catalogue_pending.as_ref()
+        let already_pending = state
+            .rest
+            .catalogue_pending
+            .as_ref()
             .is_some_and(|p| p.endpoint == r.endpoint);
-        let already_fetching = state.rest.catalogue_fetching.as_deref()
-            == Some(r.endpoint.as_str());
+        let already_fetching =
+            state.rest.catalogue_fetching.as_deref() == Some(r.endpoint.as_str());
         if !already_pending && !already_fetching {
-            state.rest.request_catalogue(&r.endpoint, &r.api_key, &r.oauth_uuid);
+            state
+                .rest
+                .request_catalogue(&r.endpoint, &r.api_key, &r.oauth_uuid);
         }
     }
     // Only trust `models_cache` when it was fetched for the Main endpoint;

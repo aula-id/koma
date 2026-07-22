@@ -138,7 +138,10 @@ fn body_lines<'a>(st: &'a ExtScreenState, palette: &Palette, width: usize) -> Ve
             for node in body {
                 match node.get("t").and_then(|t| t.as_str()) {
                     Some("text") => {
-                        let text = node.get("text").and_then(|x| x.as_str()).unwrap_or_default();
+                        let text = node
+                            .get("text")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_default();
                         for chunk in word_wrap(text, width) {
                             lines.push(Line::from(Span::styled(
                                 chunk,
@@ -167,18 +170,14 @@ fn body_lines<'a>(st: &'a ExtScreenState, palette: &Palette, width: usize) -> Ve
                     Some("menu") => {
                         if let Some(items) = node.get("items").and_then(|i| i.as_array()) {
                             for item in items {
-                                let id = item
-                                    .get("id")
-                                    .and_then(|x| x.as_str())
-                                    .unwrap_or_default();
+                                let id =
+                                    item.get("id").and_then(|x| x.as_str()).unwrap_or_default();
                                 if id.is_empty() {
                                     // Skipped in navigation too (see `screen_menu_entries`).
                                     continue;
                                 }
-                                let label = item
-                                    .get("label")
-                                    .and_then(|x| x.as_str())
-                                    .unwrap_or(id);
+                                let label =
+                                    item.get("label").and_then(|x| x.as_str()).unwrap_or(id);
                                 let selected = menu_idx == st.menu_cursor;
                                 let marker = if selected { "› " } else { "  " };
                                 let label_style = if selected {

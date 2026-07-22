@@ -18,8 +18,6 @@
 //! **Save path:** `Session::save` writes `settings.json` and `messages.json`
 //! atomically enough for a TUI — no WAL, no rename-over, just `write`.
 
-use std::path::{Path, PathBuf};
-use anyhow::Result;
 use crate::dto::chat::ChatMessage;
 use crate::model::agent_def::AgentRegistry;
 use crate::model::conversation::Conversation;
@@ -28,6 +26,8 @@ use crate::model::session_registry;
 use crate::model::settings::{LocalConfig, Settings};
 use crate::model::store::shared_settings_path;
 use crate::resources;
+use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// One named chat session.
 ///
@@ -217,7 +217,10 @@ impl Session {
         if let Err(e) = std::fs::create_dir_all(&scratch) {
             crate::model::store::append_global_error_log(
                 "session",
-                &format!("warning: could not create scratch dir {}: {e}", scratch.display()),
+                &format!(
+                    "warning: could not create scratch dir {}: {e}",
+                    scratch.display()
+                ),
             );
         }
 
@@ -296,7 +299,8 @@ impl Session {
     /// process cwd when the list is empty. Used by `DirCacheUpdate` and the
     /// `@` autocomplete to index every workspace root.
     pub fn workdirs(&self) -> Vec<std::path::PathBuf> {
-        let dirs: Vec<std::path::PathBuf> = self.settings
+        let dirs: Vec<std::path::PathBuf> = self
+            .settings
             .workdir
             .iter()
             .map(|s| s.trim())
@@ -345,7 +349,12 @@ impl Session {
                 let when = if !a.conditions.trim().is_empty() {
                     a.conditions.lines().next().unwrap_or("").trim().to_string()
                 } else {
-                    a.description.lines().next().unwrap_or("").trim().to_string()
+                    a.description
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
                 };
                 format!("- {}: {}", a.name, when)
             })
@@ -358,11 +367,8 @@ impl Session {
             Some(roster)
         };
 
-        let mut sys = resources::build_system_prompt(
-            mem.as_deref(),
-            agents.as_deref(),
-            subagents.as_deref(),
-        );
+        let mut sys =
+            resources::build_system_prompt(mem.as_deref(), agents.as_deref(), subagents.as_deref());
 
         // Append the scratch space section so the model knows where it can
         // freely write temporary files and clone repositories.

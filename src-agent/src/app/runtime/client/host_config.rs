@@ -151,8 +151,7 @@ fn apply_swapper_agent_mutation(req: &ClientRequest) -> bool {
         ClientRequest::DeleteAgent { scope, name, .. } => {
             // Built-in delete rejected; only the GLOBAL tier is writable pre-session.
             let registry = load_registry(None);
-            let is_builtin =
-                registry.get(name).map(|d| d.source) == Some(AgentSource::Builtin);
+            let is_builtin = registry.get(name).map(|d| d.source) == Some(AgentSource::Builtin);
             if scope == "global" && !is_builtin {
                 if let Err(e) = delete_agent(AgentScope::Global, name) {
                     crate::model::store::append_global_error_log(
@@ -207,10 +206,16 @@ fn apply_global_config_req(
             // can never be deleted by the user — only uninstall removes it. This path has no
             // structured-error reply channel (success re-pushes a `Config`, failure logs), so
             // refuse IN PLACE (leave the provider, apply nothing → no save/push) + log.
-            if cfg.providers.iter().any(|p| p.uuid == *uuid && p.ext_id.is_some()) {
+            if cfg
+                .providers
+                .iter()
+                .any(|p| p.uuid == *uuid && p.ext_id.is_some())
+            {
                 crate::model::store::append_global_error_log(
                     "gui",
-                    &format!("refused deleting extension-managed provider {uuid} (uninstall to remove)"),
+                    &format!(
+                        "refused deleting extension-managed provider {uuid} (uninstall to remove)"
+                    ),
                 );
                 false
             } else {

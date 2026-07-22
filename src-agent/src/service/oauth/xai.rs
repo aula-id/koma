@@ -265,7 +265,10 @@ pub async fn refresh(http: &reqwest::Client, refresh_token: &str) -> Result<Toke
         if body.contains("invalid_grant") || body.contains("refresh_token_reused") {
             return Err("unrecoverable: re-login required".to_string());
         }
-        return Err(format!("refresh failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "refresh failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     let mut tokens = resp
@@ -389,7 +392,10 @@ mod tests {
             "https://evil.com\\.x.ai#frag",
             "https://evil.com\\\\.x.ai/token", // multiple backslashes
         ] {
-            assert!(!is_valid_xai_endpoint(bad), "must reject (dials non-x.ai): {bad}");
+            assert!(
+                !is_valid_xai_endpoint(bad),
+                "must reject (dials non-x.ai): {bad}"
+            );
         }
     }
 

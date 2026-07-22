@@ -10,9 +10,7 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::ipc::frame::FrameReader;
-use crate::ipc::knowledge_proto::{
-    KnowledgeFact, KnowledgeRequest, KnowledgeResponse,
-};
+use crate::ipc::knowledge_proto::{KnowledgeFact, KnowledgeRequest, KnowledgeResponse};
 use crate::ipc::SyncIpcStream;
 use crate::model::store;
 
@@ -22,7 +20,13 @@ const PROXY_IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Fire-and-forget: push a fact to the global knowledge daemon. Spawns a
 /// detached OS thread so callers (including blocking-block'd async contexts)
 /// never block on daemon IO. A dead/missing daemon is silently ignored.
-pub fn proxy_push_fact(fact_id: String, content: String, category: String, confidence: f64, embedding: Vec<f32>) {
+pub fn proxy_push_fact(
+    fact_id: String,
+    content: String,
+    category: String,
+    confidence: f64,
+    embedding: Vec<f32>,
+) {
     std::thread::spawn(move || {
         let _ = push_fact_sync(&fact_id, &content, &category, confidence, &embedding);
     });
@@ -85,15 +89,18 @@ fn expand_sync(query_vec: &[f32], limit: usize) -> anyhow::Result<ExpandResult> 
 
     send_request(&mut stream, &req)?;
     match read_response(&mut stream)? {
-        KnowledgeResponse::ExpandResult { facts, entities: _, related_facts } => {
-            Ok(ExpandResult { facts, related_facts })
-        }
-        KnowledgeResponse::Error(e) => {
-            Err(anyhow::anyhow!("knowledge daemon expand error: {e}"))
-        }
-        other => {
-            Err(anyhow::anyhow!("unexpected knowledge daemon response: {other:?}"))
-        }
+        KnowledgeResponse::ExpandResult {
+            facts,
+            entities: _,
+            related_facts,
+        } => Ok(ExpandResult {
+            facts,
+            related_facts,
+        }),
+        KnowledgeResponse::Error(e) => Err(anyhow::anyhow!("knowledge daemon expand error: {e}")),
+        other => Err(anyhow::anyhow!(
+            "unexpected knowledge daemon response: {other:?}"
+        )),
     }
 }
 
@@ -104,7 +111,9 @@ fn send_request(stream: &mut SyncIpcStream, req: &KnowledgeRequest) -> anyhow::R
     let payload = serde_json::to_vec(req).context("serialise KnowledgeRequest")?;
     let prefix = (payload.len() as u32).to_be_bytes();
     stream.write_all(&prefix).context("write request prefix")?;
-    stream.write_all(&payload).context("write request payload")?;
+    stream
+        .write_all(&payload)
+        .context("write request payload")?;
     stream.flush().context("flush request")?;
     Ok(())
 }
@@ -114,8 +123,7 @@ fn read_response(stream: &mut SyncIpcStream) -> anyhow::Result<KnowledgeResponse
     let mut reader = FrameReader::new();
     loop {
         if let Some(bytes) = reader.next_frame().context("knowledge response frame")? {
-            return serde_json::from_slice(&bytes)
-                .context("decode KnowledgeResponse");
+            return serde_json::from_slice(&bytes).context("decode KnowledgeResponse");
         }
         let mut chunk = [0u8; 8192];
         let n = stream.read(&mut chunk).context("read knowledge response")?;

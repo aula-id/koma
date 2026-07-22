@@ -83,7 +83,8 @@ pub(crate) fn handle_compact(
     state.rest.fg_mut().active_rx = Some(rx);
     let Some(c) = client.as_ref().cloned() else {
         crate::model::store::append_global_error_log("compact", "BUG: client missing");
-        return;
+        state.rest.pending_plan_seed = false;
+        return Ok(());
     };
     let jh = handle.spawn(async move {
         // Compaction sends on the resolved Compactor connection (endpoint +

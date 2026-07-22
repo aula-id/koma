@@ -1,9 +1,9 @@
 //! Key handler for the `/agents` management dashboard (`Mode::Agents`).
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use super::{is_ctrl, Action};
 use crate::app::mode::AgentsState;
 use crate::app::state::AppStateRest;
-use super::{is_ctrl, Action};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle a key press inside the `/agents` management dashboard.
 ///
@@ -145,9 +145,7 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
                     p.backspace_filter();
                 }
             }
-            KeyCode::Char(c)
-                if !key.modifiers.contains(KeyModifiers::CONTROL) && c != ' ' =>
-            {
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && c != ' ' => {
                 if let Some(p) = s.tool_picker.as_mut() {
                     p.push_filter(c);
                 }
@@ -307,19 +305,17 @@ pub fn handle_agents(s: &mut AgentsState, rest: &mut AppStateRest, key: KeyEvent
                 s.enter_create();
                 Action::None
             }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                match s.current_agent().map(|a| a.source) {
-                    Some(AgentSource::Builtin) => {
-                        rest.fg_mut().status = "cannot delete a built-in agent".into();
-                        Action::None
-                    }
-                    Some(_) => {
-                        s.enter_delete();
-                        Action::None
-                    }
-                    None => Action::None,
+            KeyCode::Char('d') | KeyCode::Char('D') => match s.current_agent().map(|a| a.source) {
+                Some(AgentSource::Builtin) => {
+                    rest.fg_mut().status = "cannot delete a built-in agent".into();
+                    Action::None
                 }
-            }
+                Some(_) => {
+                    s.enter_delete();
+                    Action::None
+                }
+                None => Action::None,
+            },
             _ => Action::None,
         },
     }

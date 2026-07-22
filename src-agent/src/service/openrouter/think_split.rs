@@ -38,16 +38,16 @@ enum Phase {
 
 /// (opener, closer) tag pairs, tried in order, matched case-insensitively.
 const TAG_PAIRS: [(&str, &str); 3] = [
-    ("<think>",    "</think>"),
+    ("<think>", "</think>"),
     ("<thinking>", "</thinking>"),
-    ("<thought>",  "</thought>"),
+    ("<thought>", "</thought>"),
 ];
 
 /// State machine that splits a leading `<think>…</think>` block out of the
 /// content stream, routing it to the reasoning channel and the rest to the
 /// content channel.
 pub struct ThinkSplit {
-    buf:   String,
+    buf: String,
     phase: Phase,
 }
 
@@ -55,7 +55,7 @@ impl ThinkSplit {
     /// Create a fresh instance (one per stream call / per turn).
     pub fn new() -> Self {
         ThinkSplit {
-            buf:   String::new(),
+            buf: String::new(),
             phase: Phase::Pending,
         }
     }
@@ -79,7 +79,8 @@ impl ThinkSplit {
                     // BYTE offset (index of the first non-whitespace char); it is
                     // only *consumed* once a tag matches, so a genuine
                     // leading-whitespace answer still survives into Passthrough.
-                    let ws_len = self.buf
+                    let ws_len = self
+                        .buf
                         .find(|c: char| !c.is_whitespace())
                         .unwrap_or(self.buf.len());
                     let t = &self.buf[ws_len..];
@@ -113,8 +114,9 @@ impl ThinkSplit {
                     // indistinguishable from a leaked orphan closer and will be
                     // swallowed here. Accepted trade-off — vanishingly rare, and the
                     // alternative (leaking stray close tags) is worse.
-                    if let Some(&(_, close)) =
-                        TAG_PAIRS.iter().find(|&&(_, close)| starts_with_ci(t, close))
+                    if let Some(&(_, close)) = TAG_PAIRS
+                        .iter()
+                        .find(|&&(_, close)| starts_with_ci(t, close))
                     {
                         self.buf.drain(..ws_len + close.len());
                         self.phase = Phase::Passthrough;
@@ -264,7 +266,10 @@ mod tests {
         let (reasoning, content) = run(&["<think>reason</think>answer"]);
         assert_eq!(reasoning, "reason");
         assert_eq!(content, "answer");
-        assert!(!content.contains("think>"), "tag leaked into content: {content:?}");
+        assert!(
+            !content.contains("think>"),
+            "tag leaked into content: {content:?}"
+        );
     }
 
     #[test]
@@ -273,7 +278,10 @@ mod tests {
         let (reasoning, content) = run(&["</think>answer"]);
         assert_eq!(reasoning, "");
         assert_eq!(content, "answer");
-        assert!(!content.contains("think>"), "orphan closer leaked: {content:?}");
+        assert!(
+            !content.contains("think>"),
+            "orphan closer leaked: {content:?}"
+        );
         assert!(!content.contains("</"), "orphan closer leaked: {content:?}");
     }
 
@@ -283,8 +291,14 @@ mod tests {
         let (reasoning, content) = run(&["</thi", "nk>hi"]);
         assert_eq!(reasoning, "");
         assert_eq!(content, "hi");
-        assert!(!content.contains("think>"), "split closer leaked: {content:?}");
-        assert!(!content.contains("</thi"), "split closer leaked: {content:?}");
+        assert!(
+            !content.contains("think>"),
+            "split closer leaked: {content:?}"
+        );
+        assert!(
+            !content.contains("</thi"),
+            "split closer leaked: {content:?}"
+        );
     }
 
     #[test]

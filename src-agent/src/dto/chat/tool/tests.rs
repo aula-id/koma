@@ -20,8 +20,7 @@ mod text_tool_call_tests {
 
     #[test]
     fn parameters_alias() {
-        let content =
-            r#"<tool_call>{"name": "list", "parameters": {"dir": "src"}}</tool_call>"#;
+        let content = r#"<tool_call>{"name": "list", "parameters": {"dir": "src"}}</tool_call>"#;
         let (cleaned, calls) = extract_text_tool_calls(content);
         assert_eq!(cleaned, "");
         assert_eq!(calls.len(), 1);
@@ -98,8 +97,7 @@ mod text_tool_call_tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "edit");
         // Re-parse the stringified arguments to confirm the nesting survived.
-        let v: serde_json::Value =
-            serde_json::from_str(&calls[0].function.arguments).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
         assert_eq!(v["replace"]["from"]["a"], 1);
         assert_eq!(v["replace"]["to"]["b"], 2);
     }
@@ -148,8 +146,14 @@ mod text_tool_call_tests {
     fn stray_close_tag_is_stripped() {
         let content = "Some prose.</tool_call> More prose.";
         let out = strip_tool_call_tags(content);
-        assert!(!out.contains("</tool_call>"), "orphan close tag must be removed");
-        assert!(out.contains("Some prose."), "surrounding prose must survive");
+        assert!(
+            !out.contains("</tool_call>"),
+            "orphan close tag must be removed"
+        );
+        assert!(
+            out.contains("Some prose."),
+            "surrounding prose must survive"
+        );
         assert!(out.contains("More prose."), "trailing prose must survive");
     }
 
@@ -289,6 +293,9 @@ mod strip_ansi_tests {
 
     #[test]
     fn strips_mixed_content() {
-        assert_eq!(strip_ansi("\x1b[32mok\x1b[0m plain \x1b[31mfail\x1b[0m"), "ok plain fail");
+        assert_eq!(
+            strip_ansi("\x1b[32mok\x1b[0m plain \x1b[31mfail\x1b[0m"),
+            "ok plain fail"
+        );
     }
 }

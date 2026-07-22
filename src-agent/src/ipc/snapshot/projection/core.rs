@@ -59,12 +59,12 @@ pub fn session_snapshot(
         .as_ref()
         .map(|s| s.conversation.messages().to_vec())
         .unwrap_or_default();
-    let committed_reasoning: Vec<Option<String>> =
-        if messages.iter().any(|m| m.reasoning.is_some()) {
-            messages.iter().map(|m| m.reasoning.clone()).collect()
-        } else {
-            Vec::new()
-        };
+    let committed_reasoning: Vec<Option<String>> = if messages.iter().any(|m| m.reasoning.is_some())
+    {
+        messages.iter().map(|m| m.reasoning.clone()).collect()
+    } else {
+        Vec::new()
+    };
     let name = rt
         .session
         .as_ref()
@@ -200,9 +200,7 @@ fn subagent_snapshot(sa: &crate::app::subagent::SubAgent) -> SubAgentSnapshot {
     }
 }
 
-fn pending_subagent_snapshot(
-    p: &crate::app::subagent::PendingSubagent,
-) -> PendingSubagentSnapshot {
+fn pending_subagent_snapshot(p: &crate::app::subagent::PendingSubagent) -> PendingSubagentSnapshot {
     PendingSubagentSnapshot {
         id: p.id,
         agent_name: p.agent_name.clone(),
@@ -276,7 +274,11 @@ pub fn global_snapshot_with_mode(state: &AppState, mode: ModeSnapshot) -> Global
             crate::app::state::AgentMode::Yolo => "yolo",
         }
         .to_string(),
-        latest_version: state.rest.latest_version.as_ref().map(|v| v.version.clone()),
+        latest_version: state
+            .rest
+            .latest_version
+            .as_ref()
+            .map(|v| v.version.clone()),
     }
 }
 

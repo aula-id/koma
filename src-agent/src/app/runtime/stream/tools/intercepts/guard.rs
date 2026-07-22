@@ -6,15 +6,15 @@
 
 use std::sync::Arc;
 
-use crate::app::state::AppState;
 use crate::app::state::AgentMode;
+use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
 use crate::service::openrouter::OpenRouterClient;
 
+use super::InterceptFlow;
 use crate::app::runtime::stream::tools::approval::{
     file_known_in_history, spawn_classify_park, tac_inputs,
 };
-use super::InterceptFlow;
 
 pub(in crate::app::runtime::stream::tools) fn intercept_cd(
     state: &mut AppState,
@@ -24,15 +24,20 @@ pub(in crate::app::runtime::stream::tools) fn intercept_cd(
     handle: &tokio::runtime::Handle,
 ) -> InterceptFlow {
     let result = crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
-    let final_result = if let Some(target) = result.strip_prefix(crate::tool::cd::CWD_CHANGE_PREFIX) {
+    let final_result = if let Some(target) = result.strip_prefix(crate::tool::cd::CWD_CHANGE_PREFIX)
+    {
         let new_cwd = std::path::PathBuf::from(target);
-        crate::app::runtime::stream::spawn::apply_workspace_change(state, sess_idx, new_cwd, client, handle);
+        crate::app::runtime::stream::spawn::apply_workspace_change(
+            state, sess_idx, new_cwd, client, handle,
+        );
         format!("changed working directory to {target}")
     } else {
         // Already an `error:`/refusal line — pass it through unchanged.
         result
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), final_result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -56,7 +61,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_cred(
             // list output or error: — pass through unchanged.
             result
         };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), final_result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -82,8 +89,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
         &crate::dto::chat::sanitize_tool_arguments(&call.function.arguments),
     )
     .unwrap_or_default();
-    let is_remove =
-        wt_args.get("action").and_then(|a| a.as_str()) == Some("remove");
+    let is_remove = wt_args.get("action").and_then(|a| a.as_str()) == Some("remove");
     let pre_approved = state.rest.sessions[sess_idx]
         .approved_worktree_call
         .as_deref()
@@ -108,8 +114,14 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
                     Some((vid, v)) if vid == call.id => v,
                     _ => {
                         spawn_classify_park(
-                            state, sess_idx, handle, c, config, settings,
-                            convo_context, call,
+                            state,
+                            sess_idx,
+                            handle,
+                            c,
+                            config,
+                            settings,
+                            convo_context,
+                            call,
                         );
                         return InterceptFlow::Return;
                     }
@@ -139,8 +151,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
                         state.rest.sessions[sess_idx].tool_idx += 1;
                         return InterceptFlow::Continue;
                     }
-                    state.rest.sessions[sess_idx].approval_reason =
-                        Some(verdict.reason);
+                    state.rest.sessions[sess_idx].approval_reason = Some(verdict.reason);
                     state.rest.sessions[sess_idx].awaiting_approval = true;
                     state.rest.sessions[sess_idx].status =
                         format!("approve {}? [y/n]", call.function.name);
@@ -182,137 +193,153 @@ pub(in crate::app::runtime::stream::tools) fn intercept_git_worktree(
         }
     }
     let result = crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
-    let final_result =
-        if let Some(target) =
-            result.strip_prefix(crate::tool::git_worktree::GIT_WT_CREATE_PREFIX)
+    let final_result = if let Some(target) =
+        result.strip_prefix(crate::tool::git_worktree::GIT_WT_CREATE_PREFIX)
+    {
+        // `create` succeeded: target is the shadow path string.
+        // Same state work as enter: register the path + persist + switch cwd.
+        let new_cwd = std::path::PathBuf::from(target);
+        let target_str = target.to_string();
         {
-            // `create` succeeded: target is the shadow path string.
-            // Same state work as enter: register the path + persist + switch cwd.
-            let new_cwd = std::path::PathBuf::from(target);
-            let target_str = target.to_string();
-            {
-                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                    sess.settings.enter_worktree(target_str.clone());
-                    let _ = sess.save();
-                }
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                sess.settings.enter_worktree(target_str.clone());
+                let _ = sess.save();
             }
-            crate::app::runtime::stream::spawn::apply_workspace_change(
-                state, sess_idx, new_cwd.clone(), client, handle,
-            );
-            // Emit a clear "created + entered" confirmation so no model
-            // misreads this as a failure (unlike the bare "entered worktree"
-            // string the old enter sentinel would have produced).
-            let name = std::path::Path::new(target)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(target);
-            format!(
-                "created worktree '{name}' at {target} and switched into it \
+        }
+        crate::app::runtime::stream::spawn::apply_workspace_change(
+            state,
+            sess_idx,
+            new_cwd.clone(),
+            client,
+            handle,
+        );
+        // Emit a clear "created + entered" confirmation so no model
+        // misreads this as a failure (unlike the bare "entered worktree"
+        // string the old enter sentinel would have produced).
+        let name = std::path::Path::new(target)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(target);
+        format!(
+            "created worktree '{name}' at {target} and switched into it \
                  — you are now working inside the new worktree. \
                  Use git_worktree({{\"action\":\"exit\"}}) to return to the repo root."
-            )
-        } else if let Some(target) =
-            result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
+        )
+    } else if let Some(target) = result.strip_prefix(crate::tool::git_worktree::GIT_WT_ENTER_PREFIX)
+    {
+        // `enter` succeeded: target is the canonical path string.
+        let new_cwd = std::path::PathBuf::from(target);
+        let target_str = target.to_string();
+        // Swap slot [0] to the worktree root (stashing the current
+        // primary root for restore on exit), then persist. Scoped so
+        // the mutable sess borrow ends before we call
+        // apply_workspace_change (which also borrows state mut).
         {
-            // `enter` succeeded: target is the canonical path string.
-            let new_cwd = std::path::PathBuf::from(target);
-            let target_str = target.to_string();
-            // Swap slot [0] to the worktree root (stashing the current
-            // primary root for restore on exit), then persist. Scoped so
-            // the mutable sess borrow ends before we call
-            // apply_workspace_change (which also borrows state mut).
-            {
-                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                    sess.settings.enter_worktree(target_str.clone());
-                    let _ = sess.save();
-                }
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                sess.settings.enter_worktree(target_str.clone());
+                let _ = sess.save();
             }
-            crate::app::runtime::stream::spawn::apply_workspace_change(
-                state, sess_idx, new_cwd.clone(), client, handle,
-            );
-            format!("entered worktree: {}", new_cwd.display())
-        } else if result.starts_with(crate::tool::git_worktree::GIT_WT_EXIT_PREFIX) {
-            // `exit`: restore the base primary root (swap slot [0] back) and return
-            // to it. Extra roots in workdir[1..] are preserved. Mutate + save in a
-            // scoped borrow, then call apply_workspace_change outside it.
-            //
-            // Capture whether we were ACTUALLY inside an entered worktree BEFORE the
-            // swap: `workdir_saved.is_some()` means a real worktree is active and
-            // exit_worktree() will restore the base; `is_none()` means there is
-            // nothing to exit (e.g. the session was launched FROM a worktree). We
-            // must report these distinctly or the model can't tell a no-op from a
-            // real exit and retries `exit` in a loop.
-            let (primary, was_active) = {
-                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                    let was_active = sess.settings.workdir_saved.is_some();
-                    sess.settings.exit_worktree();
-                    let _ = sess.save();
-                    (sess.workdir(), was_active)
-                } else {
-                    (std::path::PathBuf::from("."), false)
-                }
-            };
-            crate::app::runtime::stream::spawn::apply_workspace_change(
-                state, sess_idx, primary.clone(), client, handle,
-            );
-            if was_active {
-                format!("exited worktree — now at {}", primary.display())
+        }
+        crate::app::runtime::stream::spawn::apply_workspace_change(
+            state,
+            sess_idx,
+            new_cwd.clone(),
+            client,
+            handle,
+        );
+        format!("entered worktree: {}", new_cwd.display())
+    } else if result.starts_with(crate::tool::git_worktree::GIT_WT_EXIT_PREFIX) {
+        // `exit`: restore the base primary root (swap slot [0] back) and return
+        // to it. Extra roots in workdir[1..] are preserved. Mutate + save in a
+        // scoped borrow, then call apply_workspace_change outside it.
+        //
+        // Capture whether we were ACTUALLY inside an entered worktree BEFORE the
+        // swap: `workdir_saved.is_some()` means a real worktree is active and
+        // exit_worktree() will restore the base; `is_none()` means there is
+        // nothing to exit (e.g. the session was launched FROM a worktree). We
+        // must report these distinctly or the model can't tell a no-op from a
+        // real exit and retries `exit` in a loop.
+        let (primary, was_active) = {
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                let was_active = sess.settings.workdir_saved.is_some();
+                sess.settings.exit_worktree();
+                let _ = sess.save();
+                (sess.workdir(), was_active)
             } else {
-                format!(
+                (std::path::PathBuf::from("."), false)
+            }
+        };
+        crate::app::runtime::stream::spawn::apply_workspace_change(
+            state,
+            sess_idx,
+            primary.clone(),
+            client,
+            handle,
+        );
+        if was_active {
+            format!("exited worktree — now at {}", primary.display())
+        } else {
+            format!(
                     "no active worktree to exit — already at {} (this session started here); nothing to do",
                     primary.display()
                 )
-            }
-        } else if let Some(removed) =
-            result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
+        }
+    } else if let Some(removed) =
+        result.strip_prefix(crate::tool::git_worktree::GIT_WT_REMOVE_PREFIX)
+    {
+        // `remove` succeeded: the worktree is already deleted (git ran
+        // from the repo root). Two cleanups:
+        // (1) de-register the path from settings.workdir; (2) if the
+        // session's live cwd was inside the removed worktree it now
+        // points at a dead dir — snap it back to the primary workdir
+        // (repo root). Capture the primary path in the same scoped
+        // borrow, then apply outside it (apply_workspace_change also
+        // borrows state mutably).
+        let removed = removed.to_string();
+        let primary;
         {
-            // `remove` succeeded: the worktree is already deleted (git ran
-            // from the repo root). Two cleanups:
-            // (1) de-register the path from settings.workdir; (2) if the
-            // session's live cwd was inside the removed worktree it now
-            // points at a dead dir — snap it back to the primary workdir
-            // (repo root). Capture the primary path in the same scoped
-            // borrow, then apply outside it (apply_workspace_change also
-            // borrows state mutably).
-            let removed = removed.to_string();
-            let primary;
-            {
-                if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
-                    // Removing the worktree we're standing in → restore the base
-                    // root (swap slot [0] back). Removing a different worktree/dir
-                    // by name → just drop it wherever it sits in the list.
-                    let in_removed = sess
-                        .settings
-                        .workdir
-                        .first()
-                        .map(|p| p == &removed)
-                        .unwrap_or(false);
-                    if in_removed {
-                        sess.settings.exit_worktree();
-                    } else {
-                        sess.settings.workdir.retain(|p| p != &removed);
-                    }
-                    let _ = sess.save();
-                    primary = sess.workdir();
+            if let Some(sess) = state.rest.sessions[sess_idx].session.as_mut() {
+                // Removing the worktree we're standing in → restore the base
+                // root (swap slot [0] back). Removing a different worktree/dir
+                // by name → just drop it wherever it sits in the list.
+                let in_removed = sess
+                    .settings
+                    .workdir
+                    .first()
+                    .map(|p| p == &removed)
+                    .unwrap_or(false);
+                if in_removed {
+                    sess.settings.exit_worktree();
                 } else {
-                    primary = std::path::PathBuf::from(".");
+                    sess.settings.workdir.retain(|p| p != &removed);
                 }
+                let _ = sess.save();
+                primary = sess.workdir();
+            } else {
+                primary = std::path::PathBuf::from(".");
             }
-            let stale = state.rest.sessions[sess_idx]
-                .active_cwd
-                .as_ref()
-                .is_some_and(|c| !c.is_dir());
-            if stale {
-                crate::app::runtime::stream::spawn::apply_workspace_change(
-                    state, sess_idx, primary.clone(), client, handle,
-                );
-            }
-            format!("worktree removed: {removed}")
-        } else {
-            // list output, or an error: — pass through.
-            result
-        };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+        }
+        let stale = state.rest.sessions[sess_idx]
+            .active_cwd
+            .as_ref()
+            .is_some_and(|c| !c.is_dir());
+        if stale {
+            crate::app::runtime::stream::spawn::apply_workspace_change(
+                state,
+                sess_idx,
+                primary.clone(),
+                client,
+                handle,
+            );
+        }
+        format!("worktree removed: {removed}")
+    } else {
+        // list output, or an error: — pass through.
+        result
+    };
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), final_result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -322,8 +349,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_read_before_edit_guard(
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {

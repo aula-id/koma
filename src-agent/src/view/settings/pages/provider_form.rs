@@ -1,3 +1,6 @@
+use super::super::utils::truncate;
+use crate::app::mode::settings::ProviderModal;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::Rect,
     style::Style,
@@ -5,9 +8,6 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-use crate::app::mode::settings::ProviderModal;
-use crate::view::theme::Palette;
-use super::super::utils::truncate;
 
 pub(crate) fn draw_provider_form(
     frame: &mut Frame,
@@ -16,44 +16,75 @@ pub(crate) fn draw_provider_form(
     area: Rect,
 ) {
     let inner = area;
-    if inner.width == 0 || inner.height == 0 { return; }
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
 
     let label_w = 14usize;
     let val_w = (inner.width as usize).saturating_sub(label_w + 1).max(4);
     let mut lines: Vec<Line> = Vec::new();
 
     // Blank padding top
-    for _ in 0..(inner.height as usize / 3).min(6) { lines.push(Line::from("")); }
+    for _ in 0..(inner.height as usize / 3).min(6) {
+        lines.push(Line::from(""));
+    }
 
     // Name
     {
         let active = modal.field == 0;
         let lc = if active { palette.accent } else { palette.dim };
-        let label = Span::styled(format!("{:<width$}", "Name", width = label_w), Style::default().fg(lc));
+        let label = Span::styled(
+            format!("{:<width$}", "Name", width = label_w),
+            Style::default().fg(lc),
+        );
         let mut val = truncate(&modal.name, val_w.saturating_sub(1));
-        if active { val.push('\u{2588}'); }
+        if active {
+            val.push('\u{2588}');
+        }
         let vc = if active { palette.fg } else { palette.dim };
-        lines.push(Line::from(vec![Span::raw("  "), label, Span::styled(val, Style::default().fg(vc))]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            label,
+            Span::styled(val, Style::default().fg(vc)),
+        ]));
     }
     // Endpoint
     {
         let active = modal.field == 1;
         let lc = if active { palette.accent } else { palette.dim };
-        let label = Span::styled(format!("{:<width$}", "Endpoint", width = label_w), Style::default().fg(lc));
+        let label = Span::styled(
+            format!("{:<width$}", "Endpoint", width = label_w),
+            Style::default().fg(lc),
+        );
         let mut val = truncate(&modal.endpoint, val_w.saturating_sub(1));
-        if active { val.push('\u{2588}'); }
+        if active {
+            val.push('\u{2588}');
+        }
         let vc = if active { palette.fg } else { palette.dim };
-        lines.push(Line::from(vec![Span::raw("  "), label, Span::styled(val, Style::default().fg(vc))]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            label,
+            Span::styled(val, Style::default().fg(vc)),
+        ]));
     }
     // API key
     {
         let active = modal.field == 2;
         let lc = if active { palette.accent } else { palette.dim };
-        let label = Span::styled(format!("{:<width$}", "API key", width = label_w), Style::default().fg(lc));
+        let label = Span::styled(
+            format!("{:<width$}", "API key", width = label_w),
+            Style::default().fg(lc),
+        );
         let mut val = truncate(&modal.api_key, val_w.saturating_sub(1));
-        if active { val.push('\u{2588}'); }
+        if active {
+            val.push('\u{2588}');
+        }
         let vc = if active { palette.fg } else { palette.dim };
-        lines.push(Line::from(vec![Span::raw("  "), label, Span::styled(val, Style::default().fg(vc))]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            label,
+            Span::styled(val, Style::default().fg(vc)),
+        ]));
     }
     // Blank
     lines.push(Line::from(""));

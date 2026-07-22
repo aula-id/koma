@@ -238,7 +238,10 @@ impl OpenRouterClient {
                         }
                         // Open a thinking block; seed text/signature from the start
                         // (usually empty — the body streams via thinking_delta).
-                        ContentBlockStart::Thinking { thinking, signature } => {
+                        ContentBlockStart::Thinking {
+                            thinking,
+                            signature,
+                        } => {
                             thinking_blocks.push(PartialThinking {
                                 index,
                                 text: thinking,

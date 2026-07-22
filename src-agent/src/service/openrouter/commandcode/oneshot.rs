@@ -10,7 +10,9 @@ use super::super::helpers::clean_error;
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::ndjson::{parse_line, CcEvent};
-use super::request::{build_messages, extract_system, GenerateRequest, RequestConfig, RequestParams};
+use super::request::{
+    build_messages, extract_system, GenerateRequest, RequestConfig, RequestParams,
+};
 use super::stream::today_date_string;
 
 impl OpenRouterClient {

@@ -37,8 +37,7 @@ pub(crate) fn tool_box_label(name: &str) -> Option<&'static str> {
 /// Unmapped tools (mcp__*, sec_*, future) fall back to their object values, or the
 /// raw args if parsing fails.
 pub(crate) fn format_tool_signature(name: &str, args_json: &str) -> String {
-    let v: serde_json::Value =
-        serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
+    let v: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
     let inner = tool_signature_inner(name, &v).unwrap_or_else(|| generic_inner(&v, args_json));
     // Collapse newlines/runs of whitespace so the header stays one line, then cap.
     let flat = inner.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -52,7 +51,10 @@ fn tool_signature_inner(name: &str, v: &serde_json::Value) -> Option<String> {
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
     let arr = |k: &str| {
         v.get(k).and_then(|x| x.as_array()).map(|a| {
-            a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(" ")
+            a.iter()
+                .filter_map(|e| e.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
         })
     };
     match name {
@@ -122,12 +124,19 @@ fn generic_inner(v: &serde_json::Value, raw: &str) -> String {
                     serde_json::Value::Bool(b) => Some(b.to_string()),
                     serde_json::Value::Number(n) => Some(n.to_string()),
                     serde_json::Value::Array(a) => Some(
-                        a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join(" "),
+                        a.iter()
+                            .filter_map(|e| e.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
                     ),
                     _ => None,
                 })
                 .collect();
-            if parts.is_empty() { raw.to_string() } else { parts.join(", ") }
+            if parts.is_empty() {
+                raw.to_string()
+            } else {
+                parts.join(", ")
+            }
         }
         _ => raw.to_string(),
     }

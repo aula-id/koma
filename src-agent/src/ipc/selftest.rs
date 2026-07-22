@@ -92,9 +92,7 @@ async fn roundtrip() -> Result<()> {
     let server_expected = request_bytes.clone();
     let server_reply = reply_bytes.clone();
     let server = tokio::spawn(async move {
-        let mut conn = server::accept(&listener)
-            .await
-            .context("accept client")?;
+        let mut conn = server::accept(&listener).await.context("accept client")?;
         let mut reader = FrameReader::new();
 
         // Read the client's request frame and re-encode it to compare bytes.
@@ -132,8 +130,7 @@ async fn roundtrip() -> Result<()> {
         .context("client recv reply")?;
     let decoded_reply: DaemonFrame =
         serde_json::from_slice(&reply_frame).context("client decode reply")?;
-    let reencoded_reply =
-        serde_json::to_vec(&decoded_reply).context("client re-encode reply")?;
+    let reencoded_reply = serde_json::to_vec(&decoded_reply).context("client re-encode reply")?;
 
     // Drop the client stream so the server task observes EOF and finishes cleanly.
     drop(stream);

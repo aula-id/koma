@@ -28,12 +28,9 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // Per-PROJECT memory dir (shared by every session in this working dir), not
     // the old per-session `<session_dir>/memory`. Falls back to the per-session
     // path if the bucket dir can't be resolved (it always should).
-    let memory_dir = session_ref
-        .as_ref()
-        .map(|s| {
-            crate::model::store::memory_dir(&s.pwd_hash)
-                .unwrap_or_else(|_| s.path.join("memory"))
-        });
+    let memory_dir = session_ref.as_ref().map(|s| {
+        crate::model::store::memory_dir(&s.pwd_hash).unwrap_or_else(|_| s.path.join("memory"))
+    });
     // The shadow worktree dir (`<pwd_bucket_dir>/worktrees/`) for this session's
     // pwd bucket, mirrored from `memory_dir`. `git_worktree` create/remove resolve
     // `<worktrees_dir>/<name>` so worktrees live OUTSIDE the repo. `None` when the
@@ -45,13 +42,11 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // Created on access so the tool can write into it without a separate
     // create_dir_all. The MEDIA_WORKDIR: sentinel points at the parent `media/`
     // dir so @-autocomplete shows the `downloads/` subdirectory.
-    let download_dir = session_ref
-        .as_ref()
-        .and_then(|s| {
-            crate::model::store::session_media_dir(&s.pwd_hash)
-                .ok()
-                .map(|m| m.join("downloads"))
-        });
+    let download_dir = session_ref.as_ref().and_then(|s| {
+        crate::model::store::session_media_dir(&s.pwd_hash)
+            .ok()
+            .map(|m| m.join("downloads"))
+    });
 
     // Ensure the downloads dir exists so web_download can write into it.
     if let Some(ref dir) = download_dir {
@@ -271,8 +266,9 @@ fn spawn_task_with_id(
     narrow_ctx_to_workspace(&mut ctx, overrides.as_ref())?;
     let (session_dir, config, settings, awareness, memory_md) = {
         let rt = &state.rest.sessions[sess_idx];
-        let Some(sess) = rt.session.as_ref() else {
-            return Err(anyhow::anyhow!("session missing for spawn"));
+        let sess = match rt.session.as_ref() {
+            Some(s) => s,
+            None => return Err(SpawnFailReason::Unresolved),
         };
         let session_dir = sess.path.clone();
         let config = state.rest.config.clone();
@@ -314,12 +310,15 @@ fn spawn_task_with_id(
         if crate::app::resolve::agent_declares_model(&check_agent)
             && !crate::app::resolve::agent_model_resolves(&config, &settings, &check_agent)
         {
-            state.rest.sessions[sess_idx]
-                .set_toast(format!("agent '{}' model unresolved — using main", agent_name));
+            state.rest.sessions[sess_idx].set_toast(format!(
+                "agent '{}' model unresolved — using main",
+                agent_name
+            ));
         }
     }
-    let Some(client_arc) = client.as_ref().cloned() else {
-        return Err(anyhow::anyhow!("client missing for spawn"));
+    let client_arc = match client.as_ref() {
+        Some(c) => Arc::clone(c),
+        None => return Err(SpawnFailReason::Unresolved),
     };
 
     let sub = crate::app::subagent::spawn_subagent(
@@ -378,7 +377,17 @@ pub(crate) fn spawn_task(
 ) -> Result<usize, SpawnFailReason> {
     let id = state.rest.sessions[sess_idx].next_subagent_id;
     let spawned = spawn_task_with_id(
-        state, sess_idx, client, handle, id, agent_name, task_text, tool_call_id, detached, ext_owned, overrides,
+        state,
+        sess_idx,
+        client,
+        handle,
+        id,
+        agent_name,
+        task_text,
+        tool_call_id,
+        detached,
+        ext_owned,
+        overrides,
         // Live spawn: nothing was stashed while queued (there was no queue wait).
         Vec::new(),
     )?;
@@ -452,7 +461,18 @@ pub(crate) fn spawn_or_queue(
     overrides: Option<crate::app::subagent::SpawnOverrides>,
 ) -> SpawnOutcome {
     if running_subagents(state, sess_idx) < crate::app::subagent::MAX_SUBAGENTS {
-        match spawn_task(state, sess_idx, client, handle, agent_name, task_text, tool_call_id, detached, ext_owned, overrides) {
+        match spawn_task(
+            state,
+            sess_idx,
+            client,
+            handle,
+            agent_name,
+            task_text,
+            tool_call_id,
+            detached,
+            ext_owned,
+            overrides,
+        ) {
             Ok(id) => SpawnOutcome::Spawned(id),
             Err(reason) => SpawnOutcome::Failed(reason),
         }
@@ -464,9 +484,8 @@ pub(crate) fn spawn_or_queue(
         }
         let id = state.rest.sessions[sess_idx].next_subagent_id;
         state.rest.sessions[sess_idx].next_subagent_id += 1;
-        state.rest.sessions[sess_idx]
-            .pending_subagents
-            .push_back(crate::app::subagent::PendingSubagent {
+        state.rest.sessions[sess_idx].pending_subagents.push_back(
+            crate::app::subagent::PendingSubagent {
                 id,
                 agent_name: agent_name.to_string(),
                 prompt: task_text.to_string(),
@@ -477,7 +496,8 @@ pub(crate) fn spawn_or_queue(
                 // No follow-ups yet; `agents.send`/`task_send` may stash some here
                 // while this delegation waits for a slot, delivered at promotion.
                 pending_injects: Vec::new(),
-            });
+            },
+        );
         SpawnOutcome::Queued(id)
     }
 }
@@ -536,7 +556,10 @@ pub(crate) fn try_start_pending(
             // between enqueue and promotion. Drop the entry; for a task-tool
             // delegation, free its parked call so the round can't hang.
             if let Some(call_id) = pending.tool_call_id {
-                if state.rest.sessions[sess_idx].pending_subagent_calls.contains(&call_id) {
+                if state.rest.sessions[sess_idx]
+                    .pending_subagent_calls
+                    .contains(&call_id)
+                {
                     state.rest.sessions[sess_idx]
                         .pending_subagent_calls
                         .retain(|c| c != &call_id);
@@ -546,7 +569,9 @@ pub(crate) fn try_start_pending(
                         }
                         SpawnFailReason::Workspace(m) => format!("error: {m}"),
                     };
-                    state.rest.sessions[sess_idx].tool_results.push((call_id, msg));
+                    state.rest.sessions[sess_idx]
+                        .tool_results
+                        .push((call_id, msg));
                 }
             }
             // Try the next queued entry within the same free slot.
@@ -571,9 +596,12 @@ fn canonicalize_and_contain(
     requested: &std::path::Path,
     roots: &[std::path::PathBuf],
 ) -> Result<std::path::PathBuf, String> {
-    let canon = requested
-        .canonicalize()
-        .map_err(|e| format!("workspace '{}' could not be resolved: {e}", requested.display()))?;
+    let canon = requested.canonicalize().map_err(|e| {
+        format!(
+            "workspace '{}' could not be resolved: {e}",
+            requested.display()
+        )
+    })?;
     let contained = roots.iter().any(|root| {
         root.canonicalize()
             .map(|canon_root| canon.starts_with(&canon_root))
@@ -667,7 +695,8 @@ mod tests {
     /// `ctx.workspace`/`ctx.workspaces` down to that single canonicalized path.
     #[test]
     fn containment_pass_narrows_ctx_to_single_root() {
-        let base = std::env::temp_dir().join(format!("koma-spawn-test-pass-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("koma-spawn-test-pass-{}", std::process::id()));
         let child = base.join("desk-1");
         std::fs::create_dir_all(&child).expect("create nested test dir");
 
@@ -690,8 +719,10 @@ mod tests {
     /// naming the rejected path.
     #[test]
     fn containment_reject_when_outside_every_root() {
-        let root = std::env::temp_dir().join(format!("koma-spawn-test-root-{}", std::process::id()));
-        let outsider = std::env::temp_dir().join(format!("koma-spawn-test-outsider-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("koma-spawn-test-root-{}", std::process::id()));
+        let outsider =
+            std::env::temp_dir().join(format!("koma-spawn-test-outsider-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create root dir");
         std::fs::create_dir_all(&outsider).expect("create outsider dir");
 
@@ -710,7 +741,11 @@ mod tests {
             ),
             SpawnFailReason::Unresolved => panic!("expected a Workspace failure reason"),
         }
-        assert_eq!((ctx.workspace, ctx.workspaces), before, "ctx must be untouched on rejection");
+        assert_eq!(
+            (ctx.workspace, ctx.workspaces),
+            before,
+            "ctx must be untouched on rejection"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outsider);
@@ -723,7 +758,8 @@ mod tests {
     /// "…/b" is a literal prefix of "…/bc".
     #[test]
     fn containment_rejects_string_prefix_trap() {
-        let base = std::env::temp_dir().join(format!("koma-spawn-test-trap-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("koma-spawn-test-trap-{}", std::process::id()));
         let root = base.join("b");
         let sibling = base.join("bc");
         std::fs::create_dir_all(&root).expect("create root dir");

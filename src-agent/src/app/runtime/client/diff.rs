@@ -104,7 +104,11 @@ pub(super) fn session_dir_for(uuid: &str) -> Option<std::path::PathBuf> {
 /// stored under (both come from `tool::fs::display_key`), so the lookup is direct.
 /// `None` when the session is unknown or no baseline row exists — the caller then
 /// reports that neither diff source is available.
-fn baseline_diff(path: &str, current_session: Option<&str>, modified: String) -> Option<FileDiffResult> {
+fn baseline_diff(
+    path: &str,
+    current_session: Option<&str>,
+    modified: String,
+) -> Option<FileDiffResult> {
     let session_dir = current_session.and_then(session_dir_for)?;
     let baseline = crate::model::msglog::read_file_baseline(&session_dir, path)?;
     let empty = |error: Option<String>, binary: bool| FileDiffResult {
@@ -137,7 +141,10 @@ fn baseline_diff(path: &str, current_session: Option<&str>, modified: String) ->
                 binary: false,
                 origin: "baseline",
             },
-            None => empty(Some("baseline unavailable for this file".to_string()), false),
+            None => empty(
+                Some("baseline unavailable for this file".to_string()),
+                false,
+            ),
         },
     })
 }
@@ -306,8 +313,10 @@ pub(super) fn compute_usage_preview(session: Option<&str>) -> UsagePreviewResult
 
     // Normalize to exactly 7 daily buckets (oldest -> newest, today last), zero-filled
     // for any day the ledger has no rows for.
-    let bucket_map: std::collections::HashMap<i64, f64> =
-        buckets.into_iter().map(|b| (b.bucket_epoch, b.cost)).collect();
+    let bucket_map: std::collections::HashMap<i64, f64> = buckets
+        .into_iter()
+        .map(|b| (b.bucket_epoch, b.cost))
+        .collect();
     let days = (0..7)
         .map(|i| {
             let epoch = today - (6 - i) * 86400;

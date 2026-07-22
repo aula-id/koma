@@ -234,7 +234,9 @@ fn parse_verdict(reply: &str) -> Option<Verdict> {
     //     slice of the reply as the reason.
     let upper = trimmed.to_ascii_uppercase();
     let has_word = |word: &str| {
-        upper.split(|c: char| !c.is_ascii_alphanumeric()).any(|tok| tok == word)
+        upper
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|tok| tok == word)
     };
     if has_word("ALLOW") || has_word("ALLOWED") || has_word("SAFE") {
         return Some(Verdict::allow());
@@ -291,7 +293,9 @@ async fn classify(
     // possible in practice if that substitution itself somehow fails to build,
     // which it never does — this `let else` stays as the structural backstop.
     let Some(route) = resolve_role_dispatch(config, settings, ModelRole::Safeguard) else {
-        return unavailable("classifier not configured (no safeguard model) — set one in /settings".to_string());
+        return unavailable(
+            "classifier not configured (no safeguard model) — set one in /settings".to_string(),
+        );
     };
     // Call-boundary gate (fail-CLOSED): an Anthropic-typed safeguard provider can't
     // be dispatched against the OpenAI-compatible client (native Anthropic is
@@ -321,7 +325,12 @@ async fn classify(
     let main_route = resolve_role_dispatch(config, settings, ModelRole::Main);
     match tokio::time::timeout(
         CLASSIFY_TIMEOUT,
-        client.classify_with(route.conn(), &route.model_id, route.provider(), messages.clone()),
+        client.classify_with(
+            route.conn(),
+            &route.model_id,
+            route.provider(),
+            messages.clone(),
+        ),
     )
     .await
     {
@@ -335,9 +344,9 @@ async fn classify(
             // Main resolves to the same route (same model + endpoint) the retry would
             // fail the same way, so skip it. When Main is absent or equal, fall
             // through to the unavailable verdict as before.
-            let should_retry = main_route.as_ref().is_some_and(|m| {
-                m.model_id != route.model_id || m.endpoint != route.endpoint
-            });
+            let should_retry = main_route
+                .as_ref()
+                .is_some_and(|m| m.model_id != route.model_id || m.endpoint != route.endpoint);
             if let (true, Some(m)) = (should_retry, main_route.as_ref()) {
                 if let Ok(Ok(reply)) = tokio::time::timeout(
                     CLASSIFY_TIMEOUT,
@@ -356,7 +365,10 @@ async fn classify(
                     }
                 }
             }
-            unavailable(format!("classifier error: {}", truncate(&primary_err.to_string(), 100)))
+            unavailable(format!(
+                "classifier error: {}",
+                truncate(&primary_err.to_string(), 100)
+            ))
         }
         Err(_) => unavailable("classifier timeout".to_string()),
     }

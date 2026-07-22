@@ -1,21 +1,21 @@
 //! Transcript area: committed messages, live streaming buffer, sub-agent
 //! inline indicator, and the follow-scroll logic.
 
+use super::blocks::{
+    render_attachment_card, render_bash_nudge_block, render_shell_block, render_user_message,
+};
+use super::helpers::{
+    push_thinking_line, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
+};
+use crate::app::state::AppStateRest;
+use crate::dto::chat::Role;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
-};
-use crate::app::state::AppStateRest;
-use crate::dto::chat::Role;
-use crate::view::theme::Palette;
-use super::helpers::{
-    push_thinking_line, render_block, render_tool_box, split_thinking, truncate_chars, THINK_BAR,
-};
-use super::blocks::{
-    render_attachment_card, render_bash_nudge_block, render_shell_block, render_user_message,
 };
 // `tool_box_label` / `format_tool_signature` now live in the sibling `tool_format`
 // module (file size); re-exported here so the existing
@@ -35,7 +35,10 @@ pub(super) fn render_transcript(
     rest: &AppStateRest,
     palette: &Palette,
 ) {
-    let body = body_chunk.inner(Margin { horizontal: 2, vertical: 0 });
+    let body = body_chunk.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
     let wrap_w = (body.width as usize).saturating_sub(2).max(1);
 
     // Render (or reuse) each committed message's lines. Cache is keyed by width
@@ -92,7 +95,9 @@ pub(super) fn render_transcript(
             // the cache never falls out of step with the message list. A `tool`-role
             // result now renders EMPTY here — its output is rendered inline under its
             // own call by `render_tool_lines`, so the cached block stays trivial.
-            cache.blocks.push(render_message_block(msg, palette, wrap_w));
+            cache
+                .blocks
+                .push(render_message_block(msg, palette, wrap_w));
         }
 
         // Assemble the frame: cached blocks (with blank separators) + the live
@@ -198,7 +203,9 @@ pub(super) fn render_transcript(
             .fg()
             .subagents
             .iter()
-            .filter(|s| matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached)
+            .filter(|s| {
+                matches!(s.status, crate::app::subagent::SubAgentStatus::Running) && !s.detached
+            })
             .collect();
         if !running_agents.is_empty() {
             let elapsed_ms = std::time::SystemTime::now()
@@ -235,7 +242,11 @@ pub(super) fn render_transcript(
         let total = u16::try_from(lines.len()).unwrap_or(u16::MAX);
         let max_scroll = total.saturating_sub(body.height);
         rest.last_max_scroll.set(max_scroll);
-        let top = if rest.fg().follow { max_scroll } else { rest.fg().scroll.min(max_scroll) };
+        let top = if rest.fg().follow {
+            max_scroll
+        } else {
+            rest.fg().scroll.min(max_scroll)
+        };
         let messages = Paragraph::new(lines).scroll((top, 0));
         frame.render_widget(messages, body);
     } // cache borrow ends
@@ -358,7 +369,11 @@ pub(super) fn render_message_block(
                 logical.push(vec![]);
             }
             if !response_body.is_empty() {
-                logical.extend(crate::view::markdown::render(response_body, palette, wrap_w));
+                logical.extend(crate::view::markdown::render(
+                    response_body,
+                    palette,
+                    wrap_w,
+                ));
             }
             render_block(logical, "● ", palette.fg, wrap_w, false)
         }
@@ -421,7 +436,11 @@ pub(super) fn render_tool_lines(
             if let Some(digest) =
                 serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                     .ok()
-                    .and_then(|v| v.get("highlights").and_then(|s| s.as_str()).map(str::to_string))
+                    .and_then(|v| {
+                        v.get("highlights")
+                            .and_then(|s| s.as_str())
+                            .map(str::to_string)
+                    })
             {
                 // Header: "⚙/✓ plan ready" — the glyph flips to ✓ once the user
                 // decides and the plan_ready tool result lands.
@@ -506,7 +525,12 @@ pub(super) fn render_tool_lines(
         // the result has landed (`done`). Output tools get a box; others a terse line.
         if done {
             if let Some(result) = tool_results.get(call.id.as_str()) {
-                lines.extend(render_tool_result(result, &call.function.name, palette, wrap_w));
+                lines.extend(render_tool_result(
+                    result,
+                    &call.function.name,
+                    palette,
+                    wrap_w,
+                ));
             }
         }
     }
@@ -549,7 +573,8 @@ pub(super) fn assemble_messages(
     for msg in messages {
         let block = render_message_block(msg, palette, wrap_w);
         let has_body = !block.is_empty();
-        let tool_lines = render_tool_lines(msg, &completed, has_body, palette, wrap_w, &tool_results);
+        let tool_lines =
+            render_tool_lines(msg, &completed, has_body, palette, wrap_w, &tool_results);
         // Empty block with no tool lines (system / hidden harness) → no trace.
         if block.is_empty() && tool_lines.is_empty() {
             continue;

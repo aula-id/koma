@@ -13,7 +13,10 @@ fn slug_lowercases_and_sanitizes_weird_chars() {
     // Leading `.`/`/` collapse into one leading dash, which trim_matches
     // then strips; internal runs of non-alnum chars (`/`, `-`, `.`, ` `)
     // each collapse to a single dash.
-    assert_eq!(command_slug("./scripts/Run-Thing.sh --now"), "scripts-run-thing-sh-now");
+    assert_eq!(
+        command_slug("./scripts/Run-Thing.sh --now"),
+        "scripts-run-thing-sh-now"
+    );
     // Only the first two whitespace-separated words are used.
     assert_eq!(command_slug("echo $(git log)"), "echo-git");
 }
@@ -43,7 +46,9 @@ impl TempDir {
         ));
         TempDir(dir)
     }
-    fn path(&self) -> &Path { &self.0 }
+    fn path(&self) -> &Path {
+        &self.0
+    }
 }
 impl Drop for TempDir {
     fn drop(&mut self) {
@@ -78,7 +83,10 @@ fn gc_keeps_only_the_50_newest_logs() {
 #[test]
 fn tee_not_written_when_output_clean_unchanged_and_small() {
     let dir = TempDir::new("no-write");
-    let opts = OutputOpts { saving: true, log_dir: Some(dir.path().to_path_buf()) };
+    let opts = OutputOpts {
+        saving: true,
+        log_dir: Some(dir.path().to_path_buf()),
+    };
     let raw = "hello world\n".to_string();
     let out = finalize_output("echo hello world", raw, ShellExit::Code(Some(0)), &opts);
 
@@ -92,20 +100,29 @@ fn tee_not_written_when_output_clean_unchanged_and_small() {
 #[test]
 fn tee_written_when_output_would_truncate() {
     let dir = TempDir::new("truncate-write");
-    let opts = OutputOpts { saving: true, log_dir: Some(dir.path().to_path_buf()) };
+    let opts = OutputOpts {
+        saving: true,
+        log_dir: Some(dir.path().to_path_buf()),
+    };
     const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
     let raw = "a".repeat(MAX_CHARS + 10);
     let out = finalize_output("cat bigfile", raw, ShellExit::Code(Some(0)), &opts);
 
     assert!(out.contains("full-output:"));
-    let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().filter_map(|e| e.ok()).collect();
+    let entries: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
     assert_eq!(entries.len(), 1);
 }
 
 #[test]
 fn tee_written_on_nonzero_exit_even_when_small_and_unfiltered() {
     let dir = TempDir::new("nonzero-write");
-    let opts = OutputOpts { saving: true, log_dir: Some(dir.path().to_path_buf()) };
+    let opts = OutputOpts {
+        saving: true,
+        log_dir: Some(dir.path().to_path_buf()),
+    };
     let out = finalize_output("false", "".to_string(), ShellExit::Code(Some(1)), &opts);
 
     assert!(out.contains("full-output:"));
@@ -125,7 +142,10 @@ fn git_redirect_regex_matches_command_position_not_dot_git_paths() {
         "foo; git commit",
         "  git diff".trim(),
     ] {
-        assert!(git_re.is_match(cmd), "expected git-as-command match: {cmd:?}");
+        assert!(
+            git_re.is_match(cmd),
+            "expected git-as-command match: {cmd:?}"
+        );
     }
 
     for cmd in [
@@ -138,15 +158,26 @@ fn git_redirect_regex_matches_command_position_not_dot_git_paths() {
         ".github",
         "cat .gitignore",
     ] {
-        assert!(!git_re.is_match(cmd), "expected no match for .git path/name: {cmd:?}");
+        assert!(
+            !git_re.is_match(cmd),
+            "expected no match for .git path/name: {cmd:?}"
+        );
     }
 }
 
 #[test]
 fn early_exit_never_tees() {
     let dir = TempDir::new("early-no-write");
-    let opts = OutputOpts { saving: true, log_dir: Some(dir.path().to_path_buf()) };
-    let out = finalize_output("whatever", "command timed out after 1ms".to_string(), ShellExit::Early, &opts);
+    let opts = OutputOpts {
+        saving: true,
+        log_dir: Some(dir.path().to_path_buf()),
+    };
+    let out = finalize_output(
+        "whatever",
+        "command timed out after 1ms".to_string(),
+        ShellExit::Early,
+        &opts,
+    );
 
     assert_eq!(out, "command timed out after 1ms");
     assert!(!dir.path().exists());

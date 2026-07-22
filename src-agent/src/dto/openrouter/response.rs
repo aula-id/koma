@@ -3,8 +3,8 @@
 //! Covers both non-streaming (full-body) responses used by `/compact` and
 //! per-SSE-frame streaming chunks used by normal chat turns.
 
-use serde::Deserialize;
 use super::usage::Usage;
+use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
 // Non-streaming response (used by /compact summary)

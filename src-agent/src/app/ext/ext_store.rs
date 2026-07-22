@@ -19,7 +19,9 @@
 
 use tokio::runtime::Handle;
 
-use crate::app::ext::store_api::{detect_platform, fetch_catalogue, fetch_detail, fetch_install_artifact};
+use crate::app::ext::store_api::{
+    detect_platform, fetch_catalogue, fetch_detail, fetch_install_artifact,
+};
 use crate::app::state::AppStateRest;
 use crate::ipc::proto::{StoreDetailWire, StoreItemWire};
 use crate::model::app_config::OAuthProvider;
@@ -114,8 +116,14 @@ pub(crate) fn kick_off_store_install(
             });
             return;
         }
-        let event = match fetch_install_artifact(&id, version.as_deref(), &platform, &bearer).await {
-            Ok((zip, sha256, signature)) => StoreEvent::InstallArtifact { id, zip, sha256, signature },
+        let event = match fetch_install_artifact(&id, version.as_deref(), &platform, &bearer).await
+        {
+            Ok((zip, sha256, signature)) => StoreEvent::InstallArtifact {
+                id,
+                zip,
+                sha256,
+                signature,
+            },
             Err(e) => StoreEvent::InstallFailed { id, error: e },
         };
         let _ = tx.send(event);

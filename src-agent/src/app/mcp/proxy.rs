@@ -29,7 +29,10 @@ use super::PROXY_IO_TIMEOUT;
 /// (connect refused, write/read IO error, timeout, decode error) is surfaced as an
 /// `Err` the caller maps to a model-facing tool error or (for `connect_proxy`) a
 /// fallback trigger.
-pub(super) fn proxy_request(sock: &std::path::Path, req: &McpRequest) -> anyhow::Result<McpResponse> {
+pub(super) fn proxy_request(
+    sock: &std::path::Path,
+    req: &McpRequest,
+) -> anyhow::Result<McpResponse> {
     use anyhow::Context;
 
     // Connect (blocking). A refused/absent socket means the daemon isn't accepting.
@@ -56,8 +59,12 @@ fn proxy_send(stream: &mut StdUnixStream, req: &McpRequest) -> anyhow::Result<()
     use anyhow::Context;
     let payload = serde_json::to_vec(req).context("serialise McpRequest")?;
     let prefix = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&prefix).context("write MCP frame prefix")?;
-    stream.write_all(&payload).context("write MCP frame payload")?;
+    stream
+        .write_all(&prefix)
+        .context("write MCP frame prefix")?;
+    stream
+        .write_all(&payload)
+        .context("write MCP frame payload")?;
     stream.flush().context("flush MCP frame")?;
     Ok(())
 }
@@ -76,7 +83,9 @@ fn proxy_recv(stream: &mut StdUnixStream) -> anyhow::Result<McpResponse> {
             return serde_json::from_slice(&bytes).context("decode McpResponse");
         }
         let mut chunk = [0u8; 8192];
-        let n = stream.read(&mut chunk).context("read from global MCP daemon socket")?;
+        let n = stream
+            .read(&mut chunk)
+            .context("read from global MCP daemon socket")?;
         if n == 0 {
             return Err(anyhow!("global MCP daemon closed the connection mid-frame"));
         }

@@ -1,9 +1,9 @@
 //! Key handler for the `--resume` session picker (`Mode::SessionPicker`).
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use super::Action;
 use crate::app::mode::PickerState;
 use crate::app::state::AppStateRest;
-use super::Action;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle a key press inside the `--resume` session picker.
 ///

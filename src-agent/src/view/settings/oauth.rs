@@ -105,7 +105,10 @@ pub(crate) fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area
 pub(crate) fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
     crate::view::clear_and_fill(frame, area, palette.bg);
     let lines = vec![
-        Line::from(Span::styled(msg.to_string(), Style::default().fg(palette.error))),
+        Line::from(Span::styled(
+            msg.to_string(),
+            Style::default().fg(palette.error),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "enter/esc dismiss",

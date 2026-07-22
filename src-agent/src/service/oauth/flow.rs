@@ -215,15 +215,14 @@ async fn run_commandcode_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>
     let state = super::commandcode::generate_state();
     let timeout = super::registry::COMMANDCODE_AUTH_TIMEOUT_SECS;
 
-    let (port, callback_fut) = match super::loopback_post::catch_post_callback(&state, timeout)
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = tx.send(OAuthEvent::Failed { error: e });
-            return;
-        }
-    };
+    let (port, callback_fut) =
+        match super::loopback_post::catch_post_callback(&state, timeout).await {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(OAuthEvent::Failed { error: e });
+                return;
+            }
+        };
 
     let auth_url = super::commandcode::build_auth_url(port, &state);
     let _ = tx.send(OAuthEvent::CodexUrl {

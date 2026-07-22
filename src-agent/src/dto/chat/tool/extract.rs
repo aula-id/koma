@@ -78,7 +78,9 @@ pub fn extract_text_tool_calls(content: &str) -> (String, Vec<ToolCall>) {
         let fn_start = fn_search_from + rel_fn_open;
 
         // Skip if this position is already inside a removed range.
-        let already_removed = remove.iter().any(|&(rs, re)| fn_start >= rs && fn_start < re);
+        let already_removed = remove
+            .iter()
+            .any(|&(rs, re)| fn_start >= rs && fn_start < re);
         if already_removed {
             fn_search_from = fn_start + FN_OPEN.len();
             continue;
@@ -87,8 +89,12 @@ pub fn extract_text_tool_calls(content: &str) -> (String, Vec<ToolCall>) {
         // A span runs from <function= to its matching </function>, or to the
         // next <function=, or to end-of-string — whichever comes first.
         let search_after_open = fn_start + FN_OPEN.len();
-        let next_fn = content[search_after_open..].find(FN_OPEN).map(|r| search_after_open + r);
-        let close_fn = content[search_after_open..].find(FN_CLOSE).map(|r| search_after_open + r);
+        let next_fn = content[search_after_open..]
+            .find(FN_OPEN)
+            .map(|r| search_after_open + r);
+        let close_fn = content[search_after_open..]
+            .find(FN_CLOSE)
+            .map(|r| search_after_open + r);
 
         let (span_inner_end, span_end) = match (close_fn, next_fn) {
             (Some(cf), Some(nf)) if cf < nf => (cf, cf + FN_CLOSE.len()),
@@ -278,7 +284,9 @@ pub fn strip_tool_call_tags(content: &str) -> String {
     while let Some(open_pos) = s.find(OPEN) {
         // Search for the matching close AFTER the open tag.
         let after_open = open_pos + OPEN.len();
-        let Some(rel_close) = s[after_open..].find(CLOSE) else { break };
+        let Some(rel_close) = s[after_open..].find(CLOSE) else {
+            break;
+        };
         let close_end = after_open + rel_close + CLOSE.len();
         s.replace_range(open_pos..close_end, "");
     }
@@ -286,7 +294,9 @@ pub fn strip_tool_call_tags(content: &str) -> String {
     // Step 1b: Remove all <tool_calls>...</tool_calls> spans (plural form).
     while let Some(open_pos) = s.find(PLURAL_OPEN) {
         let after_open = open_pos + PLURAL_OPEN.len();
-        let Some(rel_close) = s[after_open..].find(PLURAL_CLOSE) else { break };
+        let Some(rel_close) = s[after_open..].find(PLURAL_CLOSE) else {
+            break;
+        };
         let close_end = after_open + rel_close + PLURAL_CLOSE.len();
         s.replace_range(open_pos..close_end, "");
     }
@@ -385,7 +395,10 @@ mod tests {
         assert_eq!(name, "sec_remote");
         let v: serde_json::Value = serde_json::from_str(&args).unwrap();
         assert_eq!(v["action"], serde_json::Value::String("open".to_string()));
-        assert_eq!(v["host"], serde_json::Value::String("localhost".to_string()));
+        assert_eq!(
+            v["host"],
+            serde_json::Value::String("localhost".to_string())
+        );
         assert_eq!(v["port"], serde_json::json!(3000));
         assert_eq!(v["enabled"], serde_json::json!(true));
     }
@@ -464,8 +477,7 @@ mod tests {
         let (cleaned, calls) = extract_text_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "ls");
-        let v: serde_json::Value =
-            serde_json::from_str(&calls[0].function.arguments).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
         assert_eq!(v["path"], serde_json::Value::String("/tmp".to_string()));
         assert!(cleaned.is_empty() || !cleaned.contains("<tool_call>"));
     }
@@ -476,7 +488,8 @@ mod tests {
 
     #[test]
     fn standalone_harmony_call() {
-        let content = "Here is the call:\n<function=say_hi>\n<parameter=name>Bob\n</function>\nDone.";
+        let content =
+            "Here is the call:\n<function=say_hi>\n<parameter=name>Bob\n</function>\nDone.";
         let (cleaned, calls) = extract_text_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "say_hi");
@@ -493,7 +506,8 @@ mod tests {
 
     #[test]
     fn no_markup_leak_in_cleaned_content() {
-        let content = "Prose\n<tool_call>\n<function=tool>\n<parameter=x>1\n</tool_call>\nMore prose";
+        let content =
+            "Prose\n<tool_call>\n<function=tool>\n<parameter=x>1\n</tool_call>\nMore prose";
         let (cleaned, calls) = extract_text_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert!(!cleaned.contains("<tool_call>"));

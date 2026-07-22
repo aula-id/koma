@@ -35,20 +35,20 @@ impl SettingField {
     /// Human-readable label shown in the detail pane.
     pub fn label(self) -> &'static str {
         match self {
-            SettingField::ApiKey            => "API key",
-            SettingField::Provider          => "Provider",
-            SettingField::Accent            => "Accent",
-            SettingField::Palette           => "Theme",
-            SettingField::Name              => "Session name",
-            SettingField::Workdir           => "Workdir",
-            SettingField::AwarenessEnabled  => "Awareness",
-            SettingField::ClassifierEnabled  => "Harness",
-            SettingField::AllowedFolders     => "Allowed dirs",
-            SettingField::ShortSendEnabled   => "Short-send",
-            SettingField::SlidingCache       => "Sliding cache",
-            SettingField::BashSaving         => "Bash shorts",
-            SettingField::CodingAutosave     => "Coding autosave",
-            SettingField::InternetMode       => "Internet mode",
+            SettingField::ApiKey => "API key",
+            SettingField::Provider => "Provider",
+            SettingField::Accent => "Accent",
+            SettingField::Palette => "Theme",
+            SettingField::Name => "Session name",
+            SettingField::Workdir => "Workdir",
+            SettingField::AwarenessEnabled => "Awareness",
+            SettingField::ClassifierEnabled => "Harness",
+            SettingField::AllowedFolders => "Allowed dirs",
+            SettingField::ShortSendEnabled => "Short-send",
+            SettingField::SlidingCache => "Sliding cache",
+            SettingField::BashSaving => "Bash shorts",
+            SettingField::CodingAutosave => "Coding autosave",
+            SettingField::InternetMode => "Internet mode",
         }
     }
 }

@@ -31,46 +31,21 @@ pub mod usage;
 
 // request
 pub use request::{
-    ChatRequest,
-    ProviderRouting,
-    ReasoningConfig,
-    ToolDef,
-    ToolFunctionDef,
-    UsageRequest,
-    StreamOptions,
-    ImageWireCtx,
-    WireMessage,
-    to_wire,
-    to_wire_with_images,
+    to_wire, to_wire_with_images, ChatRequest, ImageWireCtx, ProviderRouting, ReasoningConfig,
+    StreamOptions, ToolDef, ToolFunctionDef, UsageRequest, WireMessage,
 };
 
 // models
 pub use models::{
-    Architecture,
-    EndpointsData,
-    EndpointsResponse,
-    ModelEndpoint,
-    ModelInfo,
-    ModelPricing,
-    ModelReasoning,
-    ModelsResponse,
-    TopProvider,
+    Architecture, EndpointsData, EndpointsResponse, ModelEndpoint, ModelInfo, ModelPricing,
+    ModelReasoning, ModelsResponse, TopProvider,
 };
 
 // usage
-pub use usage::{
-    PromptTokensDetails,
-    Usage,
-};
+pub use usage::{PromptTokensDetails, Usage};
 
 // response
 pub use response::{
-    ChatResponse,
-    Choice,
-    Delta,
-    FunctionDelta,
-    ResponseMessage,
-    StreamChunk,
-    StreamChoice,
+    ChatResponse, Choice, Delta, FunctionDelta, ResponseMessage, StreamChoice, StreamChunk,
     ToolCallDelta,
 };

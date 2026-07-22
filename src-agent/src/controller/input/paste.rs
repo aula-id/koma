@@ -42,8 +42,8 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
             // Non-image / non-path / multi-token pastes fall through to the verbatim
             // text insert below, exactly as before. (An `if/else` — not an early
             // `return` — because the surrounding take/put-back must reach `set_mode`.)
-            let attached = image_path_paste(text)
-                .is_some_and(|path| state.rest.try_attach_image_path(&path));
+            let attached =
+                image_path_paste(text).is_some_and(|path| state.rest.try_attach_image_path(&path));
             if !attached {
                 // Multiline verbatim: '\n' is kept (newline in the input, never a
                 // submit). NORMALIZE line endings first so bracketed paste that
@@ -88,9 +88,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
                 paste_single_line(text, |c| s.mm_push_char(c));
                 // If that fed the Model omnisearch, prime the on-demand fetch for
                 // the edited provider's endpoint (debounced; no-op otherwise).
-                if s.mm_current_field()
-                    == Some(crate::app::mode::settings::ModelField::Model)
-                {
+                if s.mm_current_field() == Some(crate::app::mode::settings::ModelField::Model) {
                     if let Some((ep, key)) = s.mm_provider_conn() {
                         state.rest.request_catalogue(&ep, &key, "");
                     }
@@ -223,19 +221,19 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
 /// real file), but paths with spaces work as long as they exist.
 fn image_path_paste(text: &str) -> Option<String> {
     let mut cleaned = text.trim().to_string();
-    
+
     // Strip surrounding quotes if present (matching pair: "" or '')
     if (cleaned.starts_with('"') && cleaned.ends_with('"'))
         || (cleaned.starts_with('\'') && cleaned.ends_with('\''))
     {
         cleaned = cleaned[1..cleaned.len() - 1].to_string();
     }
-    
+
     // Strip file:// scheme if present
     if let Some(stripped) = cleaned.strip_prefix("file://") {
         cleaned = stripped.to_string();
     }
-    
+
     // Unescape backslash-escapes: replace \<char> with <char>
     let mut unescaped = String::new();
     let mut chars = cleaned.chars();
@@ -251,15 +249,15 @@ fn image_path_paste(text: &str) -> Option<String> {
         }
     }
     cleaned = unescaped;
-    
+
     if cleaned.is_empty() {
         return None;
     }
-    
+
     if !crate::model::attachment::has_image_extension(&cleaned) {
         return None;
     }
-    
+
     if std::path::Path::new(&cleaned).is_file() {
         Some(cleaned)
     } else {

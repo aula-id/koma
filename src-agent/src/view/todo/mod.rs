@@ -72,16 +72,16 @@ fn todo_row<'a>(item: &TodoItem, selected: bool, width: usize, palette: &Palette
     let sym_width = sym.chars().count();
     let suffix = if item.locked { LOCKED_SUFFIX } else { "" };
     let suffix_width = suffix.chars().count();
-    let label = truncate(&item.content, width.saturating_sub(sym_width + 1 + suffix_width));
+    let label = truncate(
+        &item.content,
+        width.saturating_sub(sym_width + 1 + suffix_width),
+    );
     let used = sym_width + 1 + label.chars().count() + suffix_width;
     let pad = width.saturating_sub(used);
 
     if selected {
         let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
-        let mut spans = vec![
-            Span::styled(format!("{sym} "), hl),
-            Span::styled(label, hl),
-        ];
+        let mut spans = vec![Span::styled(format!("{sym} "), hl), Span::styled(label, hl)];
         if item.locked {
             spans.push(Span::styled(suffix, hl));
         }
@@ -121,11 +121,17 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
         Span::styled(item.status.display().to_string(), status_style),
         Span::styled("   ·   ", Style::default().fg(palette.dim)),
         Span::styled("priority: ", Style::default().fg(palette.dim)),
-        Span::styled(item.priority.label().to_string(), Style::default().fg(palette.fg)),
+        Span::styled(
+            item.priority.label().to_string(),
+            Style::default().fg(palette.fg),
+        ),
     ];
     if item.locked {
         top_line.push(Span::styled("   ·   ", Style::default().fg(palette.dim)));
-        top_line.push(Span::styled("locked (system-managed)", Style::default().fg(palette.dim)));
+        top_line.push(Span::styled(
+            "locked (system-managed)",
+            Style::default().fg(palette.dim),
+        ));
     }
     lines.push(Line::from(top_line));
 
@@ -160,9 +166,10 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
     lines.push(Line::from(""));
 
     // Content as description — each word is a separate span for natural wrapping.
-    lines.push(Line::from(vec![
-        Span::styled("content:", Style::default().fg(palette.dim)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "content:",
+        Style::default().fg(palette.dim),
+    )]));
     let content_spans: Vec<Span> = {
         let words: Vec<&str> = item.content.split_whitespace().collect();
         let word_count = words.len();
@@ -170,7 +177,10 @@ fn detail_lines<'a>(item: &TodoItem, palette: &Palette) -> Vec<Line<'a>> {
             .into_iter()
             .enumerate()
             .flat_map(|(i, word)| {
-                let mut spans = vec![Span::styled(word.to_string(), Style::default().fg(palette.fg))];
+                let mut spans = vec![Span::styled(
+                    word.to_string(),
+                    Style::default().fg(palette.fg),
+                )];
                 if i + 1 < word_count {
                     spans.push(Span::raw(" "));
                 }
@@ -205,7 +215,12 @@ pub fn render_todo_overlay(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = 12u16.min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let rect = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     let total = items.len();
     let title = format!(" todo ({}/{}) ", completed_count, total);
@@ -226,7 +241,10 @@ pub fn render_todo_overlay(
                 "(no todos — model can add with checklist tool)",
                 Style::default().fg(palette.dim),
             )),
-            inner.inner(Margin { horizontal: 1, vertical: 0 }),
+            inner.inner(Margin {
+                horizontal: 1,
+                vertical: 0,
+            }),
         );
         return;
     }
@@ -256,12 +274,8 @@ pub fn render_todo_overlay(
     // Scrolloff window (persisted offset on rest — TodoState is rebuilt per
     // client frame). One row per item, so window start == scroll offset.
     let scroll = if list_h > 0 {
-        let (start, _) = crate::view::scroll::scroll_window(
-            &rest.todo_offset,
-            sel,
-            items.len(),
-            list_h,
-        );
+        let (start, _) =
+            crate::view::scroll::scroll_window(&rest.todo_offset, sel, items.len(), list_h);
         start as u16
     } else {
         0
@@ -269,7 +283,10 @@ pub fn render_todo_overlay(
     frame.render_widget(Paragraph::new(list_lines).scroll((scroll, 0)), list_inner);
 
     // RIGHT: selected item detail.
-    let right = cols[1].inner(Margin { horizontal: 1, vertical: 0 });
+    let right = cols[1].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     if right.width == 0 || right.height == 0 {
         return;
     }

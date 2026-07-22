@@ -11,14 +11,13 @@ use crate::app::mode::{UsageMetric, UsageNavState, UsageRange};
 use crate::model::usage::SpendBucket;
 use crate::view::theme::Palette;
 
-use super::format::{now_secs, fmt_cost, fmt_tokens_u64, METRIC_LABEL_W};
+use super::format::{fmt_cost, fmt_tokens_u64, now_secs, METRIC_LABEL_W};
 
 pub(crate) const CELL: &str = "\u{2588}";
 pub(crate) const RULE: &str = "\u{2500}";
 pub(crate) const BAR_CHARS: [char; 9] = [
-    ' ',
-    '\u{258F}', '\u{258E}', '\u{258D}', '\u{258C}',
-    '\u{258B}', '\u{258A}', '\u{2589}', '\u{2588}',
+    ' ', '\u{258F}', '\u{258E}', '\u{258D}', '\u{258C}', '\u{258B}', '\u{258A}', '\u{2589}',
+    '\u{2588}',
 ];
 pub(crate) const BAR_MAX_WIDTH: usize = 20;
 pub(crate) const COL_GAP: u16 = 2;
@@ -62,7 +61,11 @@ fn build_hourly_horizontal_chart(
     max_width: usize,
     palette: &Palette,
 ) -> Vec<Line<'static>> {
-    let map: HashMap<i64, SpendBucket> = buckets.iter().cloned().map(|b| (b.bucket_epoch, b)).collect();
+    let map: HashMap<i64, SpendBucket> = buckets
+        .iter()
+        .cloned()
+        .map(|b| (b.bucket_epoch, b))
+        .collect();
     let now = now_secs();
     let tz = crate::model::usage::local_utc_offset_secs();
     let local_now = now + tz;
@@ -77,25 +80,40 @@ fn build_hourly_horizontal_chart(
     let (p33, p66, p90) = percentile_thresholds(&nonzero);
     let max_val = values.iter().cloned().fold(0.0_f64, f64::max);
     let label_w = 3usize;
-    let bar_w = max_width.saturating_sub(label_w + METRIC_LABEL_W + 1).max(1);
+    let bar_w = max_width
+        .saturating_sub(label_w + METRIC_LABEL_W + 1)
+        .max(1);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(25);
 
     for (&v, &h) in values.iter().zip(epochs.iter()) {
         let col = heat_color(v, p33, p66, p90, false, palette);
-        let fill = if max_val <= 0.0 { 0usize } else { ((v / max_val) * bar_w as f64).round() as usize };
+        let fill = if max_val <= 0.0 {
+            0usize
+        } else {
+            ((v / max_val) * bar_w as f64).round() as usize
+        };
         let hour = (((h + tz) % 86400) / 3600) as usize;
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(bar_w + 2);
         let label_style = if hour == current_hour {
-            Style::default().fg(palette.accent).bg(palette.heat[0]).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .bg(palette.heat[0])
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.dim).bg(palette.heat[0])
         };
         spans.push(Span::styled(format!("{hour:02}"), label_style));
         for j in 0..bar_w {
             if j < fill {
-                spans.push(Span::styled(CELL, Style::default().fg(col).bg(palette.heat[0])));
+                spans.push(Span::styled(
+                    CELL,
+                    Style::default().fg(col).bg(palette.heat[0]),
+                ));
             } else {
-                spans.push(Span::styled(CELL, Style::default().fg(palette.heat[0]).bg(palette.heat[0])));
+                spans.push(Span::styled(
+                    CELL,
+                    Style::default().fg(palette.heat[0]).bg(palette.heat[0]),
+                ));
             }
         }
         let val_str = bar_metric_label(v, metric);
@@ -117,7 +135,11 @@ fn build_day_horizontal_chart(
     palette: &Palette,
 ) -> Vec<Line<'static>> {
     const DOW: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    let map: HashMap<i64, SpendBucket> = buckets.iter().cloned().map(|b| (b.bucket_epoch, b)).collect();
+    let map: HashMap<i64, SpendBucket> = buckets
+        .iter()
+        .cloned()
+        .map(|b| (b.bucket_epoch, b))
+        .collect();
     let now = now_secs();
     let tz = crate::model::usage::local_utc_offset_secs();
     let local_now = now + tz;
@@ -138,24 +160,39 @@ fn build_day_horizontal_chart(
     let (p33, p66, p90) = percentile_thresholds(&nonzero);
     let max_val = values.iter().cloned().fold(0.0_f64, f64::max);
     let label_w = 4usize;
-    let bar_w = max_width.saturating_sub(label_w + METRIC_LABEL_W + 1).max(1);
+    let bar_w = max_width
+        .saturating_sub(label_w + METRIC_LABEL_W + 1)
+        .max(1);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(8);
 
     for (i, (&v, label)) in values.iter().zip(labels.iter()).enumerate() {
         let col = heat_color(v, p33, p66, p90, false, palette);
-        let fill = if max_val <= 0.0 { 0usize } else { ((v / max_val) * bar_w as f64).round() as usize };
+        let fill = if max_val <= 0.0 {
+            0usize
+        } else {
+            ((v / max_val) * bar_w as f64).round() as usize
+        };
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(bar_w + 2);
         let label_style = if i == 6 {
-            Style::default().fg(palette.accent).bg(palette.heat[0]).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .bg(palette.heat[0])
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.dim).bg(palette.heat[0])
         };
         spans.push(Span::styled(format!("{label} "), label_style));
         for j in 0..bar_w {
             if j < fill {
-                spans.push(Span::styled(CELL, Style::default().fg(col).bg(palette.heat[0])));
+                spans.push(Span::styled(
+                    CELL,
+                    Style::default().fg(col).bg(palette.heat[0]),
+                ));
             } else {
-                spans.push(Span::styled(CELL, Style::default().fg(palette.heat[0]).bg(palette.heat[0])));
+                spans.push(Span::styled(
+                    CELL,
+                    Style::default().fg(palette.heat[0]).bg(palette.heat[0]),
+                ));
             }
         }
         let val_str = bar_metric_label(v, metric);
@@ -175,7 +212,11 @@ fn build_heatmap_yearly(
     metric: UsageMetric,
     palette: &Palette,
 ) -> Vec<Line<'static>> {
-    let map: HashMap<i64, SpendBucket> = buckets.iter().cloned().map(|b| (b.bucket_epoch, b)).collect();
+    let map: HashMap<i64, SpendBucket> = buckets
+        .iter()
+        .cloned()
+        .map(|b| (b.bucket_epoch, b))
+        .collect();
     let now = now_secs();
     let tz = crate::model::usage::local_utc_offset_secs();
     let local_now = now + tz;
@@ -184,19 +225,33 @@ fn build_heatmap_yearly(
     const COLS: usize = 53;
     const ROWS: usize = 7;
     let grid_start = today - (today_dow as i64 + (ROWS * (COLS - 1)) as i64) * 86400;
-    let nonzero: Vec<f64> = map.values().map(|b| metric_val(b, metric)).filter(|&v| v > 0.0).collect();
+    let nonzero: Vec<f64> = map
+        .values()
+        .map(|b| metric_val(b, metric))
+        .filter(|&v| v > 0.0)
+        .collect();
     let (p33, p66, p90) = percentile_thresholds(&nonzero);
     let row_labels = ["   ", "Mon", "   ", "Wed", "   ", "Fri", "   "];
     let mut result: Vec<Line<'static>> = Vec::with_capacity(ROWS + 2);
 
     for (row, &label) in row_labels.iter().enumerate() {
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(COLS + 1);
-        spans.push(Span::styled(format!("{label} "), Style::default().fg(palette.dim)));
+        spans.push(Span::styled(
+            format!("{label} "),
+            Style::default().fg(palette.dim),
+        ));
         for col in 0..COLS {
             let day = grid_start + (col as i64 * ROWS as i64 + row as i64) * 86400;
             let future = day > today;
-            let v = if future { -1.0 } else { map.get(&day).map(|b| metric_val(b, metric)).unwrap_or(0.0) };
-            spans.push(Span::styled(CELL, Style::default().fg(heat_color(v, p33, p66, p90, future, palette))));
+            let v = if future {
+                -1.0
+            } else {
+                map.get(&day).map(|b| metric_val(b, metric)).unwrap_or(0.0)
+            };
+            spans.push(Span::styled(
+                CELL,
+                Style::default().fg(heat_color(v, p33, p66, p90, future, palette)),
+            ));
         }
         result.push(Line::from(spans));
     }
@@ -212,7 +267,10 @@ pub(crate) fn build_session_hourly_heatmap(
     max_width: usize,
 ) -> Vec<Line<'static>> {
     if hourly.is_empty() {
-        return vec![Line::from(Span::styled("no data yet", Style::default().fg(palette.dim)))];
+        return vec![Line::from(Span::styled(
+            "no data yet",
+            Style::default().fg(palette.dim),
+        ))];
     }
     let map: std::collections::HashMap<i64, &SpendBucket> =
         hourly.iter().map(|b| (b.bucket_epoch, b)).collect();
@@ -230,16 +288,29 @@ pub(crate) fn build_session_hourly_heatmap(
         let epoch = first + i as i64 * 3600;
         let v = map.get(&epoch).map(|b| b.cost).unwrap_or(0.0);
         let col = heat_color(v, p33, p66, p90, false, palette);
-        let fill = if max_val <= 0.0 { 0usize } else { ((v / max_val) * bar_w as f64).round() as usize };
+        let fill = if max_val <= 0.0 {
+            0usize
+        } else {
+            ((v / max_val) * bar_w as f64).round() as usize
+        };
         let tz = crate::model::usage::local_utc_offset_secs();
         let hour = (((epoch + tz) % 86400) / 3600) as usize;
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(bar_w + 1);
-        spans.push(Span::styled(format!("{hour:02}"), Style::default().fg(palette.dim).bg(palette.heat[0])));
+        spans.push(Span::styled(
+            format!("{hour:02}"),
+            Style::default().fg(palette.dim).bg(palette.heat[0]),
+        ));
         for j in 0..bar_w {
             if j < fill {
-                spans.push(Span::styled(CELL, Style::default().fg(col).bg(palette.heat[0])));
+                spans.push(Span::styled(
+                    CELL,
+                    Style::default().fg(col).bg(palette.heat[0]),
+                ));
             } else {
-                spans.push(Span::styled(CELL, Style::default().fg(palette.heat[0]).bg(palette.heat[0])));
+                spans.push(Span::styled(
+                    CELL,
+                    Style::default().fg(palette.heat[0]).bg(palette.heat[0]),
+                ));
             }
         }
         lines.push(Line::from(spans));
@@ -270,12 +341,21 @@ pub(crate) fn bar_metric_label(v: f64, metric: UsageMetric) -> String {
 }
 
 fn heat_color(v: f64, p33: f64, p66: f64, p90: f64, future: bool, palette: &Palette) -> Color {
-    if future || v < 0.0 || v == 0.0 { return palette.heat[0]; }
-    if p33 >= p90 { return palette.heat[2]; }
-    if v <= p33 { palette.heat[1] }
-    else if v <= p66 { palette.heat[2] }
-    else if v <= p90 { palette.heat[3] }
-    else { palette.heat[4] }
+    if future || v < 0.0 || v == 0.0 {
+        return palette.heat[0];
+    }
+    if p33 >= p90 {
+        return palette.heat[2];
+    }
+    if v <= p33 {
+        palette.heat[1]
+    } else if v <= p66 {
+        palette.heat[2]
+    } else if v <= p90 {
+        palette.heat[3]
+    } else {
+        palette.heat[4]
+    }
 }
 
 fn metric_val(b: &SpendBucket, metric: UsageMetric) -> f64 {
@@ -286,19 +366,25 @@ fn metric_val(b: &SpendBucket, metric: UsageMetric) -> f64 {
 }
 
 fn percentile_thresholds(nonzero: &[f64]) -> (f64, f64, f64) {
-    if nonzero.is_empty() { return (0.0, 0.0, 0.0); }
+    if nonzero.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
     let mut s = nonzero.to_vec();
     s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     (percentile(&s, 33), percentile(&s, 66), percentile(&s, 90))
 }
 
 fn percentile(sorted: &[f64], pct: usize) -> f64 {
-    if sorted.is_empty() { return 0.0; }
+    if sorted.is_empty() {
+        return 0.0;
+    }
     sorted[((sorted.len() - 1) * pct) / 100]
 }
 
 pub(crate) fn build_bar(value: i64, max_val: i64, max_width: usize) -> String {
-    if max_width == 0 || max_val <= 0 { return " ".repeat(max_width); }
+    if max_width == 0 || max_val <= 0 {
+        return " ".repeat(max_width);
+    }
     let v = value.max(0) as usize;
     let total_units = max_width * 8;
     let units = ((v as f64 / max_val as f64) * total_units as f64).round() as usize;
@@ -306,13 +392,19 @@ pub(crate) fn build_bar(value: i64, max_val: i64, max_width: usize) -> String {
     let full = units / 8;
     let rem = units % 8;
     let mut s = String::with_capacity(max_width);
-    for _ in 0..full { s.push(BAR_CHARS[8]); }
+    for _ in 0..full {
+        s.push(BAR_CHARS[8]);
+    }
     if full < max_width {
         if rem > 0 {
             s.push(BAR_CHARS[rem]);
-            for _ in 0..(max_width - full - 1) { s.push(' '); }
+            for _ in 0..(max_width - full - 1) {
+                s.push(' ');
+            }
         } else {
-            for _ in 0..(max_width - full) { s.push(' '); }
+            for _ in 0..(max_width - full) {
+                s.push(' ');
+            }
         }
     }
     s

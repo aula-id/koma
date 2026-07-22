@@ -36,7 +36,10 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) fn spawn_refresh() {
     std::thread::spawn(|| {
         if let Err(e) = refresh() {
-            crate::model::store::append_global_error_log("catalogue overlay", &format!("fetch failed: {e}"));
+            crate::model::store::append_global_error_log(
+                "catalogue overlay",
+                &format!("fetch failed: {e}"),
+            );
         }
     });
 }
@@ -98,7 +101,10 @@ fn refresh() -> anyhow::Result<()> {
     }
 
     super::set_overlay(table);
-    crate::model::store::append_global_error_log("catalogue overlay", &format!("refreshed from {OVERLAY_URL}"));
+    crate::model::store::append_global_error_log(
+        "catalogue overlay",
+        &format!("refreshed from {OVERLAY_URL}"),
+    );
     Ok(())
 }
 
@@ -120,9 +126,9 @@ fn is_cache_fresh(cache_path: &std::path::Path) -> bool {
 /// truncated/partial file at `path` for a concurrent reader to observe.
 fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
     let mut tmp_name = file_name.to_owned();
     tmp_name.push(format!(".{}$", std::process::id()));
     let tmp_path = parent.join(&tmp_name);

@@ -172,11 +172,7 @@ impl AgentRegistry {
 /// A missing directory is fine (nothing to load). Per-file errors are logged to
 /// stderr and skipped — one corrupt file never breaks the registry. Later files
 /// override earlier entries of the same lowercased name.
-fn load_agents_from_dir(
-    dir: &Path,
-    source: AgentSource,
-    agents: &mut HashMap<String, AgentDef>,
-) {
+fn load_agents_from_dir(dir: &Path, source: AgentSource, agents: &mut HashMap<String, AgentDef>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         // Missing/unreadable dir is not an error: nothing to merge.

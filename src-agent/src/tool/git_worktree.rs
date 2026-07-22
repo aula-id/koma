@@ -274,7 +274,10 @@ fn run_git(args: &[&str], cwd: &Path, timeout_ms: u64) -> String {
     // Guard: a dead cwd (e.g. a removed worktree the session's live cwd sat in)
     // would make git fail obscurely — bail with a clear message instead.
     if !cwd.is_dir() {
-        return format!("error: git working directory '{}' does not exist", cwd.display());
+        return format!(
+            "error: git working directory '{}' does not exist",
+            cwd.display()
+        );
     }
     let mut cmd = Command::new("git");
     cmd.args(args)

@@ -35,7 +35,11 @@ pub(super) fn handle_role_picker(s: &mut SettingsState, key: KeyEvent) {
 
 /// Handle a key on the ModelForm page (model modal open as a full page).
 /// Same logic as the old `handle_model_modal` but Esc goes back to Models page.
-pub(super) fn handle_model_form(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub(super) fn handle_model_form(
+    s: &mut SettingsState,
+    rest: &mut AppStateRest,
+    key: KeyEvent,
+) -> Action {
     use crate::app::mode::filter_models;
     use crate::app::mode::settings::ModelField;
 
@@ -207,27 +211,29 @@ pub(super) fn handle_model_form(s: &mut SettingsState, rest: &mut AppStateRest, 
                     rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                 }
             }
-            KeyCode::Enter => {
-                match cur {
-                    Some(ModelField::Save) => {
-                        let so = s.model_modal.as_ref().map(|m| m.session_only).unwrap_or(false);
-                        s.save_model_modal(so);
-                        s.page = SettingsPage::Models;
-                    }
-                    Some(ModelField::Cancel) => {
-                        s.close_model_modal();
-                        s.page = SettingsPage::Models;
-                    }
-                    _ => {
-                        s.mm_down();
-                        if s.mm_current_field() == Some(ModelField::Model) {
-                            if let Some((ep, key)) = s.mm_provider_conn() {
-                                rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
-                            }
+            KeyCode::Enter => match cur {
+                Some(ModelField::Save) => {
+                    let so = s
+                        .model_modal
+                        .as_ref()
+                        .map(|m| m.session_only)
+                        .unwrap_or(false);
+                    s.save_model_modal(so);
+                    s.page = SettingsPage::Models;
+                }
+                Some(ModelField::Cancel) => {
+                    s.close_model_modal();
+                    s.page = SettingsPage::Models;
+                }
+                _ => {
+                    s.mm_down();
+                    if s.mm_current_field() == Some(ModelField::Model) {
+                        if let Some((ep, key)) = s.mm_provider_conn() {
+                            rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                         }
                     }
                 }
-            }
+            },
             KeyCode::Backspace => {
                 s.mm_backspace();
             }

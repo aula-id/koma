@@ -5,7 +5,12 @@ use crate::model::app_config::{ModelEntry, ProviderConn};
 /// Build a minimal config with one Main model + one Planner model, each on its
 /// own provider connection, so `resolve_role` resolves both independently
 /// (Planner must never inherit Main's route the way Compactor/Awareness do).
-fn config_with(main_model: &str, main_endpoint: &str, planner_model: &str, planner_endpoint: &str) -> AppConfig {
+fn config_with(
+    main_model: &str,
+    main_endpoint: &str,
+    planner_model: &str,
+    planner_endpoint: &str,
+) -> AppConfig {
     let mut config = AppConfig::default();
     config.providers.push(ProviderConn {
         uuid: "prov-main".to_string(),
@@ -42,7 +47,12 @@ fn config_with(main_model: &str, main_endpoint: &str, planner_model: &str, plann
 
 #[test]
 fn non_plan_mode_always_uses_main_even_with_planner_assigned() {
-    let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
+    let config = config_with(
+        "main/model",
+        "https://main.example",
+        "planner/model",
+        "https://planner.example",
+    );
     let settings = Settings::default();
 
     let resolved = resolve_turn_model(&config, &settings, AgentMode::Auto).unwrap();
@@ -52,7 +62,12 @@ fn non_plan_mode_always_uses_main_even_with_planner_assigned() {
 
 #[test]
 fn plan_mode_with_distinct_planner_uses_planner() {
-    let config = config_with("main/model", "https://main.example", "planner/model", "https://planner.example");
+    let config = config_with(
+        "main/model",
+        "https://main.example",
+        "planner/model",
+        "https://planner.example",
+    );
     let settings = Settings::default();
 
     let resolved = resolve_turn_model(&config, &settings, AgentMode::Plan).unwrap();
@@ -90,7 +105,12 @@ fn plan_mode_with_planner_same_route_as_main_keeps_main_resolved() {
     // user pinned the same model to both roles): the caller should get Main's
     // `Resolved` unchanged, not a structurally-identical Planner copy — this is
     // the prompt-cache-continuity guarantee.
-    let config = config_with("shared/model", "https://shared.example", "shared/model", "https://shared.example");
+    let config = config_with(
+        "shared/model",
+        "https://shared.example",
+        "shared/model",
+        "https://shared.example",
+    );
     let settings = Settings::default();
 
     let main_only = resolve_role(&config, &settings, ModelRole::Main).unwrap();
@@ -142,7 +162,10 @@ fn resolve_role_falls_back_to_codex_oauth_conn() {
     let settings = Settings::default();
 
     let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
-    assert_eq!(resolved.endpoint, crate::service::oauth::registry::meta(OAuthProvider::Codex).chat_endpoint);
+    assert_eq!(
+        resolved.endpoint,
+        crate::service::oauth::registry::meta(OAuthProvider::Codex).chat_endpoint
+    );
     assert_eq!(resolved.api_key, "codex-token");
     assert_eq!(resolved.api_type, ApiType::Codex);
     assert_eq!(resolved.account_id, "acct-123");
@@ -164,7 +187,10 @@ fn resolve_role_falls_back_to_kilocode_oauth_conn() {
     let settings = Settings::default();
 
     let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("Main must resolve");
-    assert_eq!(resolved.endpoint, crate::service::oauth::registry::meta(OAuthProvider::Kilocode).chat_endpoint);
+    assert_eq!(
+        resolved.endpoint,
+        crate::service::oauth::registry::meta(OAuthProvider::Kilocode).chat_endpoint
+    );
     assert_eq!(resolved.api_key, "kilo-token");
     assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
     assert_eq!(resolved.account_id, "org-456");
@@ -261,7 +287,10 @@ fn reassigned_main_on_real_provider_wins_over_koma_free_entry() {
     assert_eq!(resolved.endpoint, "https://real.example");
     assert_eq!(resolved.api_key, "key-real");
     assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
-    assert_ne!(resolved.model_id, crate::service::koma_free::KOMA_FREE_MODEL);
+    assert_ne!(
+        resolved.model_id,
+        crate::service::koma_free::KOMA_FREE_MODEL
+    );
 }
 
 #[test]
@@ -410,7 +439,10 @@ fn find_model_entry_by_slug_session_models_win_over_global() {
     };
 
     let hit = find_model_entry_by_slug(&config, &settings, "shared/slug", None).expect("matches");
-    assert_eq!(hit.uuid, "session-uuid", "session_models must win over config.models on the same slug");
+    assert_eq!(
+        hit.uuid, "session-uuid",
+        "session_models must win over config.models on the same slug"
+    );
 }
 
 #[test]
@@ -448,7 +480,10 @@ fn find_model_entry_by_slug_preferred_provider_wins_over_earlier_general_match()
 
     let hit = find_model_entry_by_slug(&config, &settings, "shared/slug", Some(&preferred))
         .expect("matches");
-    assert_eq!(hit.uuid, "wanted-uuid", "a preferred provider_uuid must win over the earlier general match");
+    assert_eq!(
+        hit.uuid, "wanted-uuid",
+        "a preferred provider_uuid must win over the earlier general match"
+    );
 
     // Without the preference, the FIRST general match (insertion order) wins.
     let unpreferred =
@@ -512,7 +547,10 @@ fn resolve_agent_slug_miss_falls_to_main_and_agent_model_resolves_is_false() {
     };
 
     let resolved = resolve_agent(&config, &settings, &agent).expect("falls to Main");
-    assert_eq!(resolved.model_id, "main/model", "unresolved slug falls to Main");
+    assert_eq!(
+        resolved.model_id, "main/model",
+        "unresolved slug falls to Main"
+    );
 
     assert!(
         agent_declares_model(&agent),
@@ -573,7 +611,10 @@ fn spawn_override_model_replaces_agent_model_at_resolution() {
 
     let resolved =
         resolve_agent(&config, &settings, &overridden).expect("resolves via override slug");
-    assert_eq!(resolved.model_id, "vendor/model-b", "override model wins over the agent's own");
+    assert_eq!(
+        resolved.model_id, "vendor/model-b",
+        "override model wins over the agent's own"
+    );
     assert_eq!(resolved.endpoint, "https://b.example");
 }
 
@@ -606,7 +647,10 @@ fn spawn_override_effort_only_leaves_model_untouched() {
     overridden.effort = Some("max".to_string());
 
     let resolved = resolve_agent(&config, &settings, &overridden).expect("resolves");
-    assert_eq!(resolved.model_id, "vendor/model-a", "model untouched by an effort-only override");
+    assert_eq!(
+        resolved.model_id, "vendor/model-a",
+        "model untouched by an effort-only override"
+    );
     assert_eq!(resolved.effort, "max", "effort replaced by the override");
 }
 
@@ -643,7 +687,10 @@ fn spawn_override_garbage_slug_falls_to_main_and_warns() {
     let resolved = resolve_agent(&config, &settings, &check_agent).expect("falls to Main");
     assert_eq!(resolved.model_id, "main/model");
 
-    assert!(agent_declares_model(&check_agent), "override slug counts as a declared model");
+    assert!(
+        agent_declares_model(&check_agent),
+        "override slug counts as a declared model"
+    );
     assert!(
         !agent_model_resolves(&config, &settings, &check_agent),
         "a garbage override slug must fail to resolve so the mismatch warning fires"
@@ -677,9 +724,12 @@ fn ext_conn_with_meta_resolves_data_driven_openai() {
     // endpoint resolves to that endpoint + bearer, wire type OpenAiCompatible, threading the
     // conn uuid as oauth_uuid for the send-time refresh hook.
     let mut config = AppConfig::default();
-    config
-        .oauth_conns
-        .push(ext_model_conn("ext-conn", "my.ext", "https://api.ext.test/v1", "openai"));
+    config.oauth_conns.push(ext_model_conn(
+        "ext-conn",
+        "my.ext",
+        "https://api.ext.test/v1",
+        "openai",
+    ));
     config.models.push(ModelEntry {
         uuid: "ext-model".to_string(),
         name: "Ext Model".to_string(),
@@ -694,8 +744,14 @@ fn ext_conn_with_meta_resolves_data_driven_openai() {
     assert_eq!(resolved.endpoint, "https://api.ext.test/v1");
     assert_eq!(resolved.api_key, "ext-bearer");
     assert_eq!(resolved.api_type, ApiType::OpenAiCompatible);
-    assert_eq!(resolved.account_id, "", "ext conns carry no account/org header");
-    assert_eq!(resolved.oauth_uuid, "ext-conn", "conn uuid threads through for refresh");
+    assert_eq!(
+        resolved.account_id, "",
+        "ext conns carry no account/org header"
+    );
+    assert_eq!(
+        resolved.oauth_uuid, "ext-conn",
+        "conn uuid threads through for refresh"
+    );
     // The Conn projection carries the same identity to the call boundary.
     let conn = resolved.conn();
     assert_eq!(conn.endpoint, "https://api.ext.test/v1");
@@ -707,9 +763,12 @@ fn ext_conn_with_meta_resolves_data_driven_openai() {
 fn ext_conn_with_meta_resolves_data_driven_anthropic() {
     // The "anthropic" wire maps to AnthropicCompatible.
     let mut config = AppConfig::default();
-    config
-        .oauth_conns
-        .push(ext_model_conn("ext-conn", "my.ext", "https://api.ext.test", "anthropic"));
+    config.oauth_conns.push(ext_model_conn(
+        "ext-conn",
+        "my.ext",
+        "https://api.ext.test",
+        "anthropic",
+    ));
     config.models.push(ModelEntry {
         uuid: "ext-model".to_string(),
         name: "Ext Model".to_string(),
@@ -762,7 +821,10 @@ fn ext_conn_without_meta_is_not_a_model_provider() {
     // Via resolve_role: the dangling entry falls through to the legacy Main fallback (empty
     // settings → DEFAULT_BASE_URL), never the ext conn's (empty) endpoint or its bearer.
     let resolved = resolve_role(&config, &settings, ModelRole::Main).expect("falls to legacy Main");
-    assert_ne!(resolved.oauth_uuid, "ext-login-only", "the meta-less ext conn must not route");
+    assert_ne!(
+        resolved.oauth_uuid, "ext-login-only",
+        "the meta-less ext conn must not route"
+    );
     assert_eq!(resolved.endpoint, crate::config::DEFAULT_BASE_URL);
 }
 
@@ -776,9 +838,12 @@ fn ext_agent_binds_to_its_own_model_over_same_named_global() {
     // provider falls through to the general pass.
     let mut config = AppConfig::default();
     // The extension's connected model-provider conn.
-    config
-        .oauth_conns
-        .push(ext_model_conn("ext-conn", "my.ext", "https://api.ext.test/v1", "openai"));
+    config.oauth_conns.push(ext_model_conn(
+        "ext-conn",
+        "my.ext",
+        "https://api.ext.test/v1",
+        "openai",
+    ));
     // A real user provider for the global entry.
     config.providers.push(ProviderConn {
         uuid: "prov-x".to_string(),
@@ -811,7 +876,10 @@ fn ext_agent_binds_to_its_own_model_over_same_named_global() {
         ..AgentDef::default()
     };
     let resolved = resolve_agent(&config, &settings, &ext_agent).expect("resolves");
-    assert_eq!(resolved.model_id, "ext/fast-model", "ext agent binds to its OWN 'fast'");
+    assert_eq!(
+        resolved.model_id, "ext/fast-model",
+        "ext agent binds to its OWN 'fast'"
+    );
     assert_eq!(resolved.endpoint, "https://api.ext.test/v1");
     assert_eq!(resolved.oauth_uuid, "ext-conn");
     assert!(
@@ -825,7 +893,10 @@ fn ext_agent_binds_to_its_own_model_over_same_named_global() {
         ..AgentDef::default()
     };
     let plain = resolve_agent(&config, &settings, &plain_agent).expect("resolves");
-    assert_eq!(plain.model_id, "global/fast-model", "a non-ext agent takes the general match");
+    assert_eq!(
+        plain.model_id, "global/fast-model",
+        "a non-ext agent takes the general match"
+    );
     assert_eq!(plain.endpoint, "https://x.example");
 
     // Ext agent whose extension owns NO conn → empty preferred set → general pass (the global).

@@ -66,7 +66,11 @@ pub fn register_contributions(
 
     if !manifest.contributes.tools.is_empty() {
         if let Some(mgr) = mcp_manager {
-            mgr.register_extension_tools(&ext.id, &manifest.contributes.tools, Arc::clone(ext_manager));
+            mgr.register_extension_tools(
+                &ext.id,
+                &manifest.contributes.tools,
+                Arc::clone(ext_manager),
+            );
         }
     }
 
@@ -154,9 +158,9 @@ pub fn register_mcp_servers(ext: &InstalledExtension, config: &mut AppConfig) ->
     // upserting the current set. Never touches a row owned by a different extension or a
     // user-created one — the retain predicate only ever matches THIS extension's own rows.
     let keep: HashSet<&str> = resolved.iter().map(|(name, _, _)| name.as_str()).collect();
-    config.mcp_servers.retain(|s| {
-        s.ext_id.as_deref() != Some(ext.id.as_str()) || keep.contains(s.name.as_str())
-    });
+    config
+        .mcp_servers
+        .retain(|s| s.ext_id.as_deref() != Some(ext.id.as_str()) || keep.contains(s.name.as_str()));
 
     for (name, exec_path, args) in &resolved {
         // Find THIS extension's existing row under the resolved name (if any) so the upsert
@@ -167,7 +171,10 @@ pub fn register_mcp_servers(ext: &InstalledExtension, config: &mut AppConfig) ->
             .find(|s| s.ext_id.as_deref() == Some(ext.id.as_str()) && &s.name == name)
             .cloned();
         let entry = McpServerEntry {
-            uuid: existing.as_ref().map(|e| e.uuid.clone()).unwrap_or_default(),
+            uuid: existing
+                .as_ref()
+                .map(|e| e.uuid.clone())
+                .unwrap_or_default(),
             name: name.clone(),
             enabled: existing.as_ref().map(|e| e.enabled).unwrap_or(true),
             transport: McpTransport::Stdio,
@@ -208,10 +215,9 @@ fn resolve_server_name(config: &AppConfig, ext_id: &str, name: &str) -> String {
 /// Read + parse `<extensions_dir>/<id>/manifest.json`.
 fn read_manifest(id: &str) -> Result<ExtensionManifest> {
     let path = store::extensions_dir()?.join(id).join("manifest.json");
-    let bytes = std::fs::read(&path)
-        .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
+    let bytes =
+        std::fs::read(&path).map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+    serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -237,6 +243,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().expect("build runtime");
         let ext_manager = ExtHostManager::new(rt.handle());
         let result = register_contributions(&ext, None, &ext_manager);
-        assert!(result.is_err(), "a missing manifest.json must be a clean Err");
+        assert!(
+            result.is_err(),
+            "a missing manifest.json must be a clean Err"
+        );
     }
 }

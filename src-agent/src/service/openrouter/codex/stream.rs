@@ -11,7 +11,9 @@ use crate::service::StreamEvent;
 use super::super::helpers::{clean_error, emit, sanitize_tool_acc};
 use super::super::Conn;
 use super::super::OpenRouterClient;
-use super::request::{build_input, codex_effort, flatten_tools, ResponsesReasoning, ResponsesRequest};
+use super::request::{
+    build_input, codex_effort, flatten_tools, ResponsesReasoning, ResponsesRequest,
+};
 use super::sse::{parse_event, OutputItem, ResponsesEvent};
 use super::{codex_headers, error_message, failed_message};
 
@@ -70,7 +72,12 @@ impl OpenRouterClient {
             text: None,
         };
 
-        let rb = codex_headers(self.http.post(&url), bearer, account_id, self.codex_session_id());
+        let rb = codex_headers(
+            self.http.post(&url),
+            bearer,
+            account_id,
+            self.codex_session_id(),
+        );
         let resp = match rb.json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -196,10 +203,8 @@ impl OpenRouterClient {
                         let (prompt_tokens, completion_tokens, cached_tokens) = response
                             .usage
                             .map(|u| {
-                                let cached = u
-                                    .input_tokens_details
-                                    .map(|d| d.cached_tokens)
-                                    .unwrap_or(0);
+                                let cached =
+                                    u.input_tokens_details.map(|d| d.cached_tokens).unwrap_or(0);
                                 (u.input_tokens, u.output_tokens, cached)
                             })
                             .unwrap_or((0, 0, 0));

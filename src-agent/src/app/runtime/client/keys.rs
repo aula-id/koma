@@ -59,11 +59,19 @@ pub(super) struct KeyRevealResult {
 }
 
 fn op_ok(op: &str) -> KeyOpResult {
-    KeyOpResult { ok: true, op: op.to_string(), error: None }
+    KeyOpResult {
+        ok: true,
+        op: op.to_string(),
+        error: None,
+    }
 }
 
 fn op_err(op: &str, error: impl Into<String>) -> KeyOpResult {
-    KeyOpResult { ok: false, op: op.to_string(), error: Some(error.into()) }
+    KeyOpResult {
+        ok: false,
+        op: op.to_string(),
+        error: Some(error.into()),
+    }
 }
 
 /// Resolve `<~/.koma>/keys/`, creating it if missing. Reuses the SAME
@@ -172,12 +180,19 @@ fn parse_keygen_lf(output: &str) -> Option<(String, String, String)> {
     let (comment, key_type) = match remainder.rfind('(') {
         Some(open) => {
             let comment = remainder[..open].trim().to_string();
-            let ty = remainder[open + 1..].trim_end_matches(')').trim().to_string();
+            let ty = remainder[open + 1..]
+                .trim_end_matches(')')
+                .trim()
+                .to_string();
             (comment, ty)
         }
         None => (remainder.to_string(), String::new()),
     };
-    let comment = if comment == "no comment" { String::new() } else { comment };
+    let comment = if comment == "no comment" {
+        String::new()
+    } else {
+        comment
+    };
     Some((fingerprint, comment, key_type))
 }
 
@@ -231,7 +246,12 @@ pub(super) fn list_keys() -> Vec<KeyInfo> {
             }
             let text = String::from_utf8_lossy(&out.stdout);
             let (fingerprint, comment, key_type) = parse_keygen_lf(&text)?;
-            Some(KeyInfo { name, fingerprint, comment, key_type })
+            Some(KeyInfo {
+                name,
+                fingerprint,
+                comment,
+                key_type,
+            })
         })
         .collect()
 }
@@ -258,7 +278,11 @@ pub(super) fn generate_key(name: &str, comment: &str) -> KeyOpResult {
     }
     let comment = {
         let c = comment.trim();
-        if c.is_empty() { "koma".to_string() } else { c.to_string() }
+        if c.is_empty() {
+            "koma".to_string()
+        } else {
+            c.to_string()
+        }
     };
     let Some(priv_str) = priv_path.to_str() else {
         return op_err(OP, "invalid path encoding");
@@ -382,9 +406,18 @@ pub(super) fn reveal_key(name: &str, private: bool) -> KeyRevealResult {
         Ok(d) => d,
         Err(e) => return empty(Some(e)),
     };
-    let path = if private { dir.join(&name) } else { dir.join(format!("{name}.pub")) };
+    let path = if private {
+        dir.join(&name)
+    } else {
+        dir.join(format!("{name}.pub"))
+    };
     match std::fs::read_to_string(&path) {
-        Ok(content) => KeyRevealResult { name, private, content, error: None },
+        Ok(content) => KeyRevealResult {
+            name,
+            private,
+            content,
+            error: None,
+        },
         Err(e) => empty(Some(format!("could not read key: {e}"))),
     }
 }

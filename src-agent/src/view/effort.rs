@@ -13,6 +13,9 @@
 //! `@`/command palette look (the allowed bordered exception to the otherwise
 //! borderless, top-down UI).
 
+use crate::app::mode::EffortPickerState;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::Style,
@@ -20,9 +23,6 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::mode::EffortPickerState;
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
 
 /// Render the effort picker for `picker` using the given colour `palette`.
 pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &EffortPickerState, palette: &Palette) {
@@ -49,7 +49,10 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &EffortPickerState, 
     frame.render_widget(title_block, chunks[0]);
 
     // --- Option list (flat, no borders) ---
-    let inner = chunks[1].inner(Margin { horizontal: 1, vertical: 0 });
+    let inner = chunks[1].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     let lines: Vec<Line> = picker
         .options
         .iter()
@@ -71,19 +74,29 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &EffortPickerState, 
     // (scrolloff-walk within the window; one row per option → start == offset).
     let list_height = inner.height as usize;
     let sel = picker.selected.min(picker.options.len().saturating_sub(1));
-    let (start, _) =
-        crate::view::scroll::scroll_window(&rest.effort_offset, sel, picker.options.len(), list_height);
+    let (start, _) = crate::view::scroll::scroll_window(
+        &rest.effort_offset,
+        sel,
+        picker.options.len(),
+        list_height,
+    );
     frame.render_widget(Paragraph::new(lines).scroll((start as u16, 0)), inner);
 
     // --- Capability note (dim) ---
-    let note_area = chunks[2].inner(Margin { horizontal: 1, vertical: 0 });
+    let note_area = chunks[2].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     frame.render_widget(
         Paragraph::new(picker.note.as_str()).style(Style::default().fg(palette.dim)),
         note_area,
     );
 
     // --- Keybinding hint ---
-    let hint_area = chunks[3].inner(Margin { horizontal: 1, vertical: 0 });
+    let hint_area = chunks[3].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     let hint = "↑↓ select · Enter apply · Esc cancel · Ctrl+C quit";
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(palette.dim)),

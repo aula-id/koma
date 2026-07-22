@@ -15,14 +15,13 @@
 mod action;
 mod agents;
 mod bash;
-mod todo;
 mod chat;
-mod mcp;
-mod extensions;
-mod ext_screen;
-mod help;
 mod clipboard;
+mod ext_screen;
+mod extensions;
+mod help;
 mod key_input;
+mod mcp;
 mod onboard;
 mod onboard_provider;
 mod paste;
@@ -33,6 +32,7 @@ mod security;
 mod session_hub;
 mod settings;
 mod store;
+mod todo;
 mod usage;
 
 pub use action::Action;
@@ -48,9 +48,9 @@ pub use rewind::handle_rewind;
 pub use session_hub::handle_session_hub;
 pub use settings::handle_settings;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::app::mode::{EffortPickerState, LoadingState, Mode, WarmStatus};
 use crate::app::state::{AppState, AppStateRest};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Returns `true` when `key` is the given ASCII `c` held with Ctrl.
 ///
@@ -58,8 +58,7 @@ use crate::app::state::{AppState, AppStateRest};
 /// the client-side swapper (`app::runtime::client::swapper`) can reuse the same
 /// Ctrl-chord detector instead of hand-rolling the modifier check.
 pub(crate) fn is_ctrl(key: &KeyEvent, c: char) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char(x) if x == c)
+    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char(x) if x == c)
 }
 
 /// Translate a raw key event into an [`Action`] based on the current [`Mode`].

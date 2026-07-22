@@ -6,10 +6,10 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-mod session;
 mod modes;
+mod session;
 mod settings;
 
-pub use session::*;
 pub use modes::*;
+pub use session::*;
 pub use settings::*;

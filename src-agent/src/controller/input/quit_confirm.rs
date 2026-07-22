@@ -23,10 +23,10 @@
 //! The overlay carries its own snapshot state (the busy-session count + focused
 //! index), so `_rest` is unused — mirroring [`super::handle_session_hub`].
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use super::Action;
 use crate::app::mode::QuitConfirmState;
 use crate::app::state::AppStateRest;
-use super::Action;
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 /// Map a focused button index to its action. Order matches the view + the
 /// event-loop click hit-test: `0` = close window (quit), `1` = minimize (detach),

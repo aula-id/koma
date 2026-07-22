@@ -13,7 +13,9 @@ use crate::app::mode::settings::{
     ProviderModal, RolePickerState, SettingsPage, SettingsState,
 };
 use crate::dto::openrouter::{ModelEndpoint, ModelPricing};
-use crate::ipc::proto::{ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot, SettingsSnapshot};
+use crate::ipc::proto::{
+    ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot, SettingsSnapshot,
+};
 use crate::model::app_config::{ApiType, ModelRole, ThemeMode};
 use crate::model::settings::{InternetMode, Settings};
 
@@ -59,11 +61,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
                 ext_id: p.ext_id,
             })
             .collect(),
-        oauth_drafts: s
-            .oauth_drafts
-            .into_iter()
-            .map(shadow_oauth_draft)
-            .collect(),
+        oauth_drafts: s.oauth_drafts.into_iter().map(shadow_oauth_draft).collect(),
         oauth_sel: s.oauth_sel,
         oauth_armed: s.oauth_armed,
         oauth_flow: shadow_oauth_flow(s.oauth_flow),
@@ -102,9 +100,9 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         model_delete_armed: s.model_delete_armed,
         model_modal: s.model_modal.map(shadow_model_modal),
         model_filter: match s.model_filter.as_str() {
-            "local"  => crate::app::mode::settings::ModelFilterMode::Local,
+            "local" => crate::app::mode::settings::ModelFilterMode::Local,
             "global" => crate::app::mode::settings::ModelFilterMode::Global,
-            _        => crate::app::mode::settings::ModelFilterMode::All,
+            _ => crate::app::mode::settings::ModelFilterMode::All,
         },
         palette_sel: s.palette_sel,
     }
@@ -174,14 +172,14 @@ pub(crate) fn shadow_path_picker(p: PathPickerSnapshot) -> PathPicker {
 /// Map a wire page token back to a [`SettingsPage`] (unknown → Menu).
 fn shadow_settings_page(t: &str) -> SettingsPage {
     match t {
-        "appearance"    => SettingsPage::Appearance,
-        "general"       => SettingsPage::General,
-        "providers"     => SettingsPage::Providers,
+        "appearance" => SettingsPage::Appearance,
+        "general" => SettingsPage::General,
+        "providers" => SettingsPage::Providers,
         "provider_form" => SettingsPage::ProviderForm,
-        "oauth"         => SettingsPage::OAuth,
-        "models"        => SettingsPage::Models,
-        "model_form"    => SettingsPage::ModelForm,
-        _               => SettingsPage::Menu,
+        "oauth" => SettingsPage::OAuth,
+        "models" => SettingsPage::Models,
+        "model_form" => SettingsPage::ModelForm,
+        _ => SettingsPage::Menu,
     }
 }
 
@@ -247,7 +245,11 @@ pub(super) fn shadow_oauth_flow(s: crate::ipc::proto::OAuthFlowSnapshot) -> OAut
     match s.kind.as_str() {
         "starting" => OAuthFlowState::Starting,
         "pick" => OAuthFlowState::Pick(s.cursor),
-        "codex_wait" => OAuthFlowState::CodexWait { url: s.url, frame: s.frame, copied: s.copied },
+        "codex_wait" => OAuthFlowState::CodexWait {
+            url: s.url,
+            frame: s.frame,
+            copied: s.copied,
+        },
         "codex_paste" => OAuthFlowState::CodexPaste {
             input: s.input,
             provider: crate::model::app_config::OAuthProvider::default(),

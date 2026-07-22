@@ -230,8 +230,7 @@ pub(super) fn apply_tool_call_delta(acc: &mut Vec<ToolCall>, d: &ToolCallDelta) 
 pub(super) fn provider_routing_for(
     provider: &str,
 ) -> Option<crate::dto::openrouter::ProviderRouting> {
-    let pinned =
-        crate::model::app_config::ModelEntry::normalize_route(Some(provider.to_string()))?;
+    let pinned = crate::model::app_config::ModelEntry::normalize_route(Some(provider.to_string()))?;
     Some(crate::dto::openrouter::ProviderRouting {
         only: vec![pinned],
         allow_fallbacks: false,
@@ -392,7 +391,11 @@ mod apply_tool_call_delta_tests {
         apply_tool_call_delta(&mut acc, &delta(Some(0), Some("a"), Some("read"), None));
         apply_tool_call_delta(&mut acc, &delta(None, None, None, Some(r#"{"path":"x"}"#)));
 
-        assert_eq!(acc.len(), 1, "index-less continuation must not open a new slot");
+        assert_eq!(
+            acc.len(),
+            1,
+            "index-less continuation must not open a new slot"
+        );
         assert_eq!(acc[0].id, "a");
         assert_eq!(acc[0].function.name, "read");
         assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);
@@ -404,9 +407,16 @@ mod apply_tool_call_delta_tests {
     fn reannounced_id_at_new_index_coalesces() {
         let mut acc = Vec::new();
         apply_tool_call_delta(&mut acc, &delta(Some(0), Some("a"), Some("read"), None));
-        apply_tool_call_delta(&mut acc, &delta(Some(1), Some("a"), None, Some(r#"{"path":"x"}"#)));
+        apply_tool_call_delta(
+            &mut acc,
+            &delta(Some(1), Some("a"), None, Some(r#"{"path":"x"}"#)),
+        );
 
-        assert_eq!(acc.len(), 1, "a re-announced id must coalesce, not fork a phantom slot");
+        assert_eq!(
+            acc.len(),
+            1,
+            "a re-announced id must coalesce, not fork a phantom slot"
+        );
         assert_eq!(acc[0].id, "a");
         assert_eq!(acc[0].function.name, "read");
         assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);
@@ -426,7 +436,11 @@ mod apply_tool_call_delta_tests {
             &delta(Some(1), Some("b"), Some("grep"), Some(r#"{"pattern":"y"}"#)),
         );
 
-        assert_eq!(acc.len(), 2, "distinct ids at distinct indices must not merge");
+        assert_eq!(
+            acc.len(),
+            2,
+            "distinct ids at distinct indices must not merge"
+        );
         assert_eq!(acc[0].id, "a");
         assert_eq!(acc[0].function.name, "read");
         assert_eq!(acc[0].function.arguments, r#"{"path":"x"}"#);

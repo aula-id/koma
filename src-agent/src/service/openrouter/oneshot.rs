@@ -3,18 +3,16 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::dto::chat::{ChatMessage, Role};
-use crate::dto::openrouter::{
-    to_wire, ChatRequest, ChatResponse, ReasoningConfig, UsageRequest,
-};
-use crate::model::app_config::ApiType;
+use super::client::OpenRouterClient;
 use super::codex::to_text_format;
 use super::helpers::{
     accepts_reasoning_exclude, auth_headers, clean_error, parse_blob_ids, parse_summary,
     provider_routing_for,
 };
-use super::client::OpenRouterClient;
 use super::types::Conn;
+use crate::dto::chat::{ChatMessage, Role};
+use crate::dto::openrouter::{to_wire, ChatRequest, ChatResponse, ReasoningConfig, UsageRequest};
+use crate::model::app_config::ApiType;
 
 /// Shared Command Code API-first fallback for oneshot paths: if `provider/v1`
 /// rejects the key as Go-plan, remember NDJSON and collect via `/alpha/generate`.
@@ -79,7 +77,11 @@ impl OpenRouterClient {
     ) -> Result<String> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        let effective_account = if !acct.is_empty() {
+            acct.as_str()
+        } else {
+            conn.account_id
+        };
         if conn.api_type == ApiType::Codex {
             // Codex has no non-streaming endpoint: `codex_collect` drains the SSE
             // inline and returns the concatenated text. Default effort, no schema.
@@ -118,10 +120,15 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
-            .json(&body)
-            .send()
-            .await?;
+        let response = auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -174,7 +181,11 @@ impl OpenRouterClient {
     ) -> Result<String> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        let effective_account = if !acct.is_empty() {
+            acct.as_str()
+        } else {
+            conn.account_id
+        };
         if conn.api_type == ApiType::Codex {
             // Default effort (→ medium), no structured-output schema. `json_mode`
             // has no Responses-API equivalent here — ignored, never errors.
@@ -215,10 +226,15 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
-            .json(&body)
-            .send()
-            .await?;
+        let response = auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -275,7 +291,11 @@ impl OpenRouterClient {
     ) -> Result<String> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        let effective_account = if !acct.is_empty() {
+            acct.as_str()
+        } else {
+            conn.account_id
+        };
         // Strict JSON-schema for the verdict object: exactly
         // `{"allow": <bool>, "reason": <string>}`, `additionalProperties: false`.
         // Built once, reused by both transports.
@@ -384,10 +404,15 @@ impl OpenRouterClient {
             max_tokens: Some(2_000),
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
-            .json(&body)
-            .send()
-            .await?;
+        let response = auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -455,7 +480,11 @@ impl OpenRouterClient {
     ) -> Result<String> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        let effective_account = if !acct.is_empty() {
+            acct.as_str()
+        } else {
+            conn.account_id
+        };
         // Strict JSON-schema for the summary object: exactly `{"summary": "<text>"}`,
         // `additionalProperties: false`. Built once, reused by both transports.
         let schema = serde_json::json!({
@@ -549,10 +578,15 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
-            .json(&body)
-            .send()
-            .await?;
+        let response = auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -615,7 +649,11 @@ impl OpenRouterClient {
     ) -> Result<Vec<i64>> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        let effective_account = if !acct.is_empty() {
+            acct.as_str()
+        } else {
+            conn.account_id
+        };
         // Strict JSON-schema for the id list: exactly `{"blob_ids": [<integer>, …]}`,
         // `additionalProperties: false`. Built once, reused by both transports.
         let schema = serde_json::json!({
@@ -724,10 +762,15 @@ impl OpenRouterClient {
         };
 
         // Best-effort: any failure returns an empty selection rather than erroring.
-        let response = match auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
-            .json(&body)
-            .send()
-            .await
+        let response = match auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await
         {
             Ok(r) => r,
             Err(_) => return Ok(Vec::new()),

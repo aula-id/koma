@@ -54,7 +54,9 @@ Successfully installed idna-3.4 requests-2.31.0
     assert!(!outcome.text.contains("Downloading"));
     assert!(!outcome.text.contains("Using cached"));
     assert!(!outcome.text.contains("Installing collected"));
-    assert!(outcome.text.contains("Successfully installed idna-3.4 requests-2.31.0"));
+    assert!(outcome
+        .text
+        .contains("Successfully installed idna-3.4 requests-2.31.0"));
 }
 
 #[test]

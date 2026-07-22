@@ -3,8 +3,8 @@
 //! build logs don't flood the context. Only invoked when
 //! [`crate::tool::shell::OutputOpts::saving`] is true; passthrough otherwise.
 
-pub mod spec;
 mod smart;
+pub mod spec;
 
 /// Result of running a command's output through the filter pipeline.
 pub struct FilterOutcome {
@@ -25,7 +25,11 @@ pub struct FilterOutcome {
 /// would fight their intent.
 pub fn filter_output(command: &str, raw: &str, exit_code: Option<i32>) -> FilterOutcome {
     if command.contains('|') {
-        return FilterOutcome { text: raw.to_string(), filter_name: None, changed: false };
+        return FilterOutcome {
+            text: raw.to_string(),
+            filter_name: None,
+            changed: false,
+        };
     }
 
     // 1. Smart filters — semantic, command-family-aware.
@@ -38,14 +42,26 @@ pub fn filter_output(command: &str, raw: &str, exit_code: Option<i32>) -> Filter
     for s in spec::table() {
         if s.match_command.is_match(trimmed) {
             return match spec::apply(s, raw, exit_code) {
-                Some(text) => FilterOutcome { text, filter_name: Some(s.name), changed: true },
-                None => FilterOutcome { text: raw.to_string(), filter_name: None, changed: false },
+                Some(text) => FilterOutcome {
+                    text,
+                    filter_name: Some(s.name),
+                    changed: true,
+                },
+                None => FilterOutcome {
+                    text: raw.to_string(),
+                    filter_name: None,
+                    changed: false,
+                },
             };
         }
     }
 
     // 3. Passthrough.
-    FilterOutcome { text: raw.to_string(), filter_name: None, changed: false }
+    FilterOutcome {
+        text: raw.to_string(),
+        filter_name: None,
+        changed: false,
+    }
 }
 
 #[cfg(test)]

@@ -62,7 +62,10 @@ fn missing_required_field_returns_error_string() {
         "total_thoughts": 1
     });
     let result = SeqThink.run(&ctx, &args).unwrap();
-    assert!(result.starts_with("error:"), "expected error string, got: {result}");
+    assert!(
+        result.starts_with("error:"),
+        "expected error string, got: {result}"
+    );
     assert!(result.contains("thought"));
 }
 
@@ -75,5 +78,8 @@ fn missing_thought_number_returns_error_string() {
         "total_thoughts": 1
     });
     let result = SeqThink.run(&ctx, &args).unwrap();
-    assert!(result.starts_with("error:"), "expected error string, got: {result}");
+    assert!(
+        result.starts_with("error:"),
+        "expected error string, got: {result}"
+    );
 }

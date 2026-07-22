@@ -4,10 +4,10 @@
 //! (pure code motion, no behaviour change; see the parent module doc for the
 //! `InterceptFlow` control-flow contract every `intercept_*` fn here follows).
 
-use crate::app::state::AppState;
-use crate::app::state::AgentMode;
-use crate::dto::chat::ToolCall;
 use super::InterceptFlow;
+use crate::app::state::AgentMode;
+use crate::app::state::AppState;
+use crate::dto::chat::ToolCall;
 
 /// Build the recent-history context string fed to the TAC classifier so it's
 /// intent-aware (sees the last few turns, not just a terse confirmation like
@@ -15,7 +15,10 @@ use super::InterceptFlow;
 /// preamble instructing the classifier to ALLOW the calls that carry it out
 /// and only flag off-plan/destructive actions — the classifier still runs, this
 /// only enriches its context. Identical behaviour when no plan is stashed.
-pub(in crate::app::runtime::stream::tools) fn build_convo_context(state: &AppState, sess_idx: usize) -> String {
+pub(in crate::app::runtime::stream::tools) fn build_convo_context(
+    state: &AppState,
+    sess_idx: usize,
+) -> String {
     let base = state.rest.sessions[sess_idx]
         .session
         .as_ref()
@@ -51,7 +54,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_enter(
         // unchanged rather than swallow it.
         result
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), final_result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), final_result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -77,7 +82,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_ready(
     // REJECT (do NOT park) and tell the model to collect the outputs first.
     let mut pending: Vec<String> = Vec::new();
     for j in &state.rest.sessions[sess_idx].bash_jobs {
-        if matches!(j.snapshot_status(), crate::app::bgbash::BashJobStatus::Running) {
+        if matches!(
+            j.snapshot_status(),
+            crate::app::bgbash::BashJobStatus::Running
+        ) {
             pending.push(format!("bash-{}", j.id));
         }
     }
@@ -99,14 +107,15 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_ready(
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
     }
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     let (highlights, plan) = match crate::tool::plan::parse_plan_ready_args(&args) {
         Ok(pair) => pair,
         Err(e) => {
-            state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), e));
+            state.rest.sessions[sess_idx]
+                .tool_results
+                .push((call.id.clone(), e));
             state.rest.sessions[sess_idx].tool_idx += 1;
             return InterceptFlow::Continue;
         }
@@ -120,9 +129,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_ready(
         .map(|s| s.plan_path());
     match plan_path {
         Some(path) => {
-            if let Err(e) =
-                crate::model::memory::atomic_write(&path, plan.as_bytes())
-            {
+            if let Err(e) = crate::model::memory::atomic_write(&path, plan.as_bytes()) {
                 state.rest.sessions[sess_idx].tool_results.push((
                     call.id.clone(),
                     format!("error: could not write plan.md: {e}"),
@@ -230,8 +237,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_plan(
     use crate::app::mode::todo::{
         self, TodoItem, TodoPriority, TodoStatus, PLAN_RAIL_SAVE, PLAN_RAIL_SERVE,
     };
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     let plan_todos_path = state.rest.sessions[sess_idx]
@@ -279,7 +285,12 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_plan(
                                 .and_then(serde_json::Value::as_str)
                                 .map(TodoPriority::from_str)
                                 .unwrap_or(TodoPriority::Medium);
-                            Some(TodoItem { content, status, priority, locked: false })
+                            Some(TodoItem {
+                                content,
+                                status,
+                                priority,
+                                locked: false,
+                            })
                         })
                         .collect()
                 })
@@ -314,7 +325,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_checklist_plan(
         }
         None => "error: no active session — cannot write plan todos".to_string(),
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -325,8 +338,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_readonly_gate(
     call: &ToolCall,
 ) -> InterceptFlow {
     if call.function.name == "git_operator" {
-        let sanitized =
-            crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+        let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
         let args: serde_json::Value =
             serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
         let subcmd = args
@@ -338,9 +350,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_plan_readonly_gate(
         if !crate::tool::plan_git_subcommand_allowed(subcmd) {
             state.rest.sessions[sess_idx].tool_results.push((
                 call.id.clone(),
-                format!(
-                    "plan mode is read-only: git {subcmd} is not allowed (read-only git only)"
-                ),
+                format!("plan mode is read-only: git {subcmd} is not allowed (read-only git only)"),
             ));
             state.rest.sessions[sess_idx].tool_idx += 1;
             return InterceptFlow::Continue;

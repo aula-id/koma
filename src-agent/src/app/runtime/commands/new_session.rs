@@ -148,12 +148,7 @@ pub(crate) fn apply_new_session_local(
     // global counter to reset: the new session carries its own totals, and the
     // previous foreground keeps its counters intact in its own slot.
     let new_fg = state.rest.foreground;
-    let sess_path = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
+    let sess_path = state.rest.fg().session.as_ref().map(|s| s.path.clone());
     if let Some(p) = sess_path.as_ref() {
         state.rest.load_token_totals(new_fg, p);
     }
@@ -231,7 +226,8 @@ pub(crate) fn apply_new_session_local(
 /// status line.
 pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
     // Compute the current directory hash once for dir-label comparisons.
-    let cur_hash = store::pwd_hash(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    let cur_hash =
+        store::pwd_hash(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
     // COOKING pane: a synthetic "[+ new session]" row at index 0, then one row per
     // LIVE session with a non-empty Session that ISN'T tombstoned.
@@ -300,7 +296,11 @@ pub(crate) fn build_session_hub(state: &AppState) -> SessionHub {
         Err(_) => Vec::new(),
     };
     // Sort: current-dir sessions first, then newest within each group.
-    history.sort_by(|a, b| b.is_current_dir.cmp(&a.is_current_dir).then(b.last_active.cmp(&a.last_active)));
+    history.sort_by(|a, b| {
+        b.is_current_dir
+            .cmp(&a.is_current_dir)
+            .then(b.last_active.cmp(&a.last_active))
+    });
 
     // Default the cooking cursor to the current foreground's row. Clamp defensively
     // (a closed foreground is filtered out, so its row may be absent → fall to 0).

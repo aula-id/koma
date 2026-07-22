@@ -23,7 +23,11 @@ pub fn search_hybrid(session_dir: &Path, query: &str, limit: usize) -> Vec<Messa
         let q = q_owned.clone();
         async move {
             search_hybrid_async(&sd, &q, lim).await.unwrap_or_else(|e| {
-                crate::model::store::append_error_log(&sd, "surreal::search_hybrid failed", &e.to_string());
+                crate::model::store::append_error_log(
+                    &sd,
+                    "surreal::search_hybrid failed",
+                    &e.to_string(),
+                );
                 Vec::new()
             })
         }
@@ -54,7 +58,11 @@ async fn search_hybrid_async(
     let roles: Vec<String> = fts_res.take("role").unwrap_or_default();
     let fts_snippets: Vec<String> = fts_res.take("snippet").unwrap_or_default();
     let fts_created: Vec<i64> = fts_res.take("created_at").unwrap_or_default();
-    let n_fts = ids.len().min(roles.len()).min(fts_snippets.len()).min(fts_created.len());
+    let n_fts = ids
+        .len()
+        .min(roles.len())
+        .min(fts_snippets.len())
+        .min(fts_created.len());
     let fts_results: Vec<MessageMatch> = (0..n_fts)
         .map(|i| MessageMatch {
             id: ids[i],
@@ -79,7 +87,11 @@ async fn search_hybrid_async(
     let v_roles: Vec<String> = vec_res.take("role").unwrap_or_default();
     let v_snippets: Vec<String> = vec_res.take("snippet").unwrap_or_default();
     let v_created: Vec<i64> = vec_res.take("created_at").unwrap_or_default();
-    let n_vec = v_ids.len().min(v_roles.len()).min(v_snippets.len()).min(v_created.len());
+    let n_vec = v_ids
+        .len()
+        .min(v_roles.len())
+        .min(v_snippets.len())
+        .min(v_created.len());
     let vec_results: Vec<MessageMatch> = (0..n_vec)
         .map(|i| MessageMatch {
             id: v_ids[i],
@@ -105,10 +117,16 @@ pub fn search_fts_only(session_dir: &Path, query: &str, limit: usize) -> Vec<Mes
         let sd = sd.clone();
         let q = q_owned.clone();
         async move {
-            search_fts_only_async(&sd, &q, lim).await.unwrap_or_else(|e| {
-                crate::model::store::append_error_log(&sd, "surreal::search_fts_only failed", &e.to_string());
-                Vec::new()
-            })
+            search_fts_only_async(&sd, &q, lim)
+                .await
+                .unwrap_or_else(|e| {
+                    crate::model::store::append_error_log(
+                        &sd,
+                        "surreal::search_fts_only failed",
+                        &e.to_string(),
+                    );
+                    Vec::new()
+                })
         }
     })
     .unwrap_or_default()
@@ -134,7 +152,11 @@ async fn search_fts_only_async(
     let roles: Vec<String> = results.take("role").unwrap_or_default();
     let snippets: Vec<String> = results.take("snippet").unwrap_or_default();
     let createds: Vec<i64> = results.take("created_at").unwrap_or_default();
-    let n = ids.len().min(roles.len()).min(snippets.len()).min(createds.len());
+    let n = ids
+        .len()
+        .min(roles.len())
+        .min(snippets.len())
+        .min(createds.len());
     Ok((0..n)
         .map(|i| MessageMatch {
             id: ids[i],
@@ -176,12 +198,32 @@ mod tests {
     #[test]
     fn test_fuse_rrf_combines_two_lists() {
         let fts = vec![
-            MessageMatch { id: 1, role: "user".into(), snippet: "a".into(), created_at: 1 },
-            MessageMatch { id: 2, role: "assistant".into(), snippet: "b".into(), created_at: 2 },
+            MessageMatch {
+                id: 1,
+                role: "user".into(),
+                snippet: "a".into(),
+                created_at: 1,
+            },
+            MessageMatch {
+                id: 2,
+                role: "assistant".into(),
+                snippet: "b".into(),
+                created_at: 2,
+            },
         ];
         let vec = vec![
-            MessageMatch { id: 2, role: "assistant".into(), snippet: "c".into(), created_at: 2 },
-            MessageMatch { id: 3, role: "user".into(), snippet: "d".into(), created_at: 3 },
+            MessageMatch {
+                id: 2,
+                role: "assistant".into(),
+                snippet: "c".into(),
+                created_at: 2,
+            },
+            MessageMatch {
+                id: 3,
+                role: "user".into(),
+                snippet: "d".into(),
+                created_at: 3,
+            },
         ];
         let fused = fuse_rrf(fts, vec, 5);
         assert_eq!(fused.len(), 3);
@@ -196,7 +238,12 @@ mod tests {
     #[test]
     fn test_fuse_rrf_respects_limit() {
         let fts: Vec<MessageMatch> = (0..10)
-            .map(|i| MessageMatch { id: i, role: "u".into(), snippet: "x".into(), created_at: i })
+            .map(|i| MessageMatch {
+                id: i,
+                role: "u".into(),
+                snippet: "x".into(),
+                created_at: i,
+            })
             .collect();
         assert_eq!(fuse_rrf(fts, vec![], 3).len(), 3);
     }

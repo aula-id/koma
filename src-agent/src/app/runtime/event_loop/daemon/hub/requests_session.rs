@@ -100,7 +100,10 @@ impl DaemonHub {
     ) {
         let task = task.trim();
         if task.is_empty() {
-            self.send_to(idx, DaemonEvent::Error("spawn requires a non-empty task".into()));
+            self.send_to(
+                idx,
+                DaemonEvent::Error("spawn requires a non-empty task".into()),
+            );
             return;
         }
         // Active session: the foreground when live, else the first non-closed session.
@@ -127,12 +130,18 @@ impl DaemonHub {
             // workspace-confinement feature, which only threads through the LOCAL
             // `broker_spawn` path. `workspace: None` here is exactly current
             // behavior for this request.
-            Some(crate::app::subagent::SpawnOverrides { model, effort, workspace: None })
+            Some(crate::app::subagent::SpawnOverrides {
+                model,
+                effort,
+                workspace: None,
+            })
         } else {
             None
         };
 
-        match spawn_or_queue(state, sess_idx, client, handle, agent_name, task, None, false, false, overrides) {
+        match spawn_or_queue(
+            state, sess_idx, client, handle, agent_name, task, None, false, false, overrides,
+        ) {
             SpawnOutcome::Spawned(_) | SpawnOutcome::Queued(_) => {
                 self.send_to(idx, DaemonEvent::Ack)
             }

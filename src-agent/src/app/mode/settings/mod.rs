@@ -18,7 +18,10 @@ pub use picker::{PathPicker, PickerMode, PICKER_MAX};
 pub use state::SettingsState;
 
 pub use field_types::{SettingField, GENERAL_FIELDS};
-pub use model_types::{filter_models, ModelDraft, ModelField, ModelFilterMode, ModelModal, ModelRowSel, MODEL_CTRL_SLOTS, RolePickerState};
+pub use model_types::{
+    filter_models, ModelDraft, ModelField, ModelFilterMode, ModelModal, ModelRowSel,
+    RolePickerState, MODEL_CTRL_SLOTS,
+};
 pub use oauth_types::OAuthFlowState;
 pub use provider_types::{new_uuid, ModelRole, OAuthDraft, ProviderDraft, ProviderModal};
 

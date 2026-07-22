@@ -142,7 +142,8 @@ pub fn spawn_subagent(
         // that risk), otherwise `tool_allowed_in_plan` would strip every mcp__*
         // name since it knows nothing about them.
         tools.retain(|n| {
-            (crate::tool::tool_allowed_in_plan(n) && !matches!(n.as_str(), "seqthink" | "checklist"))
+            (crate::tool::tool_allowed_in_plan(n)
+                && !matches!(n.as_str(), "seqthink" | "checklist"))
                 || n.starts_with("mcp__")
         });
     }

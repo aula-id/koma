@@ -62,7 +62,12 @@ impl OpenRouterClient {
             text: text_format,
         };
 
-        let rb = codex_headers(self.http.post(&url), bearer, account_id, self.codex_session_id());
+        let rb = codex_headers(
+            self.http.post(&url),
+            bearer,
+            account_id,
+            self.codex_session_id(),
+        );
         let resp = rb.json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {

@@ -29,7 +29,11 @@ pub(super) fn handle_todo(state: &mut AppState) -> Result<()> {
 fn load_todos_with_pwd(
     state: &AppState,
     in_plan: bool,
-) -> (Vec<crate::app::mode::todo::TodoItem>, String, Option<std::path::PathBuf>) {
+) -> (
+    Vec<crate::app::mode::todo::TodoItem>,
+    String,
+    Option<std::path::PathBuf>,
+) {
     let Some(session) = state.rest.fg().session.as_ref() else {
         return (Vec::new(), String::new(), None);
     };
@@ -39,8 +43,7 @@ fn load_todos_with_pwd(
         let items = crate::app::mode::todo::load_todos_from(&path);
         return (items, pwd_hash, Some(path));
     }
-    let memory_dir = crate::model::store::memory_dir(&session.pwd_hash)
-        .unwrap_or_default();
+    let memory_dir = crate::model::store::memory_dir(&session.pwd_hash).unwrap_or_default();
     let path = memory_dir.join("TODO.md");
     let Ok(content) = std::fs::read_to_string(&path) else {
         return (Vec::new(), pwd_hash, None);

@@ -17,8 +17,8 @@ use crate::service::openrouter::OpenRouterClient;
 mod agents;
 mod background;
 mod bash;
-mod todo;
 mod chat;
+mod todo;
 // `pub(in crate::app::runtime)` so the daemon store hub (`event_loop::daemon::hub::
 // requests_ext`, within `runtime`) can call `uninstall_extension_core` — the shared,
 // hub-independent uninstall nuke the TUI `/extension` path also drives.
@@ -161,7 +161,11 @@ pub(in crate::app::runtime) fn apply_action(
             onboard::handle_onboard_provider_back(state)?;
         }
 
-        Action::SaveCreds { endpoint, api_key, model } => {
+        Action::SaveCreds {
+            endpoint,
+            api_key,
+            model,
+        } => {
             settings_creds::handle_save_creds(endpoint, api_key, model, state, client, handle)?;
         }
 

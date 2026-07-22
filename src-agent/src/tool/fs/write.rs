@@ -1,15 +1,17 @@
 //! `write` tool — create or overwrite a workspace-relative file.
 
+use super::helpers::arg_str;
+use crate::tool::{resolve, Tool, ToolCtx};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use crate::tool::{resolve, Tool, ToolCtx};
-use super::helpers::arg_str;
 
 /// Create or overwrite a workspace-relative file.
 pub struct Write;
 
 impl Tool for Write {
-    fn name(&self) -> &'static str { "write" }
+    fn name(&self) -> &'static str {
+        "write"
+    }
     fn description(&self) -> &'static str {
         "Create or overwrite a workspace-relative file with the given content."
     }

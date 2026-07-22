@@ -145,47 +145,45 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         //    the carried uuid. Never silently rebind OAuth models onto
         //    providers[0] on Esc/save.
         // 4. If the index does not resolve at all, keep the carried uuid.
-        let to_entry = |d: &crate::app::mode::settings::ModelDraft, oauth_drafts: &[crate::app::mode::settings::OAuthDraft]| {
-            let from_idx = if d.provider_idx < provider_conns.len() {
-                provider_conns.get(d.provider_idx).map(|p| p.uuid.clone())
-            } else {
-                oauth_drafts
-                    .get(d.provider_idx.saturating_sub(provider_conns.len()))
-                    .map(|o| o.uuid.clone())
-            };
-            let provider_uuid = match from_idx {
-                Some(uuid)
-                    if d.provider_uuid.is_empty() || d.provider_uuid == uuid =>
-                {
-                    uuid
-                }
-                Some(_) | None => {
-                    // Index miss, OR index disagrees with the carried binding.
-                    // Prefer the authoritative uuid loaded from disk / committed
-                    // by the modal — never providers[0] by accident.
-                    d.provider_uuid.clone()
-                }
-            };
-            ModelEntry {
-                uuid: if d.uuid.is_empty() {
-                    uuid::Uuid::new_v4().to_string()
+        let to_entry =
+            |d: &crate::app::mode::settings::ModelDraft,
+             oauth_drafts: &[crate::app::mode::settings::OAuthDraft]| {
+                let from_idx = if d.provider_idx < provider_conns.len() {
+                    provider_conns.get(d.provider_idx).map(|p| p.uuid.clone())
                 } else {
-                    d.uuid.clone()
-                },
-                name: d.name.clone(),
-                model_id: d.model_id.clone(),
-                provider_uuid,
-                route: d.route.clone(),
-                // Persist the multi-role list; leave the legacy single-role
-                // field None so it stops being serialized (migration on save).
-                roles: d.roles.clone(),
-                role: None,
-                // Preserve the clone-source identity through the save so a /settings save
-                // that never opened this override keeps the GUI picker's exact match
-                // (a modal edit re-authors the draft to None — see save_model_modal).
-                source_uuid: d.source_uuid.clone(),
-            }
-        };
+                    oauth_drafts
+                        .get(d.provider_idx.saturating_sub(provider_conns.len()))
+                        .map(|o| o.uuid.clone())
+                };
+                let provider_uuid = match from_idx {
+                    Some(uuid) if d.provider_uuid.is_empty() || d.provider_uuid == uuid => uuid,
+                    Some(_) | None => {
+                        // Index miss, OR index disagrees with the carried binding.
+                        // Prefer the authoritative uuid loaded from disk / committed
+                        // by the modal — never providers[0] by accident.
+                        d.provider_uuid.clone()
+                    }
+                };
+                ModelEntry {
+                    uuid: if d.uuid.is_empty() {
+                        uuid::Uuid::new_v4().to_string()
+                    } else {
+                        d.uuid.clone()
+                    },
+                    name: d.name.clone(),
+                    model_id: d.model_id.clone(),
+                    provider_uuid,
+                    route: d.route.clone(),
+                    // Persist the multi-role list; leave the legacy single-role
+                    // field None so it stops being serialized (migration on save).
+                    roles: d.roles.clone(),
+                    role: None,
+                    // Preserve the clone-source identity through the save so a /settings save
+                    // that never opened this override keeps the GUI picker's exact match
+                    // (a modal edit re-authors the draft to None — see save_model_modal).
+                    source_uuid: d.source_uuid.clone(),
+                }
+            };
         // Global catalogue: session_only == false. Session override layer:
         // session_only == true (persisted to settings.json, never config).
         let mut model_entries: Vec<ModelEntry> = model_drafts
@@ -229,7 +227,10 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             .cloned()
             .collect();
         // Drop draft models still referencing a removed provider.
-        for m in model_entries.iter().filter(|m| removed_providers.contains(&m.provider_uuid)) {
+        for m in model_entries
+            .iter()
+            .filter(|m| removed_providers.contains(&m.provider_uuid))
+        {
             dead_models.insert(m.uuid.clone());
         }
         model_entries.retain(|m| !removed_providers.contains(&m.provider_uuid));
@@ -248,8 +249,10 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             })
             .unwrap_or_default();
         session_model_entries.retain(|m| !removed_providers.contains(&m.provider_uuid));
-        let new_session_uuids: HashSet<String> =
-            session_model_entries.iter().map(|m| m.uuid.clone()).collect();
+        let new_session_uuids: HashSet<String> = session_model_entries
+            .iter()
+            .map(|m| m.uuid.clone())
+            .collect();
         dead_models.extend(
             prev_session_model_uuids
                 .difference(&new_session_uuids)
@@ -269,7 +272,12 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
 
         // Capture old internet mode before overwriting, so we can toast only
         // on actual change (avoids a spurious toast on every settings save).
-        let old_internet = state.rest.fg().session.as_ref().map(|s| s.settings.internet_mode);
+        let old_internet = state
+            .rest
+            .fg()
+            .session
+            .as_ref()
+            .map(|s| s.settings.internet_mode);
         // BUG FIX: this save can reassign the Main role two ways at once — the
         // session-local `session_models` write below, AND the global
         // `config.models` write further down (b) — either of which can change
@@ -334,9 +342,13 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
                 main_reset,
             );
             if report.agents_cleared > 0 || report.main_reset {
-                state.rest.fg_mut().set_toast_info(
-                    crate::app::cascade::cascade_status_line("provider/model", &report),
-                );
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast_info(crate::app::cascade::cascade_status_line(
+                        "provider/model",
+                        &report,
+                    ));
             }
         }
         // c) Persist the session's settings.json.
@@ -407,14 +419,22 @@ pub(super) fn handle_save_effort(choice: String, state: &mut AppState) -> Result
     // only into the streaming path via the Main route's `effort`), so the
     // existing keyless client applies the new directive on the next request
     // WITHOUT busting its cache-stable plan_word.
-    let effort = if choice == "default" { String::new() } else { choice };
+    let effort = if choice == "default" {
+        String::new()
+    } else {
+        choice
+    };
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         sess.settings.effort = effort.clone();
         if let Err(e) = sess.save() {
             state.rest.fg_mut().status = format!("error: {e}");
         }
     }
-    let label = if effort.is_empty() { "default" } else { &effort };
+    let label = if effort.is_empty() {
+        "default"
+    } else {
+        &effort
+    };
     state.rest.fg_mut().status = format!("effort: {label}");
     *state.mode_mut() = Mode::Chat;
     Ok(())

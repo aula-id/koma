@@ -224,7 +224,11 @@ mod tests {
         match e {
             AnthropicEvent::ContentBlockStart {
                 index,
-                content_block: ContentBlockStart::Thinking { thinking, signature },
+                content_block:
+                    ContentBlockStart::Thinking {
+                        thinking,
+                        signature,
+                    },
             } => {
                 assert_eq!(index, 0);
                 assert_eq!(thinking, "seed");
@@ -240,7 +244,10 @@ mod tests {
         assert!(matches!(
             e2,
             AnthropicEvent::ContentBlockStart {
-                content_block: ContentBlockStart::Thinking { signature: None, .. },
+                content_block: ContentBlockStart::Thinking {
+                    signature: None,
+                    ..
+                },
                 ..
             }
         ));

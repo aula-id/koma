@@ -7,12 +7,12 @@
 mod modals;
 mod nav;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use super::{is_ctrl, Action};
 use crate::app::mode::settings::{OAuthFlowState, SettingsPage};
 use crate::app::mode::{SettingField, SettingsState};
 use crate::app::state::AppStateRest;
 use crate::model::app_config::OAuthProvider;
-use super::{is_ctrl, Action};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use modals::{
     handle_fs_picker, handle_list_editing, handle_model_form, handle_provider_form,
@@ -111,11 +111,26 @@ fn handle_menu(s: &mut SettingsState, key: KeyEvent) -> Action {
             }
             Action::None
         }
-        KeyCode::Char('1') => { s.page = SettingsPage::Appearance; Action::None }
-        KeyCode::Char('2') => { s.page = SettingsPage::General;    Action::None }
-        KeyCode::Char('3') => { s.page = SettingsPage::Providers;  Action::None }
-        KeyCode::Char('4') => { s.page = SettingsPage::OAuth;      Action::None }
-        KeyCode::Char('5') => { s.page = SettingsPage::Models;     Action::None }
+        KeyCode::Char('1') => {
+            s.page = SettingsPage::Appearance;
+            Action::None
+        }
+        KeyCode::Char('2') => {
+            s.page = SettingsPage::General;
+            Action::None
+        }
+        KeyCode::Char('3') => {
+            s.page = SettingsPage::Providers;
+            Action::None
+        }
+        KeyCode::Char('4') => {
+            s.page = SettingsPage::OAuth;
+            Action::None
+        }
+        KeyCode::Char('5') => {
+            s.page = SettingsPage::Models;
+            Action::None
+        }
         _ => Action::SaveSettings,
     }
 }
@@ -228,14 +243,14 @@ fn handle_oauth_page(s: &mut SettingsState, key: KeyEvent) -> Action {
 fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
     match s.oauth_flow.clone() {
         OAuthFlowState::Idle => Action::None,
-        OAuthFlowState::Starting | OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
-            match key.code {
-                KeyCode::Esc => Action::OAuthCancel,
-                KeyCode::Char('c') => Action::OAuthCopyUrl,
-                KeyCode::Char('o') => Action::OAuthOpenUrl,
-                _ => Action::None,
-            }
-        }
+        OAuthFlowState::Starting
+        | OAuthFlowState::CodexWait { .. }
+        | OAuthFlowState::KiloWait { .. } => match key.code {
+            KeyCode::Esc => Action::OAuthCancel,
+            KeyCode::Char('c') => Action::OAuthCopyUrl,
+            KeyCode::Char('o') => Action::OAuthOpenUrl,
+            _ => Action::None,
+        },
         OAuthFlowState::Pick(cursor) => {
             match key.code {
                 KeyCode::Esc => {
@@ -282,14 +297,20 @@ fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
             }
             Action::None
         }
-        OAuthFlowState::CodexPaste { ref input, provider } => {
+        OAuthFlowState::CodexPaste {
+            ref input,
+            provider,
+        } => {
             match key.code {
                 KeyCode::Esc => {
                     s.oauth_flow = OAuthFlowState::Idle;
                 }
                 KeyCode::Enter => {
                     if !input.trim().is_empty() {
-                        return Action::OAuthPaste { provider, token: input.clone() };
+                        return Action::OAuthPaste {
+                            provider,
+                            token: input.clone(),
+                        };
                     }
                 }
                 KeyCode::Backspace => {

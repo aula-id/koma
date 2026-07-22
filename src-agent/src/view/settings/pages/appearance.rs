@@ -79,8 +79,11 @@ pub(crate) fn draw_appearance(
         let is_cursor = i == st.palette_sel;
         let is_applied = *name == applied;
         // Border + title colour: accent for the cursor box, dim otherwise.
-        let bstyle =
-            Style::default().fg(if is_cursor { palette.accent } else { palette.dim });
+        let bstyle = Style::default().fg(if is_cursor {
+            palette.accent
+        } else {
+            palette.dim
+        });
 
         // --- top border: `┌─ [> ]{name}[ · selected] ───┐`, `w` cols wide ---
         let label = if is_applied {

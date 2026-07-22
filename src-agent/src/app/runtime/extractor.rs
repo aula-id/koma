@@ -21,23 +21,75 @@
 
 use std::collections::HashSet;
 
-use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
+use surrealdb::Surreal;
 
 use crate::model::surreal::core;
 
 /// Built-in technical terms that should always be extracted even when not
 /// capitalised. Keep short (~50 entries) to avoid false positives.
 const KNOWN_TERMS: &[&str] = &[
-    "rust", "python", "javascript", "typescript", "golang", "java", "c++",
-    "c#", "swift", "kotlin", "zig", "sql", "html", "css", "wasm",
-    "linux", "macos", "windows", "bsd", "unix", "android", "ios",
-    "docker", "kubernetes", "git", "postgresql", "mysql", "sqlite",
-    "mongodb", "redis", "kafka", "nginx", "haproxy", "llvm", "gcc",
-    "tokio", "actix", "axum", "rocket", "react", "vue", "svelte",
-    "tailwind", "graphql", "grpc", "rest", "websocket", "http",
-    "tls", "ssl", "oauth", "jwt", "surreal", "etcd", "raft",
-    "paxos", "protobuf", "json", "yaml", "toml", "markdown",
+    "rust",
+    "python",
+    "javascript",
+    "typescript",
+    "golang",
+    "java",
+    "c++",
+    "c#",
+    "swift",
+    "kotlin",
+    "zig",
+    "sql",
+    "html",
+    "css",
+    "wasm",
+    "linux",
+    "macos",
+    "windows",
+    "bsd",
+    "unix",
+    "android",
+    "ios",
+    "docker",
+    "kubernetes",
+    "git",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "mongodb",
+    "redis",
+    "kafka",
+    "nginx",
+    "haproxy",
+    "llvm",
+    "gcc",
+    "tokio",
+    "actix",
+    "axum",
+    "rocket",
+    "react",
+    "vue",
+    "svelte",
+    "tailwind",
+    "graphql",
+    "grpc",
+    "rest",
+    "websocket",
+    "http",
+    "tls",
+    "ssl",
+    "oauth",
+    "jwt",
+    "surreal",
+    "etcd",
+    "raft",
+    "paxos",
+    "protobuf",
+    "json",
+    "yaml",
+    "toml",
+    "markdown",
 ];
 
 /// Extract entity name candidates from a fact's content.
@@ -59,7 +111,8 @@ pub fn extract_candidates(content: &str) -> Vec<(String, String)> {
     for cap in camel_case().find_iter(content) {
         // Split camelCase into words: "TokioRuntime" → ["Tokio", "Runtime"]
         let s = cap.as_str();
-        let words: Vec<&str> = s.split(|c: char| c.is_uppercase())
+        let words: Vec<&str> = s
+            .split(|c: char| c.is_uppercase())
             .filter(|w: &&str| !w.is_empty())
             .collect();
         if words.len() >= 2 {
@@ -86,10 +139,7 @@ pub fn extract_candidates(content: &str) -> Vec<(String, String)> {
     // 5. Single capitalised words not yet caught.
     for cap in single_capital().find_iter(content) {
         let s = cap.as_str();
-        if !seen.contains(&s.to_lowercase())
-            && s.len() > 1
-            && !is_stop_word(s)
-        {
+        if !seen.contains(&s.to_lowercase()) && s.len() > 1 && !is_stop_word(s) {
             add(s, &mut candidates, &mut seen);
         }
     }
@@ -109,16 +159,79 @@ fn add(word: &str, candidates: &mut Vec<(String, String)>, seen: &mut HashSet<St
 fn is_stop_word(w: &str) -> bool {
     matches!(
         w.to_lowercase().as_str(),
-        "the" | "a" | "an" | "is" | "are" | "was" | "were" | "be" | "been"
-            | "have" | "has" | "had" | "do" | "does" | "did" | "will" | "would"
-            | "can" | "could" | "may" | "might" | "shall" | "should" | "must"
-            | "this" | "that" | "these" | "those" | "it" | "its" | "he" | "she"
-            | "they" | "we" | "you" | "i" | "me" | "him" | "her" | "us" | "them"
-            | "and" | "or" | "but" | "not" | "if" | "then" | "else" | "when"
-            | "where" | "how" | "what" | "which" | "who" | "why" | "with"
-            | "from" | "for" | "about" | "into" | "through" | "during"
-            | "before" | "after" | "above" | "below" | "between"
-            | "really" | "just" | "very" | "also" | "only" | "still"
+        "the"
+            | "a"
+            | "an"
+            | "is"
+            | "are"
+            | "was"
+            | "were"
+            | "be"
+            | "been"
+            | "have"
+            | "has"
+            | "had"
+            | "do"
+            | "does"
+            | "did"
+            | "will"
+            | "would"
+            | "can"
+            | "could"
+            | "may"
+            | "might"
+            | "shall"
+            | "should"
+            | "must"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "it"
+            | "its"
+            | "he"
+            | "she"
+            | "they"
+            | "we"
+            | "you"
+            | "i"
+            | "me"
+            | "him"
+            | "her"
+            | "us"
+            | "them"
+            | "and"
+            | "or"
+            | "but"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "when"
+            | "where"
+            | "how"
+            | "what"
+            | "which"
+            | "who"
+            | "why"
+            | "with"
+            | "from"
+            | "for"
+            | "about"
+            | "into"
+            | "through"
+            | "during"
+            | "before"
+            | "after"
+            | "above"
+            | "below"
+            | "between"
+            | "really"
+            | "just"
+            | "very"
+            | "also"
+            | "only"
+            | "still"
     )
 }
 
@@ -163,10 +276,7 @@ pub enum EntityResolution {
 /// Resolve a SINGLE candidate entity name against the existing entity table.
 /// Uses KNN over the entity_vec HNSW index. If the top result exceeds
 /// [`ENTITY_MATCH_THRESHOLD`], reuses it; otherwise returns `New`.
-pub async fn resolve_candidate(
-    db: &Surreal<Db>,
-    name: &str,
-) -> anyhow::Result<EntityResolution> {
+pub async fn resolve_candidate(db: &Surreal<Db>, name: &str) -> anyhow::Result<EntityResolution> {
     let name_emb = core::embed_one(name);
 
     // KNN with K=1, EF=40 — find the closest entity by cosine similarity
@@ -185,9 +295,11 @@ pub async fn resolve_candidate(
     let names: Vec<String> = results.take("name").unwrap_or_default();
     let distances: Vec<f64> = results.take("distance").unwrap_or_default();
 
-    if let (Some(id), Some(existing_name), Some(dist)) =
-        (ids.into_iter().next(), names.into_iter().next(), distances.into_iter().next())
-    {
+    if let (Some(id), Some(existing_name), Some(dist)) = (
+        ids.into_iter().next(),
+        names.into_iter().next(),
+        distances.into_iter().next(),
+    ) {
         let sim = 1.0 - dist; // COSINE distance → similarity
         if sim >= ENTITY_MATCH_THRESHOLD {
             return Ok(EntityResolution::Existing(id, existing_name, sim));
@@ -244,14 +356,17 @@ pub async fn extract_and_resolve(
                 if let Err(e) = db
                     .query("CREATE type::thing($rid) CONTENT $data")
                     .bind(("rid", rid))
-                    .bind(("data", serde_json::json!({
-                        "entity_id": &bare_id,
-                        "entity_type": "concept",
-                        "name": &name,
-                        "aliases": [],
-                        "embedding": emb,
-                        "last_seen": now,
-                    })))
+                    .bind((
+                        "data",
+                        serde_json::json!({
+                            "entity_id": &bare_id,
+                            "entity_type": "concept",
+                            "name": &name,
+                            "aliases": [],
+                            "embedding": emb,
+                            "last_seen": now,
+                        }),
+                    ))
                     .await
                 {
                     crate::model::store::append_global_error_log(
@@ -361,8 +476,14 @@ mod tests {
         let content = "Rust is great with tokio and postgresql.";
         let cands = extract_candidates(content);
         let names: Vec<&str> = cands.iter().map(|(_, n)| n.as_str()).collect();
-        assert!(names.iter().any(|n| n.to_lowercase() == "tokio"), "got: {names:?}");
-        assert!(names.iter().any(|n| n.to_lowercase() == "postgresql"), "got: {names:?}");
+        assert!(
+            names.iter().any(|n| n.to_lowercase() == "tokio"),
+            "got: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.to_lowercase() == "postgresql"),
+            "got: {names:?}"
+        );
     }
 
     #[test]
@@ -372,7 +493,9 @@ mod tests {
         let names: Vec<&str> = cands.iter().map(|(_, n)| n.as_str()).collect();
         // The full phrase should be extracted (alongside individual capitals).
         assert!(
-            names.iter().any(|n| n.contains("Systems Programming Language")),
+            names
+                .iter()
+                .any(|n| n.contains("Systems Programming Language")),
             "expected 'Systems Programming Language' in: {names:?}"
         );
     }

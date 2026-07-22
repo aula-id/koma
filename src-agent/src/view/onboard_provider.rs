@@ -66,7 +66,12 @@ pub fn draw(
 
     match state.step {
         OnboardProviderStep::Login => {
-            put_line(frame, body, 2, dim_line("sign in to a provider account", palette));
+            put_line(
+                frame,
+                body,
+                2,
+                dim_line("sign in to a provider account", palette),
+            );
             // Content region for the reused sub-renderer (rows 4 .. footer).
             let content = sub_rect(body, 4, 1);
             draw_login(frame, &state.oauth_flow, palette, content);
@@ -96,7 +101,10 @@ pub fn draw(
                 frame,
                 body,
                 body.height.saturating_sub(1),
-                dim_line("up/down move · type to filter · enter select · esc back", palette),
+                dim_line(
+                    "up/down move · type to filter · enter select · esc back",
+                    palette,
+                ),
             );
         }
     }
@@ -119,7 +127,11 @@ fn draw_login(frame: &mut Frame, flow: &OAuthFlowState, palette: &Palette, area:
             None,
             false,
         ),
-        OAuthFlowState::CodexWait { url, frame: f, copied } => draw_message(
+        OAuthFlowState::CodexWait {
+            url,
+            frame: f,
+            copied,
+        } => draw_message(
             frame,
             palette,
             area,
@@ -182,14 +194,21 @@ fn draw_model_list(
             frame,
             body,
             start_row,
-            dim_line("no models — type to search, or press enter to use the typed id", palette),
+            dim_line(
+                "no models — type to search, or press enter to use the typed id",
+                palette,
+            ),
         );
         return;
     }
     let max_rows = avail as usize;
     let sel = sel.min(ids.len() - 1);
     // Scroll so the selection stays visible (bottom-anchored window).
-    let start = if sel >= max_rows { sel + 1 - max_rows } else { 0 };
+    let start = if sel >= max_rows {
+        sel + 1 - max_rows
+    } else {
+        0
+    };
     for (row, i) in (start..ids.len()).take(max_rows).enumerate() {
         let line = if i == sel {
             let text = format!("› {}", ids[i]);
@@ -224,7 +243,10 @@ fn put_line(frame: &mut Frame, body: Rect, r: u16, line: Line) {
 
 /// A dim single-line span (owned, so it outlives the borrow of `text`).
 fn dim_line(text: &str, palette: &Palette) -> Line<'static> {
-    Line::from(Span::styled(text.to_string(), Style::default().fg(palette.dim)))
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(palette.dim),
+    ))
 }
 
 /// A sub-rect of `body` starting `top` rows down, reserving `bottom` rows at the end.

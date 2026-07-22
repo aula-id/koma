@@ -1,6 +1,10 @@
 //! Sub-agents panel rendering (the `$` overlay) and the helper functions for
 //! status tag/line formatting used both here and in the panel.
 
+use super::helpers::truncate_chars;
+use super::transcript::assemble_messages;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
@@ -8,10 +12,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
-use super::helpers::truncate_chars;
-use super::transcript::assemble_messages;
 
 /// Short status tag/glyph for a sub-agent, shown in the panel's left list.
 pub(super) fn subagent_tag(status: &crate::app::subagent::SubAgentStatus) -> &'static str {
@@ -54,7 +54,12 @@ pub(super) fn render_subagents_panel(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = 12u16.min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let rect = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     // Build the panel title, appending Ctrl+B hint when a running blocking agent
     // is selected (the only situation where the key does something useful).
@@ -89,7 +94,10 @@ pub(super) fn render_subagents_panel(
                 Style::default().fg(palette.dim),
             ))
             .style(Style::default()),
-            inner.inner(Margin { horizontal: 1, vertical: 0 }),
+            inner.inner(Margin {
+                horizontal: 1,
+                vertical: 0,
+            }),
         );
     } else {
         // Two-pane split: a ~24-col left list (RIGHT border divider, like the
@@ -108,7 +116,9 @@ pub(super) fn render_subagents_panel(
         let list_inner = list_block.inner(cols[0]);
         frame.render_widget(list_block, cols[0]);
 
-        let sel = rest.subagent_sel.min(rest.fg().subagents.len().saturating_sub(1));
+        let sel = rest
+            .subagent_sel
+            .min(rest.fg().subagents.len().saturating_sub(1));
         let list_w = list_inner.width as usize;
         let mut list_lines: Vec<Line> = rest
             .fg()
@@ -118,7 +128,10 @@ pub(super) fn render_subagents_panel(
             .map(|(i, sa)| {
                 let tag = subagent_tag(&sa.status);
                 let head = format!("#{} {} {}", sa.id, sa.agent_name, tag);
-                let label = truncate_chars(&sa.label, list_w.saturating_sub(head.chars().count() + 1).max(1));
+                let label = truncate_chars(
+                    &sa.label,
+                    list_w.saturating_sub(head.chars().count() + 1).max(1),
+                );
                 let text = format!("{head} {label}");
                 if i == sel {
                     Line::from(Span::styled(
@@ -131,7 +144,9 @@ pub(super) fn render_subagents_panel(
                         Span::styled(
                             truncate_chars(
                                 &format!("{} {} {}", sa.agent_name, tag, sa.label),
-                                list_w.saturating_sub(2 + sa.id.to_string().chars().count()).max(1),
+                                list_w
+                                    .saturating_sub(2 + sa.id.to_string().chars().count())
+                                    .max(1),
                             ),
                             Style::default().fg(palette.fg),
                         ),
@@ -150,7 +165,9 @@ pub(super) fn render_subagents_panel(
                 Span::styled(
                     truncate_chars(
                         &body,
-                        list_w.saturating_sub(2 + p.id.to_string().chars().count()).max(1),
+                        list_w
+                            .saturating_sub(2 + p.id.to_string().chars().count())
+                            .max(1),
                     ),
                     Style::default().fg(palette.dim),
                 ),
@@ -165,14 +182,20 @@ pub(super) fn render_subagents_panel(
             total_rows,
             list_inner.height as usize,
         );
-        frame.render_widget(Paragraph::new(list_lines).scroll((start as u16, 0)), list_inner);
+        frame.render_widget(
+            Paragraph::new(list_lines).scroll((start as u16, 0)),
+            list_inner,
+        );
 
         // RIGHT: the selected sub-agent's status line + the trailing transcript
         // lines that fit. Inset 1 col on the left so it doesn't hug the divider.
         // When ONLY pending entries exist (no spawned sub-agent yet) there is
         // nothing to select, so show a neutral note instead of indexing an empty
         // list.
-        let right = cols[1].inner(Margin { horizontal: 1, vertical: 0 });
+        let right = cols[1].inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        });
         if right.width > 0 && right.height > 0 && rest.fg().subagents.is_empty() {
             frame.render_widget(
                 Paragraph::new(Span::styled(
@@ -263,7 +286,10 @@ pub(super) fn render_agent_viewer(
     );
     frame.render_widget(
         Paragraph::new(Span::styled(title, Style::default().fg(palette.dim))),
-        header_inner.inner(Margin { horizontal: 2, vertical: 0 }),
+        header_inner.inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
     );
 
     // --- Footer hint (dim). ---
@@ -272,12 +298,18 @@ pub(super) fn render_agent_viewer(
             "up/down scroll \u{b7} Esc back",
             Style::default().fg(palette.dim),
         )),
-        outer[2].inner(Margin { horizontal: 2, vertical: 0 }),
+        outer[2].inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
     );
 
     // --- Body: same 2-col horizontal margin + wrap width as the main chat, so
     // the reused renderer wraps identically. ---
-    let body = outer[1].inner(Margin { horizontal: 2, vertical: 0 });
+    let body = outer[1].inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
     if body.width == 0 || body.height == 0 {
         return;
     }

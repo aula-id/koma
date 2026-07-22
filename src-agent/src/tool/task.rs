@@ -7,14 +7,16 @@
 //! background, and returns immediately so the main turn continues. The `run`
 //! impl exists only to satisfy the [`Tool`] trait and must never be reached.
 
+use super::{Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
-use super::{Tool, ToolCtx};
 
 /// Delegate a task to a named sub-agent that runs in the background.
 pub struct Task;
 impl Tool for Task {
-    fn name(&self) -> &'static str { "task" }
+    fn name(&self) -> &'static str {
+        "task"
+    }
 
     fn description(&self) -> &'static str {
         "Delegate a self-contained task to a named specialist sub-agent that runs \
@@ -66,7 +68,9 @@ impl Tool for Task {
 /// [`Tool`] trait and must never be reached.
 pub struct TaskOutput;
 impl Tool for TaskOutput {
-    fn name(&self) -> &'static str { "task_output" }
+    fn name(&self) -> &'static str {
+        "task_output"
+    }
     fn description(&self) -> &'static str {
         "Check the current status/progress of a background sub-agent (one started \
          by task with run_in_background=true). NOTE: when a background sub-agent \
@@ -101,7 +105,9 @@ impl Tool for TaskOutput {
 /// the [`Tool`] trait and must never be reached.
 pub struct TaskKill;
 impl Tool for TaskKill {
-    fn name(&self) -> &'static str { "task_kill" }
+    fn name(&self) -> &'static str {
+        "task_kill"
+    }
     fn description(&self) -> &'static str {
         "Terminate a running background sub-agent (one started by task with \
          run_in_background=true)."
@@ -136,7 +142,9 @@ impl Tool for TaskKill {
 /// [`Tool`] trait and must never be reached.
 pub struct TaskSend;
 impl Tool for TaskSend {
-    fn name(&self) -> &'static str { "task_send" }
+    fn name(&self) -> &'static str {
+        "task_send"
+    }
     fn description(&self) -> &'static str {
         "Send a follow-up user message to a running sub-agent (one you delegated \
          with task). It is delivered as a new user turn at the sub-agent's NEXT \

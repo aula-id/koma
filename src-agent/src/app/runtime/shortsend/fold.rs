@@ -169,9 +169,7 @@ pub async fn update_summary(
     // Belt-and-suspenders: strip ANSI escape codes and tool-call tags that the
     // model may have echoed back before persisting. A dirty summary would poison
     // every future send-payload and every subsequent fold input.
-    let new_text = crate::dto::chat::strip_tool_call_tags(
-        &crate::dto::chat::strip_ansi(&new_text)
-    );
+    let new_text = crate::dto::chat::strip_tool_call_tags(&crate::dto::chat::strip_ansi(&new_text));
 
     // Persist: the new summary now covers through `fold_up_to`; the live-send
     // start id is the first message past it.

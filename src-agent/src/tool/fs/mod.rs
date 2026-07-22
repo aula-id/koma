@@ -6,21 +6,21 @@
 //! [`super::all_tools`]; the agentic loop dispatches the model's requested calls
 //! through [`Tool::run`].
 
-mod helpers;
+pub mod delete;
 pub mod dirlist;
+pub mod edit;
+mod helpers;
 pub mod read;
 pub mod write;
-pub mod edit;
-pub mod delete;
 
+pub use delete::Delete;
 pub use dirlist::DirList;
+pub use edit::Edit;
 pub use read::Read;
 pub use write::Write;
-pub use edit::Edit;
-pub use delete::Delete;
 
-use std::path::Path;
 use super::ToolCtx;
+use std::path::Path;
 
 /// Record a workspace file mutation into the session's cumulative file-change log
 /// (#24): `path` is the resolved absolute path just written/edited/deleted, and
@@ -96,5 +96,6 @@ pub(crate) fn capture_baseline(ctx: &ToolCtx, path: &Path) {
         }
         Ok(bytes) => ("text", Some(bytes)),
     };
-    let _ = crate::model::msglog::record_file_baseline(session_dir, &display, kind, content.as_deref());
+    let _ =
+        crate::model::msglog::record_file_baseline(session_dir, &display, kind, content.as_deref());
 }

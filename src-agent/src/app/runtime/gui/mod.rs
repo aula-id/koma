@@ -211,7 +211,10 @@ mod koma_request_tests {
     /// as a directory name (empty, `.`/`..`, embedded `/`) is rejected.
     #[test]
     fn safe_ext_id_rejects_path_escapes() {
-        assert_eq!(safe_ext_id("run.koma.example.fleet-board-daemon"), Some("run.koma.example.fleet-board-daemon"));
+        assert_eq!(
+            safe_ext_id("run.koma.example.fleet-board-daemon"),
+            Some("run.koma.example.fleet-board-daemon")
+        );
         assert_eq!(safe_ext_id(""), None);
         assert_eq!(safe_ext_id("."), None);
         assert_eq!(safe_ext_id(".."), None);
@@ -225,7 +228,10 @@ mod koma_request_tests {
     /// applied to protocol request paths instead of zip entries.
     #[test]
     fn safe_ext_rel_path_rejects_escapes() {
-        assert_eq!(safe_ext_rel_path("index.html"), Some(PathBuf::from("index.html")));
+        assert_eq!(
+            safe_ext_rel_path("index.html"),
+            Some(PathBuf::from("index.html"))
+        );
         assert_eq!(
             safe_ext_rel_path("assets/index-abc123.js"),
             Some(PathBuf::from("assets/index-abc123.js"))
@@ -506,7 +512,9 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
             .context("failed to build webview (gtk)")?
     };
     #[cfg(not(target_os = "linux"))]
-    let webview = wv_builder.build(&window).context("failed to build webview")?;
+    let webview = wv_builder
+        .build(&window)
+        .context("failed to build webview")?;
 
     // --- 3b. macOS: clear WKWebView's `underPageBackgroundColor` -----------------
     // wry 0.52.1's "transparent" feature (enabled on our `wry` dependency above)
@@ -557,7 +565,10 @@ pub fn run_gui(opts: crate::cli::Opts) -> Result<()> {
                 WinCmd::Minimize => window.set_minimized(true),
                 WinCmd::ToggleMax => window.set_maximized(!window.is_maximized()),
                 WinCmd::Close => {
-                    crate::model::store::append_global_error_log("gui", "titlebar close -> closing");
+                    crate::model::store::append_global_error_log(
+                        "gui",
+                        "titlebar close -> closing",
+                    );
                     *control_flow = ControlFlow::Exit;
                 }
                 WinCmd::Resize(dir) => {
