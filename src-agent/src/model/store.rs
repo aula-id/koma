@@ -92,7 +92,10 @@ pub fn migrate_legacy_dir() {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => {
-            eprintln!("koma: warning: cannot resolve home directory; skipping config migration");
+            append_global_error_log(
+                "config migration skipped",
+                "cannot resolve home directory; skipping config migration",
+            );
             return;
         }
     };
@@ -107,8 +110,14 @@ pub fn migrate_legacy_dir() {
         return;
     }
     match std::fs::rename(&old_dir, &new_dir) {
-        Ok(()) => eprintln!("migrated config: ~/.simple-coder -> ~/.koma"),
-        Err(e) => eprintln!("koma: warning: could not migrate ~/.simple-coder to ~/.koma: {e}"),
+        Ok(()) => append_global_error_log(
+            "config migrated",
+            "~/.simple-coder -> ~/.koma",
+        ),
+        Err(e) => append_global_error_log(
+            "config migration failed",
+            &format!("could not migrate ~/.simple-coder to ~/.koma: {e}"),
+        ),
     }
 }
 
