@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph},
     Frame,
@@ -193,7 +193,7 @@ pub(super) fn draw_model_picker(
     let popup_w = 56_u16.min(area.width.saturating_sub(2));
     let popup = centered_rect(area, popup_w, total_h);
 
-    // Dim the backdrop (fg dim + bg reset, like the settings modals so a stacked
+    // Dim the backdrop (fg dim + bg, like the settings modals so a stacked
     // layer still recedes).
     {
         let buf = frame.buffer_mut();
@@ -202,7 +202,7 @@ pub(super) fn draw_model_picker(
                 if x >= popup.x && x < popup.right() && y >= popup.y && y < popup.bottom() {
                     continue;
                 }
-                buf[(x, y)].set_fg(palette.dim).set_bg(Color::Reset);
+                buf[(x, y)].set_fg(palette.dim).set_bg(palette.bg);
             }
         }
     }
