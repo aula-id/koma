@@ -4,6 +4,7 @@ mod turn;
 mod tools;
 mod spawn;
 mod run;
+mod knowledge;
 
 pub(super) use turn::{finish_stream, advance_turn};
 pub(crate) use turn::push_image_unsupported_notice;
