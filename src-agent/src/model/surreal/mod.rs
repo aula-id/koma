@@ -9,7 +9,7 @@
 //! The entry point is [`search_messages`], which checks sync state and
 //! dispatches to hybrid search (when synced) or FTS5 (when not).
 
-mod core;
+pub(crate) mod core;
 mod search;
 
 // Phase 3-4 modules: fully implemented and tested, gated until wired into callers.

@@ -124,6 +124,9 @@ async fn open_knowledge_db(knowledge_path: &std::path::Path) -> Result<Surreal<D
          DEFINE FIELD IF NOT EXISTS entity_type ON entity TYPE string;
          DEFINE FIELD IF NOT EXISTS name ON entity TYPE string;
          DEFINE FIELD IF NOT EXISTS aliases ON entity TYPE array;
+         DEFINE FIELD IF NOT EXISTS embedding ON entity TYPE array;
+         DEFINE INDEX IF NOT EXISTS entity_vec ON entity
+             FIELDS embedding HNSW DIMENSION 384 DIST COSINE;
 
          DEFINE TABLE IF NOT EXISTS memory_edge TYPE RELATION FROM entity TO entity SCHEMALESS;
 
@@ -266,7 +269,7 @@ async fn respond(
 
 async fn handle_request(
     req: KnowledgeRequest,
-    db: &Surreal<Db>,
+    db: &Arc<Surreal<Db>>,
     shutting_down: &std::sync::atomic::AtomicBool,
 ) -> KnowledgeResponse {
     match req {
@@ -282,9 +285,7 @@ async fn handle_request(
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let result = db
-                .query(
-                    "CREATE fact CONTENT $data",
-                )
+                .query("CREATE fact CONTENT $data")
                 .bind(("data", serde_json::json!({
                     "fact_id": fact_id,
                     "content": content,
@@ -298,7 +299,24 @@ async fn handle_request(
                 })))
                 .await;
             match result {
-                Ok(_) => KnowledgeResponse::Ack,
+                Ok(_) => {
+                    // Spawn entity extraction in the background — non-blocking,
+                    // the Ack returns immediately.
+                    let db_ref = db.clone();
+                    let fid = fact_id.clone();
+                    let c = content.clone();
+                    tokio::spawn(async move {
+                        match super::extractor::extract_and_resolve(&db_ref, &c).await {
+                            Ok(resolved) => {
+                                let _ = super::extractor::relate_entities(&db_ref, &fid, &resolved).await;
+                            }
+                            Err(e) => {
+                                eprintln!("knowledge daemon: entity extraction failed for {fid}: {e}");
+                            }
+                        }
+                    });
+                    KnowledgeResponse::Ack
+                }
                 Err(e) => KnowledgeResponse::Error(format!("push fact failed: {e}")),
             }
         }
@@ -348,10 +366,15 @@ async fn handle_request(
                 })
                 .collect();
 
+            // Graph traversal: for matched facts, fetch connected entities
+            // and related facts reachable through the entity graph.
+            let (entities, related_facts) =
+                traverse_graph(db, &ids).await.unwrap_or_default();
+
             KnowledgeResponse::ExpandResult {
                 facts,
-                entities: Vec::new(),      // TODO: entity extraction phase 2
-                related_facts: Vec::new(), // TODO: graph traversal phase 2
+                entities,
+                related_facts,
             }
         }
 
@@ -378,4 +401,143 @@ async fn handle_request(
             KnowledgeResponse::Ack
         }
     }
+}
+
+// ── Graph traversal ───────────────────────────────────────────────────
+
+/// Traverse the entity graph from a set of matched fact IDs.
+///
+/// For each fact, follows `->produced->entity` to get connected entities,
+/// then `->memory_edge->entity` to get related entities, and finally
+/// `<-produced<-fact` to pull in related facts from those entities.
+///
+/// Uses SurrealQL FETCH to do the full 1-hop traversal in a single query.
+async fn traverse_graph(
+    db: &Surreal<Db>,
+    fact_ids: &[String],
+) -> anyhow::Result<(
+    Vec<crate::ipc::knowledge_proto::KnowledgeEntity>,
+    Vec<crate::ipc::knowledge_proto::KnowledgeFact>,
+)> {
+    if fact_ids.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    // Build a single query that:
+    // 1. Selects the matched facts
+    // 2. FETCH-es the entities via produced edges
+    // 3. From those entities, follows memory_edge to related entities
+    // 4. From related entities, follows back through produced to related facts
+    //
+    // We use an IN clause with the fact_id field (bare, not record ID) since
+    // SurrealDB RELATE uses record IDs but the fact_id field is a plain string.
+
+    // Step 1: fetch entities for matched facts
+    let entities = fetch_entities_for_facts(db, fact_ids).await?;
+
+    // Step 2: fetch related facts through the entity graph (1-hop)
+    let related_facts = fetch_related_facts(db, fact_ids).await?;
+
+    Ok((entities, related_facts))
+}
+
+async fn fetch_entities_for_facts(
+    db: &Surreal<Db>,
+    fact_ids: &[String],
+) -> anyhow::Result<Vec<crate::ipc::knowledge_proto::KnowledgeEntity>> {
+    let mut seen_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut entities: Vec<crate::ipc::knowledge_proto::KnowledgeEntity> = Vec::new();
+
+    for id in fact_ids {
+        let rid = format!("fact:{id}");
+        // Forward traversal: fact -> produced -> entity
+        let mut result = db
+            .query("SELECT ->produced->entity AS entities FROM type::thing($rid)")
+            .bind(("rid", rid))
+            .await?;
+
+        let entity_rows: Vec<serde_json::Value> = result.take("entities").unwrap_or_default();
+        for row in entity_rows {
+            if let Some(entity_id) = row.get("entity_id").and_then(|v| v.as_str()) {
+                if seen_entities.insert(entity_id.to_string()) {
+                    let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let entity_type = row.get("entity_type").and_then(|v| v.as_str()).unwrap_or("concept").to_string();
+                    let aliases: Vec<String> = row.get("aliases")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    entities.push(crate::ipc::knowledge_proto::KnowledgeEntity {
+                        entity_id: entity_id.to_string(),
+                        entity_type,
+                        name,
+                        aliases,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(entities)
+}
+
+async fn fetch_related_facts(
+    db: &Surreal<Db>,
+    fact_ids: &[String],
+) -> anyhow::Result<Vec<crate::ipc::knowledge_proto::KnowledgeFact>> {
+    // Two-step: first collect all entity IDs connected to the matched facts,
+    // then find facts connected to those entities (excluding the original facts).
+    let mut entity_rids: Vec<String> = Vec::new();
+    for id in fact_ids {
+        let rid = format!("fact:{id}");
+        let mut result = db
+            .query("SELECT ->produced->entity.id AS eid FROM ONLY type::thing($rid)")
+            .bind(("rid", rid))
+            .await?;
+
+        let ids: Vec<String> = result.take("eid").unwrap_or_default();
+        entity_rids.extend(ids);
+    }
+
+    if entity_rids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut seen: std::collections::HashSet<String> =
+        fact_ids.iter().cloned().collect(); // exclude originals
+    let mut related: Vec<crate::ipc::knowledge_proto::KnowledgeFact> = Vec::new();
+
+    for e_rid in &entity_rids {
+        // For each entity, get facts via reverse produced edge: entity <-produced- fact
+        let mut result = db
+            .query("SELECT <-produced<-fact.* AS facts FROM type::thing($rid)")
+            .bind(("rid", e_rid.clone()))
+            .await?;
+
+        let fact_rows: Vec<serde_json::Value> = result.take("facts").unwrap_or_default();
+        for row in fact_rows {
+            if let Some(fact_id) = row.get("fact_id").and_then(|v| v.as_str()) {
+                if seen.insert(fact_id.to_string()) {
+                    let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let category = row.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let confidence = row.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let trust = row.get("trust").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let reinforcement_count = row.get("reinforcement_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let created_at = row.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let last_reinforced = row.get("last_reinforced").and_then(|v| v.as_i64()).unwrap_or(0);
+                    related.push(crate::ipc::knowledge_proto::KnowledgeFact {
+                        id: fact_id.to_string(),
+                        content,
+                        category,
+                        confidence,
+                        trust,
+                        reinforcement_count,
+                        created_at,
+                        last_reinforced,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(related)
 }
