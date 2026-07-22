@@ -113,17 +113,18 @@ fn daemon_session_count(sock: &Path) -> Result<usize> {
 /// is best-effort — one wedged session never blocks stopping the rest. A run dir with no
 /// live daemons reports "no daemons running" (and still sweeps any stale turds).
 ///
-/// Either way, this ALSO runs [`super::os::kill_orphan_daemon_processes`] — a `/proc` sweep for
-/// koma daemon processes the socket scan structurally can't see (socket file removed
-/// out from under a still-running daemon, or a daemon spawned by an older/different-path
-/// binary). That keeps "no daemons running" honest and makes `kill` reliably clear the
-/// way for a reinstall (a lingering orphan otherwise holds the binary, causing "Text
-/// file busy").
+/// Also stops the GLOBAL MCP daemon and the GLOBAL knowledge daemon (best-effort), then
+/// runs [`super::os::kill_orphan_daemon_processes`] — a `/proc` sweep for koma daemon
+/// processes the socket scan structurally can't see (socket file removed out from under
+/// a still-running daemon, or a daemon spawned by an older/different-path binary). That
+/// keeps "no daemons running" honest and makes `kill` reliably clear the way for a
+/// reinstall (a lingering orphan otherwise holds the binary, causing "Text file busy").
 pub(super) fn cmd_kill() -> Result<()> {
     let live = super::live_session_sockets()?;
     let mcp_live = super::mcp::mcp_daemon_alive();
+    let knowledge_live = super::knowledge::knowledge_daemon_alive();
 
-    if live.is_empty() && !mcp_live {
+    if live.is_empty() && !mcp_live && !knowledge_live {
         // Nothing visible via the socket scan — but an orphan daemon (socket removed,
         // or spawned by an older/different-path binary) may still be running. Sweep
         // before declaring victory.
@@ -136,6 +137,7 @@ pub(super) fn cmd_kill() -> Result<()> {
         // Sweep any stale socket/pidfiles left by crashed daemons.
         sweep_stale_files();
         super::mcp::unlink_mcp_daemon_files();
+        super::knowledge::unlink_knowledge_daemon_files();
         return Ok(());
     }
     for (id, _path) in live {
@@ -147,6 +149,10 @@ pub(super) fn cmd_kill() -> Result<()> {
     if mcp_live {
         // `koma daemon kill` owns a terminal — print the outcome (not quiet).
         super::mcp::stop_mcp_daemon(false);
+    }
+    // Same for the GLOBAL knowledge daemon.
+    if knowledge_live {
+        super::knowledge::stop_knowledge_daemon(false);
     }
     // Catch any socket-less orphans the scan above couldn't see, regardless of whether
     // any keyed sockets were found live.
