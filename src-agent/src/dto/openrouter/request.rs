@@ -294,7 +294,10 @@ fn attachment_parts(
         // into a data-URL at send time, so resume re-derives it from the file.
         // An unreadable file is silently skipped (no crash) — the marker still
         // shows in the text part so the model knows an image was intended.
-        let ctx = image_ctx.expect("capable implies Some");
+        let Some(ctx) = image_ctx else {
+            // image_ctx was None even though we checked capability; skip images
+            return Ok(parts);
+        };
         for att in attachments {
             if let Some(url) = data_url_for(&ctx.session_dir, att) {
                 parts.push(WirePart::Image(ImagePart {

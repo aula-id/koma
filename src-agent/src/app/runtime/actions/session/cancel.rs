@@ -26,7 +26,9 @@ pub fn handle_cancel_key_input(
         // Pop the just-appended session (it is always the LAST entry: KeyInput is
         // modal, so nothing could have appended after it).
         if state.rest.sessions.len() > 1 {
-            let mut popped = state.rest.sessions.pop().expect("len > 1 checked");
+            let Some(mut popped) = state.rest.sessions.pop() else {
+                return;
+            };
             if let Some(lock) = popped.held_lock.take() {
                 store::remove_lock(&lock);
             }

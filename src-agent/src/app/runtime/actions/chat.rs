@@ -81,16 +81,17 @@ pub(super) fn handle_submit(
     let mut attachments = state.rest.take_attachments(&text);
     attachments.extend(scan_attachments);
     let had_image = !attachments.is_empty();
-    let history = {
-        let sess = state.rest.fg_mut().session.as_mut().unwrap();
-        let _ = msglog::append(&sess.path, Role::User, &text, None);
-        sess.conversation.push_user_with_attachments(text, attachments);
-        if let Err(e) = sess.save() {
-            state.rest.fg_mut().status = format!("error: {e}");
-            return Ok(());
-        }
-        sess.conversation.history()
+    let Some(sess) = state.rest.fg_mut().session.as_mut() else {
+        crate::model::store::append_global_error_log("chat", "BUG: fg session missing in handle_submit");
+        return Ok(());
     };
+    let _ = msglog::append(&sess.path, Role::User, &text, None);
+    sess.conversation.push_user_with_attachments(text, attachments);
+    if let Err(e) = sess.save() {
+        state.rest.fg_mut().status = format!("error: {e}");
+        return Ok(());
+    }
+    let history = sess.conversation.history();
     // Image-capability guard: if this message carries images and the resolved Main
     // model can't read them, DON'T spend an API call — post a friendly notice in the
     // chat and keep the image un-sent (the orange attachment tree still shows it).
@@ -260,7 +261,10 @@ pub(super) fn handle_shell(text: String, state: &mut AppState) -> Result<()> {
     // the bash tool. Capture cwd + the sender before the spawn so nothing borrows
     // `state` across the thread boundary.
     let cwd = state.rest.fg().effective_cwd();
-    let tx = state.rest.sessions[fgi].shell_task_tx.as_ref().unwrap().clone();
+    let Some(tx) = state.rest.sessions[fgi].shell_task_tx.as_ref().cloned() else {
+        crate::model::store::append_global_error_log("chat", "BUG: shell_task_tx missing");
+        return Ok(());
+    };
     // Plain `std::thread` (NOT a tokio task): `run_shell_capture` itself spawns a
     // helper thread + blocks on `recv_timeout`, and there's no async involved, so a
     // bare OS thread is the right home. The `UnboundedSender` is `Send`, so it can
@@ -365,16 +369,17 @@ pub(super) fn handle_resend(
         state.rest.fg_mut().status = "no active session".into();
         return Ok(());
     }
-    let history = {
-        let sess = state.rest.fg_mut().session.as_mut().unwrap();
-        if sess.conversation.last_user_content().is_none() {
-            state.rest.fg_mut().status = "nothing to resend".into();
-            return Ok(());
-        }
-        sess.conversation.pop_trailing_assistants();
-        let _ = sess.save();
-        sess.conversation.history()
+    let Some(sess) = state.rest.fg_mut().session.as_mut() else {
+        crate::model::store::append_global_error_log("chat", "BUG: fg session missing in handle_resend");
+        return Ok(());
     };
+    if sess.conversation.last_user_content().is_none() {
+        state.rest.fg_mut().status = "nothing to resend".into();
+        return Ok(());
+    }
+    sess.conversation.pop_trailing_assistants();
+    let _ = sess.save();
+    let history = sess.conversation.history();
     state.rest.reset_scroll();
     state.rest.fg_mut().begin_stream();
     state.rest.fg_mut().waiting = true;

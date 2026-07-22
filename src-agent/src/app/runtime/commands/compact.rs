@@ -36,11 +36,13 @@ pub(crate) fn handle_compact(
         state.rest.pending_plan_seed = false;
         return Ok(());
     }
-    let (to_sum, kept_tail) = {
-        let sess = state.rest.fg().session.as_ref().unwrap();
-        let pn = preserve_n_override.unwrap_or(sess.settings.compaction.preserve_n);
-        sess.conversation.split_for_compaction(pn)
+    let Some(sess) = state.rest.fg().session.as_ref() else {
+        crate::model::store::append_global_error_log("compact", "BUG: fg session missing");
+        state.rest.pending_plan_seed = false;
+        return Ok(());
     };
+    let pn = preserve_n_override.unwrap_or(sess.settings.compaction.preserve_n);
+    let (to_sum, kept_tail) = sess.conversation.split_for_compaction(pn);
     if to_sum.is_empty() {
         state.rest.fg_mut().status = "nothing to compact".into();
         state.rest.pending_plan_seed = false;
@@ -79,7 +81,10 @@ pub(crate) fn handle_compact(
     // interrupt/new just drops it and the task's result is ignored.
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.fg_mut().active_rx = Some(rx);
-    let c = Arc::clone(client.as_ref().unwrap());
+    let Some(c) = client.as_ref().cloned() else {
+        crate::model::store::append_global_error_log("compact", "BUG: client missing");
+        return;
+    };
     let jh = handle.spawn(async move {
         // Compaction sends on the resolved Compactor connection (endpoint +
         // key) with its model id + upstream-route slug; no effort (the

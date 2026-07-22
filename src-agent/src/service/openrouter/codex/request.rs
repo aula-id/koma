@@ -212,7 +212,9 @@ pub(super) fn build_input(
                     // like `attachment_parts`; an unreadable file is skipped.
                     let capable = image_ctx.map(|c| c.model_takes_images).unwrap_or(false);
                     if capable {
-                        let ctx = image_ctx.expect("capable implies Some");
+                        let Some(ctx) = image_ctx else {
+                            return Ok(input);
+                        };
                         for att in &m.attachments {
                             if let Some(url) =
                                 crate::dto::openrouter::request::data_url_for(&ctx.session_dir, att)
