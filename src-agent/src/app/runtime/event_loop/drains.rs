@@ -212,10 +212,10 @@ pub(super) fn apply_compaction_result(
     // leaving it pending for a manual Enter. `apply_compaction_result` just set
     // `waiting = false` above, so this cleanly re-enters the streaming state.
     if seeded && client.is_some() && state.rest.sessions[idx].session.is_some() {
-        let history = {
-            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
-            sess.conversation.history()
+        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
+            return;
         };
+        let history = sess.conversation.history();
         // Per-turn reset + start stream, mirroring handle_submit's kickoff. The
         // session is idle here (waiting was just cleared), so these are clean-state.
         {

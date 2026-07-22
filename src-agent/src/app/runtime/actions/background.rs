@@ -44,10 +44,16 @@ pub(super) fn handle_background_subagent(id: usize, state: &mut AppState) -> Res
     }
 
     // Take the call id before we mutate the sub-agent.
-    let call_id = state.rest.sessions[fg].subagents[sa_idx]
+    let Some(call_id) = state.rest.sessions[fg].subagents[sa_idx]
         .tool_call_id
         .take()
-        .unwrap(); // Safe: checked Some above.
+    else {
+        crate::model::store::append_global_error_log(
+            "background",
+            "BUG: tool_call_id was None after is_none() check",
+        );
+        return Ok(());
+    };
 
     // Flip to detached so the completion path fires a nudge instead of a tool result.
     state.rest.sessions[fg].subagents[sa_idx].detached = true;
@@ -111,10 +117,16 @@ pub(super) fn handle_background_all_subagents(state: &mut AppState) -> Result<()
 
     for sa_idx in eligible_indices {
         // Take the call id before flipping detached.
-        let call_id = state.rest.sessions[fg].subagents[sa_idx]
+        let Some(call_id) = state.rest.sessions[fg].subagents[sa_idx]
             .tool_call_id
             .take()
-            .unwrap(); // Safe: filtered Some above.
+        else {
+            crate::model::store::append_global_error_log(
+                "background",
+                "BUG: tool_call_id was None after filter Some",
+            );
+            continue;
+        };
 
         let id = state.rest.sessions[fg].subagents[sa_idx].id;
         let agent_name = state.rest.sessions[fg].subagents[sa_idx].agent_name.clone();

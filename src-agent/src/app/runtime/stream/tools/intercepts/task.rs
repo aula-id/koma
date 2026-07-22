@@ -295,7 +295,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_kill(
             // Drop the immutable borrow before taking a mutable one.
             let sa = state.rest.sessions[sess_idx].subagents.iter_mut()
                 .find(|s| s.id == target_id)
-                .expect("id was validated above");
+                .expect("id was validated above"); // keep — this is a programmer assertion on a checked id; allowed
             // Abort the tokio task (best effort) and flip a still-Running
             // status to Killed so the $ panel + a later task_output reflect
             // it immediately (a terminal status is left untouched).

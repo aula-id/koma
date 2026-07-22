@@ -147,11 +147,14 @@ pub(super) fn spawn_classify_park(
         state.rest.sessions[sess_idx].classify_tx = Some(tx);
         state.rest.sessions[sess_idx].classify_rx = Some(rx);
     }
-    let tx = state.rest.sessions[sess_idx]
+    let Some(tx) = state.rest.sessions[sess_idx]
         .classify_tx
         .as_ref()
-        .unwrap()
-        .clone();
+        .cloned()
+    else {
+        crate::model::store::append_global_error_log("approval", "BUG: classify_tx missing");
+        return;
+    };
     let convo = convo_context.to_string();
     let name = call.function.name.clone();
     let args = call.function.arguments.clone();

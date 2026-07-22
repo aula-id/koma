@@ -179,8 +179,7 @@ impl Conversation {
         let mut out: Vec<ChatMessage> = Vec::with_capacity(msgs.len());
         for m in msgs {
             match m.role {
-                Role::Assistant if m.tool_calls.is_some() => {
-                    let tcs = m.tool_calls.as_ref().unwrap();
+                Role::Assistant if let Some(tcs) = m.tool_calls.as_ref() => {
                     if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
                         out.push(m.clone()); // complete tool-call group → keep as-is
                     } else if !m.content.trim().is_empty() {
@@ -276,8 +275,7 @@ impl Conversation {
         let mut out: Vec<ChatMessage> = Vec::with_capacity(msgs.len());
         for m in msgs {
             match m.role {
-                Role::Assistant if m.tool_calls.is_some() => {
-                    let tcs = m.tool_calls.as_ref().unwrap();
+                Role::Assistant if let Some(tcs) = m.tool_calls.as_ref() => {
                     if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
                         out.push(m.clone()); // complete tool-call group → keep as-is
                     } else if !m.content.trim().is_empty() {
