@@ -132,16 +132,19 @@ async fn store_fact_async(
 }
 
 /// Recall memory atoms closest to the given vector query.
+/// Falls back to the global knowledge daemon when local recall is weak.
 pub fn recall_memory(session_dir: &Path, query_vec: &[f32], limit: usize) -> Vec<Fact> {
     let sd = session_dir.to_path_buf();
     let qv = query_vec.to_vec();
     core::blocking_block(move || {
         let sd = sd.clone();
         async move {
-            recall_memory_async(&sd, &qv, limit).await.unwrap_or_else(|e| {
+            let mut facts = recall_memory_async(&sd, &qv, limit).await.unwrap_or_else(|e| {
                 crate::model::store::append_error_log(&sd, "surreal::recall_memory failed", &e.to_string());
                 Vec::new()
-            })
+            });
+            merge_daemon_fallback(&qv, limit, &mut facts);
+            facts
         }
     })
 }
@@ -192,6 +195,69 @@ async fn recall_memory_async(
         created_at: cas[i],
         last_reinforced: lrs[i],
     }).collect())
+}
+
+/// Try knowledge daemon fallback and merge with local results when local
+/// recall is weak (empty or average trust < 0.5).
+fn merge_daemon_fallback(
+    query_vec: &[f32],
+    limit: usize,
+    local: &mut Vec<Fact>,
+) {
+    // Determine whether fallback is needed.
+    let avg_trust = if local.is_empty() {
+        0.0
+    } else {
+        local.iter().map(|f| f.trust).sum::<f64>() / local.len() as f64
+    };
+    if avg_trust >= 0.5 && !local.is_empty() {
+        return; // local results are sufficient
+    }
+
+    // Try the global knowledge daemon.
+    let result = crate::app::knowledge::proxy_expand(query_vec, limit);
+    if result.facts.is_empty() && result.related_facts.is_empty() {
+        return;
+    }
+
+    // Build a set of existing IDs for dedup.
+    let seen: std::collections::HashSet<String> =
+        local.iter().map(|f| f.id.clone()).collect();
+
+    // Merge primary facts.
+    for kf in &result.facts {
+        if !seen.contains(&kf.id) {
+            local.push(Fact {
+                id: kf.id.clone(),
+                content: kf.content.clone(),
+                category: kf.category.clone(),
+                confidence: kf.confidence,
+                trust: kf.trust,
+                reinforcement_count: kf.reinforcement_count,
+                created_at: kf.created_at,
+                last_reinforced: kf.last_reinforced,
+            });
+        }
+    }
+
+    // Merge related facts (lower priority — append at end).
+    let mut seen_after_primary: std::collections::HashSet<String> =
+        local.iter().map(|f| f.id.clone()).collect();
+    for kf in &result.related_facts {
+        if !seen_after_primary.contains(&kf.id) {
+            seen_after_primary.insert(kf.id.clone());
+            local.push(Fact {
+                id: kf.id.clone(),
+                content: kf.content.clone(),
+                category: kf.category.clone(),
+                confidence: kf.confidence,
+                trust: kf.trust,
+                reinforcement_count: kf.reinforcement_count,
+                created_at: kf.created_at,
+                last_reinforced: kf.last_reinforced,
+            });
+        }
+    }
 }
 
 /// Store an episode — a narrative decision point with an embedding.
