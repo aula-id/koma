@@ -117,7 +117,7 @@ async fn store_fact_async(
             contents[i].as_str()
         };
 
-        let _ = db
+        if let Err(e) = db
             .query(
                 "UPDATE fact SET content = $content, confidence = $c, trust = $t, \
                  reinforcement_count = $r, last_reinforced = $lr, embedding = $emb \
@@ -130,7 +130,14 @@ async fn store_fact_async(
             .bind(("lr", now))
             .bind(("emb", new_emb.clone()))
             .bind(("id", ids[i].clone()))
-            .await;
+            .await
+        {
+            crate::model::store::append_error_log(
+                session_dir,
+                "surreal::store_fact — UPDATE reinforce",
+                &e.to_string(),
+            );
+        }
 
         crate::app::knowledge::proxy_push_fact(
             ids[i].clone(),
@@ -143,12 +150,16 @@ async fn store_fact_async(
         return Ok(Some(ids[i].clone()));
     }
 
-    // Store new fact.
+    // Store new fact with an explicit record ID so RELATE edges can target it.
+    // Bare fact_id (no `fact:` prefix) — record RID is `fact:{fact_id}`.
     let trust = compute_trust(confidence, now, 0);
-    let fact_id = format!("fact:{category}:{now}:{}", content.len());
+    let cat = sanitize_id_part(category);
+    let fact_id = format!("{cat}_{now}_{}", content.len());
+    let rid = format!("fact:{fact_id}");
 
-    let _ = db
-        .query("CREATE fact CONTENT $data")
+    if let Err(e) = db
+        .query("CREATE type::thing($rid) CONTENT $data")
+        .bind(("rid", rid))
         .bind(("data", serde_json::json!({
             "fact_id": fact_id.clone(),
             "content": content,
@@ -160,7 +171,15 @@ async fn store_fact_async(
             "created_at": now,
             "last_reinforced": now,
         })))
-        .await;
+        .await
+    {
+        crate::model::store::append_error_log(
+            session_dir,
+            "surreal::store_fact — CREATE fact",
+            &e.to_string(),
+        );
+        return Err(e.into());
+    }
 
     crate::app::knowledge::proxy_push_fact(
         fact_id.clone(),
@@ -171,6 +190,24 @@ async fn store_fact_async(
     );
 
     Ok(Some(fact_id))
+}
+
+/// Keep Surreal record-id components simple (ascii alnum / _ / -).
+fn sanitize_id_part(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
 }
 
 /// Recall memory atoms closest to the given vector query.
@@ -345,6 +382,33 @@ pub fn is_quality_fact(content: &str) -> bool {
 
     let lower = trimmed.to_lowercase();
 
+    // Question sentences — reject anything that looks like a question.
+    // Ends with '?' (defensive check — splitters should handle, but filter
+    // may receive unsplit text from other callers).
+    if trimmed.ends_with('?') {
+        return false;
+    }
+    // Starts with question words — these are queries, not facts.
+    const QUESTION_STARTS: &[&str] = &[
+        "what ", "what's ", "whats ", "what is ", "what are ", "what was ", "what were ",
+        "how ", "how's ", "hows ", "how is ", "how does ", "how can ", "how do ",
+        "why ", "why's ", "whys ", "why is ", "why does ", "why are ",
+        "when ", "when's ", "whens ", "when is ", "when does ", "when did ",
+        "where ", "where's ", "wheres ", "where is ", "where does ", "where are ",
+        "who ", "who's ", "whos ", "who is ", "who does ", "who are ",
+        "which ", "which's ", "whichs ", "which is ", "which are ",
+        "can i ", "can you ", "can we ", "could you ", "could i ",
+        "would you ", "would i ", "should i ", "should we ",
+        "do i ", "do you ", "does this ", "does that ",
+        "is there ", "are there ",
+        "what can i help", "what can i do",
+    ];
+    for prefix in QUESTION_STARTS {
+        if lower.starts_with(prefix) {
+            return false;
+        }
+    }
+
     // Imperative instructions (starts with a verb command).
     const INSTRUCTION_STARTS: &[&str] = &[
         "run ", "build ", "test ", "fix ", "add ", "create ", "update ",
@@ -459,6 +523,16 @@ mod tests {
         assert!(!is_quality_fact(
             "SELECT * FROM fact WHERE embedding <|5,100|> $query"
         ));
+        // Question sentences.
+        assert!(!is_quality_fact("What can I help you with today?"));
+        assert!(!is_quality_fact("How does this work?"));
+        assert!(!is_quality_fact("Why is the build failing?"));
+        assert!(!is_quality_fact("When did this start?"));
+        assert!(!is_quality_fact("Where is the config file?"));
+        assert!(!is_quality_fact("Can I use this approach?"));
+        assert!(!is_quality_fact("Could you explain the error?"));
+        // Greeting that was being stored as a fact.
+        assert!(!is_quality_fact("What can I help you with"));
     }
 
     #[test]

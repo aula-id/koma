@@ -1,13 +1,13 @@
 //! Persistent SurrealDB mirror backed by SurrealKV.
 //!
-//! `open_db` creates/opens the on-disk database and defines all schemas
-//! (message, graph, memory tables + indexes). `start_sync` spawns a
-//! fire-and-forget background thread that reads the SQLite message log,
-//! embeds every message via fastembed (BGE-small-en-v1.5, 384d), and
-//! batch-inserts them into the SurrealDB index.
+//! `open_db` returns a cached on-disk connection (schema is defined once per
+//! path). `start_sync` spawns a fire-and-forget background thread that reads
+//! the SQLite message log, embeds every message via fastembed
+//! (BGE-small-en-v1.5, 384d), and batch-inserts them into the SurrealDB index.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
@@ -26,12 +26,11 @@ fn get_embedder() -> Option<&'static TextEmbedding> {
     EMBEDDER
         .get_or_init(|| {
             TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15))
-                .map_err(|e| {
+                .inspect_err(|e| {
                     crate::model::store::append_global_error_log(
                         "fastembed init failed",
                         &e.to_string(),
                     );
-                    e
                 })
                 .ok()
         })
@@ -133,17 +132,30 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// open_db
+// open_db — process-wide cache, schema defined once per path
 // ---------------------------------------------------------------------------
+
+static DB_CACHE: OnceLock<Mutex<HashMap<String, Surreal<Db>>>> = OnceLock::new();
+
+fn db_cache() -> &'static Mutex<HashMap<String, Surreal<Db>>> {
+    DB_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 pub(crate) async fn open_db(session_dir: &Path) -> anyhow::Result<Surreal<Db>> {
     let db_path = session_dir.join("messages.surreal");
     let path_str = db_path.to_string_lossy().to_string();
 
-    let db = Surreal::<Db>::new(path_str).await?;
+    if let Ok(guard) = db_cache().lock() {
+        if let Some(db) = guard.get(&path_str) {
+            return Ok(db.clone());
+        }
+    }
+
+    let db = Surreal::<Db>::new(path_str.clone()).await?;
     db.use_ns("koma").use_db("messages").await?;
 
     // ── Message tables ──────────────────────────────────────────────
+    // NOTE: SurrealDB 3.0 renames SEARCH ANALYZER → FULLTEXT ANALYZER
     db.query(
         "DEFINE TABLE IF NOT EXISTS message SCHEMALESS;
          DEFINE FIELD IF NOT EXISTS sqlite_id ON message TYPE int;
@@ -161,6 +173,8 @@ pub(crate) async fn open_db(session_dir: &Path) -> anyhow::Result<Surreal<Db>> {
     .await?;
 
     // ── Graph tables ────────────────────────────────────────────────
+    // `delegation` and `produced` (tool_call→message) are forward-compat —
+    // defined but unused on production write paths today.
     db.query(
         "DEFINE TABLE IF NOT EXISTS agent SCHEMALESS;
          DEFINE FIELD IF NOT EXISTS agent_id ON agent TYPE string;
@@ -175,6 +189,8 @@ pub(crate) async fn open_db(session_dir: &Path) -> anyhow::Result<Surreal<Db>> {
          DEFINE FIELD IF NOT EXISTS result_snippet ON tool_call TYPE string;
          DEFINE FIELD IF NOT EXISTS embedding ON tool_call TYPE array;
          DEFINE FIELD IF NOT EXISTS timestamp ON tool_call TYPE int;
+         DEFINE INDEX IF NOT EXISTS tool_call_vec ON tool_call
+             FIELDS embedding HNSW DIMENSION 384 DIST COSINE;
 
          DEFINE TABLE IF NOT EXISTS delegation TYPE RELATION FROM agent TO agent SCHEMALESS;
          DEFINE TABLE IF NOT EXISTS called TYPE RELATION FROM agent TO tool_call SCHEMALESS;
@@ -183,6 +199,7 @@ pub(crate) async fn open_db(session_dir: &Path) -> anyhow::Result<Surreal<Db>> {
     .await?;
 
     // ── Memory tables ───────────────────────────────────────────────
+    // `episode` is forward-compat — defined but unused on production write paths today.
     db.query(
         "DEFINE TABLE IF NOT EXISTS fact SCHEMALESS;
          DEFINE FIELD IF NOT EXISTS fact_id ON fact TYPE string;
@@ -203,16 +220,28 @@ pub(crate) async fn open_db(session_dir: &Path) -> anyhow::Result<Surreal<Db>> {
          DEFINE FIELD IF NOT EXISTS decision_point ON episode TYPE string;
          DEFINE FIELD IF NOT EXISTS embedding ON episode TYPE array;
          DEFINE FIELD IF NOT EXISTS created_at ON episode TYPE int;
+         DEFINE INDEX IF NOT EXISTS episode_vec ON episode
+             FIELDS embedding HNSW DIMENSION 384 DIST COSINE;
 
          DEFINE TABLE IF NOT EXISTS entity SCHEMALESS;
          DEFINE FIELD IF NOT EXISTS entity_id ON entity TYPE string;
          DEFINE FIELD IF NOT EXISTS entity_type ON entity TYPE string;
          DEFINE FIELD IF NOT EXISTS name ON entity TYPE string;
          DEFINE FIELD IF NOT EXISTS aliases ON entity TYPE array;
+         DEFINE FIELD IF NOT EXISTS embedding ON entity TYPE array;
+         DEFINE INDEX IF NOT EXISTS entity_vec ON entity
+             FIELDS embedding HNSW DIMENSION 384 DIST COSINE;
 
          DEFINE TABLE IF NOT EXISTS memory_edge TYPE RELATION FROM entity TO entity SCHEMALESS;",
     )
     .await?;
+
+    if let Ok(mut guard) = db_cache().lock() {
+        if let Some(existing) = guard.get(&path_str) {
+            return Ok(existing.clone());
+        }
+        guard.insert(path_str, db.clone());
+    }
 
     Ok(db)
 }
@@ -277,11 +306,18 @@ fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
 
             for (i, (sqlite_id, role, content, created_at)) in rows.iter().enumerate() {
                 let emb = embeddings.get(i).cloned().unwrap_or_else(|| vec![0.0f32; 384]);
-                let _ = db
+                if let Err(e) = db
                     .query("DELETE FROM message WHERE sqlite_id = $id")
                     .bind(("id", *sqlite_id))
-                    .await;
-                let _ = db
+                    .await
+                {
+                    crate::model::store::append_error_log(
+                        &sd,
+                        "surreal::do_sync — DELETE message",
+                        &e.to_string(),
+                    );
+                }
+                if let Err(e) = db
                     .query("CREATE message CONTENT $data")
                     .bind(("data", serde_json::json!({
                         "sqlite_id": *sqlite_id,
@@ -290,7 +326,14 @@ fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
                         "embedding": emb,
                         "created_at": *created_at,
                     })))
-                    .await;
+                    .await
+                {
+                    crate::model::store::append_error_log(
+                        &sd,
+                        "surreal::do_sync — CREATE message",
+                        &e.to_string(),
+                    );
+                }
             }
 
             Ok::<usize, anyhow::Error>(total)

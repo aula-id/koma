@@ -284,11 +284,14 @@ async fn handle_request(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
+            // Bare fact_id from the client — record RID is `fact:{fact_id}`.
+            let rid = format!("fact:{fact_id}");
             let result = db
-                .query("CREATE fact CONTENT $data")
+                .query("CREATE type::thing($rid) CONTENT $data")
+                .bind(("rid", rid))
                 .bind(("data", serde_json::json!({
-                    "fact_id": fact_id,
-                    "content": content,
+                    "fact_id": fact_id.clone(),
+                    "content": content.clone(),
                     "category": category,
                     "confidence": confidence,
                     "trust": confidence,
@@ -303,8 +306,8 @@ async fn handle_request(
                     // Spawn entity extraction in the background — non-blocking,
                     // the Ack returns immediately.
                     let db_ref = db.clone();
-                    let fid = fact_id.clone();
-                    let c = content.clone();
+                    let fid = fact_id;
+                    let c = content;
                     tokio::spawn(async move {
                         match super::extractor::extract_and_resolve(&db_ref, &c).await {
                             Ok(resolved) => {
@@ -383,14 +386,20 @@ async fn handle_request(
                 .query("SELECT count() FROM fact GROUP ALL")
                 .await
             {
-                Ok(mut r) => r.take::<Option<u64>>(0).unwrap_or_default().unwrap_or(0),
+                Ok(mut r) => {
+                    let counts: Vec<u64> = r.take("count").unwrap_or_default();
+                    counts.into_iter().next().unwrap_or(0)
+                }
                 Err(_) => 0,
             };
             let entity_count: u64 = match db
                 .query("SELECT count() FROM entity GROUP ALL")
                 .await
             {
-                Ok(mut r) => r.take::<Option<u64>>(0).unwrap_or_default().unwrap_or(0),
+                Ok(mut r) => {
+                    let counts: Vec<u64> = r.take("count").unwrap_or_default();
+                    counts.into_iter().next().unwrap_or(0)
+                }
                 Err(_) => 0,
             };
             KnowledgeResponse::Status { fact_count, entity_count }

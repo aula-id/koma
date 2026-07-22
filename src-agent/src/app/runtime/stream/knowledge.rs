@@ -62,6 +62,7 @@ pub fn gather(
 ///
 /// Returns the note ready to append to the System message, e.g.:
 /// `"\n\n[Knowledge context: Rust is a systems programming language ...]"`
+#[allow(dead_code)]
 pub async fn distill(
     facts: &KnowledgeFacts,
     config: &KnowledgeConfig,

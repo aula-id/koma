@@ -223,18 +223,27 @@ pub async fn extract_and_resolve(
         match resolve_candidate(db, name).await? {
             EntityResolution::Existing(id, existing_name, _sim) => {
                 // Update last_seen timestamp
-                let _ = db
+                if let Err(e) = db
                     .query("UPDATE entity SET last_seen = $now WHERE entity_id = $id")
                     .bind(("now", now))
                     .bind(("id", id.clone()))
-                    .await;
+                    .await
+                {
+                    crate::model::store::append_global_error_log(
+                        "knowledge extractor — UPDATE entity last_seen",
+                        &e.to_string(),
+                    );
+                }
                 resolved.push((id, existing_name));
             }
             EntityResolution::New(name) => {
-                let bare_id = format!("{name}:{now}");
+                // Bare entity_id (no `entity:` prefix) — record RID is `entity:{bare_id}`.
+                let bare_id = format!("{}_{now}", sanitize_id_part(&name));
+                let rid = format!("entity:{bare_id}");
                 let emb = core::embed_one(&name);
-                let _ = db
-                    .query("CREATE entity CONTENT $data")
+                if let Err(e) = db
+                    .query("CREATE type::thing($rid) CONTENT $data")
+                    .bind(("rid", rid))
                     .bind(("data", serde_json::json!({
                         "entity_id": &bare_id,
                         "entity_type": "concept",
@@ -243,7 +252,14 @@ pub async fn extract_and_resolve(
                         "embedding": emb,
                         "last_seen": now,
                     })))
-                    .await;
+                    .await
+                {
+                    crate::model::store::append_global_error_log(
+                        "knowledge extractor — CREATE entity",
+                        &e.to_string(),
+                    );
+                    continue;
+                }
                 resolved.push((bare_id, name));
             }
         }
@@ -255,8 +271,8 @@ pub async fn extract_and_resolve(
 /// Create `produced` edges (fact → entity) and `memory_edge` edges
 /// (entity ↔ entity for co-occurring pairs in the same fact).
 ///
-/// `resolved` contains bare entity IDs (without the `entity:` table prefix)
-/// e.g. `("rust:1700000000", "Rust")`.
+/// `fact_id` and `resolved` entity IDs are **bare** (no table prefix).
+/// Record RIDs are `fact:{fact_id}` / `entity:{entity_id}`.
 pub async fn relate_entities(
     db: &Surreal<Db>,
     fact_id: &str,
@@ -266,11 +282,17 @@ pub async fn relate_entities(
     for (entity_id, _name) in resolved {
         let fact_rid = format!("fact:{fact_id}");
         let entity_rid = format!("entity:{entity_id}");
-        let _ = db
-            .query("RELATE type::thing($fact)->produced->type::thing($entity)")
+        if let Err(e) = db
+            .query("RELATE $fact->produced->$entity")
             .bind(("fact", fact_rid))
             .bind(("entity", entity_rid))
-            .await;
+            .await
+        {
+            crate::model::store::append_global_error_log(
+                "knowledge extractor — RELATE produced",
+                &e.to_string(),
+            );
+        }
     }
 
     // memory_edge: entity ↔ entity for co-occurring pairs
@@ -278,15 +300,39 @@ pub async fn relate_entities(
         for j in (i + 1)..resolved.len() {
             let a = format!("entity:{}", resolved[i].0);
             let b = format!("entity:{}", resolved[j].0);
-            let _ = db
-                .query("RELATE type::thing($a)->memory_edge->type::thing($b)")
+            if let Err(e) = db
+                .query("RELATE $a->memory_edge->$b")
                 .bind(("a", a))
                 .bind(("b", b))
-                .await;
+                .await
+            {
+                crate::model::store::append_global_error_log(
+                    "knowledge extractor — RELATE memory_edge",
+                    &e.to_string(),
+                );
+            }
         }
     }
 
     Ok(())
+}
+
+/// Keep Surreal record-id components simple (ascii alnum / _ / -).
+pub(crate) fn sanitize_id_part(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
 }
 
 #[cfg(test)]
