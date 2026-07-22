@@ -147,23 +147,6 @@ fn single_capital() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b[A-Z][a-z]{2,}\b").unwrap())
 }
 
-// ── Cosine similarity ─────────────────────────────────────────────────
-
-/// Compute cosine similarity between two same-length vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    let (dot, na, nb) = a.iter().zip(b.iter()).fold((0.0f64, 0.0f64, 0.0f64), |(d, na, nb), (x, y)| {
-        let x = *x as f64;
-        let y = *y as f64;
-        (d + x * y, na + x * x, nb + y * y)
-    });
-    let denom = (na * nb).sqrt();
-    if denom < 1e-12 {
-        0.0
-    } else {
-        dot / denom
-    }
-}
-
 /// Cosine threshold for entity reuse. Below this, a candidate is treated
 /// as a new entity rather than a match to an existing one.
 pub const ENTITY_MATCH_THRESHOLD: f64 = 0.85;
@@ -354,21 +337,6 @@ mod tests {
         let names: Vec<&str> = cands.iter().map(|(_, n)| n.as_str()).collect();
         let rust_count = names.iter().filter(|n| n.to_lowercase() == "rust").count();
         assert_eq!(rust_count, 1, "duplicate 'Rust': {names:?}");
-    }
-
-    #[test]
-    fn test_cosine_identical() {
-        let v = &[1.0f32, 2.0, 3.0];
-        let sim = cosine_similarity(v, v);
-        assert!((sim - 1.0).abs() < 1e-6, "identical vectors should be 1.0, got {sim}");
-    }
-
-    #[test]
-    fn test_cosine_orthogonal() {
-        let a = &[1.0f32, 0.0];
-        let b = &[0.0f32, 1.0];
-        let sim = cosine_similarity(a, b);
-        assert!((sim - 0.0).abs() < 1e-6, "orthogonal vectors should be 0.0, got {sim}");
     }
 
     #[test]
