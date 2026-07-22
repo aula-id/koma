@@ -9,8 +9,8 @@ use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::stream::tools::approval::parse_subagent_id;
 use super::InterceptFlow;
+use crate::app::runtime::stream::tools::approval::parse_subagent_id;
 
 pub(in crate::app::runtime::stream::tools) fn intercept_task(
     state: &mut AppState,
@@ -19,12 +19,19 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
     client: &Option<Arc<OpenRouterClient>>,
     handle: &tokio::runtime::Handle,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
-    let agent = args.get("agent").and_then(|v| v.as_str()).unwrap_or("").trim();
-    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let agent = args
+        .get("agent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let prompt = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
     // `run_in_background: true` makes the sub-agent DETACHED: the call is
     // answered IMMEDIATELY with its id (no park), mirroring bg-bash. The
     // model then polls it with `task_output` / stops it with `task_kill`.
@@ -47,12 +54,7 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
         let agent = agent.to_string();
         let prompt = prompt.to_string();
         let result = match crate::app::runtime::stream::spawn::spawn_or_queue(
-            state,
-            sess_idx,
-            client,
-            handle,
-            &agent,
-            &prompt,
+            state, sess_idx, client, handle, &agent, &prompt,
             None,  // detached: not tied to a blocking call
             true,  // detached = true
             false, // ext_owned: model-initiated, not an extension spawn
@@ -85,7 +87,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
                 }
             },
         };
-        state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), result));
     } else {
         let agent = agent.to_string();
         let prompt = prompt.to_string();
@@ -109,7 +113,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
         ) {
             crate::app::runtime::stream::spawn::SpawnOutcome::Spawned(_)
             | crate::app::runtime::stream::spawn::SpawnOutcome::Queued(_) => {
-                state.rest.sessions[sess_idx].pending_subagent_calls.push(call.id.clone());
+                state.rest.sessions[sess_idx]
+                    .pending_subagent_calls
+                    .push(call.id.clone());
                 // Park the round on this delegation IMMEDIATELY (mirrors
                 // `dispatch_deferred` setting `awaiting_tool_tasks` inline at
                 // dispatch): if a LATER call in this round early-returns
@@ -136,7 +142,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task(
                         format!("error: {m}")
                     }
                 };
-                state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), msg));
+                state.rest.sessions[sess_idx]
+                    .tool_results
+                    .push((call.id.clone(), msg));
             }
         }
     }
@@ -149,14 +157,16 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_output(
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     let id_arg = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
-    let result = match parse_subagent_id(&id_arg)
-        .and_then(|n| state.rest.sessions[sess_idx].subagents.iter().find(|s| s.id == n))
-    {
+    let result = match parse_subagent_id(&id_arg).and_then(|n| {
+        state.rest.sessions[sess_idx]
+            .subagents
+            .iter()
+            .find(|s| s.id == n)
+    }) {
         Some(sa) => {
             use crate::app::subagent::SubAgentStatus::*;
             match &sa.status {
@@ -191,7 +201,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_output(
             }
         }
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -208,12 +220,18 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_send(
     call: &ToolCall,
 ) -> InterceptFlow {
     use crate::app::subagent::InjectOutcome;
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
-    let id_arg = args.get("agent_id").cloned().unwrap_or(serde_json::Value::Null);
-    let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let id_arg = args
+        .get("agent_id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let message = args
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
     let result = if message.is_empty() {
         "error: task_send requires a non-empty 'message'.".to_string()
     } else if let Some(id) = parse_subagent_id(&id_arg) {
@@ -246,7 +264,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_send(
              agent_id, e.g. task_send({{\"agent_id\": 0, \"message\": \"...\"}})."
         )
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -256,20 +276,25 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_kill(
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     let id_arg = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
     // Resolve the target id first (immutable borrow), then mutate by id.
-    let explicit_id = parse_subagent_id(&id_arg)
-        .filter(|&n| state.rest.sessions[sess_idx].subagents.iter().any(|s| s.id == n));
+    let explicit_id = parse_subagent_id(&id_arg).filter(|&n| {
+        state.rest.sessions[sess_idx]
+            .subagents
+            .iter()
+            .any(|s| s.id == n)
+    });
     let resolved_id: Result<usize, String> = if let Some(n) = explicit_id {
         Ok(n)
     } else {
         // No valid explicit id — try to infer a safe target.
         use crate::app::subagent::SubAgentStatus;
-        let running: Vec<usize> = state.rest.sessions[sess_idx].subagents.iter()
+        let running: Vec<usize> = state.rest.sessions[sess_idx]
+            .subagents
+            .iter()
             .filter(|s| matches!(s.status, SubAgentStatus::Running))
             .map(|s| s.id)
             .collect();
@@ -277,7 +302,8 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_kill(
             0 => Err("error: no running sub-agent to kill.".to_string()),
             1 => Ok(running[0]),
             _ => {
-                let list = running.iter()
+                let list = running
+                    .iter()
                     .map(|id| format!("#{id}"))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -293,21 +319,29 @@ pub(in crate::app::runtime::stream::tools) fn intercept_task_kill(
         Ok(target_id) => {
             use crate::app::subagent::SubAgentStatus;
             // Drop the immutable borrow before taking a mutable one.
-            let sa = state.rest.sessions[sess_idx].subagents.iter_mut()
+            if let Some(sa) = state.rest.sessions[sess_idx]
+                .subagents
+                .iter_mut()
                 .find(|s| s.id == target_id)
-                .expect("id was validated above"); // keep — this is a programmer assertion on a checked id; allowed
-            // Abort the tokio task (best effort) and flip a still-Running
-            // status to Killed so the $ panel + a later task_output reflect
-            // it immediately (a terminal status is left untouched).
-            sa.abort.abort();
-            if matches!(sa.status, SubAgentStatus::Running) {
-                sa.status = SubAgentStatus::Killed;
+            {
+                // Abort the tokio task (best effort) and flip a still-Running
+                // status to Killed so the $ panel + a later task_output reflect
+                // it immediately (a terminal status is left untouched).
+                sa.abort.abort();
+                if matches!(sa.status, SubAgentStatus::Running) {
+                    sa.status = SubAgentStatus::Killed;
+                }
+                format!("sub-agent #{} killed", sa.id)
+            } else {
+                // Defensive: id resolved above; if the list mutated, don't panic the daemon.
+                format!("error: no sub-agent with id {target_id}.")
             }
-            format!("sub-agent #{} killed", sa.id)
         }
         Err(msg) => msg,
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }

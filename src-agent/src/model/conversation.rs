@@ -73,13 +73,17 @@ impl Conversation {
     /// enters the list so the transcript cache captures it on first render, and
     /// it is never serialised (the field is `#[serde(skip)]`) — it only ever
     /// shows above the answer, never re-entering the conversation or disk.
-    pub fn push_assistant(&mut self, content: impl Into<String>, reasoning: Option<String>, promoted: bool) {
-        self.messages
-            .push(
-                ChatMessage::new(Role::Assistant, content)
-                    .with_reasoning(reasoning)
-                    .with_reasoning_promoted(promoted),
-            );
+    pub fn push_assistant(
+        &mut self,
+        content: impl Into<String>,
+        reasoning: Option<String>,
+        promoted: bool,
+    ) {
+        self.messages.push(
+            ChatMessage::new(Role::Assistant, content)
+                .with_reasoning(reasoning)
+                .with_reasoning_promoted(promoted),
+        );
     }
 
     /// Append an assistant turn that requested tool calls. `content` is the
@@ -179,30 +183,36 @@ impl Conversation {
         let mut out: Vec<ChatMessage> = Vec::with_capacity(msgs.len());
         for m in msgs {
             match m.role {
-                Role::Assistant if let Some(tcs) = m.tool_calls.as_ref() => {
-                    if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
-                        out.push(m.clone()); // complete tool-call group → keep as-is
-                    } else if !m.content.trim().is_empty() {
-                        // dangling tool-call → drop tool_calls, keep any text content
-                        let mut m2 = m.clone();
-                        m2.tool_calls = None;
-                        out.push(m2);
+                Role::Assistant => {
+                    if let Some(tcs) = m.tool_calls.as_ref() {
+                        if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
+                            out.push(m.clone()); // complete tool-call group → keep as-is
+                        } else if !m.content.trim().is_empty() {
+                            // dangling tool-call → drop tool_calls, keep any text content
+                            let mut m2 = m.clone();
+                            m2.tool_calls = None;
+                            out.push(m2);
+                        }
+                        // else: empty dangling assistant → drop entirely
+                    } else if m.reasoning_promoted {
+                        // Excluded from the wire only: this turn's content was PROMOTED
+                        // from raw reasoning/chain-of-thought by `final_answer` (empty
+                        // `content` + non-empty `reasoning`). Replaying that prose
+                        // few-shot-conditions other models into skipping tool use, so it
+                        // is dropped from the sent history — storage/display (the stored
+                        // `Conversation` + msglog) are untouched. Promoted turns never
+                        // carry `tool_calls` (that's handled by the arm above), so
+                        // dropping one here can never orphan a Tool result.
+                    } else {
+                        out.push(m.clone());
                     }
-                    // else: empty dangling assistant → drop entirely
-                }
-                Role::Assistant if m.reasoning_promoted => {
-                    // Excluded from the wire only: this turn's content was PROMOTED
-                    // from raw reasoning/chain-of-thought by `final_answer` (empty
-                    // `content` + non-empty `reasoning`). Replaying that prose
-                    // few-shot-conditions other models into skipping tool use, so it
-                    // is dropped from the sent history — storage/display (the stored
-                    // `Conversation` + msglog) are untouched. Promoted turns never
-                    // carry `tool_calls` (that's handled by the arm above), so
-                    // dropping one here can never orphan a Tool result.
                 }
                 Role::Tool => {
                     // keep tool results only when their call was fully answered
-                    if m.tool_call_id.as_deref().is_some_and(|id| valid_ids.contains(id)) {
+                    if m.tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| valid_ids.contains(id))
+                    {
                         out.push(m.clone());
                     }
                 }
@@ -275,20 +285,27 @@ impl Conversation {
         let mut out: Vec<ChatMessage> = Vec::with_capacity(msgs.len());
         for m in msgs {
             match m.role {
-                Role::Assistant if let Some(tcs) = m.tool_calls.as_ref() => {
-                    if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
-                        out.push(m.clone()); // complete tool-call group → keep as-is
-                    } else if !m.content.trim().is_empty() {
-                        // dangling tool-call → drop tool_calls, keep any text content
-                        let mut m2 = m.clone();
-                        m2.tool_calls = None;
-                        out.push(m2);
+                Role::Assistant => {
+                    if let Some(tcs) = m.tool_calls.as_ref() {
+                        if tcs.iter().all(|c| valid_ids.contains(&c.id)) {
+                            out.push(m.clone()); // complete tool-call group → keep as-is
+                        } else if !m.content.trim().is_empty() {
+                            // dangling tool-call → drop tool_calls, keep any text content
+                            let mut m2 = m.clone();
+                            m2.tool_calls = None;
+                            out.push(m2);
+                        }
+                        // else: empty dangling assistant → drop entirely
+                    } else {
+                        out.push(m.clone());
                     }
-                    // else: empty dangling assistant → drop entirely
                 }
                 Role::Tool => {
                     // keep tool results only when their call was fully answered
-                    if m.tool_call_id.as_deref().is_some_and(|id| valid_ids.contains(id)) {
+                    if m.tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| valid_ids.contains(id))
+                    {
                         out.push(m.clone());
                     }
                 }
@@ -312,10 +329,7 @@ impl Conversation {
     ///
     /// The system message is excluded from both halves; `apply_compaction`
     /// re-prepends it.
-    pub fn split_for_compaction(
-        &self,
-        preserve_n: usize,
-    ) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
+    pub fn split_for_compaction(&self, preserve_n: usize) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
         if self.messages.is_empty() {
             return (vec![], vec![]);
         }
