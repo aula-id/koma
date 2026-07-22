@@ -12,13 +12,13 @@
 pub(crate) mod core;
 mod search;
 
-// Phase 3-4 modules: fully implemented and tested, gated until wired into callers.
+// Phase 3-4 modules: fully implemented and tested.
 #[cfg(test)]
 mod graph;
-#[cfg(test)]
 mod memory;
 
 pub use core::{sync_state, SyncState};
+pub use memory::{Fact, recall_memory, store_fact, store_episode};
 pub use search::{search_fts_only, search_hybrid};
 
 use std::path::Path;

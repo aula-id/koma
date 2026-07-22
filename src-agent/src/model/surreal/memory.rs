@@ -88,6 +88,15 @@ async fn store_fact_async(
             .bind(("id", ids[i].clone()))
             .await;
 
+        // Fire-and-forget push to global knowledge daemon.
+        crate::app::knowledge::proxy_push_fact(
+            ids[i].clone(),
+            content.to_string(),
+            category.to_string(),
+            new_conf,
+            new_emb,
+        );
+
         return Ok(Some(ids[i].clone()));
     }
 
@@ -103,12 +112,21 @@ async fn store_fact_async(
             "category": category,
             "confidence": confidence,
             "trust": trust,
-            "embedding": new_emb,
+            "embedding": new_emb.clone(),
             "reinforcement_count": 0,
             "created_at": now,
             "last_reinforced": now,
         })))
         .await;
+
+    // Fire-and-forget push to global knowledge daemon.
+    crate::app::knowledge::proxy_push_fact(
+        fact_id.clone(),
+        content.to_string(),
+        category.to_string(),
+        confidence,
+        new_emb,
+    );
 
     Ok(Some(fact_id))
 }
