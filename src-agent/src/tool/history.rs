@@ -5,7 +5,7 @@
 //! The SurrealDB layer is a fire-and-forget background sync from the
 //! SQLite message log. Until the sync completes, SurrealDB returns empty
 //! or partial results — the tool transparently falls back to SQLite FTS5
-//! in that case without logging any error.
+//! in that case, logging "Surreal Empty" to error.log for observability.
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -67,7 +67,11 @@ impl Tool for MessageFind {
                         .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at)),
                 )
             } else {
-                // SurrealDB returned empty — transparent fallback to SQLite FTS5.
+                // SurrealDB returned empty — log and transparent fallback to SQLite FTS5.
+                crate::model::store::append_global_error_log(
+                    "Surreal Empty",
+                    &format!("search_messages returned 0 hits for query: {query}"),
+                );
                 let fts5_hits = crate::model::msglog::search_messages(session_dir, query, 10);
                 format_matches(
                     fts5_hits

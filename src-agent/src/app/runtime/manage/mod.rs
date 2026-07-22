@@ -121,7 +121,10 @@ pub fn restart_daemon(session_id: &str, quiet: bool) -> Result<()> {
     // block the restart — surface it but continue to the spawn.
     if let Err(e) = stop_session_daemon(session_id, quiet) {
         if !quiet {
-            eprintln!("koma daemon: warning during stop phase of restart: {e:#}");
+            crate::model::store::append_global_error_log(
+                "daemon restart warning",
+                &format!("warning during stop phase of restart: {e:#}"),
+            );
         }
     }
 
@@ -731,7 +734,10 @@ pub fn migrate_legacy_daemon() {
     let _ = std::fs::remove_file(&legacy_sock);
     let _ = std::fs::remove_file(&legacy_pid);
 
-    eprintln!("koma: reaped a pre-0.2.0 daemon (upgrade cleanup)");
+    crate::model::store::append_global_error_log(
+        "legacy daemon reaped",
+        "reaped a pre-0.2.0 daemon (upgrade cleanup)",
+    );
 }
 
 // ─── signal + wait helpers ───────────────────────────────────────────────────
