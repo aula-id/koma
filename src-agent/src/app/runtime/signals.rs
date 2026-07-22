@@ -68,16 +68,32 @@ pub(super) fn install_daemon_signals(
                 _ = term.recv() => {
                     if requested == 0 {
                         requested = 1;
+                        crate::model::store::append_global_error_log(
+                            "daemon-exit",
+                            "door: SIGTERM (first) → graceful shutdown",
+                        );
                         flag.store(true, Ordering::Relaxed);
                     } else {
+                        crate::model::store::append_global_error_log(
+                            "daemon-exit",
+                            "door: SIGTERM (second) → hard exit(0)",
+                        );
                         std::process::exit(0);
                     }
                 }
                 _ = int.recv() => {
                     if requested == 0 {
                         requested = 1;
+                        crate::model::store::append_global_error_log(
+                            "daemon-exit",
+                            "door: SIGINT (first) → graceful shutdown",
+                        );
                         flag.store(true, Ordering::Relaxed);
                     } else {
+                        crate::model::store::append_global_error_log(
+                            "daemon-exit",
+                            "door: SIGINT (second) → hard exit(0)",
+                        );
                         std::process::exit(0);
                     }
                 }

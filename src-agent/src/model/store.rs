@@ -92,7 +92,10 @@ pub fn migrate_legacy_dir() {
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => {
-            eprintln!("koma: warning: cannot resolve home directory; skipping config migration");
+            append_global_error_log(
+                "config migration skipped",
+                "cannot resolve home directory; skipping config migration",
+            );
             return;
         }
     };
@@ -107,8 +110,14 @@ pub fn migrate_legacy_dir() {
         return;
     }
     match std::fs::rename(&old_dir, &new_dir) {
-        Ok(()) => eprintln!("migrated config: ~/.simple-coder -> ~/.koma"),
-        Err(e) => eprintln!("koma: warning: could not migrate ~/.simple-coder to ~/.koma: {e}"),
+        Ok(()) => append_global_error_log(
+            "config migrated",
+            "~/.simple-coder -> ~/.koma",
+        ),
+        Err(e) => append_global_error_log(
+            "config migration failed",
+            &format!("could not migrate ~/.simple-coder to ~/.koma: {e}"),
+        ),
     }
 }
 
@@ -496,6 +505,42 @@ pub fn mcp_daemon_pid_path() -> Result<PathBuf> {
 /// liveness oracle. The MCP daemon's graceful-shutdown teardown unlinks it.
 pub fn write_mcp_daemon_pid() -> Result<()> {
     std::fs::write(mcp_daemon_pid_path()?, std::process::id().to_string())?;
+    Ok(())
+}
+
+// ── Global knowledge daemon socket / pidfile ──────────────────────────
+
+/// Path to the GLOBAL knowledge daemon's Unix domain socket: `~/.koma/knowledge.sock`.
+///
+/// Like the MCP daemon, the knowledge daemon is a SINGLETON — one process owns the
+/// central SurrealKV store at `~/.koma/knowledge/` and sessions push facts / query
+/// for graph expansion here. Whoever binds this socket IS the live knowledge daemon
+/// (bind-as-oracle, same rule as the session and MCP sockets).
+#[cfg(unix)]
+pub fn knowledge_daemon_sock_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("knowledge.sock"))
+}
+
+/// Windows twin of [`knowledge_daemon_sock_path`] — the singleton knowledge daemon
+/// named pipe `\\.\pipe\koma-knowledge`.
+#[cfg(windows)]
+pub fn knowledge_daemon_sock_path() -> Result<PathBuf> {
+    Ok(PathBuf::from(r"\\.\pipe\koma-knowledge"))
+}
+
+/// Path to the GLOBAL knowledge daemon's PID file: `~/.koma/knowledge.pid`.
+///
+/// Advisory only — recorded for diagnostics / `koma daemon kill`. Singleton, like
+/// the MCP daemon pidfile.
+pub fn knowledge_daemon_pid_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("knowledge.pid"))
+}
+
+/// Write the running knowledge daemon's PID into [`knowledge_daemon_pid_path`],
+/// overwriting any stale one. Best-effort + advisory — the bound socket, not this
+/// file, is the liveness oracle.
+pub fn write_knowledge_daemon_pid() -> Result<()> {
+    std::fs::write(knowledge_daemon_pid_path()?, std::process::id().to_string())?;
     Ok(())
 }
 

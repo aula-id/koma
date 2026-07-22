@@ -63,6 +63,7 @@ pub fn split_stream(stream: IpcStream) -> (IpcReadHalf, IpcWriteHalf) {
 pub mod client;
 pub mod conn;
 pub mod frame;
+pub mod knowledge_proto;
 pub mod mcp_proto;
 pub mod proto;
 pub mod selftest;

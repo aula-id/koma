@@ -254,6 +254,44 @@ over sec_remote (stateful socket).\n",
         (sess.path.clone(), sess.settings.clone(), user_intent, aware)
     });
 
+    // Knowledge context: captured pre-spawn, gathered inside the spawned task
+    // so daemon IPC (proxy_expand, up to 5s) never blocks the event loop.
+    let knowledge_session_path: Option<std::path::PathBuf> =
+        state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.path.clone());
+    let knowledge_cfg: Option<crate::model::settings::KnowledgeConfig> =
+        state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .map(|s| s.settings.knowledge.clone());
+    let knowledge_user_query: Option<String> =
+        state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .and_then(|s| {
+                // Skip gather on tool hops (agent_steps > 0) to avoid re-querying
+                // with the same user string. Delta inject for tool hops will be
+                // added in a follow-up.
+                if state.rest.sessions[sess_idx].agent_steps > 0 {
+                    return None;
+                }
+                let last_user = s.conversation.last_user_content();
+                if let Some(lu) = last_user {
+                    // Enrich the query with recent context for multi-turn intent.
+                    let recent = s.conversation.recent_context(4, 200);
+                    let mut enriched = lu.clone();
+                    if !recent.is_empty() {
+                        enriched.push_str("\n\n[Recent context]\n");
+                        enriched.push_str(&recent);
+                    }
+                    Some(enriched)
+                } else {
+                    None
+                }
+            });
+
     // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows
     // ONLY here, into the streaming path. Resolved BEFORE the spawn into an owned
@@ -525,8 +563,43 @@ over sec_remote (stateful socket).\n",
 
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
-    let c = Arc::clone(client.as_ref().unwrap());
+    let Some(c) = client.as_ref().cloned() else {
+        let _ = tx.send(crate::service::StreamEvent::Error(
+            "no OpenRouter client available; configure a model in /settings".into(),
+        ));
+        return;
+    };
     let jh = handle.spawn(async move {
+        // Knowledge gather + distill: runs inside the spawned task so daemon IPC
+        // (proxy_expand, up to 5s timeout) never blocks the event loop.
+        // spawn_blocking moves the sync gather (which internally calls
+        // blocking_block → new thread + tokio runtime + SurrealDB open) onto
+        // the dedicated blocking thread pool, so it never stalls a tokio worker
+        // thread or races with the main runtime's SurrealDB connections.
+        let knowledge_facts = match (&knowledge_session_path, &knowledge_cfg, &knowledge_user_query) {
+            (Some(path), Some(cfg), Some(query)) => {
+                let p = path.clone();
+                let c = cfg.clone();
+                let q = query.clone();
+                tokio::task::spawn_blocking(move || super::knowledge::gather(&p, &c, &q))
+                    .await
+                    .ok()
+                    .flatten()
+            }
+            _ => None,
+        };
+        if let Some(kfacts) = knowledge_facts.as_ref() {
+            // Mechanical top-N-by-trust injection — no AI inference, instant.
+            let note = super::knowledge::raw_note(kfacts);
+            if !note.is_empty() {
+                if let Some(first) = history.first_mut() {
+                    if first.role == crate::dto::chat::Role::System {
+                        first.content.push_str(&note);
+                    }
+                }
+            }
+        }
+
         // Reshape the wire payload just before POSTing. `shape` preserves the
         // system message at index 0 (with the project-files/awareness injection
         // applied above, plus — when engaged — the condensed-history summary

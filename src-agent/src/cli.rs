@@ -133,6 +133,12 @@ pub struct Opts {
     /// `ensure_mcp_daemon_running`; consumed by the session-daemon MCP proxy in the
     /// next commit.
     pub mcp_daemon: bool,
+    /// When `true`, run the GLOBAL knowledge daemon with no terminal
+    /// (`--knowledge-daemon` flag): a singleton process that owns the central
+    /// SurrealKV knowledge store (`~/.koma/knowledge.sock`) so sessions share entity
+    /// resolution, graph-based recall expansion, and a persistent fact corpus that
+    /// survives compaction. No `--session` — it is not keyed to any session.
+    pub knowledge_daemon: bool,
     /// When `true`, run as a thin client that attaches to a running daemon
     /// (`--attach` flag): connect to `~/.koma/daemon.sock`, render the daemon's
     /// foreground session from streamed snapshots/deltas, and forward input.
@@ -250,6 +256,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--daemon-selftest"              => opts.daemon_selftest = true,
             "--daemon"                       => opts.daemon = true,
             "--mcp-daemon"                   => opts.mcp_daemon = true,
+            "--knowledge-daemon"             => opts.knowledge_daemon = true,
             "--attach"                       => opts.attach = true,
             "--local"                        => opts.local = true,
             _                                => {}

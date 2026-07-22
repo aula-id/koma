@@ -602,6 +602,10 @@ fn notify_ext_owned_subagents_on_shutdown(state: &mut AppState) -> usize {
 /// makes a post-drop send a safe no-op (no panic, no deadlock). A crash that skips
 /// this is covered by PID-liveness staleness in `store::is_locked`.
 fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
+    crate::model::store::append_global_error_log(
+        "daemon-exit",
+        "shutdown_runtime: entering",
+    );
     // Death-notice pass FIRST — while the duplex ext wire AND the runtime are still live,
     // and BEFORE `stop_all` kills the extension children: tell every ext-owned in-flight
     // sub-agent's spawner it is dying to a host shutdown/restart, so a restart-resilient
@@ -629,7 +633,15 @@ fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     // path (TUI `run` and the headless `run_daemon`, both of which call this). A `None`
     // manager (extension host never built) is a no-op.
     if let Some(ext) = state.rest.ext_manager.as_ref() {
+        crate::model::store::append_global_error_log(
+            "daemon-exit",
+            "shutdown_runtime: stopping all extensions (kill_on_drop)",
+        );
         ext.stop_all();
+        crate::model::store::append_global_error_log(
+            "daemon-exit",
+            "shutdown_runtime: all extensions stopped",
+        );
         // Every extension is stopped, so every extension's grant-broker spawn
         // registry (`app::ext::broker::ExtAgentRegistry`) is now dangling —
         // clear it here, the one place a whole-app extension stop has `AppState`
@@ -648,6 +660,10 @@ fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
             crate::model::store::remove_lock(&p);
         }
     }
+    crate::model::store::append_global_error_log(
+        "daemon-exit",
+        "shutdown_runtime: runtime dropped, locks released, done",
+    );
     drop(rt);
 }
 
@@ -728,6 +744,14 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // MCP for the session-daemon: PROXY to the global MCP daemon when possible, with a
     // LOCAL fallback that is never worse than today. `build_startup` left
     // `mcp_manager = None` in daemon mode so this is the sole owner of the decision.
+    // 4.5 Global knowledge daemon — ensure it's running so sessions can push facts
+    //     and query for graph-expanded recall. Fire-and-forget at boot: a missing
+    //     daemon is spawned, a stale one is restarted. Best-effort — the session
+    //     never blocks or fails on this.
+    {
+        let _ = super::manage::ensure_knowledge_daemon_running();
+    }
+
     //
     // - No `mcp_servers` configured → leave it `None` (no manager, no global daemon
     //   spawned): byte-identical to a build without MCP.
@@ -791,7 +815,19 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // bridge drain (apply mutations) + delta streaming on the adaptive cadence.
     // Returns when a controller's QuitDaemon latches the hub flag OR a signal flips
     // `shutting_down` (both observed each tick).
+    crate::model::store::append_global_error_log(
+        "daemon-exit",
+        "daemon_loop entering (this is normal startup)",
+    );
     daemon_loop(&mut state, &mut client, &handle, &mut hub, &shutting_down);
+    crate::model::store::append_global_error_log(
+        "daemon-exit",
+        &format!(
+            "daemon_loop returned → teardown begins [sessions={}, clients={}]",
+            state.rest.sessions.len(),
+            hub.client_count(),
+        ),
+    );
 
     // Graceful teardown (QuitDaemon, SIGTERM/SIGINT, or a future self-exit). Dropping
     // the runtime in `shutdown_runtime` cancels the accept loop and every per-client

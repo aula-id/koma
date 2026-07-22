@@ -44,6 +44,7 @@
 
 mod commands;
 mod doctor;
+mod knowledge;
 mod mcp;
 mod os;
 mod probe;
@@ -59,6 +60,7 @@ pub use commands::print_daemon_usage;
 pub use doctor::run_doctor;
 // `stop_mcp_daemon` is re-exported for the detached extension-uninstall path (bounce the
 // global MCP daemon so the next ensure respawns it off the just-saved config).
+pub use knowledge::ensure_knowledge_daemon_running;
 pub use mcp::{ensure_mcp_daemon_running, stop_mcp_daemon};
 // `spawn_into_session` + `SpawnIntoReply` are the extension `sessions.spawn_into`
 // cross-process transport (W7), consumed by the grant broker outside this module tree.
@@ -121,7 +123,10 @@ pub fn restart_daemon(session_id: &str, quiet: bool) -> Result<()> {
     // block the restart — surface it but continue to the spawn.
     if let Err(e) = stop_session_daemon(session_id, quiet) {
         if !quiet {
-            eprintln!("koma daemon: warning during stop phase of restart: {e:#}");
+            crate::model::store::append_global_error_log(
+                "daemon restart warning",
+                &format!("warning during stop phase of restart: {e:#}"),
+            );
         }
     }
 
@@ -731,7 +736,10 @@ pub fn migrate_legacy_daemon() {
     let _ = std::fs::remove_file(&legacy_sock);
     let _ = std::fs::remove_file(&legacy_pid);
 
-    eprintln!("koma: reaped a pre-0.2.0 daemon (upgrade cleanup)");
+    crate::model::store::append_global_error_log(
+        "legacy daemon reaped",
+        "reaped a pre-0.2.0 daemon (upgrade cleanup)",
+    );
 }
 
 // ─── signal + wait helpers ───────────────────────────────────────────────────

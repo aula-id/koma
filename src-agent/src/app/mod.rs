@@ -27,6 +27,7 @@ pub mod bgbash;
 pub mod cascade;
 pub mod ext;
 pub mod harness;
+pub mod knowledge;
 pub mod mcp;
 pub mod mode;
 pub mod resolve;
@@ -44,6 +45,7 @@ pub use runtime::run;
 pub use runtime::gui::run_gui;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
+pub use runtime::run_knowledge_daemon;
 pub use runtime::run_mcp_daemon;
 pub use runtime::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
