@@ -11,7 +11,7 @@ use anyhow::Context;
 
 use crate::ipc::frame::FrameReader;
 use crate::ipc::knowledge_proto::{
-    KnowledgeEntity, KnowledgeFact, KnowledgeRequest, KnowledgeResponse,
+    KnowledgeFact, KnowledgeRequest, KnowledgeResponse,
 };
 use crate::ipc::SyncIpcStream;
 use crate::model::store;
@@ -68,7 +68,6 @@ pub fn proxy_expand(query_vec: &[f32], limit: usize) -> ExpandResult {
 #[derive(Debug, Default)]
 pub struct ExpandResult {
     pub facts: Vec<KnowledgeFact>,
-    pub entities: Vec<KnowledgeEntity>,
     pub related_facts: Vec<KnowledgeFact>,
 }
 
@@ -86,8 +85,8 @@ fn expand_sync(query_vec: &[f32], limit: usize) -> anyhow::Result<ExpandResult> 
 
     send_request(&mut stream, &req)?;
     match read_response(&mut stream)? {
-        KnowledgeResponse::ExpandResult { facts, entities, related_facts } => {
-            Ok(ExpandResult { facts, entities, related_facts })
+        KnowledgeResponse::ExpandResult { facts, entities: _, related_facts } => {
+            Ok(ExpandResult { facts, related_facts })
         }
         KnowledgeResponse::Error(e) => {
             Err(anyhow::anyhow!("knowledge daemon expand error: {e}"))

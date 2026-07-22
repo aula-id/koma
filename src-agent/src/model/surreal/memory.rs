@@ -17,12 +17,7 @@ use super::core::{self, embed_one, open_db};
 pub struct Fact {
     pub id: String,
     pub content: String,
-    pub category: String,
-    pub confidence: f64,
     pub trust: f64,
-    pub reinforcement_count: i64,
-    pub created_at: i64,
-    pub last_reinforced: i64,
 }
 
 /// Store a fact with deduplication. Returns the fact's surrogate id.
@@ -159,8 +154,7 @@ async fn recall_memory_async(
     // Dynamic K (limit) + EF (search effort: 2×K for better recall, floor 100).
     let ef = (limit * 2).max(100);
     let query_str = format!(
-        "SELECT fact_id, content, category, confidence, trust,
-                reinforcement_count, created_at, last_reinforced,
+        "SELECT fact_id, content, trust,
                 vector::distance::knn() AS distance
          FROM fact
          WHERE embedding <|{limit},{ef}|> $query_vec
@@ -174,26 +168,14 @@ async fn recall_memory_async(
 
     let ids: Vec<String> = results.take("fact_id").unwrap_or_default();
     let contents: Vec<String> = results.take("content").unwrap_or_default();
-    let categories: Vec<String> = results.take("category").unwrap_or_default();
-    let confidences: Vec<f64> = results.take("confidence").unwrap_or_default();
     let trusts: Vec<f64> = results.take("trust").unwrap_or_default();
-    let rcs: Vec<i64> = results.take("reinforcement_count").unwrap_or_default();
-    let cas: Vec<i64> = results.take("created_at").unwrap_or_default();
-    let lrs: Vec<i64> = results.take("last_reinforced").unwrap_or_default();
 
-    let n = ids.len().min(contents.len()).min(categories.len())
-        .min(confidences.len()).min(trusts.len()).min(rcs.len())
-        .min(cas.len()).min(lrs.len());
+    let n = ids.len().min(contents.len()).min(trusts.len());
 
     Ok((0..n).map(|i| Fact {
         id: ids[i].clone(),
         content: contents[i].clone(),
-        category: categories[i].clone(),
-        confidence: confidences[i],
         trust: trusts[i],
-        reinforcement_count: rcs[i],
-        created_at: cas[i],
-        last_reinforced: lrs[i],
     }).collect())
 }
 
@@ -230,12 +212,7 @@ fn merge_daemon_fallback(
             local.push(Fact {
                 id: kf.id.clone(),
                 content: kf.content.clone(),
-                category: kf.category.clone(),
-                confidence: kf.confidence,
                 trust: kf.trust,
-                reinforcement_count: kf.reinforcement_count,
-                created_at: kf.created_at,
-                last_reinforced: kf.last_reinforced,
             });
         }
     }
@@ -249,57 +226,13 @@ fn merge_daemon_fallback(
             local.push(Fact {
                 id: kf.id.clone(),
                 content: kf.content.clone(),
-                category: kf.category.clone(),
-                confidence: kf.confidence,
                 trust: kf.trust,
-                reinforcement_count: kf.reinforcement_count,
-                created_at: kf.created_at,
-                last_reinforced: kf.last_reinforced,
             });
         }
     }
 }
 
-/// Store an episode — a narrative decision point with an embedding.
-pub fn store_episode(session_dir: &Path, narrative: &str, decision_point: &str) -> Option<String> {
-    let sd = session_dir.to_path_buf();
-    let narrative = narrative.to_string();
-    let dp = decision_point.to_string();
-    core::blocking_block(move || {
-        let sd = sd.clone();
-        async move {
-            store_episode_async(&sd, &narrative, &dp).await.unwrap_or_else(|e| {
-                crate::model::store::append_error_log(&sd, "surreal::store_episode failed", &e.to_string());
-                None
-            })
-        }
-    })
-}
 
-async fn store_episode_async(
-    session_dir: &Path,
-    narrative: &str,
-    decision_point: &str,
-) -> anyhow::Result<Option<String>> {
-    let db = open_db(session_dir).await?;
-    let now = now_secs();
-    let combined = format!("{narrative} {decision_point}");
-    let emb = embed_one(&combined);
-    let episode_id = format!("ep:{now}:{}", narrative.len());
-
-    let _ = db
-        .query("CREATE episode CONTENT $data")
-        .bind(("data", serde_json::json!({
-            "episode_id": &episode_id,
-            "narrative": narrative,
-            "decision_point": decision_point,
-            "embedding": emb,
-            "created_at": now,
-        })))
-        .await;
-
-    Ok(Some(episode_id))
-}
 
 // ── Trust scoring ──────────────────────────────────────────────────
 
@@ -360,15 +293,6 @@ mod tests {
         let qv = embed_one("programming languages");
         let _facts = recall_memory(&dir, &qv, 5);
 
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_store_episode() {
-        let dir = std::env::temp_dir().join("koma_test_surreal_episode");
-        let _ = std::fs::create_dir_all(&dir);
-        let id = store_episode(&dir, "Debugged a race condition", "Chose single-threaded runtime");
-        assert!(id.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
