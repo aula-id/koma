@@ -231,7 +231,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // --- headless path: run the GLOBAL knowledge daemon (no TUI) ---
-    // A singleton process that owns the central SurrealKV knowledge store so
+    // A singleton process that owns the central RocksDB knowledge store so
     // sessions share entity resolution and graph-expanded recall. Checked BEFORE
     // `--mcp-daemon` and `--daemon` so a stray combination can't accidentally
     // take the wrong branch.

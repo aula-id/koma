@@ -135,7 +135,7 @@ pub struct Opts {
     pub mcp_daemon: bool,
     /// When `true`, run the GLOBAL knowledge daemon with no terminal
     /// (`--knowledge-daemon` flag): a singleton process that owns the central
-    /// SurrealKV knowledge store (`~/.koma/knowledge.sock`) so sessions share entity
+    /// RocksDB knowledge store (`~/.koma/knowledge.sock`) so sessions share entity
     /// resolution, graph-based recall expansion, and a persistent fact corpus that
     /// survives compaction. No `--session` — it is not keyed to any session.
     pub knowledge_daemon: bool,

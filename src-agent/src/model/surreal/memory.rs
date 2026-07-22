@@ -692,11 +692,8 @@ mod tests {
 
     #[test]
     fn test_store_and_recall_fact() {
-        // Verify store_fact succeeds and recall_memory doesn't panic.
-        // NOTE: SurrealKV may not make writes visible to subsequent SELECT
-        // queries within the same process lifetime. This is a SurrealDB
-        // engine behavior, not a bug. The store_fact CREATE response
-        // confirms the data is written; recall_memory handles empty results.
+        // After RocksDB swap, store → recall must be visible in the same process.
+        // If this test fails, the engine swap did not fix the visibility bug.
         let dir = std::env::temp_dir().join("koma_test_surreal_memory");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
@@ -704,13 +701,19 @@ mod tests {
         let id = store_fact(&dir, "Rust is a systems programming language", "tech", 0.9);
         assert!(id.is_some(), "store_fact should return an id");
 
-        // Second store may return None due to SurrealKV visibility lag within the
-        // same process; this is documented engine behaviour, not a failure.
+        // Second store may return None — with RocksDB the KNN dedup check now
+        // actually sees the first fact, and two programming-language facts can
+        // trigger near-duplicate detection. This is correct engine behavior.
         let _ = store_fact(&dir, "Python is used for ML", "tech", 0.8);
 
-        // recall_memory should not panic, even if HNSW returns empty.
-        let qv = embed_one("programming languages");
-        let _facts = recall_memory(&dir, &qv, 5);
+        // RocksDB must make store_fact visible to recall_memory.
+        let qv = embed_one("systems programming language Rust");
+        let facts = recall_memory(&dir, &qv, 5);
+        assert!(!facts.is_empty(), "RocksDB must make store_fact visible to recall_memory");
+        assert!(
+            facts.iter().any(|f| f.content.contains("Rust")),
+            "recall should find the stored Rust fact"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
