@@ -115,9 +115,7 @@ pub(crate) fn model_display(
             }
         }
         None => match legacy {
-            Some(m) if !m.trim().is_empty() => {
-                (format!("(inherit main)  was: {m}"), false)
-            }
+            Some(m) if !m.trim().is_empty() => (format!("(inherit main)  was: {m}"), false),
             _ => ("(inherit main)".to_string(), false),
         },
     }
@@ -166,7 +164,10 @@ pub fn draw(
     frame.render_widget(header_block, outer[0]);
     frame.render_widget(
         Paragraph::new(Span::styled("agents", Style::default().fg(palette.dim))),
-        header_inner.inner(Margin { horizontal: 2, vertical: 0 }),
+        header_inner.inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
     );
 
     // --- Body: list sidebar + detail pane ---
@@ -193,7 +194,11 @@ pub fn draw(
             .add_modifier(Modifier::BOLD);
         // Pad the hint with a leading space, then right-pad to the full width so
         // the Paragraph's base style (bar_style) paints the background edge to edge.
-        let padded = format!(" {:<width$}", hint, width = footer_rect.width.saturating_sub(1) as usize);
+        let padded = format!(
+            " {:<width$}",
+            hint,
+            width = footer_rect.width.saturating_sub(1) as usize
+        );
         frame.render_widget(
             Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
             footer_rect,

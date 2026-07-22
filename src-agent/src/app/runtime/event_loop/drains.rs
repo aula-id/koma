@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ratatui::crossterm::event::DisableMouseCapture;
+use ratatui::crossterm::event::EnableMouseCapture;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
-use ratatui::crossterm::event::EnableMouseCapture;
 
 use crate::app::state::AppState;
 use crate::dto::chat::Role;
@@ -38,7 +38,10 @@ pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()>
             }
         }
     }
-    write!(out, "\r\n-- copy with your mouse, then press any key to return --\r\n")?;
+    write!(
+        out,
+        "\r\n-- copy with your mouse, then press any key to return --\r\n"
+    )?;
     out.flush()?;
     Ok(())
 }
@@ -128,7 +131,11 @@ pub(super) fn apply_compaction_result(
     // result lands asynchronously via the `awareness_rx` drain in `service_global`.
     let aware_inputs = match (
         client.as_ref(),
-        state.rest.sessions.get(idx).and_then(|rt| rt.session.as_ref()),
+        state
+            .rest
+            .sessions
+            .get(idx)
+            .and_then(|rt| rt.session.as_ref()),
     ) {
         (Some(c), Some(sess)) if sess.settings.awareness_enabled => Some((
             Arc::clone(c),
@@ -156,14 +163,7 @@ pub(super) fn apply_compaction_result(
             );
             if let Some(session_id) = state.rest.sessions.get(idx).map(|rt| rt.id.clone()) {
                 crate::app::runtime::spawn_awareness_recompute(
-                    state,
-                    handle,
-                    session_id,
-                    c,
-                    settings,
-                    workdir,
-                    r,
-                    main_route,
+                    state, handle, session_id, c, settings, workdir, r, main_route,
                 );
             }
         }
@@ -189,10 +189,7 @@ pub(super) fn apply_compaction_result(
     // multi-line info toast (capped so a long summary stays contained). Toast is
     // per-session now (C6) and this applies per-session unbracketed, so raise it on
     // `sessions[idx]` — the session that compacted — not the stale foreground.
-    state
-        .rest
-        .sessions[idx]
-        .set_toast_info(format!("compacted ✓\n{}", cap_summary(&summary, 400)));
+    state.rest.sessions[idx].set_toast_info(format!("compacted ✓\n{}", cap_summary(&summary, 400)));
 
     // Clear THIS session's waiting + animation/deferral bookkeeping (per-session, C4):
     // the animation is done, so stop the per-tick redraw + drop any deferral state for

@@ -186,11 +186,9 @@ pub fn message_count(session_dir: &Path) -> Option<usize> {
 pub fn max_message_id(session_dir: &Path) -> i64 {
     fn inner(session_dir: &Path) -> Result<i64> {
         let conn = open(session_dir)?;
-        let id: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) FROM messages",
-            [],
-            |r| r.get(0),
-        )?;
+        let id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |r| {
+            r.get(0)
+        })?;
         Ok(id)
     }
     inner(session_dir).unwrap_or(0)
@@ -219,9 +217,18 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
     let tx = conn.transaction()?;
     // Drop orphaned heavy-blob index rows first (FK-free, but keep it tidy), then
     // the messages themselves. `blobs.msg_id` mirrors `messages.id`.
-    tx.execute("DELETE FROM blobs WHERE msg_id >= ?1", rusqlite::params![cut_id])?;
-    tx.execute("DELETE FROM messages_fts WHERE rowid >= ?1", rusqlite::params![cut_id])?;
-    tx.execute("DELETE FROM messages WHERE id >= ?1", rusqlite::params![cut_id])?;
+    tx.execute(
+        "DELETE FROM blobs WHERE msg_id >= ?1",
+        rusqlite::params![cut_id],
+    )?;
+    tx.execute(
+        "DELETE FROM messages_fts WHERE rowid >= ?1",
+        rusqlite::params![cut_id],
+    )?;
+    tx.execute(
+        "DELETE FROM messages WHERE id >= ?1",
+        rusqlite::params![cut_id],
+    )?;
     // Rewind the summary watermark so it never references a dropped message. Clamp
     // both bookkeeping ids to the last surviving id (`cut_id - 1`, floored at 0).
     let last_kept = (cut_id - 1).max(0);

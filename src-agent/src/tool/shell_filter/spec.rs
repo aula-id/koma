@@ -2,8 +2,8 @@
 //! install, docker build, make, wget/curl). Matched against the full shell
 //! command (as typed, may contain `&&`/pipes) by [`super::filter_output`].
 
-use std::sync::OnceLock;
 use regex::Regex;
+use std::sync::OnceLock;
 
 pub struct FilterSpec {
     pub name: &'static str,
@@ -110,15 +110,23 @@ pub fn apply(spec: &FilterSpec, raw: &str, exit_code: Option<i32>) -> Option<Str
 
     let original: Vec<String> = raw.lines().map(|s| s.to_string()).collect();
 
-    let stage = drop_matching(original.clone(), |l| spec.strip_lines.iter().any(|re| re.is_match(l)));
+    let stage = drop_matching(original.clone(), |l| {
+        spec.strip_lines.iter().any(|re| re.is_match(l))
+    });
 
     let stage = if spec.keep_lines.is_empty() {
         stage
     } else {
-        drop_matching(stage, |l| !is_marker(l) && !spec.keep_lines.iter().any(|re| re.is_match(l)))
+        drop_matching(stage, |l| {
+            !is_marker(l) && !spec.keep_lines.iter().any(|re| re.is_match(l))
+        })
     };
 
-    let stage = apply_head_tail(stage, spec.head.map(|h| h * relax), spec.tail.map(|t| t * relax));
+    let stage = apply_head_tail(
+        stage,
+        spec.head.map(|h| h * relax),
+        spec.tail.map(|t| t * relax),
+    );
 
     let stage = match spec.max_lines {
         Some(max) => apply_max(stage, max * relax),
@@ -165,7 +173,7 @@ fn build_table() -> Vec<FilterSpec> {
             name: "npm-install",
             match_command: re(r"(^|\s|&&\s*)(npm|pnpm|yarn)\s+(install|ci|i|add)\b"),
             strip_lines: vec![
-                re(r"^[\s\S]*[⠀-⣿]"),           // progress-bar / spinner frames (braille block)
+                re(r"^[\s\S]*[⠀-⣿]"), // progress-bar / spinner frames (braille block)
                 re(r"^npm (timing|http|sill|verb)"),
                 re(r"^npm warn deprecated"),
             ],
@@ -178,9 +186,9 @@ fn build_table() -> Vec<FilterSpec> {
         FilterSpec {
             name: "pip-install",
             match_command: re(r"(^|\s|&&\s*)(pip3?|uv)\s+(install|sync)\b"),
-            strip_lines: vec![
-                re(r"^\s*(Collecting|Downloading|Using cached|Preparing metadata|Installing collected|Requirement already satisfied)"),
-            ],
+            strip_lines: vec![re(
+                r"^\s*(Collecting|Downloading|Using cached|Preparing metadata|Installing collected|Requirement already satisfied)",
+            )],
             keep_lines: vec![],
             head: None,
             tail: None,
@@ -191,7 +199,9 @@ fn build_table() -> Vec<FilterSpec> {
             name: "docker",
             match_command: re(r"(^|\s|&&\s*)docker\s+(build|pull|push)\b"),
             strip_lines: vec![
-                re(r"^\s*([0-9a-f]{12}:|\s*(Pulling|Waiting|Verifying|Download complete|Pull complete|Extracting|Layer already exists))"),
+                re(
+                    r"^\s*([0-9a-f]{12}:|\s*(Pulling|Waiting|Verifying|Download complete|Pull complete|Extracting|Layer already exists))",
+                ),
                 re(r"^#\d+ (sha256:|extracting|DONE \d)"),
             ],
             keep_lines: vec![],
@@ -203,9 +213,7 @@ fn build_table() -> Vec<FilterSpec> {
         FilterSpec {
             name: "make",
             match_command: re(r"(^|\s|&&\s*)make(\s|$)"),
-            strip_lines: vec![
-                re(r"^make\[\d+\]: (Entering|Leaving) directory"),
-            ],
+            strip_lines: vec![re(r"^make\[\d+\]: (Entering|Leaving) directory")],
             keep_lines: vec![],
             head: None,
             tail: None,
@@ -215,9 +223,7 @@ fn build_table() -> Vec<FilterSpec> {
         FilterSpec {
             name: "wget-curl",
             match_command: re(r"(^|\s|&&\s*)(wget|curl)\b.*(-O|--output|--remote-name|-o )"),
-            strip_lines: vec![
-                re(r"^\s*[\d.]+[KMG%]?\s|^\s*#+\s*$|\r"),
-            ],
+            strip_lines: vec![re(r"^\s*[\d.]+[KMG%]?\s|^\s*#+\s*$|\r")],
             keep_lines: vec![],
             head: None,
             tail: None,

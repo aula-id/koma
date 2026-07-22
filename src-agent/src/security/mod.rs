@@ -14,9 +14,9 @@
 //! | [`is_installed`] | non-panicking predicate consumed by gating logic |
 //! | [`install`] | provisions the environment (CLI mode, prints progress) |
 
-use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use include_dir::{include_dir, Dir};
+use std::path::PathBuf;
 
 use crate::model::store::base_dir;
 
@@ -124,15 +124,13 @@ pub fn install(force: bool) -> Result<()> {
         let venv = dest.join("venv");
         if venv.exists() {
             println!("removing existing venv for reinstall...");
-            std::fs::remove_dir_all(&venv)
-                .with_context(|| format!("remove {}", venv.display()))?;
+            std::fs::remove_dir_all(&venv).with_context(|| format!("remove {}", venv.display()))?;
         }
     }
 
     // Step 4: extract embedded assets (creates dest if needed).
     println!("extracting security assets to {}...", dest.display());
-    std::fs::create_dir_all(&dest)
-        .with_context(|| format!("create {}", dest.display()))?;
+    std::fs::create_dir_all(&dest).with_context(|| format!("create {}", dest.display()))?;
     extract_assets(&SECURITY_ASSETS, &dest)?;
 
     // Step 5: create the virtual environment.
@@ -148,18 +146,22 @@ pub fn install(force: bool) -> Result<()> {
     // Step 6: install Python dependencies.
     let pip = dest.join("venv").join("bin").join("pip");
     let requirements = dest.join("requirements.txt");
-    println!("installing Python dependencies from {}...", requirements.display());
+    println!(
+        "installing Python dependencies from {}...",
+        requirements.display()
+    );
     let status = std::process::Command::new(&pip)
-        .args(["install", "-r", requirements.to_str().unwrap_or("requirements.txt")])
+        .args([
+            "install",
+            "-r",
+            requirements.to_str().unwrap_or("requirements.txt"),
+        ])
         .status()
         .context("failed to launch pip install")?;
     if !status.success() {
         return Err(anyhow!("pip install exited with status {}", status));
     }
 
-    println!(
-        "security daemon installed at {}",
-        dest.display()
-    );
+    println!("security daemon installed at {}", dest.display());
     Ok(())
 }

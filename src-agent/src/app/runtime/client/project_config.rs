@@ -231,7 +231,11 @@ fn koma_free_synthetic_model(providers: &[crate::model::app_config::ProviderConn
 /// last call. Called every frame from [`push_loop`]; `last.config_json` dedups so an
 /// unchanged catalogue is silent, and a `Ready` reset re-emits the full current config.
 /// A `None` projection (no snapshot seen yet) is a no-op.
-pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String), last: &mut PushState) {
+pub(super) fn push_config(
+    cfg: Option<&ConfigProjection>,
+    push: &dyn Fn(String),
+    last: &mut PushState,
+) {
     let Some(cfg) = cfg else { return };
     use crate::model::app_config::McpTransport;
 
@@ -333,16 +337,12 @@ pub(super) fn push_config(cfg: Option<&ConfigProjection>, push: &dyn Fn(String),
     // projection doesn't carry) — mirroring `resolve.rs`'s `from_entry`, which falls back
     // to `config.oauth_conns` when `config.providers` has no match (Claude/Codex/xAI
     // login-backed Main models).
-    let has_usable_main = cfg
-        .models
-        .iter()
-        .chain(cfg.session_models.iter())
-        .any(|m| {
-            m.effective_roles()
-                .contains(&crate::model::app_config::ModelRole::Main)
-                && (cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
-                    || cfg.oauth_conn_uuids.contains(&m.provider_uuid))
-        });
+    let has_usable_main = cfg.models.iter().chain(cfg.session_models.iter()).any(|m| {
+        m.effective_roles()
+            .contains(&crate::model::app_config::ModelRole::Main)
+            && (cfg.providers.iter().any(|p| p.uuid == m.provider_uuid)
+                || cfg.oauth_conn_uuids.contains(&m.provider_uuid))
+    });
     let needs_onboarding = !has_usable_main;
 
     // Available theme registry keys for the onboarding theme step + Settings picker.

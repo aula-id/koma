@@ -165,7 +165,10 @@ pub fn broadcast_unload_extension(ext_id: &str) {
         if let Err(e) = send_unload_frame(&sock, &req) {
             store::append_global_error_log(
                 "ext-uninstall",
-                &format!("unload fan-out to session {} failed: {e}", status.session_id),
+                &format!(
+                    "unload fan-out to session {} failed: {e}",
+                    status.session_id
+                ),
             );
         }
     }
@@ -219,7 +222,10 @@ pub enum SpawnIntoReply {
 /// (kind preserved) on any connect/write/read/decode/EOF/timeout/cap failure — the caller
 /// maps the kind to its structured error (connect-refused/ENOENT ⇒ "session not live";
 /// everything else ⇒ "target daemon incompatible or unavailable").
-pub fn spawn_into_session(sock_path: &Path, req: &ClientRequest) -> std::io::Result<SpawnIntoReply> {
+pub fn spawn_into_session(
+    sock_path: &Path,
+    req: &ClientRequest,
+) -> std::io::Result<SpawnIntoReply> {
     // Connect (blocking). A refused / missing socket propagates its ErrorKind verbatim so the
     // caller can distinguish "not live" from an incompatible/unavailable daemon.
     let mut stream = SyncIpcStream::connect(sock_path)?;

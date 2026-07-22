@@ -11,8 +11,8 @@ use std::sync::{Mutex, OnceLock};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
-use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
+use surrealdb::Surreal;
 
 // ---------------------------------------------------------------------------
 // Embedder
@@ -50,7 +50,10 @@ pub(crate) fn embed_batch(texts: Vec<String>) -> Vec<Embedding> {
 
 pub(crate) fn embed_one(text: &str) -> Embedding {
     let batch = embed_batch(vec![text.to_string()]);
-    batch.into_iter().next().unwrap_or_else(|| vec![0.0f32; 384])
+    batch
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| vec![0.0f32; 384])
 }
 
 // ---------------------------------------------------------------------------
@@ -263,11 +266,7 @@ pub fn start_sync(session_dir: &Path) {
                 let _ = std::fs::write(sync_done_path(&sd), format!("{n}"));
             }
             Err(e) => {
-                crate::model::store::append_error_log(
-                    &sd,
-                    "SurrealDB sync failed",
-                    &e.to_string(),
-                );
+                crate::model::store::append_error_log(&sd, "SurrealDB sync failed", &e.to_string());
             }
         }
     });
@@ -275,9 +274,8 @@ pub fn start_sync(session_dir: &Path) {
 
 fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
     let conn = crate::model::msglog::open(session_dir)?;
-    let mut stmt = conn.prepare(
-        "SELECT id, role, content, created_at FROM messages ORDER BY id ASC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, role, content, created_at FROM messages ORDER BY id ASC")?;
     let rows: Vec<(i64, String, String, i64)> = stmt
         .query_map([], |r| {
             Ok((
@@ -305,7 +303,10 @@ fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
             let db = open_db(&sd).await?;
 
             for (i, (sqlite_id, role, content, created_at)) in rows.iter().enumerate() {
-                let emb = embeddings.get(i).cloned().unwrap_or_else(|| vec![0.0f32; 384]);
+                let emb = embeddings
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0f32; 384]);
                 if let Err(e) = db
                     .query("DELETE FROM message WHERE sqlite_id = $id")
                     .bind(("id", *sqlite_id))
@@ -319,13 +320,16 @@ fn do_sync(session_dir: &Path) -> anyhow::Result<usize> {
                 }
                 if let Err(e) = db
                     .query("CREATE message CONTENT $data")
-                    .bind(("data", serde_json::json!({
-                        "sqlite_id": *sqlite_id,
-                        "role": role,
-                        "content": content,
-                        "embedding": emb,
-                        "created_at": *created_at,
-                    })))
+                    .bind((
+                        "data",
+                        serde_json::json!({
+                            "sqlite_id": *sqlite_id,
+                            "role": role,
+                            "content": content,
+                            "embedding": emb,
+                            "created_at": *created_at,
+                        }),
+                    ))
                     .await
                 {
                     crate::model::store::append_error_log(

@@ -1,7 +1,9 @@
 //! Models Select screen helpers for [`SettingsState`]: open/save/delete and role
 //! picker operations.
 
-use super::super::{ModelDraft, ModelFilterMode, ModelModal, ModelRowSel, MODEL_CTRL_SLOTS, RolePickerState};
+use super::super::{
+    ModelDraft, ModelFilterMode, ModelModal, ModelRowSel, RolePickerState, MODEL_CTRL_SLOTS,
+};
 use super::SettingsState;
 
 impl SettingsState {
@@ -36,7 +38,7 @@ impl SettingsState {
                 let vis = self.visible_model_indices();
                 match vis.get(n - MODEL_CTRL_SLOTS) {
                     Some(&real) => ModelRowSel::Data(real),
-                    None        => ModelRowSel::FilterGlobal, // clamp guard; shouldn't happen
+                    None => ModelRowSel::FilterGlobal, // clamp guard; shouldn't happen
                 }
             }
         }
@@ -103,10 +105,10 @@ impl SettingsState {
     /// to the valid range, and clear the delete-armed flag.
     fn set_model_line_col(&mut self, line: usize, col: usize) {
         let line = line.min(self.model_line_count().saturating_sub(1));
-        let col  = col.min(self.model_line_width(line).saturating_sub(1));
+        let col = col.min(self.model_line_width(line).saturating_sub(1));
         self.model_sel = match line {
-            0 => col,           // 0=AddGlobal, 1=AddLocal
-            1 => 2 + col,       // 2=FilterAll, 3=FilterLocal, 4=FilterGlobal
+            0 => col,                           // 0=AddGlobal, 1=AddLocal
+            1 => 2 + col,                       // 2=FilterAll, 3=FilterLocal, 4=FilterGlobal
             _ => MODEL_CTRL_SLOTS + (line - 2), // data rows
         };
         self.model_delete_armed = false;
@@ -325,7 +327,9 @@ impl SettingsState {
                 .map(|vis_pos| MODEL_CTRL_SLOTS + vis_pos)
                 .unwrap_or_else(|| {
                     // Saved entry filtered out — land on last control slot.
-                    (MODEL_CTRL_SLOTS + vis.len()).saturating_sub(1).max(MODEL_CTRL_SLOTS - 1)
+                    (MODEL_CTRL_SLOTS + vis.len())
+                        .saturating_sub(1)
+                        .max(MODEL_CTRL_SLOTS - 1)
                 });
         }
     }
@@ -370,21 +374,33 @@ impl SettingsState {
 
     /// Move the Role picker cursor up. No-op when the picker is closed.
     pub fn mm_role_picker_up(&mut self) {
-        if let Some(p) = self.model_modal.as_mut().and_then(|m| m.role_picker.as_mut()) {
+        if let Some(p) = self
+            .model_modal
+            .as_mut()
+            .and_then(|m| m.role_picker.as_mut())
+        {
             p.up();
         }
     }
 
     /// Move the Role picker cursor down. No-op when the picker is closed.
     pub fn mm_role_picker_down(&mut self) {
-        if let Some(p) = self.model_modal.as_mut().and_then(|m| m.role_picker.as_mut()) {
+        if let Some(p) = self
+            .model_modal
+            .as_mut()
+            .and_then(|m| m.role_picker.as_mut())
+        {
             p.down();
         }
     }
 
     /// Toggle the checkbox under the Role picker cursor. No-op when closed.
     pub fn mm_role_picker_toggle(&mut self) {
-        if let Some(p) = self.model_modal.as_mut().and_then(|m| m.role_picker.as_mut()) {
+        if let Some(p) = self
+            .model_modal
+            .as_mut()
+            .and_then(|m| m.role_picker.as_mut())
+        {
             p.toggle();
         }
     }

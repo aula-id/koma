@@ -4,9 +4,9 @@
 //! checkbox format that the `/todo` overlay parses. The model provides the
 //! COMPLETE updated list on each call (not just deltas).
 
+use super::{Tool, ToolCtx};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use super::{Tool, ToolCtx};
 
 /// The `checklist` tool: update the session's task list.
 pub struct Checklist;
@@ -61,25 +61,29 @@ impl Tool for Checklist {
 
         // Determine the write path: memory/TODO.md in the session directory.
         // We use the workspace root + memory/ as the base, matching the memory tool.
-        let memory_dir = ctx.memory_dir.as_ref()
+        let memory_dir = ctx
+            .memory_dir
+            .as_ref()
             .context("no session active — cannot write todos")?;
 
         // Ensure the memory directory exists.
-        std::fs::create_dir_all(memory_dir)
-            .context("failed to create memory directory")?;
+        std::fs::create_dir_all(memory_dir).context("failed to create memory directory")?;
 
         let todo_path = memory_dir.join("TODO.md");
 
         // Build the markdown content.
         let mut md = String::from("# Session Tasks\n\n");
         for item in todos {
-            let content = item.get("content")
+            let content = item
+                .get("content")
                 .and_then(Value::as_str)
                 .unwrap_or("(no description)");
-            let status = item.get("status")
+            let status = item
+                .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("pending");
-            let priority = item.get("priority")
+            let priority = item
+                .get("priority")
                 .and_then(Value::as_str)
                 .unwrap_or("medium");
 
@@ -93,12 +97,14 @@ impl Tool for Checklist {
             md.push_str(&format!("- [{checkbox}] {content} ({priority})\n"));
         }
 
-        std::fs::write(&todo_path, &md)
-            .context("failed to write TODO.md")?;
+        std::fs::write(&todo_path, &md).context("failed to write TODO.md")?;
 
-        let active = todos.iter()
-            .filter(|t| t.get("status").and_then(Value::as_str) != Some("completed")
-                     && t.get("status").and_then(Value::as_str) != Some("cancelled"))
+        let active = todos
+            .iter()
+            .filter(|t| {
+                t.get("status").and_then(Value::as_str) != Some("completed")
+                    && t.get("status").and_then(Value::as_str) != Some("cancelled")
+            })
             .count();
 
         Ok(format!("Updated {} todos ({} active)", todos.len(), active))

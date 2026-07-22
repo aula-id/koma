@@ -16,6 +16,9 @@
 //! Selection state lives in [`crate::app::mode::RewindState`]. Keystroke handling
 //! lives in [`crate::controller::input::handle_rewind`].
 
+use crate::app::mode::RewindState;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
@@ -23,9 +26,6 @@ use ratatui::{
     widgets::{Block, Paragraph},
     Frame,
 };
-use crate::app::mode::RewindState;
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
 
 /// Collapse a message to a single line and truncate it to at most `max` Unicode
 /// scalar values, appending `…` if cut. Newlines/tabs become spaces so a
@@ -33,7 +33,13 @@ use crate::view::theme::Palette;
 fn preview(s: &str, max: usize) -> String {
     let flat: String = s
         .chars()
-        .map(|c| if c == '\n' || c == '\t' || c == '\r' { ' ' } else { c })
+        .map(|c| {
+            if c == '\n' || c == '\t' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     let chars: Vec<char> = flat.chars().collect();
     if chars.len() <= max {
@@ -67,7 +73,12 @@ pub fn draw(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = 12u16.min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let rect = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
@@ -93,7 +104,10 @@ pub fn draw(
         .split(inner);
 
     // --- Message list (flat, chronological: oldest→newest, newest at the bottom) ---
-    let list = rows[0].inner(Margin { horizontal: 1, vertical: 0 });
+    let list = rows[0].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     if list.width > 0 && list.height > 0 {
         let list_w = list.width as usize;
         let mut lines: Vec<Line> = Vec::with_capacity(rw.entries.len());
@@ -122,7 +136,10 @@ pub fn draw(
     }
 
     // --- Keybinding hint ---
-    let hint = rows[1].inner(Margin { horizontal: 1, vertical: 0 });
+    let hint = rows[1].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     if hint.width > 0 && hint.height > 0 {
         frame.render_widget(
             Paragraph::new("↑↓ select · Enter rewind · Esc cancel")

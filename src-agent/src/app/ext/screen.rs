@@ -78,7 +78,10 @@ pub struct ExtScreenReply {
 ///   - `Ok(true)`  → already running → invoke straight away.
 ///   - `Ok(false)` → a daemon-kind, ENABLED, not-yet-running extension → `ensure_started` first.
 ///   - `Err(msg)`  → not serviceable (MISSING / DISABLED / ONESHOT) → surfaced as the reply error.
-fn screen_start_decision(running: bool, record: Option<&InstalledExtension>) -> Result<bool, String> {
+fn screen_start_decision(
+    running: bool,
+    record: Option<&InstalledExtension>,
+) -> Result<bool, String> {
     if running {
         return Ok(true);
     }

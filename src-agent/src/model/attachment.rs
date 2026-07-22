@@ -166,22 +166,27 @@ pub fn ingest_image_from_raw_bytes(
             return Err(anyhow!("clipboard data does not appear to be an image"));
         }
     }
-    let effective_mime = if let Some(kind) = inferred.filter(|k| k.mime_type().starts_with("image/")) {
-        // Magic bytes identified a concrete image type — trust that over the
-        // host-supplied `--type`, which may be stale or simply wrong.
-        kind.mime_type().to_string()
-    } else if mime.starts_with("image/") {
-        mime.to_string()
-    } else {
-        // Try to derive from basename extension.
-        let ext = Path::new(basename)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .unwrap_or_else(|| "png".to_string());
-        let sub = if ext == "jpg" { "jpeg".to_string() } else { ext };
-        format!("image/{sub}")
-    };
+    let effective_mime =
+        if let Some(kind) = inferred.filter(|k| k.mime_type().starts_with("image/")) {
+            // Magic bytes identified a concrete image type — trust that over the
+            // host-supplied `--type`, which may be stale or simply wrong.
+            kind.mime_type().to_string()
+        } else if mime.starts_with("image/") {
+            mime.to_string()
+        } else {
+            // Try to derive from basename extension.
+            let ext = Path::new(basename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .unwrap_or_else(|| "png".to_string());
+            let sub = if ext == "jpg" {
+                "jpeg".to_string()
+            } else {
+                ext
+            };
+            format!("image/{sub}")
+        };
     std::fs::create_dir_all(images_dir)?;
     let nn = next_image_seq(images_dir);
     let name_path = Path::new(basename);

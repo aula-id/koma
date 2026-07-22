@@ -22,15 +22,28 @@ fn same_key_reuses_cached_value_without_recomputing() {
 
     let first = get_or_compute(key.clone(), || {
         calls.set(calls.get() + 1);
-        UsageData { session_calls: 1, ..Default::default() }
+        UsageData {
+            session_calls: 1,
+            ..Default::default()
+        }
     });
     let second = get_or_compute(key, || {
         calls.set(calls.get() + 1);
-        UsageData { session_calls: 2, ..Default::default() }
+        UsageData {
+            session_calls: 2,
+            ..Default::default()
+        }
     });
 
-    assert_eq!(calls.get(), 1, "second call with the same key must not recompute");
-    assert_eq!(first.session_calls, second.session_calls, "cached value must be reused as-is");
+    assert_eq!(
+        calls.get(),
+        1,
+        "second call with the same key must not recompute"
+    );
+    assert_eq!(
+        first.session_calls, second.session_calls,
+        "cached value must be reused as-is"
+    );
 }
 
 #[test]
@@ -45,13 +58,23 @@ fn different_key_always_recomputes() {
     });
 
     let key_b: CacheKey = (true, 2000, BucketSize::Hour, 24, "sess-b".to_string());
-    let expected_b = UsageData { session_calls: 42, ..Default::default() };
+    let expected_b = UsageData {
+        session_calls: 42,
+        ..Default::default()
+    };
     let data_b = get_or_compute(key_b, || {
         calls.set(calls.get() + 1);
-        UsageData { session_calls: 42, ..Default::default() }
+        UsageData {
+            session_calls: 42,
+            ..Default::default()
+        }
     });
 
-    assert_eq!(calls.get(), 2, "a differing key must trigger a fresh compute");
+    assert_eq!(
+        calls.get(),
+        2,
+        "a differing key must trigger a fresh compute"
+    );
     assert_eq!(data_a.session_calls, 0);
     assert_eq!(data_b.session_calls, expected_b.session_calls);
 }

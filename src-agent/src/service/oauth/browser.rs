@@ -56,7 +56,10 @@ fn spawn_copier(text: &str) -> bool {
     if write_via(&mut Command::new("wl-copy"), text) {
         return true;
     }
-    write_via(Command::new("xclip").args(["-selection", "clipboard"]), text)
+    write_via(
+        Command::new("xclip").args(["-selection", "clipboard"]),
+        text,
+    )
 }
 
 #[cfg(target_os = "macos")]

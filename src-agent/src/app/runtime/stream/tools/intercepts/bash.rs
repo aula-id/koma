@@ -6,18 +6,17 @@
 use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
 
+use super::InterceptFlow;
 use crate::app::runtime::stream::tools::approval::{
     bash_status_line, filter_bash_output, parse_bash_id,
 };
-use super::InterceptFlow;
 
 pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
     state: &mut AppState,
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
     let background = args
@@ -57,7 +56,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_background(
                  bash_kill{{\"job_id\":\"bash-{id}\"}}."
             )
         };
-        state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), result));
         state.rest.sessions[sess_idx].tool_idx += 1;
         return InterceptFlow::Continue;
     }
@@ -70,20 +71,29 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_output(
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
-    let job_id = args.get("job_id").and_then(|v| v.as_str()).unwrap_or("").trim();
-    let tail_lines = args.get("tail_lines").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let job_id = args
+        .get("job_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let tail_lines = args
+        .get("tail_lines")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let result = match parse_bash_id(job_id)
-        .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
-    {
+    let result = match parse_bash_id(job_id).and_then(|n| {
+        state.rest.sessions[sess_idx]
+            .bash_jobs
+            .iter()
+            .find(|j| j.id == n)
+    }) {
         Some(job) => {
             let status = job.snapshot_status();
             let line = bash_status_line(&status);
@@ -111,9 +121,15 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_output(
                 // Mirror `tool::shell::finalize_output`'s "saving" path
                 // (filter + tee) for a finished background job, same as
                 // synchronous bash/git_operator.
-                let Some(code) = finished_code else {
-                    crate::model::store::append_global_error_log("bash", "BUG: finished_code was None after qualifies");
-                    continue;
+                let code = match finished_code {
+                    Some(c) => c,
+                    None => {
+                        crate::model::store::append_global_error_log(
+                            "bash",
+                            "BUG: finished_code was None after qualifies",
+                        );
+                        return InterceptFlow::Continue;
+                    }
                 };
                 let (text, should_tee) =
                     crate::app::bgbash::render_finished_output(&job.command, &out, code, saving);
@@ -140,7 +156,9 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_output(
         }
         None => format!("error: no such job: {job_id}"),
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }
@@ -150,21 +168,29 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_kill(
     sess_idx: usize,
     call: &ToolCall,
 ) -> InterceptFlow {
-    let sanitized =
-        crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
+    let sanitized = crate::dto::chat::sanitize_tool_arguments(&call.function.arguments);
     let args: serde_json::Value =
         serde_json::from_str(&sanitized).unwrap_or_else(|_| serde_json::json!({}));
-    let job_id = args.get("job_id").and_then(|v| v.as_str()).unwrap_or("").trim();
-    let result = match parse_bash_id(job_id)
-        .and_then(|n| state.rest.sessions[sess_idx].bash_jobs.iter().find(|j| j.id == n))
-    {
+    let job_id = args
+        .get("job_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let result = match parse_bash_id(job_id).and_then(|n| {
+        state.rest.sessions[sess_idx]
+            .bash_jobs
+            .iter()
+            .find(|j| j.id == n)
+    }) {
         Some(job) => {
             crate::app::bgbash::kill_bash_job(job);
             format!("job bash-{} killed", job.id)
         }
         None => format!("error: no such job: {job_id}"),
     };
-    state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
 }

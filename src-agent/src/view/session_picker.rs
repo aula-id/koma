@@ -12,7 +12,9 @@
 //! Filtering and selection state live in [`app::mode::PickerState`].
 //! Keystroke handling lives in [`controller::input::handle_picker`].
 
-use std::time::SystemTime;
+use crate::app::mode::PickerState;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::Style,
@@ -20,9 +22,7 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::mode::PickerState;
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
+use std::time::SystemTime;
 
 /// Format a `SystemTime` as a human-readable relative age string.
 ///
@@ -93,7 +93,10 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &PickerState, palett
 
     // --- Session list (flat, no borders) ---
     // Render rows directly into the inset area (1 char horizontal margin).
-    let inner = chunks[1].inner(Margin { horizontal: 1, vertical: 0 });
+    let inner = chunks[1].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
 
     // Build one styled Line per filtered entry with aligned columns.
     //
@@ -118,9 +121,7 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &PickerState, palett
         );
         // Width available for the name: total inner width minus right column
         // minus two separator spaces, clamped to at least 4 chars.
-        let name_w = inner_w
-            .saturating_sub(right.chars().count() + 2)
-            .max(4);
+        let name_w = inner_w.saturating_sub(right.chars().count() + 2).max(4);
         let name = truncate(&meta.name, name_w);
         let row = format!("{name:<name_w$}  {right}");
 
@@ -140,7 +141,9 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, picker: &PickerState, palett
     // client frame). `lines` holds one row per filtered entry, so the window
     // start maps straight onto the Paragraph scroll offset.
     let list_height = inner.height as usize;
-    let sel = picker.selected.min(picker.filtered_idx.len().saturating_sub(1));
+    let sel = picker
+        .selected
+        .min(picker.filtered_idx.len().saturating_sub(1));
     let (start, _) = crate::view::scroll::scroll_window(
         &rest.session_picker_offset,
         sel,

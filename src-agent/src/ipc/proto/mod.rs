@@ -35,8 +35,8 @@ pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 pub struct SessionStatus {
     pub session_id: String,
     pub name: String,
-    pub pwd: String,     // the session's working dir, for disambiguation in the hub
-    pub working: bool,   // is the session's agent currently cooking?
+    pub pwd: String,   // the session's working dir, for disambiguation in the hub
+    pub working: bool, // is the session's agent currently cooking?
 }
 
 /// One workspace-file hit from a [`ClientRequest::FileSearch`] (the GUI omnisearch
@@ -87,32 +87,51 @@ pub enum ClientRequest {
         effort: Option<String>,
     },
     Resync,
-    SwitchForeground { session_id: String },
-    SubmitInput { text: String },
-    Shell { cmd: String },
+    SwitchForeground {
+        session_id: String,
+    },
+    SubmitInput {
+        text: String,
+    },
+    Shell {
+        cmd: String,
+    },
     SendKey(KeyWire),
-    Paste { text: String },
+    Paste {
+        text: String,
+    },
     /// Drop a single STAGED attachment (a GUI chip) by its `[Image #N]` marker number,
     /// unstaging it from the foreground session's `pending_attachments` before submit.
     /// The TUI has no equivalent request (it drops attachments by deleting the marker in
     /// the composer); this is the GUI's explicit remove path.
-    RemoveAttachment { marker_n: usize },
+    RemoveAttachment {
+        marker_n: usize,
+    },
     /// Fuzzy-search the foreground session's workspace file index (the `@`-palette engine)
     /// for the GUI omnisearch overlay. Read-only: the daemon runs `DirCache::search` and
     /// replies with a one-shot [`DaemonEvent::FileSearchResults`] WITHOUT attaching or
     /// mutating state. `limit` caps the result count (defaults to the palette cap).
-    FileSearch { query: String, limit: Option<usize> },
-    ApproveTool { approve: bool },
+    FileSearch {
+        query: String,
+        limit: Option<usize>,
+    },
+    ApproveTool {
+        approve: bool,
+    },
     /// Answer a paused `plan_ready` approval. `decision` is one of `"approve"`,
     /// `"compact"` (approve + compact history to the plan), or `"deny"` (keep
     /// discussing). Parity with [`ApproveTool`] for a direct (non-key) path; the
     /// TUI client normally forwards the y/a/n keystroke as `SendKey` instead.
-    PlanDecision { decision: String },
+    PlanDecision {
+        decision: String,
+    },
     NewSession {
         name: Option<String>,
         working_dir: Option<String>,
     },
-    QuitSession { session_id: String },
+    QuitSession {
+        session_id: String,
+    },
     QuitDaemon,
     EditorWrapW(usize),
     OpenSessionHub,
@@ -123,7 +142,9 @@ pub enum ClientRequest {
     /// the `/rename` slash-command / the Settings save — so this is the GUI's direct
     /// atomic rename path (fixes the "rename not working" gap where `NewSession.name`
     /// was accept-ignored). An empty/whitespace name is a no-op.
-    RenameSession { name: String },
+    RenameSession {
+        name: String,
+    },
 
     // ─── GUI config setters (Connector + MCP panels) ─────────────────────────
     // All gui-gated: the TUI drives config through `Mode::Settings`/`Mode::Mcp` and
@@ -147,13 +168,20 @@ pub enum ClientRequest {
         url: String,
     },
     /// Remove the MCP server with `uuid`, persist, and live-reconnect the manager.
-    DeleteMcpServer { uuid: String },
+    DeleteMcpServer {
+        uuid: String,
+    },
     /// Toggle the `enabled` flag on the MCP server with `uuid` (the list-row switch),
     /// persist, and live-reconnect the manager.
-    EnableMcpServer { uuid: String, enabled: bool },
+    EnableMcpServer {
+        uuid: String,
+        enabled: bool,
+    },
     /// Request live MCP server connection status. Answered with a one-shot
     /// `DaemonEvent::McpStatus` frame (never folded — re-pushed by push_intercept).
-    GetMcpStatus { request_id: String },
+    GetMcpStatus {
+        request_id: String,
+    },
     /// Upsert a provider (Connector ProviderForm). `uuid` is `None` for a new provider
     /// (minted OpenAI-compatible) or `Some` to edit by uuid (preserving its wire type).
     SetProvider {
@@ -163,7 +191,9 @@ pub enum ClientRequest {
         api_key: String,
     },
     /// Remove the provider with `uuid` and persist.
-    DeleteProvider { uuid: String },
+    DeleteProvider {
+        uuid: String,
+    },
     /// Upsert a model (Connector ModelForm). `uuid` is `None` for a new model. `roles`
     /// are lowercase role tokens (`"main"`/`"awareness"`/…); `scope` is `"global"`
     /// (persisted to `AppConfig.models`) or `"local"` (the foreground session's
@@ -179,12 +209,17 @@ pub enum ClientRequest {
     },
     /// Remove the model with `uuid` from the `scope` catalogue (`"global"`/`"local"`)
     /// and persist.
-    DeleteModel { uuid: String, scope: String },
+    DeleteModel {
+        uuid: String,
+        scope: String,
+    },
     /// Fetch the live model-id catalogue for the provider with uuid `provider` (a
     /// `GET {endpoint}/models`) to populate the Connector ModelForm's model-id picker.
     /// Read-only + async: the daemon spawns the network GET and replies out-of-band with
     /// a [`DaemonEvent::ModelList`] on a later tick (mirrors the `FileSearch` one-shot).
-    ListModels { provider: String },
+    ListModels {
+        provider: String,
+    },
     /// Fetch the live PROVIDER-ROUTE list for one model (a `GET
     /// {endpoint}/models/{model_id}/endpoints`) to populate the Connector ModelForm's
     /// ROUTE picker with the model's REAL routes (provider name + prompt/completion price
@@ -193,7 +228,10 @@ pub enum ClientRequest {
     ///   provider being an OpenRouter-style routable endpoint (non-OpenRouter → empty), spawns
     ///   the network GET, and replies out-of-band with a [`DaemonEvent::ModelRoutes`] on a
     ///   later tick. gui-gated.
-    ListRoutes { provider: String, model_id: String },
+    ListRoutes {
+        provider: String,
+        model_id: String,
+    },
     /// Set the active theme (the GUI onboarding theme step + the future Settings gear).
     /// `name` is a [`crate::view::theme::PALETTES`] registry key (an unknown name falls
     /// back to the dark palette at render time). The daemon writes `AppConfig.palette`
@@ -201,7 +239,9 @@ pub enum ClientRequest {
     /// change forces a full snapshot so the GUI host re-derives + re-pushes its `Config`
     /// palette live. gui-gated: the TUI picks the theme in `Mode::Settings`. `theme`/
     /// `accent` are the deprecated legacy fields and are left untouched.
-    SetTheme { name: String },
+    SetTheme {
+        name: String,
+    },
     /// Mint (or reuse) the keyless Koma Free provider + a Main-role "koma free" model in
     /// the GLOBAL config — the GUI onboarding "koma free" choice, the non-key equivalent of
     /// the TUI first-run chooser's `Action::SetupKomaFree`. Idempotent: reuses an existing
@@ -237,13 +277,17 @@ pub enum ClientRequest {
     /// agent-row kill button). Mirrors the model-callable `task_kill` primitive: abort
     /// the tokio task + flip a still-Running status to Killed (a terminal status is left
     /// untouched). gui-gated.
-    KillSubagent { id: usize },
+    KillSubagent {
+        id: usize,
+    },
     /// Background a single sub-agent of the foreground session by its stable id (the GUI
     /// agent-row background button). Mirrors the TUI's Ctrl+B-on-selection. Reuses
     /// [`Action::BackgroundSubagent`] daemon-side — the handler re-checks eligibility
     /// itself (must be `Running`, not already detached, and have a `tool_call_id`), so an
     /// ineligible or stale id is a clean no-op.
-    BackgroundSubagent { id: usize },
+    BackgroundSubagent {
+        id: usize,
+    },
     /// Background EVERY eligible running sub-agent of the foreground session at once (the
     /// GUI's global Ctrl+B). Mirrors the TUI's Ctrl+B-in-composer. Reuses
     /// [`Action::BackgroundAllSubagents`] daemon-side, which is itself a no-op when no
@@ -253,7 +297,9 @@ pub enum ClientRequest {
     /// GUI bash-row kill button). Reuses [`Action::BashKillJob`] daemon-side (SIGTERM +
     /// flip status→Killed). The GUI addresses the job as `bash-<id>`; only the numeric
     /// `id` crosses here. gui-gated.
-    BashKill { id: usize },
+    BashKill {
+        id: usize,
+    },
     /// Set THIS client's read-only STREAM VIEW — which sub-agent / bash job the GUI is
     /// live-streaming into an Explore stream tab (the non-key equivalent of the TUI's
     /// full-screen sub-agent viewer, generalised to bash). `subagent`/`bash` are the
@@ -287,14 +333,18 @@ pub enum ClientRequest {
     /// `"yolo"` is honoured ONLY while `yolo_armed` (else a no-op), exactly like `/mode`.
     /// An unknown token is a no-op. The mode change re-projects into the snapshot, so the
     /// GUI reflects it live. gui-gated: the TUI drives the mode via Shift+Tab / `/mode`.
-    SetMode { mode: String },
+    SetMode {
+        mode: String,
+    },
     /// Set (or clear) the foreground session's LOCAL Main-role model override (the GUI
     /// model quick-picker). `model_uuid` is `Some(uuid)` of a GLOBAL `config.models`
     /// entry to CLONE into a session-local Main [`crate::model::app_config::ModelEntry`]
     /// (reusing an existing matching local override instead of duplicating), or `None` to
     /// REMOVE the override (inherit the global Main). Persists to the per-session
     /// `session_models`; the global catalogue is never touched. gui-gated.
-    SetSessionMain { model_uuid: Option<String> },
+    SetSessionMain {
+        model_uuid: Option<String>,
+    },
     /// Rewind the foreground session's conversation to JUST BEFORE the message at
     /// `index` (the GUI's hover-edit pencil on a USER chat bubble) — the non-key
     /// equivalent of the TUI's double-Esc `Mode::MessageRewind` + Enter path.
@@ -306,7 +356,9 @@ pub enum ClientRequest {
     /// composer with that message's text (surfaced to the client via the
     /// projected `GlobalSnapshot.input` / `InputChanged` delta — NOT auto-sent, the
     /// user edits + presses Enter). gui-gated: the TUI drives rewind via double-Esc.
-    RewindTo { index: usize },
+    RewindTo {
+        index: usize,
+    },
     /// Compact the foreground session's conversation (the GUI status-footer Compact
     /// action) — the non-key equivalent of the TUI's `/compact`. Reuses
     /// [`crate::app::runtime::commands::compact::handle_compact`] daemon-side with
@@ -360,7 +412,9 @@ pub enum ClientRequest {
     /// reply-via-re-push framing) so the GUI's effort-picker label updates off
     /// the SAME settings channel it already listens to. gui-gated: the TUI
     /// drives this via `Mode::Effort`'s confirm handler.
-    SetEffort { effort: String },
+    SetEffort {
+        effort: String,
+    },
 
     // ─── GUI /agents dashboard (sub-agent definitions) ───────────────────────
     /// Fetch the merged sub-agent registry (built-in < global < session) + the model /
@@ -431,12 +485,16 @@ pub enum ClientRequest {
     /// `waiting_code` → `success` / `failed`). `codex_paste` just replies `paste` (the
     /// token then arrives via [`SubmitOAuthPaste`]). Attached-only (the flow runs on the
     /// daemon's runtime). gui-gated.
-    StartOAuth { provider: String },
+    StartOAuth {
+        provider: String,
+    },
     /// Complete the Codex paste-token flow: build a connection straight from a hand-pasted
     /// raw access token via the EXISTING `Action::OAuthPaste` path (persist + seed cache),
     /// then reply with a `success` [`DaemonEvent::OAuthState`] carrying the fresh
     /// connection list. Attached-only. gui-gated.
-    SubmitOAuthPaste { token: String },
+    SubmitOAuthPaste {
+        token: String,
+    },
     /// Cancel an in-flight OAuth flow via the EXISTING `Action::OAuthCancel` path (abort the
     /// background task + drop its receiver), then reply with an `idle`
     /// [`DaemonEvent::OAuthState`]. Attached-only. gui-gated.
@@ -446,7 +504,9 @@ pub enum ClientRequest {
     /// then reply with a fresh `idle` [`DaemonEvent::OAuthState`]. Works UN-ATTACHED too (the
     /// connector is reachable pre-session): the GUI host removes + evicts from the on-disk
     /// config and re-pushes host-side. gui-gated.
-    DeleteOAuthConn { uuid: String },
+    DeleteOAuthConn {
+        uuid: String,
+    },
 
     // ─── GUI extension STORE surface (browse / install / uninstall) ──────────
     // The koma.run extension marketplace, wired to koma's install pipeline
@@ -459,22 +519,32 @@ pub enum ClientRequest {
     /// optional `q` (full-text) / `category` filters. PUBLIC (no auth). Read-only + async:
     /// the daemon spawns the GET and replies out-of-band with a [`DaemonEvent::StoreCatalogue`]
     /// (empty items + an `error` string on a network failure — never a hang). gui-gated.
-    StoreBrowse { query: Option<String>, category: Option<String> },
+    StoreBrowse {
+        query: Option<String>,
+        category: Option<String>,
+    },
     /// Fetch one extension's full detail: `GET .../extensions/{id}`. PUBLIC (no auth).
     /// Read-only + async like [`StoreBrowse`]; replies with a [`DaemonEvent::StoreItemDetail`]
     /// (`detail: None` + an `error` on failure). gui-gated.
-    StoreDetail { id: String },
+    StoreDetail {
+        id: String,
+    },
     /// Install `id` (optionally pinning `version`, else latest). The install action: detect
     /// the `<os>-<arch>` platform, resolve the KomaRun account bearer (via
     /// [`crate::service::oauth::manager::fresh_key`]), `GET .../extensions/{id}/download`
     /// following the 302 → signed URI, verify the artifact's sha256 + Ed25519 signature, then
     /// unpack + register + (daemon-kind) spawn it. Replies with a [`DaemonEvent::ExtensionOpResult`]
     /// then a fresh [`DaemonEvent::InstalledExtensions`]. gui-gated.
-    InstallExtension { id: String, version: Option<String> },
+    InstallExtension {
+        id: String,
+        version: Option<String>,
+    },
     /// Uninstall `id`: purge its contributions, stop its process, remove its on-disk dir +
     /// registry entry. Replies with a [`DaemonEvent::ExtensionOpResult`] then a fresh
     /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
-    UninstallExtension { id: String },
+    UninstallExtension {
+        id: String,
+    },
     /// FIRE-AND-FORGET cross-daemon in-memory unload of an extension — the uninstall
     /// FAN-OUT. The one uninstalling side (a session-daemon OR the detached GUI host) sends
     /// this to EVERY OTHER live session-daemon's keyed socket (over the blocking management
@@ -487,7 +557,9 @@ pub enum ClientRequest {
     /// (fire-and-forget); a daemon too old to know the verb error-replies or drops the
     /// connection, which the sender ignores (additive variant, like the MCP `Fingerprint`
     /// probe). NOT gui-gated — it is daemon-internal and never sent by a GUI client.
-    UnloadExtension { id: String },
+    UnloadExtension {
+        id: String,
+    },
     /// Fetch the locally-installed extension registry (read-only): replies with a one-shot
     /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
     ListInstalledExtensions,
@@ -572,14 +644,20 @@ pub enum DaemonEvent {
     /// One-shot reply to a [`ClientRequest::FileSearch`]: the resolved workspace-file
     /// hits for `query` (echoed so the GUI can drop a stale/out-of-order reply). Sent
     /// WITHOUT attaching or snapshotting — a metadata reply like [`Status`].
-    FileSearchResults { query: String, items: Vec<FileSearchItem> },
+    FileSearchResults {
+        query: String,
+        items: Vec<FileSearchItem>,
+    },
     /// One-shot reply to a [`ClientRequest::ListModels`]: the live model-id catalogue
     /// (`GET {endpoint}/models`) for the provider uuid echoed in `provider` (so the GUI
     /// can drop a stale/out-of-order reply). Delivered on a LATER tick than the request
     /// (the fetch is async) via the hub's per-client seq'd `send_to`, so it never
     /// breaks the seq stream; an empty `models` marks a failed/empty fetch. The GUI host
     /// re-pushes it as a `ModelList` envelope; the TUI shadow treats it as a no-op.
-    ModelList { provider: String, models: Vec<String> },
+    ModelList {
+        provider: String,
+        models: Vec<String>,
+    },
     /// One-shot reply to a [`ClientRequest::ListRoutes`]: the model's live provider-route
     /// list (`GET {endpoint}/models/{model_id}/endpoints`), each route flattened to the
     /// GUI subset ([`ModelEndpointWire`]: provider name + prompt/completion price + uptime).
@@ -814,7 +892,11 @@ pub enum ModeSnapshot {
     Effort(EffortSnapshot),
     Usage(Box<UsageSnapshot>),
     MessageRewind(RewindSnapshot),
-    QuitConfirm { working: usize, total: usize, selected: usize },
+    QuitConfirm {
+        working: usize,
+        total: usize,
+        selected: usize,
+    },
 }
 
 // ─── incremental deltas ──────────────────────────────────────────────────────
@@ -823,22 +905,39 @@ pub enum ModeSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum StateDelta {
-    TokenAppended { session_id: String, text: String },
-    ReasoningAppended { session_id: String, text: String },
+    TokenAppended {
+        session_id: String,
+        text: String,
+    },
+    ReasoningAppended {
+        session_id: String,
+        text: String,
+    },
     StatusChanged {
         session_id: Option<String>,
         text: String,
     },
-    InputChanged { text: String, cursor: usize },
-    ScrollChanged { scroll: u16, follow: bool },
+    InputChanged {
+        text: String,
+        cursor: usize,
+    },
+    ScrollChanged {
+        scroll: u16,
+        follow: bool,
+    },
     SessionStatusChanged {
         session_id: String,
         working: bool,
         finished_unseen: bool,
     },
-    ForegroundChanged { session_id: String },
+    ForegroundChanged {
+        session_id: String,
+    },
     SessionAdded(Box<SessionSnapshot>),
-    Toast { kind: String, text: String },
+    Toast {
+        kind: String,
+        text: String,
+    },
 }
 
 #[cfg(test)]
@@ -882,8 +981,7 @@ mod tests {
         let ev = DaemonEvent::AttachSession {
             session_id: "abc-123".into(),
         };
-        let back: DaemonEvent =
-            serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
+        let back: DaemonEvent = serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
         assert_eq!(back, ev);
     }
 
@@ -926,8 +1024,7 @@ mod tests {
             payload: Some(serde_json::json!({ "rows": [1, 2, 3] })),
             error: None,
         };
-        let back: DaemonEvent =
-            serde_json::from_slice(&serde_json::to_vec(&ok).unwrap()).unwrap();
+        let back: DaemonEvent = serde_json::from_slice(&serde_json::to_vec(&ok).unwrap()).unwrap();
         assert_eq!(back, ok);
 
         let err = DaemonEvent::ExtPanelReply {
@@ -952,8 +1049,7 @@ mod tests {
             panel_id: "sidebar".into(),
             payload: serde_json::json!({ "tick": 42 }),
         };
-        let back: DaemonEvent =
-            serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
+        let back: DaemonEvent = serde_json::from_slice(&serde_json::to_vec(&ev).unwrap()).unwrap();
         assert_eq!(back, ev);
     }
 }

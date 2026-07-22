@@ -36,7 +36,13 @@ const CORS_ORIGINS: &[&str] = &[
 pub async fn catch_post_callback(
     expected_state: &str,
     timeout_secs: u64,
-) -> Result<(u16, impl std::future::Future<Output = Result<PostCallback, String>>), String> {
+) -> Result<
+    (
+        u16,
+        impl std::future::Future<Output = Result<PostCallback, String>>,
+    ),
+    String,
+> {
     let start = super::registry::COMMANDCODE_PORT_START;
     let range = super::registry::COMMANDCODE_PORT_RANGE;
 
@@ -79,9 +85,7 @@ pub async fn catch_post_callback(
             let (mut stream, _addr) = match timeout(remaining, listener.accept()).await {
                 Ok(Ok(pair)) => pair,
                 Ok(Err(e)) => return Err(format!("loopback accept failed: {e}")),
-                Err(_) => {
-                    return Err("timed out waiting for the Command Code callback".to_string())
-                }
+                Err(_) => return Err("timed out waiting for the Command Code callback".to_string()),
             };
 
             // Read headers first (through \r\n\r\n), then the body up to Content-Length.
@@ -221,22 +225,16 @@ pub async fn catch_post_callback(
                             r#"{"success":false,"error":"state mismatch"}"#,
                         )
                         .await;
-                        return Err(
-                            "state mismatch — possible CSRF, aborting login".to_string()
-                        );
+                        return Err("state mismatch — possible CSRF, aborting login".to_string());
                     }
 
                     let user_id = field_str(&parsed, "userId");
                     let user_name = field_str(&parsed, "userName");
                     let key_name = field_str(&parsed, "keyName");
 
-                    let _ = write_json_response(
-                        &mut stream,
-                        &origin,
-                        "200 OK",
-                        r#"{"success":true}"#,
-                    )
-                    .await;
+                    let _ =
+                        write_json_response(&mut stream, &origin, "200 OK", r#"{"success":true}"#)
+                            .await;
                     return Ok(PostCallback {
                         api_key,
                         state: cb_state,
@@ -317,10 +315,7 @@ mod tests {
     #[test]
     fn extract_header_finds_origin() {
         let headers = "POST /callback HTTP/1.1\r\nOrigin: https://commandcode.ai\r\nContent-Type: application/json\r\n\r\n";
-        assert_eq!(
-            extract_header(headers, "Origin"),
-            "https://commandcode.ai"
-        );
+        assert_eq!(extract_header(headers, "Origin"), "https://commandcode.ai");
     }
 
     #[test]

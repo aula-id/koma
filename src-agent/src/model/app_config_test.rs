@@ -40,7 +40,10 @@ fn upsert_model_entry_mints_uuid_for_brand_new_entry() {
         },
     );
     assert_eq!(list.len(), 1);
-    assert!(!list[0].uuid.is_empty(), "an empty incoming uuid must be minted fresh");
+    assert!(
+        !list[0].uuid.is_empty(),
+        "an empty incoming uuid must be minted fresh"
+    );
     assert_eq!(list[0].effective_roles(), vec![ModelRole::Main]);
 }
 
@@ -66,7 +69,11 @@ fn upsert_model_entry_steals_role_from_roles_vec_leaving_other_roles_intact() {
     );
     assert_eq!(list.len(), 2);
     let a = list.iter().find(|m| m.uuid == "a").expect("a survives");
-    assert_eq!(a.effective_roles(), vec![ModelRole::Awareness], "Main is stolen; Awareness survives");
+    assert_eq!(
+        a.effective_roles(),
+        vec![ModelRole::Awareness],
+        "Main is stolen; Awareness survives"
+    );
     let b = list.iter().find(|m| m.uuid == "b").expect("b inserted");
     assert_eq!(b.effective_roles(), vec![ModelRole::Main]);
 }
@@ -84,7 +91,11 @@ fn upsert_model_entry_steals_role_from_legacy_role_field_too() {
         role: Some(ModelRole::Main), // old-style single-role holder
         ..ModelEntry::default()
     }];
-    assert_eq!(list[0].effective_roles(), vec![ModelRole::Main], "legacy field folds in via effective_roles");
+    assert_eq!(
+        list[0].effective_roles(),
+        vec![ModelRole::Main],
+        "legacy field folds in via effective_roles"
+    );
 
     upsert_model_entry(
         &mut list,
@@ -96,9 +107,18 @@ fn upsert_model_entry_steals_role_from_legacy_role_field_too() {
         },
     );
 
-    let legacy = list.iter().find(|m| m.uuid == "legacy").expect("legacy entry survives");
-    assert!(legacy.effective_roles().is_empty(), "the legacy role field must be cleared, not just shadowed");
-    assert_eq!(legacy.role, None, "strip_role must null the legacy field directly");
+    let legacy = list
+        .iter()
+        .find(|m| m.uuid == "legacy")
+        .expect("legacy entry survives");
+    assert!(
+        legacy.effective_roles().is_empty(),
+        "the legacy role field must be cleared, not just shadowed"
+    );
+    assert_eq!(
+        legacy.role, None,
+        "strip_role must null the legacy field directly"
+    );
 }
 
 /// Re-upserting an entry by its OWN uuid updates it in place (replace-by-uuid), and does NOT
@@ -123,9 +143,17 @@ fn upsert_model_entry_updates_in_place_by_uuid_without_self_theft() {
             ..ModelEntry::default()
         },
     );
-    assert_eq!(list.len(), 1, "same uuid must update in place, never append a duplicate");
+    assert_eq!(
+        list.len(),
+        1,
+        "same uuid must update in place, never append a duplicate"
+    );
     assert_eq!(list[0].name, "New Name");
-    assert_eq!(list[0].effective_roles(), vec![ModelRole::Main], "re-saving with the same role keeps it");
+    assert_eq!(
+        list[0].effective_roles(),
+        vec![ModelRole::Main],
+        "re-saving with the same role keeps it"
+    );
 }
 
 /// `AppConfig::upsert_model` (the public wrapper `try_vacuum_fill_main` calls) delegates to the
@@ -148,12 +176,20 @@ fn app_config_upsert_model_delegates_role_steal_to_global_catalogue() {
     });
 
     // Mirrors `try_vacuum_fill_main`: clone the target entry, add Main, upsert.
-    let mut promoted = config.models.iter().find(|m| m.uuid == "other").unwrap().clone();
+    let mut promoted = config
+        .models
+        .iter()
+        .find(|m| m.uuid == "other")
+        .unwrap()
+        .clone();
     promoted.roles.push(ModelRole::Main);
     config.upsert_model(promoted);
 
     let old = config.models.iter().find(|m| m.uuid == "old-main").unwrap();
-    assert!(old.effective_roles().is_empty(), "the previous Main holder must lose the role");
+    assert!(
+        old.effective_roles().is_empty(),
+        "the previous Main holder must lose the role"
+    );
     let other = config.models.iter().find(|m| m.uuid == "other").unwrap();
     assert_eq!(
         other.effective_roles(),

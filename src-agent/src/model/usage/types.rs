@@ -210,7 +210,13 @@ impl UsageData {
         heat_n: usize,
         session_uuid: &str,
     ) -> Self {
-        let key = (session_view, since, heat_bucket, heat_n, session_uuid.to_string());
+        let key = (
+            session_view,
+            since,
+            heat_bucket,
+            heat_n,
+            session_uuid.to_string(),
+        );
         super::cache::get_or_compute(key, || {
             Self::collect_uncached(session_view, since, heat_bucket, heat_n, session_uuid)
         })

@@ -52,7 +52,10 @@ pub(crate) fn flash_internet_feedback(
 /// and sets a transient status line with a token-cost warning when Full.
 pub(super) fn handle_internet(target: Option<InternetMode>, state: &mut AppState) -> Result<()> {
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
-        state.rest.fg_mut().set_toast("no active session".to_string());
+        state
+            .rest
+            .fg_mut()
+            .set_toast("no active session".to_string());
         return Ok(());
     };
 
@@ -64,7 +67,10 @@ pub(super) fn handle_internet(target: Option<InternetMode>, state: &mut AppState
     sess.rebuild_system();
 
     if let Err(e) = sess.save() {
-        state.rest.fg_mut().set_toast(format!("error saving settings: {e}"));
+        state
+            .rest
+            .fg_mut()
+            .set_toast(format!("error saving settings: {e}"));
         return Ok(());
     }
 

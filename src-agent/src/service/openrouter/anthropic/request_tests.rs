@@ -103,10 +103,7 @@ fn assistant_text_precedes_tool_use_and_input_is_object() {
 fn parallel_tool_results_coalesce_into_one_user_message() {
     let asst = ChatMessage::assistant_with_tools(
         String::new(),
-        vec![
-            tool_call("c1", "read", "{}"),
-            tool_call("c2", "grep", "{}"),
-        ],
+        vec![tool_call("c1", "read", "{}"), tool_call("c2", "grep", "{}")],
     );
     let (_system, msgs) = build_messages(
         vec![
@@ -134,10 +131,8 @@ fn parallel_tool_results_coalesce_into_one_user_message() {
 
 #[test]
 fn tool_result_then_user_text_merge_into_one_user_turn() {
-    let asst = ChatMessage::assistant_with_tools(
-        String::new(),
-        vec![tool_call("c1", "read", "{}")],
-    );
+    let asst =
+        ChatMessage::assistant_with_tools(String::new(), vec![tool_call("c1", "read", "{}")]);
     let (_system, msgs) = build_messages(
         vec![
             ChatMessage::new(Role::System, "sys"),
@@ -321,11 +316,8 @@ fn assistant_blocks_replays_signed_thinking_before_text_and_tool_use() {
 fn assistant_blocks_drops_unsigned_thinking() {
     // Real Anthropic requires the signature; an unsigned thinking detail is dropped
     // (never sent as `signature: ""`). Only the tool_use survives (content empty).
-    let msg = ChatMessage::assistant_with_tools(
-        String::new(),
-        vec![tool_call("c1", "read", "{}")],
-    )
-    .with_reasoning_details(Some(vec![thinking_detail("unsigned", None)]));
+    let msg = ChatMessage::assistant_with_tools(String::new(), vec![tool_call("c1", "read", "{}")])
+        .with_reasoning_details(Some(vec![thinking_detail("unsigned", None)]));
     let blocks = assistant_blocks(&msg);
     assert!(!blocks.iter().any(|b| matches!(b, Block::Thinking { .. })));
     assert!(matches!(blocks[0], Block::ToolUse { .. }));
@@ -338,11 +330,9 @@ fn assistant_blocks_replays_redacted_thinking_first() {
         data: Some("ENCRYPTED".to_string()),
         ..Default::default()
     };
-    let msg = ChatMessage::assistant_with_tools(
-        "hi".to_string(),
-        vec![tool_call("c1", "read", "{}")],
-    )
-    .with_reasoning_details(Some(vec![detail]));
+    let msg =
+        ChatMessage::assistant_with_tools("hi".to_string(), vec![tool_call("c1", "read", "{}")])
+            .with_reasoning_details(Some(vec![detail]));
     let blocks = assistant_blocks(&msg);
     assert_eq!(
         blocks[0],

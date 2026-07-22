@@ -135,7 +135,10 @@ impl Tool for Cd {
             Err(e) => return Ok(format!("error: {e}")),
         };
         if !canonical.is_dir() {
-            return Ok(format!("error: '{}' is not a directory", canonical.display()));
+            return Ok(format!(
+                "error: '{}' is not a directory",
+                canonical.display()
+            ));
         }
         // MODEL RESTRICTION: the target must be under an allowed root. `/cd`
         // (user) skips this; the model may only roam inside its workspaces.

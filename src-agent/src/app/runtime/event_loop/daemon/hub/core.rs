@@ -397,7 +397,10 @@ impl DaemonHub {
     /// see nothing and are excluded. The set is REPLACED (cleared + rebuilt) each call.
     /// Resolved UUIDs are gathered into a local first so the immutable borrow of
     /// `state.rest.sessions` ends before the `viewed_sessions` mutation.
-    pub(in crate::app::runtime::event_loop::daemon) fn refresh_viewed_sessions(&self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn refresh_viewed_sessions(
+        &self,
+        state: &mut AppState,
+    ) {
         let viewed: std::collections::HashSet<String> = self
             .clients
             .iter()
@@ -488,11 +491,20 @@ impl DaemonHub {
     /// so behaviour is byte-identical; it gives `HubClient::foreground` its genuine read +
     /// write site. The live UUID is computed FIRST (borrowing `state.rest.sessions`), then
     /// the clients are mutated, so the session borrow never overlaps the `&mut` on clients.
-    pub(in crate::app::runtime::event_loop::daemon) fn repoint_foreground_off_closed(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn repoint_foreground_off_closed(
+        &mut self,
+        state: &mut AppState,
+    ) {
         // --- global pointer (render still uses this in C1.5 — keep identical) ---
         let fg = state.rest.foreground;
         // Current foreground still live → leave the global index untouched.
-        if state.rest.sessions.get(fg).map(|s| s.closed).unwrap_or(false) {
+        if state
+            .rest
+            .sessions
+            .get(fg)
+            .map(|s| s.closed)
+            .unwrap_or(false)
+        {
             if let Some(live) = state.rest.sessions.iter().position(|s| !s.closed) {
                 state.rest.foreground = live;
             }
@@ -534,7 +546,10 @@ impl DaemonHub {
     /// no index shifts. Foreground is repointed afterwards — it lands on a tombstone since
     /// all are closed, which is harmless: the grace-timed self-exit then fires because
     /// `all_sessions_closed` is now true and no further live work can start.
-    pub(in crate::app::runtime::event_loop::daemon) fn close_all_sessions(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn close_all_sessions(
+        &mut self,
+        state: &mut AppState,
+    ) {
         for s in &mut state.rest.sessions {
             s.close();
         }

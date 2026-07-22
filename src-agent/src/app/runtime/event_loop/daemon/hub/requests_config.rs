@@ -124,7 +124,9 @@ impl DaemonHub {
             // Reuse the same `DaemonEvent::Error` reply shape as the success/failure ack.
             self.ack_or_error(
                 idx,
-                Err(anyhow::anyhow!("managed by extension {ext} — uninstall to remove")),
+                Err(anyhow::anyhow!(
+                    "managed by extension {ext} — uninstall to remove"
+                )),
             );
             return;
         }
@@ -145,13 +147,13 @@ impl DaemonHub {
                 &dead_providers,
                 purge.main_reset,
             );
-            if !purge.models_removed.is_empty()
-                || report.agents_cleared > 0
-                || purge.main_reset
-            {
-                state.rest.fg_mut().set_toast_info(
-                    crate::app::cascade::cascade_status_line("provider", &report),
-                );
+            if !purge.models_removed.is_empty() || report.agents_cleared > 0 || purge.main_reset {
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast_info(crate::app::cascade::cascade_status_line(
+                        "provider", &report,
+                    ));
             }
         }
         self.ack_or_error(idx, result);
@@ -283,9 +285,10 @@ impl DaemonHub {
                     purge.main_reset,
                 );
                 if purge.main_reset || report.agents_cleared > 0 {
-                    state.rest.fg_mut().set_toast_info(
-                        crate::app::cascade::cascade_status_line("model", &report),
-                    );
+                    state
+                        .rest
+                        .fg_mut()
+                        .set_toast_info(crate::app::cascade::cascade_status_line("model", &report));
                 }
             }
             save
@@ -433,7 +436,11 @@ impl DaemonHub {
     // mirrors `SetSessionPrefs`: a fresh `SettingsValues` re-push IS the reply
     // (the effort-picker label rides the same settings channel), not a bare Ack.
     pub(super) fn set_effort(&mut self, idx: usize, state: &mut AppState, effort: String) {
-        let effort = if effort == "default" { String::new() } else { effort };
+        let effort = if effort == "default" {
+            String::new()
+        } else {
+            effort
+        };
         if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             sess.settings.effort = effort;
             let _ = sess.save();
@@ -490,7 +497,13 @@ impl DaemonHub {
         // Resolve + CLONE the chosen global entry first (owned) so the later
         // `fg_mut()` mutable borrow doesn't overlap the config read.
         let chosen = model_uuid.as_ref().and_then(|u| {
-            state.rest.config.models.iter().find(|m| &m.uuid == u).cloned()
+            state
+                .rest
+                .config
+                .models
+                .iter()
+                .find(|m| &m.uuid == u)
+                .cloned()
         });
         let result = if let Some(sess) = state.rest.fg_mut().session.as_mut() {
             if model_uuid.is_none() {

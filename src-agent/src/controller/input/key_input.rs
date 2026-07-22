@@ -1,9 +1,9 @@
 //! Key handler for the first-run credentials setup wizard (`Mode::KeyInput`).
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use super::Action;
 use crate::app::mode::KeyInputForm;
 use crate::app::state::AppStateRest;
-use super::Action;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle a key press while the first-run setup wizard is active.
 ///

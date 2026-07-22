@@ -233,7 +233,11 @@ pub(crate) fn find_model_entry_by_slug<'a>(
 /// pass matches nothing and `find_model_entry_by_slug` falls straight through to the general
 /// pass, so the semantics are identical to `None` in that case but the intent stays explicit.
 fn ext_preferred_provider_uuids(config: &AppConfig, agent: &AgentDef) -> Option<HashSet<String>> {
-    let ext_id = agent.ext_id.as_deref().map(str::trim).filter(|e| !e.is_empty())?;
+    let ext_id = agent
+        .ext_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())?;
     Some(
         config
             .oauth_conns
@@ -262,13 +266,22 @@ fn ext_preferred_provider_uuids(config: &AppConfig, agent: &AgentDef) -> Option<
 /// role (Planner drives the turn exactly like Main while it is active, so it
 /// carries the same reasoning-effort knob); every other role gets an empty
 /// effort.
-fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role: ModelRole) -> Option<Resolved> {
+fn from_entry(
+    config: &AppConfig,
+    settings: &Settings,
+    entry: &ModelEntry,
+    role: ModelRole,
+) -> Option<Resolved> {
     let effort = if matches!(role, ModelRole::Main | ModelRole::Planner) {
         settings.effort.clone()
     } else {
         String::new()
     };
-    if let Some(provider) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+    if let Some(provider) = config
+        .providers
+        .iter()
+        .find(|p| p.uuid == entry.provider_uuid)
+    {
         // koma-free: keyless dual-header transport. Route the ModelEntry names as-is
         // (no force-override), but send NO api_key and carry the stable install id for
         // the `X-Koma` header — auth rides the X-Koma/X-Session headers, not a bearer.
@@ -299,7 +312,10 @@ fn from_entry(config: &AppConfig, settings: &Settings, entry: &ModelEntry, role:
         });
     }
     // Fall back to an OAuth-backed connection (Codex / Kilo Code).
-    let conn = config.oauth_conns.iter().find(|c| c.uuid == entry.provider_uuid)?;
+    let conn = config
+        .oauth_conns
+        .iter()
+        .find(|c| c.uuid == entry.provider_uuid)?;
     // W12: an EXTENSION-backed conn is data-driven from its OWN stored provider meta
     // (endpoint + wire type captured at login from the manifest `OAuthProviderDef`), NOT the
     // static `registry::meta` table below (which is empty for Extension). Handled here with
@@ -519,7 +535,12 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
         .session_models
         .iter()
         .find(|e| e.effective_roles().contains(&role))
-        .or_else(|| config.models.iter().find(|e| e.effective_roles().contains(&role)));
+        .or_else(|| {
+            config
+                .models
+                .iter()
+                .find(|e| e.effective_roles().contains(&role))
+        });
 
     // 2. If a model is assigned AND its provider resolves, that route wins —
     //    including an explicitly-assigned Awareness model (explicit assignment is
@@ -551,7 +572,10 @@ pub fn resolve_role(config: &AppConfig, settings: &Settings, role: ModelRole) ->
 /// OTHER role). Never used to build a request; see [`AppStateRest::main_identity_now`]
 /// / [`AppStateRest::reset_effort_if_main_changed`](crate::app::state::rest::AppStateRest::reset_effort_if_main_changed)
 /// for the effort-reset bug fix that consumes this.
-pub fn main_identity(config: &AppConfig, settings: &Settings) -> Option<(String, String, Option<String>)> {
+pub fn main_identity(
+    config: &AppConfig,
+    settings: &Settings,
+) -> Option<(String, String, Option<String>)> {
     resolve_role(config, settings, ModelRole::Main).map(|r| (r.model_id, r.endpoint, r.route))
 }
 
@@ -635,7 +659,11 @@ fn koma_free_dispatch_route(config: &AppConfig, settings: &Settings, role: Model
 /// actually about to be built (the Main turn, the Awareness fold/summary call,
 /// `/compact`'s Compactor call, their Main-route retry fallbacks, and the
 /// Safeguard classifier call).
-pub fn resolve_role_dispatch(config: &AppConfig, settings: &Settings, role: ModelRole) -> Option<Resolved> {
+pub fn resolve_role_dispatch(
+    config: &AppConfig,
+    settings: &Settings,
+    role: ModelRole,
+) -> Option<Resolved> {
     let resolved = resolve_role(config, settings, role);
     if matches!(
         role,
@@ -727,9 +755,17 @@ pub fn main_fallback_reason(config: &AppConfig, settings: &Settings) -> Option<M
     //    provider necessarily has an empty `api_key`, and a matching OAuth conn an
     //    empty `access_token` (a populated credential would have resolved usable at
     //    step 2 and returned `None`).
-    if config.providers.iter().any(|p| p.uuid == assigned.provider_uuid) {
+    if config
+        .providers
+        .iter()
+        .any(|p| p.uuid == assigned.provider_uuid)
+    {
         Some(MainFallback::NoKey)
-    } else if config.oauth_conns.iter().any(|c| c.uuid == assigned.provider_uuid) {
+    } else if config
+        .oauth_conns
+        .iter()
+        .any(|c| c.uuid == assigned.provider_uuid)
+    {
         Some(MainFallback::NotSignedIn)
     } else {
         Some(MainFallback::ProviderRemoved)
@@ -776,7 +812,11 @@ fn same_route(a: &Resolved, b: &Resolved) -> bool {
 /// here rather than shipping an empty-key request. This does not affect any
 /// "is Main configured?" gate: those call [`resolve_role`] directly (see
 /// [`resolve_role_dispatch`]'s doc comment).
-pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMode) -> Option<Resolved> {
+pub fn resolve_turn_model(
+    config: &AppConfig,
+    settings: &Settings,
+    mode: AgentMode,
+) -> Option<Resolved> {
     let main = resolve_role_dispatch(config, settings, ModelRole::Main)?;
     if mode != AgentMode::Plan {
         return Some(main);
@@ -818,7 +858,10 @@ pub fn resolve_turn_model(config: &AppConfig, settings: &Settings, mode: AgentMo
 /// model at all" predicate used to decide whether a fallback-to-Main is
 /// surprising (declared but unresolvable) or expected (no model declared).
 pub fn agent_declares_model(agent: &AgentDef) -> bool {
-    agent.model_uuid.as_deref().is_some_and(|u| !u.trim().is_empty())
+    agent
+        .model_uuid
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty())
         || agent.model.as_deref().is_some_and(|m| !m.trim().is_empty())
 }
 
@@ -839,7 +882,11 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
     }
     // 2. Legacy explicit model + resolvable provider connection.
     if let Some(model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
-        if let Some(uuid) = agent.provider_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
+        if let Some(uuid) = agent
+            .provider_uuid
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+        {
             if config.providers.iter().any(|p| p.uuid == uuid) {
                 return true;
             }
@@ -869,7 +916,11 @@ pub fn agent_model_resolves(config: &AppConfig, settings: &Settings, agent: &Age
 /// looked up against the registered catalogues; else 2. inherit the fully-resolved
 /// Main route. The agent's own `effort`, when set, overrides whichever route is
 /// picked.
-pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) -> Option<Resolved> {
+pub fn resolve_agent(
+    config: &AppConfig,
+    settings: &Settings,
+    agent: &AgentDef,
+) -> Option<Resolved> {
     // The agent's declared effort, applied on top of whichever route we land on.
     let agent_effort = agent.effort.clone();
     let with_effort = |mut r: Resolved| -> Resolved {
@@ -893,7 +944,11 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
 
     // 1b. Legacy explicit model + resolvable provider connection → dispatch there.
     if let Some(model_id) = agent.model.as_deref().filter(|m| !m.trim().is_empty()) {
-        if let Some(uuid) = agent.provider_uuid.as_deref().filter(|u| !u.trim().is_empty()) {
+        if let Some(uuid) = agent
+            .provider_uuid
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+        {
             if let Some(provider) = config.providers.iter().find(|p| p.uuid == uuid) {
                 return Some(with_effort(Resolved {
                     model_id: model_id.to_string(),
@@ -927,7 +982,9 @@ pub fn resolve_agent(config: &AppConfig, settings: &Settings, agent: &AgentDef) 
             // entry can't hijack the extension's own model. A non-ext agent passes `None`
             // (unchanged general lookup).
             let preferred = ext_preferred_provider_uuids(config, agent);
-            if let Some(entry) = find_model_entry_by_slug(config, settings, slug, preferred.as_ref()) {
+            if let Some(entry) =
+                find_model_entry_by_slug(config, settings, slug, preferred.as_ref())
+            {
                 if let Some(resolved) = from_entry(config, settings, entry, ModelRole::Main) {
                     return Some(with_effort(resolved));
                 }

@@ -242,7 +242,14 @@ impl DaemonHub {
         let cancel_task = Arc::clone(&cancel);
         let provider_for_task = provider_id.clone();
         let join = handle.spawn_blocking(move || {
-            run_ext_oauth_delegate(&mgr, record, &provider_for_task, &provider_def, &cancel_task, tx);
+            run_ext_oauth_delegate(
+                &mgr,
+                record,
+                &provider_for_task,
+                &provider_def,
+                &cancel_task,
+                tx,
+            );
         });
         state.rest.oauth_task = Some(join.abort_handle());
         state.rest.oauth_ext_flow = Some(ExtOAuthFlow {
@@ -278,7 +285,12 @@ impl DaemonHub {
         }
         let provider = state.rest.oauth_paste_provider;
         state.rest.oauth_paste_provider = OAuthProvider::Codex; // reset after use
-        let _ = apply_action(Action::OAuthPaste { provider, token }, state, client, handle);
+        let _ = apply_action(
+            Action::OAuthPaste { provider, token },
+            state,
+            client,
+            handle,
+        );
         self.send_oauth_state(idx, state, "success", None, None, None, None);
     }
 
@@ -456,7 +468,12 @@ fn ext_oauth_provider_rows(installed: &[InstalledExtension]) -> Vec<OAuthProvide
         } else {
             Vec::new()
         };
-        rows.extend(ext_oauth_rows_for(&ext.id, ext.enabled, &ext.granted, &providers));
+        rows.extend(ext_oauth_rows_for(
+            &ext.id,
+            ext.enabled,
+            &ext.granted,
+            &providers,
+        ));
     }
     rows
 }
@@ -557,7 +574,10 @@ enum BeginOutcome {
     /// Browser method: surface `url` (the `waiting_url` phase; koma does NOT auto-open it).
     Browser { url: String },
     /// Device method: surface a user code + verification URL (the `waiting_code` phase).
-    Device { user_code: String, verification_url: String },
+    Device {
+        user_code: String,
+        verification_url: String,
+    },
     /// The begin step failed (or returned an unusable reply).
     Failed(String),
 }
@@ -649,7 +669,9 @@ fn decide_poll(reply: &Value) -> PollDecision {
             PollDecision::Success(ExtToken {
                 access_token: access,
                 refresh_token: field("refresh_token"),
-                expires_at: token.and_then(|t| t.get("expires_at")).and_then(Value::as_u64),
+                expires_at: token
+                    .and_then(|t| t.get("expires_at"))
+                    .and_then(Value::as_u64),
                 email: field("email"),
                 label: field("label"),
             })
@@ -800,7 +822,12 @@ fn run_ext_oauth_delegate(
     // Fresh `{ "providerId": … }` params per invoke (provider_id is borrowed, &str is Copy).
     let params = || serde_json::json!({ "providerId": provider_id });
 
-    let begin = mgr.invoke_with_timeout(&record.id, "oauth.begin", params(), EXT_OAUTH_INVOKE_TIMEOUT);
+    let begin = mgr.invoke_with_timeout(
+        &record.id,
+        "oauth.begin",
+        params(),
+        EXT_OAUTH_INVOKE_TIMEOUT,
+    );
     if cancel.load(Ordering::SeqCst) {
         return;
     }
@@ -843,7 +870,8 @@ fn run_ext_oauth_delegate(
             });
             return;
         }
-        let poll = mgr.invoke_with_timeout(&record.id, "oauth.poll", params(), EXT_OAUTH_INVOKE_TIMEOUT);
+        let poll =
+            mgr.invoke_with_timeout(&record.id, "oauth.poll", params(), EXT_OAUTH_INVOKE_TIMEOUT);
         if cancel.load(Ordering::SeqCst) {
             return;
         }
@@ -914,27 +942,45 @@ mod ext_oauth_tests {
         let providers = [def("demo", "Demo Login", "device_code")];
         assert!(ext_oauth_rows_for("ext.a", true, &[], &providers).is_empty());
         // An unrelated grant does not unlock it either.
-        assert!(ext_oauth_rows_for("ext.a", true, &["agents:read".to_string()], &providers).is_empty());
+        assert!(
+            ext_oauth_rows_for("ext.a", true, &["agents:read".to_string()], &providers).is_empty()
+        );
     }
 
     /// A disabled extension contributes no rows even when granted + declaring providers.
     #[test]
     fn rows_none_when_disabled() {
         let providers = [def("demo", "Demo Login", "browser")];
-        assert!(ext_oauth_rows_for("ext.a", false, &["oauth:contribute".to_string()], &providers).is_empty());
+        assert!(ext_oauth_rows_for(
+            "ext.a",
+            false,
+            &["oauth:contribute".to_string()],
+            &providers
+        )
+        .is_empty());
     }
 
     /// Granted + enabled but declaring NO providers → no rows.
     #[test]
     fn rows_none_without_declared_providers() {
-        assert!(ext_oauth_rows_for("ext.a", true, &["oauth:contribute".to_string()], &[]).is_empty());
+        assert!(
+            ext_oauth_rows_for("ext.a", true, &["oauth:contribute".to_string()], &[]).is_empty()
+        );
     }
 
     /// Multiple declared providers → one row each, ids kept distinct.
     #[test]
     fn rows_one_per_declared_provider() {
-        let providers = [def("gh", "GitHub", "browser"), def("gl", "GitLab", "device_code")];
-        let rows = ext_oauth_rows_for("acme.ext", true, &["oauth:contribute".to_string()], &providers);
+        let providers = [
+            def("gh", "GitHub", "browser"),
+            def("gl", "GitLab", "device_code"),
+        ];
+        let rows = ext_oauth_rows_for(
+            "acme.ext",
+            true,
+            &["oauth:contribute".to_string()],
+            &providers,
+        );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "ext:acme.ext:gh");
         assert_eq!(rows[0].kind, "pkce");
@@ -957,7 +1003,10 @@ mod ext_oauth_tests {
     fn parse_ext_id_valid() {
         assert_eq!(
             parse_ext_provider_id("ext:run.koma.example.oauth-demo-daemon:demo"),
-            Some(("run.koma.example.oauth-demo-daemon".to_string(), "demo".to_string()))
+            Some((
+                "run.koma.example.oauth-demo-daemon".to_string(),
+                "demo".to_string()
+            ))
         );
     }
 
@@ -981,14 +1030,18 @@ mod ext_oauth_tests {
     fn begin_browser() {
         assert_eq!(
             parse_begin(&json!({ "url": "https://example.com/auth" })),
-            BeginOutcome::Browser { url: "https://example.com/auth".to_string() }
+            BeginOutcome::Browser {
+                url: "https://example.com/auth".to_string()
+            }
         );
     }
 
     #[test]
     fn begin_device() {
         assert_eq!(
-            parse_begin(&json!({ "userCode": "ABCD-1234", "verificationUrl": "https://example.com/activate" })),
+            parse_begin(
+                &json!({ "userCode": "ABCD-1234", "verificationUrl": "https://example.com/activate" })
+            ),
             BeginOutcome::Device {
                 user_code: "ABCD-1234".to_string(),
                 verification_url: "https://example.com/activate".to_string(),
@@ -998,20 +1051,34 @@ mod ext_oauth_tests {
 
     #[test]
     fn begin_error_and_empty_are_failed() {
-        assert!(matches!(parse_begin(&json!({ "error": "nope" })), BeginOutcome::Failed(e) if e == "nope"));
+        assert!(
+            matches!(parse_begin(&json!({ "error": "nope" })), BeginOutcome::Failed(e) if e == "nope")
+        );
         // Neither a url nor a (complete) device code → failed, never a stuck spinner.
         assert!(matches!(parse_begin(&json!({})), BeginOutcome::Failed(_)));
-        assert!(matches!(parse_begin(&json!({ "userCode": "X" })), BeginOutcome::Failed(_)));
-        assert!(matches!(parse_begin(&json!({ "url": "" })), BeginOutcome::Failed(_)));
+        assert!(matches!(
+            parse_begin(&json!({ "userCode": "X" })),
+            BeginOutcome::Failed(_)
+        ));
+        assert!(matches!(
+            parse_begin(&json!({ "url": "" })),
+            BeginOutcome::Failed(_)
+        ));
     }
 
     // ── oauth.poll decision ─────────────────────────────────────────────────────────
 
     #[test]
     fn poll_pending_continues() {
-        assert_eq!(decide_poll(&json!({ "status": "pending" })), PollDecision::Continue);
+        assert_eq!(
+            decide_poll(&json!({ "status": "pending" })),
+            PollDecision::Continue
+        );
         // Unknown status and empty reply are both non-terminal (keep polling until budget).
-        assert_eq!(decide_poll(&json!({ "status": "warming_up" })), PollDecision::Continue);
+        assert_eq!(
+            decide_poll(&json!({ "status": "warming_up" })),
+            PollDecision::Continue
+        );
         assert_eq!(decide_poll(&json!({})), PollDecision::Continue);
     }
 
@@ -1042,7 +1109,8 @@ mod ext_oauth_tests {
     #[test]
     fn poll_success_minimal_token() {
         // Only access_token → the rest default to None.
-        let d = decide_poll(&json!({ "status": "success", "token": { "access_token": "at-only" } }));
+        let d =
+            decide_poll(&json!({ "status": "success", "token": { "access_token": "at-only" } }));
         assert_eq!(
             d,
             PollDecision::Success(ExtToken {
@@ -1084,7 +1152,10 @@ mod ext_oauth_tests {
             PollDecision::Failed(e) if e == "extension crashed"
         ));
         // A "failed" without an error message still fails with a default reason.
-        assert!(matches!(decide_poll(&json!({ "status": "failed" })), PollDecision::Failed(_)));
+        assert!(matches!(
+            decide_poll(&json!({ "status": "failed" })),
+            PollDecision::Failed(_)
+        ));
     }
 
     // ── conn construction ───────────────────────────────────────────────────────────
@@ -1100,7 +1171,12 @@ mod ext_oauth_tests {
         };
         // An account-login-only def (no chat_endpoint/api_type) → the conn is NOT a model
         // provider (its W12 meta stays None).
-        let conn = build_ext_conn("run.koma.ext.demo", "demo", &def("demo", "Demo", "browser"), token);
+        let conn = build_ext_conn(
+            "run.koma.ext.demo",
+            "demo",
+            &def("demo", "Demo", "browser"),
+            token,
+        );
         assert_eq!(conn.provider, OAuthProvider::Extension);
         assert_eq!(conn.ext_id.as_deref(), Some("run.koma.ext.demo"));
         assert_eq!(conn.provider_id.as_deref(), Some("demo"));
@@ -1112,7 +1188,10 @@ mod ext_oauth_tests {
         assert!(!conn.uuid.is_empty()); // minted host-side
         assert!(conn.chat_endpoint.is_none());
         assert!(conn.api_type.is_none());
-        assert!(conn.ext_model_route().is_none(), "account-login-only conn is not a model provider");
+        assert!(
+            conn.ext_model_route().is_none(),
+            "account-login-only conn is not a model provider"
+        );
     }
 
     /// W12: a def declaring a chat endpoint + a recognised api_type + a refresh descriptor
@@ -1138,19 +1217,34 @@ mod ext_oauth_tests {
             label: None,
         };
         let conn = build_ext_conn("e.ext", "demo", &provider_def, token);
-        assert_eq!(conn.chat_endpoint.as_deref(), Some("https://api.demo.test/v1"));
+        assert_eq!(
+            conn.chat_endpoint.as_deref(),
+            Some("https://api.demo.test/v1")
+        );
         assert_eq!(conn.api_type.as_deref(), Some("openai"));
-        assert_eq!(conn.refresh_token_url.as_deref(), Some("https://demo.test/token"));
+        assert_eq!(
+            conn.refresh_token_url.as_deref(),
+            Some("https://demo.test/token")
+        );
         assert_eq!(conn.refresh_client_id.as_deref(), Some("cid"));
-        assert!(conn.ext_model_route().is_some(), "a declared model provider resolves");
+        assert!(
+            conn.ext_model_route().is_some(),
+            "a declared model provider resolves"
+        );
     }
 
     /// W12: only `"openai"`/`"anthropic"` are accepted api_type wires; anything else (an
     /// unknown/legacy value, or absent) normalizes to `None` (account-login-only).
     #[test]
     fn normalize_ext_api_type_accepts_only_known_wires() {
-        assert_eq!(normalize_ext_api_type(Some("openai")).as_deref(), Some("openai"));
-        assert_eq!(normalize_ext_api_type(Some("  anthropic  ")).as_deref(), Some("anthropic"));
+        assert_eq!(
+            normalize_ext_api_type(Some("openai")).as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            normalize_ext_api_type(Some("  anthropic  ")).as_deref(),
+            Some("anthropic")
+        );
         assert_eq!(normalize_ext_api_type(Some("openai_compatible")), None);
         assert_eq!(normalize_ext_api_type(Some("")), None);
         assert_eq!(normalize_ext_api_type(None), None);
@@ -1165,7 +1259,12 @@ mod ext_oauth_tests {
             email: None,
             label: None,
         };
-        let conn = build_ext_conn("run.koma.ext.demo", "demo", &def("demo", "Demo", "browser"), token);
+        let conn = build_ext_conn(
+            "run.koma.ext.demo",
+            "demo",
+            &def("demo", "Demo", "browser"),
+            token,
+        );
         assert_eq!(conn.name, "run.koma.ext.demo:demo"); // no label → id fallback
         assert_eq!(conn.refresh_token, "");
         assert_eq!(conn.expires_at, 0);

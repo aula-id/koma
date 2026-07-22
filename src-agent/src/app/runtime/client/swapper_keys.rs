@@ -258,10 +258,7 @@ fn resolve_enter(hub: &SessionHub) -> Option<SwapperOutcome> {
             // A real live session → attach to its already-running daemon by its id. A
             // real row always carries `Some(id)`; the `?`-less guard degrades a (never-
             // expected) `None` to staying in the picker rather than picking a blank id.
-            Some(entry) => entry
-                .session_id
-                .clone()
-                .map(SwapperOutcome::Pick),
+            Some(entry) => entry.session_id.clone().map(SwapperOutcome::Pick),
             // Empty cooking pane (can't happen — the synthetic row is always present) →
             // stay in the picker.
             None => None,

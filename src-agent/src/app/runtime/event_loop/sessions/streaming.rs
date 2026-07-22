@@ -3,9 +3,9 @@ use std::sync::Arc;
 use crate::app::state::AppState;
 use crate::service::{openrouter::OpenRouterClient, StreamEvent};
 
+use super::super::super::stream::{advance_turn, finish_stream};
 use super::super::drains::apply_compaction_result;
 use super::super::MIN_COMPACT_ANIM;
-use super::super::super::stream::{advance_turn, finish_stream};
 
 /// Drain this session's `active_rx` stream (Token/Reasoning/Usage/ToolCalls/Done/Error/Compacted).
 /// Returns true if any event was processed.
@@ -44,10 +44,16 @@ pub(super) fn drain_stream(
                         d,
                     );
                 }
-                StreamEvent::Usage { prompt_tokens, completion_tokens, cached_tokens, cost } => {
+                StreamEvent::Usage {
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    cost,
+                } => {
                     // Stash for the assistant-commit step; do NOT break — usage
                     // arrives just before Done.
-                    state.rest.sessions[idx].pending_usage = Some((prompt_tokens, completion_tokens, cost));
+                    state.rest.sessions[idx].pending_usage =
+                        Some((prompt_tokens, completion_tokens, cost));
                     // Cached-prompt-token count for THIS prompt (current context,
                     // like tokens_in — not cumulative). Set straight away on THIS
                     // session so its readout can show the cache hit even on a tool
@@ -116,7 +122,8 @@ pub(super) fn drain_stream(
                         .unwrap_or(MIN_COMPACT_ANIM);
                     if elapsed < MIN_COMPACT_ANIM {
                         if let Some(start) = state.rest.sessions[idx].compact_anim_start {
-                            state.rest.sessions[idx].compact_apply_at = Some(start + MIN_COMPACT_ANIM);
+                            state.rest.sessions[idx].compact_apply_at =
+                                Some(start + MIN_COMPACT_ANIM);
                             state.rest.sessions[idx].compact_pending = Some((summary, kept_tail));
                         } else {
                             apply_compaction_result(state, idx, client, handle, summary, kept_tail);
@@ -159,11 +166,12 @@ pub(super) fn drain_stream(
         while let Ok(event) = hrx.try_recv() {
             if let StreamEvent::HarnessVerdict { allow, reason } = event {
                 if !allow {
-                    let reason = if reason.is_empty() { "flagged".into() } else { reason };
-                    state
-                        .rest
-                        .sessions[idx]
-                        .set_toast(format!("harness flagged: {reason}"));
+                    let reason = if reason.is_empty() {
+                        "flagged".into()
+                    } else {
+                        reason
+                    };
+                    state.rest.sessions[idx].set_toast(format!("harness flagged: {reason}"));
                     dirty = true;
                 }
                 // One verdict per turn; stop listening on this channel.

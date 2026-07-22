@@ -37,7 +37,10 @@ pub(super) fn handle_submit(
             return Ok(());
         }
         if state.rest.fg().pending_steer.len() >= 5 {
-            state.rest.fg_mut().set_toast("5 pending allowed!".to_string());
+            state
+                .rest
+                .fg_mut()
+                .set_toast("5 pending allowed!".to_string());
             return Ok(());
         }
         // Real user activity (queued-steer path): reset the extension-injection
@@ -65,14 +68,13 @@ pub(super) fn handle_submit(
     // ingested and rewritten to `[Image #N]` in `text`.  This runs BEFORE
     // `take_attachments()` so the interactive attachments are still on the
     // composer; the scan's attachments are appended to them afterward.
-    let (text, scan_attachments) =
-        if let Some(sess) = state.rest.fg().session.as_ref() {
-            let images_dir = sess.images_dir();
-            let workdir = sess.workdir();
-            crate::model::attachment::scan_at_image_tokens(&text, &images_dir, &workdir)
-        } else {
-            (text, Vec::new())
-        };
+    let (text, scan_attachments) = if let Some(sess) = state.rest.fg().session.as_ref() {
+        let images_dir = sess.images_dir();
+        let workdir = sess.workdir();
+        crate::model::attachment::scan_at_image_tokens(&text, &images_dir, &workdir)
+    } else {
+        (text, Vec::new())
+    };
     // Move the staged composer attachments (from path-paste / @-picker) AND the
     // scan-backstop attachments onto THIS user message. Ingested bytes are already
     // on disk under `<session>/images/`; the wire builder re-reads at send time.
@@ -82,11 +84,15 @@ pub(super) fn handle_submit(
     attachments.extend(scan_attachments);
     let had_image = !attachments.is_empty();
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
-        crate::model::store::append_global_error_log("chat", "BUG: fg session missing in handle_submit");
+        crate::model::store::append_global_error_log(
+            "chat",
+            "BUG: fg session missing in handle_submit",
+        );
         return Ok(());
     };
     let _ = msglog::append(&sess.path, Role::User, &text, None);
-    sess.conversation.push_user_with_attachments(text, attachments);
+    sess.conversation
+        .push_user_with_attachments(text, attachments);
     if let Err(e) = sess.save() {
         state.rest.fg_mut().status = format!("error: {e}");
         return Ok(());
@@ -183,9 +189,7 @@ pub(super) fn handle_submit(
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         state.rest.fg_mut().harness_rx = Some(rx);
         handle.spawn(async move {
-            let v =
-                crate::app::harness::classify_prompt(&c, &config, &settings, &pc_prompt)
-                    .await;
+            let v = crate::app::harness::classify_prompt(&c, &config, &settings, &pc_prompt).await;
             // A dropped receiver (turn superseded / app closing) makes
             // this a no-op — same contract as the streaming channel.
             let _ = tx.send(crate::service::StreamEvent::HarnessVerdict {
@@ -335,17 +339,12 @@ pub(super) fn handle_interrupt_rewind(state: &mut AppState) -> Result<()> {
     handle_interrupt(state)?;
 
     // 2. Locate the last user message; nothing to rewind to → the interrupt stands.
-    let last_user_idx = state
-        .rest
-        .fg()
-        .session
-        .as_ref()
-        .and_then(|s| {
-            s.conversation
-                .messages()
-                .iter()
-                .rposition(|m| m.role == Role::User)
-        });
+    let last_user_idx = state.rest.fg().session.as_ref().and_then(|s| {
+        s.conversation
+            .messages()
+            .iter()
+            .rposition(|m| m.role == Role::User)
+    });
     let Some(idx) = last_user_idx else {
         return Ok(());
     };
@@ -370,7 +369,10 @@ pub(super) fn handle_resend(
         return Ok(());
     }
     let Some(sess) = state.rest.fg_mut().session.as_mut() else {
-        crate::model::store::append_global_error_log("chat", "BUG: fg session missing in handle_resend");
+        crate::model::store::append_global_error_log(
+            "chat",
+            "BUG: fg session missing in handle_resend",
+        );
         return Ok(());
     };
     if sess.conversation.last_user_content().is_none() {
@@ -405,7 +407,13 @@ pub(super) fn handle_approve_tool(
     let fgi = state.rest.foreground;
     state.rest.fg_mut().awaiting_approval = false;
     state.rest.fg_mut().approval_reason = None;
-    if let Some(call) = state.rest.fg().pending_tool_calls.get(state.rest.fg().tool_idx).cloned() {
+    if let Some(call) = state
+        .rest
+        .fg()
+        .pending_tool_calls
+        .get(state.rest.fg().tool_idx)
+        .cloned()
+    {
         // `git_worktree` is intercepted in `process_tools` and needs its special
         // post-processing (workdir de-registration + cwd snap-back); the generic
         // `run_tool` path below would push a raw sentinel string and skip that
@@ -430,7 +438,11 @@ pub(super) fn handle_approve_tool(
             return Ok(());
         }
         let result = run_tool(state, fgi, &call);
-        state.rest.fg_mut().tool_results.push((call.id.clone(), result));
+        state
+            .rest
+            .fg_mut()
+            .tool_results
+            .push((call.id.clone(), result));
         state.rest.fg_mut().tool_idx += 1;
     }
     process_tools(state, fgi, client, handle);
@@ -457,22 +469,13 @@ pub(super) fn handle_deny_tool(state: &mut AppState) -> Result<()> {
         .collect();
     if let Some(sess) = state.rest.fg_mut().session.as_mut() {
         for (id, result) in &results {
-            let _ = msglog::append(
-                &sess.path,
-                Role::Tool,
-                result,
-                None,
-            );
+            let _ = msglog::append(&sess.path, Role::Tool, result, None);
             sess.conversation.push_tool(id.clone(), result.clone());
         }
         for id in &denied_ids {
-            let _ = msglog::append(
-                &sess.path,
-                Role::Tool,
-                "denied by user",
-                None,
-            );
-            sess.conversation.push_tool(id.clone(), "denied by user".to_string());
+            let _ = msglog::append(&sess.path, Role::Tool, "denied by user", None);
+            sess.conversation
+                .push_tool(id.clone(), "denied by user".to_string());
         }
         let _ = sess.save();
     }

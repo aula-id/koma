@@ -490,18 +490,13 @@ fn refresh_git_status(push: &dyn Fn(String), session: Option<&str>) {
 /// Resolve `root` + relative `path` to an absolute path that is contained inside
 /// one of the configured `workdirs`. Rejects absolute relative portions, `..`
 /// traversal, roots that aren't configured, and symlink escapes.
-fn resolve_contained(
-    root: &str,
-    path: &str,
-    workdirs: &[PathBuf],
-) -> Result<PathBuf, String> {
+fn resolve_contained(root: &str, path: &str, workdirs: &[PathBuf]) -> Result<PathBuf, String> {
     let root_path = Path::new(root);
     if !root_path.is_absolute() {
         return Err("workspace root must be an absolute path".to_string());
     }
 
-    let root_canon =
-        std::fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
+    let root_canon = std::fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
 
     // Root must match one of the configured workdirs (canonical compare).
     // When workdirs is empty (detached / no-session), still allow the absolute
@@ -667,7 +662,9 @@ mod tests {
         guard
             .iter()
             .rev()
-            .map(|json| serde_json::from_str::<serde_json::Value>(json).expect("push must be valid json"))
+            .map(|json| {
+                serde_json::from_str::<serde_json::Value>(json).expect("push must be valid json")
+            })
             .find(|env| env["requestId"] == request_id)
             .expect("expected push for request id")
     }
@@ -806,13 +803,7 @@ mod tests {
         assert!(dir.join("src/nested").is_dir());
 
         // Tree listing of src/ — dirs first, excludes nothing here.
-        file_tree(
-            &root_s,
-            "src",
-            "req-tree-src",
-            push.as_ref(),
-            &workdirs,
-        );
+        file_tree(&root_s, "src", "req-tree-src", push.as_ref(), &workdirs);
         let tree = last_json(&sink);
         assert_eq!(tree["k"], "FileTree");
         assert_eq!(tree["requestId"], "req-tree-src");
@@ -828,13 +819,7 @@ mod tests {
         // Excluded dirs must not appear even if present.
         std::fs::create_dir_all(dir.join("src/target")).unwrap();
         std::fs::create_dir_all(dir.join("src/.git")).unwrap();
-        file_tree(
-            &root_s,
-            "src",
-            "req-tree-excl",
-            push.as_ref(),
-            &workdirs,
-        );
+        file_tree(&root_s, "src", "req-tree-excl", push.as_ref(), &workdirs);
         let tree2 = last_json(&sink);
         let names2: Vec<&str> = tree2["entries"]
             .as_array()
@@ -912,10 +897,7 @@ mod tests {
         ));
         let v = last_json(&sink);
         assert_eq!(v["requestId"], "req-kind");
-        assert!(v["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("unknown kind"));
+        assert!(v["error"].as_str().unwrap_or("").contains("unknown kind"));
 
         // Rename missing source.
         assert!(!file_rename(

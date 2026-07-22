@@ -99,9 +99,10 @@ pub(super) fn kill_orphan_daemon_processes() -> usize {
         if argv0_basename != our_basename {
             continue;
         }
-        if !args.iter().any(|a| {
-            a == "--daemon" || a == "--mcp-daemon" || a == "--knowledge-daemon"
-        }) {
+        if !args
+            .iter()
+            .any(|a| a == "--daemon" || a == "--mcp-daemon" || a == "--knowledge-daemon")
+        {
             continue;
         }
 

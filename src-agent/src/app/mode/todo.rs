@@ -181,7 +181,12 @@ pub fn parse_todo_file(content: &str) -> Vec<TodoItem> {
             (rest.to_string(), TodoPriority::Medium)
         };
 
-        items.push(TodoItem { content, status, priority, locked });
+        items.push(TodoItem {
+            content,
+            status,
+            priority,
+            locked,
+        });
     }
     items
 }
@@ -207,7 +212,10 @@ pub fn load_todos_from(path: &std::path::Path) -> Vec<TodoItem> {
 /// load, mode transitions, and after every tool round — follows the SAME
 /// source of truth as the TUI overlay, in every mode, not just Plan. Empty
 /// when the relevant file doesn't exist yet.
-pub fn load_current_todos(session: &crate::model::session::Session, in_plan: bool) -> Vec<TodoItem> {
+pub fn load_current_todos(
+    session: &crate::model::session::Session,
+    in_plan: bool,
+) -> Vec<TodoItem> {
     if in_plan {
         load_todos_from(&session.plan_todos_path())
     } else {
@@ -271,7 +279,13 @@ impl Default for TodoState {
 impl TodoState {
     /// Build the panel from an initial item list, cursor at the top.
     pub fn new(items: Vec<TodoItem>, pwd_hash: String) -> Self {
-        Self { items, selected: 0, pwd_hash, plan_path: None, last_refresh: Instant::now() }
+        Self {
+            items,
+            selected: 0,
+            pwd_hash,
+            plan_path: None,
+            last_refresh: Instant::now(),
+        }
     }
 
     /// Move the LIST cursor up (saturating at 0).
@@ -317,11 +331,15 @@ impl TodoState {
     /// Returns `true` if the item list actually changed (caller should mark dirty).
     pub fn maybe_refresh(&mut self) -> bool {
         if self.last_refresh.elapsed() >= REFRESH_INTERVAL {
-            let old_hash: Vec<_> = self.items.iter()
+            let old_hash: Vec<_> = self
+                .items
+                .iter()
                 .map(|i| (i.content.clone(), i.status.clone(), i.priority.clone()))
                 .collect();
             self.refresh_from_disk();
-            let new_hash: Vec<_> = self.items.iter()
+            let new_hash: Vec<_> = self
+                .items
+                .iter()
                 .map(|i| (i.content.clone(), i.status.clone(), i.priority.clone()))
                 .collect();
             old_hash != new_hash
@@ -380,6 +398,9 @@ impl TodoState {
 
     /// Count completed items (for the title display).
     pub fn completed_count(&self) -> usize {
-        self.items.iter().filter(|i| i.status == TodoStatus::Completed).count()
+        self.items
+            .iter()
+            .filter(|i| i.status == TodoStatus::Completed)
+            .count()
     }
 }

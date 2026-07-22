@@ -34,9 +34,7 @@ impl AppStateRest {
         if endpoint.is_empty() {
             return;
         }
-        if self.models_cache_endpoint.as_deref() == Some(endpoint)
-            && self.models_cache.is_some()
-        {
+        if self.models_cache_endpoint.as_deref() == Some(endpoint) && self.models_cache.is_some() {
             return; // already have a successful cache for this endpoint
         }
         if self.models_cache_failed.as_deref() == Some(endpoint) {

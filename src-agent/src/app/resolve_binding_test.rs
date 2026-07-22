@@ -50,16 +50,30 @@ fn ext_model_conn(uuid: &str, ext_id: &str, endpoint: &str, api_type: &str) -> O
 #[test]
 fn ext_preferred_provider_uuids_collects_multiple_conns_and_either_matches() {
     let mut config = AppConfig::default();
-    config
-        .oauth_conns
-        .push(ext_model_conn("conn-1", "my.ext", "https://api.one.test/v1", "openai"));
-    config
-        .oauth_conns
-        .push(ext_model_conn("conn-2", "my.ext", "https://api.two.test/v1", "anthropic"));
+    config.oauth_conns.push(ext_model_conn(
+        "conn-1",
+        "my.ext",
+        "https://api.one.test/v1",
+        "openai",
+    ));
+    config.oauth_conns.push(ext_model_conn(
+        "conn-2",
+        "my.ext",
+        "https://api.two.test/v1",
+        "anthropic",
+    ));
 
-    let agent = AgentDef { ext_id: Some("my.ext".to_string()), ..AgentDef::default() };
-    let preferred = ext_preferred_provider_uuids(&config, &agent).expect("ext agent has a preferred set");
-    assert_eq!(preferred.len(), 2, "both of the extension's conns must be collected");
+    let agent = AgentDef {
+        ext_id: Some("my.ext".to_string()),
+        ..AgentDef::default()
+    };
+    let preferred =
+        ext_preferred_provider_uuids(&config, &agent).expect("ext agent has a preferred set");
+    assert_eq!(
+        preferred.len(),
+        2,
+        "both of the extension's conns must be collected"
+    );
     assert!(preferred.contains("conn-1"));
     assert!(preferred.contains("conn-2"));
 
@@ -82,7 +96,10 @@ fn ext_preferred_provider_uuids_collects_multiple_conns_and_either_matches() {
     let settings = Settings::default();
     let hit = find_model_entry_by_slug(&config, &settings, "fast", Some(&preferred))
         .expect("matches via the second owned conn");
-    assert_eq!(hit.uuid, "on-conn-2", "the preferred pass must match against ANY owned conn, not just the first");
+    assert_eq!(
+        hit.uuid, "on-conn-2",
+        "the preferred pass must match against ANY owned conn, not just the first"
+    );
 }
 
 /// Inside the preferred pass itself: when BOTH `settings.session_models` AND `config.models`
@@ -113,8 +130,8 @@ fn preferred_pass_session_scoped_match_beats_global_scoped_match() {
     let mut preferred = std::collections::HashSet::new();
     preferred.insert("ext-conn".to_string());
 
-    let hit = find_model_entry_by_slug(&config, &settings, "shared", Some(&preferred))
-        .expect("matches");
+    let hit =
+        find_model_entry_by_slug(&config, &settings, "shared", Some(&preferred)).expect("matches");
     assert_eq!(
         hit.uuid, "session-preferred",
         "within the preferred pass, a session-scoped match must beat a global-scoped one"

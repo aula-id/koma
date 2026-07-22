@@ -132,11 +132,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
     // The count check is cheap and makes this a one-shot: once populated,
     // new messages enter FTS via `append()` so this never runs again.
     let fts_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM messages_fts",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get(0))
         .unwrap_or(0);
     if fts_count == 0 {
         let _ = conn.execute(

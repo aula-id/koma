@@ -579,10 +579,7 @@ pub(super) enum HostCtl {
     /// every boot too; a not-yet-started daemon-kind extension also lazily auto-starts on
     /// its first opened panel (see `requests_ext::panel_start_decision`). See
     /// `store_host::spawn_install`.
-    InstallExtension {
-        id: String,
-        version: Option<String>,
-    },
+    InstallExtension { id: String, version: Option<String> },
     /// PRE-SESSION uninstall — same host-local reasoning as [`InstallExtension`]:
     /// purges the on-disk package + registry entry. No live `ext_manager`/`mcp_manager`
     /// to purge contributions from or stop a running child — nothing is registered

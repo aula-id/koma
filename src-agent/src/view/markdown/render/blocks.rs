@@ -35,7 +35,9 @@ impl<'p> Renderer<'p> {
         };
         // Levels 1-2 use the accent colour; 3-6 stay fg. All bold.
         let color = match level {
-            pulldown_cmark::HeadingLevel::H1 | pulldown_cmark::HeadingLevel::H2 => self.palette.accent,
+            pulldown_cmark::HeadingLevel::H1 | pulldown_cmark::HeadingLevel::H2 => {
+                self.palette.accent
+            }
             _ => self.palette.fg,
         };
         // Restyle the accumulated spans to the heading colour + bold (headings
@@ -183,23 +185,33 @@ impl<'p> Renderer<'p> {
         };
 
         // A data/header row: "│ " cell " │ " cell " │", cells truncated+aligned.
-        let make_row =
-            |cells: &[Vec<Span<'static>>], bold: bool, widths: &[usize], palette: &Palette| -> Vec<Span<'static>> {
-                let mut line: Vec<Span<'static>> = Vec::new();
-                for (c, w) in widths.iter().enumerate() {
-                    line.push(Span::styled("│ ".to_string(), Style::default().fg(palette.dim)));
-                    let empty: Vec<Span<'static>> = Vec::new();
-                    let cell = cells.get(c).unwrap_or(&empty);
-                    let mut padded = fit_cell(cell, *w, align_of(c), bold, palette);
-                    line.append(&mut padded);
-                    line.push(Span::raw(" "));
-                }
-                line.push(Span::styled("│".to_string(), Style::default().fg(palette.dim)));
-                line
-            };
+        let make_row = |cells: &[Vec<Span<'static>>],
+                        bold: bool,
+                        widths: &[usize],
+                        palette: &Palette|
+         -> Vec<Span<'static>> {
+            let mut line: Vec<Span<'static>> = Vec::new();
+            for (c, w) in widths.iter().enumerate() {
+                line.push(Span::styled(
+                    "│ ".to_string(),
+                    Style::default().fg(palette.dim),
+                ));
+                let empty: Vec<Span<'static>> = Vec::new();
+                let cell = cells.get(c).unwrap_or(&empty);
+                let mut padded = fit_cell(cell, *w, align_of(c), bold, palette);
+                line.append(&mut padded);
+                line.push(Span::raw(" "));
+            }
+            line.push(Span::styled(
+                "│".to_string(),
+                Style::default().fg(palette.dim),
+            ));
+            line
+        };
 
         self.out.push(border("┌", "┬", "┐"));
-        self.out.push(make_row(&tb.head, true, &widths, self.palette));
+        self.out
+            .push(make_row(&tb.head, true, &widths, self.palette));
         self.out.push(border("├", "┼", "┤"));
         for row in &tb.rows {
             self.out.push(make_row(row, false, &widths, self.palette));

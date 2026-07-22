@@ -1,15 +1,17 @@
 //! `read` tool — read a workspace-relative file with line numbers.
 
+use super::helpers::{arg_str, not_found_help};
+use crate::tool::{resolve_read, Tool, ToolCtx};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use crate::tool::{resolve_read, Tool, ToolCtx};
-use super::helpers::{arg_str, not_found_help};
 
 /// Read a workspace-relative file, returning line-numbered content.
 pub struct Read;
 
 impl Tool for Read {
-    fn name(&self) -> &'static str { "read" }
+    fn name(&self) -> &'static str {
+        "read"
+    }
     fn description(&self) -> &'static str {
         "Read a workspace-relative file. Returns line-numbered content. Use offset/limit to paginate large files."
     }
@@ -39,15 +41,16 @@ impl Tool for Read {
         if !path.exists() {
             bail!("{}", not_found_help(ctx, &path, rel));
         }
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading file '{rel}'"))?;
+        let content =
+            std::fs::read_to_string(&path).with_context(|| format!("reading file '{rel}'"))?;
 
         const MAX_LINES: usize = 20_000;
         const MAX_BYTES: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
 
         // Parse optional offset/limit; clamp limit to the hard cap.
         let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let limit = args.get("limit")
+        let limit = args
+            .get("limit")
             .and_then(Value::as_u64)
             .map(|v| (v as usize).min(MAX_LINES))
             .unwrap_or(MAX_LINES);

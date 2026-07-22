@@ -199,7 +199,9 @@ impl AgentDef {
         } else {
             self.tools.clone()
         };
-        base.into_iter().filter(|t| !TASK_TOOLS.contains(&t.as_str())).collect()
+        base.into_iter()
+            .filter(|t| !TASK_TOOLS.contains(&t.as_str()))
+            .collect()
     }
 
     /// Render this agent into a frontmatter + markdown string for writing to disk.
@@ -258,8 +260,8 @@ impl AgentDef {
             fm.insert(key("disable"), serde_yaml_ng::Value::Bool(true));
         }
 
-        let fm_str = serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping(fm))
-            .unwrap_or_default();
+        let fm_str =
+            serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping(fm)).unwrap_or_default();
         let fm_str = fm_str.trim_end();
         format!("---\n{fm_str}\n---\n{}", self.prompt)
     }

@@ -17,7 +17,11 @@ use crate::app::state::AppStateRest;
 use super::Action;
 
 /// Handle a key press inside the `/extension` manager.
-pub fn handle_extensions(s: &mut ExtensionsState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_extensions(
+    s: &mut ExtensionsState,
+    _rest: &mut AppStateRest,
+    key: KeyEvent,
+) -> Action {
     match s.sub_mode {
         // --- UninstallConfirm: modal y/n ---
         ExtSubMode::UninstallConfirm => match key.code {

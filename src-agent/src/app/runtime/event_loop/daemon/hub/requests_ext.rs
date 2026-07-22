@@ -239,7 +239,8 @@ impl DaemonHub {
         handle.spawn(async move {
             // A fresh (possibly just-refreshed) koma.run access token. Empty ⇒ the
             // connection is gone / unrecoverable — treat as a sign-in failure.
-            let (bearer, _account) = crate::service::oauth::manager::fresh_key(&oauth_uuid, "").await;
+            let (bearer, _account) =
+                crate::service::oauth::manager::fresh_key(&oauth_uuid, "").await;
             if bearer.trim().is_empty() {
                 store::append_global_error_log(
                     "ext install",
@@ -254,21 +255,21 @@ impl DaemonHub {
                 });
                 return;
             }
-            let reply = match fetch_install_artifact(&id, version.as_deref(), &platform, &bearer).await
-            {
-                Ok((zip, sha256, signature)) => StoreReply::InstallArtifact {
-                    client_id,
-                    id,
-                    zip,
-                    sha256,
-                    signature,
-                },
-                Err(e) => StoreReply::InstallFailed {
-                    client_id,
-                    id,
-                    error: e,
-                },
-            };
+            let reply =
+                match fetch_install_artifact(&id, version.as_deref(), &platform, &bearer).await {
+                    Ok((zip, sha256, signature)) => StoreReply::InstallArtifact {
+                        client_id,
+                        id,
+                        zip,
+                        sha256,
+                        signature,
+                    },
+                    Err(e) => StoreReply::InstallFailed {
+                        client_id,
+                        id,
+                        error: e,
+                    },
+                };
             let _ = tx.send(reply);
         });
     }
@@ -293,9 +294,9 @@ impl DaemonHub {
         // same sequence WITHOUT the hub). Best-effort — it logs each failure internally and
         // returns `Ok(())` today — so the reply below stays `ok:true`, byte-identical to the
         // pre-extraction inline path; a future hard error is surfaced as `ok:false` instead.
-        if let Err(e) =
-            crate::app::runtime::actions::ext_uninstall::uninstall_extension_core(state, handle, &id)
-        {
+        if let Err(e) = crate::app::runtime::actions::ext_uninstall::uninstall_extension_core(
+            state, handle, &id,
+        ) {
             store::append_global_error_log("ext-uninstall", &format!("uninstall {id}: {e}"));
             self.send_to(
                 idx,
@@ -552,7 +553,10 @@ impl DaemonHub {
 ///     pool).
 ///   - `Err(msg)`  → not serviceable: MISSING / DISABLED / a ONESHOT-kind extension (spawned
 ///     per-invoke, so it has no live panel backend) → surfaced as the reply error.
-fn panel_start_decision(running: bool, record: Option<&InstalledExtension>) -> Result<bool, String> {
+fn panel_start_decision(
+    running: bool,
+    record: Option<&InstalledExtension>,
+) -> Result<bool, String> {
     if running {
         return Ok(true);
     }

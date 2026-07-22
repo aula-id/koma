@@ -98,14 +98,24 @@ fn search_messages_single_term_finds_match() {
     let hits = search_messages(dir.path(), "hello", 10);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].role, "user");
-    assert!(hits[0].snippet.contains("hello"), "snippet should contain the match: {}", hits[0].snippet);
+    assert!(
+        hits[0].snippet.contains("hello"),
+        "snippet should contain the match: {}",
+        hits[0].snippet
+    );
 }
 
 #[test]
 fn search_messages_multi_term_or_finds_any_match() {
     let dir = TempDir::new("fts-multi");
     append(dir.path(), Role::User, "the quick brown fox", None).unwrap();
-    append(dir.path(), Role::Assistant, "lazy dog sleeps", Some((10, 5, 0.0))).unwrap();
+    append(
+        dir.path(),
+        Role::Assistant,
+        "lazy dog sleeps",
+        Some((10, 5, 0.0)),
+    )
+    .unwrap();
     append(dir.path(), Role::User, "unrelated text here", None).unwrap();
 
     // "fox zebra" -> fox* OR zebra* -> should match message 1 but not 2 or 3.
@@ -117,14 +127,29 @@ fn search_messages_multi_term_or_finds_any_match() {
 #[test]
 fn search_messages_or_ranks_multiple_hits() {
     let dir = TempDir::new("fts-rank");
-    append(dir.path(), Role::User, "security vulnerability found in parser", None).unwrap();
-    append(dir.path(), Role::Assistant, "security is important always", Some((10, 5, 0.0))).unwrap();
+    append(
+        dir.path(),
+        Role::User,
+        "security vulnerability found in parser",
+        None,
+    )
+    .unwrap();
+    append(
+        dir.path(),
+        Role::Assistant,
+        "security is important always",
+        Some((10, 5, 0.0)),
+    )
+    .unwrap();
     append(dir.path(), Role::User, "nothing to see here", None).unwrap();
 
     let hits = search_messages(dir.path(), "security", 10);
     assert_eq!(hits.len(), 2);
     for h in &hits {
-        assert!(h.snippet.contains("security"), "every hit must contain the term");
+        assert!(
+            h.snippet.contains("security"),
+            "every hit must contain the term"
+        );
     }
 }
 
@@ -140,7 +165,13 @@ fn search_messages_no_match_returns_empty() {
 #[test]
 fn search_messages_strips_fts5_syntax_chars() {
     let dir = TempDir::new("fts-syntax");
-    append(dir.path(), Role::User, "the FOO constant is defined in config.rs", None).unwrap();
+    append(
+        dir.path(),
+        Role::User,
+        "the FOO constant is defined in config.rs",
+        None,
+    )
+    .unwrap();
 
     // Parentheses and asterisks should be stripped so the query doesn't error.
     let hits = search_messages(dir.path(), "FOO*", 10);

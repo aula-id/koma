@@ -223,7 +223,10 @@ pub fn active_extension_workspaces(
         // Canonicalize-if-exists; an injected root exists on disk so this matches the
         // canonical string injection stored in `workdir`.
         let canon = norm(&expanded);
-        if let Some(idx) = workdir.iter().position(|w| norm(Path::new(w.trim())) == canon) {
+        if let Some(idx) = workdir
+            .iter()
+            .position(|w| norm(Path::new(w.trim())) == canon)
+        {
             out.push((idx, ext.id.clone()));
         }
     }

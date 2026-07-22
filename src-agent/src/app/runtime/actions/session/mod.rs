@@ -7,10 +7,10 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
+mod attach;
 mod cancel;
 mod picker;
-mod attach;
 
+pub use attach::*;
 pub use cancel::*;
 pub use picker::*;
-pub use attach::*;

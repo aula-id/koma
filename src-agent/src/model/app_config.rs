@@ -19,9 +19,9 @@
 //! permission denied — returns `AppConfig::default()` instead of propagating,
 //! so a corrupt or missing config never prevents startup.
 
+use crate::model::store::base_dir;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use crate::model::store::base_dir;
 
 /// Visual colour scheme.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -734,8 +734,7 @@ impl AppConfig {
         let mut val: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         let stripped = Self::strip_clinepass(&mut val);
-        let config: AppConfig =
-            serde_json::from_value(val).unwrap_or_default();
+        let config: AppConfig = serde_json::from_value(val).unwrap_or_default();
         if stripped {
             // Persist the cleaned config so we don't re-strip on every boot.
             // Ignore save errors (best-effort migration; the stripped in-memory
@@ -757,10 +756,7 @@ impl AppConfig {
         if let Some(conns) = doc.get_mut("oauth_conns").and_then(|c| c.as_array_mut()) {
             let before = conns.len();
             conns.retain(|c| {
-                let is_clinepass = c
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    == Some("clinepass");
+                let is_clinepass = c.get("provider").and_then(|v| v.as_str()) == Some("clinepass");
                 if is_clinepass {
                     if let Some(uuid) = c.get("uuid").and_then(|v| v.as_str()) {
                         stripped_uuids.insert(uuid.to_string());
@@ -825,9 +821,10 @@ impl AppConfig {
         if dead.is_empty() {
             return CascadePurge::default();
         }
-        let main_reset = self.models.iter().any(|m| {
-            dead.contains(&m.uuid) && m.effective_roles().contains(&ModelRole::Main)
-        });
+        let main_reset = self
+            .models
+            .iter()
+            .any(|m| dead.contains(&m.uuid) && m.effective_roles().contains(&ModelRole::Main));
         let mut models_removed = Vec::new();
         self.models.retain(|m| {
             if dead.contains(&m.uuid) {
@@ -946,7 +943,11 @@ impl AppConfig {
     // dead until then, like `seed_from_settings`.
     #[allow(dead_code)]
     pub fn upsert_extension(&mut self, ext: InstalledExtension) {
-        match self.installed_extensions.iter_mut().find(|e| e.id == ext.id) {
+        match self
+            .installed_extensions
+            .iter_mut()
+            .find(|e| e.id == ext.id)
+        {
             Some(slot) => *slot = ext,
             None => self.installed_extensions.push(ext),
         }
@@ -1060,10 +1061,12 @@ impl AppConfig {
         // Model sweep (also computes main_reset from dead anchors).
         let model_purge = self.remove_models_by_providers(&dead);
         let before_providers = self.providers.len();
-        self.providers.retain(|p| p.ext_id.as_deref() != Some(ext_id));
+        self.providers
+            .retain(|p| p.ext_id.as_deref() != Some(ext_id));
         let providers_removed = before_providers - self.providers.len();
         let before_conns = self.oauth_conns.len();
-        self.oauth_conns.retain(|c| c.ext_id.as_deref() != Some(ext_id));
+        self.oauth_conns
+            .retain(|c| c.ext_id.as_deref() != Some(ext_id));
         let conns_removed = before_conns - self.oauth_conns.len();
         self.ext_preferred_models.remove(ext_id);
         ExtPurge {
@@ -1320,12 +1323,21 @@ mod oauth_conn_serde_tests {
 
         let back: OAuthConn = serde_json::from_value(v).expect("ext conn roundtrips");
         assert_eq!(back.provider, OAuthProvider::Extension);
-        assert_eq!(back.ext_id.as_deref(), Some("run.koma.example.oauth-demo-daemon"));
+        assert_eq!(
+            back.ext_id.as_deref(),
+            Some("run.koma.example.oauth-demo-daemon")
+        );
         assert_eq!(back.provider_id.as_deref(), Some("demo"));
         assert_eq!(back.access_token, "demo-at");
-        assert_eq!(back.chat_endpoint.as_deref(), Some("https://api.demo.test/v1"));
+        assert_eq!(
+            back.chat_endpoint.as_deref(),
+            Some("https://api.demo.test/v1")
+        );
         assert_eq!(back.api_type.as_deref(), Some("openai"));
-        assert_eq!(back.refresh_token_url.as_deref(), Some("https://demo.test/token"));
+        assert_eq!(
+            back.refresh_token_url.as_deref(),
+            Some("https://demo.test/token")
+        );
     }
 
     /// [`OAuthConn::ext_model_route`] accepts a conn with both a chat endpoint and a
@@ -1352,9 +1364,15 @@ mod oauth_conn_serde_tests {
         );
         // Missing endpoint, missing api_type, or unrecognised api_type → account-login-only.
         assert!(with(None, Some("openai")).ext_model_route().is_none());
-        assert!(with(Some("https://x.test"), None).ext_model_route().is_none());
-        assert!(with(Some("   "), Some("openai")).ext_model_route().is_none());
-        assert!(with(Some("https://x.test"), Some("openai_compatible")).ext_model_route().is_none());
+        assert!(with(Some("https://x.test"), None)
+            .ext_model_route()
+            .is_none());
+        assert!(with(Some("   "), Some("openai"))
+            .ext_model_route()
+            .is_none());
+        assert!(with(Some("https://x.test"), Some("openai_compatible"))
+            .ext_model_route()
+            .is_none());
     }
 }
 
@@ -1377,7 +1395,8 @@ mod provider_conn_serde_tests {
     /// files round-trip unchanged (the W11/W12 `OAuthConn` discipline, applied to providers).
     #[test]
     fn native_provider_roundtrips_byte_stable() {
-        let p: ProviderConn = serde_json::from_str(NATIVE_PROVIDER_JSON).expect("pre-W12b provider parses");
+        let p: ProviderConn =
+            serde_json::from_str(NATIVE_PROVIDER_JSON).expect("pre-W12b provider parses");
         assert_eq!(p.api_type, ApiType::OpenAiCompatible);
         assert!(p.ext_id.is_none(), "a native provider carries no ext_id");
         let reser = serde_json::to_string(&p).expect("serializes");
@@ -1549,7 +1568,9 @@ mod ext_purge_tests {
             provider_uuid: "conn-a".to_string(),
             ..Default::default()
         });
-        config.ext_preferred_models.insert("ext.a".to_string(), "m-a-main".to_string());
+        config
+            .ext_preferred_models
+            .insert("ext.a".to_string(), "m-a-main".to_string());
         // ext B + a native provider/model that must SURVIVE the purge of A.
         config.providers.push(ext_provider("prov-b", "ext.b"));
         config.providers.push(ProviderConn {
@@ -1562,22 +1583,46 @@ mod ext_purge_tests {
             provider_uuid: "prov-native".to_string(),
             ..Default::default()
         });
-        config.ext_preferred_models.insert("ext.b".to_string(), "m-b".to_string());
+        config
+            .ext_preferred_models
+            .insert("ext.b".to_string(), "m-b".to_string());
 
         let report = config.purge_extension("ext.a");
         assert_eq!(report.providers_removed, 1);
         assert_eq!(report.conns_removed, 1);
-        assert_eq!(report.models_removed, 2, "both of A's models (provider + conn backed) are swept");
-        assert!(report.main_reset, "a removed model held the global Main role");
+        assert_eq!(
+            report.models_removed, 2,
+            "both of A's models (provider + conn backed) are swept"
+        );
+        assert!(
+            report.main_reset,
+            "a removed model held the global Main role"
+        );
 
         // A is gone; B + native survive.
         assert!(config.providers.iter().all(|p| p.uuid != "prov-a"));
         assert!(config.oauth_conns.is_empty());
-        assert!(config.models.iter().all(|m| m.provider_uuid != "prov-a" && m.provider_uuid != "conn-a"));
-        assert!(config.providers.iter().any(|p| p.uuid == "prov-b"), "another extension is untouched");
-        assert!(config.providers.iter().any(|p| p.uuid == "prov-native"), "a native provider is untouched");
-        assert!(config.models.iter().any(|m| m.uuid == "m-native"), "a native model is untouched");
-        assert_eq!(config.ext_preferred_models.get("ext.a"), None, "A's preferred record is cleared");
+        assert!(config
+            .models
+            .iter()
+            .all(|m| m.provider_uuid != "prov-a" && m.provider_uuid != "conn-a"));
+        assert!(
+            config.providers.iter().any(|p| p.uuid == "prov-b"),
+            "another extension is untouched"
+        );
+        assert!(
+            config.providers.iter().any(|p| p.uuid == "prov-native"),
+            "a native provider is untouched"
+        );
+        assert!(
+            config.models.iter().any(|m| m.uuid == "m-native"),
+            "a native model is untouched"
+        );
+        assert_eq!(
+            config.ext_preferred_models.get("ext.a"),
+            None,
+            "A's preferred record is cleared"
+        );
         assert_eq!(
             config.ext_preferred_models.get("ext.b").map(String::as_str),
             Some("m-b"),

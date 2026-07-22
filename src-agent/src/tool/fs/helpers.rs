@@ -1,9 +1,9 @@
 //! Shared private helpers used by the fs submodules.
 
-use std::path::Path;
+use crate::tool::ToolCtx;
 use anyhow::{Context, Result};
 use serde_json::Value;
-use crate::tool::ToolCtx;
+use std::path::Path;
 
 /// Pull a required string argument out of the decoded JSON args.
 pub(super) fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
@@ -92,7 +92,9 @@ pub(super) fn not_found_help(ctx: &ToolCtx, abs: &Path, rel: &str) -> String {
 
     let mut msg = format!("'{rel}' does not exist.\n");
     if total == 0 {
-        msg.push_str(&format!("Nearest existing directory '{dir_label}' is empty."));
+        msg.push_str(&format!(
+            "Nearest existing directory '{dir_label}' is empty."
+        ));
     } else {
         msg.push_str(&format!(
             "Nearest existing directory '{dir_label}' contains:\n"

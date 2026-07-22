@@ -102,8 +102,10 @@ fn daemon_selftest_inner() -> Result<()> {
         // Attach -> expect a `Hello` (build-skew handshake, task #142) FOLLOWED by a
         // full Snapshot. Read frames until the Snapshot, tolerating the leading Hello
         // (and any interleaved control frame) so the test mirrors a real client.
-        let attach =
-            serde_json::to_vec(&ClientRequest::Attach { foreground_id: None, cwd: None })?;
+        let attach = serde_json::to_vec(&ClientRequest::Attach {
+            foreground_id: None,
+            cwd: None,
+        })?;
         write_frame(&mut stream, &attach).await?;
         let mut saw_snapshot = false;
         for _ in 0..8 {

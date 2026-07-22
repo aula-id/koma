@@ -197,7 +197,9 @@ mod tests {
         // Prefix claims MAX_FRAME_BYTES + 1 bytes; no payload supplied.
         let bogus = (MAX_FRAME_BYTES as u64 + 1) as u32;
         reader.push(&bogus.to_be_bytes());
-        let err = reader.next_frame().expect_err("oversized prefix must error");
+        let err = reader
+            .next_frame()
+            .expect_err("oversized prefix must error");
         assert_eq!(err.kind(), ErrorKind::InvalidData);
     }
 

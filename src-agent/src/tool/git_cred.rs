@@ -61,20 +61,21 @@ impl Tool for GitCred {
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'action'"))?;
 
         // Resolve ~/.ssh via the same dirs crate the rest of the codebase uses.
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("cannot resolve home directory"))?;
+        let home =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot resolve home directory"))?;
         let ssh_dir = home.join(".ssh");
 
         match action {
             "list" => list_keys(&ssh_dir, &ctx.ssh_key),
             "select" => {
-                let key = args
-                    .get("key")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("missing required string argument 'key' for action=\"select\""))?;
+                let key = args.get("key").and_then(Value::as_str).ok_or_else(|| {
+                    anyhow::anyhow!("missing required string argument 'key' for action=\"select\"")
+                })?;
                 select_key(&ssh_dir, key)
             }
-            other => Ok(format!("error: unknown action '{other}'; expected \"list\" or \"select\"")),
+            other => Ok(format!(
+                "error: unknown action '{other}'; expected \"list\" or \"select\""
+            )),
         }
     }
 }
@@ -88,8 +89,8 @@ fn list_keys(ssh_dir: &std::path::Path, current: &Option<String>) -> Result<Stri
     }
 
     let mut keys: Vec<String> = Vec::new();
-    let entries = std::fs::read_dir(ssh_dir)
-        .map_err(|e| anyhow::anyhow!("cannot read ~/.ssh: {e}"))?;
+    let entries =
+        std::fs::read_dir(ssh_dir).map_err(|e| anyhow::anyhow!("cannot read ~/.ssh: {e}"))?;
 
     for entry in entries.flatten() {
         let file_name = entry.file_name();
@@ -133,7 +134,9 @@ fn list_keys(ssh_dir: &std::path::Path, current: &Option<String>) -> Result<Stri
     }
 
     if keys.is_empty() {
-        return Ok("no identity keys found in ~/.ssh (no file with a matching .pub sibling)".into());
+        return Ok(
+            "no identity keys found in ~/.ssh (no file with a matching .pub sibling)".into(),
+        );
     }
 
     keys.sort();
@@ -149,13 +152,21 @@ fn select_key(ssh_dir: &std::path::Path, key: &str) -> Result<String> {
         return Ok("error: invalid key name (must not be empty)".into());
     }
     if key.contains('/') || key.contains('\\') || key.contains("..") {
-        return Ok("error: invalid key name (must be a bare filename, no path separators or '..')".into());
+        return Ok(
+            "error: invalid key name (must be a bare filename, no path separators or '..')".into(),
+        );
     }
     // Reject whitespace and shell-special characters: the key name is embedded
     // inside a single-quoted ssh command string, so a single-quote in the name
     // would escape out of the quoting, and whitespace would cause word-splitting.
-    if key.chars().any(|c| matches!(c, ' ' | '\t' | '\'' | '"' | '$' | '`')) {
-        return Ok("error: invalid key name (must not contain whitespace or shell-special characters)".into());
+    if key
+        .chars()
+        .any(|c| matches!(c, ' ' | '\t' | '\'' | '"' | '$' | '`'))
+    {
+        return Ok(
+            "error: invalid key name (must not contain whitespace or shell-special characters)"
+                .into(),
+        );
     }
 
     let private_path = ssh_dir.join(key);

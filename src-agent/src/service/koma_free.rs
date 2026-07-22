@@ -95,8 +95,10 @@ pub fn ensure_koma_free_config(cfg: &mut AppConfig) {
         ModelRole::Compactor,
         ModelRole::Planner,
     ];
-    let koma_free_uuid = if let Some(existing) =
-        cfg.models.iter_mut().find(|m| m.provider_uuid == provider_uuid)
+    let koma_free_uuid = if let Some(existing) = cfg
+        .models
+        .iter_mut()
+        .find(|m| m.provider_uuid == provider_uuid)
     {
         let mut roles = existing.effective_roles();
         for role in all_roles {

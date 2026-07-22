@@ -16,24 +16,24 @@
 //! receiver, so a superseded task's late events vanish with no generation
 //! bookkeeping.
 
-mod terminal;
-mod event_loop;
-mod stream;
 mod actions;
 mod client;
 mod client_shadow;
+mod event_loop;
 mod manage;
+mod stream;
+mod terminal;
 // `pub(crate)` so the shared `commands::internet::internet_feedback` helper is
 // reachable from the controller's Ctrl+E handler (outside this module tree).
 pub(crate) mod commands;
 mod shortsend;
 
-mod lifecycle;
-mod knowledge_daemon;
-mod mcp_daemon;
 mod extractor;
-mod signals;
+mod knowledge_daemon;
+mod lifecycle;
+mod mcp_daemon;
 mod session_mgmt;
+mod signals;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
 pub(crate) mod bg_persist;
 #[cfg(feature = "gui")]

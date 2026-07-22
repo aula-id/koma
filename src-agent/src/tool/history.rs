@@ -7,9 +7,9 @@
 //! or partial results — the tool transparently falls back to SQLite FTS5
 //! in that case, logging "Surreal Empty" to error.log for observability.
 
+use super::{Tool, ToolCtx};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use super::{Tool, ToolCtx};
 
 /// Search the session's `messages.sqlite` full-text index for past
 /// conversation turns matching the query. Returns ranked snippets.
@@ -90,9 +90,7 @@ impl Tool for MessageFind {
     }
 }
 
-fn format_matches<'a>(
-    matches: impl Iterator<Item = (i64, &'a str, &'a str, i64)>,
-) -> String {
+fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str, i64)>) -> String {
     let mut out = String::new();
     for (msg_id, role, snip, created_at) in matches {
         let role_prefix = match role {

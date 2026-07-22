@@ -73,7 +73,9 @@ fn begin_falls_back_to_url_when_device_code_is_incomplete() {
     });
     assert_eq!(
         parse_begin(&reply),
-        BeginOutcome::Browser { url: "https://example.com/auth".to_string() },
+        BeginOutcome::Browser {
+            url: "https://example.com/auth".to_string()
+        },
         "an incomplete device code must not shadow a valid url"
     );
 }

@@ -178,7 +178,10 @@ fn detail_lines<'a>(st: &'a ExtensionsState, palette: &Palette, width: usize) ->
 
     let kv = |label: &str, value: String, color: Color| -> Line<'static> {
         Line::from(vec![
-            Span::styled(format!("{label:<label_w$}"), Style::default().fg(palette.dim)),
+            Span::styled(
+                format!("{label:<label_w$}"),
+                Style::default().fg(palette.dim),
+            ),
             Span::styled(value, Style::default().fg(color)),
         ])
     };
@@ -188,7 +191,10 @@ fn detail_lines<'a>(st: &'a ExtensionsState, palette: &Palette, width: usize) ->
         for (i, chunk) in chunks.into_iter().enumerate() {
             if i == 0 {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{label:<label_w$}"), Style::default().fg(palette.dim)),
+                    Span::styled(
+                        format!("{label:<label_w$}"),
+                        Style::default().fg(palette.dim),
+                    ),
                     Span::styled(chunk, Style::default().fg(color)),
                 ]));
             } else {
@@ -209,11 +215,18 @@ fn detail_lines<'a>(st: &'a ExtensionsState, palette: &Palette, width: usize) ->
     lines.push(kv("kind", row.kind.clone(), palette.fg));
     lines.push(kv(
         "enabled",
-        if row.enabled { "yes".into() } else { "no".into() },
+        if row.enabled {
+            "yes".into()
+        } else {
+            "no".into()
+        },
         if row.enabled { palette.fg } else { palette.dim },
     ));
     lines.push(Line::from(vec![
-        Span::styled(format!("{:<label_w$}", "running"), Style::default().fg(palette.dim)),
+        Span::styled(
+            format!("{:<label_w$}", "running"),
+            Style::default().fg(palette.dim),
+        ),
         running_span(row.running, palette),
     ]));
     lines.push(kv(

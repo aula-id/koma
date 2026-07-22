@@ -6,12 +6,12 @@
 //! signaling `finish_tool_round` to add the media directory to workspaces so
 //! the downloaded file appears in `@`-autocomplete.
 
+use super::{Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::mpsc;
 use std::time::Duration;
-use super::{Tool, ToolCtx};
 
 /// Hard cap on how many bytes may be downloaded in a single call.
 const MAX_DOWNLOAD_BYTES: u64 = 500 * 1024 * 1024; // 500 MiB
@@ -20,7 +20,9 @@ const MAX_DOWNLOAD_BYTES: u64 = 500 * 1024 * 1024; // 500 MiB
 pub struct WebDownload;
 
 impl Tool for WebDownload {
-    fn name(&self) -> &'static str { "web_download" }
+    fn name(&self) -> &'static str {
+        "web_download"
+    }
 
     fn description(&self) -> &'static str {
         "Download a file from a URL and save it to the session media directory. \
@@ -45,16 +47,20 @@ impl Tool for WebDownload {
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'url'"))?;
 
-        let save_name = args.get("save_name")
+        let save_name = args
+            .get("save_name")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'save_name'"))?;
 
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Ok(format!("error: url must start with http:// or https://, got: {url}"));
+            return Ok(format!(
+                "error: url must start with http:// or https://, got: {url}"
+            ));
         }
 
         if save_name.is_empty() {
@@ -69,7 +75,9 @@ impl Tool for WebDownload {
 
         let download_dir = match &ctx.download_dir {
             Some(d) => d.clone(),
-            None => return Ok("error: no download directory available for this session".to_string()),
+            None => {
+                return Ok("error: no download directory available for this session".to_string())
+            }
         };
 
         let full_path = download_dir.join(save_name);

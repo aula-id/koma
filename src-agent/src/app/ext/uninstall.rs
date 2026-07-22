@@ -128,7 +128,10 @@ fn remove_override_if_present(path: &std::path::Path, name: &str, scope: &str) {
     match std::fs::remove_file(path) {
         Ok(()) => store::append_global_error_log(
             "ext-uninstall",
-            &format!("removed {scope} agent override for '{name}': {}", path.display()),
+            &format!(
+                "removed {scope} agent override for '{name}': {}",
+                path.display()
+            ),
         ),
         Err(e) => store::append_global_error_log(
             "ext-uninstall",

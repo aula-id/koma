@@ -63,13 +63,9 @@ pub(super) fn handle_setup_koma_free(
     // usable. `is_usable()` returns true for a keyless koma-free route, so the client
     // is actually built (a plain `!api_key.is_empty()` gate would leave it `None`).
     *client = state.rest.fg().session.as_ref().and_then(|sess| {
-        crate::app::resolve::resolve_role(
-            &state.rest.config,
-            &sess.settings,
-            ModelRole::Main,
-        )
-        .filter(|r| r.is_usable())
-        .map(|_| build_client())
+        crate::app::resolve::resolve_role(&state.rest.config, &sess.settings, ModelRole::Main)
+            .filter(|r| r.is_usable())
+            .map(|_| build_client())
     });
     // Seed THIS foreground session's own counters from its (new/empty) ledger.
     if let Some(p) = state.rest.fg().session.as_ref().map(|s| s.path.clone()) {
@@ -138,7 +134,9 @@ pub(super) fn handle_onboard_provider_save_model(
     let (conn_uuid, provider_label) = match state.mode() {
         Mode::OnboardProvider(op) => (
             op.new_conn_uuid.clone(),
-            op.provider.map(|p| p.label().to_string()).unwrap_or_default(),
+            op.provider
+                .map(|p| p.label().to_string())
+                .unwrap_or_default(),
         ),
         _ => (String::new(), String::new()),
     };

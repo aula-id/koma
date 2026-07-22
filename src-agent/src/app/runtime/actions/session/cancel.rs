@@ -27,7 +27,7 @@ pub fn handle_cancel_key_input(
         // modal, so nothing could have appended after it).
         if state.rest.sessions.len() > 1 {
             let Some(mut popped) = state.rest.sessions.pop() else {
-                return;
+                return Ok(());
             };
             if let Some(lock) = popped.held_lock.take() {
                 store::remove_lock(&lock);

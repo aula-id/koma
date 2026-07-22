@@ -15,11 +15,21 @@
 use super::git::{git_cmd, git_failure, repo_root_for, GitOpResult};
 
 fn op_ok(op: &str) -> GitOpResult {
-    GitOpResult { ok: true, op: op.to_string(), error: None, message: None }
+    GitOpResult {
+        ok: true,
+        op: op.to_string(),
+        error: None,
+        message: None,
+    }
 }
 
 fn op_err(op: &str, error: impl Into<String>) -> GitOpResult {
-    GitOpResult { ok: false, op: op.to_string(), error: Some(error.into()), message: None }
+    GitOpResult {
+        ok: false,
+        op: op.to_string(),
+        error: Some(error.into()),
+        message: None,
+    }
 }
 
 /// `git stash push` — stashes tracked + staged changes (untracked files are left
@@ -88,7 +98,10 @@ pub(super) struct StashListResult {
 /// non-git workdir sets `error` rather than panicking, mirroring
 /// [`super::git_branch::git_branch_list`].
 pub(super) fn git_stash_list(session: Option<&str>) -> StashListResult {
-    let empty = |error: Option<String>| StashListResult { entries: Vec::new(), error };
+    let empty = |error: Option<String>| StashListResult {
+        entries: Vec::new(),
+        error,
+    };
 
     let Some(root) = repo_root_for(session) else {
         return empty(Some("not a git repository".to_string()));
@@ -103,12 +116,21 @@ pub(super) fn git_stash_list(session: Option<&str>) -> StashListResult {
     let text = String::from_utf8_lossy(&stdout);
     let mut entries = Vec::new();
     for line in text.lines() {
-        let Some(rest) = line.strip_prefix("stash@{") else { continue };
-        let Some(close) = rest.find('}') else { continue };
-        let Ok(index) = rest[..close].parse::<u32>() else { continue };
+        let Some(rest) = line.strip_prefix("stash@{") else {
+            continue;
+        };
+        let Some(close) = rest.find('}') else {
+            continue;
+        };
+        let Ok(index) = rest[..close].parse::<u32>() else {
+            continue;
+        };
         let message = rest[close + 1..].trim_start_matches(':').trim().to_string();
         entries.push(StashEntry { index, message });
     }
 
-    StashListResult { entries, error: None }
+    StashListResult {
+        entries,
+        error: None,
+    }
 }

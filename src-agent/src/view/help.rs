@@ -46,11 +46,11 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Pa
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),                 // header text + BOTTOM border
-            Constraint::Length(update_h as u16),   // "Updating koma" info block + spacer
-            Constraint::Length(2),                 // search line + spacer
-            Constraint::Min(0),                    // filtered list
-            Constraint::Length(1),                 // footer hint
+            Constraint::Length(2),               // header text + BOTTOM border
+            Constraint::Length(update_h as u16), // "Updating koma" info block + spacer
+            Constraint::Length(2),               // search line + spacer
+            Constraint::Min(0),                  // filtered list
+            Constraint::Length(1),               // footer hint
         ])
         .split(frame.area());
 
@@ -84,7 +84,10 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Pa
     )];
     if let Some((latest, _)) = &st.update {
         cur_spans.push(Span::styled("  ·  available ", dim));
-        cur_spans.push(Span::styled(format!("[{latest}]"), Style::default().fg(palette.success)));
+        cur_spans.push(Span::styled(
+            format!("[{latest}]"),
+            Style::default().fg(palette.success),
+        ));
     }
     update_lines.push(Line::from(cur_spans));
     // How to update.
@@ -119,10 +122,7 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Pa
 
     if st.filtered_idx.is_empty() {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "no matches",
-                Style::default().fg(palette.dim),
-            )),
+            Paragraph::new(Span::styled("no matches", Style::default().fg(palette.dim))),
             list_inner,
         );
     } else if max_vis > 0 {

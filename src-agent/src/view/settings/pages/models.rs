@@ -1,3 +1,7 @@
+use super::super::utils::truncate;
+use crate::app::mode::SettingsState;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Rect},
     style::Style,
@@ -5,10 +9,6 @@ use ratatui::{
     widgets::{Cell, Paragraph, Row, Table},
     Frame,
 };
-use crate::app::mode::SettingsState;
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
-use super::super::utils::truncate;
 
 /// Render the Models Select interactive screen inside `area`.
 ///
@@ -41,14 +41,20 @@ pub(crate) fn draw_models_page(
         return;
     }
 
-    let filter  = st.model_filter;
+    let filter = st.model_filter;
 
     // ---- Line 0: title --------------------------------------------------------
     {
-        let title_line = Line::from(vec![
-            Span::styled("Model List", Style::default().fg(palette.dim)),
-        ]);
-        let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        let title_line = Line::from(vec![Span::styled(
+            "Model List",
+            Style::default().fg(palette.dim),
+        )]);
+        let title_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
         frame.render_widget(Paragraph::new(title_line), title_area);
     }
 
@@ -59,7 +65,7 @@ pub(crate) fn draw_models_page(
     // ---- Line 1: add buttons (below the title) --------------------------------
     {
         let on_global = st.model_sel == 0;
-        let on_local  = st.model_sel == 1;
+        let on_local = st.model_sel == 1;
 
         let btn_g_style = if on_global {
             Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
@@ -77,7 +83,12 @@ pub(crate) fn draw_models_page(
             Span::raw("  "),
             Span::styled("[+add local]", btn_l_style),
         ]);
-        let btn_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: 1 };
+        let btn_area = Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: 1,
+        };
         frame.render_widget(Paragraph::new(btn_line), btn_area);
     }
 
@@ -88,7 +99,11 @@ pub(crate) fn draw_models_page(
     // ---- Line 2: filter radio bar ---------------------------------------------
     {
         let mk_radio = |mode: ModelFilterMode, label: &str| -> String {
-            if filter == mode { format!("[X]{}", label) } else { format!("[ ]{}", label) }
+            if filter == mode {
+                format!("[X]{}", label)
+            } else {
+                format!("[ ]{}", label)
+            }
         };
         let cursor_style = |slot: usize| -> Style {
             if st.model_sel == slot {
@@ -99,13 +114,18 @@ pub(crate) fn draw_models_page(
         };
 
         let radio_line = Line::from(vec![
-            Span::styled(mk_radio(ModelFilterMode::All,    "all"),    cursor_style(2)),
+            Span::styled(mk_radio(ModelFilterMode::All, "all"), cursor_style(2)),
             Span::raw(" "),
-            Span::styled(mk_radio(ModelFilterMode::Local,  "local"),  cursor_style(3)),
+            Span::styled(mk_radio(ModelFilterMode::Local, "local"), cursor_style(3)),
             Span::raw(" "),
             Span::styled(mk_radio(ModelFilterMode::Global, "global"), cursor_style(4)),
         ]);
-        let radio_area = Rect { x: area.x, y: area.y + 2, width: area.width, height: 1 };
+        let radio_area = Rect {
+            x: area.x,
+            y: area.y + 2,
+            width: area.width,
+            height: 1,
+        };
         frame.render_widget(Paragraph::new(radio_line), radio_area);
     }
 
@@ -119,18 +139,20 @@ pub(crate) fn draw_models_page(
 
     // Column widths: Name (12 total = 2 glyph + 10 name text), Role (11),
     // Model (flexible), Provider (12).
-    let col_name_w  = 12u16;
-    let col_role_w  = 11u16;
-    let col_prov_w  = 12u16;
-    let col_model_w = area.width.saturating_sub(col_name_w + col_role_w + col_prov_w + 3);
+    let col_name_w = 12u16;
+    let col_role_w = 11u16;
+    let col_prov_w = 12u16;
+    let col_model_w = area
+        .width
+        .saturating_sub(col_name_w + col_role_w + col_prov_w + 3);
     // Name text budget after the 2-char glyph prefix.
     let name_text_w = col_name_w.saturating_sub(2) as usize;
 
     // Header row.
     let header = Row::new(vec![
-        Cell::from(Span::styled("Name",     Style::default().fg(palette.dim))),
-        Cell::from(Span::styled("Role",     Style::default().fg(palette.dim))),
-        Cell::from(Span::styled("Model",    Style::default().fg(palette.dim))),
+        Cell::from(Span::styled("Name", Style::default().fg(palette.dim))),
+        Cell::from(Span::styled("Role", Style::default().fg(palette.dim))),
+        Cell::from(Span::styled("Model", Style::default().fg(palette.dim))),
         Cell::from(Span::styled("Provider", Style::default().fg(palette.dim))),
     ]);
 
@@ -148,66 +170,77 @@ pub(crate) fn draw_models_page(
     );
 
     // Data rows — iterate the visible window only.
-    let rows: Vec<Row> = vis_indices[start..end].iter().enumerate().map(|(vis_pos, &real_idx)| {
-        let m = &st.models[real_idx];
-        let selected = st.model_sel == MODEL_CTRL_SLOTS + start + vis_pos;
-        let armed    = selected && st.model_delete_armed;
+    let rows: Vec<Row> = vis_indices[start..end]
+        .iter()
+        .enumerate()
+        .map(|(vis_pos, &real_idx)| {
+            let m = &st.models[real_idx];
+            let selected = st.model_sel == MODEL_CTRL_SLOTS + start + vis_pos;
+            let armed = selected && st.model_delete_armed;
 
-        let glyph = if m.session_only { "  " } else { "* " };
-        let name_text = if armed {
-            format!("DEL? {}", if m.name.is_empty() { "\u{2014}" } else { &m.name })
-        } else if m.name.is_empty() {
-            "\u{2014}".to_string()
-        } else {
-            m.name.clone()
-        };
-        let name_text = truncate(&name_text, name_text_w);
+            let glyph = if m.session_only { "  " } else { "* " };
+            let name_text = if armed {
+                format!(
+                    "DEL? {}",
+                    if m.name.is_empty() {
+                        "\u{2014}"
+                    } else {
+                        &m.name
+                    }
+                )
+            } else if m.name.is_empty() {
+                "\u{2014}".to_string()
+            } else {
+                m.name.clone()
+            };
+            let name_text = truncate(&name_text, name_text_w);
 
-        let row_style = if selected {
-            Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
-        } else {
-            Style::default().fg(palette.fg)
-        };
+            let row_style = if selected {
+                Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
+            } else {
+                Style::default().fg(palette.fg)
+            };
 
-        let name_line = if selected {
-            // Single span padded to full width — sel_bg covers entire cell.
-            let full = format!("{glyph}{name_text:<name_text_w$}");
-            Line::from(Span::styled(
-                format!("{full:<w$}", w = col_name_w as usize),
-                Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
-            ))
-        } else {
-            Line::from(vec![
-                Span::styled(glyph,     Style::default().fg(palette.dim)),
-                Span::styled(name_text, Style::default().fg(palette.fg)),
+            let name_line = if selected {
+                // Single span padded to full width — sel_bg covers entire cell.
+                let full = format!("{glyph}{name_text:<name_text_w$}");
+                Line::from(Span::styled(
+                    format!("{full:<w$}", w = col_name_w as usize),
+                    Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(glyph, Style::default().fg(palette.dim)),
+                    Span::styled(name_text, Style::default().fg(palette.fg)),
+                ])
+            };
+
+            let role_str = if m.roles.is_empty() {
+                "\u{2014}".to_string()
+            } else {
+                m.roles
+                    .iter()
+                    .map(|r: &ModelRole| r.label())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let role_str = truncate(&role_str, col_role_w as usize);
+            let model_str = if m.model_id.is_empty() {
+                "\u{2014}".to_string()
+            } else {
+                truncate(&m.model_id, col_model_w as usize)
+            };
+            let prov_str = st.provider_label_for_draft(m);
+            let prov_str = truncate(&prov_str, col_prov_w as usize);
+
+            Row::new(vec![
+                Cell::from(name_line),
+                Cell::from(role_str).style(row_style),
+                Cell::from(model_str).style(row_style),
+                Cell::from(prov_str).style(row_style),
             ])
-        };
-
-        let role_str = if m.roles.is_empty() {
-            "\u{2014}".to_string()
-        } else {
-            m.roles
-                .iter()
-                .map(|r: &ModelRole| r.label())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let role_str  = truncate(&role_str, col_role_w as usize);
-        let model_str = if m.model_id.is_empty() {
-            "\u{2014}".to_string()
-        } else {
-            truncate(&m.model_id, col_model_w as usize)
-        };
-        let prov_str = st.provider_label_for_draft(m);
-        let prov_str = truncate(&prov_str, col_prov_w as usize);
-
-        Row::new(vec![
-            Cell::from(name_line),
-            Cell::from(role_str).style(row_style),
-            Cell::from(model_str).style(row_style),
-            Cell::from(prov_str).style(row_style),
-        ])
-    }).collect();
+        })
+        .collect();
 
     let widths = [
         Constraint::Length(col_name_w),
@@ -216,7 +249,12 @@ pub(crate) fn draw_models_page(
         Constraint::Length(col_prov_w),
     ];
 
-    let table_area = Rect { x: area.x, y: table_y, width: area.width, height: table_h };
+    let table_area = Rect {
+        x: area.x,
+        y: table_y,
+        width: area.width,
+        height: table_h,
+    };
     let table = Table::new(rows, widths).header(header);
     frame.render_widget(table, table_area);
 }

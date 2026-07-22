@@ -247,19 +247,19 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
 
     for arg in &all {
         match arg.as_str() {
-            "--resume"                       => opts.resume = true,
-            "--internet-fullmode-install"    => opts.internet_fullmode_install = true,
-            "--internet-fullmode-uninstall"  => opts.internet_fullmode_uninstall = true,
-            "--security-install"             => opts.security_install = true,
-            "--force"                        => opts.force = true,
-            "--ipc-selftest"                 => opts.ipc_selftest = true,
-            "--daemon-selftest"              => opts.daemon_selftest = true,
-            "--daemon"                       => opts.daemon = true,
-            "--mcp-daemon"                   => opts.mcp_daemon = true,
-            "--knowledge-daemon"             => opts.knowledge_daemon = true,
-            "--attach"                       => opts.attach = true,
-            "--local"                        => opts.local = true,
-            _                                => {}
+            "--resume" => opts.resume = true,
+            "--internet-fullmode-install" => opts.internet_fullmode_install = true,
+            "--internet-fullmode-uninstall" => opts.internet_fullmode_uninstall = true,
+            "--security-install" => opts.security_install = true,
+            "--force" => opts.force = true,
+            "--ipc-selftest" => opts.ipc_selftest = true,
+            "--daemon-selftest" => opts.daemon_selftest = true,
+            "--daemon" => opts.daemon = true,
+            "--mcp-daemon" => opts.mcp_daemon = true,
+            "--knowledge-daemon" => opts.knowledge_daemon = true,
+            "--attach" => opts.attach = true,
+            "--local" => opts.local = true,
+            _ => {}
         }
     }
 
@@ -300,10 +300,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             opts.doctor_verbose = all.iter().any(|a| a == "-v" || a == "--verbose");
         }
         Some("daemon") => {
-            opts.subcommand = Some(match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
-                Some(sub) => DaemonCli::Run(sub),
-                None => DaemonCli::Usage,
-            });
+            opts.subcommand = Some(
+                match positional.next().and_then(|v| DaemonSub::from_verb(v)) {
+                    Some(sub) => DaemonCli::Run(sub),
+                    None => DaemonCli::Usage,
+                },
+            );
         }
         Some("ext") => {
             // `ext install --dev <path>` is the only real verb; `--dev`'s value is

@@ -82,7 +82,12 @@ impl<'p> Renderer<'p> {
 
     /// Build one code content row from already-styled spans whose total width is
     /// `<= iw`, padding with spaces to `iw` and wrapping in the box borders.
-    pub(super) fn code_row(&self, mut content: Vec<Span<'static>>, iw: usize, dim: Style) -> Vec<Span<'static>> {
+    pub(super) fn code_row(
+        &self,
+        mut content: Vec<Span<'static>>,
+        iw: usize,
+        dim: Style,
+    ) -> Vec<Span<'static>> {
         let used: usize = content.iter().map(|s| s.content.chars().count()).sum();
         let pad = iw.saturating_sub(used);
         if pad > 0 {

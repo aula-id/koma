@@ -212,8 +212,9 @@ pub(super) fn build_input(
                     // like `attachment_parts`; an unreadable file is skipped.
                     let capable = image_ctx.map(|c| c.model_takes_images).unwrap_or(false);
                     if capable {
-                        let Some(ctx) = image_ctx else {
-                            return Ok(input);
+                        let ctx = match image_ctx {
+                            Some(c) => c,
+                            None => return (instructions, input),
                         };
                         for att in &m.attachments {
                             if let Some(url) =
@@ -402,7 +403,10 @@ mod tests {
 
     #[test]
     fn system_split_head_to_instructions_tail_to_developer() {
-        let sys = format!("BASE PROMPT{}VOLATILE TAIL", crate::dto::chat::CACHE_SPLIT_MARK);
+        let sys = format!(
+            "BASE PROMPT{}VOLATILE TAIL",
+            crate::dto::chat::CACHE_SPLIT_MARK
+        );
         let (instructions, input) = build_input(
             vec![
                 ChatMessage::new(Role::System, sys),
@@ -444,10 +448,7 @@ mod tests {
         assert_eq!(instructions, "WHOLE SYSTEM");
         // No developer message — the user message is first.
         assert_eq!(input.len(), 1);
-        assert!(matches!(
-            &input[0],
-            InputItem::Message { role: "user", .. }
-        ));
+        assert!(matches!(&input[0], InputItem::Message { role: "user", .. }));
     }
 
     #[test]
@@ -531,7 +532,10 @@ mod tests {
             .any(|i| matches!(i, InputItem::Reasoning { .. })));
         assert!(matches!(
             &input[0],
-            InputItem::Message { role: "assistant", .. }
+            InputItem::Message {
+                role: "assistant",
+                ..
+            }
         ));
     }
 

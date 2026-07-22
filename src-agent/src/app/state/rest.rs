@@ -9,12 +9,12 @@
 //! (input, scroll, misc); the streaming-lifecycle + toast methods live on
 //! `SessionRuntime`.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use crate::model::app_config::{AppConfig, OAuthProvider};
-use crate::service::WarmEvent;
 use super::runtime::SessionRuntime;
 use super::types::{AgentMode, CataloguePending, TranscriptCache};
+use crate::model::app_config::{AppConfig, OAuthProvider};
+use crate::service::WarmEvent;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// W11: identity + cooperative-cancel handle for the ONE in-flight DELEGATED extension
 /// OAuth flow (see [`AppStateRest::oauth_ext_flow`]). The off-loop begin/poll task runs
@@ -344,8 +344,11 @@ pub struct AppStateRest {
     /// in flight. Kept out of the IPC snapshot — only the daemon owns the manager, so
     /// only the daemon ever drives a probe; the client animates from the projected
     /// `health_fetching` / `health_frame` instead.
-    pub sec_health_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<crate::app::sec::InstallHealthEntry>, String>>>,
+    pub sec_health_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<
+            Result<Vec<crate::app::sec::InstallHealthEntry>, String>,
+        >,
+    >,
     /// Receiver for an in-flight EXTENSION-SCREEN invoke (TUI SCREEN PROTOCOL v1: the
     /// async `tui-open` / `tui-select` `panel.msg` round-trip). `Some` while an
     /// `ext::screen::kick_off_ext_screen_msg` spawn is pending; drained each tick in
@@ -364,7 +367,8 @@ pub struct AppStateRest {
     /// then cleared. Mirrors `ext_screen_rx`. `None` when no fetch/install is in flight. Kept
     /// OUT of the IPC snapshot — only the daemon runs the fetch; the client renders the
     /// folded result off the projected mode.
-    pub store_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ext_store::StoreEvent>>,
+    pub store_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ext_store::StoreEvent>>,
     /// Receiver for the in-flight `/settings` OAuth submenu connect flow (Codex
     /// browser login or Kilo Code device login). Mirrors `sec_health_rx`: opened
     /// by `Action::OAuthStart`'s handler, drained each tick in `service_global`
@@ -427,8 +431,7 @@ pub struct AppStateRest {
     /// is dispatched against the ACTIVE session through the grant broker and its
     /// oneshot answered with the broker's JSON. `Option` only so the drain can
     /// take/put-back it (mirroring `oauth_rx`); always `Some` between ticks.
-    pub ext_call_rx:
-        Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtCallRequest>>,
+    pub ext_call_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::app::ext::ExtCallRequest>>,
     /// SENDER half of the extension notify lane. A clone is handed to
     /// [`crate::app::ext::ExtHostManager`] at startup (`set_ext_notify_tx`); each
     /// extension's socket reader task uses it to forward an ext->koma `Notify` — which
@@ -634,7 +637,10 @@ impl AppStateRest {
     /// onto the new one. No-ops (skips the write + extra save) when nothing
     /// changed or `effort` is already the default — safe to call
     /// unconditionally after any settings mutation that might touch Main.
-    pub fn reset_effort_if_main_changed(&mut self, before: Option<(String, String, Option<String>)>) {
+    pub fn reset_effort_if_main_changed(
+        &mut self,
+        before: Option<(String, String, Option<String>)>,
+    ) {
         let after = self.main_identity_now();
         if before != after {
             if let Some(sess) = self.fg_mut().session.as_mut() {
@@ -726,7 +732,8 @@ impl AppStateRest {
                     // execution keeps showing its checklist instead of the GUI
                     // Explore "PLAN" section going blank until the model's next
                     // `checklist`. Empty when that file doesn't exist yet.
-                    plan_todos_after = Some(crate::app::mode::todo::load_current_todos(sess, false));
+                    plan_todos_after =
+                        Some(crate::app::mode::todo::load_current_todos(sess, false));
                 }
                 sess.rebuild_system();
                 let _ = sess.save();
@@ -749,10 +756,7 @@ impl AppStateRest {
                 return i;
             }
         }
-        self.sessions
-            .iter()
-            .position(|s| !s.closed)
-            .unwrap_or(0)
+        self.sessions.iter().position(|s| !s.closed).unwrap_or(0)
     }
 
     /// Reset the scroll/follow of session `idx` itself (snap it to the bottom), instead of

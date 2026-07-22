@@ -101,10 +101,7 @@ pub fn sanitize_tool_arguments(raw: &str) -> String {
     for item in stream {
         match item {
             Ok(value) => {
-                if value
-                    .as_object()
-                    .is_some_and(|obj| !obj.is_empty())
-                {
+                if value.as_object().is_some_and(|obj| !obj.is_empty()) {
                     last_nonempty_obj = Some(value.clone());
                 }
                 last_any = Some(value);

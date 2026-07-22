@@ -98,7 +98,10 @@ pub async fn summarize(
     // `complete_with` treats an empty provider as default routing.
     // Best-effort: any error (no key, network, bad provider) → no summary.
     // Free-form text — no JSON mode.
-    match client.complete_with(conn, model, provider, messages, false).await {
+    match client
+        .complete_with(conn, model, provider, messages, false)
+        .await
+    {
         Ok(s) => {
             let s = s.trim();
             if s.is_empty() {
@@ -165,7 +168,10 @@ pub async fn summarize_with_fallback(
     ];
 
     // Primary attempt. Free-form text — no JSON mode.
-    match client.complete_with(conn, model, provider, messages.clone(), false).await {
+    match client
+        .complete_with(conn, model, provider, messages.clone(), false)
+        .await
+    {
         Ok(s) => {
             let s = s.trim();
             if s.is_empty() {
@@ -177,11 +183,16 @@ pub async fn summarize_with_fallback(
         Err(_) => {
             // Primary call failed. Retry with the fallback route when it is
             // meaningfully different (avoids a guaranteed-duplicate failure).
-            let same =
-                fallback_model == model && fallback_conn.endpoint == conn.endpoint;
+            let same = fallback_model == model && fallback_conn.endpoint == conn.endpoint;
             if !same {
                 if let Ok(s) = client
-                    .complete_with(fallback_conn, fallback_model, fallback_provider, messages, false)
+                    .complete_with(
+                        fallback_conn,
+                        fallback_model,
+                        fallback_provider,
+                        messages,
+                        false,
+                    )
                     .await
                 {
                     let s = s.trim();

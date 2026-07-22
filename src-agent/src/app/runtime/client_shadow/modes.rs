@@ -8,16 +8,17 @@
 
 use std::time::{Duration, Instant};
 
+use super::settings::{shadow_oauth_flow, shadow_oauth_provider};
 use crate::app::mode::agents::{
     AgentEditField, AgentScope, AgentSubMode, AgentsState, ModelPickerState, ToolPickerState,
 };
+use crate::app::mode::bash::BashState;
+use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::ext_screen::ExtScreenState;
 use crate::app::mode::extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
 use crate::app::mode::help::{HelpEntry, HelpKind, HelpState};
 use crate::app::mode::mcp::{McpEditField, McpState, McpSubMode};
 use crate::app::mode::security::SecurityState;
-use crate::app::mode::bash::BashState;
-use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState,
@@ -25,16 +26,14 @@ use crate::app::mode::{
     SessionHub, SessionKind, UsageMetric, UsageNavState, UsageRange, UsageView, WarmStatus,
 };
 use crate::ipc::proto::{
-    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot,
-    ExtRowWire, ExtScreenSnapshot, ExtStoreRowWire, ExtStoreSnapshot, ExtensionsSnapshot, HelpSnapshot,
-    KeyInputSnapshot, LoadingSnapshot, McpSnapshot,
-    OnboardProviderSnapshot, OnboardSnapshot, PickerSnapshot, RewindSnapshot,
-    SecuritySnapshot, SessionHubSnapshot,
-    TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
+    AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, ExtRowWire,
+    ExtScreenSnapshot, ExtStoreRowWire, ExtStoreSnapshot, ExtensionsSnapshot, HelpSnapshot,
+    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
+    PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot, TextEditorSnapshot,
+    ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::McpTransport;
 use crate::model::store::SessionMeta;
-use super::settings::{shadow_oauth_flow, shadow_oauth_provider};
 
 // ─── mode reconstruction (stage 2: core interactive modes) ───────────────────
 //
@@ -127,7 +126,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
             path: std::path::PathBuf::new(), // daemon-side load target; not rendered
             name: e.name,
             last_active: std::time::UNIX_EPOCH + Duration::from_secs(e.last_active_secs),
-            dir_label: String::new(),  // not projected over the wire; labels shown on daemon side
+            dir_label: String::new(), // not projected over the wire; labels shown on daemon side
             is_current_dir: false,
         })
         .collect();
@@ -150,7 +149,7 @@ pub(crate) fn shadow_session_hub(h: SessionHubSnapshot) -> SessionHub {
                 // armed target by session UUID (matching the daemon handler's identity-based
                 // `pending_kill`). None for the synthetic `[+ new session]` row.
                 session_id: c.session_id,
-                dir_label: String::new(),  // not projected over the wire
+                dir_label: String::new(), // not projected over the wire
                 is_current_dir: false,
             })
             .collect(),
@@ -191,7 +190,7 @@ pub(crate) fn shadow_picker(p: PickerSnapshot) -> PickerState {
                 modified: std::time::UNIX_EPOCH + Duration::from_secs(m.modified_secs),
                 message_count: m.message_count,
                 locked: m.locked,
-                workdir: String::new(),  // not projected over the wire
+                workdir: String::new(), // not projected over the wire
                 pwd_hash: String::new(),
             })
             .collect(),
@@ -258,15 +257,17 @@ pub(crate) fn shadow_rewind(rw: RewindSnapshot) -> RewindState {
 /// state is render-only; key handling is forwarded to the daemon.
 pub(crate) fn shadow_agents(a: AgentsSnapshot) -> AgentsState {
     AgentsState {
-        agents: a.agents.into_iter().map(|e: AgentEntry| {
-            crate::model::agent_def::AgentDef {
+        agents: a
+            .agents
+            .into_iter()
+            .map(|e: AgentEntry| crate::model::agent_def::AgentDef {
                 name: e.name,
                 description: e.description,
                 conditions: e.conditions,
                 source: match e.source.as_str() {
-                    "global"  => crate::model::agent_def::AgentSource::Global,
+                    "global" => crate::model::agent_def::AgentSource::Global,
                     "builtin" => crate::model::agent_def::AgentSource::Builtin,
-                    _         => crate::model::agent_def::AgentSource::Session,
+                    _ => crate::model::agent_def::AgentSource::Session,
                 },
                 model_uuid: e.model_uuid,
                 model: e.model,
@@ -274,8 +275,8 @@ pub(crate) fn shadow_agents(a: AgentsSnapshot) -> AgentsState {
                 prompt: e.prompt,
                 file_path: None,
                 ..crate::model::agent_def::AgentDef::default()
-            }
-        }).collect(),
+            })
+            .collect(),
         list_sel: a.list_sel,
         in_detail: a.in_detail,
         mode: match a.mode.as_str() {
@@ -613,12 +614,16 @@ pub(crate) fn shadow_bash(s: BashSnapshot) -> BashState {
 pub(crate) fn shadow_todo(s: crate::ipc::proto::TodoSnapshot) -> crate::app::mode::TodoState {
     use crate::app::mode::todo::{TodoItem, TodoPriority, TodoStatus};
     crate::app::mode::TodoState {
-        items: s.items.into_iter().map(|item| TodoItem {
-            content: item.content,
-            status: TodoStatus::from_str(&item.status),
-            priority: TodoPriority::from_str(&item.priority),
-            locked: item.locked,
-        }).collect(),
+        items: s
+            .items
+            .into_iter()
+            .map(|item| TodoItem {
+                content: item.content,
+                status: TodoStatus::from_str(&item.status),
+                priority: TodoPriority::from_str(&item.priority),
+                locked: item.locked,
+            })
+            .collect(),
         selected: s.selected,
         pwd_hash: s.pwd_hash,
         // Daemon-only field (the plan-todos path). The client never reads or

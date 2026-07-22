@@ -223,8 +223,7 @@ pub(super) fn handle_approve_plan_compact(
     // which seeds plan.md and auto-wakes the execution stream. `client` is already
     // the `&mut Option<_>` the handler owns (no clone needed, unlike the deferred
     // drain which holds a `&`).
-    let _ =
-        crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
+    let _ = crate::app::runtime::commands::compact::handle_compact(state, client, handle, Some(0));
     Ok(())
 }
 

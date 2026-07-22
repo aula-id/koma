@@ -13,10 +13,10 @@
 //! and `app::runtime::stream::run_tool` dispatches the model's requested calls
 //! back through [`Tool::run`].
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
 use anyhow::{bail, Result};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 pub mod cd;
 pub mod dircache;
@@ -47,7 +47,10 @@ pub use dircache::DirCache;
 /// sub-agent engine. NOTE: `git_worktree remove` is gated separately, inside its
 /// interception in `process_tools` (it never reaches this generic gate).
 pub(crate) fn tool_is_risky(name: &str) -> bool {
-    matches!(name, "write" | "delete" | "edit" | "bash" | "git_operator" | "web_download")
+    matches!(
+        name,
+        "write" | "delete" | "edit" | "bash" | "git_operator" | "web_download"
+    )
 }
 
 /// Tools reachable while [`crate::app::state::AgentMode::Plan`] is active — the
@@ -64,12 +67,32 @@ pub(crate) fn tool_is_risky(name: &str) -> bool {
 /// `process_tools`) to write the session-scoped `plan_todos.md` + auto-managed
 /// rails, never the per-directory workspace `TODO.md`.
 pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
-    matches!(name,
-        "read" | "grep" | "glob" | "dir_list" | "dir_cache_update" | "recall"
-        | "message_find"
-        | "web_search" | "web_fetch" | "pong" | "cd" | "git_cred"
-        | "task" | "task_output" | "task_kill" | "task_send" | "bash_output" | "bash_kill"
-        | "git_operator" | "seqthink" | "plan_ready" | "plan_enter" | "checklist")
+    matches!(
+        name,
+        "read"
+            | "grep"
+            | "glob"
+            | "dir_list"
+            | "dir_cache_update"
+            | "recall"
+            | "message_find"
+            | "web_search"
+            | "web_fetch"
+            | "pong"
+            | "cd"
+            | "git_cred"
+            | "task"
+            | "task_output"
+            | "task_kill"
+            | "task_send"
+            | "bash_output"
+            | "bash_kill"
+            | "git_operator"
+            | "seqthink"
+            | "plan_ready"
+            | "plan_enter"
+            | "checklist"
+    )
 }
 
 /// True when `subcmd` (the first element of a `git_operator` call's `args`
@@ -79,9 +102,21 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
 /// `checkout`, `reset`, …) is denied so Plan mode's git access stays genuinely
 /// read-only.
 pub(crate) fn plan_git_subcommand_allowed(subcmd: &str) -> bool {
-    matches!(subcmd,
-        "status" | "log" | "diff" | "show" | "blame" | "branch" | "remote"
-        | "rev-parse" | "describe" | "shortlog" | "ls-files" | "ls-remote")
+    matches!(
+        subcmd,
+        "status"
+            | "log"
+            | "diff"
+            | "show"
+            | "blame"
+            | "branch"
+            | "remote"
+            | "rev-parse"
+            | "describe"
+            | "shortlog"
+            | "ls-files"
+            | "ls-remote"
+    )
 }
 
 /// Shared context handed to every tool invocation.
@@ -261,10 +296,20 @@ const INTERNAL_ONLY: &[&str] = &["seqthink", "plan_enter", "plan_ready"];
 /// background reindex, and `task` is intercepted by `process_tools` before this
 /// check (it delegates to a sub-agent on its own lane).
 pub const DEFERRED_TOOLS: &[&str] = &[
-    "read", "write", "edit", "delete", "bash", "grep", "glob",
-    "remember", "forget", "recall",
+    "read",
+    "write",
+    "edit",
+    "delete",
+    "bash",
+    "grep",
+    "glob",
+    "remember",
+    "forget",
+    "recall",
     "message_find",
-    "web_fetch", "web_search", "web_download",
+    "web_fetch",
+    "web_search",
+    "web_download",
     "git_operator",
 ];
 
@@ -314,7 +359,9 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
                         None => break,
                     }
                 }
-                let mut base = existing.canonicalize().unwrap_or_else(|_| existing.to_path_buf());
+                let mut base = existing
+                    .canonicalize()
+                    .unwrap_or_else(|_| existing.to_path_buf());
                 for seg in tail.iter().rev() {
                     base.push(seg);
                 }
@@ -327,8 +374,12 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
     }
 
     let (ws_idx, bare) = parse_ws_prefix(rel);
-    let base = workspaces.get(ws_idx)
-        .ok_or_else(|| anyhow::anyhow!("workspace index [{ws_idx}] out of range (have {})", workspaces.len()))?;
+    let base = workspaces.get(ws_idx).ok_or_else(|| {
+        anyhow::anyhow!(
+            "workspace index [{ws_idx}] out of range (have {})",
+            workspaces.len()
+        )
+    })?;
     let ws = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     let joined = ws.join(bare);
     // Canonicalize as far as exists, then re-append the non-existent tail, so
@@ -348,7 +399,9 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
                     None => break,
                 }
             }
-            let mut base = existing.canonicalize().unwrap_or_else(|_| existing.to_path_buf());
+            let mut base = existing
+                .canonicalize()
+                .unwrap_or_else(|_| existing.to_path_buf());
             for seg in tail.iter().rev() {
                 base.push(seg);
             }
@@ -387,14 +440,20 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
 /// read/grep every past session's chat history across all projects.
 /// `session_dir` is `None` when no session is active, in which case this
 /// exemption is simply skipped (falls through to normal workspace resolution).
-pub fn resolve_read(workspaces: &[PathBuf], rel: &str, session_dir: Option<&Path>) -> Result<PathBuf> {
+pub fn resolve_read(
+    workspaces: &[PathBuf],
+    rel: &str,
+    session_dir: Option<&Path>,
+) -> Result<PathBuf> {
     // Absolute scratch-root paths: let resolve() handle the bypass.
     let as_path = Path::new(rel);
     if as_path.is_absolute() {
         let scratch = crate::model::store::scratch_root();
         // Quick containment check before canonicalize (scratch dir may not
         // exist yet for a brand-new session).
-        let candidate = as_path.canonicalize().unwrap_or_else(|_| as_path.to_path_buf());
+        let candidate = as_path
+            .canonicalize()
+            .unwrap_or_else(|_| as_path.to_path_buf());
         if candidate.starts_with(&scratch) {
             return resolve(workspaces, rel);
         }
@@ -418,7 +477,9 @@ pub fn resolve_read(workspaces: &[PathBuf], rel: &str, session_dir: Option<&Path
                             None => break,
                         }
                     }
-                    let mut base = existing.canonicalize().unwrap_or_else(|_| existing.to_path_buf());
+                    let mut base = existing
+                        .canonicalize()
+                        .unwrap_or_else(|_| existing.to_path_buf());
                     for seg in tail.iter().rev() {
                         base.push(seg);
                     }

@@ -324,8 +324,12 @@ impl SessionRuntime {
     /// the override is still contained. Toasts on an actual reset so the user
     /// knows why their cwd moved out from under them.
     pub fn clamp_active_cwd(&mut self, launch_dir: &Path) -> bool {
-        let Some(cwd) = self.active_cwd.clone() else { return false };
-        let Some(sess) = self.session.as_ref() else { return false };
+        let Some(cwd) = self.active_cwd.clone() else {
+            return false;
+        };
+        let Some(sess) = self.session.as_ref() else {
+            return false;
+        };
         if crate::app::harness::workspace_allowed(&sess.settings, &cwd, launch_dir) {
             return false;
         }

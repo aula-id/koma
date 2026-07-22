@@ -60,7 +60,9 @@ pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &To
         let result = crate::tool::execute_tool(&ctx, &call_cloned);
         let _ = tx.send((id, result));
     });
-    state.rest.sessions[sess_idx].pending_tool_tasks.push(call.id.clone());
+    state.rest.sessions[sess_idx]
+        .pending_tool_tasks
+        .push(call.id.clone());
     state.rest.sessions[sess_idx].tool_idx += 1;
     // Mark the round PARKED on async tool work so the event-loop resume gate
     // (which requires this flag set AND `pending_tool_tasks` empty) fires once the
@@ -152,7 +154,11 @@ pub(super) fn finish_tool_round(
     // round, so re-read the mirror once here (cheap, once per round) — the GUI
     // Explore "File changed" panel projects `rt.file_changes`, so it now reflects
     // what this round touched. Skipped when the session has no on-disk dir.
-    if let Some(dir) = state.rest.sessions[sess_idx].session.as_ref().map(|s| s.path.clone()) {
+    if let Some(dir) = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.path.clone())
+    {
         state.rest.sessions[sess_idx].file_changes = crate::model::msglog::read_file_changes(&dir);
     }
 
@@ -203,8 +209,12 @@ pub(super) fn finish_tool_round(
                 let _ = sess.save();
                 // Reindex the full workdir list so @-autocomplete picks up
                 // the new media directory.
-                let roots: Vec<std::path::PathBuf> =
-                    sess.settings.workdir.iter().map(std::path::PathBuf::from).collect();
+                let roots: Vec<std::path::PathBuf> = sess
+                    .settings
+                    .workdir
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
                 crate::tool::dircache::reindex(
                     roots,
                     state.rest.sessions[sess_idx].dir_cache.clone(),
@@ -244,7 +254,10 @@ pub(super) fn finish_tool_round(
     // cleanly. `waiting` stays true (the turn isn't finished yet). Compute the
     // history into an owned Option FIRST so no session borrow is held across the
     // per-session writes in the no-session arm.
-    let history = match (state.rest.sessions[sess_idx].session.as_ref(), client.as_ref()) {
+    let history = match (
+        state.rest.sessions[sess_idx].session.as_ref(),
+        client.as_ref(),
+    ) {
         (Some(sess), Some(_)) => Some(sess.conversation.history()),
         _ => None,
     };

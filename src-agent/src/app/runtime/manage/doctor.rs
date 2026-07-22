@@ -18,7 +18,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::ipc::proto::{ClientRequest, DaemonEvent};
-use crate::model::app_config::{AppConfig, ApiType, ModelRole};
+use crate::model::app_config::{ApiType, AppConfig, ModelRole};
 use crate::model::store;
 
 /// How long the `koma doctor` update check waits for `koma.run` before giving
@@ -46,15 +46,27 @@ struct CheckResult {
 
 impl CheckResult {
     fn ok(headline: impl Into<String>) -> Self {
-        Self { status: Status::Ok, headline: headline.into(), details: Vec::new() }
+        Self {
+            status: Status::Ok,
+            headline: headline.into(),
+            details: Vec::new(),
+        }
     }
 
     fn warn(headline: impl Into<String>, details: Vec<String>) -> Self {
-        Self { status: Status::Warn, headline: headline.into(), details }
+        Self {
+            status: Status::Warn,
+            headline: headline.into(),
+            details,
+        }
     }
 
     fn fail(headline: impl Into<String>, details: Vec<String>) -> Self {
-        Self { status: Status::Fail, headline: headline.into(), details }
+        Self {
+            status: Status::Fail,
+            headline: headline.into(),
+            details,
+        }
     }
 }
 
@@ -98,15 +110,25 @@ pub fn run_doctor(verbose: bool) -> i32 {
         println!(
             "{}",
             paint(
-                &format!("! Doctor found issues in {warn_or_fail_categories} categor{}.",
-                    if warn_or_fail_categories == 1 { "y" } else { "ies" }),
+                &format!(
+                    "! Doctor found issues in {warn_or_fail_categories} categor{}.",
+                    if warn_or_fail_categories == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                ),
                 Status::Warn,
                 use_color
             )
         );
     }
 
-    if any_fail { 1 } else { 0 }
+    if any_fail {
+        1
+    } else {
+        0
+    }
 }
 
 /// Whether ANSI colour should be emitted: stdout must be a real terminal AND
@@ -154,9 +176,13 @@ fn print_result(r: &CheckResult, verbose: bool, use_color: bool) {
 /// parses cleanly; `false` only on an actual parse failure — shared with
 /// [`check_mcp_servers`] so a corrupt config is reflected there too.
 fn check_config_parses() -> bool {
-    let Ok(dir) = store::base_dir() else { return true };
+    let Ok(dir) = store::base_dir() else {
+        return true;
+    };
     let path = dir.join("config.json");
-    let Ok(bytes) = std::fs::read(&path) else { return true }; // missing = fine
+    let Ok(bytes) = std::fs::read(&path) else {
+        return true;
+    }; // missing = fine
     serde_json::from_slice::<AppConfig>(&bytes).is_ok()
 }
 
@@ -234,7 +260,11 @@ fn check_koma(config_ok: bool) -> CheckResult {
     }
 
     let headline = format!("koma ({version}, {dir_state}, {config_state})");
-    CheckResult { status, headline, details }
+    CheckResult {
+        status,
+        headline,
+        details,
+    }
 }
 
 // ─── 2. Daemons ─────────────────────────────────────────────────────────────
@@ -278,7 +308,9 @@ fn check_daemons() -> CheckResult {
                 // Not treated as a mismatch (we simply couldn't confirm).
             }
             Err(e) => {
-                details.push(format!("session {id}: could not probe build fingerprint: {e:#}"));
+                details.push(format!(
+                    "session {id}: could not probe build fingerprint: {e:#}"
+                ));
             }
         }
     }
@@ -314,7 +346,9 @@ fn check_daemons() -> CheckResult {
                 }
                 Ok(_) => "MCP daemon running".to_string(),
                 Err(e) => {
-                    details.push(format!("MCP daemon: could not probe build fingerprint: {e:#}"));
+                    details.push(format!(
+                        "MCP daemon: could not probe build fingerprint: {e:#}"
+                    ));
                     "MCP daemon running".to_string()
                 }
             }
@@ -332,7 +366,11 @@ fn check_daemons() -> CheckResult {
         mcp_note
     );
 
-    CheckResult { status, headline, details }
+    CheckResult {
+        status,
+        headline,
+        details,
+    }
 }
 
 /// Connect to a LIVE session daemon and run the SAME `Attach` handshake the
@@ -345,7 +383,13 @@ fn check_daemons() -> CheckResult {
 /// exactly like any other client detaching.
 fn probe_session_hello(path: &Path) -> anyhow::Result<Option<String>> {
     let (mut stream, mut reader) = super::connect_managed(path)?;
-    super::send_request(&mut stream, &ClientRequest::Attach { foreground_id: None, cwd: None })?;
+    super::send_request(
+        &mut stream,
+        &ClientRequest::Attach {
+            foreground_id: None,
+            cwd: None,
+        },
+    )?;
 
     // Hello is sent first by contract, but tolerate a few frames ahead of it
     // (mirrors `daemon_session_count`'s tolerance loop) before giving up.
@@ -370,7 +414,10 @@ fn check_models() -> CheckResult {
     if config.providers.is_empty() && config.oauth_conns.is_empty() {
         return CheckResult::fail(
             "Models (nothing configured)",
-            vec!["no providers, OAuth connections, or koma-free entries — nothing can run".to_string()],
+            vec![
+                "no providers, OAuth connections, or koma-free entries — nothing can run"
+                    .to_string(),
+            ],
         );
     }
 
@@ -386,8 +433,16 @@ fn check_models() -> CheckResult {
             "no main model assigned".to_string()
         }
         Some(entry) => {
-            let label = if !entry.name.is_empty() { entry.name.clone() } else { entry.model_id.clone() };
-            if let Some(provider) = config.providers.iter().find(|p| p.uuid == entry.provider_uuid) {
+            let label = if !entry.name.is_empty() {
+                entry.name.clone()
+            } else {
+                entry.model_id.clone()
+            };
+            if let Some(provider) = config
+                .providers
+                .iter()
+                .find(|p| p.uuid == entry.provider_uuid)
+            {
                 if provider.api_key.is_empty() && provider.api_type != ApiType::KomaFree {
                     status = Status::Warn;
                     details.push("provider key missing".to_string());
@@ -395,11 +450,18 @@ fn check_models() -> CheckResult {
                 } else {
                     format!("main -> {label}")
                 }
-            } else if config.oauth_conns.iter().any(|c| c.uuid == entry.provider_uuid) {
+            } else if config
+                .oauth_conns
+                .iter()
+                .any(|c| c.uuid == entry.provider_uuid)
+            {
                 format!("main -> {label}")
             } else {
                 status = Status::Warn;
-                details.push(format!("main model's provider ({}) is missing", entry.provider_uuid));
+                details.push(format!(
+                    "main model's provider ({}) is missing",
+                    entry.provider_uuid
+                ));
                 format!("main -> {label}, provider missing")
             }
         }
@@ -429,12 +491,22 @@ fn check_models() -> CheckResult {
             .models
             .iter()
             .find(|m| m.effective_roles().contains(&role))
-            .map(|m| if !m.name.is_empty() { m.name.clone() } else { m.model_id.clone() })
+            .map(|m| {
+                if !m.name.is_empty() {
+                    m.name.clone()
+                } else {
+                    m.model_id.clone()
+                }
+            })
             .unwrap_or_else(|| "(unassigned)".to_string());
         details.push(format!("{role:?}: {holder}"));
     }
 
-    CheckResult { status, headline: format!("Models ({main_note})"), details }
+    CheckResult {
+        status,
+        headline: format!("Models ({main_note})"),
+        details,
+    }
 }
 
 // ─── 4. GUI ─────────────────────────────────────────────────────────────────
@@ -446,7 +518,9 @@ fn check_gui() -> CheckResult {
 
     if !gui_feature {
         status = Status::Warn;
-        details.push("built without gui feature — rebuild with: cargo build --features gui".to_string());
+        details.push(
+            "built without gui feature — rebuild with: cargo build --features gui".to_string(),
+        );
     }
 
     let (linux_notes, linux_status) = check_gui_linux(&mut details);
@@ -454,9 +528,17 @@ fn check_gui() -> CheckResult {
         status = linux_status;
     }
 
-    let feature_note = if gui_feature { "gui feature" } else { "built without gui feature" };
+    let feature_note = if gui_feature {
+        "gui feature"
+    } else {
+        "built without gui feature"
+    };
     let headline = format!("GUI ({feature_note}{linux_notes})");
-    CheckResult { status, headline, details }
+    CheckResult {
+        status,
+        headline,
+        details,
+    }
 }
 
 /// Linux-only shared-lib + display-server checks, folded out of [`check_gui`] so the
@@ -536,15 +618,18 @@ fn check_extensions() -> CheckResult {
 
         if !manifest_path.exists() {
             broken += 1;
-            details.push(format!("{}: manifest.json missing at {}", ext.id, manifest_path.display()));
+            details.push(format!(
+                "{}: manifest.json missing at {}",
+                ext.id,
+                manifest_path.display()
+            ));
         } else {
             match std::fs::read(&manifest_path)
                 .map_err(anyhow::Error::from)
                 .and_then(|b| {
                     serde_json::from_slice::<koma_extension::protocol::ExtensionManifest>(&b)
                         .map_err(anyhow::Error::from)
-                })
-            {
+                }) {
                 Ok(_) => {}
                 Err(e) => {
                     broken += 1;
@@ -561,7 +646,11 @@ fn check_extensions() -> CheckResult {
         let exec_path = ext_root.join(&ext.exec);
         if !exec_path.exists() {
             broken += 1;
-            details.push(format!("{}: exec missing at {}", ext.id, exec_path.display()));
+            details.push(format!(
+                "{}: exec missing at {}",
+                ext.id,
+                exec_path.display()
+            ));
         } else {
             #[cfg(unix)]
             {
@@ -571,7 +660,11 @@ fn check_extensions() -> CheckResult {
                     .unwrap_or(false);
                 if !executable {
                     broken += 1;
-                    details.push(format!("{}: exec at {} is not executable", ext.id, exec_path.display()));
+                    details.push(format!(
+                        "{}: exec at {} is not executable",
+                        ext.id,
+                        exec_path.display()
+                    ));
                 }
             }
         }
@@ -581,7 +674,10 @@ fn check_extensions() -> CheckResult {
     if broken == 0 {
         CheckResult::ok(format!("Extensions ({n} installed, binaries present)"))
     } else {
-        CheckResult::warn(format!("Extensions ({n} installed, {broken} with issues)"), details)
+        CheckResult::warn(
+            format!("Extensions ({n} installed, {broken} with issues)"),
+            details,
+        )
     }
 }
 
@@ -594,13 +690,24 @@ fn check_internet_fullmode() -> CheckResult {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    details.push(format!("python3 on PATH: {}", if python3 { "yes" } else { "no" }));
+    details.push(format!(
+        "python3 on PATH: {}",
+        if python3 { "yes" } else { "no" }
+    ));
 
     if crate::internet::is_installed() {
-        CheckResult { status: Status::Ok, headline: "Internet full-mode (installed)".to_string(), details }
+        CheckResult {
+            status: Status::Ok,
+            headline: "Internet full-mode (installed)".to_string(),
+            details,
+        }
     } else {
         details.push("optional — install with: koma --internet-fullmode-install".to_string());
-        CheckResult { status: Status::Warn, headline: "Internet full-mode (optional, not installed)".to_string(), details }
+        CheckResult {
+            status: Status::Warn,
+            headline: "Internet full-mode (optional, not installed)".to_string(),
+            details,
+        }
     }
 }
 
@@ -636,10 +743,17 @@ fn check_mcp_servers(config_ok: bool) -> CheckResult {
 
     let headline = format!("MCP servers ({configured} configured, {enabled} enabled)");
     if !config_ok {
-        details.push("config.json is corrupt — these counts reflect defaults, not your real config".to_string());
+        details.push(
+            "config.json is corrupt — these counts reflect defaults, not your real config"
+                .to_string(),
+        );
         return CheckResult::fail(headline, details);
     }
-    CheckResult { status: Status::Ok, headline, details }
+    CheckResult {
+        status: Status::Ok,
+        headline,
+        details,
+    }
 }
 
 // ─── 9. Update ──────────────────────────────────────────────────────────────

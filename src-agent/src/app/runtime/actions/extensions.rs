@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 
-use crate::app::mode::{ExtSubMode, ExtScreenState, Mode};
+use crate::app::mode::{ExtScreenState, ExtSubMode, Mode};
 use crate::app::runtime::commands::extensions::build_extensions_state;
 use crate::app::state::AppState;
 
@@ -111,7 +111,11 @@ pub(super) fn handle_ext_screen_select(
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     let sel = match state.mode() {
-        Mode::ExtScreen(s) => Some((s.ext_id.clone(), s.screen_id.clone(), s.selected_menu_item())),
+        Mode::ExtScreen(s) => Some((
+            s.ext_id.clone(),
+            s.screen_id.clone(),
+            s.selected_menu_item(),
+        )),
         _ => None,
     };
     let Some((ext_id, screen_id, item)) = sel else {

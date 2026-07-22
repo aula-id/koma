@@ -29,16 +29,16 @@
 //! Pre-swap `sessions/<name>/` directories from the old layout are never
 //! registered, so they are simply not listed (and never crash the list).
 
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-use anyhow::{anyhow, Result};
-use uuid::Uuid;
 use crate::config::APP_DIR_NAME;
 use crate::dto::chat::{ChatMessage, Role};
 use crate::model::conversation::Conversation;
 use crate::model::session::Session;
 use crate::model::session_registry;
 use crate::model::settings::Settings;
+use anyhow::{anyhow, Result};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+use uuid::Uuid;
 
 pub use crate::model::session_lock::{is_locked, remove_lock, write_lock};
 
@@ -110,10 +110,7 @@ pub fn migrate_legacy_dir() {
         return;
     }
     match std::fs::rename(&old_dir, &new_dir) {
-        Ok(()) => append_global_error_log(
-            "config migrated",
-            "~/.simple-coder -> ~/.koma",
-        ),
+        Ok(()) => append_global_error_log("config migrated", "~/.simple-coder -> ~/.koma"),
         Err(e) => append_global_error_log(
             "config migration failed",
             &format!("could not migrate ~/.simple-coder to ~/.koma: {e}"),
@@ -291,7 +288,11 @@ fn append_log_entry(parent: &Path, path: &Path, header: &str, body: &str) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let entry = format!("[unix:{ts}] {header}\n{body}\n\n");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = f.write_all(entry.as_bytes());
     }
 }
@@ -701,7 +702,11 @@ pub fn list_all_sessions() -> Result<Vec<SessionMeta>> {
             let messages_path = path.join("messages.json");
             match std::fs::read(&messages_path) {
                 Ok(bytes) => serde_json::from_slice::<Vec<crate::dto::chat::ChatMessage>>(&bytes)
-                    .map(|msgs| msgs.iter().filter(|m| m.role != crate::dto::chat::Role::System).count())
+                    .map(|msgs| {
+                        msgs.iter()
+                            .filter(|m| m.role != crate::dto::chat::Role::System)
+                            .count()
+                    })
                     .unwrap_or(0),
                 Err(_) => 0,
             }
@@ -796,7 +801,10 @@ pub fn create_session_in_with_id(workdir: &Path, id: &str) -> Result<Session> {
     if let Err(e) = std::fs::create_dir_all(&scratch) {
         append_global_error_log(
             "session",
-            &format!("warning: could not create scratch dir {}: {e}", scratch.display()),
+            &format!(
+                "warning: could not create scratch dir {}: {e}",
+                scratch.display()
+            ),
         );
     }
 

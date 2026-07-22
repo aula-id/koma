@@ -354,7 +354,10 @@ impl AgentsState {
             AgentEditField::Conditions => &self.draft_conditions,
             _ => return, // only these three are full-size editable
         };
-        self.editor = Some((field, crate::app::mode::editor::TextEditorState::from_text(text)));
+        self.editor = Some((
+            field,
+            crate::app::mode::editor::TextEditorState::from_text(text),
+        ));
         // A fresh editor starts with no pending clear-confirm.
         self.editor_clear_confirm = false;
     }
@@ -404,7 +407,7 @@ impl AgentsState {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect();
-        
+
         // Start from the current agent for Edit mode (to preserve metadata),
         // or from defaults for Create mode.
         let mut def = if self.mode == AgentSubMode::Create {
@@ -412,7 +415,7 @@ impl AgentsState {
         } else {
             self.current_agent().cloned().unwrap_or_default()
         };
-        
+
         // Overwrite the editable fields from drafts.
         def.name = name;
         def.description = self.draft_description.trim().to_string();
@@ -426,7 +429,10 @@ impl AgentsState {
         def.provider_uuid = None;
         def.tools = tools;
         def.prompt = self.draft_body.clone();
-        def.source = if self.current_agent().is_some_and(|a| a.source == AgentSource::Builtin) {
+        def.source = if self
+            .current_agent()
+            .is_some_and(|a| a.source == AgentSource::Builtin)
+        {
             AgentSource::Session
         } else {
             self.current_agent()
@@ -434,7 +440,7 @@ impl AgentsState {
                 .unwrap_or(AgentSource::Session)
         };
         def.file_path = None;
-        
+
         def
     }
 }

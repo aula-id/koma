@@ -9,9 +9,9 @@ use crate::controller::command::Command;
 use crate::service::openrouter::OpenRouterClient;
 
 mod bash;
+mod cd;
 mod clear;
 mod todo;
-mod cd;
 // `pub(crate)` so the plan-approval compaction rail (deferred/idle drain) can call
 // `handle_compact` once the post-approval turn settles — the same entry point
 // `/compact` uses, with `preserve_n = 0`.

@@ -28,7 +28,6 @@ use super::push_proto::{
     PushPendingCall, PushPlanTodo, PushSubAgent, PushToolCall,
 };
 
-
 /// Serialise the foreground session of `shadow` into the push envelopes and emit any
 /// that changed since the last call, through `push` (the host's
 /// `window.__komaClient.push` sink). This is the headless twin of `terminal.draw`:
@@ -86,9 +85,7 @@ pub(super) fn serialize_and_push(
             let tool_results: std::collections::HashMap<&str, &str> = msgs
                 .iter()
                 .filter(|m| m.role == Role::Tool)
-                .filter_map(|m| {
-                    m.tool_call_id.as_deref().map(|id| (id, m.content.as_str()))
-                })
+                .filter_map(|m| m.tool_call_id.as_deref().map(|id| (id, m.content.as_str())))
                 .collect();
             msgs.iter()
                 .filter_map(|m| {
@@ -137,7 +134,11 @@ pub(super) fn serialize_and_push(
                                     (Some(r), None) => Some(r.to_string()),
                                     (None, Some(t)) => {
                                         let t = t.trim_end();
-                                        if t.is_empty() { None } else { Some(t.to_string()) }
+                                        if t.is_empty() {
+                                            None
+                                        } else {
+                                            Some(t.to_string())
+                                        }
                                     }
                                     (None, None) => None,
                                 };
@@ -156,23 +157,19 @@ pub(super) fn serialize_and_push(
                             calls
                                 .iter()
                                 .map(|c| {
-                                    let output = tool_results
-                                        .get(c.id.as_str())
-                                        .map(|s| s.to_string());
+                                    let output =
+                                        tool_results.get(c.id.as_str()).map(|s| s.to_string());
                                     PushToolCall {
-                                        signature: crate::view::chat::transcript::format_tool_signature(
-                                            &c.function.name,
-                                            &c.function.arguments,
-                                        ),
+                                        signature:
+                                            crate::view::chat::transcript::format_tool_signature(
+                                                &c.function.name,
+                                                &c.function.arguments,
+                                            ),
                                         label: crate::view::chat::transcript::tool_box_label(
                                             &c.function.name,
                                         )
                                         .map(str::to_string),
-                                        status: if output.is_some() {
-                                            "done"
-                                        } else {
-                                            "pending"
-                                        },
+                                        status: if output.is_some() { "done" } else { "pending" },
                                         id: c.id.clone(),
                                         name: c.function.name.clone(),
                                         args: c.function.arguments.clone(),
@@ -190,7 +187,11 @@ pub(super) fn serialize_and_push(
                         .map(|a| PushAttachment {
                             marker_n: a.marker_n,
                             name: a.file_name().to_string(),
-                            kind: if a.mime.starts_with("image/") { "image" } else { "file" },
+                            kind: if a.mime.starts_with("image/") {
+                                "image"
+                            } else {
+                                "file"
+                            },
                         })
                         .collect();
                     Some(PushMsg {
@@ -233,7 +234,9 @@ pub(super) fn serialize_and_push(
                 // renders) over the raw messages, so the stream tab content matches the TUI.
                 transcript: viewed.then(|| sa.transcript.clone()),
                 // Live in-progress report tail (dim under the transcript), viewed + non-empty.
-                live_text: viewed.then(|| sa.live_text.clone()).filter(|t| !t.is_empty()),
+                live_text: viewed
+                    .then(|| sa.live_text.clone())
+                    .filter(|t| !t.is_empty()),
                 // Latest committed reasoning as the collapsible thinking block; viewed only.
                 thinking: if viewed {
                     sa.messages.iter().rev().find_map(|m| m.reasoning.clone())
@@ -476,19 +479,25 @@ pub(super) fn serialize_and_push(
         Some(text) => {
             if last.stream.as_deref() != Some(text.as_str()) {
                 last.stream = Some(text.clone());
-                super::render::emit(push, &PushEnvelope::StreamMsg {
-                    session: session.clone(),
-                    text: text.clone(),
-                });
+                super::render::emit(
+                    push,
+                    &PushEnvelope::StreamMsg {
+                        session: session.clone(),
+                        text: text.clone(),
+                    },
+                );
             }
         }
         None => {
             if last.stream.is_some() {
                 last.stream = None;
-                super::render::emit(push, &PushEnvelope::StreamMsg {
-                    session: session.clone(),
-                    text: String::new(),
-                });
+                super::render::emit(
+                    push,
+                    &PushEnvelope::StreamMsg {
+                        session: session.clone(),
+                        text: String::new(),
+                    },
+                );
             }
         }
     }
@@ -497,17 +506,23 @@ pub(super) fn serialize_and_push(
     if !fg.stream_reasoning.is_empty() {
         if last.reasoning != fg.stream_reasoning {
             last.reasoning = fg.stream_reasoning.clone();
-            super::render::emit(push, &PushEnvelope::Reasoning {
-                session: session.clone(),
-                text: fg.stream_reasoning.clone(),
-            });
+            super::render::emit(
+                push,
+                &PushEnvelope::Reasoning {
+                    session: session.clone(),
+                    text: fg.stream_reasoning.clone(),
+                },
+            );
         }
     } else if !last.reasoning.is_empty() {
         last.reasoning.clear();
-        super::render::emit(push, &PushEnvelope::Reasoning {
-            session: session.clone(),
-            text: String::new(),
-        });
+        super::render::emit(
+            push,
+            &PushEnvelope::Reasoning {
+                session: session.clone(),
+                text: String::new(),
+            },
+        );
     }
 
     // --- Status: working flag (waiting or mid-stream) + optional toast (+ severity) ---
@@ -544,17 +559,20 @@ pub(super) fn serialize_and_push(
     );
     if last.status.as_ref() != Some(&status) {
         last.status = Some(status.clone());
-        super::render::emit(push, &PushEnvelope::Status {
-            session,
-            working: status.0,
-            toast: status.1,
-            toast_kind: status.2,
-            tokens_in: status.3,
-            tokens_cached: status.4,
-            tokens_out: status.5,
-            cost: status.6,
-            mode: status.7,
-        });
+        super::render::emit(
+            push,
+            &PushEnvelope::Status {
+                session,
+                working: status.0,
+                toast: status.1,
+                toast_kind: status.2,
+                tokens_in: status.3,
+                tokens_cached: status.4,
+                tokens_out: status.5,
+                cost: status.6,
+                mode: status.7,
+            },
+        );
     }
 
     // --- Loading: the TUI startup splash, projected for the GUI's own overlay ---
@@ -580,22 +598,32 @@ pub(super) fn serialize_and_push(
             );
             if last.last_loading.as_ref() != Some(&triple) {
                 last.last_loading = Some(triple.clone());
-                super::render::emit(push, &PushEnvelope::Loading {
-                    active: triple.0,
-                    workspace: triple.1,
-                    awareness: triple.2,
-                });
+                super::render::emit(
+                    push,
+                    &PushEnvelope::Loading {
+                        active: triple.0,
+                        workspace: triple.1,
+                        awareness: triple.2,
+                    },
+                );
             }
         }
         _ => {
-            if last.last_loading.as_ref().is_some_and(|(active, ..)| *active) {
+            if last
+                .last_loading
+                .as_ref()
+                .is_some_and(|(active, ..)| *active)
+            {
                 let triple = (false, "done".to_string(), "done".to_string());
                 last.last_loading = Some(triple.clone());
-                super::render::emit(push, &PushEnvelope::Loading {
-                    active: triple.0,
-                    workspace: triple.1,
-                    awareness: triple.2,
-                });
+                super::render::emit(
+                    push,
+                    &PushEnvelope::Loading {
+                        active: triple.0,
+                        workspace: triple.1,
+                        awareness: triple.2,
+                    },
+                );
             }
         }
     }
@@ -680,4 +708,3 @@ pub(super) fn push_hub(hub: &SessionHub, push: &dyn Fn(String), last: &mut PushS
         }
     }
 }
-

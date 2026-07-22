@@ -234,7 +234,11 @@ impl SyncIpcStream {
     pub fn connect(path: &Path) -> io::Result<Self> {
         let mut attempts: usize = 0;
         loop {
-            match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+            {
                 Ok(file) => return Ok(SyncIpcStream { file }),
                 Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
                     attempts += 1;

@@ -25,10 +25,7 @@ fn wrap_chars(s: &str, width: usize) -> Vec<String> {
         return vec![String::new()];
     }
     let chars: Vec<char> = s.chars().collect();
-    chars
-        .chunks(width)
-        .map(|c| c.iter().collect())
-        .collect()
+    chars.chunks(width).map(|c| c.iter().collect()).collect()
 }
 
 /// Push wrapped label+value lines into `lines`.
@@ -53,10 +50,7 @@ fn push_wrapped(
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled(
-                    " ".repeat(label_w),
-                    Style::default().fg(dim),
-                ),
+                Span::styled(" ".repeat(label_w), Style::default().fg(dim)),
                 Span::styled(chunk, Style::default().fg(color)),
             ]));
         }
@@ -83,7 +77,10 @@ pub(super) fn draw_list(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let content = inner.inner(Margin { horizontal: 1, vertical: 1 });
+    let content = inner.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
     // Focus lives in the LIST only while Browsing and not in the detail pane.
     let list_focused = st.mode == McpSubMode::Browse && !st.in_detail;
 
@@ -145,7 +142,10 @@ pub(super) fn draw_detail(
     palette: &Palette,
     area: Rect,
 ) {
-    let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+    let inner = area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
     let lines = match st.mode {
         McpSubMode::Browse => browse_lines(st, status, palette, inner.width as usize),
         McpSubMode::Edit | McpSubMode::Create => editor_lines(st, palette, inner.width as usize),
@@ -196,7 +196,15 @@ fn browse_lines<'a>(
     };
 
     // name — may be long, wrap it.
-    push_wrapped(&mut lines, "name", s.name.clone(), 14, value_w, palette.dim, palette.accent);
+    push_wrapped(
+        &mut lines,
+        "name",
+        s.name.clone(),
+        14,
+        value_w,
+        palette.dim,
+        palette.accent,
+    );
 
     // enabled / transport — always short, keep as single rows.
     lines.push(row(
@@ -204,7 +212,11 @@ fn browse_lines<'a>(
         if s.enabled { "yes".into() } else { "no".into() },
         if s.enabled { palette.fg } else { palette.dim },
     ));
-    lines.push(row("transport", transport_label(s.transport).to_string(), palette.fg));
+    lines.push(row(
+        "transport",
+        transport_label(s.transport).to_string(),
+        palette.fg,
+    ));
 
     // Live status (best-effort): only when a manager exists.
     if let Some((text, color)) = status_span(&s.uuid, status, palette) {
@@ -216,13 +228,29 @@ fn browse_lines<'a>(
             if s.command.trim().is_empty() {
                 lines.push(row("command", "(none)".to_string(), palette.dim));
             } else {
-                push_wrapped(&mut lines, "command", s.command.clone(), 14, value_w, palette.dim, palette.fg);
+                push_wrapped(
+                    &mut lines,
+                    "command",
+                    s.command.clone(),
+                    14,
+                    value_w,
+                    palette.dim,
+                    palette.fg,
+                );
             }
             if s.args.is_empty() {
                 lines.push(row("args", "(none)".to_string(), palette.dim));
             } else {
                 let joined = s.args.join(" ");
-                push_wrapped(&mut lines, "args", joined, 14, value_w, palette.dim, palette.fg);
+                push_wrapped(
+                    &mut lines,
+                    "args",
+                    joined,
+                    14,
+                    value_w,
+                    palette.dim,
+                    palette.fg,
+                );
             }
             if s.env.is_empty() {
                 lines.push(row("env", "(none)".to_string(), palette.dim));
@@ -233,14 +261,30 @@ fn browse_lines<'a>(
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                push_wrapped(&mut lines, "env", joined, 14, value_w, palette.dim, palette.fg);
+                push_wrapped(
+                    &mut lines,
+                    "env",
+                    joined,
+                    14,
+                    value_w,
+                    palette.dim,
+                    palette.fg,
+                );
             }
         }
         McpTransport::Http => {
             if s.url.trim().is_empty() {
                 lines.push(row("url", "(none)".to_string(), palette.dim));
             } else {
-                push_wrapped(&mut lines, "url", s.url.clone(), 14, value_w, palette.dim, palette.fg);
+                push_wrapped(
+                    &mut lines,
+                    "url",
+                    s.url.clone(),
+                    14,
+                    value_w,
+                    palette.dim,
+                    palette.fg,
+                );
             }
         }
     }
@@ -261,7 +305,11 @@ fn editor_lines<'a>(st: &'a McpState, palette: &Palette, width: usize) -> Vec<Li
             if selected { "› " } else { "  " },
             Style::default().fg(palette.accent),
         );
-        let label_color = if selected { palette.accent } else { palette.dim };
+        let label_color = if selected {
+            palette.accent
+        } else {
+            palette.dim
+        };
         let label = Span::styled(
             format!("{:<14}", f.label()),
             Style::default().fg(label_color),
@@ -277,7 +325,10 @@ fn editor_lines<'a>(st: &'a McpState, palette: &Palette, width: usize) -> Vec<Li
                 Span::styled(val.to_string(), Style::default().fg(palette.fg)),
             ];
             if selected {
-                row.push(Span::styled("  ←/→ toggle", Style::default().fg(palette.dim)));
+                row.push(Span::styled(
+                    "  ←/→ toggle",
+                    Style::default().fg(palette.dim),
+                ));
             }
             lines.push(Line::from(row));
             continue;
@@ -341,10 +392,7 @@ fn editor_lines<'a>(st: &'a McpState, palette: &Palette, width: usize) -> Vec<Li
                 } else {
                     // Continuation: 16 spaces (marker 2 + label 14) + value chunk.
                     lines.push(Line::from(vec![
-                        Span::styled(
-                            " ".repeat(16),
-                            Style::default().fg(palette.dim),
-                        ),
+                        Span::styled(" ".repeat(16), Style::default().fg(palette.dim)),
                         Span::styled(chunk, Style::default().fg(palette.fg)),
                     ]));
                 }

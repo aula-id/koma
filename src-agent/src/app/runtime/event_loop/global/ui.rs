@@ -30,8 +30,9 @@ pub(super) fn drain_clipboard(state: &mut AppState) -> bool {
         match rx.try_recv() {
             Ok(Ok(bytes)) => {
                 // Ingest the bytes; basename "pasted.png" + explicit png mime.
-                let attached =
-                    state.rest.try_attach_image_bytes(bytes, "image/png", "pasted.png");
+                let attached = state
+                    .rest
+                    .try_attach_image_bytes(bytes, "image/png", "pasted.png");
                 if attached {
                     // The image attached to the FOREGROUND session (`try_attach_image_bytes`
                     // targets `fg()`), so its toast belongs on the foreground too (C6).
@@ -48,7 +49,10 @@ pub(super) fn drain_clipboard(state: &mut AppState) -> bool {
                 dirty = true;
             }
             Ok(Err(reason)) => {
-                state.rest.fg_mut().set_toast(format!("clipboard image: {reason}"));
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast(format!("clipboard image: {reason}"));
                 state.rest.clipboard_rx = None;
                 dirty = true;
             }

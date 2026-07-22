@@ -50,7 +50,9 @@ fn call_broker(
     };
     let mut client_local = client.clone();
     handle_ext_call(state, handle, &mut client_local, req);
-    reply_rx.try_recv().expect("broker must reply inline on the oneshot in this wave")
+    reply_rx
+        .try_recv()
+        .expect("broker must reply inline on the oneshot in this wave")
 }
 
 /// A caller-owned OAuth conn (model-provider capable), mirroring `broker::tests::ext_conn`.
@@ -136,7 +138,9 @@ fn agents_spawn_task_wrong_type_falls_to_missing_task_error() {
         json!({ "task": 12345 }),
     );
     assert!(
-        out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'task'")),
+        out.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("non-empty 'task'")),
         "a numeric task must degrade to the empty-task error, got {out}"
     );
 }
@@ -183,7 +187,9 @@ fn agents_status_agent_id_wrong_type_is_treated_as_absent() {
         json!({ "agentId": [1, 2] }),
     );
     assert!(
-        out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires an 'agentId'")),
+        out.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("requires an 'agentId'")),
         "an array agentId must be treated as absent, got {out}"
     );
 }
@@ -205,7 +211,9 @@ fn chat_prompt_text_wrong_type_falls_to_missing_text_error() {
         json!({ "text": { "nested": true } }),
     );
     assert!(
-        out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'text'")),
+        out.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("non-empty 'text'")),
         "an object text must degrade to the empty-text error, got {out}"
     );
     assert!(state.rest.sessions[0].pending_ext_prompts.is_empty());
@@ -227,7 +235,10 @@ fn models_invoke_prompt_wrong_type_falls_to_missing_prompt_error() {
         "models.invoke",
         json!({ "prompt": 42 }),
     );
-    assert!(out.get("error").is_some(), "a numeric prompt must be rejected as empty, got {out}");
+    assert!(
+        out.get("error").is_some(),
+        "a numeric prompt must be rejected as empty, got {out}"
+    );
 }
 
 /// `models.register { models: <object, not array> }` — the top-level type gate rejects it
@@ -237,7 +248,9 @@ fn models_register_models_wrong_type_is_rejected() {
     let mut config = AppConfig::default();
     let out = apply_models_register(&mut config, "my.ext", &json!({ "models": { "id": "m1" } }));
     assert!(
-        out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("'models' array")),
+        out.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("'models' array")),
         "a non-array 'models' must be rejected, got {out}"
     );
     assert!(config.models.is_empty());
@@ -250,9 +263,19 @@ fn models_register_models_wrong_type_is_rejected() {
 fn models_register_non_object_model_entry_is_rejected() {
     let mut config = AppConfig::default();
     config.oauth_conns.push(ext_conn("conn-a", "my.ext"));
-    let out = apply_models_register(&mut config, "my.ext", &json!({ "models": ["not-an-object", 7, null] }));
-    assert!(out.get("error").is_some(), "non-object array entries must be rejected, got {out}");
-    assert!(config.models.is_empty(), "an atomically-rejected batch registers nothing");
+    let out = apply_models_register(
+        &mut config,
+        "my.ext",
+        &json!({ "models": ["not-an-object", 7, null] }),
+    );
+    assert!(
+        out.get("error").is_some(),
+        "non-object array entries must be rejected, got {out}"
+    );
+    assert!(
+        config.models.is_empty(),
+        "an atomically-rejected batch registers nothing"
+    );
 }
 
 /// `providers.register { name: <number>, key: <array> }` — both wrong-typed fields degrade to
@@ -267,7 +290,9 @@ fn providers_register_wrong_types_fall_to_missing_field_errors() {
         &json!({ "name": 123, "endpoint": "https://x.test", "api_type": "openai", "key": ["a"] }),
     );
     assert!(
-        out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'name'")),
+        out.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("non-empty 'name'")),
         "a numeric name must degrade to the missing-name error, got {out}"
     );
     assert!(config.providers.is_empty());
@@ -290,7 +315,9 @@ fn sessions_switch_session_wrong_type_falls_to_missing_session_error() {
         json!({ "session": 7 }),
     );
     assert!(
-        out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires a 'session'")),
+        out.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("requires a 'session'")),
         "a numeric session must degrade to the missing-session error, got {out}"
     );
 }
@@ -313,7 +340,11 @@ fn chat_prompt_16384_bytes_exactly_is_accepted() {
         "chat.prompt",
         json!({ "text": "x".repeat(16_384) }),
     );
-    assert_eq!(out, json!({ "queued": 1 }), "exactly 16384 bytes must be accepted, got {out}");
+    assert_eq!(
+        out,
+        json!({ "queued": 1 }),
+        "exactly 16384 bytes must be accepted, got {out}"
+    );
 }
 
 /// `models.invoke`: exactly 32768 bytes (32KB) must NOT hit the "exceeds 32KB" error — it
@@ -338,7 +369,10 @@ fn models_invoke_32768_bytes_exactly_is_accepted_by_size_gate() {
         !err.contains("32KB"),
         "exactly 32768 bytes must NOT trip the size cap, got {out}"
     );
-    assert!(err.contains("no llm client"), "must reach the client check, got {out}");
+    assert!(
+        err.contains("no llm client"),
+        "must reach the client check, got {out}"
+    );
 }
 
 /// `providers.register`: `name` exactly 200 chars is accepted; 201 chars is rejected
@@ -352,7 +386,10 @@ fn providers_register_name_and_key_exact_boundaries() {
         "my.ext",
         &json!({ "name": "n".repeat(200), "endpoint": "https://x.test", "api_type": "openai", "key": "k" }),
     );
-    assert!(ok_name.get("uuid").is_some(), "a 200-char name must be accepted, got {ok_name}");
+    assert!(
+        ok_name.get("uuid").is_some(),
+        "a 200-char name must be accepted, got {ok_name}"
+    );
 
     let mut config2 = AppConfig::default();
     let bad_name = apply_providers_register(
@@ -361,7 +398,10 @@ fn providers_register_name_and_key_exact_boundaries() {
         &json!({ "name": "n".repeat(201), "endpoint": "https://x.test", "api_type": "openai", "key": "k" }),
     );
     assert!(
-        bad_name.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("name too long")),
+        bad_name
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("name too long")),
         "a 201-char name must be rejected, got {bad_name}"
     );
     assert!(config2.providers.is_empty());
@@ -372,7 +412,10 @@ fn providers_register_name_and_key_exact_boundaries() {
         "my.ext",
         &json!({ "name": "N", "endpoint": "https://x.test", "api_type": "openai", "key": "k".repeat(4096) }),
     );
-    assert!(ok_key.get("uuid").is_some(), "a 4096-char key must be accepted, got {ok_key}");
+    assert!(
+        ok_key.get("uuid").is_some(),
+        "a 4096-char key must be accepted, got {ok_key}"
+    );
 
     let mut config4 = AppConfig::default();
     let bad_key = apply_providers_register(
@@ -381,7 +424,10 @@ fn providers_register_name_and_key_exact_boundaries() {
         &json!({ "name": "N", "endpoint": "https://x.test", "api_type": "openai", "key": "k".repeat(4097) }),
     );
     assert!(
-        bad_key.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("key too long")),
+        bad_key
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("key too long")),
         "a 4097-char key must be rejected, got {bad_key}"
     );
     assert!(config4.providers.is_empty());
@@ -398,7 +444,11 @@ fn models_register_field_length_exact_boundary() {
         "my.ext",
         &json!({ "models": [{ "id": "m".repeat(200), "name": "n".repeat(200) }] }),
     );
-    assert_eq!(ok["registered"], json!(1), "exactly-200-char id/name must be accepted, got {ok}");
+    assert_eq!(
+        ok["registered"],
+        json!(1),
+        "exactly-200-char id/name must be accepted, got {ok}"
+    );
 
     let mut config2 = AppConfig::default();
     config2.oauth_conns.push(ext_conn("conn-a", "my.ext"));
@@ -408,10 +458,15 @@ fn models_register_field_length_exact_boundary() {
         &json!({ "models": [{ "id": "m".repeat(201), "name": "n" }] }),
     );
     assert!(
-        bad.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("too long")),
+        bad.get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("too long")),
         "a 201-char id must be rejected, got {bad}"
     );
-    assert!(config2.models.is_empty(), "a rejected entry registers nothing");
+    assert!(
+        config2.models.is_empty(),
+        "a rejected entry registers nothing"
+    );
 }
 
 /// `models.register`: a batch of EXACTLY [`MAX_REGISTER_MODELS`] (100) entries is accepted —
@@ -420,8 +475,14 @@ fn models_register_field_length_exact_boundary() {
 fn models_register_batch_of_100_exactly_is_accepted() {
     let mut config = AppConfig::default();
     config.oauth_conns.push(ext_conn("conn-a", "my.ext"));
-    let models: Vec<Value> = (0..100).map(|i| json!({ "id": format!("m{i}"), "name": "n" })).collect();
+    let models: Vec<Value> = (0..100)
+        .map(|i| json!({ "id": format!("m{i}"), "name": "n" }))
+        .collect();
     let out = apply_models_register(&mut config, "my.ext", &json!({ "models": models }));
-    assert_eq!(out["registered"], json!(100), "exactly 100 models must be accepted, got {out}");
+    assert_eq!(
+        out["registered"],
+        json!(100),
+        "exactly 100 models must be accepted, got {out}"
+    );
     assert_eq!(config.models.len(), 100);
 }

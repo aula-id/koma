@@ -16,12 +16,12 @@
 //!     response, with short jittered backoff sleeps (safe here because `run` is
 //!     called from the off-UI async-defer thread).
 
+use super::{Tool, ToolCtx};
 use anyhow::Result;
 use scraper::{Html, Selector};
 use serde_json::{json, Value};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use super::{Tool, ToolCtx};
 
 const DEFAULT_REGION: &str = "wt-wt";
 const TOP_N: usize = 8;
@@ -94,8 +94,8 @@ fn nanos_seed() -> u64 {
 /// Pick a (ua, platform) pair from the pool using the given seed, offset by
 /// `skip` so that consecutive retry attempts always pick a *different* UA.
 fn pick_ua(seed: u64, skip: usize) -> (&'static str, &'static str) {
-    let idx = ((seed ^ (skip as u64).wrapping_mul(0x517c_c1b7_2722_0a95))
-        % UA_POOL.len() as u64) as usize;
+    let idx = ((seed ^ (skip as u64).wrapping_mul(0x517c_c1b7_2722_0a95)) % UA_POOL.len() as u64)
+        as usize;
     UA_POOL[idx]
 }
 
@@ -192,17 +192,13 @@ fn ddg_post(
                 "Sec-Fetch-User"
                     .parse::<reqwest::header::HeaderName>()
                     .map_err(|e| format!("header name: {e}"))?,
-                "?1"
-                    .parse()
-                    .map_err(|e| format!("header parse: {e}"))?,
+                "?1".parse().map_err(|e| format!("header parse: {e}"))?,
             );
             default_headers.insert(
                 "Upgrade-Insecure-Requests"
                     .parse::<reqwest::header::HeaderName>()
                     .map_err(|e| format!("header name: {e}"))?,
-                "1"
-                    .parse()
-                    .map_err(|e| format!("header parse: {e}"))?,
+                "1".parse().map_err(|e| format!("header parse: {e}"))?,
             );
             // Chrome client hints — must be consistent with the Chrome UA.
             default_headers.insert(
@@ -217,9 +213,7 @@ fn ddg_post(
                 "sec-ch-ua-mobile"
                     .parse::<reqwest::header::HeaderName>()
                     .map_err(|e| format!("header name: {e}"))?,
-                "?0"
-                    .parse()
-                    .map_err(|e| format!("header parse: {e}"))?,
+                "?0".parse().map_err(|e| format!("header parse: {e}"))?,
             );
             let platform_header_val = format!("\"{}\"", platform_owned);
             default_headers.insert(
@@ -304,7 +298,9 @@ const BACKOFF_MS: &[u64] = &[0, 1200, 2500];
 pub struct WebSearch;
 
 impl Tool for WebSearch {
-    fn name(&self) -> &'static str { "web_search" }
+    fn name(&self) -> &'static str {
+        "web_search"
+    }
 
     fn description(&self) -> &'static str {
         "Search the web (DuckDuckGo) for a query and return result titles, URLs, and snippets. \
@@ -329,11 +325,13 @@ impl Tool for WebSearch {
     }
 
     fn run(&self, _ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let query = args.get("query")
+        let query = args
+            .get("query")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'query'"))?;
 
-        let region = args.get("region")
+        let region = args
+            .get("region")
             .and_then(Value::as_str)
             .unwrap_or(DEFAULT_REGION);
 
@@ -359,10 +357,7 @@ impl Tool for WebSearch {
             // Build the POST form body.
             // `b` is the page offset (empty string = first page).
             // `kl` is the region; include only when non-empty.
-            let mut form_params: Vec<(&str, &str)> = vec![
-                ("q", query),
-                ("b", ""),
-            ];
+            let mut form_params: Vec<(&str, &str)> = vec![("q", query), ("b", "")];
             if !region.is_empty() {
                 form_params.push(("kl", region));
             }
@@ -463,7 +458,11 @@ fn parse_ddg_results(html: &str) -> Vec<SearchResult> {
         .zip(snippets.into_iter().chain(std::iter::repeat(String::new())))
         .take(TOP_N)
         .filter(|((title, _url), _snippet)| !title.is_empty())
-        .map(|((title, url), snippet)| SearchResult { title, url, snippet })
+        .map(|((title, url), snippet)| SearchResult {
+            title,
+            url,
+            snippet,
+        })
         .collect()
 }
 

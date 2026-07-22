@@ -19,8 +19,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::dto::chat::{ChatMessage, Role};
-use crate::dto::openrouter::{ImageWireCtx, ToolDef};
 use crate::dto::openrouter::request::data_url_for;
+use crate::dto::openrouter::{ImageWireCtx, ToolDef};
 
 /// Top-level `POST /alpha/generate` body.
 #[derive(Debug, Serialize)]
@@ -117,9 +117,7 @@ pub(super) fn extract_system(messages: &[ChatMessage]) -> String {
     let mut parts = Vec::new();
     for m in messages {
         if m.role == Role::System {
-            let text = m
-                .content
-                .replace(crate::dto::chat::CACHE_SPLIT_MARK, "");
+            let text = m.content.replace(crate::dto::chat::CACHE_SPLIT_MARK, "");
             if !text.trim().is_empty() {
                 parts.push(text);
             }
@@ -135,7 +133,10 @@ pub(super) fn extract_system(messages: &[ChatMessage]) -> String {
 /// - Assistant with text + tool calls → `{role: "assistant", content: [text, tool-call, ...]}`
 /// - Tool result → `{role: "tool", content: [tool-result]}`
 /// - Orphan tool calls (no matching tool result) are dropped.
-pub(super) fn build_messages(messages: &[ChatMessage], image_ctx: Option<&ImageWireCtx>) -> Vec<Value> {
+pub(super) fn build_messages(
+    messages: &[ChatMessage],
+    image_ctx: Option<&ImageWireCtx>,
+) -> Vec<Value> {
     let paired = complete_tool_call_ids(messages);
     let mut out = Vec::new();
 
@@ -200,8 +201,7 @@ pub(super) fn build_messages(messages: &[ChatMessage], image_ctx: Option<&ImageW
                         }
                         let input_str =
                             crate::dto::chat::sanitize_tool_arguments(&tc.function.arguments);
-                        let input: Value =
-                            serde_json::from_str(&input_str).unwrap_or(json!({}));
+                        let input: Value = serde_json::from_str(&input_str).unwrap_or(json!({}));
                         blocks.push(json!({
                             "type": "tool-call",
                             "toolCallId": tc.id,

@@ -5,8 +5,8 @@ use anyhow::{anyhow, Result};
 
 use crate::dto::openrouter::{EndpointsResponse, ModelEndpoint, ModelInfo, ModelsResponse};
 
-use super::helpers::{auth_headers_with_account, clean_error};
 use super::client::OpenRouterClient;
+use super::helpers::{auth_headers_with_account, clean_error};
 use super::types::{Conn, EffortCaps};
 
 /// Derive [`EffortCaps`] for `model_id` from a `GET /models` listing.
@@ -34,7 +34,11 @@ pub fn effort_caps(models: &[ModelInfo], model_id: &str) -> EffortCaps {
         .as_ref()
         .map(|r| r.supported_efforts.clone())
         .unwrap_or_default();
-    let mandatory = info.reasoning.as_ref().map(|r| r.mandatory).unwrap_or(false);
+    let mandatory = info
+        .reasoning
+        .as_ref()
+        .map(|r| r.mandatory)
+        .unwrap_or(false);
     EffortCaps {
         supported,
         mandatory,
@@ -52,16 +56,13 @@ pub fn effort_caps(models: &[ModelInfo], model_id: &str) -> EffortCaps {
 /// model's theoretical maximum). Falls back to the nominal value when the
 /// `top_provider` object is absent or its `context_length` is not reported.
 pub fn context_length_for(models: &[ModelInfo], model_id: &str) -> Option<u64> {
-    models
-        .iter()
-        .find(|m| m.id == model_id)
-        .and_then(|model| {
-            model
-                .top_provider
-                .as_ref()
-                .and_then(|tp| tp.context_length)
-                .or(model.context_length)
-        })
+    models.iter().find(|m| m.id == model_id).and_then(|model| {
+        model
+            .top_provider
+            .as_ref()
+            .and_then(|tp| tp.context_length)
+            .or(model.context_length)
+    })
 }
 
 /// Tri-state image-capability result from [`model_image_capability`].
@@ -114,11 +115,21 @@ impl OpenRouterClient {
         // sends a live bearer + its org header; non-OAuth conns pass through.
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { Some(acct.as_str()) } else { None };
+        let effective_account = if !acct.is_empty() {
+            Some(acct.as_str())
+        } else {
+            None
+        };
         let url = format!("{}/models", conn.endpoint);
-        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account, self.codex_session_id())
-            .send()
-            .await?;
+        let response = auth_headers_with_account(
+            self.http.get(&url),
+            &conn,
+            &bearer,
+            effective_account,
+            self.codex_session_id(),
+        )
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -145,11 +156,21 @@ impl OpenRouterClient {
     ) -> Result<Vec<ModelEndpoint>> {
         let (bearer, acct) =
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
-        let effective_account = if !acct.is_empty() { Some(acct.as_str()) } else { None };
+        let effective_account = if !acct.is_empty() {
+            Some(acct.as_str())
+        } else {
+            None
+        };
         let url = format!("{}/models/{}/endpoints", conn.endpoint, model_id);
-        let response = auth_headers_with_account(self.http.get(&url), &conn, &bearer, effective_account, self.codex_session_id())
-            .send()
-            .await?;
+        let response = auth_headers_with_account(
+            self.http.get(&url),
+            &conn,
+            &bearer,
+            effective_account,
+            self.codex_session_id(),
+        )
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
