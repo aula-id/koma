@@ -6,11 +6,11 @@
 //! - [`model_ops`]   — Models Select screen: open/save/delete modal
 //! - [`model_nav`]   — Models Select screen: modal navigation and text input
 
+mod model_nav;
+mod model_ops;
+mod oauth_ops;
 mod path_ops;
 mod provider_ops;
-mod oauth_ops;
-mod model_ops;
-mod model_nav;
 
 use std::path::PathBuf;
 

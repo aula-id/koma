@@ -32,7 +32,10 @@ pub(super) fn drain_endpoints(state: &mut AppState) -> bool {
         let mut keep = true;
         while let Ok(ev) = erx.try_recv() {
             match ev {
-                StreamEvent::EndpointsLoaded { model_id, endpoints } => {
+                StreamEvent::EndpointsLoaded {
+                    model_id,
+                    endpoints,
+                } => {
                     // De-globalized (C3): mode is per-session and `service_global` runs
                     // OUTSIDE any client bracket, so the foreground cursor is stale scratch
                     // here. Fold the result into WHICHEVER session(s) have a Settings model-
@@ -109,7 +112,10 @@ pub(super) fn drain_sec_health(state: &mut AppState) -> bool {
             Ok(Err(e)) => {
                 // Toast is per-session (C6); a health-probe failure is a global notice —
                 // surface it on the foreground session (single-window: the only session).
-                state.rest.fg_mut().set_toast(format!("security health probe failed: {e}"));
+                state
+                    .rest
+                    .fg_mut()
+                    .set_toast(format!("security health probe failed: {e}"));
                 for s in security_states(state) {
                     s.health_fetching = false;
                 }
@@ -147,22 +153,22 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
         match orx.try_recv() {
             Ok(OAuthEvent::CodexUrl { url }) => {
                 for flow in oauth_flow_states(state) {
-                    *flow = OAuthFlowState::CodexWait { url: url.clone(), frame: 0, copied: false };
+                    *flow = OAuthFlowState::CodexWait {
+                        url: url.clone(),
+                        frame: 0,
+                        copied: false,
+                    };
                 }
                 // GUI side-channel: queue a `waiting_url` push to the initiating push
                 // client (if any). The mode fold above is untouched (TUI parity).
-                push_oauth_gui(
-                    state,
-                    "waiting_url",
-                    Some(url.clone()),
-                    None,
-                    None,
-                    None,
-                );
+                push_oauth_gui(state, "waiting_url", Some(url.clone()), None, None, None);
                 state.rest.oauth_rx = Some(orx);
                 dirty = true;
             }
-            Ok(OAuthEvent::KiloCode { user_code, verification_url }) => {
+            Ok(OAuthEvent::KiloCode {
+                user_code,
+                verification_url,
+            }) => {
                 for flow in oauth_flow_states(state) {
                     *flow = OAuthFlowState::KiloWait {
                         user_code: user_code.clone(),
@@ -196,7 +202,8 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 let conn_token = conn.access_token.clone();
                 state.rest.config.oauth_conns.push(conn);
                 let save_err = state.rest.config.save().err().map(|e| e.to_string());
-                let drafts = crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);
+                let drafts =
+                    crate::app::mode::settings::OAuthDraft::from_config(&state.rest.config);
                 // Settings sessions: rebuild `oauth_drafts` + return to the list (or
                 // surface a save error). Unchanged behaviour.
                 for st in settings_states(state) {
@@ -236,8 +243,14 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 // Prime the network catalogue so ModelSelect can filter immediately
                 // (Codex serves its static list, so it needs no fetch). Done AFTER the
                 // `onboard_provider_states` borrow ends.
-                if advanced && save_err.is_none() && !crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint.is_empty() {
-                    let ep = crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint;
+                if advanced
+                    && save_err.is_none()
+                    && !crate::service::oauth::registry::meta(conn_provider)
+                        .catalogue_endpoint
+                        .is_empty()
+                {
+                    let ep =
+                        crate::service::oauth::registry::meta(conn_provider).catalogue_endpoint;
                     state.rest.request_catalogue(ep, &conn_token, &conn_uuid);
                 }
                 state.rest.oauth_task = None;
@@ -265,8 +278,7 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 // spinning forever.
                 for flow in oauth_flow_states(state) {
                     if !matches!(flow, OAuthFlowState::Idle) {
-                        *flow =
-                            OAuthFlowState::Failed("login flow ended unexpectedly".to_string());
+                        *flow = OAuthFlowState::Failed("login flow ended unexpectedly".to_string());
                     }
                 }
                 push_oauth_gui_terminal(
@@ -296,14 +308,17 @@ fn push_oauth_gui(
     error: Option<String>,
 ) {
     if let Some(client_id) = state.rest.oauth_gui_client {
-        state.rest.oauth_pushes.push(crate::service::oauth::OAuthPushOut {
-            client_id,
-            phase,
-            url,
-            user_code,
-            verification_url,
-            error,
-        });
+        state
+            .rest
+            .oauth_pushes
+            .push(crate::service::oauth::OAuthPushOut {
+                client_id,
+                phase,
+                url,
+                user_code,
+                verification_url,
+                error,
+            });
     }
 }
 
@@ -312,14 +327,17 @@ fn push_oauth_gui(
 /// transition can re-push after the flow ended. A no-op when no GUI client is armed.
 fn push_oauth_gui_terminal(state: &mut AppState, phase: &'static str, error: Option<String>) {
     if let Some(client_id) = state.rest.oauth_gui_client.take() {
-        state.rest.oauth_pushes.push(crate::service::oauth::OAuthPushOut {
-            client_id,
-            phase,
-            url: None,
-            user_code: None,
-            verification_url: None,
-            error,
-        });
+        state
+            .rest
+            .oauth_pushes
+            .push(crate::service::oauth::OAuthPushOut {
+                client_id,
+                phase,
+                url: None,
+                user_code: None,
+                verification_url: None,
+                error,
+            });
     }
 }
 
@@ -475,8 +493,7 @@ pub(super) fn drain_ext_screen(state: &mut AppState) -> bool {
                                     } else {
                                         // Neither `screen` nor `close` → soft error, keep the
                                         // last screen so the view isn't blanked.
-                                        es.error =
-                                            Some("extension returned no screen".to_string());
+                                        es.error = Some("extension returned no screen".to_string());
                                     }
                                 }
                                 Err(e) => es.error = Some(e.clone()),
@@ -603,7 +620,12 @@ pub(super) fn drain_store(state: &mut AppState, handle: &tokio::runtime::Handle)
                 }
                 dirty = true;
             }
-            Ok(StoreEvent::InstallArtifact { id, zip, sha256, signature }) => {
+            Ok(StoreEvent::InstallArtifact {
+                id,
+                zip,
+                sha256,
+                signature,
+            }) => {
                 match crate::app::runtime::actions::ext_install::install_extension_core(
                     state,
                     handle,
@@ -681,10 +703,14 @@ pub(super) fn drain_store(state: &mut AppState, handle: &tokio::runtime::Handle)
 fn ext_screen_states(
     state: &mut AppState,
 ) -> impl Iterator<Item = &mut crate::app::mode::ExtScreenState> {
-    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
-        Mode::ExtScreen(es) => Some(es.as_mut()),
-        _ => None,
-    })
+    state
+        .rest
+        .sessions
+        .iter_mut()
+        .filter_map(|s| match &mut s.mode {
+            Mode::ExtScreen(es) => Some(es.as_mut()),
+            _ => None,
+        })
 }
 
 /// Route ONE extension notify into the panel-push outbox (the per-notify body of
@@ -738,7 +764,9 @@ fn enforce_ext_panel_cap(out: &mut Vec<(String, String, serde_json::Value)>) {
         out.drain(0..overflow);
         crate::model::store::append_global_error_log(
             "ext panel",
-            &format!("panel-push outbox over cap ({EXT_PANEL_PUSH_CAP}); dropped {overflow} oldest"),
+            &format!(
+                "panel-push outbox over cap ({EXT_PANEL_PUSH_CAP}); dropped {overflow} oldest"
+            ),
         );
     }
 }
@@ -833,7 +861,10 @@ pub(super) fn drain_warm(state: &mut AppState) -> bool {
                     }
                     dirty = true;
                 }
-                Ok(WarmEvent::WarmAwareness { session_id, summary }) => {
+                Ok(WarmEvent::WarmAwareness {
+                    session_id,
+                    summary,
+                }) => {
                     let had = summary.is_some();
                     // Route by SESSION ID (C4): the warm result belongs to exactly the
                     // session that was warming, identified by its stable UUID tagged into
@@ -892,56 +923,59 @@ pub(super) fn fetch_catalogue_debounced(
     handle: &tokio::runtime::Handle,
 ) -> bool {
     let mut dirty = false;
-    if state.rest.catalogue_pending.as_ref().is_some_and(|p| std::time::Instant::now() >= p.due)
+    if state
+        .rest
+        .catalogue_pending
+        .as_ref()
+        .is_some_and(|p| std::time::Instant::now() >= p.due)
         && state.rest.catalogue_fetching.is_none()
     {
         let Some(pending) = state.rest.catalogue_pending.take() else {
             return dirty;
         };
-            let endpoint = pending.endpoint;
-            let api_key = pending.api_key;
-            let oauth_uuid = pending.oauth_uuid;
-            state.rest.catalogue_fetching = Some(endpoint.clone());
-            // Open a fresh warm channel for this fetch and stash its receiver.
-            // Senders aren't stored in state (only the receiver), so this is the
-            // only way to obtain one. This is safe wrt the awareness warm task:
-            // the omnisearch (the sole `request_catalogue` caller) only runs in
-            // Chat-mode modals / the first-run wizard, by which point the startup
-            // awareness task has already resolved + closed its channel — so no
-            // live awareness send can be stranded on a replaced receiver.
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            state.rest.warm_rx = Some(rx);
-            // Reuse the pinned client, or build a keyless one (the first-run
-            // wizard fetches before any client is pinned — `Conn` carries the
-            // endpoint+key, so a keyless client is enough). The fetch is just
-            // `GET {endpoint}/models`; on error the drain records a failure marker
-            // (no rapid re-fetch).
-            let c = match client.as_ref() {
-                Some(c) => Arc::clone(c),
-                None => crate::app::runtime::build_client(),
+        let endpoint = pending.endpoint;
+        let api_key = pending.api_key;
+        let oauth_uuid = pending.oauth_uuid;
+        state.rest.catalogue_fetching = Some(endpoint.clone());
+        // Open a fresh warm channel for this fetch and stash its receiver.
+        // Senders aren't stored in state (only the receiver), so this is the
+        // only way to obtain one. This is safe wrt the awareness warm task:
+        // the omnisearch (the sole `request_catalogue` caller) only runs in
+        // Chat-mode modals / the first-run wizard, by which point the startup
+        // awareness task has already resolved + closed its channel — so no
+        // live awareness send can be stranded on a replaced receiver.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        state.rest.warm_rx = Some(rx);
+        // Reuse the pinned client, or build a keyless one (the first-run
+        // wizard fetches before any client is pinned — `Conn` carries the
+        // endpoint+key, so a keyless client is enough). The fetch is just
+        // `GET {endpoint}/models`; on error the drain records a failure marker
+        // (no rapid re-fetch).
+        let c = match client.as_ref() {
+            Some(c) => Arc::clone(c),
+            None => crate::app::runtime::build_client(),
+        };
+        handle.spawn(async move {
+            let conn = crate::service::openrouter::Conn {
+                endpoint: &endpoint,
+                api_key: &api_key,
+                // Catalogue fetch is OpenAI-compatible. `oauth_uuid` is threaded
+                // through so an OAuth-backed catalogue (e.g. Kilo Code) refreshes
+                // its bearer via `fresh_key`; empty for a static-key provider.
+                api_type: crate::model::app_config::ApiType::OpenAiCompatible,
+                account_id: "",
+                oauth_uuid: &oauth_uuid,
+                // Catalogue GET, never koma-free — no X-Koma header needed.
+                install_id: "",
             };
-            handle.spawn(async move {
-                let conn = crate::service::openrouter::Conn {
-                    endpoint: &endpoint,
-                    api_key: &api_key,
-                    // Catalogue fetch is OpenAI-compatible. `oauth_uuid` is threaded
-                    // through so an OAuth-backed catalogue (e.g. Kilo Code) refreshes
-                    // its bearer via `fresh_key`; empty for a static-key provider.
-                    api_type: crate::model::app_config::ApiType::OpenAiCompatible,
-                    account_id: "",
-                    oauth_uuid: &oauth_uuid,
-                    // Catalogue GET, never koma-free — no X-Koma header needed.
-                    install_id: "",
-                };
-                let ev = match c.list_models(conn).await {
-                    Ok(models) => WarmEvent::WarmCatalogue { endpoint, models },
-                    Err(_) => WarmEvent::WarmCatalogueFailed { endpoint },
-                };
-                // A dropped receiver (app closing) makes this a no-op.
-                let _ = tx.send(ev);
-            });
-            dirty = true;
-        }
+            let ev = match c.list_models(conn).await {
+                Ok(models) => WarmEvent::WarmCatalogue { endpoint, models },
+                Err(_) => WarmEvent::WarmCatalogueFailed { endpoint },
+            };
+            // A dropped receiver (app closing) makes this a no-op.
+            let _ = tx.send(ev);
+        });
+        dirty = true;
     }
     dirty
 }
@@ -971,7 +1005,8 @@ pub(super) fn advance_oauth_spinner(state: &mut AppState) -> bool {
     if state.rest.oauth_rx.is_some() {
         for flow in oauth_flow_states(state) {
             match flow {
-                OAuthFlowState::CodexWait { frame, .. } | OAuthFlowState::KiloWait { frame, .. } => {
+                OAuthFlowState::CodexWait { frame, .. }
+                | OAuthFlowState::KiloWait { frame, .. } => {
                     *frame = frame.wrapping_add(1);
                     dirty = true;
                 }
@@ -993,10 +1028,14 @@ pub(super) fn advance_oauth_spinner(state: &mut AppState) -> bool {
 fn security_states(
     state: &mut AppState,
 ) -> impl Iterator<Item = &mut crate::app::mode::SecurityState> {
-    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
-        Mode::Security(sec) => Some(sec.as_mut()),
-        _ => None,
-    })
+    state
+        .rest
+        .sessions
+        .iter_mut()
+        .filter_map(|s| match &mut s.mode {
+            Mode::Security(sec) => Some(sec.as_mut()),
+            _ => None,
+        })
 }
 
 /// De-globalization helper (C3): mutably borrow the [`crate::app::mode::SettingsState`]
@@ -1009,10 +1048,14 @@ fn security_states(
 fn settings_states(
     state: &mut AppState,
 ) -> impl Iterator<Item = &mut crate::app::mode::SettingsState> {
-    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
-        Mode::Settings(set) => Some(set.as_mut()),
-        _ => None,
-    })
+    state
+        .rest
+        .sessions
+        .iter_mut()
+        .filter_map(|s| match &mut s.mode {
+            Mode::Settings(set) => Some(set.as_mut()),
+            _ => None,
+        })
 }
 
 /// De-globalization helper (C3): mutably borrow the [`OAuthFlowState`] of EVERY session
@@ -1026,11 +1069,15 @@ fn settings_states(
 /// separately. `service_global` runs outside any client bracket, so it must reach the
 /// session(s) actually in one of those modes, never the (stale) foreground.
 fn oauth_flow_states(state: &mut AppState) -> impl Iterator<Item = &mut OAuthFlowState> {
-    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
-        Mode::Settings(set) => Some(&mut set.oauth_flow),
-        Mode::OnboardProvider(op) => Some(&mut op.oauth_flow),
-        _ => None,
-    })
+    state
+        .rest
+        .sessions
+        .iter_mut()
+        .filter_map(|s| match &mut s.mode {
+            Mode::Settings(set) => Some(&mut set.oauth_flow),
+            Mode::OnboardProvider(op) => Some(&mut op.oauth_flow),
+            _ => None,
+        })
 }
 
 /// De-globalization helper (C3): mutably borrow the [`OnboardProviderState`] of EVERY
@@ -1039,10 +1086,14 @@ fn oauth_flow_states(state: &mut AppState) -> impl Iterator<Item = &mut OAuthFlo
 fn onboard_provider_states(
     state: &mut AppState,
 ) -> impl Iterator<Item = &mut OnboardProviderState> {
-    state.rest.sessions.iter_mut().filter_map(|s| match &mut s.mode {
-        Mode::OnboardProvider(op) => Some(op.as_mut()),
-        _ => None,
-    })
+    state
+        .rest
+        .sessions
+        .iter_mut()
+        .filter_map(|s| match &mut s.mode {
+            Mode::OnboardProvider(op) => Some(op.as_mut()),
+            _ => None,
+        })
 }
 
 /// De-globalization helper (C3): apply `f` to the Settings model-modal of every session
@@ -1125,13 +1176,19 @@ mod ext_notify_tests {
         assert_eq!(out[0].2, serde_json::json!({ "ok": true }));
 
         // Malformed panel.push → dropped, no outbox growth.
-        route_ext_notify(&mut out, notify("panel.push", serde_json::json!({ "nope": 1 })));
+        route_ext_notify(
+            &mut out,
+            notify("panel.push", serde_json::json!({ "nope": 1 })),
+        );
         assert_eq!(out.len(), 1);
 
         // Unknown notify name → dropped, no outbox growth.
         route_ext_notify(
             &mut out,
-            notify("tool.call", serde_json::json!({ "panelId": "p1", "payload": 1 })),
+            notify(
+                "tool.call",
+                serde_json::json!({ "panelId": "p1", "payload": 1 }),
+            ),
         );
         assert_eq!(out.len(), 1);
     }

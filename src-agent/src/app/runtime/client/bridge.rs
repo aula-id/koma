@@ -97,7 +97,10 @@ pub(super) async fn writer_task(
                 // fault — skip it rather than tear down the connection.
                 Err(_) => continue,
             };
-            if frame::write_frame_to(&mut write_half, &bytes).await.is_err() {
+            if frame::write_frame_to(&mut write_half, &bytes)
+                .await
+                .is_err()
+            {
                 return; // dead socket
             }
         }

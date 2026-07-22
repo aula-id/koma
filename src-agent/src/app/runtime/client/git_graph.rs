@@ -132,7 +132,8 @@ pub(super) fn valid_commit_ref(s: &str) -> bool {
         && !s.starts_with('-')
         && !s.contains("..")
         && s.len() <= 200
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
 }
 
 /// Parse one commit's `%D` (`git log --decorate=full`'s "ref names" field — e.g. `HEAD ->
@@ -182,11 +183,23 @@ fn parse_refs(raw: &str) -> (Vec<GitRef>, bool) {
         // `refs/tags/X` form.
         let token = token.strip_prefix("tag: ").unwrap_or(token);
         if let Some(name) = token.strip_prefix("refs/heads/") {
-            refs.push(GitRef { name: name.to_string(), kind: "local".to_string(), is_head: false });
+            refs.push(GitRef {
+                name: name.to_string(),
+                kind: "local".to_string(),
+                is_head: false,
+            });
         } else if let Some(name) = token.strip_prefix("refs/remotes/") {
-            refs.push(GitRef { name: name.to_string(), kind: "remote".to_string(), is_head: false });
+            refs.push(GitRef {
+                name: name.to_string(),
+                kind: "remote".to_string(),
+                is_head: false,
+            });
         } else if let Some(name) = token.strip_prefix("refs/tags/") {
-            refs.push(GitRef { name: name.to_string(), kind: "tag".to_string(), is_head: false });
+            refs.push(GitRef {
+                name: name.to_string(),
+                kind: "tag".to_string(),
+                is_head: false,
+            });
         }
         // anything else — not a form `--decorate=full` documents — skipped.
     }
@@ -280,12 +293,21 @@ pub(super) fn compute_git_graph(limit: u32, skip: u32, session: Option<&str>) ->
     let head = match git_cmd(&root, &["rev-parse", "HEAD"]) {
         Some(out) if out.status.success() => {
             let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if sha.is_empty() { None } else { Some(sha) }
+            if sha.is_empty() {
+                None
+            } else {
+                Some(sha)
+            }
         }
         _ => None,
     };
 
-    GitGraphResult { commits, head, has_more, error: None }
+    GitGraphResult {
+        commits,
+        head,
+        has_more,
+        error: None,
+    }
 }
 
 /// Parse `git diff-tree --name-status -z`'s NUL-separated output into [`CommitFile`]
@@ -312,14 +334,22 @@ fn parse_name_status(raw: &[u8]) -> Vec<CommitFile> {
             let orig_path = fields[i].clone();
             let path = fields[i + 1].clone();
             i += 2;
-            files.push(CommitFile { status, path, orig_path: Some(orig_path) });
+            files.push(CommitFile {
+                status,
+                path,
+                orig_path: Some(orig_path),
+            });
         } else {
             if i >= fields.len() {
                 break;
             }
             let path = fields[i].clone();
             i += 1;
-            files.push(CommitFile { status, path, orig_path: None });
+            files.push(CommitFile {
+                status,
+                path,
+                orig_path: None,
+            });
         }
     }
     files
@@ -333,7 +363,15 @@ fn parse_name_status(raw: &[u8]) -> Vec<CommitFile> {
 fn commit_files(root: &std::path::Path, sha: &str) -> Vec<CommitFile> {
     match git_cmd(
         root,
-        &["diff-tree", "--no-commit-id", "--name-status", "-r", "-z", "--first-parent", sha],
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            "-z",
+            "--first-parent",
+            sha,
+        ],
     ) {
         Some(out) if out.status.success() => parse_name_status(&out.stdout),
         _ => Vec::new(),
@@ -415,7 +453,11 @@ pub(super) fn compute_commit_detail(sha: &str, session: Option<&str>) -> CommitD
 /// Same binary/size-cap handling as [`super::git::compute_git_diff`] (reusing its
 /// [`looks_binary`]/[`FILE_DIFF_SIZE_CAP`]) — only "invalid sha" / "not a git repository" is
 /// reported as `error`; a missing blob on either side is silently an empty side.
-pub(super) fn compute_commit_diff(sha: &str, path: &str, session: Option<&str>) -> CommitDiffResult {
+pub(super) fn compute_commit_diff(
+    sha: &str,
+    path: &str,
+    session: Option<&str>,
+) -> CommitDiffResult {
     let empty = |error: Option<String>, binary: bool| CommitDiffResult {
         sha: sha.to_string(),
         path: path.to_string(),

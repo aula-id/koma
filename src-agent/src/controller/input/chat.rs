@@ -1,9 +1,9 @@
 //! Key handler for the normal Chat mode.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use super::{is_ctrl, Action};
 use crate::app::state::AppStateRest;
 use crate::controller::command;
-use super::{is_ctrl, Action};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// If the input's current (last, whitespace-delimited) token is a file
 /// reference (`@...`), return the partial path after the `@`. The file palette
@@ -56,16 +56,15 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
     // Image file: ingest through the same core as path-paste.
     if crate::model::attachment::has_image_extension(bare) {
         // Resolve the absolute path for this workspace entry.
-        let abs_path: Option<std::path::PathBuf> = rest
-            .fg()
-            .session
-            .as_ref()
-            .map(|s| {
-                let dirs = s.workdirs();
-                let root = dirs.get(ws_idx).or_else(|| dirs.first()).cloned()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."));
-                root.join(bare)
-            });
+        let abs_path: Option<std::path::PathBuf> = rest.fg().session.as_ref().map(|s| {
+            let dirs = s.workdirs();
+            let root = dirs
+                .get(ws_idx)
+                .or_else(|| dirs.first())
+                .cloned()
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            root.join(bare)
+        });
 
         if let Some(abs) = abs_path {
             // Erase the `@token` from input and park the caret at that position
@@ -106,7 +105,8 @@ fn complete_file_ref(rest: &mut AppStateRest, matches: &[String]) {
 
 /// This session's sent user messages, oldest-first (for bash-style recall).
 fn user_messages(rest: &AppStateRest) -> Vec<String> {
-    rest.fg().session
+    rest.fg()
+        .session
         .as_ref()
         .map(|s| {
             s.conversation
@@ -279,7 +279,8 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // for the NEXT message. Only SUBMITTING a turn is gated by cooking, never staging.
     if is_ctrl(&key, 'v') {
         super::request_clipboard_image(rest);
-        rest.fg_mut().set_toast_info("reading image from clipboard…".to_string());
+        rest.fg_mut()
+            .set_toast_info("reading image from clipboard…".to_string());
         return Action::None;
     }
     // Ctrl+E: toggle internet mode (Simple <-> Full), persist, and set status.
@@ -302,7 +303,8 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                     }
                 }
                 Err(e) => {
-                    rest.fg_mut().set_toast(format!("error saving settings: {e}"));
+                    rest.fg_mut()
+                        .set_toast(format!("error saving settings: {e}"));
                 }
             }
         } else {
@@ -400,7 +402,13 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             } else {
                 // File palette: complete instead of submitting when a file match is selected.
                 let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
-                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| {
+                        rest.fg()
+                            .dir_cache
+                            .read()
+                            .map(|c| c.search(p, FILE_PAL_MAX))
+                            .unwrap_or_default()
+                    })
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     complete_file_ref(rest, &fmatches);
@@ -472,7 +480,13 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.palette_sel = rest.palette_sel.saturating_sub(1);
             } else {
                 let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
-                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| {
+                        rest.fg()
+                            .dir_cache
+                            .read()
+                            .map(|c| c.search(p, FILE_PAL_MAX))
+                            .unwrap_or_default()
+                    })
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     rest.palette_sel = rest.palette_sel.saturating_sub(1);
@@ -489,7 +503,13 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.palette_sel = (rest.palette_sel + 1).min(n - 1);
             } else {
                 let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
-                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| {
+                        rest.fg()
+                            .dir_cache
+                            .read()
+                            .map(|c| c.search(p, FILE_PAL_MAX))
+                            .unwrap_or_default()
+                    })
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     rest.palette_sel = (rest.palette_sel + 1).min(fmatches.len() - 1);
@@ -509,7 +529,13 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
                 rest.cursor_end(); // input replaced wholesale → caret to the end
             } else {
                 let fmatches: Vec<String> = file_ref_partial(&rest.fg().input)
-                    .map(|p| rest.fg().dir_cache.read().map(|c| c.search(p, FILE_PAL_MAX)).unwrap_or_default())
+                    .map(|p| {
+                        rest.fg()
+                            .dir_cache
+                            .read()
+                            .map(|c| c.search(p, FILE_PAL_MAX))
+                            .unwrap_or_default()
+                    })
                     .unwrap_or_default();
                 if !fmatches.is_empty() {
                     complete_file_ref(rest, &fmatches);

@@ -78,14 +78,20 @@ impl Tool for GitOperator {
             .ok_or_else(|| anyhow::anyhow!("'args' must be an array of strings"))?;
 
         if arr.is_empty() {
-            return Ok("error: 'args' must not be empty (provide at least the git subcommand)".into());
+            return Ok(
+                "error: 'args' must not be empty (provide at least the git subcommand)".into(),
+            );
         }
 
         let mut git_args: Vec<String> = Vec::with_capacity(arr.len());
         for (i, v) in arr.iter().enumerate() {
             match v.as_str() {
                 Some(s) => git_args.push(s.to_string()),
-                None => return Ok(format!("error: element at index {i} in 'args' is not a string")),
+                None => {
+                    return Ok(format!(
+                        "error: element at index {i} in 'args' is not a string"
+                    ))
+                }
             }
         }
 
@@ -158,7 +164,9 @@ impl Tool for GitOperator {
         // If that dir is gone (e.g. a removed worktree the session's cwd sat in),
         // fall back to the first EXISTING workspace root so git still has a valid
         // cwd; only error when nothing usable remains.
-        let run_dir = cwd_override.clone().unwrap_or_else(|| ctx.workspace.clone());
+        let run_dir = cwd_override
+            .clone()
+            .unwrap_or_else(|| ctx.workspace.clone());
         let run_dir = if run_dir.is_dir() {
             run_dir
         } else {
@@ -223,8 +231,16 @@ impl Tool for GitOperator {
         // command-family matching still works for git subcommands.
         let exit = super::shell::ShellExit::Code(output.status.code());
         let pseudo_command = format!("git {}", git_args.join(" "));
-        let opts = super::shell::OutputOpts { saving: ctx.bash_saving, log_dir: ctx.bash_log_dir.clone() };
-        Ok(super::shell::finalize_output(&pseudo_command, combined, exit, &opts))
+        let opts = super::shell::OutputOpts {
+            saving: ctx.bash_saving,
+            log_dir: ctx.bash_log_dir.clone(),
+        };
+        Ok(super::shell::finalize_output(
+            &pseudo_command,
+            combined,
+            exit,
+            &opts,
+        ))
     }
 }
 
@@ -269,9 +285,9 @@ fn check_destructive(args: &[String]) -> Option<&'static str> {
     /// E.g. `has_bundle_char(args, 'f')` matches `-f`, `-fd`, `-xfd`, etc.
     /// Only considers arguments that start with a single `-` (not `--`).
     fn has_bundle_char(haystack: &[String], ch: char) -> bool {
-        haystack.iter().any(|a| {
-            a.starts_with('-') && !a.starts_with("--") && a.contains(ch)
-        })
+        haystack
+            .iter()
+            .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(ch))
     }
 
     match subcmd {
@@ -299,9 +315,7 @@ fn check_destructive(args: &[String]) -> Option<&'static str> {
 
         "clean" => {
             // Any combination of -f, -d, -x (bundled or separate) is destructive.
-            if has_bundle_char(rest, 'f')
-                || has_flag(rest, "--force")
-            {
+            if has_bundle_char(rest, 'f') || has_flag(rest, "--force") {
                 return Some("clean -f (filesystem wipe)");
             }
         }

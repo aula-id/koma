@@ -9,10 +9,10 @@
 //! into the system prompt on rebuild; the model pulls a body on demand via
 //! `recall`.
 
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
 use super::{Tool, ToolCtx};
 use crate::model::memory::{read_memory, remove_memory, slugify, write_memory};
+use anyhow::{bail, Context, Result};
+use serde_json::{json, Value};
 
 /// Pull a required string argument out of the decoded JSON args.
 fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
@@ -182,4 +182,3 @@ impl Tool for Recall {
         }
     }
 }
-

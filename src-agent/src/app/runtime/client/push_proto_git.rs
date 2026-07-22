@@ -44,7 +44,10 @@ pub(super) fn push_git_graph(push: &dyn Fn(String), result: super::git_graph::Gi
 /// Emit a one-shot `CommitDetail` envelope for the commit-detail view, carrying a
 /// host-computed [`super::git_graph::CommitDetailResult`] verbatim. Mirrors
 /// `push_git_diff`.
-pub(super) fn push_commit_detail(push: &dyn Fn(String), result: super::git_graph::CommitDetailResult) {
+pub(super) fn push_commit_detail(
+    push: &dyn Fn(String),
+    result: super::git_graph::CommitDetailResult,
+) {
     super::render::emit(push, &PushEnvelope::CommitDetail(result));
 }
 

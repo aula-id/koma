@@ -51,8 +51,8 @@ pub use summary::SummaryRow;
 // Public functions
 pub use blobs::{fetch_blob_content, list_blobs, search_blobs};
 pub use query::{
-    append, fetch_messages_since, max_message_id, message_count, totals, truncate_after,
-    user_message_ids, search_messages,
+    append, fetch_messages_since, max_message_id, message_count, search_messages, totals,
+    truncate_after, user_message_ids,
 };
 pub use schema::open;
 // Wave-5 per-session record persistence (file-change log + inert bash/sub-agent records).

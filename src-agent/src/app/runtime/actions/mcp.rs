@@ -30,7 +30,10 @@ pub(super) fn handle_close_mcp(state: &mut AppState) -> Result<()> {
 /// On success the dashboard returns to Browse with the new server selected; on a
 /// save error the status line reports it and the editor stays open so the draft
 /// isn't lost.
-pub(super) fn handle_create_mcp(state: &mut AppState, handle: &tokio::runtime::Handle) -> Result<()> {
+pub(super) fn handle_create_mcp(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
     let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };
@@ -39,7 +42,12 @@ pub(super) fn handle_create_mcp(state: &mut AppState, handle: &tokio::runtime::H
     let name = entry.name.clone();
 
     state.rest.config.mcp_servers.push(entry);
-    persist_and_finish(state, handle, &uuid, format!("mcp server saved: {name} — connecting…"));
+    persist_and_finish(
+        state,
+        handle,
+        &uuid,
+        format!("mcp server saved: {name} — connecting…"),
+    );
     Ok(())
 }
 
@@ -66,13 +74,21 @@ pub(super) fn handle_save_mcp(state: &mut AppState, handle: &tokio::runtime::Han
     } else {
         state.rest.config.mcp_servers.push(entry);
     }
-    persist_and_finish(state, handle, &uuid, format!("mcp server saved: {name} — connecting…"));
+    persist_and_finish(
+        state,
+        handle,
+        &uuid,
+        format!("mcp server saved: {name} — connecting…"),
+    );
     Ok(())
 }
 
 /// Handle `Action::DeleteMcp`: remove the selected server from `config.mcp_servers`
 /// by uuid, persist, and refresh the snapshot.
-pub(super) fn handle_delete_mcp(state: &mut AppState, handle: &tokio::runtime::Handle) -> Result<()> {
+pub(super) fn handle_delete_mcp(
+    state: &mut AppState,
+    handle: &tokio::runtime::Handle,
+) -> Result<()> {
     let Mode::Mcp(m) = state.mode() else {
         return Ok(());
     };

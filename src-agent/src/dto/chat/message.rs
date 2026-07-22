@@ -51,14 +51,30 @@ pub fn merge_reasoning_details(acc: &mut Vec<ReasoningDetail>, incoming: Vec<Rea
         };
         match slot {
             Some(e) => {
-                if let Some(t) = d.text { e.text.get_or_insert_with(String::new).push_str(&t); }
-                if let Some(s) = d.summary { e.summary.get_or_insert_with(String::new).push_str(&s); }
-                if let Some(dd) = d.data { e.data.get_or_insert_with(String::new).push_str(&dd); }
-                if d.signature.is_some() { e.signature = d.signature; }
-                if d.id.is_some() { e.id = d.id; }
-                if d.format.is_some() { e.format = d.format; }
-                if d.kind.is_some() { e.kind = d.kind; }
-                for (k, v) in d.extra { e.extra.insert(k, v); }
+                if let Some(t) = d.text {
+                    e.text.get_or_insert_with(String::new).push_str(&t);
+                }
+                if let Some(s) = d.summary {
+                    e.summary.get_or_insert_with(String::new).push_str(&s);
+                }
+                if let Some(dd) = d.data {
+                    e.data.get_or_insert_with(String::new).push_str(&dd);
+                }
+                if d.signature.is_some() {
+                    e.signature = d.signature;
+                }
+                if d.id.is_some() {
+                    e.id = d.id;
+                }
+                if d.format.is_some() {
+                    e.format = d.format;
+                }
+                if d.kind.is_some() {
+                    e.kind = d.kind;
+                }
+                for (k, v) in d.extra {
+                    e.extra.insert(k, v);
+                }
             }
             None => acc.push(d),
         }

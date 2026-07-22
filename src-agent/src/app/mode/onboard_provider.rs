@@ -162,7 +162,11 @@ pub fn candidate_model_ids(
             .map(crate::service::catalogue_overlay::models_for_provider)
             .unwrap_or_default()
     };
-    let cache: &[ModelInfo] = if cache_matches { models_cache } else { &overlay_cache };
+    let cache: &[ModelInfo] = if cache_matches {
+        models_cache
+    } else {
+        &overlay_cache
+    };
     filter_models(cache, query)
         .into_iter()
         .map(|i| cache[i].id.clone())

@@ -11,7 +11,9 @@ use super::types::{
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn daily_costs(days: i64) -> Vec<DailyCost> {
-    let Some(conn) = open() else { return Vec::new() };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
     let cutoff = now_secs() - days * 86400;
     let mut stmt = match conn.prepare(
         "SELECT (ts - ts % 86400) AS day_epoch, COALESCE(SUM(cost), 0.0)
@@ -40,7 +42,9 @@ pub fn daily_costs(days: i64) -> Vec<DailyCost> {
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn top_models(limit: i64) -> Vec<ModelCost> {
-    let Some(conn) = open() else { return Vec::new() };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
     let mut stmt = match conn.prepare(
         "SELECT
             COALESCE(model_id, ''),
@@ -74,7 +78,9 @@ pub fn top_models(limit: i64) -> Vec<ModelCost> {
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn weekly_costs(weeks: i64) -> Vec<WeeklyCost> {
-    let Some(conn) = open() else { return Vec::new() };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
     let cutoff = now_secs() - weeks * 604800;
     let mut stmt = match conn.prepare(
         "SELECT (ts - ts % 604800) AS week_epoch, COALESCE(SUM(cost), 0.0)
@@ -116,8 +122,14 @@ pub fn range_totals(since_ts: i64) -> RangeTotals {
 /// **Non-fatal**: returns [`RangeTotals::default()`] (all zeroes) on any DB error.
 #[allow(dead_code)]
 pub fn range_totals_scoped(since_ts: i64, session_uuid: Option<&str>) -> RangeTotals {
-    let Some(conn) = open() else { return RangeTotals::default() };
-    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
+    let Some(conn) = open() else {
+        return RangeTotals::default();
+    };
+    let clause = if session_uuid.is_some() {
+        " AND session_uuid = ?2"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT
             COALESCE(SUM(cost), 0.0),
@@ -169,8 +181,14 @@ pub fn top_models_in_range_scoped(
     limit: i64,
     session_uuid: Option<&str>,
 ) -> Vec<ModelCostRange> {
-    let Some(conn) = open() else { return Vec::new() };
-    let clause = if session_uuid.is_some() { " AND session_uuid = ?3" } else { "" };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
+    let clause = if session_uuid.is_some() {
+        " AND session_uuid = ?3"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT
             COALESCE(model_id, ''),
@@ -225,8 +243,14 @@ pub fn role_split(since_ts: i64) -> RoleSplit {
 /// **Non-fatal**: returns [`RoleSplit::default()`] (all zeroes) on any DB error.
 #[allow(dead_code)]
 pub fn role_split_scoped(since_ts: i64, session_uuid: Option<&str>) -> RoleSplit {
-    let Some(conn) = open() else { return RoleSplit::default() };
-    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
+    let Some(conn) = open() else {
+        return RoleSplit::default();
+    };
+    let clause = if session_uuid.is_some() {
+        " AND session_uuid = ?2"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT
             COALESCE(SUM(CASE WHEN role = 'main' THEN cost ELSE 0 END), 0.0),
@@ -282,11 +306,17 @@ pub fn spend_buckets_scoped(
     tz: i64,
     session_uuid: Option<&str>,
 ) -> Vec<SpendBucket> {
-    let Some(conn) = open() else { return Vec::new() };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
     let secs = bucket.secs();
     // Bucket size is injected as a literal; SQLite does not accept arithmetic
     // expressions in GROUP BY via parameter substitution.
-    let clause = if session_uuid.is_some() { " AND session_uuid = ?2" } else { "" };
+    let clause = if session_uuid.is_some() {
+        " AND session_uuid = ?2"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT
             ((ts + {tz}) - (ts + {tz}) % {secs} - {tz}) AS bucket_epoch,
@@ -324,7 +354,9 @@ pub fn spend_buckets_scoped(
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn session_models(session_uuid: &str) -> Vec<ModelCostRange> {
-    let Some(conn) = open() else { return Vec::new() };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
     let mut stmt = match conn.prepare(
         "SELECT
             COALESCE(model_id, ''),
@@ -363,7 +395,9 @@ pub fn session_models(session_uuid: &str) -> Vec<ModelCostRange> {
 /// **Non-fatal**: returns [`RangeTotals::default()`] (all zeroes) on any DB error.
 #[allow(dead_code)]
 pub fn session_totals(session_uuid: &str) -> RangeTotals {
-    let Some(conn) = open() else { return RangeTotals::default() };
+    let Some(conn) = open() else {
+        return RangeTotals::default();
+    };
     let mut stmt = match conn.prepare(
         "SELECT
             COALESCE(SUM(cost), 0.0),
@@ -395,7 +429,9 @@ pub fn session_totals(session_uuid: &str) -> RangeTotals {
 /// **Non-fatal**: returns an empty `Vec` on any DB error.
 #[allow(dead_code)]
 pub fn session_hourly(session_uuid: &str) -> Vec<SpendBucket> {
-    let Some(conn) = open() else { return Vec::new() };
+    let Some(conn) = open() else {
+        return Vec::new();
+    };
     let mut stmt = match conn.prepare(
         "SELECT
             (ts - ts % 3600) AS bucket_epoch,

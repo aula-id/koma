@@ -146,10 +146,13 @@ mod tests {
         let mut st = ExtScreenState::new("x".into(), "s".into(), "Home".into());
         st.screen = Some(screen);
         let entries = st.menu_entries();
-        assert_eq!(entries, vec![
-            ("a".to_string(), "Alpha".to_string()),
-            ("b".to_string(), "Beta".to_string()),
-        ]);
+        assert_eq!(
+            entries,
+            vec![
+                ("a".to_string(), "Alpha".to_string()),
+                ("b".to_string(), "Beta".to_string()),
+            ]
+        );
         // Cursor clamps + selects across the union.
         st.menu_cursor = 5;
         st.clamp_menu();

@@ -4,14 +4,16 @@
 //! Paths are sandboxed via [`super::resolve`]; file walks use the `ignore` crate
 //! (gitignore-aware), matching [`super::dircache`].
 
+use super::{resolve_read, Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
-use super::{resolve_read, Tool, ToolCtx};
 
 /// Search file contents by regular expression.
 pub struct Grep;
 impl Tool for Grep {
-    fn name(&self) -> &'static str { "grep" }
+    fn name(&self) -> &'static str {
+        "grep"
+    }
     fn description(&self) -> &'static str {
         "Search file contents by regular expression. Returns matching lines as path:line: text."
     }
@@ -36,7 +38,8 @@ impl Tool for Grep {
         })
     }
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let pattern = args.get("pattern")
+        let pattern = args
+            .get("pattern")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'pattern'"))?;
 
@@ -50,14 +53,15 @@ impl Tool for Grep {
         let base = resolve_read(&ctx.workspaces, search_path, ctx.session_dir.as_deref())?;
 
         // Optional glob filter.
-        let glob_matcher: Option<globset::GlobMatcher> = match args.get("glob").and_then(Value::as_str) {
-            Some(g) => {
-                let glob = globset::Glob::new(g)
-                    .map_err(|e| anyhow::anyhow!("invalid glob '{g}': {e}"))?;
-                Some(glob.compile_matcher())
-            }
-            None => None,
-        };
+        let glob_matcher: Option<globset::GlobMatcher> =
+            match args.get("glob").and_then(Value::as_str) {
+                Some(g) => {
+                    let glob = globset::Glob::new(g)
+                        .map_err(|e| anyhow::anyhow!("invalid glob '{g}': {e}"))?;
+                    Some(glob.compile_matcher())
+                }
+                None => None,
+            };
 
         const MAX_MATCHES: usize = 200;
         const MAX_LINE_CHARS: usize = 300;
@@ -74,7 +78,10 @@ impl Tool for Grep {
 
             // Apply glob filter against the workspace-relative path.
             if let Some(ref m) = glob_matcher {
-                let rel = ctx.workspaces.iter().enumerate()
+                let rel = ctx
+                    .workspaces
+                    .iter()
+                    .enumerate()
                     .find_map(|(i, ws)| abs_path.strip_prefix(ws).ok().map(|r| (i, r)))
                     .map(|(i, r)| {
                         if ctx.workspaces.len() > 1 {
@@ -96,7 +103,10 @@ impl Tool for Grep {
                 Err(_) => continue, // binary or unreadable
             };
 
-            let rel_display = ctx.workspaces.iter().enumerate()
+            let rel_display = ctx
+                .workspaces
+                .iter()
+                .enumerate()
                 .find_map(|(i, ws)| abs_path.strip_prefix(ws).ok().map(|r| (i, r)))
                 .map(|(i, r)| {
                     if ctx.workspaces.len() > 1 {
@@ -129,7 +139,9 @@ impl Tool for Grep {
         }
         let mut out = matches.join("\n");
         if truncated {
-            out.push_str("\n... (truncated at 200 matches; narrow your pattern or path to see more)");
+            out.push_str(
+                "\n... (truncated at 200 matches; narrow your pattern or path to see more)",
+            );
         }
         Ok(out)
     }
@@ -138,7 +150,9 @@ impl Tool for Grep {
 /// Find files by glob pattern.
 pub struct Glob;
 impl Tool for Glob {
-    fn name(&self) -> &'static str { "glob" }
+    fn name(&self) -> &'static str {
+        "glob"
+    }
     fn description(&self) -> &'static str {
         "Find files by glob pattern (e.g. **/*.rs). Returns matching paths."
     }
@@ -159,7 +173,8 @@ impl Tool for Glob {
         })
     }
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let pattern = args.get("pattern")
+        let pattern = args
+            .get("pattern")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'pattern'"))?;
 
@@ -174,7 +189,10 @@ impl Tool for Glob {
 
         // Prefer the live dir cache — it's already gitignore-aware and sorted.
         let cache_files: Vec<String> = {
-            let cache = ctx.dir_cache.read().map_err(|_| anyhow::anyhow!("dir cache unavailable"))?;
+            let cache = ctx
+                .dir_cache
+                .read()
+                .map_err(|_| anyhow::anyhow!("dir cache unavailable"))?;
             cache.files.clone()
         };
 
@@ -191,7 +209,10 @@ impl Tool for Glob {
             for entry in ignore::WalkBuilder::new(&base_abs).build().flatten() {
                 if entry.file_type().is_some_and(|t| t.is_file()) {
                     let abs = entry.path();
-                    let rel = ctx.workspaces.iter().enumerate()
+                    let rel = ctx
+                        .workspaces
+                        .iter()
+                        .enumerate()
                         .find_map(|(i, ws)| abs.strip_prefix(ws).ok().map(|r| (i, r)))
                         .map(|(i, r)| {
                             if multi {

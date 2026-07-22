@@ -17,19 +17,17 @@ use crate::view::theme::Palette;
 use super::{model_display, truncate};
 
 /// Render the LIST pane: one row per agent (`name` + source tag), RIGHT border.
-pub(super) fn draw_list(
-    frame: &mut Frame,
-    st: &AgentsState,
-    palette: &Palette,
-    area: Rect,
-) {
+pub(super) fn draw_list(frame: &mut Frame, st: &AgentsState, palette: &Palette, area: Rect) {
     let block = Block::new()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(palette.dim));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let content = inner.inner(Margin { horizontal: 1, vertical: 1 });
+    let content = inner.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
     // Focus lives in the LIST only while Browsing and not in the detail pane.
     let list_focused = st.mode == AgentSubMode::Browse && !st.in_detail;
 
@@ -69,7 +67,10 @@ pub(super) fn draw_list(
                 } else {
                     Line::from(vec![
                         Span::styled("  ", Style::default().fg(palette.dim)),
-                        Span::styled(format!("{name:<width$}", width = name_w), Style::default().fg(palette.dim)),
+                        Span::styled(
+                            format!("{name:<width$}", width = name_w),
+                            Style::default().fg(palette.dim),
+                        ),
                         Span::styled(" ", Style::default()),
                         Span::styled(source_label(a.source), Style::default().fg(palette.dim)),
                     ])
@@ -91,7 +92,10 @@ pub(super) fn draw_detail(
 ) {
     use super::editor::{delete_lines, editor_lines};
 
-    let inner = area.inner(Margin { horizontal: 2, vertical: 1 });
+    let inner = area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
     let lines = match st.mode {
         AgentSubMode::Browse => browse_lines(st, config, settings, palette, inner.width as usize),
         AgentSubMode::Edit | AgentSubMode::Create => {
@@ -127,7 +131,11 @@ pub(super) fn browse_lines<'a>(
     };
 
     lines.push(row("name", a.name.clone(), palette.accent));
-    lines.push(row("source", source_label(a.source).to_string(), palette.fg));
+    lines.push(row(
+        "source",
+        source_label(a.source).to_string(),
+        palette.fg,
+    ));
     lines.push(row(
         "description",
         truncate(&a.description, value_w),
@@ -136,7 +144,11 @@ pub(super) fn browse_lines<'a>(
     // Conditions (when to delegate) — only shown when set; it's what the roster
     // injects into the system prompt.
     if !a.conditions.trim().is_empty() {
-        lines.push(row("conditions", truncate(&a.conditions, value_w), palette.fg));
+        lines.push(row(
+            "conditions",
+            truncate(&a.conditions, value_w),
+            palette.fg,
+        ));
     }
     // Model is the chosen REGISTERED model (resolved to `name @ provider`); None =
     // inherit the Main role, shown dim (with a legacy slug hint for old files).
@@ -144,7 +156,11 @@ pub(super) fn browse_lines<'a>(
     lines.push(row(
         "model",
         truncate(&model_text, value_w),
-        if model_chosen { palette.fg } else { palette.dim },
+        if model_chosen {
+            palette.fg
+        } else {
+            palette.dim
+        },
     ));
     let tools = if a.tools.is_empty() {
         "(read-only default)".to_string()
@@ -154,7 +170,11 @@ pub(super) fn browse_lines<'a>(
     lines.push(row(
         "tools",
         tools,
-        if a.tools.is_empty() { palette.dim } else { palette.fg },
+        if a.tools.is_empty() {
+            palette.dim
+        } else {
+            palette.fg
+        },
     ));
 
     // Body preview: a label row, then the first few prompt lines, dim.

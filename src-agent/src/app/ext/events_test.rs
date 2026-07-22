@@ -22,7 +22,10 @@ use std::sync::Arc;
 
 /// Build an inert manager and directly seed its (private, descendant-visible) `inner` map
 /// with hand-built [`ExtEntry`] rows — no subprocess spawn, no handshake.
-fn seeded_manager(handle: &tokio::runtime::Handle, rows: Vec<(&str, bool, Vec<&str>)>) -> Arc<ExtHostManager> {
+fn seeded_manager(
+    handle: &tokio::runtime::Handle,
+    rows: Vec<(&str, bool, Vec<&str>)>,
+) -> Arc<ExtHostManager> {
     let mgr = ExtHostManager::new(handle);
     {
         let mut inner = mgr.inner.lock().unwrap();
@@ -58,7 +61,11 @@ fn subscribers_matrix_running_and_subscribed() {
     );
 
     let subs = mgr.subscribers("subagent.done");
-    assert_eq!(subs, vec!["running.subscribed".to_string()], "only the running+subscribed row matches");
+    assert_eq!(
+        subs,
+        vec!["running.subscribed".to_string()],
+        "only the running+subscribed row matches"
+    );
 
     let subs2 = mgr.subscribers("agent.turn_end");
     assert_eq!(subs2, vec!["running.other_event".to_string()]);
@@ -84,7 +91,11 @@ fn subscribers_matrix_multiple_running_subscribers() {
     );
     let mut subs = mgr.subscribers("subagent.done");
     subs.sort();
-    assert_eq!(subs, vec!["ext.a".to_string(), "ext.b".to_string()], "only the two RUNNING subscribers");
+    assert_eq!(
+        subs,
+        vec!["ext.a".to_string(), "ext.b".to_string()],
+        "only the two RUNNING subscribers"
+    );
 }
 
 /// Query-side case normalization: `subscribers` lowercases the QUERIED event name before
@@ -111,12 +122,22 @@ fn find_by_location_oldest_wins_on_duplicate_location() {
     let mut registry = ExtAgentRegistry::default();
     let first_id = registry.insert("S".to_string(), 9, false);
     let second_id = registry.insert("S".to_string(), 9, true);
-    assert!(first_id < second_id, "ids are monotonic, so 'oldest' is the lower id");
+    assert!(
+        first_id < second_id,
+        "ids are monotonic, so 'oldest' is the lower id"
+    );
 
-    let (found_id, found_notify) =
-        registry.find_by_location("S", 9).expect("duplicate location still resolves");
-    assert_eq!(found_id, first_id, "the OLDEST registration wins on a duplicate location");
-    assert!(!found_notify, "the oldest entry's own notify flag is reported, not the newer one's");
+    let (found_id, found_notify) = registry
+        .find_by_location("S", 9)
+        .expect("duplicate location still resolves");
+    assert_eq!(
+        found_id, first_id,
+        "the OLDEST registration wins on a duplicate location"
+    );
+    assert!(
+        !found_notify,
+        "the oldest entry's own notify flag is reported, not the newer one's"
+    );
 }
 
 /// The same precedence, exercised through [`find_terminal_owner`]'s per-registry call: a
@@ -163,7 +184,11 @@ fn payload_shape_agents_done() {
     let obj = payload.as_object().expect("object");
     let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
     keys.sort();
-    assert_eq!(keys, vec!["agentId", "status"], "agents.done payload key set is an API contract");
+    assert_eq!(
+        keys,
+        vec!["agentId", "status"],
+        "agents.done payload key set is an API contract"
+    );
 }
 
 /// The BROADCAST `subagent.done` payload is EXACTLY `{ "session": <string>, "subagentId":
@@ -176,7 +201,12 @@ fn payload_shape_subagent_done() {
         "agent": "general",
         "status": "done",
     });
-    let mut keys: Vec<&str> = payload.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut keys: Vec<&str> = payload
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     keys.sort();
     assert_eq!(keys, vec!["agent", "session", "status", "subagentId"]);
 }

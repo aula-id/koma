@@ -354,5 +354,7 @@ fn sock_gone_for(id: &str) -> bool {
 
 #[cfg(windows)]
 fn sock_gone_for(id: &str) -> bool {
-    !store::list_koma_session_pipes().iter().any(|pipe_id| pipe_id == id)
+    !store::list_koma_session_pipes()
+        .iter()
+        .any(|pipe_id| pipe_id == id)
 }

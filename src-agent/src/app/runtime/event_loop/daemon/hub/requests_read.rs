@@ -31,7 +31,12 @@ impl DaemonHub {
     // that follows. Cloning the stored string keeps `&mut self` free for the
     // `send_to` below.
     pub(super) fn attach(&mut self, idx: usize, state: &mut AppState) {
-        self.send_to(idx, DaemonEvent::Hello { version: self.version.clone() });
+        self.send_to(
+            idx,
+            DaemonEvent::Hello {
+                version: self.version.clone(),
+            },
+        );
         // ATOMIC attach (critique #2): build the full snapshot, send it, and
         // flip the client to attached + seed ITS OWN baseline IN THIS TICK.
         // Only this client's baseline is (re)seeded (blocker #2) — never a
@@ -120,7 +125,11 @@ impl DaemonHub {
             .read()
             .map(|c| c.search(&query, limit.unwrap_or(200)))
             .unwrap_or_default();
-        let workdirs = fg.session.as_ref().map(|s| s.workdirs()).unwrap_or_default();
+        let workdirs = fg
+            .session
+            .as_ref()
+            .map(|s| s.workdirs())
+            .unwrap_or_default();
         let items = raw
             .into_iter()
             .map(|entry| {
@@ -178,7 +187,13 @@ impl DaemonHub {
     ) {
         let client_id = self.clients[idx].id;
         let tx = self.list_models_tx.clone();
-        if let Some(p) = state.rest.config.providers.iter().find(|p| p.uuid == provider) {
+        if let Some(p) = state
+            .rest
+            .config
+            .providers
+            .iter()
+            .find(|p| p.uuid == provider)
+        {
             let endpoint = p.endpoint.clone();
             let api_key = p.api_key.clone();
             let prov = provider.clone();
@@ -211,8 +226,12 @@ impl DaemonHub {
                     models,
                 });
             });
-        } else if let Some(conn) =
-            state.rest.config.oauth_conns.iter().find(|c| c.uuid == provider)
+        } else if let Some(conn) = state
+            .rest
+            .config
+            .oauth_conns
+            .iter()
+            .find(|c| c.uuid == provider)
         {
             // OAuth-conn provider: no live fetch — resolve straight to the curated
             // catalogue overlay for this provider's chat endpoint(s).
@@ -259,10 +278,7 @@ impl DaemonHub {
             .providers
             .iter()
             .find(|p| p.uuid == provider)
-            .map(|p| {
-                p.api_type.is_routable()
-                    && p.endpoint.to_lowercase().contains("openrouter")
-            })
+            .map(|p| p.api_type.is_routable() && p.endpoint.to_lowercase().contains("openrouter"))
             .unwrap_or(false);
         let client_id = self.clients[idx].id;
         let tx = self.list_routes_tx.clone();
@@ -275,8 +291,12 @@ impl DaemonHub {
                 model_id,
                 routes: Vec::new(),
             });
-        } else if let Some(p) =
-            state.rest.config.providers.iter().find(|p| p.uuid == provider)
+        } else if let Some(p) = state
+            .rest
+            .config
+            .providers
+            .iter()
+            .find(|p| p.uuid == provider)
         {
             let endpoint = p.endpoint.clone();
             let api_key = p.api_key.clone();

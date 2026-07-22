@@ -320,7 +320,10 @@ async fn send_frame<T: serde::Serialize>(w: &mut IpcWriteHalf, msg: &T) -> std::
 /// (each already newline-terminated) to it. Exits when the channel closes (the
 /// manager dropped the `writer` on stop) or on the first write error (child gone),
 /// shutting the write half on the way out so the child observes EOF.
-pub(super) async fn writer_task(mut write_half: IpcWriteHalf, mut rx: mpsc::UnboundedReceiver<String>) {
+pub(super) async fn writer_task(
+    mut write_half: IpcWriteHalf,
+    mut rx: mpsc::UnboundedReceiver<String>,
+) {
     while let Some(frame) = rx.recv().await {
         if write_half.write_all(frame.as_bytes()).await.is_err() {
             break;
@@ -403,7 +406,8 @@ pub(super) async fn reader_task(
                             match mgr.ext_call_tx() {
                                 Some(tx) => {
                                     let granted = mgr.granted_for(&ext_id);
-                                    let (reply_tx, reply_rx) = oneshot::channel::<serde_json::Value>();
+                                    let (reply_tx, reply_rx) =
+                                        oneshot::channel::<serde_json::Value>();
                                     // Verb-scoped cap, selected while `method` is still in
                                     // scope (it's about to move into `req` below):
                                     // `models.invoke` alone gets the longer
@@ -433,20 +437,18 @@ pub(super) async fn reader_task(
                                     } else {
                                         let writer_reply = writer.clone();
                                         tokio::spawn(async move {
-                                            let result = match tokio::time::timeout(
-                                                call_timeout,
-                                                reply_rx,
-                                            )
-                                            .await
-                                            {
-                                                Ok(Ok(v)) => v,
-                                                Ok(Err(_)) => serde_json::json!({
-                                                    "error": "grant broker dropped request"
-                                                }),
-                                                Err(_) => serde_json::json!({
-                                                    "error": "grant broker timed out"
-                                                }),
-                                            };
+                                            let result =
+                                                match tokio::time::timeout(call_timeout, reply_rx)
+                                                    .await
+                                                {
+                                                    Ok(Ok(v)) => v,
+                                                    Ok(Err(_)) => serde_json::json!({
+                                                        "error": "grant broker dropped request"
+                                                    }),
+                                                    Err(_) => serde_json::json!({
+                                                        "error": "grant broker timed out"
+                                                    }),
+                                                };
                                             send_result_frame(&writer_reply, id, result);
                                         });
                                     }
@@ -499,9 +501,7 @@ pub(super) async fn reader_task(
             Err(FrameReadError::TooLarge) => {
                 crate::model::store::append_global_error_log(
                     "extensions",
-                    &format!(
-                        "[{ext_id}] frame exceeds {MAX_FRAME_BYTES} bytes; killing extension"
-                    ),
+                    &format!("[{ext_id}] frame exceeds {MAX_FRAME_BYTES} bytes; killing extension"),
                 );
                 // Kill immediately rather than let a misbehaving/hostile child keep
                 // flooding a connection this loop is about to stop reading from.
@@ -537,6 +537,9 @@ async fn stderr_log_task(mut stderr: tokio::process::ChildStderr, id: String) {
     let mut buf = Vec::new();
     if stderr.read_to_end(&mut buf).await.is_ok() && !buf.is_empty() {
         let text = String::from_utf8_lossy(&buf);
-        crate::model::store::append_global_error_log("extensions", &format!("[{id}] stderr: {text}"));
+        crate::model::store::append_global_error_log(
+            "extensions",
+            &format!("[{id}] stderr: {text}"),
+        );
     }
 }

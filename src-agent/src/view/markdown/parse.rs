@@ -41,7 +41,10 @@ pub(super) enum Block {
     Paragraph,
     Heading(HeadingLevel),
     /// Buffered raw code text + detected language token.
-    Code { lang: String, text: String },
+    Code {
+        lang: String,
+        text: String,
+    },
     /// Block-quote: buffered like a paragraph but prefixed per visual line.
     Quote,
     /// A list item: inline text accumulates in `cur` after a leading marker span.

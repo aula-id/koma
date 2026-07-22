@@ -52,8 +52,8 @@ use crate::app::state::{AppState, SessionRuntime, EXT_TURN_BUDGET};
 use crate::app::subagent::SubAgentStatus;
 use crate::ipc::proto::{ClientRequest, SessionStatus};
 use crate::model::app_config::{new_uuid, ApiType, AppConfig, ModelEntry, ModelRole, ProviderConn};
-use crate::model::settings::Settings;
 use crate::model::session_registry::RegRow;
+use crate::model::settings::Settings;
 use crate::model::store;
 use crate::service::openrouter::OpenRouterClient;
 
@@ -115,7 +115,12 @@ impl ExtAgentRegistry {
     /// `pub(crate)` so the W5 event-fan-out tests (`app::ext::events`) can build
     /// registry fixtures the same way `agents.spawn` populates them, without
     /// re-implementing id allocation.
-    pub(crate) fn insert(&mut self, session_uuid: String, local_subagent_id: usize, notify: bool) -> u64 {
+    pub(crate) fn insert(
+        &mut self,
+        session_uuid: String,
+        local_subagent_id: usize,
+        notify: bool,
+    ) -> u64 {
         let ext_agent_id = self.next_id;
         self.next_id += 1;
         self.map.insert(
@@ -152,7 +157,11 @@ impl ExtAgentRegistry {
     /// `(session_uuid, local_subagent_id)` pair (should not happen in practice —
     /// ids are never reused — but this picks a stable winner over an arbitrary
     /// `HashMap` iteration order).
-    pub(crate) fn find_by_location(&self, session_uuid: &str, local_id: usize) -> Option<(u64, bool)> {
+    pub(crate) fn find_by_location(
+        &self,
+        session_uuid: &str,
+        local_id: usize,
+    ) -> Option<(u64, bool)> {
         self.entries_sorted()
             .into_iter()
             .find(|(_, r)| r.session_uuid == session_uuid && r.local_subagent_id == local_id)
@@ -335,8 +344,15 @@ pub(crate) fn method_permitted(method: &str, granted: &[Grant]) -> GateDecision 
 /// `sessions.bogus`) flows to the broker and comes back as
 /// [`GateDecision::UnknownMethod`], never the wire stub.
 pub(crate) fn is_broker_method(method: &str) -> bool {
-    const PREFIXES: [&str; 7] =
-        ["agents.", "sessions.", "chat.", "models.", "providers.", "context.", "oauth."];
+    const PREFIXES: [&str; 7] = [
+        "agents.",
+        "sessions.",
+        "chat.",
+        "models.",
+        "providers.",
+        "context.",
+        "oauth.",
+    ];
     PREFIXES.iter().any(|p| method.starts_with(p))
 }
 
@@ -565,16 +581,17 @@ pub fn handle_ext_call(
             // expired koma.run token — see `service::oauth::manager::fresh_key`; we never refresh
             // ourselves). The token fetch is well under the reader's 120s `EXT_CALL_TIMEOUT`, so
             // this verb uses the default cap. OWNS the reply from here.
-            let provider = params.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+            let provider = params
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             match provider {
                 // Accept the dotted contract id AND the `komarun` wire-id alias.
                 "koma.run" | "komarun" => {
-                    let Some(conn) = state
-                        .rest
-                        .config
-                        .oauth_conns
-                        .iter()
-                        .find(|c| c.provider == crate::model::app_config::OAuthProvider::KomaRun)
+                    let Some(conn) =
+                        state.rest.config.oauth_conns.iter().find(|c| {
+                            c.provider == crate::model::app_config::OAuthProvider::KomaRun
+                        })
                     else {
                         let _ = reply.send(json!({ "error": "not_connected" }));
                         return;
@@ -707,11 +724,18 @@ fn broker_spawn(
     // fields are ignored, never rejected).
     let workspace = non_empty_string("workspace").map(std::path::PathBuf::from);
     let overrides = if model.is_some() || effort.is_some() || workspace.is_some() {
-        Some(crate::app::subagent::SpawnOverrides { model, effort, workspace })
+        Some(crate::app::subagent::SpawnOverrides {
+            model,
+            effort,
+            workspace,
+        })
     } else {
         None
     };
-    let notify = params.get("notify").and_then(|v| v.as_bool()).unwrap_or(false);
+    let notify = params
+        .get("notify")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Capture the STABLE uuid of the session being spawned into BEFORE
     // `spawn_or_queue` (which needs `state` mutably) — this is the uuid the
@@ -723,7 +747,9 @@ fn broker_spawn(
     // COMPLETELY SILENT in the human chat (no fold note, no nudge) — the spawner
     // receives the result via the owned `agents.done` event instead (see
     // `emit_subagent_terminal`). Usage + the sub-agent record are still recorded.
-    match spawn_or_queue(state, sess_idx, client, handle, agent, task, None, false, true, overrides) {
+    match spawn_or_queue(
+        state, sess_idx, client, handle, agent, task, None, false, true, overrides,
+    ) {
         SpawnOutcome::Spawned(local_id) => {
             let ext_agent_id = state
                 .rest
@@ -779,7 +805,11 @@ fn broker_list(state: &AppState, ext_id: &str) -> Value {
                     "status": status_label(&sa.status),
                 });
             }
-            if sess.pending_subagents.iter().any(|p| p.id == r.local_subagent_id) {
+            if sess
+                .pending_subagents
+                .iter()
+                .any(|p| p.id == r.local_subagent_id)
+            {
                 return json!({ "agentId": ext_agent_id, "status": "queued" });
             }
             json!({ "agentId": ext_agent_id, "status": "gone" })
@@ -819,7 +849,11 @@ fn broker_status(state: &AppState, ext_id: &str, params: &Value) -> Value {
         });
     }
     // A just-queued spawn (over the cap) is not yet in `subagents`.
-    if sess.pending_subagents.iter().any(|p| p.id == r.local_subagent_id) {
+    if sess
+        .pending_subagents
+        .iter()
+        .any(|p| p.id == r.local_subagent_id)
+    {
         return json!({ "agentId": ext_agent_id, "status": "queued" });
     }
     json!({ "error": format!("unknown agentId: {ext_agent_id}") })
@@ -855,7 +889,11 @@ fn broker_result(state: &AppState, ext_id: &str, params: &Value) -> Value {
             SubAgentStatus::Running => json!({ "agentId": ext_agent_id, "status": "running" }),
         };
     }
-    if sess.pending_subagents.iter().any(|p| p.id == r.local_subagent_id) {
+    if sess
+        .pending_subagents
+        .iter()
+        .any(|p| p.id == r.local_subagent_id)
+    {
         return json!({ "agentId": ext_agent_id, "status": "queued" });
     }
     json!({ "error": format!("unknown agentId: {ext_agent_id}") })
@@ -920,8 +958,11 @@ fn broker_kill(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
         // Only transition a still-running agent; a terminal one keeps its outcome.
         if matches!(sa.status, SubAgentStatus::Running) {
             sa.status = SubAgentStatus::Killed;
-            killed_transition =
-                Some((r.session_uuid.clone(), r.local_subagent_id, sa.agent_name.clone()));
+            killed_transition = Some((
+                r.session_uuid.clone(),
+                r.local_subagent_id,
+                sa.agent_name.clone(),
+            ));
         }
         killed = true;
     }
@@ -1063,7 +1104,12 @@ fn parse_ext_agent_id(params: &Value) -> Option<u64> {
 /// trips it); a buffer already at the cap of 5 rejects further prompts. Otherwise
 /// `(ext_id, text)` is pushed. Reply `{ "queued": <len> }` on accept/dedupe, else
 /// `{ "error": ... }`.
-fn broker_chat_prompt(state: &mut AppState, ext_id: &str, sess_idx: usize, params: &Value) -> Value {
+fn broker_chat_prompt(
+    state: &mut AppState,
+    ext_id: &str,
+    sess_idx: usize,
+    params: &Value,
+) -> Value {
     let text = params
         .get("text")
         .and_then(|v| v.as_str())
@@ -1187,14 +1233,15 @@ fn broker_models_invoke(
         .unwrap_or_default();
 
     // Resolve the requested role to a concrete dispatch route.
-    let route = match crate::app::resolve::resolve_role_dispatch(&state.rest.config, &settings, role)
-    {
-        Some(r) => r,
-        None => {
-            let _ = reply.send(json!({ "error": format!("no usable route for role {role_str}") }));
-            return;
-        }
-    };
+    let route =
+        match crate::app::resolve::resolve_role_dispatch(&state.rest.config, &settings, role) {
+            Some(r) => r,
+            None => {
+                let _ =
+                    reply.send(json!({ "error": format!("no usable route for role {role_str}") }));
+                return;
+            }
+        };
     if !route.is_routable() {
         let _ = reply.send(json!({
             "error": format!("role {role_str} route is not dispatchable (Anthropic-compatible not wired)")
@@ -1219,7 +1266,10 @@ fn broker_models_invoke(
     handle.spawn(async move {
         let mut messages: Vec<crate::dto::chat::ChatMessage> = Vec::new();
         if let Some(sys) = system {
-            messages.push(crate::dto::chat::ChatMessage::new(crate::dto::chat::Role::System, sys));
+            messages.push(crate::dto::chat::ChatMessage::new(
+                crate::dto::chat::Role::System,
+                sys,
+            ));
         }
         messages.push(crate::dto::chat::ChatMessage::new(
             crate::dto::chat::Role::User,
@@ -1295,7 +1345,8 @@ fn broker_models_register(state: &mut AppState, ext_id: &str, params: &Value) ->
                 .as_ref()
                 .map(|s| s.settings.clone())
                 .unwrap_or_default();
-            if let Some(name) = try_vacuum_fill_main(&mut state.rest.config, &settings, &default_uuid)
+            if let Some(name) =
+                try_vacuum_fill_main(&mut state.rest.config, &settings, &default_uuid)
             {
                 // The new Main was assigned GLOBALLY. Clear any koma-free placeholder
                 // session-local Main override on the foreground session so /free doesn't SHADOW
@@ -1419,7 +1470,9 @@ fn apply_models_register(config: &mut AppConfig, ext_id: &str, params: &Value) -
     // Only when THIS call explicitly flagged one.
     let mut reply = json!({ "registered": uuids.len(), "uuids": uuids });
     if let Some(du) = default_uuid {
-        config.ext_preferred_models.insert(ext_id.to_string(), du.clone());
+        config
+            .ext_preferred_models
+            .insert(ext_id.to_string(), du.clone());
         reply["defaultUuid"] = json!(du);
     }
     reply
@@ -1517,7 +1570,11 @@ fn pick_ext_anchor(config: &AppConfig, ext_id: &str, params: &Value) -> Result<S
 /// persists only when at least one entry was removed.
 fn broker_models_unregister(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
     let reply = apply_models_unregister(&mut state.rest.config, ext_id, params);
-    if reply.get("removed").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+    if reply
+        .get("removed")
+        .and_then(Value::as_u64)
+        .is_some_and(|n| n > 0)
+    {
         if let Err(e) = state.rest.config.save() {
             store::append_global_error_log(
                 "ext models",
@@ -1613,22 +1670,35 @@ fn broker_providers_register(state: &mut AppState, ext_id: &str, params: &Value)
 /// PURE core of [`broker_providers_register`]: validate + apply. Does NOT persist. See that
 /// function for the full contract.
 fn apply_providers_register(config: &mut AppConfig, ext_id: &str, params: &Value) -> Value {
-    let name = params.get("name").and_then(Value::as_str).unwrap_or("").trim();
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if name.is_empty() {
         return json!({ "error": "providers.register requires a non-empty 'name'" });
     }
     if name.len() > MAX_PROVIDER_NAME_LEN {
         return json!({ "error": format!("provider name too long (max {MAX_PROVIDER_NAME_LEN})") });
     }
-    let endpoint = params.get("endpoint").and_then(Value::as_str).unwrap_or("").trim();
+    let endpoint = params
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if !is_http_url(endpoint) {
         return json!({ "error": "endpoint must be a valid http(s) URL" });
     }
-    let api_type = match normalize_provider_api_type(params.get("api_type").and_then(Value::as_str)) {
+    let api_type = match normalize_provider_api_type(params.get("api_type").and_then(Value::as_str))
+    {
         Some(t) => t,
         None => return json!({ "error": "api_type must be 'openai' or 'anthropic'" }),
     };
-    let key = params.get("key").and_then(Value::as_str).unwrap_or("").trim();
+    let key = params
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if key.is_empty() {
         return json!({ "error": "providers.register requires a non-empty 'key'" });
     }
@@ -1670,15 +1740,18 @@ fn apply_providers_register(config: &mut AppConfig, ext_id: &str, params: &Value
 fn broker_providers_unregister(state: &mut AppState, ext_id: &str, params: &Value) -> Value {
     let (reply, model_purge, dead_providers) =
         apply_providers_unregister(&mut state.rest.config, ext_id, params);
-    if reply.get("removed").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+    if reply
+        .get("removed")
+        .and_then(Value::as_u64)
+        .is_some_and(|n| n > 0)
+    {
         if let Err(e) = state.rest.config.save() {
             store::append_global_error_log(
                 "ext providers",
                 &format!("[{ext_id}] providers.unregister save failed: {e:#}"),
             );
         } else if !model_purge.models_removed.is_empty() || !dead_providers.is_empty() {
-            let dead_models: HashSet<String> =
-                model_purge.models_removed.iter().cloned().collect();
+            let dead_models: HashSet<String> = model_purge.models_removed.iter().cloned().collect();
             let cfg = state.rest.config.clone();
             let _ = crate::app::cascade::rebind_consumers_after_model_removal(
                 Some(state),
@@ -1699,7 +1772,11 @@ fn apply_providers_unregister(
     config: &mut AppConfig,
     ext_id: &str,
     params: &Value,
-) -> (Value, crate::model::app_config::CascadePurge, HashSet<String>) {
+) -> (
+    Value,
+    crate::model::app_config::CascadePurge,
+    HashSet<String>,
+) {
     // Optional id filter (uuid OR name, case-insensitive). Absent → remove all owned.
     let id_filter: Option<Vec<String>> = params.get("ids").and_then(|v| v.as_array()).map(|a| {
         a.iter()
@@ -1802,7 +1879,11 @@ fn try_vacuum_fill_main(
         return None;
     }
     // The preferred model must still exist in the global catalogue (it was just registered).
-    let mut entry = config.models.iter().find(|m| m.uuid == preferred_uuid)?.clone();
+    let mut entry = config
+        .models
+        .iter()
+        .find(|m| m.uuid == preferred_uuid)?
+        .clone();
     let name = entry.name.clone();
     if !entry.roles.contains(&ModelRole::Main) {
         entry.roles.push(ModelRole::Main);
@@ -1827,7 +1908,10 @@ fn broker_context_set(state: &mut AppState, ext_id: &str, params: &Value) -> Val
     if text.trim().is_empty() {
         state.rest.ext_context.remove(ext_id);
     } else {
-        state.rest.ext_context.insert(ext_id.to_string(), text.to_string());
+        state
+            .rest
+            .ext_context
+            .insert(ext_id.to_string(), text.to_string());
     }
     json!({ "ok": true })
 }
@@ -2010,7 +2094,11 @@ fn broker_sessions_create(
                     // lag the socket accepting. Best-effort: name it; if the row isn't there
                     // yet, wait once and retry. A failure to name is NOT a create failure.
                     let _ = crate::model::session_registry::set_name(&uuid, &name);
-                    if crate::model::session_registry::get(&uuid).ok().flatten().is_none() {
+                    if crate::model::session_registry::get(&uuid)
+                        .ok()
+                        .flatten()
+                        .is_none()
+                    {
                         std::thread::sleep(std::time::Duration::from_millis(500));
                         let _ = crate::model::session_registry::set_name(&uuid, &name);
                     }
@@ -2056,7 +2144,11 @@ fn broker_sessions_spawn_into(
         let _ = reply.send(json!({ "error": "sessions.spawn_into requires a 'session'" }));
         return;
     };
-    let task = params.get("task").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let task = params
+        .get("task")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
     if task.is_empty() {
         let _ = reply.send(json!({ "error": "sessions.spawn_into requires a non-empty 'task'" }));
         return;
@@ -2124,15 +2216,27 @@ mod tests {
 
         // granted = []  → EVERYTHING denied.
         for m in orchestrate_methods {
-            assert_eq!(method_permitted(m, &[]), GateDecision::Deny(Orch), "empty grants must deny {m}");
+            assert_eq!(
+                method_permitted(m, &[]),
+                GateDecision::Deny(Orch),
+                "empty grants must deny {m}"
+            );
         }
         for m in read_methods {
-            assert_eq!(method_permitted(m, &[]), GateDecision::Deny(Read), "empty grants must deny {m}");
+            assert_eq!(
+                method_permitted(m, &[]),
+                GateDecision::Deny(Read),
+                "empty grants must deny {m}"
+            );
         }
 
         // granted = [AgentsRead] → read methods ALLOW, orchestrate methods DENY.
         for m in read_methods {
-            assert_eq!(method_permitted(m, &[Read]), GateDecision::Allow, "read grant must allow {m}");
+            assert_eq!(
+                method_permitted(m, &[Read]),
+                GateDecision::Allow,
+                "read grant must allow {m}"
+            );
         }
         for m in orchestrate_methods {
             assert_eq!(
@@ -2153,12 +2257,22 @@ mod tests {
 
         // granted = [Read, Orchestrate] → EVERYTHING allowed.
         for m in orchestrate_methods.iter().chain(read_methods.iter()) {
-            assert_eq!(method_permitted(m, &[Read, Orch]), GateDecision::Allow, "full grants must allow {m}");
+            assert_eq!(
+                method_permitted(m, &[Read, Orch]),
+                GateDecision::Allow,
+                "full grants must allow {m}"
+            );
         }
 
         // An unrecognised verb is never a silent allow.
-        assert_eq!(method_permitted("agents.bogus", &[Orch]), GateDecision::UnknownMethod);
-        assert_eq!(method_permitted("filesystem.read", &[Orch]), GateDecision::UnknownMethod);
+        assert_eq!(
+            method_permitted("agents.bogus", &[Orch]),
+            GateDecision::UnknownMethod
+        );
+        assert_eq!(
+            method_permitted("filesystem.read", &[Orch]),
+            GateDecision::UnknownMethod
+        );
 
         // --- WAVE-3/12 families: each needs its OWN grant, EXACT-MATCH, no lattice edge.
         use Grant::{ChatPrompt, ContextPublish, ModelsContribute, ModelsInvoke, SessionsManage};
@@ -2166,7 +2280,12 @@ mod tests {
         // (every verb in a family, the grant that family requires).
         let new_families: [(&[&str], Grant); 5] = [
             (
-                &["sessions.list", "sessions.create", "sessions.switch", "sessions.spawn_into"],
+                &[
+                    "sessions.list",
+                    "sessions.create",
+                    "sessions.switch",
+                    "sessions.spawn_into",
+                ],
                 SessionsManage,
             ),
             (&["chat.prompt"], ChatPrompt),
@@ -2176,7 +2295,12 @@ mod tests {
             // (exact-verb gate). An extension that may contribute models may also contribute
             // the key-backed gateways that serve them.
             (
-                &["models.register", "models.unregister", "providers.register", "providers.unregister"],
+                &[
+                    "models.register",
+                    "models.unregister",
+                    "providers.register",
+                    "providers.unregister",
+                ],
                 ModelsContribute,
             ),
             (&["context.set", "context.clear"], ContextPublish),
@@ -2184,7 +2308,11 @@ mod tests {
 
         for (methods, own) in new_families {
             // An UNRELATED grant to probe cross-family isolation (never `own`).
-            let unrelated = if own == SessionsManage { ChatPrompt } else { SessionsManage };
+            let unrelated = if own == SessionsManage {
+                ChatPrompt
+            } else {
+                SessionsManage
+            };
             for m in methods {
                 // No grants → denied (missing its own grant).
                 assert_eq!(
@@ -2220,8 +2348,14 @@ mod tests {
             method_permitted("sessions.bogus", &[SessionsManage]),
             GateDecision::UnknownMethod
         );
-        assert_eq!(method_permitted("chat.bogus", &[ChatPrompt]), GateDecision::UnknownMethod);
-        assert_eq!(method_permitted("models.bogus", &[ModelsInvoke]), GateDecision::UnknownMethod);
+        assert_eq!(
+            method_permitted("chat.bogus", &[ChatPrompt]),
+            GateDecision::UnknownMethod
+        );
+        assert_eq!(
+            method_permitted("models.bogus", &[ModelsInvoke]),
+            GateDecision::UnknownMethod
+        );
         assert_eq!(
             method_permitted("context.bogus", &[ContextPublish]),
             GateDecision::UnknownMethod
@@ -2301,7 +2435,10 @@ mod tests {
 
         // Round-trip lock-step with `grant_wire` for every parsed grant.
         for grant in &g {
-            assert_eq!(parse_grants(&[grant_wire(*grant).to_string()]), vec![*grant]);
+            assert_eq!(
+                parse_grants(&[grant_wire(*grant).to_string()]),
+                vec![*grant]
+            );
         }
 
         // W11: `oauth:contribute` gates no broker verb — the host→ext delegation invokes
@@ -2349,7 +2486,10 @@ mod tests {
     #[test]
     fn oauth_read_grant_wire_roundtrips() {
         assert_eq!(grant_wire(Grant::OauthRead), "oauth:read");
-        assert_eq!(parse_grants(&["oauth:read".to_string()]), vec![Grant::OauthRead]);
+        assert_eq!(
+            parse_grants(&["oauth:read".to_string()]),
+            vec![Grant::OauthRead]
+        );
         assert_eq!(
             parse_grants(&[grant_wire(Grant::OauthRead).to_string()]),
             vec![Grant::OauthRead]
@@ -2363,7 +2503,10 @@ mod tests {
     #[test]
     fn oauth_token_gate_and_routing() {
         assert_eq!(required_grant("oauth.token"), Some(Grant::OauthRead));
-        assert!(is_broker_method("oauth.token"), "oauth.token must route to the broker");
+        assert!(
+            is_broker_method("oauth.token"),
+            "oauth.token must route to the broker"
+        );
 
         assert_eq!(
             method_permitted("oauth.token", &[Grant::OauthRead]),
@@ -2508,7 +2651,9 @@ mod tests {
         );
 
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "read-only grant must be denied for agents.spawn, got {out}"
         );
         assert!(
@@ -2565,9 +2710,12 @@ mod tests {
         let client: Option<Arc<OpenRouterClient>> = None;
 
         // A running agent (steerable), a done agent (terminal), and a queued one.
-        state.rest.sessions[0]
-            .subagents
-            .push(inert_subagent(rt.handle(), 3, "general", SubAgentStatus::Running));
+        state.rest.sessions[0].subagents.push(inert_subagent(
+            rt.handle(),
+            3,
+            "general",
+            SubAgentStatus::Running,
+        ));
         state.rest.sessions[0].subagents.push(inert_subagent(
             rt.handle(),
             4,
@@ -2587,81 +2735,145 @@ mod tests {
                 pending_injects: Vec::new(),
             });
         let sess_uuid = state.rest.sessions[0].id.clone();
-        let registry = state.rest.ext_agents.entry("test.ext".to_string()).or_default();
+        let registry = state
+            .rest
+            .ext_agents
+            .entry("test.ext".to_string())
+            .or_default();
         let ext_running = registry.insert(sess_uuid.clone(), 3, false);
         let ext_done = registry.insert(sess_uuid.clone(), 4, false);
         let ext_queued = registry.insert(sess_uuid, 5, false);
 
         // Running → delivered.
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsOrchestrate], "agents.send",
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "agents.send",
             json!({ "agentId": ext_running, "message": "focus on the parser" }),
         );
-        assert_eq!(out.get("sent").and_then(|v| v.as_bool()), Some(true), "running send must report sent, got {out}");
-        assert!(out.get("status").is_none(), "a running send is not queued, got {out}");
+        assert_eq!(
+            out.get("sent").and_then(|v| v.as_bool()),
+            Some(true),
+            "running send must report sent, got {out}"
+        );
+        assert!(
+            out.get("status").is_none(),
+            "a running send is not queued, got {out}"
+        );
 
         // Queued → stashed + status:queued, and the message lands in pending_injects.
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsOrchestrate], "agents.send",
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "agents.send",
             json!({ "agentId": ext_queued, "message": "also check tests" }),
         );
-        assert_eq!(out.get("sent").and_then(|v| v.as_bool()), Some(true), "queued send must report sent, got {out}");
-        assert_eq!(out.get("status").and_then(|v| v.as_str()), Some("queued"), "queued send must mark queued, got {out}");
+        assert_eq!(
+            out.get("sent").and_then(|v| v.as_bool()),
+            Some(true),
+            "queued send must report sent, got {out}"
+        );
+        assert_eq!(
+            out.get("status").and_then(|v| v.as_str()),
+            Some("queued"),
+            "queued send must mark queued, got {out}"
+        );
         let pend = state.rest.sessions[0]
             .pending_subagents
             .iter()
             .find(|p| p.id == 5)
             .expect("queued agent still present");
-        assert_eq!(pend.pending_injects, vec!["also check tests".to_string()], "queued send must stash the message");
+        assert_eq!(
+            pend.pending_injects,
+            vec!["also check tests".to_string()],
+            "queued send must stash the message"
+        );
 
         // Terminal → refused (nothing delivered).
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsOrchestrate], "agents.send",
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "agents.send",
             json!({ "agentId": ext_done, "message": "too late" }),
         );
-        assert_eq!(out.get("error").and_then(|v| v.as_str()), Some("agent is terminal"), "terminal send must refuse, got {out}");
+        assert_eq!(
+            out.get("error").and_then(|v| v.as_str()),
+            Some("agent is terminal"),
+            "terminal send must refuse, got {out}"
+        );
 
         // Unknown ext id → unknown agentId.
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsOrchestrate], "agents.send",
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "agents.send",
             json!({ "agentId": 9999, "message": "x" }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown agentId")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("unknown agentId")),
             "unknown id must error, got {out}"
         );
 
         // Missing agentId / empty message → their own validation errors.
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsOrchestrate], "agents.send", json!({ "message": "x" }),
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "agents.send",
+            json!({ "message": "x" }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires an 'agentId'")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("requires an 'agentId'")),
             "missing agentId must error, got {out}"
         );
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsOrchestrate], "agents.send",
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsOrchestrate],
+            "agents.send",
             json!({ "agentId": ext_running, "message": "   " }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'message'")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("non-empty 'message'")),
             "empty message must error, got {out}"
         );
 
         // Orchestrate-gated: a read-only grant is denied outright.
         let out = call_broker(
-            &mut state, rt.handle(), &client, "test.ext",
-            &[Grant::AgentsRead], "agents.send",
+            &mut state,
+            rt.handle(),
+            &client,
+            "test.ext",
+            &[Grant::AgentsRead],
+            "agents.send",
             json!({ "agentId": ext_running, "message": "x" }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "read-only grant must deny agents.send, got {out}"
         );
     }
@@ -2683,7 +2895,9 @@ mod tests {
             json!({}),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "empty grants must deny agents.list, got {out}"
         );
     }
@@ -2700,9 +2914,12 @@ mod tests {
         let mut state = fixture_state();
         let client: Option<Arc<OpenRouterClient>> = None;
 
-        state.rest.sessions[0]
-            .subagents
-            .push(inert_subagent(rt.handle(), 7, "general", SubAgentStatus::Running));
+        state.rest.sessions[0].subagents.push(inert_subagent(
+            rt.handle(),
+            7,
+            "general",
+            SubAgentStatus::Running,
+        ));
         state.rest.sessions[0].subagents.push(inert_subagent(
             rt.handle(),
             9,
@@ -2710,7 +2927,11 @@ mod tests {
             SubAgentStatus::Done("the answer is 42".to_string()),
         ));
         let sess_uuid = state.rest.sessions[0].id.clone();
-        let registry = state.rest.ext_agents.entry("test.ext".to_string()).or_default();
+        let registry = state
+            .rest
+            .ext_agents
+            .entry("test.ext".to_string())
+            .or_default();
         let ext_id_running = registry.insert(sess_uuid.clone(), 7, false);
         let ext_id_done = registry.insert(sess_uuid, 9, false);
 
@@ -2770,7 +2991,10 @@ mod tests {
             json!({ "agentId": 999 }),
         );
         assert!(
-            unknown.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown agentId")),
+            unknown
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("unknown agentId")),
             "unknown agentId must be an error, got {unknown}"
         );
     }
@@ -2782,9 +3006,12 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().expect("build runtime");
         let mut state = fixture_state();
         let client: Option<Arc<OpenRouterClient>> = None;
-        state.rest.sessions[0]
-            .subagents
-            .push(inert_subagent(rt.handle(), 3, "general", SubAgentStatus::Running));
+        state.rest.sessions[0].subagents.push(inert_subagent(
+            rt.handle(),
+            3,
+            "general",
+            SubAgentStatus::Running,
+        ));
         let sess_uuid = state.rest.sessions[0].id.clone();
         let ext_agent_id = state
             .rest
@@ -2804,11 +3031,17 @@ mod tests {
             json!({ "agentId": ext_agent_id }),
         );
         assert!(
-            denied.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            denied
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "kill must require orchestrate, got {denied}"
         );
         assert!(
-            matches!(state.rest.sessions[0].subagents[0].status, SubAgentStatus::Running),
+            matches!(
+                state.rest.sessions[0].subagents[0].status,
+                SubAgentStatus::Running
+            ),
             "a denied kill must leave the sub-agent running"
         );
 
@@ -2825,7 +3058,10 @@ mod tests {
         );
         assert_eq!(killed, json!({ "killed": true }));
         assert!(
-            matches!(state.rest.sessions[0].subagents[0].status, SubAgentStatus::Killed),
+            matches!(
+                state.rest.sessions[0].subagents[0].status,
+                SubAgentStatus::Killed
+            ),
             "an orchestrated kill marks the sub-agent Killed"
         );
     }
@@ -2851,9 +3087,12 @@ mod tests {
 
         // Session A (fixture's sole session, index 0): the extension's REAL spawn
         // target, local id 5, Running.
-        state.rest.sessions[0]
-            .subagents
-            .push(inert_subagent(rt.handle(), 5, "general", SubAgentStatus::Running));
+        state.rest.sessions[0].subagents.push(inert_subagent(
+            rt.handle(),
+            5,
+            "general",
+            SubAgentStatus::Running,
+        ));
         let session_a_uuid = state.rest.sessions[0].id.clone();
 
         // Session B: an unrelated (e.g. user-spawned) second session that happens
@@ -2897,11 +3136,13 @@ mod tests {
         );
         assert_eq!(status["agentId"], json!(ext_agent_id));
         assert_eq!(
-            status["agent"], json!("general"),
+            status["agent"],
+            json!("general"),
             "must resolve session A's sub-agent, not session B's, got {status}"
         );
         assert_eq!(
-            status["status"], json!("running"),
+            status["status"],
+            json!("running"),
             "must resolve session A's sub-agent, not session B's, got {status}"
         );
 
@@ -2917,11 +3158,17 @@ mod tests {
         );
         assert_eq!(killed, json!({ "killed": true }));
         assert!(
-            matches!(state.rest.sessions[0].subagents[0].status, SubAgentStatus::Killed),
+            matches!(
+                state.rest.sessions[0].subagents[0].status,
+                SubAgentStatus::Killed
+            ),
             "kill must land on session A's sub-agent"
         );
         assert!(
-            matches!(state.rest.sessions[1].subagents[0].status, SubAgentStatus::Done(_)),
+            matches!(
+                state.rest.sessions[1].subagents[0].status,
+                SubAgentStatus::Done(_)
+            ),
             "session B's unrelated sub-agent (same raw local id) must be untouched"
         );
 
@@ -2966,7 +3213,10 @@ mod tests {
             json!({ "session": "x" }),
         );
         assert!(
-            denied.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            denied
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "sessions.switch without sessions:manage must be denied, got {denied}"
         );
 
@@ -2983,7 +3233,10 @@ mod tests {
             json!({}),
         );
         assert!(
-            reached.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("requires a 'session'")),
+            reached
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("requires a 'session'")),
             "a granted sessions.switch reaches its real handler's validation, got {reached}"
         );
 
@@ -2998,7 +3251,10 @@ mod tests {
             json!({}),
         );
         assert!(
-            cross.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            cross
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "orchestrate must NOT unlock chat.prompt, got {cross}"
         );
 
@@ -3013,7 +3269,10 @@ mod tests {
             json!({}),
         );
         assert!(
-            bogus.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown method")),
+            bogus
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("unknown method")),
             "sessions.bogus must be UnknownMethod even with the family grant, got {bogus}"
         );
     }
@@ -3060,7 +3319,10 @@ mod tests {
         // Same local id (5) registered against two DIFFERENT sessions.
         let ext_id_a = registry.insert(session_a.clone(), 5, true);
         let ext_id_b = registry.insert(session_b.clone(), 5, false);
-        assert_ne!(ext_id_a, ext_id_b, "distinct ext-facing ids even for the same local id");
+        assert_ne!(
+            ext_id_a, ext_id_b,
+            "distinct ext-facing ids even for the same local id"
+        );
 
         let (found_a, notify_a) = registry
             .find_by_location(&session_a, 5)
@@ -3098,7 +3360,10 @@ mod tests {
 
         // Blank text → rejected, nothing buffered.
         let blank = prompt(&mut state, "   ");
-        assert!(blank.get("error").is_some(), "blank text must be rejected, got {blank}");
+        assert!(
+            blank.get("error").is_some(),
+            "blank text must be rejected, got {blank}"
+        );
         assert!(state.rest.sessions[0].pending_ext_prompts.is_empty());
 
         // First accepted → queued: 1. Consecutive dup → still 1, NO growth.
@@ -3115,12 +3380,17 @@ mod tests {
         // 6th distinct → cap error; buffer stays at 5.
         let full = prompt(&mut state, "six");
         assert!(
-            full.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("queue full")),
+            full.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("queue full")),
             "the 6th distinct prompt must hit the cap, got {full}"
         );
         assert_eq!(state.rest.sessions[0].pending_ext_prompts.len(), 5);
         assert!(
-            state.rest.sessions[0].pending_ext_prompts.iter().all(|(id, _)| id == "test.ext"),
+            state.rest.sessions[0]
+                .pending_ext_prompts
+                .iter()
+                .all(|(id, _)| id == "test.ext"),
             "every buffered entry must carry the caller's ext id"
         );
 
@@ -3137,7 +3407,10 @@ mod tests {
             json!({ "text": big }),
         );
         assert!(
-            toobig.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("16KB")),
+            toobig
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("16KB")),
             "a >16KB prompt must be rejected, got {toobig}"
         );
         assert!(fresh.rest.sessions[0].pending_ext_prompts.is_empty());
@@ -3164,7 +3437,9 @@ mod tests {
             json!({ "text": "please respond" }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("turn budget exhausted")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("turn budget exhausted")),
             "at budget must be refused, got {out}"
         );
         assert!(
@@ -3184,7 +3459,11 @@ mod tests {
             "chat.prompt",
             json!({ "text": "please respond" }),
         );
-        assert_eq!(out, json!({ "queued": 1 }), "below budget must be accepted, got {out}");
+        assert_eq!(
+            out,
+            json!({ "queued": 1 }),
+            "below budget must be accepted, got {out}"
+        );
         assert_eq!(below_budget.rest.sessions[0].pending_ext_prompts.len(), 1);
     }
 
@@ -3209,26 +3488,53 @@ mod tests {
         };
 
         // 8192 bytes EXACTLY → OK (boundary).
-        assert_eq!(set(&mut state, "a.ext", "x".repeat(8192)), json!({ "ok": true }));
-        assert_eq!(state.rest.ext_context.get("a.ext").map(String::len), Some(8192));
+        assert_eq!(
+            set(&mut state, "a.ext", "x".repeat(8192)),
+            json!({ "ok": true })
+        );
+        assert_eq!(
+            state.rest.ext_context.get("a.ext").map(String::len),
+            Some(8192)
+        );
 
         // 8193 bytes → rejected; the prior blob is UNCHANGED.
         let toobig = set(&mut state, "a.ext", "y".repeat(8193));
         assert!(
-            toobig.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("8KB")),
+            toobig
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("8KB")),
             "8193 bytes must be rejected, got {toobig}"
         );
-        assert_eq!(state.rest.ext_context.get("a.ext").map(String::len), Some(8192));
+        assert_eq!(
+            state.rest.ext_context.get("a.ext").map(String::len),
+            Some(8192)
+        );
 
         // A DIFFERENT ext writes its OWN blob — a.ext's is untouched (isolation).
-        assert_eq!(set(&mut state, "b.ext", "b-data".to_string()), json!({ "ok": true }));
-        assert_eq!(state.rest.ext_context.get("a.ext").map(String::len), Some(8192));
-        assert_eq!(state.rest.ext_context.get("b.ext").map(String::as_str), Some("b-data"));
+        assert_eq!(
+            set(&mut state, "b.ext", "b-data".to_string()),
+            json!({ "ok": true })
+        );
+        assert_eq!(
+            state.rest.ext_context.get("a.ext").map(String::len),
+            Some(8192)
+        );
+        assert_eq!(
+            state.rest.ext_context.get("b.ext").map(String::as_str),
+            Some("b-data")
+        );
 
         // Blank text CLEARS the caller's OWN entry only.
-        assert_eq!(set(&mut state, "a.ext", "   ".to_string()), json!({ "ok": true }));
+        assert_eq!(
+            set(&mut state, "a.ext", "   ".to_string()),
+            json!({ "ok": true })
+        );
         assert!(state.rest.ext_context.get("a.ext").is_none());
-        assert_eq!(state.rest.ext_context.get("b.ext").map(String::as_str), Some("b-data"));
+        assert_eq!(
+            state.rest.ext_context.get("b.ext").map(String::as_str),
+            Some("b-data")
+        );
 
         // context.clear removes the caller's entry, leaving others intact.
         let cleared = call_broker(
@@ -3279,24 +3585,36 @@ mod tests {
         // Unknown role → error.
         let bad_role = invoke(&mut state, json!({ "role": "wizard", "prompt": "hi" }));
         assert!(
-            bad_role.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unknown role")),
+            bad_role
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("unknown role")),
             "an unknown role must error, got {bad_role}"
         );
 
         // Empty prompt → error.
         let empty = invoke(&mut state, json!({ "prompt": "   " }));
-        assert!(empty.get("error").is_some(), "an empty prompt must error, got {empty}");
+        assert!(
+            empty.get("error").is_some(),
+            "an empty prompt must error, got {empty}"
+        );
 
         // >32KB prompt → error.
         let big = invoke(&mut state, json!({ "prompt": "x".repeat(32_769) }));
-        assert!(big.get("error").is_some(), "a >32KB prompt must error, got {big}");
+        assert!(
+            big.get("error").is_some(),
+            "a >32KB prompt must error, got {big}"
+        );
 
         // Valid role + prompt but NO client (the fixture has none) → "no llm client".
         // role=main resolves to koma-free (routable + usable), so validation reaches
         // the client check rather than short-circuiting on the route.
         let no_client = invoke(&mut state, json!({ "role": "main", "prompt": "hi" }));
         assert!(
-            no_client.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("no llm client")),
+            no_client
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("no llm client")),
             "a missing client must error, got {no_client}"
         );
     }
@@ -3348,13 +3666,21 @@ mod tests {
         assert_eq!(arr[0]["name"], json!("Live One"));
         assert_eq!(arr[0]["workdir"], json!("/w/1"));
         assert_eq!(arr[0]["live"], json!(true));
-        assert_eq!(arr[0]["working"], json!(true), "live row reports the daemon's working flag");
+        assert_eq!(
+            arr[0]["working"],
+            json!(true),
+            "live row reports the daemon's working flag"
+        );
         assert_eq!(arr[1]["id"], json!("dead-1"));
         assert_eq!(arr[1]["live"], json!(false));
         assert_eq!(arr[1]["working"], json!(false), "dead row is never working");
         // Live-but-unregistered appended with a null name.
         assert_eq!(arr[2]["id"], json!("ghost"));
-        assert_eq!(arr[2]["name"], Value::Null, "unregistered live session has no name");
+        assert_eq!(
+            arr[2]["name"],
+            Value::Null,
+            "unregistered live session has no name"
+        );
         assert_eq!(arr[2]["workdir"], json!("/w/ghost"));
         assert_eq!(arr[2]["live"], json!(true));
         assert_eq!(arr[2]["working"], json!(false));
@@ -3396,7 +3722,10 @@ mod tests {
     /// `Ok(Some)`.
     #[test]
     fn parse_create_workdir_validation() {
-        assert!(matches!(parse_create_workdir(&json!({})), Ok(None)), "missing workdir → None");
+        assert!(
+            matches!(parse_create_workdir(&json!({})), Ok(None)),
+            "missing workdir → None"
+        );
         assert!(
             matches!(parse_create_workdir(&json!({ "workdir": "   " })), Ok(None)),
             "blank workdir → None"
@@ -3411,11 +3740,17 @@ mod tests {
             .is_some_and(|e| e.contains("absolute")));
 
         let missing = parse_create_workdir(&json!({ "workdir": "/no/such/koma/test/dir/xyz" }));
-        assert!(missing.is_err(), "an absolute non-existent path must be rejected");
+        assert!(
+            missing.is_err(),
+            "an absolute non-existent path must be rejected"
+        );
 
         let dir = std::env::temp_dir();
         let ok = parse_create_workdir(&json!({ "workdir": dir.to_str().unwrap() }));
-        assert!(matches!(ok, Ok(Some(_))), "an absolute existing dir must pass, got {ok:?}");
+        assert!(
+            matches!(ok, Ok(Some(_))),
+            "an absolute existing dir must pass, got {ok:?}"
+        );
     }
 
     /// `sessions.switch` (fully sync): a LIVE local session uuid actually moves the
@@ -3444,7 +3779,10 @@ mod tests {
             json!({ "session": b_uuid }),
         );
         assert_eq!(local, json!({ "ok": true, "delivery": "local" }));
-        assert_eq!(state.rest.foreground, 1, "a local switch moves the foreground");
+        assert_eq!(
+            state.rest.foreground, 1,
+            "a local switch moves the foreground"
+        );
         assert!(
             state.rest.ext_switch_pending.is_none(),
             "a local switch must NOT latch an attach signal"
@@ -3466,7 +3804,10 @@ mod tests {
             Some("no-such-session"),
             "a remote switch latches the attach signal"
         );
-        assert_eq!(state.rest.foreground, 1, "a signaled switch must NOT move local foreground");
+        assert_eq!(
+            state.rest.foreground, 1,
+            "a signaled switch must NOT move local foreground"
+        );
     }
 
     /// `sessions.spawn_into` LOCAL branch: a two-session fixture, spawning into the
@@ -3493,9 +3834,12 @@ mod tests {
             crate::model::conversation::Conversation::new(""),
         ));
         for i in 0..crate::app::subagent::MAX_SUBAGENTS {
-            session_b
-                .subagents
-                .push(inert_subagent(rt.handle(), i, "general", SubAgentStatus::Running));
+            session_b.subagents.push(inert_subagent(
+                rt.handle(),
+                i,
+                "general",
+                SubAgentStatus::Running,
+            ));
         }
         session_b.next_subagent_id = crate::app::subagent::MAX_SUBAGENTS;
         state.rest.sessions.push(session_b);
@@ -3539,7 +3883,10 @@ mod tests {
             json!({ "task": "x" }),
         );
         assert!(
-            no_session.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("'session'")),
+            no_session
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("'session'")),
             "a missing session must error, got {no_session}"
         );
         let empty_task = call_broker(
@@ -3552,7 +3899,10 @@ mod tests {
             json!({ "session": b_uuid, "task": "   " }),
         );
         assert!(
-            empty_task.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("non-empty 'task'")),
+            empty_task
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("non-empty 'task'")),
             "an empty task must error, got {empty_task}"
         );
     }
@@ -3589,7 +3939,9 @@ mod tests {
             &json!({ "models": [{ "id": "m1", "name": "M1" }] }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("no connected oauth account")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("no connected oauth account")),
             "got {out}"
         );
         assert!(config.models.is_empty());
@@ -3606,7 +3958,9 @@ mod tests {
             &json!({ "models": [{ "id": "m1", "name": "M1" }] }),
         );
         assert!(
-            out.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("account-login only")),
+            out.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("account-login only")),
             "got {out}"
         );
         assert!(config.models.is_empty());
@@ -3627,9 +3981,21 @@ mod tests {
         assert_eq!(out["registered"], json!(2));
         assert_eq!(out["uuids"].as_array().unwrap().len(), 2);
         assert_eq!(config.models.len(), 2);
-        assert!(config.models.iter().all(|m| m.provider_uuid == "conn-a"), "served by the ext conn");
-        assert!(config.models.iter().all(|m| m.roles.is_empty()), "ext models hold no runtime role");
-        let fast_uuid = config.models.iter().find(|m| m.model_id == "fast").unwrap().uuid.clone();
+        assert!(
+            config.models.iter().all(|m| m.provider_uuid == "conn-a"),
+            "served by the ext conn"
+        );
+        assert!(
+            config.models.iter().all(|m| m.roles.is_empty()),
+            "ext models hold no runtime role"
+        );
+        let fast_uuid = config
+            .models
+            .iter()
+            .find(|m| m.model_id == "fast")
+            .unwrap()
+            .uuid
+            .clone();
 
         // Re-register "fast" with a NEW name → same uuid returned, name updated, no new entry.
         let out2 = apply_models_register(
@@ -3638,7 +4004,11 @@ mod tests {
             &json!({ "models": [{ "id": "fast", "name": "Faster" }] }),
         );
         assert_eq!(out2["registered"], json!(1));
-        assert_eq!(out2["uuids"][0], json!(fast_uuid), "dedupe returns the STABLE uuid");
+        assert_eq!(
+            out2["uuids"][0],
+            json!(fast_uuid),
+            "dedupe returns the STABLE uuid"
+        );
         assert_eq!(config.models.len(), 2, "no new entry minted on re-register");
         let fast = config.models.iter().find(|m| m.model_id == "fast").unwrap();
         assert_eq!(fast.name, "Faster", "name updated in place");
@@ -3651,13 +4021,20 @@ mod tests {
         let mut config = AppConfig::default();
         config.oauth_conns.push(ext_conn("conn-a", "my.ext", true));
 
-        let big: Vec<Value> = (0..101).map(|i| json!({ "id": format!("m{i}"), "name": "n" })).collect();
+        let big: Vec<Value> = (0..101)
+            .map(|i| json!({ "id": format!("m{i}"), "name": "n" }))
+            .collect();
         let over = apply_models_register(&mut config, "my.ext", &json!({ "models": big }));
         assert!(
-            over.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("too many models")),
+            over.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("too many models")),
             "got {over}"
         );
-        assert!(config.models.is_empty(), "an over-cap batch registers nothing");
+        assert!(
+            config.models.is_empty(),
+            "an over-cap batch registers nothing"
+        );
 
         // One empty id → the whole batch is rejected (atomic), nothing registered.
         let bad = apply_models_register(
@@ -3665,8 +4042,14 @@ mod tests {
             "my.ext",
             &json!({ "models": [{ "id": "ok", "name": "OK" }, { "id": "", "name": "Bad" }] }),
         );
-        assert!(bad.get("error").is_some(), "an empty id rejects the whole batch, got {bad}");
-        assert!(config.models.is_empty(), "a batch with one bad entry registers NONE (atomic)");
+        assert!(
+            bad.get("error").is_some(),
+            "an empty id rejects the whole batch, got {bad}"
+        );
+        assert!(
+            config.models.is_empty(),
+            "a batch with one bad entry registers NONE (atomic)"
+        );
     }
 
     /// Ownership wall + `ids` filter: a two-ext fixture proves ext A can NEVER remove ext B's
@@ -3682,19 +4065,30 @@ mod tests {
             "ext.a",
             &json!({ "models": [{ "id": "a1", "name": "A1" }, { "id": "a2", "name": "A2" }] }),
         );
-        apply_models_register(&mut config, "ext.b", &json!({ "models": [{ "id": "b1", "name": "B1" }] }));
+        apply_models_register(
+            &mut config,
+            "ext.b",
+            &json!({ "models": [{ "id": "b1", "name": "B1" }] }),
+        );
         assert_eq!(config.models.len(), 3);
 
         // ext A tries to unregister B's model by id → the ownership wall blocks it (0 removed).
         let blocked = apply_models_unregister(&mut config, "ext.a", &json!({ "ids": ["b1"] }));
-        assert_eq!(blocked["removed"], json!(0), "ext A cannot touch ext B's entry");
+        assert_eq!(
+            blocked["removed"],
+            json!(0),
+            "ext A cannot touch ext B's entry"
+        );
         assert_eq!(config.models.len(), 3);
 
         // ext A unregister with ids ABSENT → removes ALL of A's (2); B's untouched.
         let all_a = apply_models_unregister(&mut config, "ext.a", &json!({}));
         assert_eq!(all_a["removed"], json!(2));
         assert_eq!(config.models.len(), 1);
-        assert_eq!(config.models[0].model_id, "b1", "only ext B's entry remains");
+        assert_eq!(
+            config.models[0].model_id, "b1",
+            "only ext B's entry remains"
+        );
 
         // ext B unregister by specific model_id (case-insensitive) → removes it.
         let b_by_id = apply_models_unregister(&mut config, "ext.b", &json!({ "ids": ["B1"] }));
@@ -3738,7 +4132,10 @@ mod tests {
             json!({ "models": [] }),
         );
         assert!(
-            denied.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("grant denied")),
+            denied
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("grant denied")),
             "models:invoke must NOT unlock models.register, got {denied}"
         );
 
@@ -3753,7 +4150,10 @@ mod tests {
             json!({ "models": [] }),
         );
         assert!(
-            reached.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("at least one model")),
+            reached
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("at least one model")),
             "a granted models.register reaches its handler, got {reached}"
         );
     }
@@ -3791,7 +4191,11 @@ mod tests {
         let uuid = out["uuid"].as_str().expect("uuid replied").to_string();
         assert_eq!(config.providers.len(), 1);
         let p = &config.providers[0];
-        assert_eq!(p.ext_id.as_deref(), Some("my.ext"), "stamped with the caller's ext id");
+        assert_eq!(
+            p.ext_id.as_deref(),
+            Some("my.ext"),
+            "stamped with the caller's ext id"
+        );
         assert_eq!(p.api_type, ApiType::OpenAiCompatible);
         assert_eq!(p.api_key, "sk-1");
 
@@ -3801,7 +4205,11 @@ mod tests {
             "my.ext",
             &json!({ "name": "Gateway", "endpoint": "https://api.gw.test/v2", "api_type": "anthropic", "key": "sk-2" }),
         );
-        assert_eq!(out2["uuid"].as_str(), Some(uuid.as_str()), "key-rotation keeps the uuid");
+        assert_eq!(
+            out2["uuid"].as_str(),
+            Some(uuid.as_str()),
+            "key-rotation keeps the uuid"
+        );
         assert_eq!(config.providers.len(), 1, "no new entry on rotation");
         let p = &config.providers[0];
         assert_eq!(p.api_key, "sk-2");
@@ -3815,12 +4223,34 @@ mod tests {
     fn providers_register_rejects_bad_input() {
         let mut config = AppConfig::default();
         let mut bad = |p: Value| apply_providers_register(&mut config, "my.ext", &p);
-        assert!(bad(json!({ "name": "  ", "endpoint": "https://x.test", "api_type": "openai", "key": "k" })).get("error").is_some());
-        assert!(bad(json!({ "name": "G", "endpoint": "not a url", "api_type": "openai", "key": "k" })).get("error").is_some());
-        assert!(bad(json!({ "name": "G", "endpoint": "ftp://x.test", "api_type": "openai", "key": "k" })).get("error").is_some(), "non-http scheme rejected");
+        assert!(bad(
+            json!({ "name": "  ", "endpoint": "https://x.test", "api_type": "openai", "key": "k" })
+        )
+        .get("error")
+        .is_some());
+        assert!(bad(
+            json!({ "name": "G", "endpoint": "not a url", "api_type": "openai", "key": "k" })
+        )
+        .get("error")
+        .is_some());
+        assert!(
+            bad(
+                json!({ "name": "G", "endpoint": "ftp://x.test", "api_type": "openai", "key": "k" })
+            )
+            .get("error")
+            .is_some(),
+            "non-http scheme rejected"
+        );
         assert!(bad(json!({ "name": "G", "endpoint": "https://x.test", "api_type": "codex", "key": "k" })).get("error").is_some(), "koma-free/codex wire types not injectable");
-        assert!(bad(json!({ "name": "G", "endpoint": "https://x.test", "api_type": "openai", "key": "  " })).get("error").is_some());
-        assert!(config.providers.is_empty(), "no invalid provider is ever stored");
+        assert!(bad(
+            json!({ "name": "G", "endpoint": "https://x.test", "api_type": "openai", "key": "  " })
+        )
+        .get("error")
+        .is_some());
+        assert!(
+            config.providers.is_empty(),
+            "no invalid provider is ever stored"
+        );
     }
 
     /// providers.unregister enforces the ownership wall (never another ext's / a native
@@ -3829,15 +4259,24 @@ mod tests {
     #[test]
     fn providers_unregister_ownership_wall_and_orphan_sweep() {
         let mut config = AppConfig::default();
-        config.providers.push(ext_key_provider("p-a1", "ext.a", "A1"));
-        config.providers.push(ext_key_provider("p-a2", "ext.a", "A2"));
+        config
+            .providers
+            .push(ext_key_provider("p-a1", "ext.a", "A1"));
+        config
+            .providers
+            .push(ext_key_provider("p-a2", "ext.a", "A2"));
         config.providers.push(ext_key_provider("p-b", "ext.b", "B"));
         config.providers.push(ProviderConn {
             uuid: "p-native".to_string(),
             name: "native".to_string(),
             ..Default::default()
         });
-        for (u, prov) in [("m-a1", "p-a1"), ("m-a2", "p-a2"), ("m-b", "p-b"), ("m-native", "p-native")] {
+        for (u, prov) in [
+            ("m-a1", "p-a1"),
+            ("m-a2", "p-a2"),
+            ("m-b", "p-b"),
+            ("m-native", "p-native"),
+        ] {
             config.models.push(ModelEntry {
                 uuid: u.to_string(),
                 provider_uuid: prov.to_string(),
@@ -3846,24 +4285,47 @@ mod tests {
         }
 
         // ext A can never remove B's or native providers (ownership wall).
-        let (blocked, _, _) = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["p-b", "p-native"] }));
+        let (blocked, _, _) = apply_providers_unregister(
+            &mut config,
+            "ext.a",
+            &json!({ "ids": ["p-b", "p-native"] }),
+        );
         assert_eq!(blocked["removed"], json!(0));
         assert_eq!(config.providers.len(), 4);
 
         // ext A remove by NAME (case-insensitive) → removes A1 + its orphaned model only.
-        let (by_name, _, _) = apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["a1"] }));
+        let (by_name, _, _) =
+            apply_providers_unregister(&mut config, "ext.a", &json!({ "ids": ["a1"] }));
         assert_eq!(by_name["removed"], json!(1));
         assert!(config.providers.iter().all(|p| p.uuid != "p-a1"));
-        assert!(config.models.iter().all(|m| m.provider_uuid != "p-a1"), "orphaned model swept");
-        assert!(config.models.iter().any(|m| m.uuid == "m-a2"), "A2's model survives");
+        assert!(
+            config.models.iter().all(|m| m.provider_uuid != "p-a1"),
+            "orphaned model swept"
+        );
+        assert!(
+            config.models.iter().any(|m| m.uuid == "m-a2"),
+            "A2's model survives"
+        );
 
         // ext A remove ALL (ids absent) → removes A2 + its model; B + native untouched.
         let (all_a, _, _) = apply_providers_unregister(&mut config, "ext.a", &json!({}));
         assert_eq!(all_a["removed"], json!(1));
-        assert!(config.providers.iter().all(|p| p.ext_id.as_deref() != Some("ext.a")));
-        assert!(config.providers.iter().any(|p| p.uuid == "p-b"), "B untouched");
-        assert!(config.providers.iter().any(|p| p.uuid == "p-native"), "native untouched");
-        assert!(config.models.iter().any(|m| m.uuid == "m-native"), "native model untouched");
+        assert!(config
+            .providers
+            .iter()
+            .all(|p| p.ext_id.as_deref() != Some("ext.a")));
+        assert!(
+            config.providers.iter().any(|p| p.uuid == "p-b"),
+            "B untouched"
+        );
+        assert!(
+            config.providers.iter().any(|p| p.uuid == "p-native"),
+            "native untouched"
+        );
+        assert!(
+            config.models.iter().any(|m| m.uuid == "m-native"),
+            "native model untouched"
+        );
     }
 
     /// models.register anchors on a KEY-BACKED ext provider when that's the ext's only anchor
@@ -3871,11 +4333,20 @@ mod tests {
     #[test]
     fn models_register_anchors_on_key_backed_provider() {
         let mut config = AppConfig::default();
-        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
-        let out = apply_models_register(&mut config, "my.ext", &json!({ "models": [{ "id": "m1", "name": "M1" }] }));
+        config
+            .providers
+            .push(ext_key_provider("p-a", "my.ext", "GW"));
+        let out = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "m1", "name": "M1" }] }),
+        );
         assert_eq!(out["registered"], json!(1));
         assert_eq!(config.models.len(), 1);
-        assert_eq!(config.models[0].provider_uuid, "p-a", "served by the key-backed provider");
+        assert_eq!(
+            config.models[0].provider_uuid, "p-a",
+            "served by the key-backed provider"
+        );
     }
 
     /// The explicit `{ provider }` param must be caller-owned; an account-login-only conn is
@@ -3883,35 +4354,72 @@ mod tests {
     #[test]
     fn models_register_provider_param_and_ambiguity() {
         let mut config = AppConfig::default();
-        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        config
+            .providers
+            .push(ext_key_provider("p-a", "my.ext", "GW"));
         config.oauth_conns.push(ext_conn("c-a", "my.ext", true)); // second usable anchor
-        config.oauth_conns.push(ext_conn("c-login", "my.ext", false)); // account-login-only
+        config
+            .oauth_conns
+            .push(ext_conn("c-login", "my.ext", false)); // account-login-only
 
         // Two eligible anchors + no provider param → ambiguous.
-        let ambiguous = apply_models_register(&mut config, "my.ext", &json!({ "models": [{ "id": "m", "name": "M" }] }));
+        let ambiguous = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [{ "id": "m", "name": "M" }] }),
+        );
         assert!(
-            ambiguous.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("multiple providers")),
+            ambiguous
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("multiple providers")),
             "got {ambiguous}"
         );
 
         // Explicit provider not owned → rejected.
-        let not_owned = apply_models_register(&mut config, "my.ext", &json!({ "provider": "someone-else", "models": [{ "id": "m", "name": "M" }] }));
+        let not_owned = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "provider": "someone-else", "models": [{ "id": "m", "name": "M" }] }),
+        );
         assert!(
-            not_owned.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("not owned")),
+            not_owned
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("not owned")),
             "got {not_owned}"
         );
 
         // Explicit account-login-only conn → rejected.
-        let login_only = apply_models_register(&mut config, "my.ext", &json!({ "provider": "c-login", "models": [{ "id": "m", "name": "M" }] }));
+        let login_only = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "provider": "c-login", "models": [{ "id": "m", "name": "M" }] }),
+        );
         assert!(
-            login_only.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("account-login only")),
+            login_only
+                .get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("account-login only")),
             "got {login_only}"
         );
 
         // Explicit owned key-backed provider → registers there.
-        let ok = apply_models_register(&mut config, "my.ext", &json!({ "provider": "p-a", "models": [{ "id": "m", "name": "M" }] }));
+        let ok = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "provider": "p-a", "models": [{ "id": "m", "name": "M" }] }),
+        );
         assert_eq!(ok["registered"], json!(1));
-        assert_eq!(config.models.iter().find(|m| m.model_id == "m").unwrap().provider_uuid, "p-a");
+        assert_eq!(
+            config
+                .models
+                .iter()
+                .find(|m| m.model_id == "m")
+                .unwrap()
+                .provider_uuid,
+            "p-a"
+        );
     }
 
     /// `default: true` records the ext's preferred model + echoes `defaultUuid`; more than one
@@ -3919,26 +4427,56 @@ mod tests {
     #[test]
     fn models_register_default_records_preferred() {
         let mut config = AppConfig::default();
-        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        config
+            .providers
+            .push(ext_key_provider("p-a", "my.ext", "GW"));
 
-        let two = apply_models_register(&mut config, "my.ext", &json!({ "models": [
+        let two = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [
             { "id": "a", "name": "A", "default": true },
             { "id": "b", "name": "B", "default": true },
-        ] }));
+        ] }),
+        );
         assert!(
-            two.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("multiple defaults")),
+            two.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("multiple defaults")),
             "got {two}"
         );
-        assert!(config.models.is_empty(), "a multi-default batch registers nothing");
+        assert!(
+            config.models.is_empty(),
+            "a multi-default batch registers nothing"
+        );
 
-        let out = apply_models_register(&mut config, "my.ext", &json!({ "models": [
+        let out = apply_models_register(
+            &mut config,
+            "my.ext",
+            &json!({ "models": [
             { "id": "a", "name": "A" },
             { "id": "b", "name": "B", "default": true },
-        ] }));
+        ] }),
+        );
         assert_eq!(out["registered"], json!(2));
         let du = out["defaultUuid"].as_str().expect("defaultUuid echoed");
-        assert_eq!(config.ext_preferred_models.get("my.ext").map(String::as_str), Some(du));
-        assert_eq!(config.models.iter().find(|m| m.model_id == "b").unwrap().uuid, du, "the flagged entry's uuid");
+        assert_eq!(
+            config
+                .ext_preferred_models
+                .get("my.ext")
+                .map(String::as_str),
+            Some(du)
+        );
+        assert_eq!(
+            config
+                .models
+                .iter()
+                .find(|m| m.model_id == "b")
+                .unwrap()
+                .uuid,
+            du,
+            "the flagged entry's uuid"
+        );
     }
 
     /// VACUUM-FILL: when Main is unset the preferred model is assigned Main (returns its name); a
@@ -3950,7 +4488,9 @@ mod tests {
 
         // Case 1: Main unset → fill.
         let mut config = AppConfig::default();
-        config.providers.push(ext_key_provider("p-a", "my.ext", "GW"));
+        config
+            .providers
+            .push(ext_key_provider("p-a", "my.ext", "GW"));
         config.models.push(ModelEntry {
             uuid: "m-pref".to_string(),
             name: "Big".to_string(),
@@ -3958,9 +4498,18 @@ mod tests {
             ..Default::default()
         });
         assert!(main_is_unset_or_free(&config, &settings));
-        assert_eq!(try_vacuum_fill_main(&mut config, &settings, "m-pref").as_deref(), Some("Big"));
+        assert_eq!(
+            try_vacuum_fill_main(&mut config, &settings, "m-pref").as_deref(),
+            Some("Big")
+        );
         assert!(
-            config.models.iter().find(|m| m.uuid == "m-pref").unwrap().effective_roles().contains(&ModelRole::Main),
+            config
+                .models
+                .iter()
+                .find(|m| m.uuid == "m-pref")
+                .unwrap()
+                .effective_roles()
+                .contains(&ModelRole::Main),
             "Main assigned"
         );
 
@@ -3990,7 +4539,12 @@ mod tests {
         assert!(!main_is_unset_or_free(&c2, &settings), "a real Main is set");
         assert_eq!(try_vacuum_fill_main(&mut c2, &settings, "m-pref"), None);
         assert!(
-            c2.models.iter().find(|m| m.uuid == "m-user").unwrap().effective_roles().contains(&ModelRole::Main),
+            c2.models
+                .iter()
+                .find(|m| m.uuid == "m-user")
+                .unwrap()
+                .effective_roles()
+                .contains(&ModelRole::Main),
             "user Main kept"
         );
 
@@ -4017,11 +4571,28 @@ mod tests {
             provider_uuid: "p-a".to_string(),
             ..Default::default()
         });
-        assert!(main_is_unset_or_free(&c3, &settings), "koma-free placeholder counts as unset");
-        assert_eq!(try_vacuum_fill_main(&mut c3, &settings, "m-pref").as_deref(), Some("Big"));
-        assert!(c3.models.iter().find(|m| m.uuid == "m-pref").unwrap().effective_roles().contains(&ModelRole::Main));
         assert!(
-            !c3.models.iter().find(|m| m.uuid == "kf").unwrap().effective_roles().contains(&ModelRole::Main),
+            main_is_unset_or_free(&c3, &settings),
+            "koma-free placeholder counts as unset"
+        );
+        assert_eq!(
+            try_vacuum_fill_main(&mut c3, &settings, "m-pref").as_deref(),
+            Some("Big")
+        );
+        assert!(c3
+            .models
+            .iter()
+            .find(|m| m.uuid == "m-pref")
+            .unwrap()
+            .effective_roles()
+            .contains(&ModelRole::Main));
+        assert!(
+            !c3.models
+                .iter()
+                .find(|m| m.uuid == "kf")
+                .unwrap()
+                .effective_roles()
+                .contains(&ModelRole::Main),
             "placeholder lost Main (per-role steal)"
         );
 
@@ -4069,9 +4640,17 @@ mod tests {
             !main_is_unset_or_free(&c4, &free_settings),
             "a session on /free must NOT expose a real global Main to a steal"
         );
-        assert_eq!(try_vacuum_fill_main(&mut c4, &free_settings, "m-pref"), None);
+        assert_eq!(
+            try_vacuum_fill_main(&mut c4, &free_settings, "m-pref"),
+            None
+        );
         assert!(
-            c4.models.iter().find(|m| m.uuid == "m-global").unwrap().effective_roles().contains(&ModelRole::Main),
+            c4.models
+                .iter()
+                .find(|m| m.uuid == "m-global")
+                .unwrap()
+                .effective_roles()
+                .contains(&ModelRole::Main),
             "the real global Main is kept"
         );
     }
@@ -4086,20 +4665,45 @@ mod tests {
         let settings = Settings::default();
 
         // ext A registers a default → vacuum-fill Main (simulate the wrapper: apply then fill).
-        let a = apply_models_register(&mut config, "ext.a", &json!({ "models": [{ "id": "am", "name": "Amodel", "default": true }] }));
+        let a = apply_models_register(
+            &mut config,
+            "ext.a",
+            &json!({ "models": [{ "id": "am", "name": "Amodel", "default": true }] }),
+        );
         let a_uuid = a["defaultUuid"].as_str().unwrap().to_string();
-        assert_eq!(try_vacuum_fill_main(&mut config, &settings, &a_uuid).as_deref(), Some("Amodel"));
+        assert_eq!(
+            try_vacuum_fill_main(&mut config, &settings, &a_uuid).as_deref(),
+            Some("Amodel")
+        );
 
         // ext B registers a default → Main is now A's (a real provider) → NO fill.
-        let b = apply_models_register(&mut config, "ext.b", &json!({ "models": [{ "id": "bm", "name": "Bmodel", "default": true }] }));
+        let b = apply_models_register(
+            &mut config,
+            "ext.b",
+            &json!({ "models": [{ "id": "bm", "name": "Bmodel", "default": true }] }),
+        );
         let b_uuid = b["defaultUuid"].as_str().unwrap().to_string();
-        assert_eq!(try_vacuum_fill_main(&mut config, &settings, &b_uuid), None, "second ext must not fight");
+        assert_eq!(
+            try_vacuum_fill_main(&mut config, &settings, &b_uuid),
+            None,
+            "second ext must not fight"
+        );
 
         // Main still A's; BOTH preferences recorded (B's drives the `recommendedBy` hint).
-        let main = config.models.iter().find(|m| m.effective_roles().contains(&ModelRole::Main)).unwrap();
+        let main = config
+            .models
+            .iter()
+            .find(|m| m.effective_roles().contains(&ModelRole::Main))
+            .unwrap();
         assert_eq!(main.model_id, "am");
-        assert_eq!(config.ext_preferred_models.get("ext.a").map(String::as_str), Some(a_uuid.as_str()));
-        assert_eq!(config.ext_preferred_models.get("ext.b").map(String::as_str), Some(b_uuid.as_str()));
+        assert_eq!(
+            config.ext_preferred_models.get("ext.a").map(String::as_str),
+            Some(a_uuid.as_str())
+        );
+        assert_eq!(
+            config.ext_preferred_models.get("ext.b").map(String::as_str),
+            Some(b_uuid.as_str())
+        );
     }
 }
 

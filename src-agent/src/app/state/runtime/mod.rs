@@ -266,12 +266,14 @@ pub struct SessionRuntime {
     /// Cloned into each spawned classify task (the sender is `Send`, so it can fire
     /// from the tokio task). Lazily created (with `classify_rx`) the first time a
     /// risky tool is classified in a session, then reused. `None` until then.
-    pub classify_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, crate::app::harness::Verdict)>>,
+    pub classify_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<(String, crate::app::harness::Verdict)>>,
     /// Receiver half of the TAC-classify verdict channel. Drained each event-loop
     /// tick: a verdict whose id matches the parked call at `tool_idx` is staged in
     /// `pending_classify_verdict` and the round resumes; any other (stale) delivery
     /// is dropped. `None` until the first risky tool is classified.
-    pub classify_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, crate::app::harness::Verdict)>>,
+    pub classify_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<(String, crate::app::harness::Verdict)>>,
     /// The verdict the classifier produced for the parked call, staged by the
     /// event-loop drain for `process_tools` to consume on re-entry: `(tool_call_id,
     /// verdict)`. `process_tools` takes it when the id matches the current call and
@@ -754,5 +756,4 @@ impl SessionRuntime {
         self.next_bash_job_id += 1;
         id
     }
-
 }

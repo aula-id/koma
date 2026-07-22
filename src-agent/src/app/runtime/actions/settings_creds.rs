@@ -34,7 +34,10 @@ pub(super) fn provider_name_from_endpoint(endpoint: &str) -> String {
         .unwrap_or(endpoint);
     // Drop any userinfo (`user:pass@host`), then cut at the first path/port/query
     // delimiter to isolate the host.
-    let authority = after_scheme.rsplit_once('@').map(|(_, h)| h).unwrap_or(after_scheme);
+    let authority = after_scheme
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(after_scheme);
     let host = authority
         .split(['/', ':', '?', '#'])
         .next()
@@ -169,8 +172,8 @@ pub(super) fn handle_save_creds(
         state.rest.load_token_totals(fg, &p);
     }
     state.rest.prev_session = None; // committed; discard fallback
-    // Creds confirmed — a /new-spawned session is no longer pending, so a later
-    // unrelated KeyInput cancel must not pop it (the spawn is now committed).
+                                    // Creds confirmed — a /new-spawned session is no longer pending, so a later
+                                    // unrelated KeyInput cancel must not pop it (the spawn is now committed).
     state.rest.spawn_pending = false;
     state.rest.reset_scroll();
     // Land in Chat first, THEN warm: `warm_session` is non-blocking and may

@@ -74,7 +74,11 @@ pub(super) fn fit_cell(
     // Flatten to (char, style), truncate with an ellipsis if needed.
     let mut chars: Vec<(char, Style)> = Vec::new();
     for s in cell {
-        let st = if bold { s.style.add_modifier(Modifier::BOLD) } else { s.style };
+        let st = if bold {
+            s.style.add_modifier(Modifier::BOLD)
+        } else {
+            s.style
+        };
         for ch in s.content.chars() {
             chars.push((ch, st));
         }
@@ -146,11 +150,7 @@ pub(super) fn shrink_widths(widths: &mut [usize], target: usize) {
     }
     while sum < target {
         // Pad the currently-narrowest column up toward its natural width.
-        if let Some((idx, _)) = scaled
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, &w)| w)
-        {
+        if let Some((idx, _)) = scaled.iter().enumerate().min_by_key(|(_, &w)| w) {
             scaled[idx] += 1;
             sum += 1;
         } else {

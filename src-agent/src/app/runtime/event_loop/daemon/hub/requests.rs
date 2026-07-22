@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
+use std::sync::Arc;
 
 use crate::app::state::AppState;
 use crate::ipc::proto::{ClientRequest, DaemonEvent};
@@ -229,7 +229,11 @@ impl DaemonHub {
                 self.get_effort_options(idx, state, client);
             }
 
-            ClientRequest::SetStreamView { subagent, bash, session } => {
+            ClientRequest::SetStreamView {
+                subagent,
+                bash,
+                session,
+            } => {
                 self.set_stream_view(idx, subagent, bash, session);
             }
             req => {
@@ -386,7 +390,9 @@ impl DaemonHub {
                 env,
                 url,
             } => {
-                self.set_mcp_server(idx, state, handle, uuid, name, enabled, transport, command, args, env, url);
+                self.set_mcp_server(
+                    idx, state, handle, uuid, name, enabled, transport, command, args, env, url,
+                );
             }
 
             // GUI MCP delete: drop the server by uuid, persist + live-reconnect.
@@ -431,7 +437,17 @@ impl DaemonHub {
                 roles,
                 scope,
             } => {
-                self.set_model(idx, state, uuid, name, model_id, provider_uuid, route, roles, scope);
+                self.set_model(
+                    idx,
+                    state,
+                    uuid,
+                    name,
+                    model_id,
+                    provider_uuid,
+                    route,
+                    roles,
+                    scope,
+                );
             }
 
             // GUI model delete: remove by uuid from the addressed scope + persist.
@@ -621,7 +637,11 @@ impl DaemonHub {
             }
 
             // GUI /agents delete (a built-in is not deletable → error).
-            ClientRequest::DeleteAgent { scope, name, req_seq } => {
+            ClientRequest::DeleteAgent {
+                scope,
+                name,
+                req_seq,
+            } => {
                 self.delete_agent(idx, state, scope, name, req_seq);
             }
 

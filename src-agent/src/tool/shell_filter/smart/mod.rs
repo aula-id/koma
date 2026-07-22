@@ -37,7 +37,11 @@ fn finalize(raw: &str, text: String, name: &'static str) -> Option<FilterOutcome
     if text == raw || !shrunk_enough(raw, &text) {
         return None;
     }
-    Some(FilterOutcome { text, filter_name: Some(name), changed: true })
+    Some(FilterOutcome {
+        text,
+        filter_name: Some(name),
+        changed: true,
+    })
 }
 
 #[cfg(test)]

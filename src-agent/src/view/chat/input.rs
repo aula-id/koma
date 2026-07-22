@@ -1,6 +1,9 @@
 //! Input box rendering: multiline editor with caret, compact animation, and
 //! the session-name tab on the top border.
 
+use super::helpers::render_compact_anim;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
@@ -8,9 +11,6 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
-use super::helpers::render_compact_anim;
 
 /// Prefix width in columns: "[$] " on line 1, "    " on continuations.
 const PREFIX_W: usize = 4;
@@ -166,13 +166,20 @@ fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &P
         if on_this_line {
             let col = (cursor - char_start).min(line_chars);
             let before: String = logical.chars().take(col).collect();
-            let at: String = logical.chars().nth(col).map(String::from).unwrap_or_default();
+            let at: String = logical
+                .chars()
+                .nth(col)
+                .map(String::from)
+                .unwrap_or_default();
             let after: String = logical.chars().skip(col + 1).collect();
             if !before.is_empty() {
                 spans.push(Span::styled(before, Style::default().fg(palette.fg)));
             }
             if at.is_empty() {
-                spans.push(Span::styled("\u{2588}", Style::default().fg(palette.accent)));
+                spans.push(Span::styled(
+                    "\u{2588}",
+                    Style::default().fg(palette.accent),
+                ));
             } else {
                 spans.push(Span::styled(
                     at,
@@ -229,8 +236,5 @@ fn render_editor(frame: &mut Frame, area: Rect, rest: &AppStateRest, palette: &P
         0
     };
 
-    frame.render_widget(
-        Paragraph::new(input_lines).scroll((scroll, 0)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(input_lines).scroll((scroll, 0)), area);
 }

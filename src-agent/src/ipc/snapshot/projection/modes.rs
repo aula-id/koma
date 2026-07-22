@@ -1,19 +1,20 @@
 use super::tokens::{
-    agent_field_token, agent_scope_token, agent_submode_token, api_type_token,
-    ext_submode_token, help_kind_token, mcp_field_token, mcp_submode_token, mcp_transport_token,
-    role_token, settings_page_token, store_submode_token, theme_token, usage_metric_token,
-    usage_view_token,
+    agent_field_token, agent_scope_token, agent_submode_token, api_type_token, ext_submode_token,
+    help_kind_token, mcp_field_token, mcp_submode_token, mcp_transport_token, role_token,
+    settings_page_token, store_submode_token, theme_token, usage_metric_token, usage_view_token,
 };
 
 use crate::app::mode::agents::{AgentsState, ModelPickerState, ToolPickerState};
+use crate::app::mode::editor::TextEditorState;
 use crate::app::mode::ext_screen::ExtScreenState;
 use crate::app::mode::extensions::{ExtRow, ExtensionsState};
 use crate::app::mode::help::HelpState;
 use crate::app::mode::mcp::McpState;
 use crate::app::mode::security::SecurityState;
+use crate::app::mode::settings::{
+    ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft,
+};
 use crate::app::mode::store::{ExtStoreState, StoreRow};
-use crate::app::mode::editor::TextEditorState;
-use crate::app::mode::settings::{ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState, Mode,
     OnboardProviderState, OnboardProviderStep, OnboardState, PickerState, RewindState, SessionHub,
@@ -26,15 +27,13 @@ use crate::ipc::proto::{
     AgentModelPickerSnapshot, AgentsSnapshot, BashJobView, BashSnapshot, CatalogueModelSnapshot,
     CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, ExtRowWire, ExtScreenSnapshot,
     ExtStoreDetailWire, ExtStoreRowWire, ExtStoreSnapshot, ExtTuiScreenWire, ExtensionsSnapshot,
-    HelpEntrySnapshot, HelpSnapshot,
-    HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModeSnapshot,
-    ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot, OAuthDraftSnapshot,
-    OnboardProviderSnapshot, OnboardSnapshot,
-    PathPickerSnapshot,
-    PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot, RewindSnapshot,
-    RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot, SettingsSnapshot,
-    TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot,
-    WarmStatusWire,
+    HelpEntrySnapshot, HelpSnapshot, HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot,
+    McpSnapshot, ModeSnapshot, ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot,
+    OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot, PathPickerSnapshot,
+    PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot,
+    RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
+    SettingsSnapshot, TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot,
+    UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -251,10 +250,11 @@ pub fn settings_snapshot(st: &SettingsState) -> SettingsSnapshot {
         model_delete_armed: st.model_delete_armed,
         model_modal: st.model_modal.as_ref().map(model_modal_snapshot),
         model_filter: match st.model_filter {
-            crate::app::mode::settings::ModelFilterMode::All    => "all",
-            crate::app::mode::settings::ModelFilterMode::Local  => "local",
+            crate::app::mode::settings::ModelFilterMode::All => "all",
+            crate::app::mode::settings::ModelFilterMode::Local => "local",
             crate::app::mode::settings::ModelFilterMode::Global => "global",
-        }.to_string(),
+        }
+        .to_string(),
         palette_sel: st.palette_sel,
         menu_sel: st.menu_sel,
     }
@@ -324,7 +324,12 @@ pub fn oauth_flow_snapshot(
             input: input.clone(),
             ..Default::default()
         },
-        OAuthFlowState::KiloWait { user_code, verification_url, frame, copied } => OAuthFlowSnapshot {
+        OAuthFlowState::KiloWait {
+            user_code,
+            verification_url,
+            frame,
+            copied,
+        } => OAuthFlowSnapshot {
             kind: "kilo_wait".to_string(),
             url: verification_url.clone(),
             user_code: user_code.clone(),
@@ -605,12 +610,16 @@ pub fn bash_snapshot(b: &crate::app::mode::BashState, rest: &AppStateRest) -> Ba
 /// Project the `/todo` panel: the todo items + the list cursor.
 pub fn todo_snapshot(t: &crate::app::mode::TodoState) -> TodoSnapshot {
     TodoSnapshot {
-        items: t.items.iter().map(|item| TodoItemSnapshot {
-            content: item.content.clone(),
-            status: item.status.label().to_string(),
-            priority: item.priority.label().to_string(),
-            locked: item.locked,
-        }).collect(),
+        items: t
+            .items
+            .iter()
+            .map(|item| TodoItemSnapshot {
+                content: item.content.clone(),
+                status: item.status.label().to_string(),
+                priority: item.priority.label().to_string(),
+                locked: item.locked,
+            })
+            .collect(),
         selected: t.selected,
         pwd_hash: t.pwd_hash.clone(),
     }

@@ -112,7 +112,11 @@ fn diff_over_threshold_trims_long_context_keeps_changes() {
         raw.push_str("-old value here\n");
         raw.push_str("+new value here\n");
     }
-    assert!(raw.len() > 20_000, "fixture must exceed threshold, was {}", raw.len());
+    assert!(
+        raw.len() > 20_000,
+        "fixture must exceed threshold, was {}",
+        raw.len()
+    );
 
     let outcome = try_filter("git diff", &raw, Some(0)).expect("should filter");
     assert!(outcome.text.contains("... [4 context lines trimmed]"));

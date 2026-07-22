@@ -25,7 +25,11 @@ use super::push_proto_git::{push_git_op, push_git_status};
 // ─── DETACHED (host_swapper): push the reply straight through the cloned sink ───
 
 /// `HostCtl::GitCherryPick` while detached.
-pub(super) fn spawn_git_cherry_pick(push: impl Fn(String) + Send + 'static, cur: Option<String>, sha: String) {
+pub(super) fn spawn_git_cherry_pick(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    sha: String,
+) {
     std::thread::spawn(move || {
         push_git_op(&push, git_cherry_pick(&sha, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
@@ -33,7 +37,11 @@ pub(super) fn spawn_git_cherry_pick(push: impl Fn(String) + Send + 'static, cur:
 }
 
 /// `HostCtl::GitRevert` while detached.
-pub(super) fn spawn_git_revert(push: impl Fn(String) + Send + 'static, cur: Option<String>, sha: String) {
+pub(super) fn spawn_git_revert(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    sha: String,
+) {
     std::thread::spawn(move || {
         push_git_op(&push, git_revert(&sha, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
@@ -54,7 +62,11 @@ pub(super) fn spawn_git_reset(
 }
 
 /// `HostCtl::GitMerge` while detached.
-pub(super) fn spawn_git_merge(push: impl Fn(String) + Send + 'static, cur: Option<String>, ref_name: String) {
+pub(super) fn spawn_git_merge(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    ref_name: String,
+) {
     std::thread::spawn(move || {
         push_git_op(&push, git_merge(&ref_name, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
@@ -69,13 +81,20 @@ pub(super) fn spawn_git_rebase(
     branch: Option<String>,
 ) {
     std::thread::spawn(move || {
-        push_git_op(&push, git_rebase(&upstream, branch.as_deref(), cur.as_deref()));
+        push_git_op(
+            &push,
+            git_rebase(&upstream, branch.as_deref(), cur.as_deref()),
+        );
         push_git_status(&push, compute_git_status(cur.as_deref()));
     });
 }
 
 /// `HostCtl::GitOpAbort` while detached.
-pub(super) fn spawn_git_op_abort(push: impl Fn(String) + Send + 'static, cur: Option<String>, kind: String) {
+pub(super) fn spawn_git_op_abort(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    kind: String,
+) {
     std::thread::spawn(move || {
         push_git_op(&push, git_op_abort(&kind, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));
@@ -83,7 +102,11 @@ pub(super) fn spawn_git_op_abort(push: impl Fn(String) + Send + 'static, cur: Op
 }
 
 /// `HostCtl::GitOpContinue` while detached.
-pub(super) fn spawn_git_op_continue(push: impl Fn(String) + Send + 'static, cur: Option<String>, kind: String) {
+pub(super) fn spawn_git_op_continue(
+    push: impl Fn(String) + Send + 'static,
+    cur: Option<String>,
+    kind: String,
+) {
     std::thread::spawn(move || {
         push_git_op(&push, git_op_continue(&kind, cur.as_deref()));
         push_git_status(&push, compute_git_status(cur.as_deref()));

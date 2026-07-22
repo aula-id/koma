@@ -7,7 +7,11 @@ use super::super::FilterOutcome;
 /// Try to filter a (already `cd`-stripped) command starting with `git `.
 /// Returns `None` for any subcommand/flag combination this module doesn't
 /// special-case.
-pub(crate) fn try_filter(command: &str, raw: &str, exit_code: Option<i32>) -> Option<FilterOutcome> {
+pub(crate) fn try_filter(
+    command: &str,
+    raw: &str,
+    exit_code: Option<i32>,
+) -> Option<FilterOutcome> {
     let rest = command.strip_prefix("git ")?.trim_start();
     let mut tokens = rest.split_whitespace();
     let sub = tokens.next().unwrap_or("");
@@ -48,7 +52,10 @@ pub(crate) fn try_filter(command: &str, raw: &str, exit_code: Option<i32>) -> Op
         }
         "diff" => {
             let already_terse = args.iter().any(|a| {
-                *a == "--stat" || *a == "--shortstat" || *a == "--name-only" || *a == "--name-status"
+                *a == "--stat"
+                    || *a == "--shortstat"
+                    || *a == "--name-only"
+                    || *a == "--name-status"
             });
             if already_terse {
                 None
@@ -182,7 +189,13 @@ fn filter_log(raw: &str) -> Option<FilterOutcome> {
     let mut date = String::new();
     let mut message: Option<String> = None;
 
-    fn flush(hash: &str, author: &str, date: &str, message: &Option<String>, out: &mut Vec<String>) {
+    fn flush(
+        hash: &str,
+        author: &str,
+        date: &str,
+        message: &Option<String>,
+        out: &mut Vec<String>,
+    ) {
         if hash.is_empty() {
             return;
         }

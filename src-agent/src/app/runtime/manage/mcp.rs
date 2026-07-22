@@ -10,9 +10,9 @@
 //! `unlink_mcp_daemon_files`, and `read_mcp_pidfile` are bumped to `pub(super)`
 //! HERE since `manage::commands` calls them.
 
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -85,9 +85,7 @@ fn spawn_mcp_daemon() -> Result<u32> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{
-            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        };
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
@@ -135,8 +133,8 @@ pub(super) fn probe_mcp_fingerprint(path: &Path) -> Result<McpResponse> {
         .set_write_timeout(Some(FINGERPRINT_IO_TIMEOUT))
         .context("set MCP fingerprint probe write timeout")?;
 
-    let payload =
-        serde_json::to_vec(&McpRequest::Fingerprint).context("serialise McpRequest::Fingerprint")?;
+    let payload = serde_json::to_vec(&McpRequest::Fingerprint)
+        .context("serialise McpRequest::Fingerprint")?;
     let prefix = (payload.len() as u32).to_be_bytes();
     stream
         .write_all(&prefix)
@@ -144,7 +142,9 @@ pub(super) fn probe_mcp_fingerprint(path: &Path) -> Result<McpResponse> {
     stream
         .write_all(&payload)
         .context("write MCP fingerprint probe frame payload")?;
-    stream.flush().context("flush MCP fingerprint probe frame")?;
+    stream
+        .flush()
+        .context("flush MCP fingerprint probe frame")?;
 
     let mut reader = FrameReader::new();
     loop {

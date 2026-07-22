@@ -14,34 +14,34 @@
 
 pub mod agents;
 pub mod bash;
-pub mod todo;
 pub mod chat;
-pub mod mcp;
+pub mod effort;
 pub mod extensions;
 pub mod extscreen;
-pub mod store;
-pub mod security;
 pub mod help;
-pub mod effort;
 pub mod key_input;
+pub mod loading;
+pub mod markdown;
+pub mod mcp;
+pub mod message_rewind;
 pub mod onboard;
 pub mod onboard_provider;
-pub mod loading;
-pub mod message_rewind;
-pub mod markdown;
 pub mod quit_confirm;
 pub mod scroll;
+pub mod security;
 pub mod session_hub;
 pub mod session_picker;
 pub mod settings;
+pub mod store;
 pub mod theme;
+pub mod todo;
 pub mod usage;
 
-use ratatui::Frame;
-use ratatui::style::Style;
 use crate::app::mode::Mode;
 use crate::app::resolve::resolve_turn_model;
 use crate::app::state::{AppState, AppStateRest};
+use ratatui::style::Style;
+use ratatui::Frame;
 
 /// Resolve the concrete model id driving the foreground session's NEXT turn,
 /// mirroring the logic the request layer uses (`resolve_turn_model`): Main,
@@ -53,9 +53,15 @@ use crate::app::state::{AppState, AppStateRest};
 /// the theme's raised-surface color instead of the terminal's default background
 /// (which is what a bare `Clear` leaves behind). Draw your Block/Paragraph AFTER
 /// this — widgets with default (bg: None) styles won't overwrite the fill.
-pub(crate) fn clear_and_fill(frame: &mut ratatui::Frame, rect: ratatui::layout::Rect, bg: ratatui::style::Color) {
+pub(crate) fn clear_and_fill(
+    frame: &mut ratatui::Frame,
+    rect: ratatui::layout::Rect,
+    bg: ratatui::style::Color,
+) {
     frame.render_widget(ratatui::widgets::Clear, rect);
-    frame.buffer_mut().set_style(rect, ratatui::style::Style::default().bg(bg));
+    frame
+        .buffer_mut()
+        .set_style(rect, ratatui::style::Style::default().bg(bg));
 }
 
 fn resolved_main_model(rest: &AppStateRest) -> String {
@@ -132,7 +138,9 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
     // this. (`frame.area()` is hoisted into a local so it isn't a shared borrow of
     // `frame` while `buffer_mut()` holds the mutable borrow.)
     let area = frame.area();
-    frame.buffer_mut().set_style(area, Style::default().bg(palette.bg));
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(palette.bg));
     // The catalogue is now per-endpoint and fetched on demand: pass BOTH the
     // cached models and the endpoint they were fetched for, so each omnisearch view
     // can tell "this is my provider's catalogue" (filter locally) from "still
@@ -146,8 +154,12 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             chat::draw(frame, &state.rest, &resolved_model, &palette);
         }
         Mode::Onboard(o) => onboard::draw(frame, o, &palette),
-        Mode::OnboardProvider(op) => onboard_provider::draw(frame, op, cache, cache_endpoint, &palette),
-        Mode::KeyInput(form) => key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette),
+        Mode::OnboardProvider(op) => {
+            onboard_provider::draw(frame, op, cache, cache_endpoint, &palette)
+        }
+        Mode::KeyInput(form) => {
+            key_input::draw(frame, &state.rest, form, cache, cache_endpoint, &palette)
+        }
         Mode::SessionPicker(p) => session_picker::draw(frame, &state.rest, p, &palette),
         Mode::SessionHub(h) => session_hub::draw(frame, &state.rest, h, &palette),
         Mode::Settings(s) => {
@@ -157,7 +169,15 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 let chunks = chat::layout_chunks(&state.rest, frame.area());
                 settings::render_menu_overlay(frame, s, &palette, chunks[4], chunks[1]);
             } else {
-                settings::draw(frame, &state.rest, s, cache, cache_endpoint, &palette, frame.area());
+                settings::draw(
+                    frame,
+                    &state.rest,
+                    s,
+                    cache,
+                    cache_endpoint,
+                    &palette,
+                    frame.area(),
+                );
             }
         }
         Mode::Agents(a) => agents::draw(
@@ -198,7 +218,16 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             chat::draw(frame, &state.rest, &resolved_model, &palette);
             let chunks = chat::layout_chunks(&state.rest, frame.area());
             // chunks[4] = input box, chunks[1] = transcript (6-chunk layout)
-            todo::render_todo_overlay(frame, chunks[4], chunks[1], &state.rest, &t.items, t.selected, t.completed_count(), &palette);
+            todo::render_todo_overlay(
+                frame,
+                chunks[4],
+                chunks[1],
+                &state.rest,
+                &t.items,
+                t.selected,
+                t.completed_count(),
+                &palette,
+            );
         }
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
@@ -209,9 +238,11 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
             // receives the projection in the snapshot (`rest.usage_data`); a local TUI
             // leaves that `None` and collects it live from the ledger here every frame
             // (unchanged behaviour). See `model::usage::UsageData`.
-            let data = state.rest.usage_data.clone().unwrap_or_else(|| {
-                usage::collect_usage_data(nav, &state.rest)
-            });
+            let data = state
+                .rest
+                .usage_data
+                .clone()
+                .unwrap_or_else(|| usage::collect_usage_data(nav, &state.rest));
             usage::draw(frame, &state.rest, nav, &data, &palette);
         }
         Mode::MessageRewind(rw) => {

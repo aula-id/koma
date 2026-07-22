@@ -47,7 +47,12 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     // Live provider-route reply (Connector ModelForm route picker): re-push it as a
     // `RouteList` envelope BEFORE folding (a non-visual fold no-op), flattening each wire
     // route to the camelCase `PushRoute` JS contract.
-    if let DaemonEvent::ModelRoutes { provider, model_id, routes } = &frame.event {
+    if let DaemonEvent::ModelRoutes {
+        provider,
+        model_id,
+        routes,
+    } = &frame.event
+    {
         let env = PushEnvelope::RouteList {
             provider: provider.clone(),
             model_id: model_id.clone(),
@@ -226,7 +231,15 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     // clone-through as `ExtensionOpResult`. The `payload` rides as an arbitrary JSON value; the
     // GUI push injection re-encodes the whole envelope via `serde_json::to_string` before
     // `evaluate_script` (see `gui::mod`), so no manual escaping is needed here.
-    if let DaemonEvent::ExtPanelReply { ext_id, panel_id, req_id, ok, payload, error } = &frame.event {
+    if let DaemonEvent::ExtPanelReply {
+        ext_id,
+        panel_id,
+        req_id,
+        ok,
+        payload,
+        error,
+    } = &frame.event
+    {
         let env = PushEnvelope::ExtPanelReply {
             ext_id: ext_id.clone(),
             panel_id: panel_id.clone(),
@@ -239,7 +252,12 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
             push(json);
         }
     }
-    if let DaemonEvent::ExtPanelPush { ext_id, panel_id, payload } = &frame.event {
+    if let DaemonEvent::ExtPanelPush {
+        ext_id,
+        panel_id,
+        payload,
+    } = &frame.event
+    {
         let env = PushEnvelope::ExtPanelPush {
             ext_id: ext_id.clone(),
             panel_id: panel_id.clone(),
@@ -255,14 +273,23 @@ pub(super) fn repush_before_fold(frame: &crate::ipc::proto::DaemonFrame, push: &
     // reaches here too — better visible than silently consumed by the shadow's
     // non-visual frame filter. No req_seq (0) means no request correlation.
     if let DaemonEvent::Error(msg) = &frame.event {
-        let env = PushEnvelope::AgentOp { ok: false, error: Some(msg.clone()), req_seq: 0 };
+        let env = PushEnvelope::AgentOp {
+            ok: false,
+            error: Some(msg.clone()),
+            req_seq: 0,
+        };
         if let Ok(json) = serde_json::to_string(&env) {
             push(json);
         }
     }
     // One-shot MCP status reply: re-push as a `McpStatus` envelope BEFORE folding
     // (a non-visual fold no-op, keeping the seq gap-free).
-    if let DaemonEvent::McpStatus { request_id, servers, global_error } = &frame.event {
+    if let DaemonEvent::McpStatus {
+        request_id,
+        servers,
+        global_error,
+    } = &frame.event
+    {
         let env = PushEnvelope::McpStatus {
             request_id: request_id.clone(),
             servers: servers

@@ -44,7 +44,10 @@ impl DaemonHub {
     /// `select_pending` check, minus the terminal work (which now lives client-side). If
     /// no controller is enrolled the flag is still cleared (the request is dropped — there
     /// is nowhere to dump to), so it can't re-fire spuriously on the next attach.
-    pub(in crate::app::runtime::event_loop::daemon) fn drain_select_pending(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_select_pending(
+        &mut self,
+        state: &mut AppState,
+    ) {
         if state.rest.select_pending {
             state.rest.select_pending = false;
             self.send_to_controller(DaemonEvent::EnterSelect);
@@ -62,7 +65,10 @@ impl DaemonHub {
     /// cooking) so a later cancel-back doesn't find it stuck in a hub mode and re-fire. If
     /// no controller is enrolled the flag is still cleared (the signal is dropped — there
     /// is no client to open a swapper on) so it can't re-fire spuriously on the next attach.
-    pub(in crate::app::runtime::event_loop::daemon) fn drain_resume_pending(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_resume_pending(
+        &mut self,
+        state: &mut AppState,
+    ) {
         if state.rest.resume_pending {
             state.rest.resume_pending = false;
             self.send_to_controller(DaemonEvent::OpenSwapper);
@@ -80,7 +86,10 @@ impl DaemonHub {
     /// plain `/new` — or sends `QuitDaemon` — `/new kill`). If no controller is enrolled the
     /// flag is still cleared (the signal is dropped — there is no client to act on it) so it
     /// can't re-fire spuriously on the next attach.
-    pub(in crate::app::runtime::event_loop::daemon) fn drain_new_pending(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_new_pending(
+        &mut self,
+        state: &mut AppState,
+    ) {
         if let Some(kill) = state.rest.new_pending.take() {
             self.send_to_controller(DaemonEvent::NewSession { kill });
         }
@@ -98,11 +107,19 @@ impl DaemonHub {
     /// target whichever window; the TUI shadow treats it as a non-visual no-op / may ignore the
     /// hand-off, GUI wiring lands later). If no client is attached the flag is still cleared
     /// (there is nowhere to attach) so it can't re-fire spuriously on the next attach.
-    pub(in crate::app::runtime::event_loop::daemon) fn drain_ext_switch_pending(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn drain_ext_switch_pending(
+        &mut self,
+        state: &mut AppState,
+    ) {
         if let Some(session_id) = state.rest.ext_switch_pending.take() {
             for i in 0..self.clients.len() {
                 if self.clients[i].attached {
-                    self.send_to(i, DaemonEvent::AttachSession { session_id: session_id.clone() });
+                    self.send_to(
+                        i,
+                        DaemonEvent::AttachSession {
+                            session_id: session_id.clone(),
+                        },
+                    );
                 }
             }
         }
@@ -125,7 +142,10 @@ impl DaemonHub {
     /// `state.rest.foreground` cursor at that client's persistent UUID pointer, so
     /// `build_snapshot_with_mode` reads THAT client's composer / scroll / foreground_id.
     /// No live runtime state is mutated — only the view cursor is swapped per client.
-    pub(in crate::app::runtime::event_loop::daemon) fn stream_deltas(&mut self, state: &mut AppState) {
+    pub(in crate::app::runtime::event_loop::daemon) fn stream_deltas(
+        &mut self,
+        state: &mut AppState,
+    ) {
         // Nothing to do until at least one client has attached. Enrolled-but-not-
         // attached clients have no baseline and receive nothing (critique #2).
         if !self.clients.iter().any(|c| c.attached) {
@@ -214,7 +234,10 @@ impl DaemonHub {
                 let stream_subagent = self.clients[i].stream_subagent;
                 let stream_session = self.clients[i].stream_session.as_deref();
                 let Some(prev) = self.clients[i].last_snapshot.as_ref() else {
-                    crate::model::store::append_global_error_log("daemon", "BUG: attached client missing baseline");
+                    crate::model::store::append_global_error_log(
+                        "daemon",
+                        "BUG: attached client missing baseline",
+                    );
                     continue;
                 };
                 diff(prev, &next, stream_subagent, stream_session)

@@ -1,5 +1,8 @@
 //! Header row and model-name label rendering.
 
+use super::helpers::truncate_chars;
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Alignment, Margin, Rect},
     style::{Modifier, Style},
@@ -7,21 +10,23 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
-use super::helpers::truncate_chars;
 
 /// Render the header line ("koma" + mode indicator) into `chunk`.
 ///
 /// Mode colours follow the palette's semantic roles: Normal = success (green),
 /// Auto = warn (yellow), Plan = info (calm cyan — read-only, nothing to fear),
 /// Yolo = error (LOUD red — harness bypassed, make it unmistakable).
-pub(super) fn render_header(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
+pub(super) fn render_header(
+    frame: &mut Frame,
+    chunk: Rect,
+    rest: &AppStateRest,
+    palette: &Palette,
+) {
     let (mode_icon, mode_label, mode_color) = match rest.agent_mode {
-        crate::app::state::AgentMode::Normal => ("●", "normal",   palette.success),
-        crate::app::state::AgentMode::Auto   => ("»", "auto",     palette.warn),
-        crate::app::state::AgentMode::Plan   => ("●", "planning", palette.info),
-        crate::app::state::AgentMode::Yolo   => ("!", "yooloo",   palette.error),
+        crate::app::state::AgentMode::Normal => ("●", "normal", palette.success),
+        crate::app::state::AgentMode::Auto => ("»", "auto", palette.warn),
+        crate::app::state::AgentMode::Plan => ("●", "planning", palette.info),
+        crate::app::state::AgentMode::Yolo => ("!", "yooloo", palette.error),
     };
     // Build the right-side text ("● normal" or "» auto") so we can
     // measure it and pad the gap between brand and mode.
@@ -163,6 +168,9 @@ pub(super) fn render_model_row(
     let model_label = truncate_chars(display_model, row_inner_w);
     let model_row = Paragraph::new(Span::styled(model_label, Style::default().fg(palette.dim)))
         .alignment(Alignment::Right);
-    let model_area = chunk.inner(Margin { horizontal: 2, vertical: 0 });
+    let model_area = chunk.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
     frame.render_widget(model_row, model_area);
 }

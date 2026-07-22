@@ -78,11 +78,14 @@ async fn record_tc_async(
     if let Err(e) = db
         .query("CREATE type::thing($rid) CONTENT $data")
         .bind(("rid", agent_rid.clone()))
-        .bind(("data", serde_json::json!({
-            "agent_id": agent_id,
-            "name": agent_id,
-            "last_seen": now,
-        })))
+        .bind((
+            "data",
+            serde_json::json!({
+                "agent_id": agent_id,
+                "name": agent_id,
+                "last_seen": now,
+            }),
+        ))
         .await
     {
         crate::model::store::append_error_log(
@@ -97,15 +100,18 @@ async fn record_tc_async(
     if let Err(e) = db
         .query("CREATE type::thing($rid) CONTENT $data")
         .bind(("rid", tc_rid.clone()))
-        .bind(("data", serde_json::json!({
-            "tc_id": format!("tc:{agent_id}:{tool_name}:{now}"),
-            "agent_id": agent_id,
-            "tool_name": tool_name,
-            "args_summary": args_summary,
-            "result_snippet": result_snippet,
-            "embedding": emb,
-            "timestamp": now,
-        })))
+        .bind((
+            "data",
+            serde_json::json!({
+                "tc_id": format!("tc:{agent_id}:{tool_name}:{now}"),
+                "agent_id": agent_id,
+                "tool_name": tool_name,
+                "args_summary": args_summary,
+                "result_snippet": result_snippet,
+                "embedding": emb,
+                "timestamp": now,
+            }),
+        ))
         .await
     {
         crate::model::store::append_error_log(
@@ -138,16 +144,14 @@ pub fn get_agent_calls(session_dir: &Path, agent_id: &str) -> Vec<ToolCallRecord
         let sd = sd.clone();
         let aid = aid.clone();
         async move {
-            get_agent_calls_async(&sd, &aid)
-                .await
-                .unwrap_or_else(|e| {
-                    crate::model::store::append_error_log(
-                        &sd,
-                        "surreal::get_agent_calls failed",
-                        &e.to_string(),
-                    );
-                    Vec::new()
-                })
+            get_agent_calls_async(&sd, &aid).await.unwrap_or_else(|e| {
+                crate::model::store::append_error_log(
+                    &sd,
+                    "surreal::get_agent_calls failed",
+                    &e.to_string(),
+                );
+                Vec::new()
+            })
         }
     })
     .unwrap_or_default()

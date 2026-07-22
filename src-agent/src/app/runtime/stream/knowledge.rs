@@ -31,7 +31,11 @@ pub fn gather(
     if !config.enabled || user_query.trim().is_empty() {
         crate::model::store::append_global_error_log(
             "knowledge-gather",
-            &format!("skipped: enabled={}, query_empty={}", config.enabled, user_query.trim().is_empty()),
+            &format!(
+                "skipped: enabled={}, query_empty={}",
+                config.enabled,
+                user_query.trim().is_empty()
+            ),
         );
         return None;
     }

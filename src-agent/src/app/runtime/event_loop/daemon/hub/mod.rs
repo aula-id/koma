@@ -20,5 +20,5 @@ mod requests_session;
 mod requests_turn;
 mod streaming;
 
-pub(crate) use core::HubInbound;
 pub(in crate::app::runtime) use core::DaemonHub;
+pub(crate) use core::HubInbound;

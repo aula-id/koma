@@ -19,10 +19,10 @@
 //! The hub carries its own state (a snapshot of live + on-disk sessions), so
 //! `_rest` is unused — mirroring [`super::handle_rewind`].
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use super::{is_ctrl, Action};
 use crate::app::mode::{HubPane, SessionHub, SessionKind};
 use crate::app::state::AppStateRest;
-use super::{is_ctrl, Action};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 /// Convenience: the `/new` (swap) slash action — the cooking pane's `n`/`N`
 /// shortcut and the synthetic "[+ new session]" row both resolve to it.
@@ -38,11 +38,7 @@ fn new_session_action() -> Action {
 /// confirm/cancel; Ctrl+X arms a kill on a cooking real-session row; then
 /// Esc/Tab/arrows/Enter; then Backspace + printable keys feed the history search
 /// (cooking-pane `n`/`N` stays the `/new` shortcut).
-pub fn handle_session_hub(
-    hub: &mut SessionHub,
-    _rest: &mut AppStateRest,
-    key: KeyEvent,
-) -> Action {
+pub fn handle_session_hub(hub: &mut SessionHub, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
     // 2. CONFIRM MODE: while a kill is armed, accept ONLY confirm or cancel and
     //    return immediately — nothing else runs while confirming.
     if hub.pending_kill.is_some() {

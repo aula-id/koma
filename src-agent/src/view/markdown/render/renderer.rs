@@ -6,7 +6,9 @@ use ratatui::text::Span;
 
 use crate::view::theme::Palette;
 
-use super::super::helpers::{coalesce, fit_cell, shrink_widths, syntaxes, syntect_fg, theme, wrap_spans};
+use super::super::helpers::{
+    coalesce, fit_cell, shrink_widths, syntaxes, syntect_fg, theme, wrap_spans,
+};
 use super::super::parse::{Block, Inline, TableBuf};
 
 // --- the renderer ------------------------------------------------------------
@@ -179,10 +181,8 @@ impl<'p> Renderer<'p> {
                 // Stash the prefix on `cur` as a leading dim span; the wrapper
                 // hanging-indents continuations under it on flush.
                 let prefix = format!("{indent}{marker}");
-                self.cur.push(Span::styled(
-                    prefix,
-                    Style::default().fg(self.palette.dim),
-                ));
+                self.cur
+                    .push(Span::styled(prefix, Style::default().fg(self.palette.dim)));
                 self.block = Block::ListItem;
             }
             Tag::Table(aligns) => {
@@ -265,10 +265,7 @@ impl<'p> Renderer<'p> {
                     tb.cur_row.push(cell);
                 }
             }
-            TagEnd::Emphasis
-            | TagEnd::Strong
-            | TagEnd::Strikethrough
-            | TagEnd::Image => {
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Image => {
                 self.stack.pop();
             }
             TagEnd::Link => {

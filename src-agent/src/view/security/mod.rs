@@ -65,10 +65,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
     let header_inner = header_block.inner(outer[0]);
     frame.render_widget(header_block, outer[0]);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "security",
-            Style::default().fg(palette.dim),
-        )),
+        Paragraph::new(Span::styled("security", Style::default().fg(palette.dim))),
         header_inner.inner(Margin {
             horizontal: 2,
             vertical: 0,
@@ -120,7 +117,12 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                     // stopped so the user can start it from here.
                     let (box_label, base_style) = if st.status.running {
                         // Running indicator reuses the active-green (same green as armed YOLO).
-                        ("[x] Daemon running", Style::default().fg(palette.success).add_modifier(Modifier::BOLD))
+                        (
+                            "[x] Daemon running",
+                            Style::default()
+                                .fg(palette.success)
+                                .add_modifier(Modifier::BOLD),
+                        )
                     } else {
                         ("[ ] Daemon stopped", Style::default().fg(palette.fg))
                     };
@@ -134,13 +136,18 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                     // fragment is gone — the checkbox above is the running state.)
                     let installed_label = if st.status.installed { "yes" } else { "no" };
                     let mut info_spans = vec![Span::styled(
-                        format!("installed: {} · {} tools", installed_label, st.status.tools.len()),
+                        format!(
+                            "installed: {} · {} tools",
+                            installed_label,
+                            st.status.tools.len()
+                        ),
                         dim_style,
                     )];
                     if st.health_fetching {
                         // Health probe in flight — animated braille spinner from the frame
                         // counter `service_global` advances each tick.
-                        const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                        const SPINNER: [&str; 10] =
+                            ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
                         let spinner = SPINNER[(st.health_frame % 10) as usize];
                         info_spans.push(Span::styled(" · ", dim_style));
                         info_spans.push(Span::styled(
@@ -184,7 +191,12 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         // Daemon is running: original behaviour. Checked = armed. Selection
                         // highlight is NOT gated on `active`.
                         let (box_label, base_style) = if st.yolo_armed {
-                            ("[x] Enable YOLO mode", Style::default().fg(palette.success).add_modifier(Modifier::BOLD))
+                            (
+                                "[x] Enable YOLO mode",
+                                Style::default()
+                                    .fg(palette.success)
+                                    .add_modifier(Modifier::BOLD),
+                            )
                         } else {
                             ("[ ] Enable YOLO mode", Style::default().fg(palette.fg))
                         };
@@ -196,7 +208,9 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         if st.yolo_armed {
                             lines.push(Line::from(Span::styled(
                                 "! YOLO MODE ENABLED",
-                                Style::default().fg(palette.error).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(palette.error)
+                                    .add_modifier(Modifier::BOLD),
                             )));
                         } else {
                             lines.push(Line::from(Span::styled(
@@ -217,7 +231,11 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                         if last_domain.is_some() {
                             lines.push(Line::from(""));
                         }
-                        let domain_label = if t.domain.is_empty() { "other" } else { t.domain.as_str() };
+                        let domain_label = if t.domain.is_empty() {
+                            "other"
+                        } else {
+                            t.domain.as_str()
+                        };
                         lines.push(Line::from(Span::styled(
                             format!("[{domain_label}]"),
                             dim_style,
@@ -240,14 +258,16 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
                     let compute_span = if t.compute.is_empty() {
                         Span::raw("")
                     } else {
-                        Span::styled(
-                            format!("  [{}]", t.compute),
-                            dim_style,
-                        )
+                        Span::styled(format!("  [{}]", t.compute), dim_style)
                     };
 
                     let risk_span = if t.risk {
-                        Span::styled("  risky", Style::default().fg(palette.dim).add_modifier(Modifier::ITALIC))
+                        Span::styled(
+                            "  risky",
+                            Style::default()
+                                .fg(palette.dim)
+                                .add_modifier(Modifier::ITALIC),
+                        )
                     } else {
                         Span::raw("")
                     };
@@ -289,10 +309,7 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
         render_deps(&mut lines, st, palette);
     }
 
-    frame.render_widget(
-        Paragraph::new(lines),
-        body,
-    );
+    frame.render_widget(Paragraph::new(lines), body);
 
     // --- Footer: full-width inverse hint bar (per active pane). ---
     let footer_rect = outer[2];
@@ -321,7 +338,9 @@ pub fn draw(frame: &mut Frame, st: &SecurityState, palette: &Palette) {
 /// Returns `true` if ANY dependency entry whose `tools` list contains `tool_name` is absent
 /// (`present == false`). Used by both the per-row [!!] marker and the header legend.
 fn missing_dep_for(tool_name: &str, health: &[InstallHealthEntry]) -> bool {
-    health.iter().any(|d| d.tools.iter().any(|t| t == tool_name) && !d.present)
+    health
+        .iter()
+        .any(|d| d.tools.iter().any(|t| t == tool_name) && !d.present)
 }
 
 /// Fixed parenthetical label for a tier header (the install *strategy* for that tier),
@@ -425,4 +444,3 @@ fn render_deps(lines: &mut Vec<Line>, st: &SecurityState, palette: &Palette) {
     // Trailing blank to match the prior layout's per-group spacing tail.
     lines.push(Line::from(""));
 }
-

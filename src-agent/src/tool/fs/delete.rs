@@ -1,15 +1,17 @@
 //! `delete` tool — delete a workspace-relative file.
 
+use super::helpers::{arg_str, not_found_help};
+use crate::tool::{resolve, Tool, ToolCtx};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use crate::tool::{resolve, Tool, ToolCtx};
-use super::helpers::{arg_str, not_found_help};
 
 /// Delete a workspace-relative file.
 pub struct Delete;
 
 impl Tool for Delete {
-    fn name(&self) -> &'static str { "delete" }
+    fn name(&self) -> &'static str {
+        "delete"
+    }
     fn description(&self) -> &'static str {
         "Delete a workspace-relative file."
     }

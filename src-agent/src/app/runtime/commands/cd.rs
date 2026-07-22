@@ -43,7 +43,13 @@ pub(super) fn handle_cd(
     // Resolve against the session's CURRENT cwd + configured roots ([N] support),
     // reusing the tool's shared resolver so user + model cd never diverge.
     let cwd = state.rest.fg().effective_cwd();
-    let workspaces = state.rest.fg().session.as_ref().map(|s| s.workdirs()).unwrap_or_default();
+    let workspaces = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.workdirs())
+        .unwrap_or_default();
     let resolved = match crate::tool::cd::resolve_cd_target(path, &cwd, &workspaces) {
         Ok(p) => p,
         Err(e) => {
@@ -90,7 +96,11 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
     let cwd = state.rest.fg().effective_cwd();
     let candidate = {
         let p = std::path::Path::new(path);
-        if p.is_absolute() { p.to_path_buf() } else { cwd.join(path) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(path)
+        }
     };
     let canonical = match crate::tool::cd::canonicalize_existing(&candidate) {
         Ok(p) => p,
@@ -100,7 +110,8 @@ pub(super) fn handle_adddir(path: String, state: &mut AppState) -> Result<()> {
         }
     };
     if !canonical.is_dir() {
-        state.rest.fg_mut().status = format!("adddir: '{}' is not a directory", canonical.display());
+        state.rest.fg_mut().status =
+            format!("adddir: '{}' is not a directory", canonical.display());
         return Ok(());
     }
     let canonical_str = canonical.display().to_string();

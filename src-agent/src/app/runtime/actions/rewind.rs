@@ -123,7 +123,8 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
     let text = match messages.get(idx) {
         Some(m) if m.role == Role::User => {
             // Strip synthetic nudge/shell markers so the user edits the real body, not the marker.
-            let content = m.content
+            let content = m
+                .content
                 .strip_prefix(crate::dto::chat::BASH_NUDGE_MARK)
                 .or_else(|| m.content.strip_prefix(crate::dto::chat::SHELL_MARK))
                 .or_else(|| m.content.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK))
@@ -145,7 +146,9 @@ pub(super) fn rewind_to_vec_index(state: &mut AppState, idx: usize) -> Result<()
         .filter(|m| m.role == Role::User)
         .count();
     let session_dir = sess.path.clone();
-    let cut_id = msglog::user_message_ids(&session_dir).get(user_ordinal).copied();
+    let cut_id = msglog::user_message_ids(&session_dir)
+        .get(user_ordinal)
+        .copied();
 
     // 2. Cut the live conversation + messages.json at the boundary.
     sess.conversation.truncate_to_before_index(idx);

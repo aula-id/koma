@@ -55,7 +55,10 @@ pub(super) fn connect_attach_and_handshake(
     let stream = handle
         .block_on(async { crate::ipc::client::connect(sock_path).await })
         .map_err(|e| {
-            anyhow::anyhow!("could not reach koma daemon at {}: {e}", sock_path.display())
+            anyhow::anyhow!(
+                "could not reach koma daemon at {}: {e}",
+                sock_path.display()
+            )
         })?;
 
     // Bridge channels: incoming frames (daemon -> loop) and outgoing requests

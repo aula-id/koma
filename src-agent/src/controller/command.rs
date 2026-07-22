@@ -16,7 +16,10 @@ use crate::model::settings::InternetMode;
 /// User-facing slash commands shown in the `/` palette, in display order.
 /// (name, one-line description). Source of truth for the palette UI.
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("/new", "Spawn a new session, swap to it (current keeps running)"),
+    (
+        "/new",
+        "Spawn a new session, swap to it (current keeps running)",
+    ),
     ("/new kill", "Spawn a new session and close the current one"),
     ("/resume", "Open the session hub (live + past sessions)"),
     ("/mode", "Toggle Normal/Auto tool approval"),
@@ -26,16 +29,28 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/settings", "Edit key, model, provider, theme, name"),
     ("/agents", "Create, modify, or delete agent definitions"),
     ("/mcp", "Add, edit, or remove MCP servers"),
-    ("/extension", "Manage installed extensions (detail, uninstall, screens)"),
-    ("/store", "Browse and install extensions from the koma.run marketplace"),
+    (
+        "/extension",
+        "Manage installed extensions (detail, uninstall, screens)",
+    ),
+    (
+        "/store",
+        "Browse and install extensions from the koma.run marketplace",
+    ),
     ("/security", "Security daemon control panel"),
-    ("/task", "Run an agent on a task, or open the sub-agents viewer (no args)"),
+    (
+        "/task",
+        "Run an agent on a task, or open the sub-agents viewer (no args)",
+    ),
     ("/bash", "Manage background bash jobs"),
     ("/todo", "View the session task list"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),
-    ("/clear", "Clear the chat history (keeps system prompt + archive)"),
+    (
+        "/clear",
+        "Clear the chat history (keeps system prompt + archive)",
+    ),
     ("/usage", "Show the cost and token usage dashboard"),
     ("/rename", "Rename the current session"),
     ("/select", "Dump history to the terminal to copy/paste"),
@@ -182,7 +197,13 @@ pub fn parse(line: &str) -> Command {
         "compact" => Command::Compact,
         "clear" => Command::Clear,
         "new" => {
-            let mode = match rest.split_whitespace().next().unwrap_or("").to_lowercase().as_str() {
+            let mode = match rest
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase()
+                .as_str()
+            {
                 "kill" => NewMode::Kill,
                 _ => NewMode::Swap,
             };

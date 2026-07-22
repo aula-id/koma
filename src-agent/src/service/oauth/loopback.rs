@@ -125,9 +125,8 @@ async fn write_response(
     body: &str,
 ) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{body}"
-    );
+    let response =
+        format!("HTTP/1.1 {status}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{body}");
     stream.write_all(response.as_bytes()).await
 }
 

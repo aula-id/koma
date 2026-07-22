@@ -36,11 +36,7 @@ pub struct MessageMatch {
 /// state. If the SurrealDB mirror is synced, runs hybrid search (FTS5 +
 /// vector cosine via RRF). If syncing or not yet started, falls back to
 /// pure FTS5 on SurrealDB. If the DB file doesn't exist, returns empty.
-pub fn search_messages(
-    session_dir: &Path,
-    query: &str,
-    limit: usize,
-) -> Vec<MessageMatch> {
+pub fn search_messages(session_dir: &Path, query: &str, limit: usize) -> Vec<MessageMatch> {
     let q = query.trim();
     if q.is_empty() {
         return Vec::new();

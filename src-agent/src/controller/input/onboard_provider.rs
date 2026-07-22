@@ -14,12 +14,14 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::mode::onboard_provider::{candidate_model_ids, OnboardProviderState, OnboardProviderStep};
+use super::Action;
+use crate::app::mode::onboard_provider::{
+    candidate_model_ids, OnboardProviderState, OnboardProviderStep,
+};
 use crate::app::mode::settings::OAuthFlowState;
 use crate::app::state::AppStateRest;
 use crate::model::app_config::OAuthProvider;
 use crate::service::oauth::registry;
-use super::Action;
 
 /// Handle a key press while the guided provider wizard is active.
 pub fn handle_onboard_provider(
@@ -105,7 +107,10 @@ fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
                 if input.trim().is_empty() {
                     Action::None
                 } else {
-                    Action::OAuthPaste { provider, token: input }
+                    Action::OAuthPaste {
+                        provider,
+                        token: input,
+                    }
                 }
             }
             KeyCode::Backspace => {

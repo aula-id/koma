@@ -265,12 +265,12 @@ fn user_blocks(m: &ChatMessage, image_ctx: Option<&ImageWireCtx>) -> Vec<Block> 
     }
     let capable = image_ctx.map(|c| c.model_takes_images).unwrap_or(false);
     if capable {
-        let Some(ctx) = image_ctx else {
-            return Ok(blocks);
+        let ctx = match image_ctx {
+            Some(c) => c,
+            None => return blocks,
         };
         for att in &m.attachments {
-            if let Some(url) =
-                crate::dto::openrouter::request::data_url_for(&ctx.session_dir, att)
+            if let Some(url) = crate::dto::openrouter::request::data_url_for(&ctx.session_dir, att)
             {
                 if let Some(source) = image_source_from_data_url(&url) {
                     blocks.push(Block::Image { source });

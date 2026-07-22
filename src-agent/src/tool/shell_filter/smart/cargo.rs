@@ -8,7 +8,11 @@ use std::sync::OnceLock;
 
 /// Try to filter a (already `cd`-stripped) command starting with `cargo `.
 /// Returns `None` for any subcommand this module doesn't special-case.
-pub(crate) fn try_filter(command: &str, raw: &str, _exit_code: Option<i32>) -> Option<FilterOutcome> {
+pub(crate) fn try_filter(
+    command: &str,
+    raw: &str,
+    _exit_code: Option<i32>,
+) -> Option<FilterOutcome> {
     let rest = command.strip_prefix("cargo ")?.trim_start();
     let mut tokens = rest.split_whitespace();
     let sub = tokens.next().unwrap_or("");
@@ -94,7 +98,9 @@ fn filter_build(raw: &str, sub: &str) -> Option<FilterOutcome> {
             && !line.contains("could not compile")
         {
             error_count += 1;
-        } else if warning_start_re().is_match(line) && !(line.contains("generated") && line.contains("warning")) {
+        } else if warning_start_re().is_match(line)
+            && !(line.contains("generated") && line.contains("warning"))
+        {
             warning_count += 1;
         }
 

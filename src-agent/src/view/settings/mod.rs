@@ -12,11 +12,17 @@
 //! - Footer: inverse full-width hint bar.
 //! - No sidebar / dual-pane — every page fills the body area.
 
-mod utils;
 pub(crate) mod oauth;
-mod pickers;
 mod pages;
+mod pickers;
+mod utils;
 
+use crate::app::mode::settings::{OAuthFlowState, SettingsPage};
+use crate::app::mode::SettingsState;
+use crate::app::state::AppStateRest;
+use crate::model::app_config::ThemeMode;
+use crate::view::theme::Palette;
+use pickers::draw_role_picker;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
@@ -24,12 +30,6 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::mode::settings::{OAuthFlowState, SettingsPage};
-use crate::app::mode::SettingsState;
-use crate::app::state::AppStateRest;
-use crate::model::app_config::ThemeMode;
-use crate::view::theme::Palette;
-use pickers::draw_role_picker;
 
 /// Render the settings menu as a compact overlay anchored above the input bar,
 /// following the same pattern as the slash-command palette.
@@ -46,11 +46,21 @@ pub fn render_menu_overlay(
         .map(|(i, (num, label, _page))| {
             let is_selected = i == st.menu_sel;
             let style = if is_selected {
-                Style::default().fg(palette.sel_fg).bg(palette.sel_bg).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(palette.sel_fg)
+                    .bg(palette.sel_bg)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(palette.fg)
             };
-            let chip = Span::styled(format!("[{num}]"), if is_selected { style } else { Style::default().fg(palette.accent) });
+            let chip = Span::styled(
+                format!("[{num}]"),
+                if is_selected {
+                    style
+                } else {
+                    Style::default().fg(palette.accent)
+                },
+            );
             let text = Span::styled(format!("  {label}"), style);
             Line::from(vec![Span::raw(" "), chip, text])
         })
@@ -60,7 +70,12 @@ pub fn render_menu_overlay(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = ((rows.len() as u16) + 2).min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let popup = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let popup = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
@@ -104,12 +119,18 @@ pub fn draw(
     frame.render_widget(
         Paragraph::new(Span::styled(breadcrumb, Style::default().fg(palette.dim)))
             .style(Style::default()),
-        header_inner.inner(Margin { horizontal: 2, vertical: 0 }),
+        header_inner.inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
     );
 
     // --- Body: page dispatch ---
     let body = outer[1];
-    let body_inner = body.inner(Margin { horizontal: 2, vertical: 1 });
+    let body_inner = body.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     match st.page {
         SettingsPage::Menu => {
@@ -117,7 +138,10 @@ pub fn draw(
         }
         SettingsPage::Appearance => {
             pages::draw_appearance(
-                frame, rest, st, palette,
+                frame,
+                rest,
+                st,
+                palette,
                 rest.config.palette.as_str(),
                 body_inner,
             );
@@ -166,7 +190,16 @@ pub fn draw(
                         (models_cache, cm)
                     };
                 pages::draw_model_form(
-                    frame, rest, st, modal, omni, is_or, cache_matches, cache, palette, body_inner,
+                    frame,
+                    rest,
+                    st,
+                    modal,
+                    omni,
+                    is_or,
+                    cache_matches,
+                    cache,
+                    palette,
+                    body_inner,
                 );
 
                 // Role checkbox picker overlay: drawn over the model form.
@@ -186,8 +219,19 @@ pub fn draw(
             OAuthFlowState::CodexWait { url, copied, .. } => {
                 oauth::draw_message(frame, palette, body, "codex login", Some(url), *copied);
             }
-            OAuthFlowState::KiloWait { verification_url, copied, .. } => {
-                oauth::draw_message(frame, palette, body, "kilo code login", Some(verification_url), *copied);
+            OAuthFlowState::KiloWait {
+                verification_url,
+                copied,
+                ..
+            } => {
+                oauth::draw_message(
+                    frame,
+                    palette,
+                    body,
+                    "kilo code login",
+                    Some(verification_url),
+                    *copied,
+                );
             }
             OAuthFlowState::CodexPaste { input, .. } => {
                 oauth::draw_paste(frame, input, palette, body);
@@ -241,7 +285,11 @@ pub fn draw(
         }
 
         let title = if picker.matches.len() > MAX_VIS {
-            format!(" pick directory {}/{} ", picker.sel + 1, picker.matches.len())
+            format!(
+                " pick directory {}/{} ",
+                picker.sel + 1,
+                picker.matches.len()
+            )
         } else {
             " pick directory ".to_string()
         };
@@ -250,7 +298,12 @@ pub fn draw(
         let w = body.width.saturating_sub(4).max(10);
         let x = body.x + (body.width.saturating_sub(w)) / 2;
         let y = body.y + (body.height.saturating_sub(h)) / 2;
-        let popup = Rect { x, y, width: w, height: h };
+        let popup = Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        };
 
         let block = Block::bordered()
             .border_style(Style::default().fg(palette.dim))
@@ -270,7 +323,11 @@ pub fn draw(
             .fg(palette.sel_fg)
             .bg(palette.sel_bg)
             .add_modifier(Modifier::BOLD);
-        let padded = format!(" {:<width$}", hint, width = footer_rect.width.saturating_sub(1) as usize);
+        let padded = format!(
+            " {:<width$}",
+            hint,
+            width = footer_rect.width.saturating_sub(1) as usize
+        );
         frame.render_widget(
             Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
             footer_rect,
@@ -297,7 +354,12 @@ fn footer_hint(st: &SettingsState) -> String {
     use crate::app::mode::settings::ModelField;
 
     // Deepest-first: overlays own the hint.
-    if st.model_modal.as_ref().map(|m| m.role_picker.is_some()).unwrap_or(false) {
+    if st
+        .model_modal
+        .as_ref()
+        .map(|m| m.role_picker.is_some())
+        .unwrap_or(false)
+    {
         return "↑↓ role · space toggle · enter ok · esc cancel".to_string();
     }
     if let Some(modal) = st.model_modal.as_ref() {
@@ -319,7 +381,8 @@ fn footer_hint(st: &SettingsState) -> String {
         return "↑↓ field · ←→ move/type · enter select · esc cancel".to_string();
     }
     if st.picker.is_some() {
-        return "type path · @rel or /abs · ↑/↓ select · Tab descend · Enter pick · Esc cancel".to_string();
+        return "type path · @rel or /abs · ↑/↓ select · Tab descend · Enter pick · Esc cancel"
+            .to_string();
     }
     if st.list_editing {
         return "↑/↓ entry · + add · - remove · Enter edit · Esc done".to_string();
@@ -342,24 +405,22 @@ fn footer_hint(st: &SettingsState) -> String {
                 "↑↓ select · a add · ctrl+x delete · esc back".to_string()
             }
         }
-        SettingsPage::OAuth => {
-            match &st.oauth_flow {
-                OAuthFlowState::Idle => {
-                    if st.oauth_armed.is_some() {
-                        "ctrl+x again to CONFIRM delete · any key cancels".to_string()
-                    } else {
-                        "↑↓ select · enter connect · ctrl+x delete · esc back".to_string()
-                    }
+        SettingsPage::OAuth => match &st.oauth_flow {
+            OAuthFlowState::Idle => {
+                if st.oauth_armed.is_some() {
+                    "ctrl+x again to CONFIRM delete · any key cancels".to_string()
+                } else {
+                    "↑↓ select · enter connect · ctrl+x delete · esc back".to_string()
                 }
-                OAuthFlowState::Pick(_) => "↑↓ select · enter choose · esc back".to_string(),
-                OAuthFlowState::CodexPaste { .. } => "type token · enter save · esc back".to_string(),
-                OAuthFlowState::Failed(_) => "enter/esc dismiss".to_string(),
-                OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
-                    "c copy url · o open browser · esc cancel".to_string()
-                }
-                _ => "esc cancel".to_string(),
             }
-        }
+            OAuthFlowState::Pick(_) => "↑↓ select · enter choose · esc back".to_string(),
+            OAuthFlowState::CodexPaste { .. } => "type token · enter save · esc back".to_string(),
+            OAuthFlowState::Failed(_) => "enter/esc dismiss".to_string(),
+            OAuthFlowState::CodexWait { .. } | OAuthFlowState::KiloWait { .. } => {
+                "c copy url · o open browser · esc cancel".to_string()
+            }
+            _ => "esc cancel".to_string(),
+        },
         SettingsPage::Models => {
             if st.model_delete_armed {
                 "ctrl+x again to CONFIRM delete · any key cancels".to_string()

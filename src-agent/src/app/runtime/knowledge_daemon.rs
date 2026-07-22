@@ -30,8 +30,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
+use surrealdb::Surreal;
 
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
 use crate::ipc::knowledge_proto::{KnowledgeRequest, KnowledgeResponse};
@@ -61,9 +61,7 @@ pub fn run_knowledge_daemon(_opts: crate::cli::Opts) -> Result<()> {
 
     // Open the central knowledge store (blocking on the tokio runtime).
     let knowledge_path = store::base_dir()?.join("knowledge");
-    let db = handle.block_on(async {
-        open_knowledge_db(&knowledge_path).await
-    })?;
+    let db = handle.block_on(async { open_knowledge_db(&knowledge_path).await })?;
     let db = Arc::new(db);
 
     let shutting_down = install_daemon_signals(&handle);
@@ -289,17 +287,20 @@ async fn handle_request(
             let result = db
                 .query("CREATE type::thing($rid) CONTENT $data")
                 .bind(("rid", rid))
-                .bind(("data", serde_json::json!({
-                    "fact_id": fact_id.clone(),
-                    "content": content.clone(),
-                    "category": category,
-                    "confidence": confidence,
-                    "trust": confidence,
-                    "embedding": embedding,
-                    "reinforcement_count": 0,
-                    "created_at": now,
-                    "last_reinforced": now,
-                })))
+                .bind((
+                    "data",
+                    serde_json::json!({
+                        "fact_id": fact_id.clone(),
+                        "content": content.clone(),
+                        "category": category,
+                        "confidence": confidence,
+                        "trust": confidence,
+                        "embedding": embedding,
+                        "reinforcement_count": 0,
+                        "created_at": now,
+                        "last_reinforced": now,
+                    }),
+                ))
                 .await;
             match result {
                 Ok(_) => {
@@ -311,10 +312,13 @@ async fn handle_request(
                     tokio::spawn(async move {
                         match super::extractor::extract_and_resolve(&db_ref, &c).await {
                             Ok(resolved) => {
-                                let _ = super::extractor::relate_entities(&db_ref, &fid, &resolved).await;
+                                let _ = super::extractor::relate_entities(&db_ref, &fid, &resolved)
+                                    .await;
                             }
                             Err(e) => {
-                                eprintln!("knowledge daemon: entity extraction failed for {fid}: {e}");
+                                eprintln!(
+                                    "knowledge daemon: entity extraction failed for {fid}: {e}"
+                                );
                             }
                         }
                     });
@@ -334,11 +338,7 @@ async fn handle_request(
                  WHERE embedding <|{limit},{ef}|> $query_vec
                  ORDER BY distance"
             );
-            let mut results = match db
-                .query(&query_str)
-                .bind(("query_vec", query_vec))
-                .await
-            {
+            let mut results = match db.query(&query_str).bind(("query_vec", query_vec)).await {
                 Ok(r) => r,
                 Err(e) => return KnowledgeResponse::Error(format!("expand query failed: {e}")),
             };
@@ -352,9 +352,15 @@ async fn handle_request(
             let cas: Vec<i64> = results.take("created_at").unwrap_or_default();
             let lrs: Vec<i64> = results.take("last_reinforced").unwrap_or_default();
 
-            let n = ids.len().min(contents.len()).min(categories.len())
-                .min(confidences.len()).min(trusts.len()).min(rcs.len())
-                .min(cas.len()).min(lrs.len());
+            let n = ids
+                .len()
+                .min(contents.len())
+                .min(categories.len())
+                .min(confidences.len())
+                .min(trusts.len())
+                .min(rcs.len())
+                .min(cas.len())
+                .min(lrs.len());
 
             let facts: Vec<crate::ipc::knowledge_proto::KnowledgeFact> = (0..n)
                 .map(|i| crate::ipc::knowledge_proto::KnowledgeFact {
@@ -371,8 +377,7 @@ async fn handle_request(
 
             // Graph traversal: for matched facts, fetch connected entities
             // and related facts reachable through the entity graph.
-            let (entities, related_facts) =
-                traverse_graph(db, &ids).await.unwrap_or_default();
+            let (entities, related_facts) = traverse_graph(db, &ids).await.unwrap_or_default();
 
             KnowledgeResponse::ExpandResult {
                 facts,
@@ -382,27 +387,24 @@ async fn handle_request(
         }
 
         KnowledgeRequest::Status => {
-            let fact_count: u64 = match db
-                .query("SELECT count() FROM fact GROUP ALL")
-                .await
-            {
+            let fact_count: u64 = match db.query("SELECT count() FROM fact GROUP ALL").await {
                 Ok(mut r) => {
                     let counts: Vec<u64> = r.take("count").unwrap_or_default();
                     counts.into_iter().next().unwrap_or(0)
                 }
                 Err(_) => 0,
             };
-            let entity_count: u64 = match db
-                .query("SELECT count() FROM entity GROUP ALL")
-                .await
-            {
+            let entity_count: u64 = match db.query("SELECT count() FROM entity GROUP ALL").await {
                 Ok(mut r) => {
                     let counts: Vec<u64> = r.take("count").unwrap_or_default();
                     counts.into_iter().next().unwrap_or(0)
                 }
                 Err(_) => 0,
             };
-            KnowledgeResponse::Status { fact_count, entity_count }
+            KnowledgeResponse::Status {
+                fact_count,
+                entity_count,
+            }
         }
 
         KnowledgeRequest::Shutdown => {
@@ -469,11 +471,24 @@ async fn fetch_entities_for_facts(
         for row in entity_rows {
             if let Some(entity_id) = row.get("entity_id").and_then(|v| v.as_str()) {
                 if seen_entities.insert(entity_id.to_string()) {
-                    let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let entity_type = row.get("entity_type").and_then(|v| v.as_str()).unwrap_or("concept").to_string();
-                    let aliases: Vec<String> = row.get("aliases")
+                    let name = row
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let entity_type = row
+                        .get("entity_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("concept")
+                        .to_string();
+                    let aliases: Vec<String> = row
+                        .get("aliases")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     entities.push(crate::ipc::knowledge_proto::KnowledgeEntity {
                         entity_id: entity_id.to_string(),
@@ -511,8 +526,7 @@ async fn fetch_related_facts(
         return Ok(Vec::new());
     }
 
-    let mut seen: std::collections::HashSet<String> =
-        fact_ids.iter().cloned().collect(); // exclude originals
+    let mut seen: std::collections::HashSet<String> = fact_ids.iter().cloned().collect(); // exclude originals
     let mut related: Vec<crate::ipc::knowledge_proto::KnowledgeFact> = Vec::new();
 
     for e_rid in &entity_rids {
@@ -526,13 +540,30 @@ async fn fetch_related_facts(
         for row in fact_rows {
             if let Some(fact_id) = row.get("fact_id").and_then(|v| v.as_str()) {
                 if seen.insert(fact_id.to_string()) {
-                    let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let category = row.get("category").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let confidence = row.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let content = row
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let category = row
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let confidence = row
+                        .get("confidence")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
                     let trust = row.get("trust").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let reinforcement_count = row.get("reinforcement_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let reinforcement_count = row
+                        .get("reinforcement_count")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
                     let created_at = row.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let last_reinforced = row.get("last_reinforced").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let last_reinforced = row
+                        .get("last_reinforced")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
                     related.push(crate::ipc::knowledge_proto::KnowledgeFact {
                         id: fact_id.to_string(),
                         content,

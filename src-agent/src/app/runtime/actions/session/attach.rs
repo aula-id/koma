@@ -74,7 +74,11 @@ pub fn handle_live_switch(
     // (C6): compute the working flag (immutable `sessions` borrow) first, then write
     // the foreground session's own status.
     let working = state.rest.fg().is_ui_busy();
-    state.rest.fg_mut().status = if working { "working".into() } else { "ready".into() };
+    state.rest.fg_mut().status = if working {
+        "working".into()
+    } else {
+        "ready".into()
+    };
     // NOTE (C3): no `mode = Chat` write here. The leaving session was reset to Chat BEFORE
     // the repoint above; the now-foreground session shows its OWN stored mode (normally
     // Chat). Forcing Chat here would clobber a target that legitimately had its own overlay.
@@ -131,11 +135,14 @@ pub fn handle_hub_kill_confirm(
     //    in `cooking` → that row's `sessions` index + kind). Borrow released before
     //    we mutate `state` below.
     let target = if let Mode::SessionHub(hub) = state.mode() {
-        hub.pending_kill.as_ref().and_then(|sid| {
-            hub.cooking.iter().find(|e| {
-                e.session_id.as_deref() == Some(sid.as_str())
+        hub.pending_kill
+            .as_ref()
+            .and_then(|sid| {
+                hub.cooking
+                    .iter()
+                    .find(|e| e.session_id.as_deref() == Some(sid.as_str()))
             })
-        }).map(|e| (e.idx, e.kind))
+            .map(|e| (e.idx, e.kind))
     } else {
         None
     };
@@ -188,9 +195,7 @@ pub fn handle_hub_kill_confirm(
                 .sessions
                 .iter()
                 .enumerate()
-                .find(|(i, rt)| {
-                    *i != session_idx && rt.session.is_some() && !rt.is_closed()
-                })
+                .find(|(i, rt)| *i != session_idx && rt.session.is_some() && !rt.is_closed())
                 .map(|(i, _)| i);
             match next {
                 // Reuse the local foreground-switch path so the flat foreground-UI
@@ -207,10 +212,7 @@ pub fn handle_hub_kill_confirm(
                 // here. `false` (Swap): nothing to kill, we just need a live foreground.
                 None => {
                     crate::app::runtime::commands::new_session::apply_new_session_local(
-                        state,
-                        client,
-                        handle,
-                        false,
+                        state, client, handle, false,
                     )?;
                 }
             }
@@ -276,9 +278,11 @@ pub fn handle_hub_delete_confirm(state: &mut AppState) -> Result<()> {
             Some(u) => u.to_string(),
             None => return Ok(()),
         };
-        match hub.history.iter().find(|e| {
-            e.path.file_name().and_then(|n| n.to_str()) == Some(uuid.as_str())
-        }) {
+        match hub
+            .history
+            .iter()
+            .find(|e| e.path.file_name().and_then(|n| n.to_str()) == Some(uuid.as_str()))
+        {
             Some(e) => e.path.clone(),
             None => return Ok(()),
         }

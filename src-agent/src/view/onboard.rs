@@ -32,7 +32,10 @@ const LABEL_W: usize = 14;
 /// The three connection choices: `(label, description)`, in cursor order
 /// (0 = koma free, 1 = provider, 2 = custom). NO brand names in the copy.
 const CHOICES: [(&str, &str); 3] = [
-    ("koma free", "start now, no key - free models hosted by koma"),
+    (
+        "koma free",
+        "start now, no key - free models hosted by koma",
+    ),
     ("provider", "sign in to a provider account"),
     ("custom", "your own endpoint + API key"),
 ];
@@ -78,20 +81,28 @@ pub fn draw(frame: &mut Frame, state: &OnboardState, palette: &Palette) {
 
     // A dim 2-space-indented line (title uses accent; prompt/footer use dim).
     let indented = |text: &str, style: Style| -> Line<'static> {
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(text.to_string(), style),
-        ])
+        Line::from(vec![Span::raw("  "), Span::styled(text.to_string(), style)])
     };
 
     let mut row: u16 = 0;
 
     // Title.
-    render_line(frame, indented("koma", Style::default().fg(palette.accent)), row);
+    render_line(
+        frame,
+        indented("koma", Style::default().fg(palette.accent)),
+        row,
+    );
     row += 3; // title + two blank rows
 
     // Prompt.
-    render_line(frame, indented("how do you want to connect?", Style::default().fg(palette.dim)), row);
+    render_line(
+        frame,
+        indented(
+            "how do you want to connect?",
+            Style::default().fg(palette.dim),
+        ),
+        row,
+    );
     row += 2; // prompt + one blank row
 
     // Choices.
@@ -138,10 +149,7 @@ pub fn draw(frame: &mut Frame, state: &OnboardState, palette: &Palette) {
                 Style::default().fg(palette.warn),
             )),
         ];
-        frame.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: true }),
-            inner,
-        );
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         row += CALLOUT_H;
     }
     row += 1; // blank row before the footer

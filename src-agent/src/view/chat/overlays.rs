@@ -4,6 +4,10 @@
 //! (The `/help` reference is no longer an overlay — it is a dedicated
 //! full-screen mode; see [`crate::view::help`].)
 
+use super::helpers::truncate_chars;
+use crate::app::state::AppStateRest;
+use crate::controller::command;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -11,10 +15,6 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
     Frame,
 };
-use crate::app::state::AppStateRest;
-use crate::controller::command;
-use crate::view::theme::Palette;
-use super::helpers::truncate_chars;
 
 /// Render the slash-command palette if the current input starts with `/`.
 ///
@@ -38,12 +38,8 @@ pub(super) fn render_command_palette(
     let sel = rest.palette_sel.min(cmd_matches.len() - 1);
     // Scrolloff window: the selection walks within the visible rows and only
     // scrolls at the edges (persisted offset), instead of pinning to the bottom.
-    let (start, end) = crate::view::scroll::scroll_window(
-        &rest.palette_offset,
-        sel,
-        cmd_matches.len(),
-        MAX_VIS,
-    );
+    let (start, end) =
+        crate::view::scroll::scroll_window(&rest.palette_offset, sel, cmd_matches.len(), MAX_VIS);
     let rows: Vec<Line> = cmd_matches[start..end]
         .iter()
         .enumerate()
@@ -69,7 +65,12 @@ pub(super) fn render_command_palette(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = ((rows.len() as u16) + 2).min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let popup = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let popup = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
@@ -96,33 +97,41 @@ pub(super) fn render_file_palette(
     if let Some(partial) = crate::controller::input::file_ref_partial(&rest.fg().input) {
         const MAX_VIS: usize = 10; // visible window height (rows shown at once)
         const FILE_PAL_RESULTS: usize = 200; // result cap — larger than the window so the list scrolls
-        // Prefer the daemon-projected palette when present (the thin attach client,
-        // whose reconstructed `dir_cache` is empty — it would otherwise show no rows).
-        // `None` on a local TUI: compute the matches live from the session index. Both
-        // return up to FILE_PAL_RESULTS matches; the window (MAX_VIS) scrolls through them.
+                                             // Prefer the daemon-projected palette when present (the thin attach client,
+                                             // whose reconstructed `dir_cache` is empty — it would otherwise show no rows).
+                                             // `None` on a local TUI: compute the matches live from the session index. Both
+                                             // return up to FILE_PAL_RESULTS matches; the window (MAX_VIS) scrolls through them.
         let files: Vec<String> = match &rest.file_palette {
             Some(projected) => projected.clone(),
-            None => rest.fg().dir_cache.read().map(|c| c.search(partial, FILE_PAL_RESULTS)).unwrap_or_default(),
+            None => rest
+                .fg()
+                .dir_cache
+                .read()
+                .map(|c| c.search(partial, FILE_PAL_RESULTS))
+                .unwrap_or_default(),
         };
         if !files.is_empty() {
             let sel = rest.palette_sel.min(files.len() - 1);
             // Scrolloff window: selection walks within the visible rows; the
             // window only scrolls at the edges (persisted offset).
-            let (start, end) = crate::view::scroll::scroll_window(
-                &rest.palette_offset,
-                sel,
-                files.len(),
-                MAX_VIS,
-            );
-            let rows: Vec<Line> = files[start..end].iter().enumerate().map(|(vi, f)| {
-                let i = start + vi;
-                if i == sel {
-                    let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
-                    Line::from(Span::styled(format!(" {f} "), hl))
-                } else {
-                    Line::from(Span::styled(format!(" {f} "), Style::default().fg(palette.fg)))
-                }
-            }).collect();
+            let (start, end) =
+                crate::view::scroll::scroll_window(&rest.palette_offset, sel, files.len(), MAX_VIS);
+            let rows: Vec<Line> = files[start..end]
+                .iter()
+                .enumerate()
+                .map(|(vi, f)| {
+                    let i = start + vi;
+                    if i == sel {
+                        let hl = Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
+                        Line::from(Span::styled(format!(" {f} "), hl))
+                    } else {
+                        Line::from(Span::styled(
+                            format!(" {f} "),
+                            Style::default().fg(palette.fg),
+                        ))
+                    }
+                })
+                .collect();
             // title shows position when there are more entries than fit
             let title = if files.len() > MAX_VIS {
                 format!(" files {}/{} ", sel + 1, files.len())
@@ -132,7 +141,12 @@ pub(super) fn render_file_palette(
             let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
             let h = ((rows.len() as u16) + 2).min(avail.max(3));
             let y = input_chunk.y.saturating_sub(h);
-            let popup = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+            let popup = Rect {
+                x: input_chunk.x,
+                y,
+                width: input_chunk.width,
+                height: h,
+            };
             let block = Block::bordered()
                 .border_style(Style::default().fg(palette.dim))
                 .title(Span::styled(title, Style::default().fg(palette.dim)))
@@ -170,7 +184,10 @@ pub(super) fn render_toast(
             .split('\n')
             .flat_map(|logical| {
                 crate::view::markdown::wrap_spans(
-                    &[Span::styled(logical.to_string(), Style::default().fg(palette.fg))],
+                    &[Span::styled(
+                        logical.to_string(),
+                        Style::default().fg(palette.fg),
+                    )],
                     inner_w,
                 )
             })
@@ -180,7 +197,12 @@ pub(super) fn render_toast(
         // their own row budget so a long message stays contained.
         let body_rows = (rows.len() as u16).min(max_rows);
         let h = (body_rows + 2).min(transcript_chunk.height.max(3));
-        let rect = Rect { x: transcript_chunk.x, y: transcript_chunk.y, width: tw, height: h };
+        let rect = Rect {
+            x: transcript_chunk.x,
+            y: transcript_chunk.y,
+            width: tw,
+            height: h,
+        };
         let block = Block::bordered()
             .border_style(Style::default().fg(border_color))
             .title(Span::styled(title, Style::default().fg(border_color)))
@@ -242,7 +264,12 @@ pub(super) fn render_tool_approval(
         // plan-approval reserve in `mod::draw` so the summary block clears this box.
         let h = PLAN_APPROVAL_HEIGHT.min(avail.max(3));
         let y = input_chunk.y.saturating_sub(h);
-        let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+        let rect = Rect {
+            x: input_chunk.x,
+            y,
+            width: input_chunk.width,
+            height: h,
+        };
         let block = Block::bordered()
             .border_style(Style::default().fg(warn))
             .title(Span::styled(" plan ready ", Style::default().fg(warn)))
@@ -376,7 +403,12 @@ pub(super) fn render_tool_approval(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = ((rows.len() as u16) + 2).min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let rect = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(warn))

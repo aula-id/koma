@@ -127,7 +127,10 @@ pub async fn exchange_code(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("token exchange failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "token exchange failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     resp.json::<ClaudeTokenResponse>()
@@ -147,7 +150,10 @@ pub async fn refresh(
         .post(CLAUDE_TOKEN_URL)
         .header("Content-Type", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
-        .header("User-Agent", "anthropic-sdk-typescript/0.94.0 userOAuthProvider")
+        .header(
+            "User-Agent",
+            "anthropic-sdk-typescript/0.94.0 userOAuthProvider",
+        )
         .json(&serde_json::json!({
             "grant_type": "refresh_token",
             "client_id": CLAUDE_CLIENT_ID,
@@ -163,7 +169,10 @@ pub async fn refresh(
         if body.contains("invalid_grant") || body.contains("refresh_token_reused") {
             return Err("unrecoverable: re-login required".to_string());
         }
-        return Err(format!("refresh failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "refresh failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     resp.json::<super::codex::TokenResponse>()
@@ -199,7 +208,11 @@ pub fn to_conn(tokens: ClaudeTokenResponse) -> OAuthConn {
         .unwrap_or_default();
     if email.is_empty() {
         email = jwt::decode_payload(&tokens.access_token)
-            .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(|s| s.to_string()))
+            .and_then(|v| {
+                v.get("email")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_default();
     }
 

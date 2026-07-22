@@ -118,10 +118,9 @@ mod tests {
 
     #[test]
     fn reasoning_summary_delta() {
-        let e = parse_event(
-            r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking"}"#,
-        )
-        .unwrap();
+        let e =
+            parse_event(r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking"}"#)
+                .unwrap();
         match e {
             ResponsesEvent::ReasoningSummaryTextDelta { delta } => assert_eq!(delta, "thinking"),
             other => panic!("wrong variant: {other:?}"),
@@ -136,7 +135,12 @@ mod tests {
         .unwrap();
         match e {
             ResponsesEvent::OutputItemDone {
-                item: OutputItem::FunctionCall { name, arguments, call_id },
+                item:
+                    OutputItem::FunctionCall {
+                        name,
+                        arguments,
+                        call_id,
+                    },
             } => {
                 assert_eq!(name, "read");
                 assert_eq!(arguments, "{\"path\":\"a\"}");
@@ -154,7 +158,11 @@ mod tests {
         .unwrap();
         match e {
             ResponsesEvent::OutputItemDone {
-                item: OutputItem::Reasoning { id, encrypted_content },
+                item:
+                    OutputItem::Reasoning {
+                        id,
+                        encrypted_content,
+                    },
             } => {
                 assert_eq!(id.as_deref(), Some("rs_1"));
                 assert_eq!(encrypted_content.as_deref(), Some("BLOB"));
@@ -171,7 +179,11 @@ mod tests {
         .unwrap();
         match e {
             ResponsesEvent::OutputItemDone {
-                item: OutputItem::Reasoning { id, encrypted_content },
+                item:
+                    OutputItem::Reasoning {
+                        id,
+                        encrypted_content,
+                    },
             } => {
                 assert_eq!(id.as_deref(), Some("rs_2"));
                 assert_eq!(encrypted_content, None);
@@ -206,10 +218,9 @@ mod tests {
             other => panic!("wrong variant: {other:?}"),
         }
         // Partial usage: missing output_tokens + details default to 0/None.
-        let e2 = parse_event(
-            r#"{"type":"response.completed","response":{"usage":{"input_tokens":5}}}"#,
-        )
-        .unwrap();
+        let e2 =
+            parse_event(r#"{"type":"response.completed","response":{"usage":{"input_tokens":5}}}"#)
+                .unwrap();
         match e2 {
             ResponsesEvent::Completed { response } => {
                 let u = response.usage.unwrap();
@@ -223,13 +234,15 @@ mod tests {
 
     #[test]
     fn failed_event() {
-        let e = parse_event(
-            r#"{"type":"response.failed","response":{"error":{"message":"boom"}}}"#,
-        )
-        .unwrap();
+        let e =
+            parse_event(r#"{"type":"response.failed","response":{"error":{"message":"boom"}}}"#)
+                .unwrap();
         match e {
             ResponsesEvent::Failed { response } => {
-                let msg = response.unwrap()["error"]["message"].as_str().unwrap().to_string();
+                let msg = response.unwrap()["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
                 assert_eq!(msg, "boom");
             }
             other => panic!("wrong variant: {other:?}"),
@@ -238,8 +251,7 @@ mod tests {
 
     #[test]
     fn error_event() {
-        let e =
-            parse_event(r#"{"type":"error","message":"rate limited","code":"429"}"#).unwrap();
+        let e = parse_event(r#"{"type":"error","message":"rate limited","code":"429"}"#).unwrap();
         match e {
             ResponsesEvent::Error { message, code } => {
                 assert_eq!(message.as_deref(), Some("rate limited"));
@@ -261,7 +273,9 @@ mod tests {
         .unwrap();
         assert!(matches!(
             e2,
-            ResponsesEvent::OutputItemDone { item: OutputItem::Other }
+            ResponsesEvent::OutputItemDone {
+                item: OutputItem::Other
+            }
         ));
     }
 

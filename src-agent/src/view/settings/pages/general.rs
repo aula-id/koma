@@ -38,7 +38,11 @@ pub(crate) fn draw_general(
 
         // Label: left-padded to 14 cols.
         let label_text = format!("{:<14}", f.label());
-        let label_color = if is_selected { palette.accent } else { palette.dim };
+        let label_color = if is_selected {
+            palette.accent
+        } else {
+            palette.dim
+        };
         let label_span = Span::styled(label_text, Style::default().fg(label_color));
 
         // PATH LISTS (Workdir / Allowed dirs): a label row, then one
@@ -123,7 +127,7 @@ pub(crate) fn draw_general(
             }
             _ => {
                 let raw: &str = match f {
-                    SettingField::ApiKey   => st.api_key.as_str(),
+                    SettingField::ApiKey => st.api_key.as_str(),
                     SettingField::Provider => {
                         if st.provider.is_empty() {
                             ""
@@ -131,7 +135,7 @@ pub(crate) fn draw_general(
                             st.provider.as_str()
                         }
                     }
-                    SettingField::Name    => st.name.as_str(),
+                    SettingField::Name => st.name.as_str(),
                     _ => "",
                 };
                 let editing_here = st.editing && is_selected;

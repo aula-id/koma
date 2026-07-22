@@ -195,10 +195,7 @@ mod tests {
     #[test]
     fn detects_go_plan_403() {
         let body = r#"{"error":"403 Forbidden: Your Go plan doesn't include API access. Upgrade to Provider or higher at https://commandcode.ai/billing"}"#;
-        assert!(is_provider_api_denied(
-            reqwest::StatusCode::FORBIDDEN,
-            body
-        ));
+        assert!(is_provider_api_denied(reqwest::StatusCode::FORBIDDEN, body));
         assert!(!is_provider_api_denied(
             reqwest::StatusCode::UNAUTHORIZED,
             body

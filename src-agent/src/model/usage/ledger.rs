@@ -39,14 +39,20 @@ pub(crate) fn open() -> Option<Connection> {
     }
     let conn = Connection::open(&path)
         .map_err(|e| {
-            crate::model::store::append_global_error_log("usage ledger", &format!("open error: {e}"))
+            crate::model::store::append_global_error_log(
+                "usage ledger",
+                &format!("open error: {e}"),
+            )
         })
         .ok()?;
     // Run the DDL only on the first `open()` in this process — see
     // `SCHEMA_ONCE`. Every later call reuses the schema created here.
     SCHEMA_ONCE.call_once(|| {
         if let Err(e) = ensure_schema(&conn) {
-            crate::model::store::append_global_error_log("usage ledger", &format!("schema error: {e}"));
+            crate::model::store::append_global_error_log(
+                "usage ledger",
+                &format!("schema error: {e}"),
+            );
         }
     });
     Some(conn)
@@ -95,8 +101,15 @@ pub fn record_usage(
              tokens_in, tokens_cached, tokens_out, cost)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
-            ts, model_id, role, session_uuid, pwd_hash,
-            tokens_in as i64, tokens_cached as i64, tokens_out as i64, cost
+            ts,
+            model_id,
+            role,
+            session_uuid,
+            pwd_hash,
+            tokens_in as i64,
+            tokens_cached as i64,
+            tokens_out as i64,
+            cost
         ],
     ) {
         crate::model::store::append_global_error_log("usage ledger", &format!("insert error: {e}"));

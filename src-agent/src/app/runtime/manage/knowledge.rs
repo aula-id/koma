@@ -3,9 +3,9 @@
 //! Mirrors [`super::mcp`] — one knowledge daemon serves all sessions. Sessions
 //! push facts and query for graph-expanded recall over `~/.koma/knowledge.sock`.
 
+use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -52,9 +52,7 @@ pub fn spawn_knowledge_daemon() -> Result<u32> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{
-            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        };
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
@@ -100,8 +98,12 @@ fn probe_knowledge_fingerprint(path: &Path) -> Result<KnowledgeResponse> {
     let req = KnowledgeRequest::Status;
     let payload = serde_json::to_vec(&req).context("serialise KnowledgeRequest::Status")?;
     let prefix = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&prefix).context("write knowledge probe prefix")?;
-    stream.write_all(&payload).context("write knowledge probe payload")?;
+    stream
+        .write_all(&prefix)
+        .context("write knowledge probe prefix")?;
+    stream
+        .write_all(&payload)
+        .context("write knowledge probe payload")?;
     stream.flush().context("flush knowledge probe")?;
 
     let mut reader = FrameReader::new();
@@ -110,15 +112,16 @@ fn probe_knowledge_fingerprint(path: &Path) -> Result<KnowledgeResponse> {
             .next_frame()
             .context("knowledge probe frame reassembly")?
         {
-            return serde_json::from_slice(&bytes)
-                .context("decode KnowledgeResponse for probe");
+            return serde_json::from_slice(&bytes).context("decode KnowledgeResponse for probe");
         }
         let mut chunk = [0u8; 8192];
         let n = stream
             .read(&mut chunk)
             .context("read knowledge probe reply")?;
         if n == 0 {
-            return Err(anyhow::anyhow!("knowledge daemon closed connection mid-probe"));
+            return Err(anyhow::anyhow!(
+                "knowledge daemon closed connection mid-probe"
+            ));
         }
         reader.push(&chunk[..n]);
     }

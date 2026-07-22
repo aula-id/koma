@@ -20,7 +20,9 @@
 //! Selection/scroll state lives in [`crate::app::mode::SessionHub`]; keystroke
 //! handling lives in [`crate::controller::input::handle_session_hub`].
 
-use std::time::SystemTime;
+use crate::app::mode::{HubPane, SessionHub, SessionKind};
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
@@ -28,9 +30,7 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::mode::{HubPane, SessionHub, SessionKind};
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
+use std::time::SystemTime;
 
 /// Format a `SystemTime` as a human-readable relative age string.
 ///
@@ -103,7 +103,13 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, hub: &SessionHub, palette: &
 /// works on both. Reuses the inverse `sel_fg`/`sel_bg` + BOLD style the help
 /// footer / tool-approval bar use as the palette's "warning" treatment (this palette
 /// has no dedicated warn colour).
-fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, kill_id: &str, palette: &Palette) {
+fn draw_confirm_bar(
+    frame: &mut Frame,
+    area: Rect,
+    hub: &SessionHub,
+    kill_id: &str,
+    palette: &Palette,
+) {
     if area.width == 0 {
         return;
     }
@@ -125,7 +131,11 @@ fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, kill_id: &s
         .bg(palette.sel_bg)
         .add_modifier(Modifier::BOLD);
     // Pad to full width so the whole footer line carries the warning background.
-    let padded = format!(" {:<width$}", text, width = area.width.saturating_sub(1) as usize);
+    let padded = format!(
+        " {:<width$}",
+        text,
+        width = area.width.saturating_sub(1) as usize
+    );
     frame.render_widget(
         Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
         area,
@@ -137,7 +147,13 @@ fn draw_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, kill_id: &s
 /// whose on-disk path's final component == `del_id` (the session UUID). Uses the
 /// same inverse warning treatment as [`draw_confirm_bar`]. The wording is
 /// deliberately blunt ("permanently") — this deletes files off disk.
-fn draw_delete_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, del_id: &str, palette: &Palette) {
+fn draw_delete_confirm_bar(
+    frame: &mut Frame,
+    area: Rect,
+    hub: &SessionHub,
+    del_id: &str,
+    palette: &Palette,
+) {
     if area.width == 0 {
         return;
     }
@@ -147,12 +163,17 @@ fn draw_delete_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, del_
         .find(|e| e.path.file_name().and_then(|n| n.to_str()) == Some(del_id))
         .map(|e| e.name.as_str())
         .unwrap_or("session");
-    let text = format!("Permanently delete session '{name}' from disk?  Ctrl+X confirm · Esc cancel");
+    let text =
+        format!("Permanently delete session '{name}' from disk?  Ctrl+X confirm · Esc cancel");
     let bar_style = Style::default()
         .fg(palette.sel_fg)
         .bg(palette.sel_bg)
         .add_modifier(Modifier::BOLD);
-    let padded = format!(" {:<width$}", text, width = area.width.saturating_sub(1) as usize);
+    let padded = format!(
+        " {:<width$}",
+        text,
+        width = area.width.saturating_sub(1) as usize
+    );
     frame.render_widget(
         Paragraph::new(Line::from(Span::raw(padded))).style(bar_style),
         area,
@@ -160,11 +181,27 @@ fn draw_delete_confirm_bar(frame: &mut Frame, area: Rect, hub: &SessionHub, del_
 }
 
 /// Render the TOP "cooking" pane (the live sessions) into `area`.
-fn draw_cooking(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &SessionHub, palette: &Palette) {
+fn draw_cooking(
+    frame: &mut Frame,
+    area: Rect,
+    rest: &AppStateRest,
+    hub: &SessionHub,
+    palette: &Palette,
+) {
     let focused = hub.focus == HubPane::Cooking;
 
-    let real_sessions = hub.cooking.iter().filter(|e| e.kind == SessionKind::Session).count();
-    let inner = pane_inner(frame, area, &format!("cooking ({real_sessions})"), focused, palette);
+    let real_sessions = hub
+        .cooking
+        .iter()
+        .filter(|e| e.kind == SessionKind::Session)
+        .count();
+    let inner = pane_inner(
+        frame,
+        area,
+        &format!("cooking ({real_sessions})"),
+        focused,
+        palette,
+    );
     let inner_w = inner.width as usize;
 
     // Animated spinner frame — ticks every 80ms.
@@ -196,7 +233,11 @@ fn draw_cooking(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &Sessio
                 "○ ready  ".to_string()
             };
             let dir = truncate(&entry.dir_label, 14);
-            let right = if dir.is_empty() { marker.clone() } else { format!("{dir}  {marker}") };
+            let right = if dir.is_empty() {
+                marker.clone()
+            } else {
+                format!("{dir}  {marker}")
+            };
             let name_w = inner_w.saturating_sub(right.chars().count() + 2).max(4);
             let name = truncate(&entry.name, name_w);
             let name_style = if entry.is_foreground {
@@ -218,7 +259,9 @@ fn draw_cooking(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &Sessio
     // Persisted offset on rest — SessionHub is rebuilt per client frame.
     let list_height = inner.height as usize;
     let scroll = if focused {
-        let sel = hub.cooking_selected.min(hub.cooking.len().saturating_sub(1));
+        let sel = hub
+            .cooking_selected
+            .min(hub.cooking.len().saturating_sub(1));
         let (start, _) = crate::view::scroll::scroll_window(
             &rest.hub_cooking_offset,
             sel,
@@ -241,7 +284,13 @@ fn draw_cooking(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &Sessio
 /// client (the shadow: identity filter over the already-filtered rows the daemon
 /// projected). An empty filtered view shows `no matches` when a query is active, or
 /// `no past sessions` when there is simply no history.
-fn draw_history(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &SessionHub, palette: &Palette) {
+fn draw_history(
+    frame: &mut Frame,
+    area: Rect,
+    rest: &AppStateRest,
+    hub: &SessionHub,
+    palette: &Palette,
+) {
     let focused = hub.focus == HubPane::History;
 
     let inner = pane_inner(
@@ -288,7 +337,11 @@ fn draw_history(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &Sessio
             };
             let dir = truncate(&entry.dir_label, 14);
             let age = fmt_age(entry.last_active);
-            let right = if dir.is_empty() { age.clone() } else { format!("{dir}  {age}") };
+            let right = if dir.is_empty() {
+                age.clone()
+            } else {
+                format!("{dir}  {age}")
+            };
             let name_w = inner_w.saturating_sub(right.chars().count() + 2).max(4);
             let name = truncate(&entry.name, name_w);
             let row = format!("{name:<name_w$}  {right}");
@@ -308,12 +361,8 @@ fn draw_history(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &Sessio
     let scroll = if focused {
         let n = hub.history_filtered.len();
         let sel = hub.history_selected.min(n.saturating_sub(1));
-        let (start, _) = crate::view::scroll::scroll_window(
-            &rest.hub_history_offset,
-            sel,
-            n,
-            list_height,
-        );
+        let (start, _) =
+            crate::view::scroll::scroll_window(&rest.hub_history_offset, sel, n, list_height);
         start as u16
     } else {
         0
@@ -324,7 +373,13 @@ fn draw_history(frame: &mut Frame, area: Rect, rest: &AppStateRest, hub: &Sessio
 /// Draw a pane's header rule (`title` on the TOP rule) into `area` and return the
 /// inset content area below it. The focused pane's rule is accented; an unfocused
 /// pane's rule is dim. Mirrors the single-rule header used by the other pickers.
-fn pane_inner(frame: &mut Frame, area: Rect, title: &str, focused: bool, palette: &Palette) -> Rect {
+fn pane_inner(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    focused: bool,
+    palette: &Palette,
+) -> Rect {
     let rule_style = if focused {
         Style::default().fg(palette.accent)
     } else {
@@ -338,5 +393,8 @@ fn pane_inner(frame: &mut Frame, area: Rect, title: &str, focused: bool, palette
     let inner = header.inner(area);
     frame.render_widget(header, area);
     // One char horizontal margin so rows align with the picker style.
-    inner.inner(Margin { horizontal: 1, vertical: 0 })
+    inner.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    })
 }

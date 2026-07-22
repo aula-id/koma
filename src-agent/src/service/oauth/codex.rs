@@ -105,7 +105,10 @@ pub async fn exchange_code(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("token exchange failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "token exchange failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     resp.json::<TokenResponse>()
@@ -134,7 +137,10 @@ pub async fn refresh(http: &reqwest::Client, refresh_token: &str) -> Result<Toke
         if body.contains("invalid_grant") || body.contains("refresh_token_reused") {
             return Err("unrecoverable: re-login required".to_string());
         }
-        return Err(format!("refresh failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "refresh failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     resp.json::<TokenResponse>()

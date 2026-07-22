@@ -127,7 +127,10 @@ fn browse_lines<'a>(st: &'a ExtStoreState, palette: &Palette, width: usize) -> V
     }
     if let Some(err) = &st.error {
         return vec![
-            Line::from(Span::styled(err.clone(), Style::default().fg(palette.error))),
+            Line::from(Span::styled(
+                err.clone(),
+                Style::default().fg(palette.error),
+            )),
             Line::from(Span::styled(
                 "press r to retry",
                 Style::default().fg(palette.dim),
@@ -165,7 +168,10 @@ fn browse_lines<'a>(st: &'a ExtStoreState, palette: &Palette, width: usize) -> V
                     format!("{:<tagline_w$}", truncate(&row.tagline, tagline_w)),
                     Style::default().fg(palette.fg),
                 ),
-                Span::styled(format!("  {}", row.author), Style::default().fg(palette.dim)),
+                Span::styled(
+                    format!("  {}", row.author),
+                    Style::default().fg(palette.dim),
+                ),
             ];
             if row.installed {
                 spans.push(Span::styled(
@@ -212,7 +218,10 @@ fn detail_lines<'a>(st: &'a ExtStoreState, palette: &Palette, width: usize) -> V
 
     let kv = |label: &str, value: String| -> Line<'static> {
         Line::from(vec![
-            Span::styled(format!("{label:<label_w$}"), Style::default().fg(palette.dim)),
+            Span::styled(
+                format!("{label:<label_w$}"),
+                Style::default().fg(palette.dim),
+            ),
             Span::styled(value, Style::default().fg(palette.fg)),
         ])
     };
@@ -223,12 +232,12 @@ fn detail_lines<'a>(st: &'a ExtStoreState, palette: &Palette, width: usize) -> V
     lines.push(kv("author", row.author.clone()));
     if row.installed {
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<label_w$}", "status"), Style::default().fg(palette.dim)),
-            Span::styled("INSTALLED", Style::default().fg(palette.success)),
             Span::styled(
-                "  — /extension to manage",
+                format!("{:<label_w$}", "status"),
                 Style::default().fg(palette.dim),
             ),
+            Span::styled("INSTALLED", Style::default().fg(palette.success)),
+            Span::styled("  — /extension to manage", Style::default().fg(palette.dim)),
         ]));
     }
     lines.push(kv(
@@ -269,7 +278,10 @@ fn detail_lines<'a>(st: &'a ExtStoreState, palette: &Palette, width: usize) -> V
             lines.push(Line::from(""));
         } else {
             for chunk in wrap_chars(para_line, value_w.max(20)) {
-                lines.push(Line::from(Span::styled(chunk, Style::default().fg(palette.fg))));
+                lines.push(Line::from(Span::styled(
+                    chunk,
+                    Style::default().fg(palette.fg),
+                )));
             }
         }
     }

@@ -58,6 +58,8 @@ mod subagents;
 mod tool_format;
 pub(crate) mod transcript;
 
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Style,
@@ -65,8 +67,6 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
 
 /// Compute the 6-element layout split for the chat screen given `rest` and the
 /// terminal `area`. The result is identical to what `draw` uses internally and
@@ -78,7 +78,10 @@ use crate::view::theme::Palette;
 /// When `rest.fg().pending_steer` is empty, chunk [2] has zero height (hidden)
 /// and the transcript keeps its full space.
 pub(crate) fn layout_chunks(rest: &AppStateRest, area: Rect) -> std::rc::Rc<[Rect]> {
-    let area = area.inner(Margin { horizontal: 0, vertical: 1 });
+    let area = area.inner(Margin {
+        horizontal: 0,
+        vertical: 1,
+    });
     let input_rows = input::input_row_count(rest, area.width, area.height);
     let input_h = (input_rows as u16) + 2;
     let n = rest.fg().pending_steer.len();
@@ -199,7 +202,10 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
                 .unwrap_or(false);
         let overlay_top = chunks[4].y.saturating_sub(overlays::PLAN_APPROVAL_HEIGHT);
         if plan_parked && overlay_top < chunks[1].y + chunks[1].height {
-            Rect { height: overlay_top.saturating_sub(chunks[1].y), ..chunks[1] }
+            Rect {
+                height: overlay_top.saturating_sub(chunks[1].y),
+                ..chunks[1]
+            }
         } else {
             chunks[1]
         }
@@ -216,9 +222,8 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, resolved_model: &str, palett
     status::render_status(frame, chunks[5], rest, palette);
 
     // --- Slash command palette ---
-    let cmd_palette_active = overlays::render_command_palette(
-        frame, chunks[4], chunks[1], rest, palette,
-    );
+    let cmd_palette_active =
+        overlays::render_command_palette(frame, chunks[4], chunks[1], rest, palette);
 
     // --- File reference palette --- only when the command palette is NOT active.
     if !cmd_palette_active {

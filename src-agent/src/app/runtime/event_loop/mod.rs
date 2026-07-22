@@ -93,7 +93,11 @@ pub(super) fn run_loop(
         // When any item is InProgress, force dirty every tick so the braille spinner
         // animates — spinner_glyph() uses wall-clock time but needs a redraw to cycle.
         if let Mode::Todo(t) = state.mode_mut() {
-            if t.maybe_refresh() || t.items.iter().any(|i| i.status == crate::app::mode::todo::TodoStatus::InProgress) {
+            if t.maybe_refresh()
+                || t.items
+                    .iter()
+                    .any(|i| i.status == crate::app::mode::todo::TodoStatus::InProgress)
+            {
                 dirty = true;
             }
         }
@@ -191,11 +195,15 @@ pub(super) fn run_loop(
                         if matches!(state.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) {
                             match m.kind {
                                 MouseEventKind::ScrollUp => {
-                                    for _ in 0..3 { state.rest.scroll_up(); }
+                                    for _ in 0..3 {
+                                        state.rest.scroll_up();
+                                    }
                                     dirty = true;
                                 }
                                 MouseEventKind::ScrollDown => {
-                                    for _ in 0..3 { state.rest.scroll_down(); }
+                                    for _ in 0..3 {
+                                        state.rest.scroll_down();
+                                    }
                                     dirty = true;
                                 }
                                 _ => {}

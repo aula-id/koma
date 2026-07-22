@@ -90,7 +90,9 @@ pub(super) fn handle_store_install_confirm(
         s.installing = true;
         s.install_error = None;
     }
-    if let Err(e) = crate::app::ext::ext_store::kick_off_store_install(&mut state.rest, handle, id, None) {
+    if let Err(e) =
+        crate::app::ext::ext_store::kick_off_store_install(&mut state.rest, handle, id, None)
+    {
         if let Mode::ExtStore(s) = state.mode_mut() {
             s.installing = false;
             s.install_error = Some(e);

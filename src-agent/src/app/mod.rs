@@ -40,9 +40,9 @@ pub mod version;
 
 pub use ext::{print_ext_usage, run_ext_install_dev};
 pub use runtime::client_run;
-pub use runtime::run;
 #[cfg(feature = "gui")]
 pub use runtime::gui::run_gui;
+pub use runtime::run;
 pub use runtime::run_daemon;
 pub use runtime::run_daemon_selftest;
 pub use runtime::run_knowledge_daemon;

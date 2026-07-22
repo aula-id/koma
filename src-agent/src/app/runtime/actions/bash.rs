@@ -30,7 +30,10 @@ pub(super) fn handle_bash_kill(id: usize, state: &mut AppState) -> Result<()> {
     if let Some(job) = job {
         crate::app::bgbash::kill_bash_job(job);
         state.rest.fg_mut().status = format!("killed bash-{id}");
-        state.rest.fg_mut().set_toast_info(format!("killed bash-{id}"));
+        state
+            .rest
+            .fg_mut()
+            .set_toast_info(format!("killed bash-{id}"));
     }
     Ok(())
 }

@@ -78,7 +78,10 @@ pub(super) fn draw_field_editor(
             format!("edit {title}"),
             Style::default().fg(palette.dim),
         )),
-        header_inner.inner(Margin { horizontal: 2, vertical: 0 }),
+        header_inner.inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
     );
 
     // --- Footer hint (dim), or the Ctrl+X clear-confirm prompt (accent). ---
@@ -95,11 +98,17 @@ pub(super) fn draw_field_editor(
     };
     frame.render_widget(
         Paragraph::new(footer_line),
-        outer[2].inner(Margin { horizontal: 2, vertical: 0 }),
+        outer[2].inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        }),
     );
 
     // --- Body: horizontal margin so text isn't glued to the edge (chat-style). ---
-    let body = outer[1].inner(Margin { horizontal: 2, vertical: 0 });
+    let body = outer[1].inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
     if body.width == 0 || body.height == 0 {
         return;
     }
@@ -240,7 +249,11 @@ pub(super) fn editor_lines<'a>(
             if selected { "› " } else { "  " },
             Style::default().fg(palette.accent),
         );
-        let label_color = if selected { palette.accent } else { palette.dim };
+        let label_color = if selected {
+            palette.accent
+        } else {
+            palette.dim
+        };
         let label = Span::styled(
             format!("{:<14}", f.label()),
             Style::default().fg(label_color),
@@ -279,8 +292,12 @@ pub(super) fn editor_lines<'a>(
             // Model is a SELECTION over the registered models, not free text.
             // Enter opens the picker; the row shows the current choice resolved to
             // `name @ provider` (or a dim "(inherit main)").
-            let (text, chosen) =
-                model_display(config, settings, &st.draft_model_uuid, &st.draft_model_legacy);
+            let (text, chosen) = model_display(
+                config,
+                settings,
+                &st.draft_model_uuid,
+                &st.draft_model_legacy,
+            );
             let color = if chosen { palette.fg } else { palette.dim };
             let mut row = vec![
                 marker,
@@ -288,7 +305,10 @@ pub(super) fn editor_lines<'a>(
                 Span::styled(truncate(&text, value_w), Style::default().fg(color)),
             ];
             if selected {
-                row.push(Span::styled("  enter pick", Style::default().fg(palette.dim)));
+                row.push(Span::styled(
+                    "  enter pick",
+                    Style::default().fg(palette.dim),
+                ));
             }
             lines.push(Line::from(row));
             continue;
@@ -310,7 +330,11 @@ pub(super) fn editor_lines<'a>(
             } else {
                 (truncate(first, value_w), palette.fg)
             };
-            let mut row = vec![marker, label, Span::styled(shown, Style::default().fg(color))];
+            let mut row = vec![
+                marker,
+                label,
+                Span::styled(shown, Style::default().fg(color)),
+            ];
             if selected {
                 row.push(Span::styled(
                     "  enter edit fullsize",
@@ -334,7 +358,11 @@ pub(super) fn editor_lines<'a>(
             };
             (ph.to_string(), palette.dim)
         } else {
-            let trunc_w = if editing_here { value_w.saturating_sub(1) } else { value_w };
+            let trunc_w = if editing_here {
+                value_w.saturating_sub(1)
+            } else {
+                value_w
+            };
             let mut s = truncate(raw, trunc_w);
             if editing_here {
                 s.push('█');
@@ -352,10 +380,7 @@ pub(super) fn editor_lines<'a>(
 
 /// Detail rows for DeleteConfirm: a one-line `y`/`n` prompt.
 pub(super) fn delete_lines<'a>(st: &'a AgentsState, palette: &Palette) -> Vec<Line<'a>> {
-    let name = st
-        .current_agent()
-        .map(|a| a.name.as_str())
-        .unwrap_or("?");
+    let name = st.current_agent().map(|a| a.name.as_str()).unwrap_or("?");
     vec![
         Line::from(""),
         Line::from(vec![
