@@ -1,4 +1,4 @@
-//! Persistent SurrealDB mirror backed by SurrealKV.
+//! Persistent SurrealDB mirror backed by RocksDB.
 //!
 //! `open_db` returns a cached on-disk connection (schema is defined once per
 //! path). `start_sync` spawns a fire-and-forget background thread that reads
@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
-use surrealdb::engine::local::Db;
+use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::Surreal;
 
 // ---------------------------------------------------------------------------
@@ -135,6 +135,34 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// RocksDB store compatibility — wipe legacy SurrealKV dirs on first open
+// ---------------------------------------------------------------------------
+
+/// RocksDB marker file. Absent means not a RocksDB store (legacy SurrealKV or empty).
+fn is_rocksdb_store(path: &Path) -> bool {
+    path.join("CURRENT").is_file()
+}
+
+/// If `path` exists but is not a RocksDB store, remove it so a fresh open
+/// succeeds. Also clears session sync markers when wiping a session
+/// `messages.surreal` dir so hybrid re-syncs from SQLite.
+pub(crate) fn ensure_rocksdb_compatible(path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    if is_rocksdb_store(path) {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(path);
+    // If this looks like a session mirror path, drop sync markers so hybrid
+    // re-syncs from the SQLite message log.
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::remove_file(parent.join("messages.surreal.sync.done"));
+        let _ = std::fs::remove_file(parent.join("messages.surreal.sync.lock"));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // open_db — process-wide cache, schema defined once per path
 // ---------------------------------------------------------------------------
 
@@ -154,7 +182,25 @@ pub(crate) async fn open_db(session_dir: &Path) -> anyhow::Result<Surreal<Db>> {
         }
     }
 
-    let db = Surreal::<Db>::new(path_str.clone()).await?;
+    // Wipe legacy SurrealKV store if present — RocksDB cannot open it.
+    ensure_rocksdb_compatible(&db_path);
+
+    let db = match Surreal::new::<RocksDb>(path_str.clone()).await {
+        Ok(db) => db,
+        Err(e) => {
+            // One-shot retry: wipe + reopen. Covers partial/corrupt dirs.
+            let _ = std::fs::remove_dir_all(&db_path);
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::remove_file(parent.join("messages.surreal.sync.done"));
+                let _ = std::fs::remove_file(parent.join("messages.surreal.sync.lock"));
+            }
+            crate::model::store::append_global_error_log(
+                "surreal::open_db — first open failed, wiped + retrying",
+                &e.to_string(),
+            );
+            Surreal::new::<RocksDb>(path_str.clone()).await?
+        }
+    };
     db.use_ns("koma").use_db("messages").await?;
 
     // ── Message tables ──────────────────────────────────────────────
