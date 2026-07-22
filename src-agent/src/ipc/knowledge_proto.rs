@@ -64,10 +64,7 @@ pub enum KnowledgeRequest {
     /// Expand a vector query through the entity graph. The daemon runs KNN on the
     /// fact table, then traverses `->produced->entity->memory_edge->entity` to
     /// pull in related facts. Answered with [`KnowledgeResponse::ExpandResult`].
-    Expand {
-        query_vec: Vec<f32>,
-        limit: usize,
-    },
+    Expand { query_vec: Vec<f32>, limit: usize },
     /// Daemon health + stats. Answered with [`KnowledgeResponse::Status`].
     Status,
     /// Ask the daemon to shut down gracefully (Windows graceful-stop path; unix
@@ -92,10 +89,7 @@ pub enum KnowledgeResponse {
         related_facts: Vec<KnowledgeFact>,
     },
     /// Answer to [`KnowledgeRequest::Status`].
-    Status {
-        fact_count: u64,
-        entity_count: u64,
-    },
+    Status { fact_count: u64, entity_count: u64 },
     /// A protocol-level error (malformed request, daemon-internal fault).
     Error(String),
 }

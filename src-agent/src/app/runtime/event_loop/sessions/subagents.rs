@@ -122,9 +122,7 @@ pub(super) fn drain_subagents(
                                 || l.starts_with("done:")
                                 || l.starts_with("error:")
                         });
-                        if !is_marker
-                            && sa.transcript.last().is_some_and(|l| l.len() < 200)
-                        {
+                        if !is_marker && sa.transcript.last().is_some_and(|l| l.len() < 200) {
                             if let Some(last) = sa.transcript.last_mut() {
                                 last.push_str(&t);
                             }
@@ -208,12 +206,14 @@ pub(super) fn drain_subagents(
                         // Readable quote-less signature (`read(koma.ts)`,
                         // `grep(enum HostCtl)`) instead of raw JSON args, reusing the
                         // same formatter the main chat transcript uses.
-                        let sig = crate::view::chat::transcript::format_tool_signature(&name, &args);
+                        let sig =
+                            crate::view::chat::transcript::format_tool_signature(&name, &args);
                         sa.transcript.push(format!("→ {sig}"));
                     }
                     AgentEvent::ToolDone { name, result } => {
                         let first = result.lines().next().unwrap_or("").trim();
-                        sa.transcript.push(format!("✓ {name}: {}", trunc(first, 120)));
+                        sa.transcript
+                            .push(format!("✓ {name}: {}", trunc(first, 120)));
                     }
                     AgentEvent::Done(s) => {
                         sa.transcript.push(format!("done: {}", trunc(&s, 200)));
@@ -258,9 +258,7 @@ pub(super) fn drain_subagents(
         }
         // Apply per-step spend against the OWNING session (sa borrow released).
         if !step_rollups.is_empty() {
-            let (sess_uuid, pwd_hash) = state
-                .rest
-                .sessions[idx]
+            let (sess_uuid, pwd_hash) = state.rest.sessions[idx]
                 .session
                 .as_ref()
                 .map(|s| (s.id.clone(), s.pwd_hash.clone()))
@@ -335,9 +333,12 @@ pub(super) fn drain_subagents(
                     // not a short status label — it is injected verbatim into the
                     // wake-nudge user turn so the model receives the complete result
                     // without needing to poll task_output.
-                    Some(outcome) if !sa.nudged => {
-                        (None, None, Some((sa.id, sa.agent_name.clone(), outcome)), true)
-                    }
+                    Some(outcome) if !sa.nudged => (
+                        None,
+                        None,
+                        Some((sa.id, sa.agent_name.clone(), outcome)),
+                        true,
+                    ),
                     // Terminal but already nudged: nothing to do.
                     Some(_) => (None, None, None, false),
                     // Still running: nothing this tick.
@@ -347,7 +348,9 @@ pub(super) fn drain_subagents(
                 match (&sa.tool_call_id, &sa.status) {
                     // task-tool path: deliver the deferred result back to the model.
                     (Some(call_id), status)
-                        if state.rest.sessions[idx].pending_subagent_calls.contains(call_id) =>
+                        if state.rest.sessions[idx]
+                            .pending_subagent_calls
+                            .contains(call_id) =>
                     {
                         let result = match status {
                             // Deliver the FULL, untruncated report.
@@ -402,9 +405,7 @@ pub(super) fn drain_subagents(
                     // Spend already landed per UsageReport step above.
                     (
                         None,
-                        SubAgentStatus::Done(_)
-                        | SubAgentStatus::Killed
-                        | SubAgentStatus::Error(_),
+                        SubAgentStatus::Done(_) | SubAgentStatus::Killed | SubAgentStatus::Error(_),
                     ) if !sa.nudged => (None, None, None, true),
                     _ => (None, None, None, false),
                 }
@@ -485,8 +486,12 @@ pub(super) fn drain_subagents(
     // `tool_results` and drop its id from `pending_subagent_calls`. Done AFTER
     // the loop so the per-agent borrow above stays immutable.
     for (call_id, result) in deferred_results {
-        state.rest.sessions[idx].pending_subagent_calls.retain(|c| c != &call_id);
-        state.rest.sessions[idx].tool_results.push((call_id, result));
+        state.rest.sessions[idx]
+            .pending_subagent_calls
+            .retain(|c| c != &call_id);
+        state.rest.sessions[idx]
+            .tool_results
+            .push((call_id, result));
         dirty = true;
     }
 

@@ -40,10 +40,12 @@ pub(super) use guard::{
     intercept_cd, intercept_git_cred, intercept_git_worktree, intercept_read_before_edit_guard,
 };
 pub(super) use plan::{
-    build_convo_context, intercept_plan_enter, intercept_plan_readonly_gate, intercept_plan_ready,
-    intercept_checklist_plan,
+    build_convo_context, intercept_checklist_plan, intercept_plan_enter,
+    intercept_plan_readonly_gate, intercept_plan_ready,
 };
-pub(super) use task::{intercept_task, intercept_task_kill, intercept_task_output, intercept_task_send};
+pub(super) use task::{
+    intercept_task, intercept_task_kill, intercept_task_output, intercept_task_send,
+};
 
 /// What an `intercept_*` block resolved to, mirroring the three ways the
 /// original inline `if` block could end: keep looping (`Continue`), park the

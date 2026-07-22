@@ -15,7 +15,11 @@ use crate::app::state::AppStateRest;
 use super::Action;
 
 /// Handle a key press inside an open extension screen.
-pub fn handle_ext_screen(s: &mut ExtScreenState, _rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub fn handle_ext_screen(
+    s: &mut ExtScreenState,
+    _rest: &mut AppStateRest,
+    key: KeyEvent,
+) -> Action {
     match key.code {
         KeyCode::Esc => Action::ExtScreenClose,
         KeyCode::Up => {

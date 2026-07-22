@@ -16,11 +16,10 @@
 
 pub(super) use super::push_rows::{
     PushAnalyticsModel, PushAnalyticsSeriesPoint, PushAttachment, PushBashJob, PushCooking,
-    PushFileChange, PushFileTreeEntry, PushHistory, PushMcpServer, PushModel, PushMsg, PushPalette,
-    PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent, PushToolCall,
-    PushUsageDay, PushUsageModel, PushMcpStatusServer,
+    PushFileChange, PushFileTreeEntry, PushHistory, PushMcpServer, PushMcpStatusServer, PushModel,
+    PushMsg, PushPalette, PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute,
+    PushSubAgent, PushToolCall, PushUsageDay, PushUsageModel,
 };
-
 
 /// The daemon->JS envelope, tagged on `k`. One variant per bridge message; every
 /// field name matches the contract verbatim (camelCase where the contract uses it).
@@ -199,7 +198,10 @@ pub(super) enum PushEnvelope {
     /// `ListModels` — the Connector ModelForm REPLACES its model-id picker options with
     /// `models`. Pushed out-of-band (not fingerprinted) whenever the daemon answers a
     /// `ListModels`; `provider` is echoed so the form can drop a stale/out-of-order reply.
-    ModelList { provider: String, models: Vec<String> },
+    ModelList {
+        provider: String,
+        models: Vec<String>,
+    },
     /// One-shot live provider-route list for `modelId` under `provider` (uuid), answering a
     /// `ListRoutes` — the Connector ModelForm REPLACES its ROUTE picker options with the
     /// model's REAL routes (`routes`, each a `PushRoute`) instead of the hardcoded demo
@@ -548,7 +550,11 @@ pub(super) enum PushEnvelope {
     /// echoes the client request sequence for stale-reply protection (0 = no
     /// correlation, used by the generic `DaemonEvent::Error` fallback).
     #[serde(rename_all = "camelCase")]
-    AgentOp { ok: bool, error: Option<String>, req_seq: u64 },
+    AgentOp {
+        ok: bool,
+        error: Option<String>,
+        req_seq: u64,
+    },
     /// One-shot reply to a `GetMcpStatus` request — per-server live connection state
     /// (tool counts + errors) plus an optional top-level availability error. Echoes
     /// `requestId` so the frontend store can discard a stale reply. This is a
@@ -895,7 +901,10 @@ pub(super) fn push_installed_ext_detail(
     detail: Option<crate::ipc::proto::InstalledExtensionDetailWire>,
     error: Option<String>,
 ) {
-    super::render::emit(push, &PushEnvelope::InstalledExtensionDetail { id, detail, error });
+    super::render::emit(
+        push,
+        &PushEnvelope::InstalledExtensionDetail { id, detail, error },
+    );
 }
 
 /// Emit a one-shot `ExtensionOpResult` envelope for the DETACHED (home screen / swapper)
@@ -904,7 +913,12 @@ pub(super) fn push_installed_ext_detail(
 /// ATTACHED path's reply is a separate inline re-push of the daemon's own
 /// `DaemonEvent::ExtensionOpResult` (see `push_intercept`) — this is the detached twin, used
 /// by `store_host::spawn_install`/`spawn_uninstall`.
-pub(super) fn push_ext_op_result(push: &dyn Fn(String), id: String, ok: bool, error: Option<String>) {
+pub(super) fn push_ext_op_result(
+    push: &dyn Fn(String),
+    id: String,
+    ok: bool,
+    error: Option<String>,
+) {
     super::render::emit(push, &PushEnvelope::ExtensionOpResult { id, ok, error });
 }
 
@@ -937,4 +951,3 @@ pub(super) fn push_oauth_state(
         },
     );
 }
-

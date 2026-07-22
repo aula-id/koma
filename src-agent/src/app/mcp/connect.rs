@@ -27,10 +27,7 @@ impl McpManager {
     /// With no enabled servers this is effectively a no-op constructor: the
     /// snapshot stays empty, so [`Self::tool_defs`] / [`Self::tool_names`] are empty
     /// and no task is spawned.
-    pub fn connect_all(
-        handle: &tokio::runtime::Handle,
-        servers: &[McpServerEntry],
-    ) -> Arc<Self> {
+    pub fn connect_all(handle: &tokio::runtime::Handle, servers: &[McpServerEntry]) -> Arc<Self> {
         let manager = Arc::new(Self {
             backend: McpBackend::Local {
                 handle: handle.clone(),
@@ -295,18 +292,17 @@ impl McpManager {
                                     server.name, my_full_prefix
                                 ),
                             );
-                        } else {
+                        } else if let Some(service) = to_discard.take() {
                             // Keep it: move the service into the snapshot and record
                             // its tools. `take()` leaves `to_discard = None` so nothing
                             // is torn down afterwards.
-                            let Some(service) = to_discard.take() else {
-                                crate::model::store::append_global_error_log("mcp", "BUG: service was None after take");
-                                continue;
-                            };
                             snap.conns
                                 .insert(server.uuid.clone(), ServerConn { service, peer });
                             snap.errors.remove(&server.uuid);
                             snap.tools.extend(discovered);
+                        } else {
+                            crate::model::store::append_global_error_log("mcp", "BUG: service was None after take");
+                            // to_discard guard below will drop it
                         }
                     }
 

@@ -49,9 +49,9 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
 use crate::app::runtime::HubInbound;
-use crate::ipc::{IpcReadHalf, IpcStream, IpcWriteHalf};
 use crate::ipc::frame::{self, FrameReader};
 use crate::ipc::proto::{ClientRequest, DaemonFrame};
+use crate::ipc::{IpcReadHalf, IpcStream, IpcWriteHalf};
 
 /// How often the write half polls its (sync) frame receiver. 4ms keeps streamed
 /// tokens flushing to the socket at >=60fps (matching the loop's busy 8ms cadence)
@@ -113,27 +113,24 @@ async fn read_loop(mut read_half: IpcReadHalf, client_id: u64, hub_tx: Sender<Hu
     // explicit `loop` (not `while let`) because the post-loop `Disconnect` MUST fire
     // on every exit path, including the malformed-frame and loop-gone cases.
     loop {
-        let step: ControlFlow<()> =
-            match frame::read_frame_from(&mut read_half, &mut reader).await {
-                Ok(bytes) => match serde_json::from_slice::<ClientRequest>(&bytes) {
-                    // Forward the request; stop only if the loop is gone.
-                    Ok(req) => {
-                        if hub_tx
-                            .send(HubInbound::Request { client_id, req })
-                            .is_ok()
-                        {
-                            ControlFlow::Continue(())
-                        } else {
-                            ControlFlow::Break(())
-                        }
+        let step: ControlFlow<()> = match frame::read_frame_from(&mut read_half, &mut reader).await
+        {
+            Ok(bytes) => match serde_json::from_slice::<ClientRequest>(&bytes) {
+                // Forward the request; stop only if the loop is gone.
+                Ok(req) => {
+                    if hub_tx.send(HubInbound::Request { client_id, req }).is_ok() {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(())
                     }
-                    // A malformed frame is a protocol error on this connection; drop
-                    // it rather than guess at intent (the Disconnect below cleans up).
-                    Err(_) => ControlFlow::Break(()),
-                },
-                // EOF, cap violation (MAX_FRAME_BYTES), or any read error: done.
+                }
+                // A malformed frame is a protocol error on this connection; drop
+                // it rather than guess at intent (the Disconnect below cleans up).
                 Err(_) => ControlFlow::Break(()),
-            };
+            },
+            // EOF, cap violation (MAX_FRAME_BYTES), or any read error: done.
+            Err(_) => ControlFlow::Break(()),
+        };
         if step.is_break() {
             break;
         }

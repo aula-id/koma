@@ -174,7 +174,8 @@ pub(super) fn handle_security_toggle_tool(state: &mut AppState) -> Result<()> {
             } else {
                 state.rest.yolo_armed = !state.rest.yolo_armed;
                 if state.rest.yolo_armed {
-                    state.rest.fg_mut().status = "yolo armed — switch with /mode yolo or Shift+Tab".into();
+                    state.rest.fg_mut().status =
+                        "yolo armed — switch with /mode yolo or Shift+Tab".into();
                 } else {
                     // Disarmed: if we're sitting in Yolo right now, fall straight back to
                     // Auto so the bypass turns off the instant it's disarmed.

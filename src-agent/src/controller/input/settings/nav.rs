@@ -49,7 +49,11 @@ pub(super) fn handle_providers_nav(s: &mut SettingsState, key: KeyEvent) -> Acti
 /// Handle a key on the Models Select page: row cursor, add-global/add-local
 /// buttons, filter boxes, Ctrl+X arm/confirm delete. Opening an existing model
 /// for edit arms its endpoints load; the chosen id is returned to the runtime.
-pub(super) fn handle_models_nav(s: &mut SettingsState, rest: &mut AppStateRest, key: KeyEvent) -> Action {
+pub(super) fn handle_models_nav(
+    s: &mut SettingsState,
+    rest: &mut AppStateRest,
+    key: KeyEvent,
+) -> Action {
     use crate::app::mode::settings::{ModelFilterMode, ModelRowSel};
     let mut models_action = Action::None;
     match key.code {
@@ -68,14 +72,12 @@ pub(super) fn handle_models_nav(s: &mut SettingsState, rest: &mut AppStateRest, 
         KeyCode::Right => {
             s.model_right();
         }
-        KeyCode::Char(' ') => {
-            match s.model_selection() {
-                ModelRowSel::FilterAll    => s.model_filter_set(ModelFilterMode::All),
-                ModelRowSel::FilterLocal  => s.model_filter_set(ModelFilterMode::Local),
-                ModelRowSel::FilterGlobal => s.model_filter_set(ModelFilterMode::Global),
-                _ => {}
-            }
-        }
+        KeyCode::Char(' ') => match s.model_selection() {
+            ModelRowSel::FilterAll => s.model_filter_set(ModelFilterMode::All),
+            ModelRowSel::FilterLocal => s.model_filter_set(ModelFilterMode::Local),
+            ModelRowSel::FilterGlobal => s.model_filter_set(ModelFilterMode::Global),
+            _ => {}
+        },
         KeyCode::Char('a') | KeyCode::Char('+') => {
             s.open_model_modal_add(false);
             if s.model_modal.is_some() {
@@ -85,43 +87,41 @@ pub(super) fn handle_models_nav(s: &mut SettingsState, rest: &mut AppStateRest, 
                 rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
             }
         }
-        KeyCode::Enter => {
-            match s.model_selection() {
-                ModelRowSel::AddGlobal => {
-                    s.open_model_modal_add(false);
-                    if s.model_modal.is_some() {
-                        s.page = SettingsPage::ModelForm;
-                    }
-                    if let Some((ep, key)) = s.mm_provider_conn() {
-                        rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
-                    }
+        KeyCode::Enter => match s.model_selection() {
+            ModelRowSel::AddGlobal => {
+                s.open_model_modal_add(false);
+                if s.model_modal.is_some() {
+                    s.page = SettingsPage::ModelForm;
                 }
-                ModelRowSel::AddLocal => {
-                    s.open_model_modal_add(true);
-                    if s.model_modal.is_some() {
-                        s.page = SettingsPage::ModelForm;
-                    }
-                    if let Some((ep, key)) = s.mm_provider_conn() {
-                        rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
-                    }
-                }
-                ModelRowSel::FilterAll    => s.model_filter_set(ModelFilterMode::All),
-                ModelRowSel::FilterLocal  => s.model_filter_set(ModelFilterMode::Local),
-                ModelRowSel::FilterGlobal => s.model_filter_set(ModelFilterMode::Global),
-                ModelRowSel::Data(real_idx) => {
-                    s.open_model_modal_edit(real_idx);
-                    if s.model_modal.is_some() {
-                        s.page = SettingsPage::ModelForm;
-                    }
-                    if let Some((ep, key)) = s.mm_provider_conn() {
-                        rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
-                    }
-                    if let Some(id) = s.mm_arm_endpoints_load() {
-                        models_action = Action::FetchModelEndpoints(id);
-                    }
+                if let Some((ep, key)) = s.mm_provider_conn() {
+                    rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
                 }
             }
-        }
+            ModelRowSel::AddLocal => {
+                s.open_model_modal_add(true);
+                if s.model_modal.is_some() {
+                    s.page = SettingsPage::ModelForm;
+                }
+                if let Some((ep, key)) = s.mm_provider_conn() {
+                    rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
+                }
+            }
+            ModelRowSel::FilterAll => s.model_filter_set(ModelFilterMode::All),
+            ModelRowSel::FilterLocal => s.model_filter_set(ModelFilterMode::Local),
+            ModelRowSel::FilterGlobal => s.model_filter_set(ModelFilterMode::Global),
+            ModelRowSel::Data(real_idx) => {
+                s.open_model_modal_edit(real_idx);
+                if s.model_modal.is_some() {
+                    s.page = SettingsPage::ModelForm;
+                }
+                if let Some((ep, key)) = s.mm_provider_conn() {
+                    rest.request_catalogue(&ep, &key, &s.mm_provider_oauth_uuid());
+                }
+                if let Some(id) = s.mm_arm_endpoints_load() {
+                    models_action = Action::FetchModelEndpoints(id);
+                }
+            }
+        },
         _ if is_ctrl(&key, 'x') => {
             s.model_arm_or_delete();
         }

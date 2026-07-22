@@ -89,7 +89,8 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
                 &content,
                 usage,
             );
-            sess.conversation.push_assistant(content, msg_reasoning, promoted);
+            sess.conversation
+                .push_assistant(content, msg_reasoning, promoted);
             if let Err(e) = sess.save() {
                 save_err = Some(e.to_string());
             }
@@ -127,7 +128,7 @@ pub(crate) fn finish_stream(rest: &mut AppStateRest, sess_idx: usize, error: Opt
         // to THIS session's own counters (the `sess` borrow above has ended).
         if committed {
             if let (Some((pt, ct, _)), Some(eff)) = (usage, eff_cost) {
-                rt.tokens_in = pt;        // current context size, not a sum
+                rt.tokens_in = pt; // current context size, not a sum
                 rt.tokens_out += ct;
                 rt.cost += eff;
             }
@@ -234,8 +235,7 @@ pub(crate) fn advance_turn(
     if pending.is_empty() {
         if let Some(text) = buf.as_deref() {
             if !text.is_empty() {
-                let (cleaned, synthesized) =
-                    crate::dto::chat::extract_text_tool_calls(text);
+                let (cleaned, synthesized) = crate::dto::chat::extract_text_tool_calls(text);
                 if !synthesized.is_empty() {
                     buf = Some(cleaned);
                     pending = synthesized.clone();
@@ -243,7 +243,10 @@ pub(crate) fn advance_turn(
                 }
             }
         }
-    } else if pending.iter().any(|c| tool_args_are_empty(&c.function.arguments)) {
+    } else if pending
+        .iter()
+        .any(|c| tool_args_are_empty(&c.function.arguments))
+    {
         // REPAIR: some backends parse a `<tool_call>` XML span into a native
         // tool_call but DROP its arguments (args become "{}"), leaving the raw
         // markup in `content`. The XML form is still in `text` and our extractor
@@ -253,8 +256,7 @@ pub(crate) fn advance_turn(
         // is absent stays untouched.
         if let Some(text) = buf.as_deref() {
             if !text.is_empty() {
-                let (cleaned, synthesized) =
-                    crate::dto::chat::extract_text_tool_calls(text);
+                let (cleaned, synthesized) = crate::dto::chat::extract_text_tool_calls(text);
                 if !synthesized.is_empty() {
                     let mut used = vec![false; synthesized.len()];
                     let mut repaired = false;
@@ -270,8 +272,7 @@ pub(crate) fn advance_turn(
                                 && !tool_args_are_empty(&s.function.arguments)
                         });
                         if let Some(idx) = hit {
-                            native.function.arguments =
-                                synthesized[idx].function.arguments.clone();
+                            native.function.arguments = synthesized[idx].function.arguments.clone();
                             used[idx] = true;
                             repaired = true;
                         }
@@ -305,8 +306,12 @@ pub(crate) fn advance_turn(
                 let raw = buf.clone().unwrap_or_default();
                 let content = crate::dto::chat::unescape_reasoning_tags(&raw).into_owned();
                 let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
-                sess.conversation
-                    .push_assistant_with_tools(content, pending.clone(), reasoning, reasoning_details);
+                sess.conversation.push_assistant_with_tools(
+                    content,
+                    pending.clone(),
+                    reasoning,
+                    reasoning_details,
+                );
                 if let Err(e) = sess.save() {
                     save_err = Some(e.to_string());
                 }
@@ -314,8 +319,10 @@ pub(crate) fn advance_turn(
                 let (content, msg_reasoning, promoted) =
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
-                    let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
-                    sess.conversation.push_assistant(content.clone(), msg_reasoning, promoted);
+                    let _ =
+                        crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
+                    sess.conversation
+                        .push_assistant(content.clone(), msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
                         save_err = Some(e.to_string());
                     }
@@ -469,10 +476,7 @@ pub(crate) fn advance_turn(
     if wc_blocked {
         super::tools::deny_all_pending(state, sess_idx, "workspace not in allowed folders");
         // Per-session status + toast (C6): write them on the blocked session's own slot.
-        state
-            .rest
-            .sessions[sess_idx]
-            .set_toast("workspace not in allowed folders".into());
+        state.rest.sessions[sess_idx].set_toast("workspace not in allowed folders".into());
         state.rest.sessions[sess_idx].status = "stopped: workspace not allowed".into();
         return;
     }
@@ -502,12 +506,29 @@ fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
             continue;
         }
         let lower = s.to_lowercase();
-        let looks_factual = [" is ", " are ", " was ", " were ", " has ", " have ",
-                             " does ", " can ", " will ", " should ", " must ",
-                             " uses ", " provides ", " supports ", " allows ",
-                             " requires ", " includes ", " runs ", " works "]
-            .iter()
-            .any(|v| lower.contains(v));
+        let looks_factual = [
+            " is ",
+            " are ",
+            " was ",
+            " were ",
+            " has ",
+            " have ",
+            " does ",
+            " can ",
+            " will ",
+            " should ",
+            " must ",
+            " uses ",
+            " provides ",
+            " supports ",
+            " allows ",
+            " requires ",
+            " includes ",
+            " runs ",
+            " works ",
+        ]
+        .iter()
+        .any(|v| lower.contains(v));
         if !looks_factual {
             continue;
         }
@@ -517,12 +538,7 @@ fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
             continue;
         }
         // Only count facts that were actually stored successfully.
-        let fact_id = crate::model::surreal::memory::store_fact(
-            session_dir,
-            s,
-            "inferred",
-            0.6,
-        );
+        let fact_id = crate::model::surreal::memory::store_fact(session_dir, s, "inferred", 0.6);
         if let Some(id) = fact_id {
             stored.push(format!("  [{}] \"{s}\" (id={})", stored.len(), id));
         }
@@ -532,7 +548,13 @@ fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
     }
     crate::model::store::append_global_error_log(
         "knowledge-extract",
-        &format!("session={}, response_len={}, stored={}\n{}", session_dir.display(), response.len(), stored.len(), stored.join("\n")),
+        &format!(
+            "session={}, response_len={}, stored={}\n{}",
+            session_dir.display(),
+            response.len(),
+            stored.len(),
+            stored.join("\n")
+        ),
     );
 }
 
@@ -542,7 +564,10 @@ fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
 /// Tool results often contain declarative technical facts (file paths,
 /// build settings, API responses) that are worth storing as "observations".
 /// Caps at 3 facts per round to avoid flooding the knowledge graph.
-pub(crate) fn extract_from_tool_results(session_dir: &std::path::Path, tool_results: &[(String, String)]) {
+pub(crate) fn extract_from_tool_results(
+    session_dir: &std::path::Path,
+    tool_results: &[(String, String)],
+) {
     let mut stored = Vec::new();
     for (_tool_id, result) in tool_results {
         // Truncate each result to ~2KB to avoid processing huge outputs.
@@ -552,9 +577,11 @@ pub(crate) fn extract_from_tool_results(session_dir: &std::path::Path, tool_resu
             result.as_str()
         };
         // Skip results that are mostly code/JSON (heuristic: high brace/bracket ratio).
-        let code_ratio = truncated.chars()
+        let code_ratio = truncated
+            .chars()
             .filter(|c| *c == '{' || *c == '}' || *c == '[' || *c == ']')
-            .count() as f64 / truncated.len() as f64;
+            .count() as f64
+            / truncated.len() as f64;
         if code_ratio > 0.15 {
             continue;
         }
@@ -566,13 +593,33 @@ pub(crate) fn extract_from_tool_results(session_dir: &std::path::Path, tool_resu
             }
             // Must look factual (contains copula or declarative marker).
             let lower = s.to_lowercase();
-            let looks_factual = [" is ", " are ", " was ", " were ", " has ", " have ",
-                                 " does ", " can ", " will ", " should ", " must ",
-                                 " uses ", " provides ", " supports ", " allows ",
-                                 " requires ", " includes ", " runs ", " works ",
-                                 " found ", " detected ", " enabled ", " configured "]
-                .iter()
-                .any(|v| lower.contains(v));
+            let looks_factual = [
+                " is ",
+                " are ",
+                " was ",
+                " were ",
+                " has ",
+                " have ",
+                " does ",
+                " can ",
+                " will ",
+                " should ",
+                " must ",
+                " uses ",
+                " provides ",
+                " supports ",
+                " allows ",
+                " requires ",
+                " includes ",
+                " runs ",
+                " works ",
+                " found ",
+                " detected ",
+                " enabled ",
+                " configured ",
+            ]
+            .iter()
+            .any(|v| lower.contains(v));
             if !looks_factual {
                 continue;
             }
@@ -581,12 +628,8 @@ pub(crate) fn extract_from_tool_results(session_dir: &std::path::Path, tool_resu
                 continue;
             }
             // Store as "observation" with lower confidence (tool output is noisier).
-            let fact_id = crate::model::surreal::memory::store_fact(
-                session_dir,
-                s,
-                "observation",
-                0.45,
-            );
+            let fact_id =
+                crate::model::surreal::memory::store_fact(session_dir, s, "observation", 0.45);
             if let Some(id) = fact_id {
                 stored.push(format!("  [{}] \"{s}\" (id={})", stored.len(), id));
             }
@@ -602,7 +645,13 @@ pub(crate) fn extract_from_tool_results(session_dir: &std::path::Path, tool_resu
     if !stored.is_empty() {
         crate::model::store::append_global_error_log(
             "knowledge-extract-tool",
-            &format!("session={}, tools={}, stored={}\n{}", session_dir.display(), tool_results.len(), stored.len(), stored.join("\n")),
+            &format!(
+                "session={}, tools={}, stored={}\n{}",
+                session_dir.display(),
+                tool_results.len(),
+                stored.len(),
+                stored.join("\n")
+            ),
         );
     }
 }

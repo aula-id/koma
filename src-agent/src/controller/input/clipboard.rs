@@ -216,7 +216,8 @@ fn try_osascript() -> Result<Vec<u8>, String> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp_path = std::env::temp_dir().join(format!("koma-clip-{}-{}.png", std::process::id(), nanos));
+    let tmp_path =
+        std::env::temp_dir().join(format!("koma-clip-{}-{}.png", std::process::id(), nanos));
     let tmp_str = tmp_path.to_string_lossy().to_string();
 
     // AppleScript: read the clipboard as PNG, open the temp file for writing,
@@ -267,8 +268,8 @@ fn try_osascript() -> Result<Vec<u8>, String> {
         return Err("clipboard is empty or contains no PNG image".to_string());
     }
 
-    let bytes = std::fs::read(&tmp_path)
-        .map_err(|e| format!("could not read clipboard temp file: {e}"));
+    let bytes =
+        std::fs::read(&tmp_path).map_err(|e| format!("could not read clipboard temp file: {e}"));
     let _ = std::fs::remove_file(&tmp_path);
 
     match bytes {
@@ -309,8 +310,8 @@ fn fetch_clipboard_png() -> Result<Vec<u8>, String> {
 /// PNG encoder is needed just for this.
 #[cfg(target_os = "windows")]
 fn read_clipboard_image_as_png() -> Result<Vec<u8>, String> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|e| format!("could not access clipboard: {e}"))?;
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("could not access clipboard: {e}"))?;
     let image_data = clipboard
         .get_image()
         .map_err(|_| "clipboard is empty or contains no image".to_string())?;
@@ -322,7 +323,10 @@ fn read_clipboard_image_as_png() -> Result<Vec<u8>, String> {
 
     let mut png_bytes: Vec<u8> = Vec::new();
     image::DynamicImage::ImageRgba8(rgba)
-        .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png)
+        .write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )
         .map_err(|e| format!("failed to encode clipboard image as PNG: {e}"))?;
 
     Ok(png_bytes)

@@ -1,7 +1,7 @@
 //! Model-related types: [`ModelField`], [`ModelDraft`], [`ModelModal`],
 //! [`RolePickerState`], [`ModelFilterMode`], and the [`filter_models`] omnisearch helper.
 
-use super::provider_types::{ModelRole, new_uuid};
+use super::provider_types::{new_uuid, ModelRole};
 
 /// Scope filter for the models list display.
 ///
@@ -18,8 +18,8 @@ impl ModelFilterMode {
     /// Does a model with the given `session_only` flag pass this filter?
     pub fn matches(self, session_only: bool) -> bool {
         match self {
-            Self::All    => true,
-            Self::Local  => session_only,
+            Self::All => true,
+            Self::Local => session_only,
             Self::Global => !session_only,
         }
     }
@@ -86,10 +86,7 @@ impl RolePickerState {
     /// Seed the checkbox state from the model's current `roles`: each option is
     /// pre-checked when its [`ModelRole`] appears in `roles`.
     pub fn from_roles(roles: &[ModelRole]) -> Self {
-        let checked: Vec<bool> = ModelRole::ALL
-            .iter()
-            .map(|r| roles.contains(r))
-            .collect();
+        let checked: Vec<bool> = ModelRole::ALL.iter().map(|r| roles.contains(r)).collect();
         Self { checked, cursor: 0 }
     }
 

@@ -86,9 +86,9 @@ impl SettingsState {
     /// uuid for the new entry (the add-provider modal only ever creates).
     pub fn save_provider_modal(&mut self) {
         if let Some(m) = self.prov_modal.take() {
-            let name     = m.name.trim().to_string();
+            let name = m.name.trim().to_string();
             let endpoint = m.endpoint.trim().to_string();
-            let api_key  = m.api_key.trim().to_string();
+            let api_key = m.api_key.trim().to_string();
             self.providers.push(ProviderDraft {
                 uuid: super::super::new_uuid(),
                 name,
@@ -151,9 +151,15 @@ impl SettingsState {
     pub fn modal_backspace(&mut self) {
         if let Some(m) = self.prov_modal.as_mut() {
             match m.field {
-                0 => { m.name.pop(); }
-                1 => { m.endpoint.pop(); }
-                2 => { m.api_key.pop(); }
+                0 => {
+                    m.name.pop();
+                }
+                1 => {
+                    m.endpoint.pop();
+                }
+                2 => {
+                    m.api_key.pop();
+                }
                 _ => {}
             }
         }

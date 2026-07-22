@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use crate::app::state::AppState;
 use crate::app::state::AgentMode;
+use crate::app::state::AppState;
 use crate::dto::chat::ToolCall;
 use crate::service::openrouter::OpenRouterClient;
 
@@ -103,7 +103,10 @@ pub(super) fn tac_inputs(
     crate::model::app_config::AppConfig,
     crate::model::settings::Settings,
 )> {
-    match (client.as_ref(), state.rest.sessions[sess_idx].session.as_ref()) {
+    match (
+        client.as_ref(),
+        state.rest.sessions[sess_idx].session.as_ref(),
+    ) {
         (Some(c), Some(sess)) if sess.settings.classifier_enabled => Some((
             Arc::clone(c),
             state.rest.config.clone(),
@@ -147,11 +150,7 @@ pub(super) fn spawn_classify_park(
         state.rest.sessions[sess_idx].classify_tx = Some(tx);
         state.rest.sessions[sess_idx].classify_rx = Some(rx);
     }
-    let Some(tx) = state.rest.sessions[sess_idx]
-        .classify_tx
-        .as_ref()
-        .cloned()
-    else {
+    let Some(tx) = state.rest.sessions[sess_idx].classify_tx.as_ref().cloned() else {
         crate::model::store::append_global_error_log("approval", "BUG: classify_tx missing");
         return;
     };
@@ -181,14 +180,18 @@ pub(super) fn file_known_in_history(
     target_abs: &std::path::Path,
 ) -> bool {
     for msg in messages {
-        let Some(tcs) = msg.tool_calls.as_ref() else { continue };
+        let Some(tcs) = msg.tool_calls.as_ref() else {
+            continue;
+        };
         for tc in tcs {
             if matches!(tc.function.name.as_str(), "read" | "write" | "edit") {
                 let sanitized = crate::dto::chat::sanitize_tool_arguments(&tc.function.arguments);
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&sanitized) {
                     if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
                         if let Ok(abs) = crate::tool::resolve(workspaces, p) {
-                            if abs == target_abs { return true; }
+                            if abs == target_abs {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -255,7 +258,9 @@ pub(crate) fn process_tools(
     // Recent conversation tail, used to make TAC intent-aware — see
     // `intercepts::build_convo_context` for the plan-aware preamble.
     let convo_context = intercepts::build_convo_context(state, sess_idx);
-    while state.rest.sessions[sess_idx].tool_idx < state.rest.sessions[sess_idx].pending_tool_calls.len() {
+    while state.rest.sessions[sess_idx].tool_idx
+        < state.rest.sessions[sess_idx].pending_tool_calls.len()
+    {
         // re-read every iteration: plan_enter can flip the mode mid-round
         let mode = state.rest.agent_mode;
         let call = state.rest.sessions[sess_idx].pending_tool_calls
@@ -476,7 +481,15 @@ pub(crate) fn process_tools(
         // `sess.save()` in a scoped block so the `state` borrow is fully released
         // before calling `apply_workspace_change` (which also borrows `state` mutably).
         if call.function.name == "git_worktree" {
-            match intercepts::intercept_git_worktree(state, sess_idx, &call, mode, client, handle, &convo_context) {
+            match intercepts::intercept_git_worktree(
+                state,
+                sess_idx,
+                &call,
+                mode,
+                client,
+                handle,
+                &convo_context,
+            ) {
                 InterceptFlow::Continue => continue,
                 InterceptFlow::Return => return,
                 InterceptFlow::Fallthrough => {}
@@ -531,8 +544,14 @@ pub(crate) fn process_tools(
                         Some((vid, v)) if vid == call.id => v,
                         _ => {
                             spawn_classify_park(
-                                state, sess_idx, handle, c, config, settings,
-                                &convo_context, &call,
+                                state,
+                                sess_idx,
+                                handle,
+                                c,
+                                config,
+                                settings,
+                                &convo_context,
+                                &call,
                             );
                             return;
                         }
@@ -577,7 +596,8 @@ pub(crate) fn process_tools(
                         }
                         state.rest.sessions[sess_idx].approval_reason = Some(verdict.reason);
                         state.rest.sessions[sess_idx].awaiting_approval = true;
-                        state.rest.sessions[sess_idx].status = format!("approve {}? [y/n]", call.function.name);
+                        state.rest.sessions[sess_idx].status =
+                            format!("approve {}? [y/n]", call.function.name);
                         return;
                     } else {
                         // Classifier unavailable. `verdict.reason` carries the REAL
@@ -626,7 +646,8 @@ pub(crate) fn process_tools(
                 None => {
                     if mode == AgentMode::Normal {
                         state.rest.sessions[sess_idx].awaiting_approval = true;
-                        state.rest.sessions[sess_idx].status = format!("approve {}? [y/n]", call.function.name);
+                        state.rest.sessions[sess_idx].status =
+                            format!("approve {}? [y/n]", call.function.name);
                         return;
                     }
                     // Auto + classifier disabled → fall through and run inline.
@@ -659,7 +680,9 @@ pub(crate) fn process_tools(
         // Instant tool: name the tool for the comet phase label and run it inline.
         state.rest.sessions[sess_idx].status = format!("running {}", call.function.name);
         let result = super::dispatch::run_tool(state, sess_idx, &call);
-        state.rest.sessions[sess_idx].tool_results.push((call.id.clone(), result));
+        state.rest.sessions[sess_idx]
+            .tool_results
+            .push((call.id.clone(), result));
         state.rest.sessions[sess_idx].tool_idx += 1;
     }
     // Loop exhausted. PARK if there's still deferred work outstanding from this
@@ -673,7 +696,9 @@ pub(crate) fn process_tools(
     // it lands, and once BOTH pending lists empty the resume gate re-enters
     // `process_tools` (which eventually reaches `finish_tool_round`). `waiting`
     // stays true and `awaiting_approval` stays false, so the comet keeps shimmering.
-    let has_subagents = !state.rest.sessions[sess_idx].pending_subagent_calls.is_empty();
+    let has_subagents = !state.rest.sessions[sess_idx]
+        .pending_subagent_calls
+        .is_empty();
     let has_tool_tasks = !state.rest.sessions[sess_idx].pending_tool_tasks.is_empty();
     if has_subagents || has_tool_tasks {
         if has_subagents {

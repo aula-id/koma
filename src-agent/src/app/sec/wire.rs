@@ -41,8 +41,8 @@ pub(super) struct Connected {
 pub(super) async fn spawn_and_handshake(token: &str) -> Result<Connected, String> {
     let python = crate::security::venv_python()
         .map_err(|e| format!("cannot locate security venv python: {e}"))?;
-    let dir = crate::security::security_dir()
-        .map_err(|e| format!("cannot locate security dir: {e}"))?;
+    let dir =
+        crate::security::security_dir().map_err(|e| format!("cannot locate security dir: {e}"))?;
 
     let mut cmd = tokio::process::Command::new(&python);
     cmd.arg("-m")
@@ -136,7 +136,10 @@ fn parse_tools(value: Option<&serde_json::Value>) -> Vec<SecToolDesc> {
     arr.iter()
         .filter_map(|t| {
             // A tool with no name is unusable; skip it.
-            let name = t.get("name").and_then(serde_json::Value::as_str)?.to_string();
+            let name = t
+                .get("name")
+                .and_then(serde_json::Value::as_str)?
+                .to_string();
             Some(SecToolDesc {
                 name,
                 description: t
@@ -171,7 +174,10 @@ fn parse_tools(value: Option<&serde_json::Value>) -> Vec<SecToolDesc> {
 /// the channel closes (all senders dropped — i.e. [`SecDaemonManager::stop`] cleared
 /// the `writer`) or on the first write error (child gone), closing stdin on the way
 /// out so the child observes EOF.
-pub(super) async fn writer_task(mut stdin: tokio::process::ChildStdin, mut rx: mpsc::UnboundedReceiver<String>) {
+pub(super) async fn writer_task(
+    mut stdin: tokio::process::ChildStdin,
+    mut rx: mpsc::UnboundedReceiver<String>,
+) {
     while let Some(frame) = rx.recv().await {
         if stdin.write_all(frame.as_bytes()).await.is_err() {
             break;

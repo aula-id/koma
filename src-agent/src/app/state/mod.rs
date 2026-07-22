@@ -21,20 +21,20 @@
 //! - `scroll`  – scroll `impl` block
 //! - `misc`    – credentials, catalogue requests `impl` block
 
-mod types;
+mod input;
+mod misc;
 mod rest;
 mod runtime;
-mod input;
 mod scroll;
-mod misc;
+mod types;
 
 use crate::app::mode::Mode;
 
 // Re-export everything that was public in the original state.rs so all
 // external paths remain identical.
-pub use types::{AgentMode, ToastKind};
 pub use rest::AppStateRest;
 pub use rest::ExtOAuthFlow;
+pub use types::{AgentMode, ToastKind};
 // Public surface for the upcoming multi-session stages; not yet referenced
 // outside this module while there is a single foreground session.
 #[allow(unused_imports)]

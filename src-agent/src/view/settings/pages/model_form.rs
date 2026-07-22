@@ -1,3 +1,10 @@
+use super::super::utils::{price_per_million, truncate};
+use crate::app::mode::filter_models;
+use crate::app::mode::settings::{ModelField, ModelModal, ModelRole};
+use crate::app::mode::SettingsState;
+use crate::app::state::AppStateRest;
+use crate::dto::openrouter::ModelInfo;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::Rect,
     style::Style,
@@ -5,13 +12,6 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-use crate::app::mode::SettingsState;
-use crate::app::mode::settings::{ModelModal, ModelField, ModelRole};
-use crate::app::mode::filter_models;
-use crate::app::state::AppStateRest;
-use crate::dto::openrouter::ModelInfo;
-use crate::view::theme::Palette;
-use super::super::utils::{price_per_million, truncate};
 
 /// Render the add/edit-model form as a full page.
 ///
@@ -39,7 +39,7 @@ pub(crate) fn draw_model_form(
     }
 
     let label_w = 10usize;
-    let val_w   = (inner.width as usize).saturating_sub(label_w + 1).max(4);
+    let val_w = (inner.width as usize).saturating_sub(label_w + 1).max(4);
     let mut lines: Vec<Line> = Vec::new();
 
     let fields = st.model_modal_fields();
@@ -49,32 +49,49 @@ pub(crate) fn draw_model_form(
     {
         let active = focused(ModelField::Name);
         let lc = if active { palette.accent } else { palette.dim };
-        let label = Span::styled(format!("{:<width$}", "Name", width = label_w), Style::default().fg(lc));
+        let label = Span::styled(
+            format!("{:<width$}", "Name", width = label_w),
+            Style::default().fg(lc),
+        );
         let mut val = truncate(&modal.name, val_w.saturating_sub(1));
-        if active { val.push('\u{2588}'); }
+        if active {
+            val.push('\u{2588}');
+        }
         let vc = if active { palette.fg } else { palette.dim };
-        lines.push(Line::from(vec![label, Span::styled(val, Style::default().fg(vc))]));
+        lines.push(Line::from(vec![
+            label,
+            Span::styled(val, Style::default().fg(vc)),
+        ]));
     }
 
     // Row: Provider toggle.
     {
         let active = focused(ModelField::Provider);
         let lc = if active { palette.accent } else { palette.dim };
-        let label = Span::styled(format!("{:<width$}", "Provider", width = label_w), Style::default().fg(lc));
+        let label = Span::styled(
+            format!("{:<width$}", "Provider", width = label_w),
+            Style::default().fg(lc),
+        );
         let prov_name = st.mm_provider_label();
         let toggle_text = match prov_name.as_deref() {
             Some(n) => format!("\u{2039} {} \u{203a}", n),
-            None    => "\u{2039} (no providers) \u{203a}".to_string(),
+            None => "\u{2039} (no providers) \u{203a}".to_string(),
         };
         let tc = if active { palette.accent } else { palette.dim };
-        lines.push(Line::from(vec![label, Span::styled(toggle_text, Style::default().fg(tc))]));
+        lines.push(Line::from(vec![
+            label,
+            Span::styled(toggle_text, Style::default().fg(tc)),
+        ]));
     }
 
     // Row(s): Model.
     {
         let active = focused(ModelField::Model);
         let lc = if active { palette.accent } else { palette.dim };
-        let label = Span::styled(format!("{:<width$}", "Model", width = label_w), Style::default().fg(lc));
+        let label = Span::styled(
+            format!("{:<width$}", "Model", width = label_w),
+            Style::default().fg(lc),
+        );
 
         if omni {
             // --- 1. Selected model readout (read-only, no cursor ever) ---
@@ -96,11 +113,15 @@ pub(crate) fn draw_model_form(
                 let indent = Span::raw(" ".repeat(label_w));
                 let search_text = if modal.query.is_empty() {
                     let mut ph = "type to search models\u{2026}".to_string();
-                    if active { ph.push('\u{2588}'); }
+                    if active {
+                        ph.push('\u{2588}');
+                    }
                     Span::styled(ph, Style::default().fg(palette.dim))
                 } else {
                     let mut q = truncate(&modal.query, val_w.saturating_sub(1));
-                    if active { q.push('\u{2588}'); }
+                    if active {
+                        q.push('\u{2588}');
+                    }
                     Span::styled(q, Style::default().fg(palette.fg))
                 };
                 lines.push(Line::from(vec![indent, search_text]));
@@ -186,7 +207,11 @@ pub(crate) fn draw_model_form(
                 let route_active = focused(ModelField::Route);
 
                 if !modal.model_id.is_empty() {
-                    let lc = if route_active { palette.accent } else { palette.dim };
+                    let lc = if route_active {
+                        palette.accent
+                    } else {
+                        palette.dim
+                    };
                     let rl = Span::styled(
                         format!("{:<width$}", "Route", width = label_w),
                         Style::default().fg(lc),
@@ -195,7 +220,11 @@ pub(crate) fn draw_model_form(
                         Some(name) if !name.is_empty() => name.to_string(),
                         _ => "Auto (OpenRouter routes)".to_string(),
                     };
-                    let vc = if route_active { palette.fg } else { palette.dim };
+                    let vc = if route_active {
+                        palette.fg
+                    } else {
+                        palette.dim
+                    };
                     lines.push(Line::from(vec![
                         rl,
                         Span::styled(truncate(&choice, val_w), Style::default().fg(vc)),
@@ -270,17 +299,9 @@ pub(crate) fn draw_model_form(
                             rest.model_modal_route_offset.set(0);
                             (0, VIS.min(option_count))
                         };
-                        for (i, label) in opt_labels
-                            .iter()
-                            .enumerate()
-                            .take(end)
-                            .skip(start)
-                        {
+                        for (i, label) in opt_labels.iter().enumerate().take(end).skip(start) {
                             let marker = if i == pinned { "\u{2023} " } else { "  " };
-                            let text = truncate(
-                                &format!("{marker}{label}"),
-                                row_w,
-                            );
+                            let text = truncate(&format!("{marker}{label}"), row_w);
                             let style = if route_active && i == sel {
                                 Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
                             } else if i == pinned {
@@ -288,10 +309,7 @@ pub(crate) fn draw_model_form(
                             } else {
                                 Style::default().fg(palette.fg)
                             };
-                            lines.push(Line::from(Span::styled(
-                                format!("{text:<row_w$}"),
-                                style,
-                            )));
+                            lines.push(Line::from(Span::styled(format!("{text:<row_w$}"), style)));
                         }
                         if end < option_count {
                             lines.push(Line::from(Span::styled(
@@ -315,9 +333,14 @@ pub(crate) fn draw_model_form(
         } else {
             // Non-OpenRouter: plain editable model id with a bottom rule.
             let mut val = truncate(&modal.model_id, val_w.saturating_sub(1));
-            if active { val.push('\u{2588}'); }
+            if active {
+                val.push('\u{2588}');
+            }
             let vc = if active { palette.fg } else { palette.dim };
-            lines.push(Line::from(vec![label, Span::styled(val, Style::default().fg(vc))]));
+            lines.push(Line::from(vec![
+                label,
+                Span::styled(val, Style::default().fg(vc)),
+            ]));
 
             let rule_w = val_w.max(1);
             let rule_str = "\u{2500}".repeat(rule_w);
@@ -330,8 +353,8 @@ pub(crate) fn draw_model_form(
 
     // Row: Role readout (edit mode only).
     let active = focused(ModelField::Role);
-    let lc     = if active { palette.accent } else { palette.dim };
-    let label  = Span::styled(
+    let lc = if active { palette.accent } else { palette.dim };
+    let label = Span::styled(
         format!("{:<width$}", "Role", width = label_w),
         Style::default().fg(lc),
     );
@@ -355,13 +378,13 @@ pub(crate) fn draw_model_form(
     lines.push(Line::from(""));
 
     // Button row: `[ Save ]  [ Cancel ]` centered.
-    let save_text   = "[ Save ]";
+    let save_text = "[ Save ]";
     let cancel_text = "[ Cancel ]";
-    let gap         = "  ";
-    let group_len   = save_text.len() + gap.len() + cancel_text.len();
-    let inner_w     = inner.width as usize;
-    let pad_left    = inner_w.saturating_sub(group_len) / 2;
-    let pad_right   = inner_w.saturating_sub(group_len).saturating_sub(pad_left);
+    let gap = "  ";
+    let group_len = save_text.len() + gap.len() + cancel_text.len();
+    let inner_w = inner.width as usize;
+    let pad_left = inner_w.saturating_sub(group_len) / 2;
+    let pad_right = inner_w.saturating_sub(group_len).saturating_sub(pad_left);
     let save_style = if focused(ModelField::Save) {
         Style::default().fg(palette.sel_fg).bg(palette.sel_bg)
     } else {

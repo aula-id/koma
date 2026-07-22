@@ -342,7 +342,11 @@ async fn connection_loop(
             // A malformed frame is a protocol error on this connection; report it and
             // stop rather than guess at intent.
             Err(e) => {
-                let _ = respond(&mut stream, &McpResponse::Error(format!("bad request: {e}"))).await;
+                let _ = respond(
+                    &mut stream,
+                    &McpResponse::Error(format!("bad request: {e}")),
+                )
+                .await;
                 return;
             }
         };
@@ -413,10 +417,8 @@ async fn handle_request(
             // keeps it off the reactor and lets concurrent connections' calls proceed
             // in parallel. The manager is cheaply `Arc`-cloned into the closure.
             let mgr = Arc::clone(manager);
-            let result = tokio::task::spawn_blocking(move || {
-                mgr.execute_blocking(&tool, &args_value)
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || mgr.execute_blocking(&tool, &args_value)).await;
 
             match result {
                 // Both Ok (tool output) and Err (dispatch error text) become the tool
@@ -449,7 +451,10 @@ async fn handle_request(
                     (uuid, McpServerStatus { tool_count, error })
                 })
                 .collect();
-            McpResponse::Status { servers, global_error: None }
+            McpResponse::Status {
+                servers,
+                global_error: None,
+            }
         }
 
         // Build-skew probe: report the fingerprint computed once at this process's

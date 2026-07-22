@@ -1,20 +1,20 @@
 //! Async streaming bridge: spawn / abort / finalize a request task.
 
-mod turn;
-mod tools;
-mod spawn;
-mod run;
 mod knowledge;
+mod run;
+mod spawn;
+mod tools;
+mod turn;
 
-pub(super) use turn::{finish_stream, advance_turn};
-pub(crate) use turn::push_image_unsupported_notice;
-pub(super) use tools::{dispatch_deferred, process_tools, run_tool};
 pub(super) use run::{abort_current, start_stream_task};
 pub(crate) use tools::resume_after_subagents;
+pub(super) use tools::{dispatch_deferred, process_tools, run_tool};
+pub(crate) use turn::push_image_unsupported_notice;
+pub(super) use turn::{advance_turn, finish_stream};
 // Re-exported for the daemon's detached-approval park-timeout (stage 11): the loop
 // auto-denies a too-long parked call through the SAME deny path the TUI uses.
-pub(crate) use tools::deny_all_pending;
 pub(crate) use spawn::{spawn_or_queue, try_start_pending, SpawnFailReason, SpawnOutcome};
+pub(crate) use tools::deny_all_pending;
 // The Phase 8 workspace-mutating primitive, shared by the `cd` tool interception
 // (here) and the user `/cd` + `/adddir` commands.
 pub(crate) use spawn::apply_workspace_change;
@@ -38,7 +38,10 @@ pub(crate) use spawn::spawn_task;
 /// is never polluted by tags leaked from Hermes/Qwen/ChatML-style models. The
 /// reasoning-promotion fallback is applied on the CLEANED content, so an all-tags
 /// message (empty after stripping) still promotes reasoning correctly.
-pub(super) fn final_answer(content: String, reasoning: Option<String>) -> (String, Option<String>, bool) {
+pub(super) fn final_answer(
+    content: String,
+    reasoning: Option<String>,
+) -> (String, Option<String>, bool) {
     let content = crate::dto::chat::strip_tool_call_tags(&content);
     // Decode any escaped reasoning tag the model echoed back so the COMMITTED /
     // persisted message stores the REAL `<think>` (the outbound wire escape in

@@ -25,7 +25,10 @@ use std::path::{Path, PathBuf};
 ///
 /// `pub(crate)` so the Codex Responses transport (`service::openrouter::codex`)
 /// reuses the exact same data-URL derivation for its `input_image` parts.
-pub(crate) fn data_url_for(session_dir: &Path, att: &crate::dto::chat::Attachment) -> Option<String> {
+pub(crate) fn data_url_for(
+    session_dir: &Path,
+    att: &crate::dto::chat::Attachment,
+) -> Option<String> {
     use base64::Engine;
     let path = session_dir.join(&att.rel_path);
     let bytes = std::fs::read(&path).ok()?;
@@ -350,7 +353,10 @@ mod data_url_tests {
         );
 
         let second = data_url_for(&dir, &att).expect("second call");
-        assert_eq!(first, second, "cached rendition must reproduce the same data URL");
+        assert_eq!(
+            first, second,
+            "cached rendition must reproduce the same data URL"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

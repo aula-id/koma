@@ -74,9 +74,7 @@ pub fn handle_mcp(s: &mut McpState, rest: &mut AppStateRest, key: KeyEvent) -> A
                     }
                     // ←/→ and Space flip a toggle field in place; on a text field
                     // they do nothing (text is entered via Enter → editing).
-                    KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
-                        if s.field.is_toggle() =>
-                    {
+                    KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if s.field.is_toggle() => {
                         s.toggle_field();
                         Action::None
                     }
@@ -149,7 +147,9 @@ pub fn handle_mcp(s: &mut McpState, rest: &mut AppStateRest, key: KeyEvent) -> A
 fn missing_required(s: &McpState) -> Option<&'static str> {
     use crate::model::app_config::McpTransport;
     match s.draft_transport {
-        McpTransport::Stdio if s.draft_command.trim().is_empty() => Some("command required (stdio)"),
+        McpTransport::Stdio if s.draft_command.trim().is_empty() => {
+            Some("command required (stdio)")
+        }
         McpTransport::Http if s.draft_url.trim().is_empty() => Some("url required (http)"),
         _ => None,
     }

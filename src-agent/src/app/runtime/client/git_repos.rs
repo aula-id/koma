@@ -97,9 +97,9 @@ pub(super) fn set_active_repo_checked(session: Option<&str>, root: &str) -> bool
     };
     // Must match a discovered repo for this session. Canonicalize BOTH sides so
     // symlinked/`..` forms compare equal regardless of how discovery stored them.
-    let matched = discover_repos(session).into_iter().find(|r| {
-        std::fs::canonicalize(&r.root).ok().as_deref() == Some(want.as_path())
-    });
+    let matched = discover_repos(session)
+        .into_iter()
+        .find(|r| std::fs::canonicalize(&r.root).ok().as_deref() == Some(want.as_path()));
     match matched {
         Some(r) => {
             set_active_repo(session, &r.root);
@@ -205,7 +205,10 @@ pub(super) fn discover_repos(session: Option<&str>) -> Vec<RepoInfo> {
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            RepoInfo { root: p.to_string_lossy().into_owned(), name }
+            RepoInfo {
+                root: p.to_string_lossy().into_owned(),
+                name,
+            }
         })
         .collect();
     infos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -219,7 +222,11 @@ fn workdir_toplevel(dir: &Path) -> Option<PathBuf> {
     match super::git::git_cmd(dir, &["rev-parse", "--show-toplevel"]) {
         Some(out) if out.status.success() => {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(PathBuf::from(s)) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(s))
+            }
         }
         _ => None,
     }
@@ -250,7 +257,9 @@ fn scan_subrepos(container: &Path, out: &mut Vec<PathBuf>) {
                 // `.git` may be a dir OR a gitdir file (linked worktree) —
                 // `.exists()` covers both.
                 if p.join(".git").exists() {
-                    sink.lock().unwrap_or_else(|e| e.into_inner()).push(p.to_path_buf());
+                    sink.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(p.to_path_buf());
                     return false; // record repo root, stop descending into it
                 }
             }

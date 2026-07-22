@@ -87,7 +87,10 @@ fn detail_lines<'a>(j: &BashJobView, width: usize, palette: &Palette) -> Vec<Lin
         Span::styled("status: ", Style::default().fg(palette.dim)),
         Span::styled(j.status.clone(), status_style),
         Span::styled("   ·   ", Style::default().fg(palette.dim)),
-        Span::styled(format!("{}s", j.elapsed_secs), Style::default().fg(palette.dim)),
+        Span::styled(
+            format!("{}s", j.elapsed_secs),
+            Style::default().fg(palette.dim),
+        ),
     ]));
 
     lines.push(Line::from(""));
@@ -124,7 +127,12 @@ pub fn render_bash_overlay(
     let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
     let h = 12u16.min(avail.max(3));
     let y = input_chunk.y.saturating_sub(h);
-    let rect = Rect { x: input_chunk.x, y, width: input_chunk.width, height: h };
+    let rect = Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
     let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
@@ -144,7 +152,10 @@ pub fn render_bash_overlay(
                 "(no background jobs)",
                 Style::default().fg(palette.dim),
             )),
-            inner.inner(Margin { horizontal: 1, vertical: 0 }),
+            inner.inner(Margin {
+                horizontal: 1,
+                vertical: 0,
+            }),
         );
         return;
     }
@@ -173,7 +184,10 @@ pub fn render_bash_overlay(
     frame.render_widget(Paragraph::new(list_lines), list_inner);
 
     // RIGHT: selected job detail.
-    let right = cols[1].inner(Margin { horizontal: 1, vertical: 0 });
+    let right = cols[1].inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     if right.width == 0 || right.height == 0 {
         return;
     }

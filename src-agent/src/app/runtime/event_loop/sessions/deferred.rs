@@ -40,7 +40,11 @@ pub(super) fn drain_deferred_and_resume(
         // else is a stale delivery from a killed/interrupted turn and must be
         // discarded rather than corrupting the next turn.
         for (id, result) in received {
-            if let Some(pos) = state.rest.sessions[idx].pending_tool_tasks.iter().position(|c| c == &id) {
+            if let Some(pos) = state.rest.sessions[idx]
+                .pending_tool_tasks
+                .iter()
+                .position(|c| c == &id)
+            {
                 state.rest.sessions[idx].pending_tool_tasks.remove(pos);
                 state.rest.sessions[idx].tool_results.push((id, result));
                 dirty = true;
@@ -80,7 +84,12 @@ pub(super) fn drain_deferred_and_resume(
             // what the model reads (the mark is stripped on the wire).
             let content = format!("{}$ {cmd}\n{output}", crate::dto::chat::SHELL_MARK);
             if let Some(sess) = state.rest.sessions[idx].session.as_mut() {
-                let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &content, None);
+                let _ = crate::model::msglog::append(
+                    &sess.path,
+                    crate::dto::chat::Role::User,
+                    &content,
+                    None,
+                );
                 sess.conversation.push_user(content);
                 let _ = sess.save();
             }
@@ -137,11 +146,10 @@ pub(super) fn drain_deferred_and_resume(
                 // The bg-bash completion toast is about THIS session's job, and the drain
                 // runs unbracketed (fg() is stale scratch here), so raise it on
                 // `sessions[idx]` itself (C6) — it surfaces only in the client(s) viewing idx.
-                state
-                    .rest
-                    .sessions[idx]
-                    .set_toast_info(format!("bash-{id} finished: {label}"));
-                state.rest.sessions[idx].pending_bash_nudges.push((id, label));
+                state.rest.sessions[idx].set_toast_info(format!("bash-{id} finished: {label}"));
+                state.rest.sessions[idx]
+                    .pending_bash_nudges
+                    .push((id, label));
                 dirty = true;
             }
         }
@@ -251,8 +259,9 @@ pub(super) fn drain_deferred_and_resume(
 
         // Append as a USER turn (so the model treats it as input to respond to),
         // persist to msglog + messages.json, then capture history for the wire.
-        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
-            continue;
+        let sess = match state.rest.sessions[idx].session.as_mut() {
+            Some(s) => s,
+            None => return dirty,
         };
         let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
         sess.conversation.push_user(body);
@@ -325,8 +334,9 @@ pub(super) fn drain_deferred_and_resume(
 
         // Append as a USER turn (so the model treats it as input to respond to),
         // persist to msglog + messages.json, then capture history for the wire.
-        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
-            continue;
+        let sess = match state.rest.sessions[idx].session.as_mut() {
+            Some(s) => s,
+            None => return dirty,
         };
         let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
         sess.conversation.push_user(body);
@@ -417,8 +427,9 @@ pub(super) fn drain_deferred_and_resume(
 
         // Append as a USER turn (model input), persist to msglog + messages.json, then
         // capture history for the wire — mirrors the bash-nudge block above EXACTLY.
-        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
-            continue;
+        let sess = match state.rest.sessions[idx].session.as_mut() {
+            Some(s) => s,
+            None => return dirty,
         };
         let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
         sess.conversation.push_user(body);
@@ -525,9 +536,7 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
     // so the existing toast / finished_unseen / was_working bookkeeping stays
     // byte-identical; used only by the fan-out at the end of this function.
     let raw_turn_end = state.rest.sessions[idx].was_working && !now_working;
-    let edge_finished = state.rest.sessions[idx].was_working
-        && !now_working
-        && !viewed;
+    let edge_finished = state.rest.sessions[idx].was_working && !now_working && !viewed;
     if edge_finished {
         let name = state.rest.sessions[idx]
             .session
@@ -538,10 +547,7 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
         // a session VIEWED BY NOBODY, so a client foregrounding it later will project
         // ITS toast (`fg().toast`) and see the "ready" notice — instead of the toast
         // landing on whatever the stale `foreground` cursor happened to point at.
-        state
-            .rest
-            .sessions[idx]
-            .set_toast_info(format!("session {name} ready"));
+        state.rest.sessions[idx].set_toast_info(format!("session {name} ready"));
         // STICKY counterpart of the TTL toast (daemon critique #3): latch the
         // unseen marker so a DETACHED client still learns this background session
         // finished once it reattaches, long after the toast would have expired.
@@ -590,7 +596,9 @@ mod ext_prompt_tests {
             "the body must lead with EXT_PROMPT_MARK so it renders compactly + strips on the wire"
         );
         // Strip the mark → the model-visible body: joined lines + trailer.
-        let visible = body.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK).unwrap();
+        let visible = body
+            .strip_prefix(crate::dto::chat::EXT_PROMPT_MARK)
+            .unwrap();
         assert_eq!(
             visible,
             "[ext:alpha.ext] do X\n[ext:beta.ext] do Y\nThese prompts were injected by extensions; act on them as user requests."
@@ -601,7 +609,9 @@ mod ext_prompt_tests {
     #[test]
     fn single_prompt_body_shape() {
         let body = ext_prompt_body(&[("x.ext".to_string(), "hello".to_string())]);
-        let visible = body.strip_prefix(crate::dto::chat::EXT_PROMPT_MARK).unwrap();
+        let visible = body
+            .strip_prefix(crate::dto::chat::EXT_PROMPT_MARK)
+            .unwrap();
         assert_eq!(
             visible,
             "[ext:x.ext] hello\nThese prompts were injected by extensions; act on them as user requests."
@@ -630,10 +640,22 @@ mod ext_prompt_tests {
     #[test]
     fn gate_is_not_ready_once_turn_budget_exhausted() {
         // One below budget → still ready.
-        assert!(ext_prompts_ready(true, false, true, true, EXT_TURN_BUDGET - 1));
+        assert!(ext_prompts_ready(
+            true,
+            false,
+            true,
+            true,
+            EXT_TURN_BUDGET - 1
+        ));
         // Exactly at budget → not ready (this is the park point the toast fires on).
         assert!(!ext_prompts_ready(true, false, true, true, EXT_TURN_BUDGET));
         // Past budget (the toast block's post-nudge value) → still not ready.
-        assert!(!ext_prompts_ready(true, false, true, true, EXT_TURN_BUDGET + 1));
+        assert!(!ext_prompts_ready(
+            true,
+            false,
+            true,
+            true,
+            EXT_TURN_BUDGET + 1
+        ));
     }
 }

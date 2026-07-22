@@ -108,16 +108,12 @@ pub(super) fn handle_oauth_paste(
             // Unsupported paste provider — set a failed message and return.
             match state.mode_mut() {
                 Mode::Settings(s) => {
-                    s.oauth_flow = OAuthFlowState::Failed(format!(
-                        "paste not supported for {:?}",
-                        other
-                    ));
+                    s.oauth_flow =
+                        OAuthFlowState::Failed(format!("paste not supported for {:?}", other));
                 }
                 Mode::OnboardProvider(op) => {
-                    op.oauth_flow = OAuthFlowState::Failed(format!(
-                        "paste not supported for {:?}",
-                        other
-                    ));
+                    op.oauth_flow =
+                        OAuthFlowState::Failed(format!("paste not supported for {:?}", other));
                 }
                 _ => {}
             }
@@ -136,11 +132,7 @@ pub(super) fn handle_oauth_paste(
 /// Synchronous callers only (`OAuthPaste`): the current session is the one that
 /// initiated the paste, so folding into `fg()` is correct here — unlike the async
 /// flow's `Success` event, which is de-globalized in the `service_global` drain (C3).
-fn apply_login_result(
-    rest: &mut AppStateRest,
-    conn: OAuthConn,
-    handle: &tokio::runtime::Handle,
-) {
+fn apply_login_result(rest: &mut AppStateRest, conn: OAuthConn, handle: &tokio::runtime::Handle) {
     let seeded = conn.clone();
     // Fire-and-forget the token-refresh cache seed on the explicit runtime handle
     // (the event loop may run outside a tokio runtime context).
@@ -208,7 +200,11 @@ pub(super) fn handle_oauth_copy_url(state: &mut AppState) -> Result<()> {
                     *copied = true;
                 }
             }
-            OAuthFlowState::KiloWait { verification_url, copied, .. } => {
+            OAuthFlowState::KiloWait {
+                verification_url,
+                copied,
+                ..
+            } => {
                 if crate::service::oauth::browser::copy_to_clipboard(verification_url) {
                     *copied = true;
                 }
@@ -234,7 +230,9 @@ pub(super) fn handle_oauth_open_url(state: &mut AppState) -> Result<()> {
             OAuthFlowState::CodexWait { url, .. } => {
                 crate::service::oauth::browser::open_in_browser(url);
             }
-            OAuthFlowState::KiloWait { verification_url, .. } => {
+            OAuthFlowState::KiloWait {
+                verification_url, ..
+            } => {
                 crate::service::oauth::browser::open_in_browser(verification_url);
             }
             _ => {}

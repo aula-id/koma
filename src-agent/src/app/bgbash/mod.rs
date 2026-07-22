@@ -131,7 +131,11 @@ impl BashJob {
     /// rewriting it — the job's buffer keeps growing, but the model's
     /// full-output pointer for this job must stay stable. A write failure
     /// (bad dir, clock, IO) leaves `tee_path` `None` so a later poll can retry.
-    pub fn ensure_tee_log(&self, log_dir: &std::path::Path, raw: &str) -> Option<std::path::PathBuf> {
+    pub fn ensure_tee_log(
+        &self,
+        log_dir: &std::path::Path,
+        raw: &str,
+    ) -> Option<std::path::PathBuf> {
         if let Ok(existing) = self.shared.tee_path.lock() {
             if let Some(path) = existing.as_ref() {
                 return Some(path.clone());
@@ -164,7 +168,12 @@ impl BashJob {
 /// actually changed something or the job exited non-zero — the same "might
 /// have lost information" heuristic `finalize_output` uses for its
 /// tee-write condition.
-pub(crate) fn render_finished_output(command: &str, out: &str, exit_code: i32, saving: bool) -> (String, bool) {
+pub(crate) fn render_finished_output(
+    command: &str,
+    out: &str,
+    exit_code: i32,
+    saving: bool,
+) -> (String, bool) {
     if !saving {
         return (out.to_string(), false);
     }

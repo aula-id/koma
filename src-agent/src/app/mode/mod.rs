@@ -17,53 +17,50 @@
 //! [`EffortPickerState`] live here; `Chat` carries no extra state beyond
 //! `AppStateRest`.
 
+pub mod agents;
+pub mod bash;
+pub mod editor;
+mod effort;
+pub mod ext_screen;
+pub mod extensions;
+pub mod help;
 mod key_input;
+mod loading;
+pub mod mcp;
 mod onboard;
 pub mod onboard_provider;
-mod effort;
-mod loading;
 mod picker;
 mod quit_confirm;
 mod rewind;
+pub mod security;
 mod session_hub;
 pub mod settings;
-pub mod agents;
-pub mod mcp;
-pub mod extensions;
-pub mod ext_screen;
 pub mod store;
-pub mod help;
-pub mod editor;
-pub mod security;
-pub mod bash;
 pub mod todo;
 
 pub use agents::{AgentEditField, AgentScope, AgentSubMode, AgentsState};
-pub use mcp::{McpEditField, McpState, McpSubMode};
-pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
-pub use ext_screen::ExtScreenState;
-pub use store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
-pub use security::{SecSel, SecurityState};
 pub use bash::BashState;
+pub use ext_screen::ExtScreenState;
+pub use extensions::{ExtRow, ExtSubMode, ExtTuiScreen, ExtensionsState};
+pub use mcp::{McpEditField, McpState, McpSubMode};
+pub use security::{SecSel, SecurityState};
+pub use store::{ExtStoreState, StoreDetailData, StoreRow, StoreSubMode};
 pub use todo::{parse_todo_file, TodoState};
 // `HelpEntry` is part of the module's public surface and will be consumed by the
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
+pub use effort::EffortPickerState;
 #[allow(unused_imports)]
 pub use help::{HelpEntry, HelpKind, HelpState};
-pub use effort::EffortPickerState;
 pub use key_input::KeyInputForm;
+pub use loading::{LoadingState, WarmStatus};
 pub use onboard::OnboardState;
 pub use onboard_provider::{OnboardProviderState, OnboardProviderStep};
-pub use loading::{LoadingState, WarmStatus};
 pub use picker::PickerState;
-pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
 pub use quit_confirm::QuitConfirmState;
 pub use rewind::{RewindEntry, RewindState};
-pub use settings::{
-    filter_models, SettingField, SettingsState, PICKER_MAX,
-    GENERAL_FIELDS,
-};
+pub use session_hub::{CookingEntry, HistoryEntry, HubPane, SessionHub, SessionKind};
+pub use settings::{filter_models, SettingField, SettingsState, GENERAL_FIELDS, PICKER_MAX};
 
 // ── Usage dashboard nav state ────────────────────────────────────────────────
 
@@ -105,8 +102,8 @@ impl UsageRange {
                 let local_now = now + tz;
                 local_now - local_now % 86400 - tz
             }
-            Self::Week  => now - 7 * 86400,
-            Self::Year  => now - 365 * 86400,
+            Self::Week => now - 7 * 86400,
+            Self::Year => now - 365 * 86400,
         }
     }
 
@@ -115,8 +112,8 @@ impl UsageRange {
     pub fn label(self) -> &'static str {
         match self {
             Self::Today => "today",
-            Self::Week  => "week",
-            Self::Year  => "year",
+            Self::Week => "week",
+            Self::Year => "year",
         }
     }
 }

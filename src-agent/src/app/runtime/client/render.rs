@@ -17,15 +17,15 @@ use crate::ipc::proto::{ClientRequest, DaemonEvent, DaemonFrame, KeyWire};
 use crate::view;
 
 use super::input::{handle_quit_confirm_key, local_echo, send_overlay_cancel, QuitConfirmKey};
-use super::shadow::{apply_frame, reconcile_work_clock};
-use super::push_proto::{
-    push_file_diff, push_switching, push_usage_preview, PushAttachment, PushBashJob,
-    PushCooking, PushEnvelope, PushFileChange, PushHistory, PushMcpServer, PushModel, PushMsg,
-    PushPalette, PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute,
-    PushSubAgent, PushToolCall,
-};
 use super::project::{push_hub, serialize_and_push};
 use super::project_config::{push_config, ConfigProjection};
+use super::push_proto::{
+    push_file_diff, push_switching, push_usage_preview, PushAttachment, PushBashJob, PushCooking,
+    PushEnvelope, PushFileChange, PushHistory, PushMcpServer, PushModel, PushMsg, PushPalette,
+    PushPaletteInfo, PushPendingCall, PushPlanTodo, PushProvider, PushRoute, PushSubAgent,
+    PushToolCall,
+};
+use super::shadow::{apply_frame, reconcile_work_clock};
 
 /// Local TTL for a toast reconstructed from a [`StateDelta::Toast`]. The daemon's
 /// toast `Instant` is daemon-local and never crosses the wire (see `ipc::snapshot`);
@@ -350,12 +350,30 @@ pub(super) fn render_loop(
                     // (Esc closes the viewer daemon-side) still forwards.
                     if shadow.rest.agent_viewer.is_some() {
                         match key.code {
-                            KeyCode::Up       => { shadow.rest.agent_viewer_scroll_up(1);   continue; }
-                            KeyCode::Down     => { shadow.rest.agent_viewer_scroll_down(1);  continue; }
-                            KeyCode::PageUp   => { shadow.rest.agent_viewer_scroll_up(10);   continue; }
-                            KeyCode::PageDown => { shadow.rest.agent_viewer_scroll_down(10); continue; }
-                            KeyCode::Home     => { shadow.rest.agent_viewer_scroll_to_top();    continue; }
-                            KeyCode::End      => { shadow.rest.agent_viewer_scroll_to_bottom(); continue; }
+                            KeyCode::Up => {
+                                shadow.rest.agent_viewer_scroll_up(1);
+                                continue;
+                            }
+                            KeyCode::Down => {
+                                shadow.rest.agent_viewer_scroll_down(1);
+                                continue;
+                            }
+                            KeyCode::PageUp => {
+                                shadow.rest.agent_viewer_scroll_up(10);
+                                continue;
+                            }
+                            KeyCode::PageDown => {
+                                shadow.rest.agent_viewer_scroll_down(10);
+                                continue;
+                            }
+                            KeyCode::Home => {
+                                shadow.rest.agent_viewer_scroll_to_top();
+                                continue;
+                            }
+                            KeyCode::End => {
+                                shadow.rest.agent_viewer_scroll_to_bottom();
+                                continue;
+                            }
                             _ => {}
                         }
                     }
@@ -367,7 +385,9 @@ pub(super) fn render_loop(
                 // gives immediate feedback without a round-trip). Bottom-pinning
                 // follow is reconstructed from snapshots, so a manual scroll just
                 // nudges the local offset for this render.
-                Event::Mouse(m) if matches!(shadow.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) => {
+                Event::Mouse(m)
+                    if matches!(shadow.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) =>
+                {
                     // When the full-screen sub-agent viewer is open, the wheel
                     // scrolls IT (client-owned); otherwise it scrolls the main
                     // transcript. Both use the client's fresh `last_max_scroll`.
@@ -375,19 +395,25 @@ pub(super) fn render_loop(
                     match m.kind {
                         MouseEventKind::ScrollUp => {
                             for _ in 0..3 {
-                                if viewer { shadow.rest.agent_viewer_scroll_up(1); }
-                                else { shadow.rest.scroll_up(); }
+                                if viewer {
+                                    shadow.rest.agent_viewer_scroll_up(1);
+                                } else {
+                                    shadow.rest.scroll_up();
+                                }
                             }
                         }
                         MouseEventKind::ScrollDown => {
                             for _ in 0..3 {
-                                if viewer { shadow.rest.agent_viewer_scroll_down(1); }
-                                else { shadow.rest.scroll_down(); }
+                                if viewer {
+                                    shadow.rest.agent_viewer_scroll_down(1);
+                                } else {
+                                    shadow.rest.scroll_down();
+                                }
                             }
                         }
                         _ => {}
                     }
-                },
+                }
                 // A resize just needs the next unconditional paint to relayout.
                 Event::Resize(_, _) => {}
                 // Bracketed paste: forward the WHOLE text as one Paste request so the
@@ -492,7 +518,10 @@ pub(super) fn client_select_dump(
             }
         }
     }
-    write!(out, "\r\n-- copy with your mouse, then press any key to return --\r\n")?;
+    write!(
+        out,
+        "\r\n-- copy with your mouse, then press any key to return --\r\n"
+    )?;
     out.flush()?;
 
     // (3) Block until a key is pressed. Read events (blocking) and ignore non-key ones
@@ -508,8 +537,6 @@ pub(super) fn client_select_dump(
     terminal.clear()?;
     Ok(())
 }
-
-
 
 /// Serialise `env` and hand it to `push`, dropping it silently on the (never-
 /// expected) serialisation error rather than panicking mid-frame.

@@ -11,13 +11,13 @@
 //! returned via an `mpsc::channel` with `recv_timeout` — exactly the same pattern
 //! used by `shell::Bash`.
 
+mod web_download;
 mod web_fetch;
 mod web_search;
-mod web_download;
 
+pub use web_download::WebDownload;
 pub use web_fetch::WebFetch;
 pub use web_search::WebSearch;
-pub use web_download::WebDownload;
 
 use super::{Tool, ToolCtx};
 use std::sync::mpsc;
@@ -29,10 +29,7 @@ use std::time::Duration;
 ///
 /// Errors are returned as `Err(String)` so the caller can produce a readable
 /// tool-output message without panicking.
-pub(super) fn http_get_blocking(
-    url: &str,
-    timeout: Duration,
-) -> Result<(u16, String), String> {
+pub(super) fn http_get_blocking(url: &str, timeout: Duration) -> Result<(u16, String), String> {
     const MAX_BODY_BYTES: usize = 5 * 1024 * 1024; // 5 MiB
 
     let url_owned = url.to_string();

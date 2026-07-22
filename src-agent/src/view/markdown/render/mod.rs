@@ -6,8 +6,8 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-mod renderer;
 mod blocks;
 mod code;
+mod renderer;
 
 pub(super) use renderer::Renderer;

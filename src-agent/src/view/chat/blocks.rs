@@ -18,7 +18,11 @@ use super::helpers::render_block;
 /// (accent on the gray band) starting in column 2, each visual line padded with
 /// band-colored spaces out to the full body width so the band runs edge to edge.
 /// One blank band row is emitted above and below the text (vertical padding).
-pub(super) fn render_user_message(content: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
+pub(super) fn render_user_message(
+    content: &str,
+    palette: &Palette,
+    wrap_w: usize,
+) -> Vec<Line<'static>> {
     let band = Style::default().bg(palette.panel);
     let rail = Style::default().fg(palette.accent).bg(palette.panel);
     let text = Style::default().fg(palette.accent).bg(palette.panel);
@@ -37,7 +41,12 @@ pub(super) fn render_user_message(content: &str, palette: &Palette, wrap_w: usiz
             // which would punch dark holes through the band — flatten each visual line
             // into ONE span carrying the band `text` style so spaces inherit the bg.
             let line_text: String = visual.iter().map(|s| s.content.as_ref()).collect();
-            out.push(band_row(&rail, &band, full_w, vec![Span::styled(line_text, text)]));
+            out.push(band_row(
+                &rail,
+                &band,
+                full_w,
+                vec![Span::styled(line_text, text)],
+            ));
         }
     }
     // Bottom padding.
@@ -77,7 +86,11 @@ pub(super) fn band_row(
 /// output-capped at run time). The `$ ` bullet is split off the header so the
 /// command renders right after an accent `$` glyph (no double `$`); an unexpectedly
 /// header-less body degrades gracefully (the whole first line becomes the header).
-pub(super) fn render_shell_block(body: &str, palette: &Palette, wrap_w: usize) -> Vec<Line<'static>> {
+pub(super) fn render_shell_block(
+    body: &str,
+    palette: &Palette,
+    wrap_w: usize,
+) -> Vec<Line<'static>> {
     let mut lines = body.lines();
     let header = lines.next().unwrap_or("$");
     // Strip the leading "$ " so it can be re-emitted as the accent bullet.
@@ -130,7 +143,9 @@ pub(super) fn render_attachment_card(
         return Vec::new();
     }
     let style = Style::default().fg(palette.warn);
-    let dim = Style::default().fg(palette.warn).add_modifier(Modifier::DIM);
+    let dim = Style::default()
+        .fg(palette.warn)
+        .add_modifier(Modifier::DIM);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Root: "  images"
@@ -143,9 +158,9 @@ pub(super) fn render_attachment_card(
     let last_idx = attachments.len().saturating_sub(1);
     for (i, att) in attachments.iter().enumerate() {
         let connector = if i == last_idx {
-            Span::styled("\u{2514}\u{2500} ", dim)  // └─
+            Span::styled("\u{2514}\u{2500} ", dim) // └─
         } else {
-            Span::styled("\u{251C}\u{2500} ", dim)  // ├─
+            Span::styled("\u{251C}\u{2500} ", dim) // ├─
         };
         lines.push(Line::from(vec![
             Span::raw("  "),

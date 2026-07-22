@@ -10,10 +10,10 @@ use ratatui::{
     Frame,
 };
 
+use super::super::utils::truncate;
 use crate::app::mode::settings::OAuthFlowState;
 use crate::app::mode::SettingsState;
 use crate::view::theme::Palette;
-use super::super::utils::truncate;
 
 /// Braille spinner frames, matching the `/security` panel's in-flight probe glyph.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -53,7 +53,11 @@ pub(crate) fn draw_oauth_page(
             false,
         ),
         OAuthFlowState::Pick(cursor) => draw_picker(frame, *cursor, palette, area),
-        OAuthFlowState::CodexWait { url, frame: f, copied } => draw_message(
+        OAuthFlowState::CodexWait {
+            url,
+            frame: f,
+            copied,
+        } => draw_message(
             frame,
             palette,
             area,
@@ -139,8 +143,18 @@ fn draw_list(frame: &mut Frame, st: &SettingsState, palette: &Palette, area: Rec
     ];
 
     let table_h = area.height.saturating_sub(1).max(1);
-    let table_area = Rect { x: area.x, y: area.y, width: area.width, height: table_h };
-    let btn_area = Rect { x: area.x, y: area.y + table_h, width: area.width, height: 1 };
+    let table_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: table_h,
+    };
+    let btn_area = Rect {
+        x: area.x,
+        y: area.y + table_h,
+        width: area.width,
+        height: 1,
+    };
 
     let table = Table::new(rows, widths).header(header);
     frame.render_widget(table, table_area);
@@ -241,7 +255,10 @@ fn draw_paste(frame: &mut Frame, input: &str, palette: &Palette, area: Rect) {
 fn draw_failed(frame: &mut Frame, msg: &str, palette: &Palette, area: Rect) {
     crate::view::clear_and_fill(frame, area, palette.bg);
     let lines = vec![
-        Line::from(Span::styled(msg.to_string(), Style::default().fg(palette.error))),
+        Line::from(Span::styled(
+            msg.to_string(),
+            Style::default().fg(palette.error),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "enter/esc dismiss",

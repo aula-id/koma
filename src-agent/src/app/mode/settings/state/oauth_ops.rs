@@ -35,7 +35,10 @@ impl SettingsState {
             return None;
         }
         if self.oauth_armed == Some(self.oauth_sel) {
-            let uuid = self.oauth_drafts.get(self.oauth_sel).map(|d| d.uuid.clone());
+            let uuid = self
+                .oauth_drafts
+                .get(self.oauth_sel)
+                .map(|d| d.uuid.clone());
             self.oauth_armed = None;
             uuid
         } else {

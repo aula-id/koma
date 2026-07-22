@@ -355,7 +355,10 @@ mod roundtrip_tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         // A mapped key with modifiers survives KeyEvent -> KeyWire -> JSON ->
         // KeyWire -> KeyEvent exactly.
-        let ev = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        let ev = KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         let wire = KeyWire::from(ev);
         let json = serde_json::to_string(&wire).expect("serialize");
         let back: KeyWire = serde_json::from_str(&json).expect("deserialize");
@@ -445,8 +448,14 @@ mod roundtrip_tests {
         // MessageRewind: newest-first entries + cursor.
         roundtrip(&ModeSnapshot::MessageRewind(RewindSnapshot {
             entries: vec![
-                RewindEntrySnapshot { vec_index: 4, content: "latest".to_string() },
-                RewindEntrySnapshot { vec_index: 2, content: "earlier".to_string() },
+                RewindEntrySnapshot {
+                    vec_index: 4,
+                    content: "latest".to_string(),
+                },
+                RewindEntrySnapshot {
+                    vec_index: 2,
+                    content: "earlier".to_string(),
+                },
             ],
             selected: 1,
         }));
@@ -532,8 +541,14 @@ mod roundtrip_tests {
     /// every flow-state variant survives the wire round-trip.
     #[test]
     fn oauth_flow_and_draft_snapshot_roundtrip() {
-        roundtrip(&OAuthFlowSnapshot { kind: "idle".to_string(), ..Default::default() });
-        roundtrip(&OAuthFlowSnapshot { kind: "starting".to_string(), ..Default::default() });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "idle".to_string(),
+            ..Default::default()
+        });
+        roundtrip(&OAuthFlowSnapshot {
+            kind: "starting".to_string(),
+            ..Default::default()
+        });
         roundtrip(&OAuthFlowSnapshot {
             kind: "pick".to_string(),
             cursor: 2,

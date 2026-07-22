@@ -5,8 +5,8 @@
 //! - [`TranscriptCache`] – per-frame rendered-lines cache
 //! - [`CataloguePending`] – debounced model-catalogue fetch request
 
-use ratatui::text::Line;
 use crate::view::theme::Palette;
+use ratatui::text::Line;
 
 /// Tool-approval policy for the agentic loop.
 ///

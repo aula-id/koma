@@ -76,10 +76,7 @@ pub(crate) fn validate_agent_name(stem: &str) -> Result<String> {
     if lower.is_empty() {
         return Err(anyhow!("invalid agent name: empty"));
     }
-    if !lower
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    if !lower.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(anyhow!(
             "invalid agent name: only alphanumeric and dash allowed"
         ));
@@ -132,4 +129,3 @@ pub fn load_agent_file(path: &Path, source: AgentSource) -> Result<AgentDef> {
     agent.file_path = Some(path.to_path_buf());
     Ok(agent)
 }
-

@@ -26,7 +26,11 @@ pub enum OAuthFlowState {
     /// open). `frame` drives the braille spinner, advanced once per tick.
     /// `copied` flips to `true` after a successful `c` (copy-url) press, so
     /// the view can show a one-shot confirmation line.
-    CodexWait { url: String, frame: u8, copied: bool },
+    CodexWait {
+        url: String,
+        frame: u8,
+        copied: bool,
+    },
     /// Codex manual flow: the user is typing/pasting a raw access token.
     /// `provider` tracks which provider the paste is for (Codex or CommandCode)
     /// so the handler builds the correct conn type.

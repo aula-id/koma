@@ -87,7 +87,9 @@ pub(crate) fn start_stream_task(
                 if cache.is_multi() {
                     for i in 1.. {
                         let more = cache.children(".", i);
-                        if more.is_empty() { break; }
+                        if more.is_empty() {
+                            break;
+                        }
                         listing.extend(more);
                     }
                 }
@@ -149,7 +151,10 @@ The tools below ARE your security tools — call them directly. Do NOT search or
 grep the codebase looking for \"security tools\"; these are them:\n",
                         );
                         for d in &defs {
-                            first.content.push_str(&format!("- {}: {}\n", d.function.name, d.function.description));
+                            first.content.push_str(&format!(
+                                "- {}: {}\n",
+                                d.function.name, d.function.description
+                            ));
                         }
                         // Per-domain playbooks: only include a domain's playbook when at
                         // least one of its tools is currently ACTIVE (not in sec_inactive).
@@ -256,41 +261,39 @@ over sec_remote (stateful socket).\n",
 
     // Knowledge context: captured pre-spawn, gathered inside the spawned task
     // so daemon IPC (proxy_expand, up to 5s) never blocks the event loop.
-    let knowledge_session_path: Option<std::path::PathBuf> =
-        state.rest.sessions[sess_idx]
-            .session
-            .as_ref()
-            .map(|s| s.path.clone());
-    let knowledge_cfg: Option<crate::model::settings::KnowledgeConfig> =
-        state.rest.sessions[sess_idx]
-            .session
-            .as_ref()
-            .map(|s| s.settings.knowledge.clone());
-    let knowledge_user_query: Option<String> =
-        state.rest.sessions[sess_idx]
-            .session
-            .as_ref()
-            .and_then(|s| {
-                // Skip gather on tool hops (agent_steps > 0) to avoid re-querying
-                // with the same user string. Delta inject for tool hops will be
-                // added in a follow-up.
-                if state.rest.sessions[sess_idx].agent_steps > 0 {
-                    return None;
+    let knowledge_session_path: Option<std::path::PathBuf> = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.path.clone());
+    let knowledge_cfg: Option<crate::model::settings::KnowledgeConfig> = state.rest.sessions
+        [sess_idx]
+        .session
+        .as_ref()
+        .map(|s| s.settings.knowledge.clone());
+    let knowledge_user_query: Option<String> = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .and_then(|s| {
+            // Skip gather on tool hops (agent_steps > 0) to avoid re-querying
+            // with the same user string. Delta inject for tool hops will be
+            // added in a follow-up.
+            if state.rest.sessions[sess_idx].agent_steps > 0 {
+                return None;
+            }
+            let last_user = s.conversation.last_user_content();
+            if let Some(lu) = last_user {
+                // Enrich the query with recent context for multi-turn intent.
+                let recent = s.conversation.recent_context(4, 200);
+                let mut enriched = lu.clone();
+                if !recent.is_empty() {
+                    enriched.push_str("\n\n[Recent context]\n");
+                    enriched.push_str(&recent);
                 }
-                let last_user = s.conversation.last_user_content();
-                if let Some(lu) = last_user {
-                    // Enrich the query with recent context for multi-turn intent.
-                    let recent = s.conversation.recent_context(4, 200);
-                    let mut enriched = lu.clone();
-                    if !recent.is_empty() {
-                        enriched.push_str("\n\n[Recent context]\n");
-                        enriched.push_str(&recent);
-                    }
-                    Some(enriched)
-                } else {
-                    None
-                }
-            });
+                Some(enriched)
+            } else {
+                None
+            }
+        });
 
     // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows
@@ -307,13 +310,16 @@ over sec_remote (stateful socket).\n",
     // resolution, not swap state. Every downstream use below (window sizing,
     // image capability, effort, the final dispatch) reads off THIS `main`
     // binding, so whichever route was chosen flows through consistently.
-    let main = state.rest.sessions[sess_idx].session.as_ref().and_then(|sess| {
-        crate::app::resolve::resolve_turn_model(
-            &state.rest.config,
-            &sess.settings,
-            state.rest.agent_mode,
-        )
-    });
+    let main = state.rest.sessions[sess_idx]
+        .session
+        .as_ref()
+        .and_then(|sess| {
+            crate::app::resolve::resolve_turn_model(
+                &state.rest.config,
+                &sess.settings,
+                state.rest.agent_mode,
+            )
+        });
     // Snapshot the model id that will actually be dispatched onto the session's
     // runtime state, for the usage-ledger write in `finish_stream`/`advance_turn`
     // to read once this response completes. Captured HERE (dispatch time), not
@@ -353,9 +359,12 @@ over sec_remote (stateful socket).\n",
             .as_ref()
             .is_some_and(|m| m.api_type == crate::model::app_config::ApiType::KomaFree)
     {
-        state.rest.sessions[sess_idx].session.as_ref().and_then(|sess| {
-            crate::app::resolve::main_fallback_reason(&state.rest.config, &sess.settings)
-        })
+        state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .and_then(|sess| {
+                crate::app::resolve::main_fallback_reason(&state.rest.config, &sess.settings)
+            })
     } else {
         None
     };
@@ -411,13 +420,9 @@ over sec_remote (stateful socket).\n",
     let window = main
         .as_ref()
         .and_then(|m| {
-            state
-                .rest
-                .models_cache
-                .as_deref()
-                .and_then(|models| {
-                    crate::service::openrouter::context_length_for(models, &m.model_id)
-                })
+            state.rest.models_cache.as_deref().and_then(|models| {
+                crate::service::openrouter::context_length_for(models, &m.model_id)
+            })
         })
         .unwrap_or(128_000);
     // Image-attachment send context: the session dir (source of record for image
@@ -475,7 +480,9 @@ over sec_remote (stateful socket).\n",
     let sliding_cache = reshape
         .as_ref()
         .is_some_and(|(_, settings, _, _)| settings.sliding_cache);
-    let gap = state.rest.sessions[sess_idx].last_send_at.map(|t| t.elapsed());
+    let gap = state.rest.sessions[sess_idx]
+        .last_send_at
+        .map(|t| t.elapsed());
     let cold_window = if sliding_cache {
         Duration::from_secs(300)
     } else {
@@ -534,7 +541,11 @@ over sec_remote (stateful socket).\n",
             // neither advertised nor allow-listed (an empty `sec_inactive` keeps every
             // tool, so this is byte-identical to before when nothing is toggled off).
             let inactive = &state.rest.sec_inactive;
-            advertise.extend(sec.tool_names().into_iter().filter(|n| !inactive.contains(n)));
+            advertise.extend(
+                sec.tool_names()
+                    .into_iter()
+                    .filter(|n| !inactive.contains(n)),
+            );
             mcp_tools.extend(
                 sec.tool_defs()
                     .into_iter()
@@ -576,7 +587,11 @@ over sec_remote (stateful socket).\n",
         // blocking_block → new thread + tokio runtime + SurrealDB open) onto
         // the dedicated blocking thread pool, so it never stalls a tokio worker
         // thread or races with the main runtime's SurrealDB connections.
-        let knowledge_facts = match (&knowledge_session_path, &knowledge_cfg, &knowledge_user_query) {
+        let knowledge_facts = match (
+            &knowledge_session_path,
+            &knowledge_cfg,
+            &knowledge_user_query,
+        ) {
             (Some(path), Some(cfg), Some(query)) => {
                 let p = path.clone();
                 let c = cfg.clone();

@@ -75,7 +75,8 @@ pub(crate) fn build_local_hub(current_session_id: Option<&str>) -> SessionHub {
 fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>) -> SessionHub {
     // Compute the current directory hash once — this runs in the CLIENT process,
     // so current_dir() is the user's launch dir, which is the correct reference.
-    let cur_hash = store::pwd_hash(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    let cur_hash =
+        store::pwd_hash(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
     // The set of LIVE session UUIDs, used to hide already-live sessions from the
     // HISTORY pane. `SessionStatus::session_id` and `SessionMeta::id` are the SAME
@@ -132,7 +133,11 @@ fn hub_from_snapshot(live: Vec<SessionStatus>, current_session_id: Option<&str>)
         Err(_) => Vec::new(),
     };
     // Sort: current-dir sessions first, then newest within each group.
-    history.sort_by(|a, b| b.is_current_dir.cmp(&a.is_current_dir).then(b.last_active.cmp(&a.last_active)));
+    history.sort_by(|a, b| {
+        b.is_current_dir
+            .cmp(&a.is_current_dir)
+            .then(b.last_active.cmp(&a.last_active))
+    });
 
     // History starts fully visible: identity filter, empty query.
     let history_filtered: Vec<usize> = (0..history.len()).collect();
@@ -221,7 +226,9 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
             .iter()
             .position(|e| e.session_id == captured_id);
         fresh.cooking_selected = found.unwrap_or_else(|| {
-            fresh.cooking_selected.min(fresh.cooking.len().saturating_sub(1))
+            fresh
+                .cooking_selected
+                .min(fresh.cooking.len().saturating_sub(1))
         });
     } else {
         fresh.cooking_selected = fresh
@@ -232,9 +239,10 @@ fn apply_snapshot(hub: &mut SessionHub, fresh: Vec<SessionStatus>, current_id: O
     // Relocate history_selected: find the entry in the fresh filtered view whose
     // underlying history path matches the captured path. Clamp if gone.
     if let Some(ref path) = saved_history_path {
-        let found = fresh.history_filtered.iter().position(|&real| {
-            fresh.history.get(real).map(|e| &e.path) == Some(path)
-        });
+        let found = fresh
+            .history_filtered
+            .iter()
+            .position(|&real| fresh.history.get(real).map(|e| &e.path) == Some(path));
         fresh.history_selected = found.unwrap_or_else(|| {
             fresh
                 .history_selected

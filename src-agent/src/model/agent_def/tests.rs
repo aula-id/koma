@@ -33,10 +33,7 @@ You are a focused subagent.\nReport tersely.";
     assert_eq!(a.color.as_deref(), Some("cyan"));
     assert!(a.hidden);
     assert_eq!(a.source, AgentSource::Global);
-    assert_eq!(
-        a.prompt,
-        "You are a focused subagent.\nReport tersely."
-    );
+    assert_eq!(a.prompt, "You are a focused subagent.\nReport tersely.");
 }
 
 #[test]
@@ -86,8 +83,7 @@ fn malformed_frontmatter_is_an_error_not_a_panic() {
 
 #[test]
 fn tools_allow_list_parsed_and_task_stripped() {
-    let content =
-        "---\ndescription: d\ntools: [read, task, bash]\n---\nbody";
+    let content = "---\ndescription: d\ntools: [read, task, bash]\n---\nbody";
     let a = parse_agent("t", content, AgentSource::Global).unwrap();
     // Raw parse keeps what was written...
     assert_eq!(a.tools, vec!["read", "task", "bash"]);
@@ -211,10 +207,7 @@ fn name_sanitization_rules() {
 fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
     use crate::model::app_config::{AppConfig, InstalledExtension};
 
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-agentdef-ext-test-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-agentdef-ext-test-{}", uuid::Uuid::new_v4()));
     let ext_id = "run.koma.example.subagent-test";
     let ext_dir = tmp.join(ext_id);
     std::fs::create_dir_all(&ext_dir).expect("create ext dir");
@@ -233,8 +226,7 @@ fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
         },
         "requires": []
     });
-    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string())
-        .expect("write manifest");
+    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string()).expect("write manifest");
 
     let mut config = AppConfig::default();
     config.installed_extensions.push(InstalledExtension {
@@ -250,10 +242,19 @@ fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
     // Enabled -> the sub-agent appears, name lowercased, tagged Extension.
     let mut agents: HashMap<String, AgentDef> = HashMap::new();
     merge_extension_sub_agents(&config, &tmp, &mut agents);
-    assert!(agents.contains_key("reviewer"), "sub-agent should appear when enabled");
+    assert!(
+        agents.contains_key("reviewer"),
+        "sub-agent should appear when enabled"
+    );
     assert_eq!(agents["reviewer"].source, AgentSource::Extension);
-    assert_eq!(agents["reviewer"].description, "Reviews code for style issues.");
-    assert_eq!(agents["reviewer"].conditions, "Reviews code for style issues.");
+    assert_eq!(
+        agents["reviewer"].description,
+        "Reviews code for style issues."
+    );
+    assert_eq!(
+        agents["reviewer"].conditions,
+        "Reviews code for style issues."
+    );
 
     // Disabled (still installed) -> gone.
     config.installed_extensions[0].enabled = false;
@@ -284,10 +285,7 @@ fn extension_sub_agent_appears_and_disappears_with_installed_extensions() {
 fn extension_sub_agent_merges_full_fields_and_ext_id() {
     use crate::model::app_config::{AppConfig, InstalledExtension};
 
-    let tmp = std::env::temp_dir().join(format!(
-        "koma-agentdef-ext-full-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("koma-agentdef-ext-full-{}", uuid::Uuid::new_v4()));
     let ext_id = "run.koma.example.full-subagent-test";
     let ext_dir = tmp.join(ext_id);
     std::fs::create_dir_all(&ext_dir).expect("create ext dir");
@@ -312,8 +310,7 @@ fn extension_sub_agent_merges_full_fields_and_ext_id() {
         },
         "requires": []
     });
-    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string())
-        .expect("write manifest");
+    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string()).expect("write manifest");
 
     let mut config = AppConfig::default();
     config.installed_extensions.push(InstalledExtension {
@@ -333,7 +330,10 @@ fn extension_sub_agent_merges_full_fields_and_ext_id() {
     assert_eq!(auditor.source, AgentSource::Extension);
     assert_eq!(auditor.description, "Audits code for issues.");
     assert_eq!(auditor.conditions, "Audits code for issues.");
-    assert_eq!(auditor.prompt, "You are a meticulous code auditor. Find every issue.");
+    assert_eq!(
+        auditor.prompt,
+        "You are a meticulous code auditor. Find every issue."
+    );
     assert_eq!(auditor.model.as_deref(), Some("openai/gpt-oss-20b"));
     assert_eq!(auditor.effort.as_deref(), Some("high"));
     assert_eq!(auditor.ext_id.as_deref(), Some(ext_id));
@@ -371,8 +371,7 @@ fn extension_sub_agent_partial_fields_fall_back_to_description() {
         },
         "requires": []
     });
-    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string())
-        .expect("write manifest");
+    std::fs::write(ext_dir.join("manifest.json"), manifest.to_string()).expect("write manifest");
 
     let mut config = AppConfig::default();
     config.installed_extensions.push(InstalledExtension {
@@ -389,7 +388,10 @@ fn extension_sub_agent_partial_fields_fall_back_to_description() {
     merge_extension_sub_agents(&config, &tmp, &mut agents);
 
     let planner = agents.get("planner").expect("planner sub-agent merged");
-    assert_eq!(planner.prompt, "Plans the work.", "prompt falls back to description");
+    assert_eq!(
+        planner.prompt, "Plans the work.",
+        "prompt falls back to description"
+    );
     assert!(planner.model.is_none(), "no model declared -> None");
     assert!(planner.effort.is_none(), "no effort declared -> None");
     assert_eq!(planner.ext_id.as_deref(), Some(ext_id));

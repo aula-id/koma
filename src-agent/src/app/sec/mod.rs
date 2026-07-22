@@ -198,25 +198,27 @@ impl SecDaemonManager {
         self.handle.spawn(async move {
             // Spawn + handshake, bounded by CONNECT_TIMEOUT. On any failure the child
             // (if it was spawned) is dropped here, which reaps it.
-            let connected = match tokio::time::timeout(CONNECT_TIMEOUT, spawn_and_handshake(&token))
-                .await
-            {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => {
-                    crate::model::store::append_global_error_log(
-                        "security",
-                        &format!("security daemon failed to start: {e}"),
-                    );
-                    return;
-                }
-                Err(_) => {
-                    crate::model::store::append_global_error_log(
-                        "security",
-                        &format!("security daemon handshake timed out after {}s", CONNECT_TIMEOUT.as_secs()),
-                    );
-                    return;
-                }
-            };
+            let connected =
+                match tokio::time::timeout(CONNECT_TIMEOUT, spawn_and_handshake(&token)).await {
+                    Ok(Ok(c)) => c,
+                    Ok(Err(e)) => {
+                        crate::model::store::append_global_error_log(
+                            "security",
+                            &format!("security daemon failed to start: {e}"),
+                        );
+                        return;
+                    }
+                    Err(_) => {
+                        crate::model::store::append_global_error_log(
+                            "security",
+                            &format!(
+                                "security daemon handshake timed out after {}s",
+                                CONNECT_TIMEOUT.as_secs()
+                            ),
+                        );
+                        return;
+                    }
+                };
 
             let Connected {
                 mut child,
@@ -580,4 +582,3 @@ pub struct InstallHealthEntry {
     /// Free-form hint for installing/repairing the dependency.
     pub hint: String,
 }
-

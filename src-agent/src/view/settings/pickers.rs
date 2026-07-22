@@ -1,11 +1,11 @@
+use crate::view::theme::Palette;
+use ratatui::layout::Rect;
 use ratatui::{
     style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph},
     Frame,
 };
-use ratatui::layout::Rect;
-use crate::view::theme::Palette;
 
 /// Render the Role checkbox picker overlay (model EDIT modal) as a bordered
 /// modal over a dimmed backdrop.
@@ -42,7 +42,12 @@ pub(super) fn draw_role_picker(
     let h = total_h.min(area.height.saturating_sub(2)).max(3);
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let popup = Rect { x, y, width: w, height: h };
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     // Dim everything outside the modal (fg dim + bg — same as the other
     // settings modals, so a stacked overlay still recedes the layer beneath it).

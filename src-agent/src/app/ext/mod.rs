@@ -236,7 +236,10 @@ impl ExtHostManager {
             }
         };
 
-        let event = KomaMsg::Event { name: name.to_string(), params };
+        let event = KomaMsg::Event {
+            name: name.to_string(),
+            params,
+        };
         let mut frame = match serde_json::to_string(&event) {
             Ok(f) => f,
             Err(_) => return false,
@@ -267,7 +270,10 @@ impl ExtHostManager {
         install_dir: &Path,
     ) -> Result<()> {
         if ext.kind != "daemon" {
-            bail!("ensure_started is for daemon extensions only (got kind '{}')", ext.kind);
+            bail!(
+                "ensure_started is for daemon extensions only (got kind '{}')",
+                ext.kind
+            );
         }
 
         // Fast path: already live → no-op.
@@ -310,7 +316,14 @@ impl ExtHostManager {
         let install_dir = install_dir.to_path_buf();
         self.handle.spawn(async move {
             let r = mgr
-                .connect_install(&ext_id, &sock_path, &install_dir, &exec, &token, gen_at_start)
+                .connect_install(
+                    &ext_id,
+                    &sock_path,
+                    &install_dir,
+                    &exec,
+                    &token,
+                    gen_at_start,
+                )
                 .await;
             let _ = tx.send(r);
         });
@@ -421,8 +434,8 @@ impl ExtHostManager {
             method: method.to_string(),
             params,
         };
-        let mut frame = serde_json::to_string(&invoke)
-            .map_err(|e| anyhow::anyhow!("serialize invoke: {e}"))?;
+        let mut frame =
+            serde_json::to_string(&invoke).map_err(|e| anyhow::anyhow!("serialize invoke: {e}"))?;
         frame.push('\n');
 
         // Register the oneshot under this id — but ONLY if `ext_id`'s generation is
@@ -776,7 +789,10 @@ mod tests {
         assert_eq!(out, serde_json::json!({ "output": "ping" }));
 
         mgr.stop(&installed.id);
-        assert!(!mgr.is_running(&installed.id), "extension should be stopped");
+        assert!(
+            !mgr.is_running(&installed.id),
+            "extension should be stopped"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -851,7 +867,10 @@ mod tests {
             "test.evt",
             serde_json::json!({}),
         );
-        assert!(!ok, "notify on a never-started extension must return false, not panic");
+        assert!(
+            !ok,
+            "notify on a never-started extension must return false, not panic"
+        );
     }
 
     /// Wave 2: an ext->koma `Notify` (the echo sample's `drive` hook fires
@@ -885,8 +904,10 @@ mod tests {
         let sha_hex = install::hex_encode(&digest);
         let sig_b64 = b64(&signing.sign(digest.as_slice()).to_bytes());
 
-        let tmp = std::env::temp_dir()
-            .join(format!("koma-ext-notify-route-test-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "koma-ext-notify-route-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let installed =
             install::install_from_zip_to(&zip_bytes, &sha_hex, &sig_b64, &pubkey_b64, &tmp)
                 .expect("signed install should succeed");
@@ -912,7 +933,10 @@ mod tests {
         assert_eq!(notify.ext_id, installed.id);
         assert_eq!(notify.name, "panel.push");
         assert_eq!(notify.params["panelId"], serde_json::json!("p1"));
-        assert_eq!(notify.params["payload"], serde_json::json!({ "hello": true }));
+        assert_eq!(
+            notify.params["payload"],
+            serde_json::json!({ "hello": true })
+        );
 
         mgr.stop(&installed.id);
         let _ = std::fs::remove_dir_all(&tmp);
@@ -969,7 +993,11 @@ mod tests {
             std::fs::read(install_dir.join("manifest.json")).expect("read manifest");
         let manifest: koma_extension::protocol::ExtensionManifest =
             serde_json::from_slice(&manifest_bytes).expect("parse manifest");
-        assert_eq!(manifest.contributes.tools.len(), 1, "sample declares one tool");
+        assert_eq!(
+            manifest.contributes.tools.len(),
+            1,
+            "sample declares one tool"
+        );
 
         let mcp = crate::app::mcp::McpManager::connect_all(rt.handle(), &[]);
         mcp.register_extension_tools(
@@ -985,9 +1013,14 @@ mod tests {
             .find(|n| n.ends_with("__echo"))
             .cloned()
             .expect("echo tool should be advertised");
-        assert!(namespaced.starts_with("mcp__"), "namespaced as mcp__<ext>__echo");
         assert!(
-            mcp.tool_defs().iter().any(|d| d.function.name == namespaced),
+            namespaced.starts_with("mcp__"),
+            "namespaced as mcp__<ext>__echo"
+        );
+        assert!(
+            mcp.tool_defs()
+                .iter()
+                .any(|d| d.function.name == namespaced),
             "the same namespaced tool must appear in tool_defs()"
         );
 
@@ -1048,8 +1081,8 @@ mod tests {
     /// a `..`-relative one (which would climb out of it).
     #[test]
     fn install_rejects_absolute_and_escaping_exec() {
-        let tmp = std::env::temp_dir()
-            .join(format!("koma-ext-test-execguard-{}", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("koma-ext-test-execguard-{}", uuid::Uuid::new_v4()));
 
         for bad_exec in ["/etc/passwd", "../escape"] {
             let manifest_json = minimal_manifest_json("com.koma.test.execguard", bad_exec);

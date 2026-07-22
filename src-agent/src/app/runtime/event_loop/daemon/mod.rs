@@ -65,12 +65,12 @@ use std::time::{Duration, Instant};
 use crate::app::state::AppState;
 use crate::service::openrouter::OpenRouterClient;
 
-use crate::app::runtime::stream::deny_all_pending;
 use super::global::{has_running_subagents, service_global};
 use super::sessions::service_all_sessions;
+use crate::app::runtime::stream::deny_all_pending;
 
-pub(crate) use hub::HubInbound;
 pub(in crate::app::runtime) use hub::DaemonHub;
+pub(crate) use hub::HubInbound;
 
 mod hub;
 #[cfg(test)]
@@ -145,8 +145,7 @@ fn service_approval_park_timeouts(state: &mut AppState, client_attached: bool) -
         if state.rest.sessions[idx].closed {
             continue;
         }
-        let parked_detached =
-            state.rest.sessions[idx].awaiting_approval && !client_attached;
+        let parked_detached = state.rest.sessions[idx].awaiting_approval && !client_attached;
         if !parked_detached {
             // Not parked, or a client is attached → no timeout; reset the clock.
             state.rest.sessions[idx].park_started_at = None;
@@ -450,7 +449,9 @@ pub(in crate::app::runtime) fn daemon_loop(
         //     This keeps the daemon's in-memory state current when the agent writes
         //     todos via checklist while the user has /open in a thin-client.
         for s in state.rest.sessions.iter_mut() {
-            if s.closed { continue; }
+            if s.closed {
+                continue;
+            }
             if let crate::app::mode::Mode::Todo(t) = &mut s.mode {
                 t.maybe_refresh();
             }

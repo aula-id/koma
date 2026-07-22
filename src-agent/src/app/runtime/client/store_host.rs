@@ -23,7 +23,7 @@
 use std::sync::mpsc::Sender;
 
 use crate::ipc::proto::{
-    InstalledExtensionDetailWire, InstalledExtWire, InstalledModelWire, InstalledSubAgentWire,
+    InstalledExtWire, InstalledExtensionDetailWire, InstalledModelWire, InstalledSubAgentWire,
     InstalledToolWire, PanelWire, StoreContributesWire, StoreDetailWire, StoreItemWire,
 };
 use crate::model::app_config::{AppConfig, InstalledExtension, OAuthProvider};
@@ -177,7 +177,9 @@ pub(super) fn spawn_install(
         }
 
         match fetch_install_artifact(&id, version.as_deref(), platform, &bearer).await {
-            Ok((zip, sha256, signature)) => finish_install_detached(&push, id, zip, sha256, signature),
+            Ok((zip, sha256, signature)) => {
+                finish_install_detached(&push, id, zip, sha256, signature)
+            }
             Err(e) => super::push_proto::push_ext_op_result(&push, id, false, Some(e)),
         }
     });
@@ -193,11 +195,11 @@ fn finish_install_detached(
     sha256: String,
     signature: Option<String>,
 ) {
-    let installed: anyhow::Result<InstalledExtension> =
-        match (&signature, sha256.trim().is_empty()) {
-            (Some(sig), false) => crate::app::ext::install::install_from_zip(&zip, &sha256, sig),
-            _ => install_unsigned_fallback(&id, &zip),
-        };
+    let installed: anyhow::Result<InstalledExtension> = match (&signature, sha256.trim().is_empty())
+    {
+        (Some(sig), false) => crate::app::ext::install::install_from_zip(&zip, &sha256, sig),
+        _ => install_unsigned_fallback(&id, &zip),
+    };
 
     match installed {
         Ok(ext) => {
@@ -677,23 +679,43 @@ fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String
             koma_extension::protocol::Grant::OauthRead => "oauth:read".to_string(),
         })
         .collect();
-    let panels = manifest.contributes.panels.iter().map(|p| PanelWire {
+    let panels = manifest
+        .contributes
+        .panels
+        .iter()
+        .map(|p| PanelWire {
             id: p.id.clone(),
             title: p.title.clone(),
             icon: p.icon.clone(),
-        }).collect();
-    let tools = manifest.contributes.tools.iter().map(|t| InstalledToolWire {
+        })
+        .collect();
+    let tools = manifest
+        .contributes
+        .tools
+        .iter()
+        .map(|t| InstalledToolWire {
             name: t.name.clone(),
             description: t.description.clone(),
-        }).collect();
-    let models = manifest.contributes.models.iter().map(|mdl| InstalledModelWire {
+        })
+        .collect();
+    let models = manifest
+        .contributes
+        .models
+        .iter()
+        .map(|mdl| InstalledModelWire {
             id: mdl.id.clone(),
             display_name: mdl.display_name.clone(),
-        }).collect();
-    let sub_agents = manifest.contributes.sub_agents.iter().map(|a| InstalledSubAgentWire {
+        })
+        .collect();
+    let sub_agents = manifest
+        .contributes
+        .sub_agents
+        .iter()
+        .map(|a| InstalledSubAgentWire {
             name: a.name.clone(),
             description: a.description.clone(),
-        }).collect();
+        })
+        .collect();
 
     Ok(InstalledExtensionDetailWire {
         id: entry.id.clone(),
@@ -720,8 +742,7 @@ fn get_installed_detail(id: &str) -> Result<InstalledExtensionDetailWire, String
 /// unreadable manifest, invalid JSON/schema) — the caller surfaces these as
 /// explicit errors rather than silently degrading.
 fn read_manifest(id: &str) -> Result<koma_extension::protocol::ExtensionManifest, String> {
-    let dir = store::extensions_dir()
-        .map_err(|e| format!("extensions directory error: {e}"))?;
+    let dir = store::extensions_dir().map_err(|e| format!("extensions directory error: {e}"))?;
     let path = dir.join(id).join("manifest.json");
     if !path.exists() {
         return Err(format!("missing manifest for extension '{id}'"));
@@ -1031,15 +1052,16 @@ mod tests {
     #[test]
     fn installed_extensions_projects_registry_fields() {
         let mut cfg = AppConfig::default();
-        cfg.installed_extensions.push(crate::model::app_config::InstalledExtension {
-            id: "run.koma.gateway".to_string(),
-            version: "0.3.1".to_string(),
-            tier: "paid".to_string(),
-            kind: "daemon".to_string(),
-            enabled: true,
-            granted: vec!["agents:read".to_string()],
-            exec: String::new(),
-        });
+        cfg.installed_extensions
+            .push(crate::model::app_config::InstalledExtension {
+                id: "run.koma.gateway".to_string(),
+                version: "0.3.1".to_string(),
+                tier: "paid".to_string(),
+                kind: "daemon".to_string(),
+                enabled: true,
+                granted: vec!["agents:read".to_string()],
+                exec: String::new(),
+            });
         let items: Vec<InstalledExtWire> = cfg
             .installed_extensions
             .iter()

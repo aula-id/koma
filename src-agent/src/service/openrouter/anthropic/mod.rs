@@ -52,8 +52,7 @@ pub(super) const CLAUDE_BETAS: &str = "oauth-2025-04-20,claude-code-20250219";
 /// `tool_use` blocks interleave with thinking across a tool loop;
 /// `effort-2025-11-24` unlocks the adaptive `output_config.effort` control. Never
 /// sent on the off / forced-tool_choice / oneshot paths (which carry no thinking).
-pub(super) const CLAUDE_THINKING_BETAS: &str =
-    "interleaved-thinking-2025-05-14,effort-2025-11-24";
+pub(super) const CLAUDE_THINKING_BETAS: &str = "interleaved-thinking-2025-05-14,effort-2025-11-24";
 
 /// Auth + client-identity headers for an Anthropic `/v1/messages` request.
 ///

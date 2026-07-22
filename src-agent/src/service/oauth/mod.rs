@@ -46,7 +46,10 @@ pub enum OAuthEvent {
     /// generic device-code carrier for BOTH Kilo Code and xAI (Grok) — both show
     /// a `user_code` + a `verification_url`, and the downstream wait screen / GUI
     /// `waiting_code` push are identical, so no separate variant is warranted.
-    KiloCode { user_code: String, verification_url: String },
+    KiloCode {
+        user_code: String,
+        verification_url: String,
+    },
     /// The flow completed: a ready-to-persist connection.
     Success { conn: OAuthConn },
     /// The flow failed at any stage; `error` is a human-readable reason.

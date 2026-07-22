@@ -172,7 +172,11 @@ mod tests {
     fn emit_without_ext_manager_is_noop() {
         let state = AppState::new(Mode::Chat);
         emit(&state, "agent.turn_end", &json!({ "session": "s" }));
-        emit(&state, "session.foreground_change", &json!({ "session": "s" }));
+        emit(
+            &state,
+            "session.foreground_change",
+            &json!({ "session": "s" }),
+        );
         emit_subagent_terminal(&state, "s", 1, "general", "done", None);
     }
 
@@ -185,7 +189,11 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().expect("build runtime");
         let mut state = AppState::new(Mode::Chat);
         state.rest.ext_manager = Some(crate::app::ext::ExtHostManager::new(rt.handle()));
-        emit(&state, "subagent.done", &json!({ "session": "s", "subagentId": 1 }));
+        emit(
+            &state,
+            "subagent.done",
+            &json!({ "session": "s", "subagentId": 1 }),
+        );
         emit_subagent_terminal(&state, "s", 1, "general", "killed", None);
     }
 

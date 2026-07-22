@@ -71,8 +71,11 @@ pub fn codex_identity(id_token: &str, access_token: &str) -> CodexIdentity {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .or_else(|| {
-            decode_payload(access_token)
-                .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(|s| s.to_string()))
+            decode_payload(access_token).and_then(|v| {
+                v.get("email")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string())
+            })
         })
         .unwrap_or_default();
 

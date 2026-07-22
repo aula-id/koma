@@ -22,11 +22,11 @@ use crate::model::session_registry;
 use crate::model::{app_config::AppConfig, settings::Settings, store};
 use crate::service::openrouter::OpenRouterClient;
 
-use super::terminal::TerminalGuard;
-use super::event_loop::run_loop;
 use super::event_loop::daemon::{daemon_loop, DaemonHub};
+use super::event_loop::run_loop;
 use super::session_mgmt::{build_client, warm_session};
 use super::signals::install_daemon_signals;
+use super::terminal::TerminalGuard;
 
 /// Best-effort prefill of (api_key, model, provider) from the most-recently-modified
 /// session that has a non-empty key. Ignores all errors.
@@ -45,7 +45,11 @@ pub(super) fn prefill_creds() -> (Option<String>, Option<String>, Option<String>
     if settings.api_key.is_empty() {
         (None, None, None)
     } else {
-        (Some(settings.api_key), Some(settings.model), Some(settings.provider))
+        (
+            Some(settings.api_key),
+            Some(settings.model),
+            Some(settings.provider),
+        )
     }
 }
 
@@ -120,8 +124,8 @@ fn build_startup(
             provider: lp.clone().unwrap_or_default(),
             ..Default::default()
         };
-        let unconfigured = resolve_role(&config, &probe, ModelRole::Main)
-            .is_none_or(|r| !r.is_usable());
+        let unconfigured =
+            resolve_role(&config, &probe, ModelRole::Main).is_none_or(|r| !r.is_usable());
         let mut state = if !unconfigured {
             // Returning user: spawn a fresh session pre-loaded with the last
             // creds and drop straight into chat. The credential prompt only
@@ -130,8 +134,7 @@ fn build_startup(
             match store::create_session() {
                 Ok(mut sess) => {
                     sess.settings.api_key = lk.clone().unwrap_or_default();
-                    sess.settings.model =
-                        lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string());
+                    sess.settings.model = lm.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string());
                     sess.settings.provider = lp.clone().unwrap_or_default();
                     let _ = sess.save();
                     let sess_path = sess.path.clone();
@@ -374,8 +377,9 @@ fn install_daemon_session(
     // present row → load from its on-disk dir; an absent row (or any registry error) →
     // create fresh with this exact id, rooted at the daemon's cwd.
     let loaded: Result<Session> = match session_registry::get(session_id) {
-        Ok(Some(row)) => store::session_dir(&row.pwd_hash, session_id)
-            .and_then(|dir| Session::load(&dir)),
+        Ok(Some(row)) => {
+            store::session_dir(&row.pwd_hash, session_id).and_then(|dir| Session::load(&dir))
+        }
         _ => {
             let workdir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             store::create_session_in_with_id(&workdir, session_id)
@@ -391,7 +395,11 @@ fn install_daemon_session(
             *client = None;
             *state.mode_mut() = Mode::KeyInput(KeyInputForm::prefilled(
                 state.rest.last_key.clone().unwrap_or_default(),
-                state.rest.last_model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+                state
+                    .rest
+                    .last_model
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
                 true,  // first_run framing
                 false, // not from picker
             ));
@@ -602,10 +610,7 @@ fn notify_ext_owned_subagents_on_shutdown(state: &mut AppState) -> usize {
 /// makes a post-drop send a safe no-op (no panic, no deadlock). A crash that skips
 /// this is covered by PID-liveness staleness in `store::is_locked`.
 fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
-    crate::model::store::append_global_error_log(
-        "daemon-exit",
-        "shutdown_runtime: entering",
-    );
+    crate::model::store::append_global_error_log("daemon-exit", "shutdown_runtime: entering");
     // Death-notice pass FIRST — while the duplex ext wire AND the runtime are still live,
     // and BEFORE `stop_all` kills the extension children: tell every ext-owned in-flight
     // sub-agent's spawner it is dying to a host shutdown/restart, so a restart-resilient
@@ -845,4 +850,3 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
 
     Ok(())
 }
-

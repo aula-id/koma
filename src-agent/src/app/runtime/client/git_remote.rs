@@ -440,18 +440,11 @@ fn parse_status_headers(text: &str) -> (Option<String>, Option<String>) {
     (branch, upstream)
 }
 
-fn config_value(
-    git: GitCmdFn<'_>,
-    root: &Path,
-    key: &str,
-) -> Option<String> {
+fn config_value(git: GitCmdFn<'_>, root: &Path, key: &str) -> Option<String> {
     output_text(git(root, &["config", "--get", key], None)).filter(|s| !s.is_empty())
 }
 
-fn plan_target(
-    git: GitCmdFn<'_>,
-    root: &Path,
-) -> Result<PushTarget, String> {
+fn plan_target(git: GitCmdFn<'_>, root: &Path) -> Result<PushTarget, String> {
     let status = output_text(git(root, &["status", "--porcelain=v2", "--branch"], None))
         .ok_or_else(|| "git status failed".to_string())?;
     let (branch, upstream) = parse_status_headers(&status);
@@ -535,12 +528,7 @@ fn plan_target(
     })
 }
 
-fn is_ancestor(
-    git: GitCmdFn<'_>,
-    root: &Path,
-    older: &str,
-    newer: &str,
-) -> bool {
+fn is_ancestor(git: GitCmdFn<'_>, root: &Path, older: &str, newer: &str) -> bool {
     git(root, &["merge-base", "--is-ancestor", older, newer], None)
         .is_some_and(|o| o.status.success())
 }

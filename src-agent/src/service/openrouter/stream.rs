@@ -12,13 +12,13 @@ use crate::dto::openrouter::{
 use crate::model::app_config::ApiType;
 use crate::service::StreamEvent;
 
+use super::client::OpenRouterClient;
 use super::helpers::{
     apply_tool_call_delta, auth_headers, clean_error, emit, is_openrouter, provider_routing_for,
     reasoning_config, sanitize_tool_acc,
 };
-use super::client::OpenRouterClient;
-use super::types::Conn;
 use super::think_split::{Emit as ThinkEmit, ThinkSplit};
+use super::types::Conn;
 
 impl OpenRouterClient {
     /// Streaming chat completion over Server-Sent Events.
@@ -52,7 +52,11 @@ impl OpenRouterClient {
             crate::service::oauth::manager::fresh_key(conn.oauth_uuid, conn.api_key).await;
         // Prefer the manager's cached account (authoritative post-refresh); fall
         // back to whatever the route carried.
-        let effective_account = if !acct.is_empty() { acct.as_str() } else { conn.account_id };
+        let effective_account = if !acct.is_empty() {
+            acct.as_str()
+        } else {
+            conn.account_id
+        };
 
         // Codex speaks the OpenAI Responses API — a different wire protocol —
         // handled by the dedicated transport. `provider` (the OpenRouter route
@@ -99,14 +103,7 @@ impl OpenRouterClient {
         if conn.api_type == ApiType::CommandCode {
             return self
                 .commandcode_stream_complete(
-                    conn,
-                    &bearer,
-                    model,
-                    messages,
-                    advertise,
-                    mcp_tools,
-                    image_ctx,
-                    tx,
+                    conn, &bearer, model, messages, advertise, mcp_tools, image_ctx, tx,
                 )
                 .await;
         }
@@ -168,7 +165,9 @@ impl OpenRouterClient {
             stream_options: if is_openrouter(conn.endpoint) || conn.api_type == ApiType::KomaFree {
                 None
             } else {
-                Some(StreamOptions { include_usage: true })
+                Some(StreamOptions {
+                    include_usage: true,
+                })
             },
             tools: Some(tools),
             // Interactive chat is the only path that thinks; map the resolved
@@ -180,10 +179,15 @@ impl OpenRouterClient {
             max_tokens: Some(32_000),
         };
 
-        let resp = auth_headers(self.http.post(&url), &conn, &bearer, self.codex_session_id())
-            .json(&body)
-            .send()
-            .await;
+        let resp = auth_headers(
+            self.http.post(&url),
+            &conn,
+            &bearer,
+            self.codex_session_id(),
+        )
+        .json(&body)
+        .send()
+        .await;
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
@@ -228,16 +232,13 @@ impl OpenRouterClient {
             // plan error on a first chat after OAuth.
             if !conn.oauth_uuid.is_empty()
                 && crate::service::oauth::commandcode::is_provider_api_denied(status, &text)
-                && conn
-                    .endpoint
-                    .contains("api.commandcode.ai/provider/v1")
+                && conn.endpoint.contains("api.commandcode.ai/provider/v1")
             {
                 crate::service::oauth::commandcode::remember_chat_pref(
                     conn.oauth_uuid,
                     crate::service::oauth::commandcode::CHAT_NDJSON,
                 );
-                let ndjson_endpoint =
-                    crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
+                let ndjson_endpoint = crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
                 let ndjson_conn = Conn {
                     endpoint: ndjson_endpoint,
                     api_key: conn.api_key,
@@ -259,17 +260,12 @@ impl OpenRouterClient {
                     )
                     .await;
             }
-            emit(
-                &tx,
-                StreamEvent::Error(clean_error(status, &text)),
-            );
+            emit(&tx, StreamEvent::Error(clean_error(status, &text)));
             return Ok(());
         }
 
         // Command Code provider/v1 succeeded — remember so we keep hitting it.
-        if !conn.oauth_uuid.is_empty()
-            && conn.endpoint.contains("api.commandcode.ai/provider/v1")
-        {
+        if !conn.oauth_uuid.is_empty() && conn.endpoint.contains("api.commandcode.ai/provider/v1") {
             crate::service::oauth::commandcode::remember_chat_pref(
                 conn.oauth_uuid,
                 crate::service::oauth::commandcode::CHAT_PROVIDER_V1,

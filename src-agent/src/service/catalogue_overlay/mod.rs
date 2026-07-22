@@ -100,7 +100,11 @@ pub(super) fn set_overlay(table: OverlayTable) {
 pub fn lookup(endpoint: &str, model_id: &str) -> Option<OverlayModel> {
     let lock = OVERLAY.get()?;
     let guard = lock.read().ok()?;
-    guard.get(endpoint)?.iter().find(|m| m.id == model_id).cloned()
+    guard
+        .get(endpoint)?
+        .iter()
+        .find(|m| m.id == model_id)
+        .cloned()
 }
 
 /// Compute a usage-ledger cost (USD) from this overlay's curated per-1M-token
@@ -191,8 +195,12 @@ mod tests {
 
     #[test]
     fn bundled_default_parses() {
-        let table: OverlayTable = serde_json::from_str(BUNDLED_DEFAULT).expect("bundled models.json must parse");
-        assert!(!table.is_empty(), "bundled table should have at least one endpoint");
+        let table: OverlayTable =
+            serde_json::from_str(BUNDLED_DEFAULT).expect("bundled models.json must parse");
+        assert!(
+            !table.is_empty(),
+            "bundled table should have at least one endpoint"
+        );
     }
 
     #[test]

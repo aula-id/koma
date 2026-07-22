@@ -131,8 +131,7 @@ pub fn restart_daemon(session_id: &str, quiet: bool) -> Result<()> {
     }
 
     // Spawn + wait for it to accept (false: we just killed it). Confirm-only stream.
-    let stream = ensure_daemon_and_connect(session_id)
-        .context("failed to start the new daemon")?;
+    let stream = ensure_daemon_and_connect(session_id).context("failed to start the new daemon")?;
     drop(stream); // we only needed to confirm it is accepting
 
     if !quiet {
@@ -326,9 +325,7 @@ fn spawn_daemon(session_id: &str, resume: bool, workdir: Option<&Path>) -> Resul
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{
-            CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        };
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
@@ -367,7 +364,10 @@ pub(super) fn probe_or_clear(path: &Path) -> Result<bool> {
             std::io::ErrorKind::NotFound => Ok(false),
             // Any other error (permissions, etc.): surface it rather than blindly
             // spawning a second daemon on top of an unknown condition.
-            _ => Err(anyhow!("cannot probe daemon socket {}: {e}", path.display())),
+            _ => Err(anyhow!(
+                "cannot probe daemon socket {}: {e}",
+                path.display()
+            )),
         },
     }
 }
@@ -492,7 +492,10 @@ pub(super) fn send_request(stream: &mut SyncIpcStream, req: &ClientRequest) -> R
 /// wait so a wedged daemon can't hang the CLI.
 ///
 /// `pub(super)` — called from `manage::commands::daemon_session_count`.
-pub(super) fn recv_frame(stream: &mut SyncIpcStream, reader: &mut FrameReader) -> Result<DaemonFrame> {
+pub(super) fn recv_frame(
+    stream: &mut SyncIpcStream,
+    reader: &mut FrameReader,
+) -> Result<DaemonFrame> {
     loop {
         // A previous read may have buffered a whole frame already.
         if let Some(bytes) = reader.next_frame().context("frame reassembly")? {
@@ -706,7 +709,7 @@ pub fn migrate_legacy_daemon() {
         Err(_) => return,
     };
     let legacy_sock = base.join("daemon.sock");
-    let legacy_pid  = base.join("daemon.pid");
+    let legacy_pid = base.join("daemon.pid");
 
     // Fast-path: nothing to do (the common case on 0.2.0-only installs).
     if !legacy_sock.exists() && !legacy_pid.exists() {

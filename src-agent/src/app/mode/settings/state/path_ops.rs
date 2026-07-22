@@ -12,9 +12,9 @@ impl SettingsState {
     /// non-text fields (Theme, Accent, the awareness toggles).
     pub fn text_draft_mut(&mut self, f: SettingField) -> Option<&mut String> {
         match f {
-            SettingField::ApiKey   => Some(&mut self.api_key),
+            SettingField::ApiKey => Some(&mut self.api_key),
             SettingField::Provider => Some(&mut self.provider),
-            SettingField::Name     => Some(&mut self.name),
+            SettingField::Name => Some(&mut self.name),
             SettingField::Workdir
             | SettingField::AllowedFolders
             | SettingField::Accent
@@ -38,7 +38,7 @@ impl SettingsState {
     /// not a path-list field.
     pub fn path_list_mut(&mut self, f: SettingField) -> Option<&mut Vec<String>> {
         match f {
-            SettingField::Workdir        => Some(&mut self.workdir),
+            SettingField::Workdir => Some(&mut self.workdir),
             SettingField::AllowedFolders => Some(&mut self.allowed_folders),
             _ => None,
         }
@@ -47,7 +47,7 @@ impl SettingsState {
     /// Immutable handle to the path-list draft vec for `f` (view-side reads).
     pub fn path_list(&self, f: SettingField) -> Option<&Vec<String>> {
         match f {
-            SettingField::Workdir        => Some(&self.workdir),
+            SettingField::Workdir => Some(&self.workdir),
             SettingField::AllowedFolders => Some(&self.allowed_folders),
             _ => None,
         }
@@ -114,7 +114,11 @@ impl SettingsState {
             .selected()
             .cloned()
             .unwrap_or_else(|| picker.query.clone());
-        let chosen = chosen.strip_prefix('@').unwrap_or(&chosen).trim().to_string();
+        let chosen = chosen
+            .strip_prefix('@')
+            .unwrap_or(&chosen)
+            .trim()
+            .to_string();
         if chosen.is_empty() {
             return;
         }

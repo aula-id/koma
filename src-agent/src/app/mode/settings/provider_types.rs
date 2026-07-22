@@ -6,11 +6,11 @@ pub use crate::model::app_config::{ApiType, ModelRole, OAuthProvider};
 impl ModelRole {
     pub fn label(&self) -> &'static str {
         match self {
-            ModelRole::Main      => "main",
+            ModelRole::Main => "main",
             ModelRole::Awareness => "awareness",
             ModelRole::Safeguard => "safeguard",
             ModelRole::Compactor => "compactor",
-            ModelRole::Planner   => "planner",
+            ModelRole::Planner => "planner",
         }
     }
 
@@ -27,11 +27,11 @@ impl ApiType {
     /// Short label used in the providers table column.
     pub fn short_label(self) -> &'static str {
         match self {
-            ApiType::OpenAiCompatible   => "OpenAI",
+            ApiType::OpenAiCompatible => "OpenAI",
             ApiType::AnthropicCompatible => "Anthropic",
-            ApiType::Codex               => "Codex",
-            ApiType::KomaFree            => "koma free",
-            ApiType::CommandCode         => "Command Code",
+            ApiType::Codex => "Codex",
+            ApiType::KomaFree => "koma free",
+            ApiType::CommandCode => "Command Code",
         }
     }
 
@@ -40,11 +40,11 @@ impl ApiType {
     #[allow(dead_code)]
     pub fn full_label(self) -> &'static str {
         match self {
-            ApiType::OpenAiCompatible   => "OpenAI compatible",
+            ApiType::OpenAiCompatible => "OpenAI compatible",
             ApiType::AnthropicCompatible => "Anthropic (Claude)",
-            ApiType::Codex               => "Codex (OAuth)",
-            ApiType::KomaFree            => "koma free (keyless)",
-            ApiType::CommandCode         => "Command Code (OAuth)",
+            ApiType::Codex => "Codex (OAuth)",
+            ApiType::KomaFree => "koma free (keyless)",
+            ApiType::CommandCode => "Command Code (OAuth)",
         }
     }
 
@@ -54,11 +54,11 @@ impl ApiType {
     #[allow(dead_code)]
     pub fn toggle(self) -> Self {
         match self {
-            ApiType::OpenAiCompatible   => ApiType::AnthropicCompatible,
+            ApiType::OpenAiCompatible => ApiType::AnthropicCompatible,
             ApiType::AnthropicCompatible => ApiType::OpenAiCompatible,
-            ApiType::Codex               => ApiType::OpenAiCompatible,
-            ApiType::KomaFree            => ApiType::OpenAiCompatible,
-            ApiType::CommandCode         => ApiType::OpenAiCompatible,
+            ApiType::Codex => ApiType::OpenAiCompatible,
+            ApiType::KomaFree => ApiType::OpenAiCompatible,
+            ApiType::CommandCode => ApiType::OpenAiCompatible,
         }
     }
 }

@@ -38,10 +38,7 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
         return;
     }
     let rest = &mut shadow.rest;
-    if rest.subagents_open
-        || rest.agent_viewer.is_some()
-        || rest.fg().awaiting_approval
-    {
+    if rest.subagents_open || rest.agent_viewer.is_some() || rest.fg().awaiting_approval {
         return;
     }
     // Never echo a Ctrl-modified key (Ctrl-J newline, Ctrl-V paste, interrupts, …);

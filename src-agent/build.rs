@@ -16,15 +16,23 @@ fn main() {
 
     // npm must be on PATH (run `nvm use 24` before cargo build). Fail loudly if not.
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    let install = Command::new(npm).arg("install").current_dir(webgui).status();
+    let install = Command::new(npm)
+        .arg("install")
+        .current_dir(webgui)
+        .status();
     match install {
         Ok(s) if s.success() => {}
         Ok(s) => panic!("`npm install` in src-webgui failed with status {s}. Run `nvm use 24` first."),
         Err(e) => panic!("could not run `npm` ({e}). The `gui` feature needs Node/npm on PATH — run `nvm use 24` before building, or build without --features gui."),
     }
-    let build = Command::new(npm).args(["run", "build"]).current_dir(webgui).status()
+    let build = Command::new(npm)
+        .args(["run", "build"])
+        .current_dir(webgui)
+        .status()
         .expect("failed to spawn npm run build");
-    if !build.success() { panic!("`npm run build` (vite) failed"); }
+    if !build.success() {
+        panic!("`npm run build` (vite) failed");
+    }
 }
 
 // Embeds koma.exe's PE resources (icon + version metadata) so Explorer shows

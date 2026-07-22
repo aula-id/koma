@@ -1,5 +1,8 @@
 //! Status bar: left-side animated comet label + right-side token/cost readout.
 
+use super::helpers::{comet_spans, fmt_count};
+use crate::app::state::AppStateRest;
+use crate::view::theme::Palette;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::Style,
@@ -7,9 +10,6 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-use crate::app::state::AppStateRest;
-use crate::view::theme::Palette;
-use super::helpers::{comet_spans, fmt_count};
 
 /// Render the status bar into `chunk`.
 ///
@@ -19,8 +19,16 @@ use super::helpers::{comet_spans, fmt_count};
 /// statically — a single plain dim span, no comet, no timer.
 ///
 /// The cumulative token/cost readout is right-aligned when non-zero.
-pub(super) fn render_status(frame: &mut Frame, chunk: Rect, rest: &AppStateRest, palette: &Palette) {
-    let status_area = chunk.inner(Margin { horizontal: 2, vertical: 0 });
+pub(super) fn render_status(
+    frame: &mut Frame,
+    chunk: Rect,
+    rest: &AppStateRest,
+    palette: &Palette,
+) {
+    let status_area = chunk.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
     // Status line is per-session (C6): render the FOREGROUND session's status.
     let status = &rest.fg().status;
     let status_line: Line<'static> = match rest.work_since {

@@ -92,7 +92,10 @@ pub async fn exchange_code(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("token exchange failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "token exchange failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     resp.json::<super::codex::TokenResponse>()
@@ -124,7 +127,10 @@ pub async fn refresh(
         if body.contains("invalid_grant") {
             return Err("unrecoverable: re-login required".to_string());
         }
-        return Err(format!("refresh failed ({status}): {}", truncate(&body, 200)));
+        return Err(format!(
+            "refresh failed ({status}): {}",
+            truncate(&body, 200)
+        ));
     }
 
     resp.json::<super::codex::TokenResponse>()
@@ -152,7 +158,11 @@ pub fn to_conn(tokens: super::codex::TokenResponse) -> OAuthConn {
         .unwrap_or_else(|| jwt::expiry(&tokens.access_token));
 
     let email = jwt::decode_payload(&tokens.access_token)
-        .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("email")
+                .and_then(|e| e.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_default();
 
     let label = if !email.is_empty() {

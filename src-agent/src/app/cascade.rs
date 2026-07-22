@@ -134,19 +134,12 @@ pub fn rebind_consumers_after_model_removal(
     }
 
     // B. Offline sessions (settings.json only)
-    report.sessions_touched += rebind_offline_sessions(
-        dead_model_uuids,
-        dead_provider_uuids,
-        &skip_session_paths,
-    );
+    report.sessions_touched +=
+        rebind_offline_sessions(dead_model_uuids, dead_provider_uuids, &skip_session_paths);
 
     // C. Agent files on disk → inherit main when model no longer exists
-    report.agents_cleared += rebind_agent_files(
-        dead_model_uuids,
-        &alive_global,
-        None,
-        &session_alive,
-    );
+    report.agents_cleared +=
+        rebind_agent_files(dead_model_uuids, &alive_global, None, &session_alive);
 
     report
 }
@@ -220,11 +213,7 @@ pub fn rebind_after_local_model_removal(
 }
 
 /// True when `uuid` should be cleared to inherit: explicitly dead, or absent from alive.
-fn model_binding_is_dead(
-    uuid: &str,
-    dead: &HashSet<String>,
-    alive: &HashSet<String>,
-) -> bool {
+fn model_binding_is_dead(uuid: &str, dead: &HashSet<String>, alive: &HashSet<String>) -> bool {
     dead.contains(uuid) || !alive.contains(uuid)
 }
 
@@ -236,7 +225,10 @@ fn clear_agent_model_to_inherit(agent: &mut crate::model::agent_def::AgentDef) {
     agent.provider = None;
 }
 
-fn alive_model_set(config: &AppConfig, extra: Option<&[crate::model::app_config::ModelEntry]>) -> HashSet<String> {
+fn alive_model_set(
+    config: &AppConfig,
+    extra: Option<&[crate::model::app_config::ModelEntry]>,
+) -> HashSet<String> {
     let mut s: HashSet<String> = config.models.iter().map(|m| m.uuid.clone()).collect();
     if let Some(extra) = extra {
         for m in extra {
@@ -329,12 +321,8 @@ fn rebind_agent_files(
         }
         None => {
             if let Ok(dir) = crate::model::agent_def::global_agents_dir() {
-                cleared += rebind_agents_in_dir(
-                    &dir,
-                    AgentSource::Global,
-                    dead_models,
-                    alive_global,
-                );
+                cleared +=
+                    rebind_agents_in_dir(&dir, AgentSource::Global, dead_models, alive_global);
             }
             if let Ok(sessions_root) = store::sessions_dir() {
                 for bucket in read_subdirs(&sessions_root) {

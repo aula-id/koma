@@ -5,9 +5,9 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
+mod deferred;
 mod streaming;
 mod subagents;
-mod deferred;
 
 use std::sync::Arc;
 

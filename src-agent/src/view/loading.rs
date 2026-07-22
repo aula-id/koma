@@ -49,7 +49,12 @@ const STEP_LABELS: [&str; 2] = ["indexing workspace", "reading project docs"];
 /// - `Pending` → a dim `·` (nothing else).
 /// - `Skipped` → a dim `·` + dim ` skipped`.
 /// - `Failed`  → a dim `·` + dim ` failed`.
-fn step_line<'a>(status: &'a WarmStatus, label: &'a str, frame: u64, palette: &Palette) -> Line<'a> {
+fn step_line<'a>(
+    status: &'a WarmStatus,
+    label: &'a str,
+    frame: u64,
+    palette: &Palette,
+) -> Line<'a> {
     let accent = Style::default().fg(palette.accent).bg(palette.bg);
     let dim = Style::default().fg(palette.dim).bg(palette.bg);
 
@@ -112,7 +117,10 @@ pub fn draw_reopening(frame: &mut Frame, spinner_frame: u64, palette: &Palette) 
     let glyph = SPINNER[(spinner_frame % 10) as usize];
     let line = Line::from(vec![
         Span::styled(glyph, Style::default().fg(palette.accent).bg(palette.bg)),
-        Span::styled("  reopening", Style::default().fg(palette.fg).bg(palette.bg)),
+        Span::styled(
+            "  reopening",
+            Style::default().fg(palette.fg).bg(palette.bg),
+        ),
     ]);
     frame.render_widget(
         Paragraph::new(line)

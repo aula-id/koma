@@ -16,7 +16,12 @@ pub(super) struct TerminalGuard;
 impl TerminalGuard {
     pub(super) fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        if let Err(e) = execute!(stdout(), EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste) {
+        if let Err(e) = execute!(
+            stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        ) {
             let _ = disable_raw_mode();
             return Err(e.into());
         }
@@ -26,7 +31,12 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste);
+        let _ = execute!(
+            stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
         let _ = disable_raw_mode();
         let _ = execute!(stdout(), ratatui::crossterm::cursor::Show);
     }

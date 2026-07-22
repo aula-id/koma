@@ -20,15 +20,15 @@
 //! }
 //! ```
 
-use std::fmt;
-use std::path::Path;
-use anyhow::Result;
-use serde::de::{self, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
 use crate::config::{
     DEFAULT_AWARENESS_MODEL, DEFAULT_AWARENESS_PROVIDER, DEFAULT_CLASSIFIER_MODEL,
     DEFAULT_CLASSIFIER_PROVIDER, DEFAULT_MODEL, DEFAULT_PRESERVE_N, DEFAULT_PROVIDER,
 };
+use anyhow::Result;
+use serde::de::{self, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
+use std::path::Path;
 
 /// Backwards-compatible deserializer for a field that is now a `Vec<String>`
 /// but historically may have been written as a plain JSON string.
@@ -346,9 +346,15 @@ impl Default for KnowledgeConfig {
     }
 }
 
-fn default_true() -> bool { true }
-fn default_knowledge_max_input() -> usize { 6000 }
-fn default_knowledge_max_output() -> usize { 4000 }
+fn default_true() -> bool {
+    true
+}
+fn default_knowledge_max_input() -> usize {
+    6000
+}
+fn default_knowledge_max_output() -> usize {
+    4000
+}
 
 fn default_model() -> String {
     DEFAULT_MODEL.to_string()

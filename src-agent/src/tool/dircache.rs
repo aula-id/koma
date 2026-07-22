@@ -6,11 +6,11 @@
 //! [`DirCacheUpdate`] tool lets the model trigger a refresh after it creates or
 //! deletes files.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use super::{Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
-use super::{Tool, ToolCtx};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Hard cap on indexed files. Prevents a giant workspace root (e.g. ~/Downloads
 /// with tens of thousands of files) from ballooning the index and every search.
@@ -20,8 +20,19 @@ const MAX_INDEXED_FILES: usize = 50_000;
 /// well-known heavy/generated trees that never belong in `@`-file autocomplete
 /// and would otherwise dominate the index.
 const PRUNE_DIRS: &[&str] = &[
-    "node_modules", "target", ".git", "dist", "build", ".cache",
-    ".venv", "venv", "__pycache__", ".next", ".idea", "vendor", ".gradle",
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    "build",
+    ".cache",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    ".idea",
+    "vendor",
+    ".gradle",
 ];
 
 /// Memoized result of the last `search` call. Guarded by a `Mutex` (not
@@ -263,7 +274,11 @@ impl DirCache {
     /// (prefixes are absent).
     pub fn children(&self, dir: &str, ws_idx: usize) -> Vec<String> {
         let d = dir.trim().trim_start_matches("./").trim_end_matches('/');
-        let prefix = if d.is_empty() || d == "." { String::new() } else { format!("{d}/") };
+        let prefix = if d.is_empty() || d == "." {
+            String::new()
+        } else {
+            format!("{d}/")
+        };
         // When multiple workspaces are indexed, files are prefixed with `[N]`.
         // Strip the prefix before matching, but re-add it in the output so the
         // model can reference the workspace in subsequent tool calls.
@@ -279,7 +294,9 @@ impl DirCache {
                 f.as_str()
             };
             if let Some(rest) = bare.strip_prefix(&prefix) {
-                if rest.is_empty() { continue; }
+                if rest.is_empty() {
+                    continue;
+                }
                 let entry = if self.is_multi() {
                     match rest.find('/') {
                         None => format!("[{ws_idx}]{rest}"),
@@ -306,11 +323,15 @@ impl DirCache {
 /// Tool: re-index the workspace file tree in the background.
 pub struct DirCacheUpdate;
 impl Tool for DirCacheUpdate {
-    fn name(&self) -> &'static str { "dir_cache_update" }
+    fn name(&self) -> &'static str {
+        "dir_cache_update"
+    }
     fn description(&self) -> &'static str {
         "Re-index the workspace file tree (respecting .gitignore) in the background. Call after creating or deleting files so the file list stays current."
     }
-    fn parameters(&self) -> Value { json!({ "type": "object", "properties": {} }) }
+    fn parameters(&self) -> Value {
+        json!({ "type": "object", "properties": {} })
+    }
     fn run(&self, ctx: &ToolCtx, _args: &Value) -> Result<String> {
         reindex(ctx.workspaces.clone(), ctx.dir_cache.clone());
         Ok("Re-indexing the workspace in the background.".into())

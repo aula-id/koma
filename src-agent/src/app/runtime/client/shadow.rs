@@ -146,12 +146,11 @@ pub(super) fn apply_frame(
         | DaemonEvent::StoreItemDetail { .. }
         | DaemonEvent::InstalledExtensions { .. }
         | DaemonEvent::ExtensionOpResult { .. } => false,
-        | DaemonEvent::McpStatus { .. } => false,
+        DaemonEvent::McpStatus { .. } => false,
         // W8 panel bridge: the GUI host intercepts `ExtPanelReply`/`ExtPanelPush` in `push_loop`
         // (re-pushing its own envelope); the TUI client never opens an extension panel, so both
         // fold as non-visual no-ops here (like the store replies / `AttachSession`).
-        | DaemonEvent::ExtPanelReply { .. }
-        | DaemonEvent::ExtPanelPush { .. } => false,
+        DaemonEvent::ExtPanelReply { .. } | DaemonEvent::ExtPanelPush { .. } => false,
     }
 }
 
@@ -209,9 +208,9 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         // shadow manages its own offset independently. New content arrives via
         // TokenAppended deltas and the client's renderer handles follow logic.
         fg.status = global.status;
-        fg.toast = global.toast.map(|(kind, text)| {
-            (text, Instant::now() + TOAST_TTL, toast_kind(&kind))
-        });
+        fg.toast = global
+            .toast
+            .map(|(kind, text)| (text, Instant::now() + TOAST_TTL, toast_kind(&kind)));
     }
     // The on-demand model catalogue + the endpoint it was fetched for. The Settings
     // model modal + KeyInput step-1 search render their omnisearch dropdowns from
@@ -237,14 +236,18 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
     // silently drop the loud-red Yolo header on the thin client.
     shadow.rest.agent_mode = match global.agent_mode.as_str() {
         "normal" => AgentMode::Normal,
-        "plan"   => AgentMode::Plan,
-        "yolo"   => AgentMode::Yolo,
-        _        => AgentMode::Auto,
+        "plan" => AgentMode::Plan,
+        "yolo" => AgentMode::Yolo,
+        _ => AgentMode::Auto,
     };
-    shadow.rest.latest_version = global
-        .latest_version
-        .as_ref()
-        .map(|version| crate::app::version::VersionInfo { version: version.clone(), message: None });
+    shadow.rest.latest_version =
+        global
+            .latest_version
+            .as_ref()
+            .map(|version| crate::app::version::VersionInfo {
+                version: version.clone(),
+                message: None,
+            });
     // The shadow `AppConfig`'s registered-model + provider catalogue is populated
     // ONLY for the `/agents` screen (which resolves a chosen `model_uuid` to a
     // `name @ provider` label off `rest.config`), from that mode's KEYLESS projection.
@@ -370,12 +373,21 @@ pub(super) fn apply_snapshot(shadow: &mut AppState, snap: StateSnapshot) {
         ModeSnapshot::Help(h) => Mode::Help(Box::new(shadow_help(*h))),
         ModeSnapshot::Effort(e) => Mode::Effort(Box::new(shadow_effort(e))),
         ModeSnapshot::Usage(u) => {
-            let UsageSnapshot { view, range, metric, data } = *u;
+            let UsageSnapshot {
+                view,
+                range,
+                metric,
+                data,
+            } = *u;
             shadow.rest.usage_data = Some(data);
             Mode::Usage(Box::new(shadow_usage_nav(&view, &range, &metric)))
         }
         ModeSnapshot::MessageRewind(rw) => Mode::MessageRewind(Box::new(shadow_rewind(rw))),
-        ModeSnapshot::QuitConfirm { working, total, selected } => {
+        ModeSnapshot::QuitConfirm {
+            working,
+            total,
+            selected,
+        } => {
             // Rebuild the overlay state and restore the daemon-owned focus index.
             // `new` defaults `selected` to 2 (the safe cancel); overwrite it with the
             // projected value so arrow/Tab navigation — which mutates `selected` on the
@@ -466,12 +478,7 @@ pub(super) fn apply_delta(shadow: &mut AppState, delta: StateDelta) -> bool {
             false
         }
         StateDelta::ForegroundChanged { session_id } => {
-            if let Some(idx) = shadow
-                .rest
-                .sessions
-                .iter()
-                .position(|s| s.id == session_id)
-            {
+            if let Some(idx) = shadow.rest.sessions.iter().position(|s| s.id == session_id) {
                 shadow.rest.foreground = idx;
                 // Switching foreground swaps the visible transcript wholesale; clear
                 // the rendered-lines cache so it rebuilds for the new session.

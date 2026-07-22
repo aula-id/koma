@@ -171,8 +171,7 @@ pub fn read_bash_jobs(session_dir: &Path) -> Vec<BashJobRecord> {
     let Ok(conn) = open(session_dir) else {
         return Vec::new();
     };
-    let Ok(mut stmt) =
-        conn.prepare("SELECT id, command, status FROM bash_jobs ORDER BY id ASC")
+    let Ok(mut stmt) = conn.prepare("SELECT id, command, status FROM bash_jobs ORDER BY id ASC")
     else {
         return Vec::new();
     };

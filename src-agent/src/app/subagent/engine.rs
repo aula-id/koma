@@ -79,18 +79,25 @@ fn tool_is_risky(name: &str) -> bool {
 /// - trimmed text starts with a known procrastination phrase (case-insensitive)
 fn is_stall(text: &str) -> bool {
     let t = text.trim();
-    if t.is_empty() { return true; }
+    if t.is_empty() {
+        return true;
+    }
     // Substantial -> long, multi-line, or structured (headings/tables/lists). Never a stall.
     let substantial = t.len() >= 300
         || t.contains('\n')
         || t.contains("##")
         || t.contains("| ")
         || t.contains("- ");
-    if substantial { return false; }
+    if substantial {
+        return false;
+    }
     // Short + bodyless: a "let me..."/"next I..." lead-in or a dangling colon.
     let lower = t.to_lowercase();
-    let lead_in = ["let me", "i'll", "i will", "let's", "now i", "next,", "next i", "first,"]
-        .iter().any(|p| lower.starts_with(p));
+    let lead_in = [
+        "let me", "i'll", "i will", "let's", "now i", "next,", "next i", "first,",
+    ]
+    .iter()
+    .any(|p| lower.starts_with(p));
     t.ends_with(':') || lead_in
 }
 
@@ -159,7 +166,9 @@ fn unwrap_content_tag(text: &str) -> &str {
     let trimmed = text.trim();
     // Case-insensitive prefix/suffix check without allocating for the body.
     let lower = trimmed.to_lowercase();
-    if lower.starts_with(OPEN) && lower.ends_with(CLOSE) && trimmed.len() >= OPEN.len() + CLOSE.len()
+    if lower.starts_with(OPEN)
+        && lower.ends_with(CLOSE)
+        && trimmed.len() >= OPEN.len() + CLOSE.len()
     {
         let inner = &trimmed[OPEN.len()..trimmed.len() - CLOSE.len()];
         inner.trim()
@@ -204,7 +213,9 @@ fn strip_think_blocks(s: &str) -> String {
         ("<thought>", "</thought>"),
     ] {
         while let Some(o) = out.find(open) {
-            let Some(rel) = out[o..].find(close) else { break };
+            let Some(rel) = out[o..].find(close) else {
+                break;
+            };
             let end = o + rel + close.len();
             out.replace_range(o..end, "");
         }
@@ -278,9 +289,9 @@ pub async fn run_agent_loop(
         // steer. A closed channel (the sender dropped) simply drains nothing.
         let mut injected_any = false;
         while let Ok(msg) = inject_rx.try_recv() {
-                    convo.push_user(msg.clone());
-                    emit(&tx, AgentEvent::Injected(msg));
-                    injected_any = true;
+            convo.push_user(msg.clone());
+            emit(&tx, AgentEvent::Injected(msg));
+            injected_any = true;
         }
         if injected_any {
             emit(&tx, AgentEvent::Snapshot(convo.messages().to_vec()));
@@ -291,7 +302,8 @@ pub async fn run_agent_loop(
         // 1. Stream one model reply on a fresh per-step channel, then drain it.
         //    Advertise ONLY this agent's allow-list to the model (the execution
         //    gate below stays as a backstop).
-        let outcome = stream_step(&client, &resolved, convo.history(), &tools, &mcp_tools, &tx).await;
+        let outcome =
+            stream_step(&client, &resolved, convo.history(), &tools, &mcp_tools, &tx).await;
 
         // Fold this step's usage into the running totals (best-effort: a step
         // with no Usage chunk simply contributes nothing). tokens_in is
@@ -305,18 +317,21 @@ pub async fn run_agent_loop(
                 super::usage_math::accumulate_step(acc_tokens_out, acc_cost, ct, c);
             acc_tokens_out = next_out;
             acc_cost = next_cost;
-            emit(&tx, AgentEvent::UsageReport {
-                model_id: resolved.model_id.clone(),
-                tokens_in: pt,
-                tokens_out: acc_tokens_out,
-                // Per-step completion tokens + cost (not cumulative) so the
-                // orchestrator can ledger each step independently and survive
-                // a mid-run kill without losing earlier steps.
-                step_tokens_out: ct,
-                step_tokens_cached: cached,
-                step_cost: c,
-                cost: acc_cost,
-            });
+            emit(
+                &tx,
+                AgentEvent::UsageReport {
+                    model_id: resolved.model_id.clone(),
+                    tokens_in: pt,
+                    tokens_out: acc_tokens_out,
+                    // Per-step completion tokens + cost (not cumulative) so the
+                    // orchestrator can ledger each step independently and survive
+                    // a mid-run kill without losing earlier steps.
+                    step_tokens_out: ct,
+                    step_tokens_cached: cached,
+                    step_cost: c,
+                    cost: acc_cost,
+                },
+            );
         }
 
         // A fatal stream error ends the run immediately. Beyond the in-memory
@@ -573,7 +588,8 @@ async fn stream_step(
         // exactly like the main agent's advertise fold (run.rs:447-456).
         let _ = c
             .stream_complete(
-                conn, &model_id, &provider, &effort, history, &advertise, &mcp_tools, None, inner_tx,
+                conn, &model_id, &provider, &effort, history, &advertise, &mcp_tools, None,
+                inner_tx,
             )
             .await;
     });
@@ -613,8 +629,7 @@ async fn stream_step(
                     completion_tokens,
                     cost,
                 );
-                outcome.usage =
-                    Some((prompt_tokens, completion_tokens, cached_tokens, eff_cost));
+                outcome.usage = Some((prompt_tokens, completion_tokens, cached_tokens, eff_cost));
             }
             // Accumulate the model's thinking into a parallel buffer so the
             // committed assistant message carries it (the viewer renders it as a

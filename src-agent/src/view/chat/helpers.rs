@@ -1,13 +1,13 @@
 //! Pure utility functions shared across the chat view submodules.
 
+use crate::view::theme::Palette;
+use ratatui::layout::Rect;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
-use ratatui::layout::Rect;
-use crate::view::theme::Palette;
 
 /// The blockquote bar drawn to the LEFT of every thinking/reasoning line, so the
 /// gray-italic "thinking" reads as quoted text distinct from the answer. A single
@@ -32,7 +32,12 @@ pub(super) fn truncate_chars(s: &str, max: usize) -> String {
 /// first row, and an indeterminate progress bar (a block sweeping across a hatch
 /// track) on the second row when there's height for it. Driven purely by
 /// `start.elapsed()` so it advances every redraw without any stored counter.
-pub(super) fn render_compact_anim(frame: &mut Frame, area: Rect, start: std::time::Instant, palette: &Palette) {
+pub(super) fn render_compact_anim(
+    frame: &mut Frame,
+    area: Rect,
+    start: std::time::Instant,
+    palette: &Palette,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -63,11 +68,18 @@ pub(super) fn render_compact_anim(frame: &mut Frame, area: Rect, start: std::tim
         } else {
             // Advance one cell per ~60ms, ping-ponging over [0, span].
             let step = (elapsed.as_millis() / 60) as usize % (span * 2);
-            if step <= span { step } else { span * 2 - step }
+            if step <= span {
+                step
+            } else {
+                span * 2 - step
+            }
         };
         let mut spans: Vec<Span> = Vec::with_capacity(3);
         if pos > 0 {
-            spans.push(Span::styled("░".repeat(pos), Style::default().fg(palette.dim)));
+            spans.push(Span::styled(
+                "░".repeat(pos),
+                Style::default().fg(palette.dim),
+            ));
         }
         spans.push(Span::styled(
             "▓".repeat(block_w),
@@ -108,7 +120,7 @@ pub(super) fn comet_spans(text: &str, elapsed_ms: u128, palette: &Palette) -> Ve
     }
     const FRAME_MS: u128 = 80; // ~12.5 fps advance cadence (matches the compact spinner)
     const GAP: usize = 4; // dark pause length after the comet exits the right edge
-    // The head sweeps 0..n+GAP; once head >= n it sits in the gap (whole word dim).
+                          // The head sweeps 0..n+GAP; once head >= n it sits in the gap (whole word dim).
     let period = n + GAP;
     let head = ((elapsed_ms / FRAME_MS) as usize) % period.max(1);
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(n);
@@ -118,7 +130,9 @@ pub(super) fn comet_spans(text: &str, elapsed_ms: u128, palette: &Palette) -> Ve
         // is dim. Checked against `head` via `i + 1 == head` so the comparison never
         // underflows when head is small.
         let style = if i == head {
-            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD)
         } else if i + 1 == head {
             Style::default().fg(palette.fg)
         } else {
@@ -292,7 +306,9 @@ pub(super) fn render_tool_box(
     let iw = bw.saturating_sub(4);
 
     let dim = Style::default().fg(palette.dim);
-    let dim_italic = Style::default().fg(palette.dim).add_modifier(Modifier::ITALIC);
+    let dim_italic = Style::default()
+        .fg(palette.dim)
+        .add_modifier(Modifier::ITALIC);
     let accent = Style::default().fg(palette.accent);
     // Shared 2-col indent on EVERY row so the box aligns under the ✓ glyph.
     // `render_block` can't be reused here: it indents the first row 4 cols and the
@@ -306,7 +322,10 @@ pub(super) fn render_tool_box(
     // is a belt-and-suspenders clamp (also handles `iw == 0`).
     let content_row = move |text: &str| -> Line<'static> {
         let mut s: String = if text.chars().count() > iw {
-            truncate_chars(text, iw.saturating_sub(1)).chars().take(iw).collect()
+            truncate_chars(text, iw.saturating_sub(1))
+                .chars()
+                .take(iw)
+                .collect()
         } else {
             text.to_string()
         };

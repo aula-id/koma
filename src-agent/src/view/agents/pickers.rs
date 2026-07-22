@@ -21,7 +21,12 @@ pub(super) fn centered_rect(area: Rect, w: u16, h: u16) -> Rect {
     let h = h.min(area.height);
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect { x, y, width: w, height: h }
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 /// Render the tool multi-select picker overlay as a proper bordered modal.
@@ -48,7 +53,7 @@ pub(super) fn draw_tool_picker(
     // Content rows: filter line (1) + options (min 1, max 10) + hint (2 lines, split for narrow modals).
     let opt_rows = filtered.len().clamp(1, 10) as u16;
     let content_h = 1 + opt_rows + 2; // filter + options + hint (2 lines)
-    // Total height includes top and bottom borders.
+                                      // Total height includes top and bottom borders.
     let total_h = content_h + 2;
     // Width: content is "[x] toolname" with 1-space left pad + padding.
     // 36 inner chars + 2 borders = 38 total, clamped to frame.
@@ -101,10 +106,19 @@ pub(super) fn draw_tool_picker(
         let shown = format!("{}█", picker.filter);
         format!("{:<width$}", shown, width = body_w as usize)
     };
-    let filter_color = if picker.filter.is_empty() { palette.dim } else { palette.fg };
+    let filter_color = if picker.filter.is_empty() {
+        palette.dim
+    } else {
+        palette.fg
+    };
     frame.render_widget(
         Paragraph::new(Span::styled(filter_text, Style::default().fg(filter_color))),
-        Rect { x: body_x, y: inner.y, width: body_w, height: 1 },
+        Rect {
+            x: body_x,
+            y: inner.y,
+            width: body_w,
+            height: 1,
+        },
     );
 
     // Option rows.
@@ -146,18 +160,39 @@ pub(super) fn draw_tool_picker(
 
     frame.render_widget(
         Paragraph::new(lines).scroll((scroll as u16, 0)),
-        Rect { x: body_x, y: opt_area_y, width: body_w, height: opt_rows },
+        Rect {
+            x: body_x,
+            y: opt_area_y,
+            width: body_w,
+            height: opt_rows,
+        },
     );
 
     // Hint lines (last two rows of inner area): split for narrow modals.
     let hint_y = opt_area_y + opt_rows;
     frame.render_widget(
-        Paragraph::new(Span::styled("space toggle", Style::default().fg(palette.dim))),
-        Rect { x: body_x, y: hint_y, width: body_w, height: 1 },
+        Paragraph::new(Span::styled(
+            "space toggle",
+            Style::default().fg(palette.dim),
+        )),
+        Rect {
+            x: body_x,
+            y: hint_y,
+            width: body_w,
+            height: 1,
+        },
     );
     frame.render_widget(
-        Paragraph::new(Span::styled("enter ok \u{b7} esc cancel", Style::default().fg(palette.dim))),
-        Rect { x: body_x, y: hint_y + 1, width: body_w, height: 1 },
+        Paragraph::new(Span::styled(
+            "enter ok \u{b7} esc cancel",
+            Style::default().fg(palette.dim),
+        )),
+        Rect {
+            x: body_x,
+            y: hint_y + 1,
+            width: body_w,
+            height: 1,
+        },
     );
 }
 
@@ -255,7 +290,12 @@ pub(super) fn draw_model_picker(
 
     frame.render_widget(
         Paragraph::new(lines).scroll((scroll as u16, 0)),
-        Rect { x: body_x, y: inner.y, width: body_w, height: opt_rows },
+        Rect {
+            x: body_x,
+            y: inner.y,
+            width: body_w,
+            height: opt_rows,
+        },
     );
 
     // Hint lines (last two inner rows): split for narrow modals.
@@ -265,13 +305,23 @@ pub(super) fn draw_model_picker(
             "\u{2191}\u{2193} select",
             Style::default().fg(palette.dim),
         )),
-        Rect { x: body_x, y: hint_y, width: body_w, height: 1 },
+        Rect {
+            x: body_x,
+            y: hint_y,
+            width: body_w,
+            height: 1,
+        },
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
             "enter ok \u{b7} esc cancel",
             Style::default().fg(palette.dim),
         )),
-        Rect { x: body_x, y: hint_y + 1, width: body_w, height: 1 },
+        Rect {
+            x: body_x,
+            y: hint_y + 1,
+            width: body_w,
+            height: 1,
+        },
     );
 }

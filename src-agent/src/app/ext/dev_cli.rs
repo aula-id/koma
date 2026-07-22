@@ -56,7 +56,10 @@ pub fn run_install_dev(path: &str) -> Result<()> {
 
     let mut config = AppConfig::load();
     if let Some(existing) = config.installed_extensions.iter().find(|e| e.id == ext.id) {
-        println!("[dev] replacing existing {} v{}", existing.id, existing.version);
+        println!(
+            "[dev] replacing existing {} v{}",
+            existing.id, existing.version
+        );
     }
 
     for grant in &ext.granted {

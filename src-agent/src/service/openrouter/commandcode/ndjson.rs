@@ -9,9 +9,13 @@ use serde_json::Value;
 /// A parsed NDJSON event from the `/alpha/generate` stream.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum CcEvent {
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     ReasoningStart,
-    ReasoningDelta { text: String },
+    ReasoningDelta {
+        text: String,
+    },
     ReasoningEnd,
     ToolCall {
         tool_call_id: String,

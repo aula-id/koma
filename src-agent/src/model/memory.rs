@@ -48,9 +48,9 @@ const MAX_SLUG_LEN: usize = 80;
 /// plan to `<session>/plan.md`) can reuse the same primitive.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
     let mut tmp_name = file_name.to_owned();
     tmp_name.push(format!(".{}$", std::process::id()));
     let tmp_path = parent.join(&tmp_name);
@@ -187,7 +187,10 @@ fn parse_memory_file(slug: &str, text: &str) -> Memory {
     let mut kind = String::new();
     let body;
 
-    if let Some(rest) = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n")) {
+    if let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    {
         // Find the closing fence: a line that is exactly `---`.
         if let Some(end) = find_frontmatter_end(rest) {
             let (front, after) = rest.split_at(end.0);
@@ -266,10 +269,16 @@ pub fn write_memory(
     body: &str,
 ) -> std::io::Result<String> {
     let clean = slugify(slug).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "slug has no usable characters")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "slug has no usable characters",
+        )
     })?;
     let path = slug_path(dir, &clean).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "slug resolves outside memory dir")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "slug resolves outside memory dir",
+        )
     })?;
     std::fs::create_dir_all(dir)?;
     let text = render_memory_file(&clean, description, kind, body);
@@ -393,10 +402,7 @@ pub fn migrate_legacy_memory(project_dir: &Path, session_dir: &Path) {
     let mut migrated_any = false;
     for raw in text.lines() {
         // Strip a leading markdown bullet marker, then trim.
-        let line = raw
-            .trim_start()
-            .trim_start_matches(['-', '*', '+'])
-            .trim();
+        let line = raw.trim_start().trim_start_matches(['-', '*', '+']).trim();
         if line.is_empty() {
             continue;
         }

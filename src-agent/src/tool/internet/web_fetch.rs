@@ -14,11 +14,11 @@
 //! falls back to the raw-HTTP path, so `web_fetch` always returns something
 //! useful.
 
+use super::{http_get_blocking, looks_like_cloudflare, Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::sync::mpsc;
 use std::time::Duration;
-use super::{http_get_blocking, looks_like_cloudflare, Tool, ToolCtx};
 
 /// Outer wait budget for the scrapion subprocess. It launches Firefox and
 /// renders the page, so this is deliberately generous.
@@ -32,7 +32,9 @@ const SCRAPION_MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
 pub struct WebFetch;
 
 impl Tool for WebFetch {
-    fn name(&self) -> &'static str { "web_fetch" }
+    fn name(&self) -> &'static str {
+        "web_fetch"
+    }
 
     fn description(&self) -> &'static str {
         "Fetch a web page by URL and return its main readable content as markdown. \
@@ -53,12 +55,15 @@ impl Tool for WebFetch {
     }
 
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let url = args.get("url")
+        let url = args
+            .get("url")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'url'"))?;
 
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Ok(format!("error: url must start with http:// or https://, got: {url}"));
+            return Ok(format!(
+                "error: url must start with http:// or https://, got: {url}"
+            ));
         }
 
         // Full mode + installed research env: try the browser backend first.
@@ -170,7 +175,10 @@ fn scrapion_fetch(url: &str) -> Result<String, String> {
 
     // Non-zero exit ⇒ fall back. Keep a short stderr tail for the error string.
     if !output.status.success() {
-        return Err(format!("scrapion exited non-zero: {}", tail_chars(stderr.trim(), 300)));
+        return Err(format!(
+            "scrapion exited non-zero: {}",
+            tail_chars(stderr.trim(), 300)
+        ));
     }
 
     // stdout is contractually a single JSON document. A parse failure is treated
@@ -181,7 +189,10 @@ fn scrapion_fetch(url: &str) -> Result<String, String> {
     // A top-level `error` field short-circuits to a fallback.
     if let Some(err) = report.get("error").and_then(Value::as_str) {
         if !err.trim().is_empty() {
-            return Err(format!("scrapion reported: {}", first_chars(err.trim(), 300)));
+            return Err(format!(
+                "scrapion reported: {}",
+                first_chars(err.trim(), 300)
+            ));
         }
     }
 
@@ -190,9 +201,9 @@ fn scrapion_fetch(url: &str) -> Result<String, String> {
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| "scrapion returned no results".to_string())?;
-    let success = results.iter().find(|r| {
-        r.get("status").and_then(Value::as_str) == Some("success")
-    });
+    let success = results
+        .iter()
+        .find(|r| r.get("status").and_then(Value::as_str) == Some("success"));
     let content = match success {
         Some(r) => r.get("content").and_then(Value::as_str).unwrap_or(""),
         None => return Err("scrapion returned no successful result".to_string()),
@@ -212,7 +223,9 @@ fn scrapion_fetch(url: &str) -> Result<String, String> {
 
     let mut out = format!("source: {url}\n\n{body}");
     if truncated {
-        out.push_str(&format!("\n\n... (content truncated at {SCRAPION_MAX_CHARS} chars)"));
+        out.push_str(&format!(
+            "\n\n... (content truncated at {SCRAPION_MAX_CHARS} chars)"
+        ));
     }
     Ok(out)
 }

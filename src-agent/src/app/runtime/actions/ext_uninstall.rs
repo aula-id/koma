@@ -111,9 +111,13 @@ pub(crate) fn uninstall_extension_core(
                 report.agents_cleared
             ));
         } else if report.agents_cleared > 0 {
-            state.rest.fg_mut().set_toast_info(
-                crate::app::cascade::cascade_status_line(&format!("extension {id}"), &report),
-            );
+            state
+                .rest
+                .fg_mut()
+                .set_toast_info(crate::app::cascade::cascade_status_line(
+                    &format!("extension {id}"),
+                    &report,
+                ));
         }
     }
 

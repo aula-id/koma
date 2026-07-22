@@ -88,10 +88,7 @@ fn rule_line(rule_w: usize, active: bool, palette: &Palette) -> Line<'static> {
     let color = if active { palette.accent } else { palette.dim };
     Line::from(vec![
         Span::raw(format!("{:width$}", "", width = LABEL_W + GAP)),
-        Span::styled(
-            "\u{2500}".repeat(rule_w.max(1)),
-            Style::default().fg(color),
-        ),
+        Span::styled("\u{2500}".repeat(rule_w.max(1)), Style::default().fg(color)),
     ])
 }
 
@@ -150,10 +147,7 @@ fn result_line(
         let text = truncate(&text, val_w.max(1));
         Line::from(vec![
             pad,
-            Span::styled(
-                text,
-                Style::default().fg(palette.sel_fg).bg(palette.sel_bg),
-            ),
+            Span::styled(text, Style::default().fg(palette.sel_fg).bg(palette.sel_bg)),
         ])
     } else {
         let id_disp = truncate(&id, val_w.saturating_sub(2).max(1));
@@ -293,7 +287,11 @@ pub fn draw(
         let key_active = form.field == 1;
 
         // Endpoint field row.
-        render_line(frame, field_line("Endpoint", &form.endpoint, endpoint_active, palette), row);
+        render_line(
+            frame,
+            field_line("Endpoint", &form.endpoint, endpoint_active, palette),
+            row,
+        );
         row += 1;
         // Endpoint underline rule.
         render_line(frame, rule_line(rule_w, endpoint_active, palette), row);
@@ -303,7 +301,11 @@ pub fn draw(
         row += 1;
 
         // API key field row.
-        render_line(frame, field_line("API key", &form.api_key, key_active, palette), row);
+        render_line(
+            frame,
+            field_line("API key", &form.api_key, key_active, palette),
+            row,
+        );
         row += 1;
         // API key underline rule.
         render_line(frame, rule_line(rule_w, key_active, palette), row);
@@ -328,16 +330,28 @@ pub fn draw(
         let indent = LABEL_W + GAP;
         let cache_matches = cache_endpoint == Some(form.endpoint.trim());
         if !cache_matches {
-            render_line(frame, dim_indented("searching models\u{2026}", indent, palette), row);
+            render_line(
+                frame,
+                dim_indented("searching models\u{2026}", indent, palette),
+                row,
+            );
         } else {
             // Show the "type to search" hint above the list while the query is empty.
             if form.query.trim().is_empty() {
-                render_line(frame, dim_indented("type to search models\u{2026}", indent, palette), row);
+                render_line(
+                    frame,
+                    dim_indented("type to search models\u{2026}", indent, palette),
+                    row,
+                );
                 row += 1;
             }
             let results = filter_models(models_cache, &form.query);
             if results.is_empty() {
-                render_line(frame, dim_indented("no models \u{2014} type an id", indent, palette), row);
+                render_line(
+                    frame,
+                    dim_indented("no models \u{2014} type an id", indent, palette),
+                    row,
+                );
             } else {
                 let sel = form.result_sel.min(results.len() - 1);
                 // Scrolloff window (persisted offset on rest — KeyInputForm is
@@ -351,7 +365,11 @@ pub fn draw(
                 for (vi, &mi) in results[start..end].iter().enumerate() {
                     let i = start + vi;
                     let info = &models_cache[mi];
-                    render_line(frame, result_line(info, i == sel, indent, rule_w, palette), row);
+                    render_line(
+                        frame,
+                        result_line(info, i == sel, indent, rule_w, palette),
+                        row,
+                    );
                     row += 1;
                 }
             }

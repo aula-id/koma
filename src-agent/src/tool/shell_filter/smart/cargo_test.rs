@@ -13,7 +13,9 @@ fn build_success_collapses_to_summary() {
     assert_eq!(outcome.filter_name, Some("cargo-build"));
     assert!(outcome.changed);
     assert!(!outcome.text.contains("Compiling"));
-    assert!(outcome.text.contains("cargo build: ok, 0 warnings (15.23s)"));
+    assert!(outcome
+        .text
+        .contains("cargo build: ok, 0 warnings (15.23s)"));
 }
 
 #[test]
@@ -57,7 +59,9 @@ error: linking with `cc` failed: exit status: 1
 error: aborting due to previous error
 ";
     let outcome = try_filter("cargo build", raw, Some(101)).expect("should filter");
-    assert!(outcome.text.contains("cargo:warning=custom build script output"));
+    assert!(outcome
+        .text
+        .contains("cargo:warning=custom build script output"));
     assert!(!outcome.text.contains("Compiling"));
     assert!(outcome.text.contains("cargo build: 1 errors, 0 warnings"));
 }

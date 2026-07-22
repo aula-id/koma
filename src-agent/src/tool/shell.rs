@@ -6,13 +6,13 @@
 //! last `MAX_TOOL_OUTPUT_CHARS` characters so verbose build output doesn't
 //! flood the context.
 
+use super::{Tool, ToolCtx};
 use anyhow::Result;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, OnceLock};
-use super::{Tool, ToolCtx};
 
 /// Exit status of a captured shell run, as seen by [`capture_raw`].
 ///
@@ -240,7 +240,12 @@ pub(crate) fn capture_raw(command: &str, cwd: &Path, timeout_ms: u64) -> (String
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return (format!("error: failed to spawn command: {e}"), ShellExit::Early),
+        Err(e) => {
+            return (
+                format!("error: failed to spawn command: {e}"),
+                ShellExit::Early,
+            )
+        }
     };
 
     // Wait with timeout using a helper thread + channel.
@@ -258,7 +263,10 @@ pub(crate) fn capture_raw(command: &str, cwd: &Path, timeout_ms: u64) -> (String
             // The child thread owns the child now — we can't kill it here, but we
             // still return a timeout message so the caller doesn't stall. The thread
             // drains on its own when the child finishes.
-            return (format!("command timed out after {timeout_ms}ms"), ShellExit::Early);
+            return (
+                format!("command timed out after {timeout_ms}ms"),
+                ShellExit::Early,
+            );
         }
     };
 
@@ -291,12 +299,19 @@ pub struct OutputOpts {
 /// line. `Early` exits bypass all of this and are returned unchanged, matching
 /// the pre-refactor early-return behavior exactly (no tee — those are bespoke
 /// error strings, not real command output).
-pub(crate) fn finalize_output(command: &str, raw: String, exit: ShellExit, opts: &OutputOpts) -> String {
+pub(crate) fn finalize_output(
+    command: &str,
+    raw: String,
+    exit: ShellExit,
+    opts: &OutputOpts,
+) -> String {
     let exit_code_num = match exit {
         ShellExit::Early => return raw,
         ShellExit::Code(code) => code,
     };
-    let exit_code_str = exit_code_num.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string());
+    let exit_code_str = exit_code_num
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "?".to_string());
 
     if !opts.saving {
         return format_captured_output(raw, &exit_code_str);
@@ -407,7 +422,9 @@ fn gc_log_dir(log_dir: &Path) {
         if path.extension().and_then(|e| e.to_str()) != Some("log") {
             continue;
         }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         logs.push((name.to_string(), size));
     }
@@ -440,7 +457,15 @@ fn gc_log_dir(log_dir: &Path) {
 /// exact original behavior for every existing caller.
 pub fn run_shell_capture(command: &str, cwd: &Path, timeout_ms: u64) -> String {
     let (raw, exit) = capture_raw(command, cwd, timeout_ms);
-    finalize_output(command, raw, exit, &OutputOpts { saving: false, log_dir: None })
+    finalize_output(
+        command,
+        raw,
+        exit,
+        &OutputOpts {
+            saving: false,
+            log_dir: None,
+        },
+    )
 }
 
 /// Format captured command output: ANSI must already be stripped. Applies the
@@ -460,13 +485,22 @@ pub(crate) fn format_captured_output(text: String, exit_code: &str) -> String {
 /// truncated) also points at that path instead of the generic "redirect to a
 /// file" wording. With `tee_path: None` the output is byte-identical to the
 /// pre-tee behavior.
-pub(crate) fn format_captured_output_tee(text: String, exit_code: &str, tee_path: Option<&Path>) -> String {
+pub(crate) fn format_captured_output_tee(
+    text: String,
+    exit_code: &str,
+    tee_path: Option<&Path>,
+) -> String {
     const MAX_CHARS: usize = crate::config::MAX_TOOL_OUTPUT_CHARS;
     let truncated;
     let tail: String = if text.chars().count() > MAX_CHARS {
         truncated = true;
-        text.chars().rev().take(MAX_CHARS).collect::<String>()
-            .chars().rev().collect()
+        text.chars()
+            .rev()
+            .take(MAX_CHARS)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect()
     } else {
         truncated = false;
         text
@@ -496,7 +530,9 @@ pub(crate) fn format_captured_output_tee(text: String, exit_code: &str, tee_path
 /// Run a shell command in the workspace directory.
 pub struct Bash;
 impl Tool for Bash {
-    fn name(&self) -> &'static str { "bash" }
+    fn name(&self) -> &'static str {
+        "bash"
+    }
     fn description(&self) -> &'static str {
         "Run a shell command in the workspace. Use for cargo, build commands, and general shell tasks. \
          For git operations, use the git_operator tool instead — it handles SSH key injection and \
@@ -525,7 +561,8 @@ impl Tool for Bash {
         })
     }
     fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
-        let command = args.get("command")
+        let command = args
+            .get("command")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'command'"))?;
 
@@ -541,11 +578,13 @@ impl Tool for Bash {
                 "error: use the git_operator tool for git commands, not bash. \
                  git_operator runs git directly (no shell-injection risk), injects the \
                  session SSH key automatically, and gates destructive operations. \
-                 Example: git_operator({\"args\": [\"log\", \"--oneline\", \"-5\"]})".to_string()
+                 Example: git_operator({\"args\": [\"log\", \"--oneline\", \"-5\"]})"
+                    .to_string(),
             );
         }
 
-        let timeout_ms: u64 = args.get("timeout_ms")
+        let timeout_ms: u64 = args
+            .get("timeout_ms")
             .and_then(Value::as_u64)
             .unwrap_or(120_000);
 
@@ -553,7 +592,10 @@ impl Tool for Bash {
         // (`run_shell_capture`), but with the session's saving/tee settings
         // applied — `run_shell_capture` itself always runs with saving off.
         let (raw, exit) = capture_raw(command, &ctx.workspace, timeout_ms);
-        let opts = OutputOpts { saving: ctx.bash_saving, log_dir: ctx.bash_log_dir.clone() };
+        let opts = OutputOpts {
+            saving: ctx.bash_saving,
+            log_dir: ctx.bash_log_dir.clone(),
+        };
         Ok(finalize_output(command, raw, exit, &opts))
     }
 }
@@ -568,7 +610,9 @@ impl Tool for Bash {
 /// [`Tool`] trait and must never be reached.
 pub struct BashOutput;
 impl Tool for BashOutput {
-    fn name(&self) -> &'static str { "bash_output" }
+    fn name(&self) -> &'static str {
+        "bash_output"
+    }
     fn description(&self) -> &'static str {
         "Return the current status and captured output of a background bash job \
          (one started by bash with run_in_background=true). Poll this to watch a \
@@ -613,7 +657,9 @@ impl Tool for BashOutput {
 /// trait and must never be reached.
 pub struct BashKill;
 impl Tool for BashKill {
-    fn name(&self) -> &'static str { "bash_kill" }
+    fn name(&self) -> &'static str {
+        "bash_kill"
+    }
     fn description(&self) -> &'static str {
         "Terminate a running background bash job (one started by bash with \
          run_in_background=true)."
