@@ -315,9 +315,20 @@ pub(crate) fn advance_turn(
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
                     let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
-                    sess.conversation.push_assistant(content, msg_reasoning, promoted);
+                    sess.conversation.push_assistant(content.clone(), msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
                         save_err = Some(e.to_string());
+                    }
+                    // Post-response knowledge extraction: fire-and-forget fact
+                    // extraction from the assistant's response to auto-feed the
+                    // knowledge graph. Non-blocking — the user already sees the
+                    // response; this runs in the background.
+                    if sess.settings.knowledge.enabled {
+                        let pid = sess.path.clone();
+                        let c = content.clone();
+                        tokio::task::spawn_blocking(move || {
+                            extract_and_store_facts(&pid, &c);
+                        });
                     }
                 }
             }
@@ -475,4 +486,43 @@ pub(crate) fn advance_turn(
     state.rest.sessions[sess_idx].tool_idx = 0;
     state.rest.sessions[sess_idx].tool_results.clear();
     super::tools::process_tools(state, sess_idx, client, handle);
+}
+
+// ── Post-response knowledge extraction ────────────────────────────────
+
+/// Extract facts from an assistant response and store them in the local
+/// knowledge graph (which also pushes to the global knowledge daemon
+/// via fire-and-forget). Runs on a blocking thread so it never stalls the
+/// event loop.
+fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
+    // Simple fact extraction: split on sentence boundaries, take sentences
+    // that look factual (contain a verb-like structure). Stops at 5 facts.
+    let mut count = 0;
+    for sentence in response.split(&['.', '!', '?'][..]) {
+        let s = sentence.trim();
+        if s.len() < 20 || s.len() > 500 {
+            continue;
+        }
+        // Rough heuristic: a factual sentence has at least one common verb.
+        let lower = s.to_lowercase();
+        let looks_factual = [" is ", " are ", " was ", " were ", " has ", " have ",
+                             " does ", " can ", " will ", " should ", " must ",
+                             " uses ", " provides ", " supports ", " allows ",
+                             " requires ", " includes ", " runs ", " works "]
+            .iter()
+            .any(|v| lower.contains(v));
+        if !looks_factual {
+            continue;
+        }
+        crate::model::surreal::memory::store_fact(
+            session_dir,
+            s,
+            "inferred",
+            0.6, // moderate confidence for auto-extracted facts
+        );
+        count += 1;
+        if count >= 5 {
+            break;
+        }
+    }
 }
