@@ -150,8 +150,8 @@ pub fn apply(spec: &FilterSpec, raw: &str, exit_code: Option<i32>) -> Option<Str
     }
 }
 
-fn re(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("filter spec regex must be valid")
+fn re(pattern: &'static str) -> Regex {
+    crate::re_util::static_re(pattern)
 }
 
 pub fn table() -> &'static [FilterSpec] {

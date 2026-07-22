@@ -54,10 +54,7 @@ use std::sync::OnceLock;
 /// is a single match containing exactly one `<` and one `>`.
 fn reasoning_tag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)<\s*/?\s*(?:think|thinking|thought)\s*>")
-            .expect("reasoning tag regex must be valid")
-    })
+    RE.get_or_init(|| crate::re_util::static_re(r"(?i)<\s*/?\s*(?:think|thinking|thought)\s*>"))
 }
 
 /// Matcher for the ENTITY-ENCODED form of the whitelisted reasoning tags
@@ -65,10 +62,7 @@ fn reasoning_tag_re() -> &'static Regex {
 /// used to decode a model's echoed-back escaped tag before persistence.
 fn reasoning_entity_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)&lt;\s*/?\s*(?:think|thinking|thought)\s*&gt;")
-            .expect("reasoning entity regex must be valid")
-    })
+    RE.get_or_init(|| crate::re_util::static_re(r"(?i)&lt;\s*/?\s*(?:think|thinking|thought)\s*&gt;"))
 }
 
 /// Escape whitelisted reasoning tags to HTML entities so they can't act as

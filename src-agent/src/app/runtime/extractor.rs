@@ -129,22 +129,22 @@ use std::sync::OnceLock;
 
 fn quoted_phrase() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#""[^"]{2,40}""#).unwrap())
+    RE.get_or_init(|| crate::re_util::static_re(r#""[^"]{2,40}""#))
 }
 
 fn camel_case() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b([A-Z][a-z]+){2,}\b").unwrap())
+    RE.get_or_init(|| crate::re_util::static_re(r"\b([A-Z][a-z]+){2,}\b"))
 }
 
 fn proper_noun() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(?:[A-Z][a-z]+ ){1,3}[A-Z][a-z]+\b").unwrap())
+    RE.get_or_init(|| crate::re_util::static_re(r"\b(?:[A-Z][a-z]+ ){1,3}[A-Z][a-z]+\b"))
 }
 
 fn single_capital() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b[A-Z][a-z]{2,}\b").unwrap())
+    RE.get_or_init(|| crate::re_util::static_re(r"\b[A-Z][a-z]{2,}\b"))
 }
 
 /// Cosine threshold for entity reuse. Below this, a candidate is treated
