@@ -254,26 +254,23 @@ over sec_remote (stateful socket).\n",
         (sess.path.clone(), sess.settings.clone(), user_intent, aware)
     });
 
-    // Knowledge facts: gather from local memory + daemon fallback (synchronous,
-    // fast — local DB only; daemon IPC is the only potential wait). Done BEFORE
-    // the spawn so the `Arc<OpenRouterClient>` is available for distillation.
-    let knowledge_facts: Option<super::knowledge::KnowledgeFacts> =
+    // Knowledge context: captured pre-spawn, gathered inside the spawned task
+    // so daemon IPC (proxy_expand, up to 5s) never blocks the event loop.
+    let knowledge_session_path: Option<std::path::PathBuf> =
         state.rest.sessions[sess_idx]
             .session
             .as_ref()
-            .and_then(|sess| {
-                let user_query = sess.conversation.last_user_content().unwrap_or_default();
-                super::knowledge::gather(
-                    &sess.path,
-                    &sess.settings.knowledge,
-                    &user_query,
-                )
-            });
+            .map(|s| s.path.clone());
     let knowledge_cfg: Option<crate::model::settings::KnowledgeConfig> =
         state.rest.sessions[sess_idx]
             .session
             .as_ref()
             .map(|s| s.settings.knowledge.clone());
+    let knowledge_user_query: Option<String> =
+        state.rest.sessions[sess_idx]
+            .session
+            .as_ref()
+            .and_then(|s| s.conversation.last_user_content());
 
     // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows
@@ -548,9 +545,12 @@ over sec_remote (stateful socket).\n",
     state.rest.sessions[sess_idx].active_rx = Some(rx);
     let c = Arc::clone(client.as_ref().unwrap());
     let jh = handle.spawn(async move {
-        // Knowledge distillation: if facts were gathered pre-send, distill them
-        // via the awareness model (or mechanically) and inject the note into the
-        // System message's volatile tail before reshaping.
+        // Knowledge gather + distill: runs inside the spawned task so daemon IPC
+        // (proxy_expand, up to 5s timeout) never blocks the event loop.
+        let knowledge_facts = match (&knowledge_session_path, &knowledge_cfg, &knowledge_user_query) {
+            (Some(path), Some(cfg), Some(query)) => super::knowledge::gather(path, cfg, query),
+            _ => None,
+        };
         if let (Some(kfacts), Some(kcfg)) = (knowledge_facts.as_ref(), knowledge_cfg.as_ref()) {
             // Resolve awareness route from the reshape tuple (same one shape uses).
             let aware_route = reshape.as_ref().and_then(|(_, _, _, r)| r.as_ref());
