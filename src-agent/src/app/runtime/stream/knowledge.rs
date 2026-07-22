@@ -31,8 +31,9 @@ pub fn gather(
     if !config.enabled || user_query.trim().is_empty() {
         return None;
     }
+    let limit = (config.max_input_tokens / 500).max(3); // ~500 tokens per fact, min 3
     let qv = crate::model::surreal::core::embed_one(user_query.trim());
-    let facts = crate::model::surreal::memory::recall_memory(session_dir, &qv, 10);
+    let facts = crate::model::surreal::memory::recall_memory(session_dir, &qv, limit);
     if facts.is_empty() {
         return None;
     }
@@ -93,8 +94,11 @@ pub async fn distill(
     }
 
     let body = if body.len() > config.max_output_tokens.saturating_mul(4) {
-        // Rough char cap: ~4 chars/token.
-        format!("{}…", &body[..config.max_output_tokens.saturating_mul(4) - 1])
+        // Rough char cap: ~4 chars/token. Use floor_char_boundary to
+        // avoid panicking on multi-byte UTF-8 (Chinese, emoji, etc).
+        let cap = config.max_output_tokens.saturating_mul(4) - 1;
+        let safe = body.floor_char_boundary(cap);
+        format!("{}…", &body[..safe])
     } else {
         body
     };
