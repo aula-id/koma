@@ -356,6 +356,7 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_refresh_tests {
     use super::ext_refresh_form;
 

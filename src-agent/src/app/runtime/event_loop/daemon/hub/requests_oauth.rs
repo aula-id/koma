@@ -872,6 +872,7 @@ fn run_ext_oauth_delegate(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_oauth_tests {
     use super::*;
     use serde_json::json;

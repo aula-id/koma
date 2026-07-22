@@ -203,6 +203,7 @@ fn internal_error_response() -> Response<Cow<'static, [u8]>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod koma_request_tests {
     use super::*;
 

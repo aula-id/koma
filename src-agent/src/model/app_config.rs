@@ -1212,6 +1212,7 @@ pub(crate) fn upsert_model_entry(list: &mut Vec<ModelEntry>, mut entry: ModelEnt
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod oauth_provider_wire_tests {
     use super::OAuthProvider;
 
@@ -1250,6 +1251,7 @@ mod oauth_provider_wire_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod oauth_conn_serde_tests {
     use super::{OAuthConn, OAuthProvider};
 
@@ -1357,6 +1359,7 @@ mod oauth_conn_serde_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod provider_conn_serde_tests {
     use super::{ApiType, ProviderConn};
 
@@ -1405,6 +1408,7 @@ mod provider_conn_serde_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_purge_tests {
     use super::*;
     use std::collections::HashSet;
@@ -1599,6 +1603,7 @@ mod ext_purge_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod clinepass_migration_tests {
     use super::AppConfig;
 

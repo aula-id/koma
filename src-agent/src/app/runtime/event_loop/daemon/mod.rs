@@ -74,6 +74,7 @@ pub(in crate::app::runtime) use hub::DaemonHub;
 
 mod hub;
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;
 
 /// Number of consecutive QUALIFYING ticks (all sessions quiesced AND no client)

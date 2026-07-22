@@ -103,6 +103,7 @@ pub(super) fn parse_event(data: &str) -> Option<ResponsesEvent> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

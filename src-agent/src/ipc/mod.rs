@@ -71,6 +71,7 @@ pub mod server;
 pub mod snapshot;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod roundtrip_tests {
     //! Serde round-trip coverage for the wire protocol.
     //!

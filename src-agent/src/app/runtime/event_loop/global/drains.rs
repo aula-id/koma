@@ -1068,6 +1068,7 @@ fn apply_to_settings_modal_for(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_notify_tests {
     //! Unit coverage for the W8 panel-push routing core (`route_ext_notify` +
     //! `parse_panel_push` + `enforce_ext_panel_cap`). These ARE the whole per-notify + cap logic

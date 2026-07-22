@@ -572,6 +572,7 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_prompt_tests {
     use super::{ext_prompt_body, ext_prompts_ready, EXT_TURN_BUDGET};
 

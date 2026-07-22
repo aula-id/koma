@@ -108,6 +108,7 @@ pub fn unescape_reasoning_tags(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod escape_tests {
     use super::{escape_reasoning_tags, unescape_reasoning_tags};
 

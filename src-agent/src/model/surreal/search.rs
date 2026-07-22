@@ -169,6 +169,7 @@ fn fuse_rrf(fts: Vec<MessageMatch>, vec: Vec<MessageMatch>, limit: usize) -> Vec
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

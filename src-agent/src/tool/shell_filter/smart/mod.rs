@@ -41,6 +41,7 @@ fn finalize(raw: &str, text: String, name: &'static str) -> Option<FilterOutcome
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

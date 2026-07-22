@@ -202,6 +202,7 @@ fn write_cached_rendition(path: &Path, bytes: &[u8], mime: &str) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod data_url_tests {
     use super::*;
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Unit tests for the Anthropic request-mapping layer ([`super`]). Split out of
 //! `request.rs` (loaded via `#[path] mod tests;`) to keep each source file within
 //! the repo's ≤600-line budget; `use super::*` gives access to the private

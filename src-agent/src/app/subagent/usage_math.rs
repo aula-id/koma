@@ -63,6 +63,7 @@ pub(crate) fn accumulate_step(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod usage_math_tests {
     use super::*;
 

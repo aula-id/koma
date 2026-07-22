@@ -48,6 +48,7 @@ pub fn scroll_window(offset: &Cell<usize>, sel: usize, n: usize, h: usize) -> (u
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::cell::Cell;

@@ -2104,6 +2104,7 @@ fn broker_sessions_spawn_into(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::app::mode::Mode;
