@@ -1,7 +1,7 @@
 //! SurrealDB hypercharge — persistent context layer for AI agents.
 //!
 //! Four capabilities:
-//! 1. **Persistent storage** (SurrealKV) with incremental sync from SQLite
+//! 1. **Persistent storage** (RocksDB) with incremental sync from SQLite
 //! 2. **Hybrid search** — FTS5 + vector cosine fused via reciprocal rank fusion
 //! 3. **Graph edges** — RELATE for agent orchestration / tool call tracking
 //! 4. **Memory atoms** — fact extraction, trust scoring, knowledge graph

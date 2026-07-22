@@ -514,7 +514,7 @@ pub fn write_mcp_daemon_pid() -> Result<()> {
 /// Path to the GLOBAL knowledge daemon's Unix domain socket: `~/.koma/knowledge.sock`.
 ///
 /// Like the MCP daemon, the knowledge daemon is a SINGLETON — one process owns the
-/// central SurrealKV store at `~/.koma/knowledge/` and sessions push facts / query
+/// central RocksDB store at `~/.koma/knowledge/` and sessions push facts / query
 /// for graph expansion here. Whoever binds this socket IS the live knowledge daemon
 /// (bind-as-oracle, same rule as the session and MCP sockets).
 #[cfg(unix)]

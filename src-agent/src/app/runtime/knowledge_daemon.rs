@@ -1,6 +1,6 @@
 //! The GLOBAL knowledge daemon (`koma --knowledge-daemon`).
 //!
-//! A SINGLETON headless process that owns the central SurrealKV knowledge store
+//! A SINGLETON headless process that owns the central RocksDB knowledge store
 //! at `~/.koma/knowledge/` so ALL sessions share entity resolution, graph-based
 //! recall expansion, and a persistent fact corpus that survives compaction.
 //! Sessions connect over IPC (`~/.koma/knowledge.sock`) to push facts and query
@@ -30,7 +30,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use surrealdb::engine::local::Db;
+use surrealdb::engine::local::{Db, RocksDb};
 use surrealdb::Surreal;
 
 use crate::ipc::frame::{read_frame_from, write_frame_to, FrameReader};
@@ -41,7 +41,7 @@ use super::signals::install_daemon_signals;
 
 /// Headless entry point: run the GLOBAL knowledge daemon event loop with NO terminal.
 ///
-/// Opens the central SurrealKV store at `~/.koma/knowledge/`, defines the knowledge
+/// Opens the central RocksDB store at `~/.koma/knowledge/`, defines the knowledge
 /// schema, binds `~/.koma/knowledge.sock`, and serves [`KnowledgeRequest`] frames
 /// until signalled. Returns when SIGTERM/SIGINT is observed (via the polled
 /// `shutting_down` flag).
@@ -99,7 +99,23 @@ pub fn run_knowledge_daemon(_opts: crate::cli::Opts) -> Result<()> {
 
 async fn open_knowledge_db(knowledge_path: &std::path::Path) -> Result<Surreal<Db>> {
     let path_str = knowledge_path.to_string_lossy().to_string();
-    let db = Surreal::<Db>::new(path_str).await?;
+
+    // Wipe legacy SurrealKV store if present — RocksDB cannot open it.
+    crate::model::surreal::core::ensure_rocksdb_compatible(knowledge_path);
+
+    let db = match Surreal::new::<RocksDb>(path_str).await {
+        Ok(db) => db,
+        Err(e) => {
+            // One-shot retry: wipe + reopen.
+            let _ = std::fs::remove_dir_all(knowledge_path);
+            crate::model::store::append_global_error_log(
+                "knowledge_daemon — first open failed, wiped + retrying",
+                &e.to_string(),
+            );
+            let path_str = knowledge_path.to_string_lossy().to_string();
+            Surreal::new::<RocksDb>(path_str).await?
+        }
+    };
     db.use_ns("koma").use_db("knowledge").await?;
 
     // Schema: fact, entity, and the relationship tables that build the graph.
