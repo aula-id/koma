@@ -270,7 +270,27 @@ over sec_remote (stateful socket).\n",
         state.rest.sessions[sess_idx]
             .session
             .as_ref()
-            .and_then(|s| s.conversation.last_user_content());
+            .and_then(|s| {
+                // Skip gather on tool hops (agent_steps > 0) to avoid re-querying
+                // with the same user string. Delta inject for tool hops will be
+                // added in a follow-up.
+                if state.rest.sessions[sess_idx].agent_steps > 0 {
+                    return None;
+                }
+                let last_user = s.conversation.last_user_content();
+                if let Some(lu) = last_user {
+                    // Enrich the query with recent context for multi-turn intent.
+                    let recent = s.conversation.recent_context(4, 200);
+                    let mut enriched = lu.clone();
+                    if !recent.is_empty() {
+                        enriched.push_str("\n\n[Recent context]\n");
+                        enriched.push_str(&recent);
+                    }
+                    Some(enriched)
+                } else {
+                    None
+                }
+            });
 
     // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows

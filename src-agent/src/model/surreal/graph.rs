@@ -30,22 +30,22 @@ pub fn record_tool_call(
     let tn = tool_name.to_string();
     let args = args_summary.to_string();
     let res = result_snippet.to_string();
+    // One OS thread + one current-thread runtime — do not nest blocking_block.
     std::thread::spawn(move || {
-        let _ = core::blocking_block({
-            let sd = sd.clone();
-            let aid = aid.clone();
-            let tn = tn.clone();
-            let args = args.clone();
-            let res = res.clone();
-            move || {
-                let sd = sd.clone();
-                let aid = aid.clone();
-                let tn = tn.clone();
-                let args = args.clone();
-                let res = res.clone();
-                async move { record_tc_async(&sd, &aid, &tn, &args, &res).await }
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                crate::model::store::append_global_error_log(
+                    "surreal::record_tool_call — runtime build failed",
+                    &e.to_string(),
+                );
+                return;
             }
-        });
+        };
+        rt.block_on(record_tc_async(&sd, &aid, &tn, &args, &res));
     });
 }
 
@@ -75,7 +75,7 @@ async fn record_tc_async(
 
     // Create agent node with explicit record ID for RELATE edges.
     let agent_rid = format!("agent:{agent_id}");
-    let _ = db
+    if let Err(e) = db
         .query("CREATE type::thing($rid) CONTENT $data")
         .bind(("rid", agent_rid.clone()))
         .bind(("data", serde_json::json!({
@@ -83,11 +83,18 @@ async fn record_tc_async(
             "name": agent_id,
             "last_seen": now,
         })))
-        .await;
+        .await
+    {
+        crate::model::store::append_error_log(
+            session_dir,
+            "surreal::record_tool_call — CREATE agent",
+            &e.to_string(),
+        );
+    }
 
     // Create tool_call node with explicit record ID.
     let tc_rid = format!("tool_call:tc_{agent_id}_{tool_name}_{now}");
-    let _ = db
+    if let Err(e) = db
         .query("CREATE type::thing($rid) CONTENT $data")
         .bind(("rid", tc_rid.clone()))
         .bind(("data", serde_json::json!({
@@ -99,14 +106,28 @@ async fn record_tc_async(
             "embedding": emb,
             "timestamp": now,
         })))
-        .await;
+        .await
+    {
+        crate::model::store::append_error_log(
+            session_dir,
+            "surreal::record_tool_call — CREATE tool_call",
+            &e.to_string(),
+        );
+    }
 
     // RELATE agent → tool_call via the called edge.
-    let _ = db
+    if let Err(e) = db
         .query("RELATE type::thing($a)->called->type::thing($tc)")
         .bind(("a", agent_rid.clone()))
         .bind(("tc", tc_rid.clone()))
-        .await;
+        .await
+    {
+        crate::model::store::append_error_log(
+            session_dir,
+            "surreal::record_tool_call — RELATE called",
+            &e.to_string(),
+        );
+    }
 }
 
 /// Fetch all tool calls made by `agent_id`, newest first.

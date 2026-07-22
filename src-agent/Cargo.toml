@@ -66,7 +66,7 @@ rmcp = { version = "1.8", default-features = false, features = ["client", "trans
 # mirror (SurrealKV) of the SQLite message log with hybrid search (BM25 +
 # vector cosine via HNSW), graph edges for agent orchestration, and memory
 # atoms for cross-session knowledge. NOT the canonical write path.
-surrealdb = { version = "2", default-features = false, features = ["kv-mem", "kv-surrealkv"] }
+surrealdb = { version = "2", default-features = false, features = ["kv-surrealkv"] }
 # Local ONNX embeddings for SurrealDB vector search. No API keys, no cloud.
 # Model downloads once (~130 MB BGE-small-en-v1.5) and runs offline thereafter.
 fastembed = "4"
