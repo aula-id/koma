@@ -111,7 +111,10 @@ pub(in crate::app::runtime::stream::tools) fn intercept_bash_output(
                 // Mirror `tool::shell::finalize_output`'s "saving" path
                 // (filter + tee) for a finished background job, same as
                 // synchronous bash/git_operator.
-                let code = finished_code.expect("qualifies implies finished_code is Some");
+                let Some(code) = finished_code else {
+                    crate::model::store::append_global_error_log("bash", "BUG: finished_code was None after qualifies");
+                    continue;
+                };
                 let (text, should_tee) =
                     crate::app::bgbash::render_finished_output(&job.command, &out, code, saving);
                 let mut body = format!("{line}\n{text}");

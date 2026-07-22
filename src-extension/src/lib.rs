@@ -7,6 +7,8 @@
 //! - [`sdk`]: a thin helper layer, including a standalone demo mode used by
 //!   the samples in `example/` since there is no host to connect to yet.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 pub mod protocol;
 pub mod sdk;
 

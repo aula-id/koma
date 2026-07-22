@@ -444,6 +444,7 @@ pub fn cascade_status_line(label: &str, report: &CascadeReport) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod cascade_test {
     use super::*;
     use crate::model::agent_def::AgentDef;

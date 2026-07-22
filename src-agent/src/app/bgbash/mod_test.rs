@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
 
 // `render_finished_output` is the pure decision+rendering seam for the

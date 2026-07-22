@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Unit tests for Command Code request mapping.
 
 use super::*;

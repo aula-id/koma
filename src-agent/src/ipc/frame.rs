@@ -186,6 +186,7 @@ pub async fn read_frame(stream: &mut IpcStream, reader: &mut FrameReader) -> io:
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

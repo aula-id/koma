@@ -299,7 +299,10 @@ impl McpManager {
                             // Keep it: move the service into the snapshot and record
                             // its tools. `take()` leaves `to_discard = None` so nothing
                             // is torn down afterwards.
-                            let service = to_discard.take().expect("service present");
+                            let Some(service) = to_discard.take() else {
+                                crate::model::store::append_global_error_log("mcp", "BUG: service was None after take");
+                                continue;
+                            };
                             snap.conns
                                 .insert(server.uuid.clone(), ServerConn { service, peer });
                             snap.errors.remove(&server.uuid);

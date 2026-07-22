@@ -39,6 +39,8 @@
 //!     → view::draw   (AppState → rendered Frame)
 //! ```
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 mod app;
 mod cli;
 mod config;
@@ -48,6 +50,7 @@ mod internet;
 mod ipc;
 mod security;
 mod model;
+mod re_util;
 mod resources;
 mod service;
 mod tool;

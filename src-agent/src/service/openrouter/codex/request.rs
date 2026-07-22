@@ -212,7 +212,9 @@ pub(super) fn build_input(
                     // like `attachment_parts`; an unreadable file is skipped.
                     let capable = image_ctx.map(|c| c.model_takes_images).unwrap_or(false);
                     if capable {
-                        let ctx = image_ctx.expect("capable implies Some");
+                        let Some(ctx) = image_ctx else {
+                            return Ok(input);
+                        };
                         for att in &m.attachments {
                             if let Some(url) =
                                 crate::dto::openrouter::request::data_url_for(&ctx.session_dir, att)
@@ -378,6 +380,7 @@ pub(in crate::service::openrouter) fn to_text_format(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::dto::chat::{ChatMessage, ReasoningDetail, Role, ToolCall};

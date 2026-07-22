@@ -224,6 +224,7 @@ pub fn parse(line: &str) -> Command {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod parse_tests {
     use super::*;
 

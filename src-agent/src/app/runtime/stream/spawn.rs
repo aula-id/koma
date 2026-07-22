@@ -271,7 +271,9 @@ fn spawn_task_with_id(
     narrow_ctx_to_workspace(&mut ctx, overrides.as_ref())?;
     let (session_dir, config, settings, awareness, memory_md) = {
         let rt = &state.rest.sessions[sess_idx];
-        let sess = rt.session.as_ref().unwrap();
+        let Some(sess) = rt.session.as_ref() else {
+            return Err(anyhow::anyhow!("session missing for spawn"));
+        };
         let session_dir = sess.path.clone();
         let config = state.rest.config.clone();
         // Use sess.settings as-is: session_models is per-session and authoritative
@@ -316,7 +318,9 @@ fn spawn_task_with_id(
                 .set_toast(format!("agent '{}' model unresolved — using main", agent_name));
         }
     }
-    let client_arc = Arc::clone(client.as_ref().unwrap());
+    let Some(client_arc) = client.as_ref().cloned() else {
+        return Err(anyhow::anyhow!("client missing for spawn"));
+    };
 
     let sub = crate::app::subagent::spawn_subagent(
         &client_arc,
@@ -616,6 +620,7 @@ fn narrow_ctx_to_workspace(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::{Arc, RwLock};

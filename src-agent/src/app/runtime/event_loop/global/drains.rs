@@ -892,10 +892,12 @@ pub(super) fn fetch_catalogue_debounced(
     handle: &tokio::runtime::Handle,
 ) -> bool {
     let mut dirty = false;
-    if let Some(pending) = state.rest.catalogue_pending.as_ref() {
-        if state.rest.catalogue_fetching.is_none() && std::time::Instant::now() >= pending.due {
-            // Take the pending request and mark its endpoint in-flight.
-            let pending = state.rest.catalogue_pending.take().unwrap();
+    if state.rest.catalogue_pending.as_ref().is_some_and(|p| std::time::Instant::now() >= p.due)
+        && state.rest.catalogue_fetching.is_none()
+    {
+        let Some(pending) = state.rest.catalogue_pending.take() else {
+            return dirty;
+        };
             let endpoint = pending.endpoint;
             let api_key = pending.api_key;
             let oauth_uuid = pending.oauth_uuid;
@@ -1068,6 +1070,7 @@ fn apply_to_settings_modal_for(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_notify_tests {
     //! Unit coverage for the W8 panel-push routing core (`route_ext_notify` +
     //! `parse_panel_push` + `enforce_ext_panel_cap`). These ARE the whole per-notify + cap logic

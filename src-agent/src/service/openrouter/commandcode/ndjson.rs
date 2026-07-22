@@ -165,6 +165,7 @@ pub(super) fn map_finish_reason(reason: Option<&str>) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

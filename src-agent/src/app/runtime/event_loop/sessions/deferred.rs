@@ -251,13 +251,13 @@ pub(super) fn drain_deferred_and_resume(
 
         // Append as a USER turn (so the model treats it as input to respond to),
         // persist to msglog + messages.json, then capture history for the wire.
-        let history = {
-            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
-            let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
-            sess.conversation.push_user(body);
-            let _ = sess.save();
-            sess.conversation.history()
+        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
+            continue;
         };
+        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+        sess.conversation.push_user(body);
+        let _ = sess.save();
+        let history = sess.conversation.history();
 
         // Per-turn reset + start stream, mirroring handle_submit's kickoff. The
         // session is idle here, so these are clean-state resets (defensive).
@@ -325,13 +325,13 @@ pub(super) fn drain_deferred_and_resume(
 
         // Append as a USER turn (so the model treats it as input to respond to),
         // persist to msglog + messages.json, then capture history for the wire.
-        let history = {
-            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
-            let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
-            sess.conversation.push_user(body);
-            let _ = sess.save();
-            sess.conversation.history()
+        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
+            continue;
         };
+        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+        sess.conversation.push_user(body);
+        let _ = sess.save();
+        let history = sess.conversation.history();
 
         // Per-turn reset + start stream, mirroring handle_submit's kickoff. The
         // session is idle here, so these are clean-state resets (defensive).
@@ -417,13 +417,13 @@ pub(super) fn drain_deferred_and_resume(
 
         // Append as a USER turn (model input), persist to msglog + messages.json, then
         // capture history for the wire — mirrors the bash-nudge block above EXACTLY.
-        let history = {
-            let sess = state.rest.sessions[idx].session.as_mut().unwrap();
-            let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
-            sess.conversation.push_user(body);
-            let _ = sess.save();
-            sess.conversation.history()
+        let Some(sess) = state.rest.sessions[idx].session.as_mut() else {
+            continue;
         };
+        let _ = crate::model::msglog::append(&sess.path, crate::dto::chat::Role::User, &body, None);
+        sess.conversation.push_user(body);
+        let _ = sess.save();
+        let history = sess.conversation.history();
 
         // Per-turn reset + start stream, mirroring handle_submit's kickoff. The session
         // is idle here, so these are clean-state resets (defensive).
@@ -572,6 +572,7 @@ pub(super) fn nudge_background_finish(state: &mut AppState, idx: usize) -> bool 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_prompt_tests {
     use super::{ext_prompt_body, ext_prompts_ready, EXT_TURN_BUDGET};
 
