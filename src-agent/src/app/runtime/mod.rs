@@ -31,6 +31,7 @@ mod shortsend;
 mod lifecycle;
 mod knowledge_daemon;
 mod mcp_daemon;
+mod extractor;
 mod signals;
 mod session_mgmt;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
