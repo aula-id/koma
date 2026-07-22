@@ -117,11 +117,10 @@ async fn store_fact_async(
 pub fn recall_memory(session_dir: &Path, query_vec: &[f32], limit: usize) -> Vec<Fact> {
     let sd = session_dir.to_path_buf();
     let qv = query_vec.to_vec();
-    let lim = limit.min(100) as i64;
     core::blocking_block(move || {
         let sd = sd.clone();
         async move {
-            recall_memory_async(&sd, &qv, lim).await.unwrap_or_else(|e| {
+            recall_memory_async(&sd, &qv, limit).await.unwrap_or_else(|e| {
                 crate::model::store::append_error_log(&sd, "surreal::recall_memory failed", &e.to_string());
                 Vec::new()
             })
@@ -132,19 +131,24 @@ pub fn recall_memory(session_dir: &Path, query_vec: &[f32], limit: usize) -> Vec
 async fn recall_memory_async(
     session_dir: &Path,
     query_vec: &[f32],
-    limit: i64,
+    limit: usize,
 ) -> anyhow::Result<Vec<Fact>> {
     let db = open_db(session_dir).await?;
+
+    // Dynamic K (limit) + EF (search effort: 2×K for better recall, floor 100).
+    let ef = (limit * 2).max(100);
+    let query_str = format!(
+        "SELECT fact_id, content, category, confidence, trust,
+                reinforcement_count, created_at, last_reinforced,
+                vector::distance::knn() AS distance
+         FROM fact
+         WHERE embedding <|{limit},{ef}|> $query_vec
+         ORDER BY distance"
+    );
+
     let mut results = db
-        .query(
-            "SELECT fact_id, content, category, confidence, trust,
-                    reinforcement_count, created_at, last_reinforced
-             FROM fact
-             WHERE embedding <|100|> $query_vec
-             LIMIT $limit",
-        )
+        .query(&query_str)
         .bind(("query_vec", query_vec.to_vec()))
-        .bind(("limit", limit))
         .await?;
 
     let ids: Vec<String> = results.take("fact_id").unwrap_or_default();
