@@ -219,6 +219,11 @@ struct HostHandle {
     next_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
+#[cfg(any(unix, windows))]
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl Koma {
     fn new_demo() -> Self {
         Koma {
@@ -517,10 +522,6 @@ fn host_run(mut ext: impl Extension, driver: Option<fn(&mut Koma)>) {
     use std::io::{BufRead, BufReader};
     use std::sync::atomic::AtomicU64;
     use std::sync::{mpsc, Arc, Mutex};
-
-    fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-        m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     let socket = match std::env::var("KOMA_EXT_SOCKET") {
         Ok(s) => s,
