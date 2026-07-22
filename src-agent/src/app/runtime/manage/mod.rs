@@ -44,6 +44,7 @@
 
 mod commands;
 mod doctor;
+mod knowledge;
 mod mcp;
 mod os;
 mod probe;
