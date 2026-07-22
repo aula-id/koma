@@ -39,7 +39,11 @@ pub fn store_fact(
             })
         }
     })
+    .flatten()
 }
+
+/// Cosine distance below which two fact embeddings are treated as near-duplicates.
+const DEDUP_COSINE_DISTANCE: f64 = 0.15;
 
 async fn store_fact_async(
     session_dir: &Path,
@@ -47,46 +51,90 @@ async fn store_fact_async(
     category: &str,
     confidence: f64,
 ) -> anyhow::Result<Option<String>> {
+    // Reject garbage before it ever hits the DB.
+    if !is_quality_fact(content) {
+        return Ok(None);
+    }
+
     let db = open_db(session_dir).await?;
     let now = now_secs();
     let new_emb = embed_one(content);
 
-    // Look for existing facts in the same category for dedup.
+    // Near-duplicate check via vector search (same category preferred).
+    // Over-fetch a few neighbours and pick the closest true match.
     let mut existing = db
         .query(
             "SELECT fact_id, content, category, confidence, trust,
-                    reinforcement_count, created_at, last_reinforced
+                    reinforcement_count, embedding,
+                    vector::distance::knn() AS distance
              FROM fact
-             WHERE category = $category
-             LIMIT 10",
+             WHERE embedding <|8,40|> $emb
+             ORDER BY distance
+             LIMIT 8",
         )
-        .bind(("category", category.to_string()))
+        .bind(("emb", new_emb.clone()))
         .await?;
 
     let ids: Vec<String> = existing.take("fact_id").unwrap_or_default();
+    let contents: Vec<String> = existing.take("content").unwrap_or_default();
+    let categories: Vec<String> = existing.take("category").unwrap_or_default();
     let confidences: Vec<f64> = existing.take("confidence").unwrap_or_default();
     let rcs: Vec<i64> = existing.take("reinforcement_count").unwrap_or_default();
+    let distances: Vec<f64> = existing.take("distance").unwrap_or_default();
 
-    if let Some(i) = (0..ids.len()).next() {
-        // Reinforce: update existing fact.
+    let n = ids
+        .len()
+        .min(contents.len())
+        .min(categories.len())
+        .min(confidences.len())
+        .min(rcs.len())
+        .min(distances.len());
+
+    // Prefer same-category near-dup; fall back to any category near-dup.
+    let mut match_idx: Option<usize> = None;
+    for i in 0..n {
+        if distances[i] > DEDUP_COSINE_DISTANCE {
+            break; // ordered by distance; rest are worse
+        }
+        if categories[i] == category {
+            match_idx = Some(i);
+            break;
+        }
+        if match_idx.is_none() {
+            match_idx = Some(i);
+        }
+    }
+
+    if let Some(i) = match_idx {
+        // Reinforce existing near-duplicate — keep the longer/richer content.
         let old_conf = confidences.get(i).copied().unwrap_or(confidence);
         let new_conf = (old_conf + confidence) / 2.0;
         let rc = rcs.get(i).copied().unwrap_or(0) + 1;
         let new_trust = compute_trust(new_conf, now, rc);
+        let keep_content = if content.len() > contents[i].len() {
+            content
+        } else {
+            contents[i].as_str()
+        };
 
         let _ = db
-            .query("UPDATE fact SET confidence = $c, trust = $t, reinforcement_count = $r, last_reinforced = $lr WHERE fact_id = $id")
+            .query(
+                "UPDATE fact SET content = $content, confidence = $c, trust = $t, \
+                 reinforcement_count = $r, last_reinforced = $lr, embedding = $emb \
+                 WHERE fact_id = $id",
+            )
+            .bind(("content", keep_content.to_string()))
             .bind(("c", new_conf))
             .bind(("t", new_trust))
             .bind(("r", rc))
             .bind(("lr", now))
+            .bind(("emb", new_emb.clone()))
             .bind(("id", ids[i].clone()))
             .await;
 
-        // Fire-and-forget push to global knowledge daemon.
         crate::app::knowledge::proxy_push_fact(
             ids[i].clone(),
-            content.to_string(),
+            keep_content.to_string(),
             category.to_string(),
             new_conf,
             new_emb,
@@ -114,7 +162,6 @@ async fn store_fact_async(
         })))
         .await;
 
-    // Fire-and-forget push to global knowledge daemon.
     crate::app::knowledge::proxy_push_fact(
         fact_id.clone(),
         content.to_string(),
@@ -142,7 +189,12 @@ pub fn recall_memory(session_dir: &Path, query_vec: &[f32], limit: usize) -> Vec
             facts
         }
     })
+    .unwrap_or_default()
 }
+
+/// Maximum cosine distance for a fact to be considered relevant.
+/// Cosine distance: 0 = identical, 0.5 = somewhat similar, 1.0 = unrelated.
+const MAX_COSINE_DISTANCE: f64 = 0.6;
 
 async fn recall_memory_async(
     session_dir: &Path,
@@ -151,13 +203,14 @@ async fn recall_memory_async(
 ) -> anyhow::Result<Vec<Fact>> {
     let db = open_db(session_dir).await?;
 
-    // Dynamic K (limit) + EF (search effort: 2×K for better recall, floor 100).
-    let ef = (limit * 2).max(100);
+    // Over-fetch (3× limit) so we have room to filter by distance + quality.
+    let fetch_limit = (limit * 3).max(30);
+    let ef = (fetch_limit * 2).max(100);
     let query_str = format!(
         "SELECT fact_id, content, trust,
                 vector::distance::knn() AS distance
          FROM fact
-         WHERE embedding <|{limit},{ef}|> $query_vec
+         WHERE embedding <|{fetch_limit},{ef}|> $query_vec
          ORDER BY distance"
     );
 
@@ -169,14 +222,38 @@ async fn recall_memory_async(
     let ids: Vec<String> = results.take("fact_id").unwrap_or_default();
     let contents: Vec<String> = results.take("content").unwrap_or_default();
     let trusts: Vec<f64> = results.take("trust").unwrap_or_default();
+    let distances: Vec<f64> = results.take("distance").unwrap_or_default();
 
-    let n = ids.len().min(contents.len()).min(trusts.len());
+    let n = ids.len().min(contents.len()).min(trusts.len()).min(distances.len());
 
-    Ok((0..n).map(|i| Fact {
-        id: ids[i].clone(),
-        content: contents[i].clone(),
-        trust: trusts[i],
-    }).collect())
+    // Filter: distance threshold + content quality + dedup.
+    let mut seen_hashes: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut facts = Vec::with_capacity(limit);
+
+    for i in 0..n {
+        if facts.len() >= limit {
+            break;
+        }
+        // Skip facts that are too far from the query.
+        if distances[i] > MAX_COSINE_DISTANCE {
+            continue;
+        }
+        // Skip low-quality facts (instructions, fragments, code).
+        if !is_quality_fact(&contents[i]) {
+            continue;
+        }
+        // Dedup by content hash (skip near-duplicates).
+        if !seen_hashes.insert(content_hash(&contents[i])) {
+            continue;
+        }
+        facts.push(Fact {
+            id: ids[i].clone(),
+            content: contents[i].clone(),
+            trust: trusts[i],
+        });
+    }
+
+    Ok(facts)
 }
 
 /// Try knowledge daemon fallback and merge with local results when local
@@ -202,37 +279,147 @@ fn merge_daemon_fallback(
         return;
     }
 
-    // Build a set of existing IDs for dedup.
-    let seen: std::collections::HashSet<String> =
+    // Build a set of existing IDs + content hashes for dedup.
+    let mut seen_ids: std::collections::HashSet<String> =
         local.iter().map(|f| f.id.clone()).collect();
+    let mut seen_hashes: std::collections::HashSet<u64> = local
+        .iter()
+        .map(|f| content_hash(&f.content))
+        .collect();
 
-    // Merge primary facts.
+    let mut push_if_ok = |id: &str, content: &str, trust: f64| {
+        if local.len() >= limit {
+            return;
+        }
+        if !is_quality_fact(content) {
+            return;
+        }
+        if !seen_ids.insert(id.to_string()) {
+            return;
+        }
+        if !seen_hashes.insert(content_hash(content)) {
+            return;
+        }
+        local.push(Fact {
+            id: id.to_string(),
+            content: content.to_string(),
+            trust,
+        });
+    };
+
     for kf in &result.facts {
-        if !seen.contains(&kf.id) {
-            local.push(Fact {
-                id: kf.id.clone(),
-                content: kf.content.clone(),
-                trust: kf.trust,
-            });
-        }
+        push_if_ok(&kf.id, &kf.content, kf.trust);
     }
-
-    // Merge related facts (lower priority — append at end).
-    let mut seen_after_primary: std::collections::HashSet<String> =
-        local.iter().map(|f| f.id.clone()).collect();
     for kf in &result.related_facts {
-        if !seen_after_primary.contains(&kf.id) {
-            seen_after_primary.insert(kf.id.clone());
-            local.push(Fact {
-                id: kf.id.clone(),
-                content: kf.content.clone(),
-                trust: kf.trust,
-            });
-        }
+        push_if_ok(&kf.id, &kf.content, kf.trust);
     }
 }
 
+fn content_hash(s: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    s.to_lowercase().hash(&mut h);
+    h.finish()
+}
 
+
+
+// ── Content quality filter ─────────────────────────────────────────
+
+/// Heuristic check: is this content a knowledge-worthy fact?
+/// Rejects instructions, code fragments, conversational filler, and
+/// incomplete sentences. Pure string checks — no LLM, no latency.
+pub fn is_quality_fact(content: &str) -> bool {
+    let trimmed = content.trim();
+
+    // Too short to be meaningful.
+    if trimmed.len() < 20 {
+        return false;
+    }
+
+    // Too long — likely a code block or verbose instruction.
+    if trimmed.len() > 500 {
+        return false;
+    }
+
+    let lower = trimmed.to_lowercase();
+
+    // Imperative instructions (starts with a verb command).
+    const INSTRUCTION_STARTS: &[&str] = &[
+        "run ", "build ", "test ", "fix ", "add ", "create ", "update ",
+        "delete ", "remove ", "install ", "configure ", "set ", "make ",
+        "check ", "verify ", "ensure ", "apply ", "merge ", "rebase ",
+        "commit ", "push ", "pull ", "checkout ", "revert ", "debug ",
+        "deploy ", "restart ", "reload ", "enable ", "disable ",
+        "use ", "try ", "open ", "close ", "start ", "stop ",
+        "install ", "import ", "export ", "copy ", "move ",
+    ];
+    for prefix in INSTRUCTION_STARTS {
+        if lower.starts_with(prefix) {
+            // Allow if it reads like a declarative fact despite starting with a verb.
+            // e.g. "Rust uses Cargo for builds" vs "Run cargo build"
+            if !trimmed.contains(" → ") && !trimmed.contains("->") {
+                return false;
+            }
+        }
+    }
+
+    // Code fragments and technical artifacts.
+    if trimmed.contains("```") || trimmed.contains("`fn ") || trimmed.contains("`let ")
+        || trimmed.contains("`pub ") || trimmed.contains("$.") || trimmed.contains("$.bind")
+        || trimmed.contains("DEFINE ") || trimmed.contains("SELECT ") || trimmed.contains("CREATE ")
+        || trimmed.contains("async ") && trimmed.contains("await ")
+    {
+        return false;
+    }
+
+    // Incomplete sentences (ends mid-word or with arrow/ellipsis).
+    if trimmed.ends_with("→") || trimmed.ends_with("...") || trimmed.ends_with("…")
+        || trimmed.ends_with('-') || trimmed.ends_with(',') || trimmed.ends_with('(')
+    {
+        return false;
+    }
+
+    // Starts with first-person conversational (not a fact).
+    // Keep prefixes long enough to avoid false positives ("so ", "no ", "now ").
+    const CONVERSATIONAL_STARTS: &[&str] = &[
+        "i think ", "i believe ", "i feel ", "i can see ", "i see ",
+        "we should ", "we can ", "you should ", "you can ", "you need ",
+        "let me ", "let's ", "okay ", "sure ", "hmm ", "well ",
+        "rebuild and test", "here's ", "here is ", "here are ",
+        "as you can see", "note that ", "please ",
+    ];
+    for prefix in CONVERSATIONAL_STARTS {
+        if lower.starts_with(prefix) {
+            return false;
+        }
+    }
+
+    // Markdown artifacts (bold markers, headings).
+    if trimmed.starts_with("**") || trimmed.starts_with("##") || trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+    {
+        return false;
+    }
+
+    // Incomplete markdown links like "[foo" without a closing "](".
+    if trimmed.contains('[') && !trimmed.contains("](") && !trimmed.contains(']') {
+        return false;
+    }
+
+    // Log-like patterns (timestamps, PIDs).
+    if trimmed.contains("[unix:") || lower.contains("pid ") {
+        return false;
+    }
+
+    // Must contain at least one space (reject single-token garbage).
+    if !trimmed.contains(' ') {
+        return false;
+    }
+
+    true
+}
 
 // ── Trust scoring ──────────────────────────────────────────────────
 
@@ -251,6 +438,28 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_quality_fact_accepts_declarative() {
+        assert!(is_quality_fact(
+            "Koma uses SurrealDB for vector search and knowledge storage"
+        ));
+        assert!(is_quality_fact(
+            "Rust is a systems programming language with ownership rules"
+        ));
+    }
+
+    #[test]
+    fn test_quality_fact_rejects_garbage() {
+        assert!(!is_quality_fact("Rebuild and test — you should see the batch"));
+        assert!(!is_quality_fact("Run cargo build --release after the change"));
+        assert!(!is_quality_fact("I can see from your setup that you're working"));
+        assert!(!is_quality_fact("**Feed facts** — have a normal conversation"));
+        assert!(!is_quality_fact("short"));
+        assert!(!is_quality_fact(
+            "SELECT * FROM fact WHERE embedding <|5,100|> $query"
+        ));
+    }
 
     #[test]
     fn test_compute_trust_basic() {

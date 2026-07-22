@@ -253,6 +253,13 @@ pub(super) fn run_loop(
         // per iteration would expire toasts at double rate.
 
         if state.rest.should_quit {
+            crate::model::store::append_global_error_log(
+                "daemon-exit",
+                &format!(
+                    "door: standalone run_loop should_quit [sessions={}, clients=?]",
+                    state.rest.sessions.len(),
+                ),
+            );
             break;
         }
     }

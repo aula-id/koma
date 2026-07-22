@@ -326,7 +326,7 @@ pub(crate) fn advance_turn(
                     if sess.settings.knowledge.enabled {
                         let pid = sess.path.clone();
                         let c = content.clone();
-                        tokio::task::spawn_blocking(move || {
+                        handle.spawn_blocking(move || {
                             extract_and_store_facts(&pid, &c);
                         });
                     }
@@ -495,15 +495,13 @@ pub(crate) fn advance_turn(
 /// via fire-and-forget). Runs on a blocking thread so it never stalls the
 /// event loop.
 fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
-    // Simple fact extraction: split on sentence boundaries, take sentences
-    // that look factual (contain a verb-like structure). Stops at 5 facts.
     let mut count = 0;
+    let mut stored = Vec::new();
     for sentence in response.split(&['.', '!', '?'][..]) {
         let s = sentence.trim();
         if s.len() < 20 || s.len() > 500 {
             continue;
         }
-        // Rough heuristic: a factual sentence has at least one common verb.
         let lower = s.to_lowercase();
         let looks_factual = [" is ", " are ", " was ", " were ", " has ", " have ",
                              " does ", " can ", " will ", " should ", " must ",
@@ -514,15 +512,25 @@ fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
         if !looks_factual {
             continue;
         }
+        // Apply quality filter before storing — prevents garbage facts
+        // from entering the knowledge graph in the first place.
+        if !super::knowledge::is_quality_fact_static(s) {
+            continue;
+        }
         crate::model::surreal::memory::store_fact(
             session_dir,
             s,
             "inferred",
-            0.6, // moderate confidence for auto-extracted facts
+            0.6,
         );
+        stored.push(format!("  [{count}] \"{s}\""));
         count += 1;
         if count >= 5 {
             break;
         }
     }
+    crate::model::store::append_global_error_log(
+        "knowledge-extract",
+        &format!("session={}, response_len={}, extracted_facts={}\n{}", session_dir.display(), response.len(), count, stored.join("\n")),
+    );
 }

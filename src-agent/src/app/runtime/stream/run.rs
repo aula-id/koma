@@ -543,18 +543,35 @@ over sec_remote (stateful socket).\n",
 
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
-    let c = Arc::clone(client.as_ref().unwrap());
+    let Some(c) = client.as_ref().cloned() else {
+        let _ = tx.send(crate::service::StreamEvent::Error(
+            "no OpenRouter client available; configure a model in /settings".into(),
+        ));
+        return;
+    };
     let jh = handle.spawn(async move {
         // Knowledge gather + distill: runs inside the spawned task so daemon IPC
         // (proxy_expand, up to 5s timeout) never blocks the event loop.
+        // spawn_blocking moves the sync gather (which internally calls
+        // blocking_block → new thread + tokio runtime + SurrealDB open) onto
+        // the dedicated blocking thread pool, so it never stalls a tokio worker
+        // thread or races with the main runtime's SurrealDB connections.
         let knowledge_facts = match (&knowledge_session_path, &knowledge_cfg, &knowledge_user_query) {
-            (Some(path), Some(cfg), Some(query)) => super::knowledge::gather(path, cfg, query),
+            (Some(path), Some(cfg), Some(query)) => {
+                let p = path.clone();
+                let c = cfg.clone();
+                let q = query.clone();
+                tokio::task::spawn_blocking(move || super::knowledge::gather(&p, &c, &q))
+                    .await
+                    .ok()
+                    .flatten()
+            }
             _ => None,
         };
-        if let (Some(kfacts), Some(kcfg)) = (knowledge_facts.as_ref(), knowledge_cfg.as_ref()) {
-            // Resolve awareness route from the reshape tuple (same one shape uses).
-            let aware_route = reshape.as_ref().and_then(|(_, _, _, r)| r.as_ref());
-            if let Some(note) = super::knowledge::distill(kfacts, kcfg, &c, aware_route).await {
+        if let Some(kfacts) = knowledge_facts.as_ref() {
+            // Mechanical top-N-by-trust injection — no AI inference, instant.
+            let note = super::knowledge::raw_note(kfacts);
+            if !note.is_empty() {
                 if let Some(first) = history.first_mut() {
                     if first.role == crate::dto::chat::Role::System {
                         first.content.push_str(&note);
