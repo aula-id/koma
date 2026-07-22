@@ -35,7 +35,7 @@ impl Tool for MessageFind {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search terms to find in past messages. Supports FTS5 syntax: multi-word AND, quoted phrases, etc."
+                    "description": "Search terms to find in past messages. Multi-word queries are OR'd as prefix matches (e.g. \"foo bar\" matches messages containing \"foo*\" or \"bar*\")."
                 }
             },
             "required": ["query"]
