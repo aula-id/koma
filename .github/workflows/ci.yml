@@ -50,7 +50,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0.0.0-cache-rust"
+          prefix-key: "v0.0.1-cache-rust"
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Tests (agent)
@@ -62,7 +62,7 @@ jobs:
         run: cargo test --workspace --all-targets
 
   lint:
-    name: fmt + clippy (non-gating)
+    name: fmt (non-gating) + clippy (prod, gating)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,13 +76,10 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0.0.0-cache-rust-lint"
+          prefix-key: "v0.0.1-cache-rust-lint"
           save-if: ${{ github.event_name != 'pull_request' }}
 
-      # Non-gating for now: the tree is not rustfmt- or clippy-clean yet, so
-      # these report in the logs but do not fail the build. Drop the `|| true`
-      # on fmt once `cargo fmt --all` has been run, and on clippy (adding
-      # `-- -D warnings`) once its warnings are cleared.
+      # Formatting: non-gating until the tree is rustfmt-clean.
       - name: Formatting
         run: cargo fmt --all --check || true
 
@@ -90,5 +87,15 @@ jobs:
         working-directory: src-extension
         run: cargo fmt --all --check || true
 
-      - name: Clippy
+      # Production-only clippy: --lib --bins excludes test/bench/example
+      # targets so test-style unwraps and WIP dead_code don't gate CI.
+      - name: Clippy (production)
+        run: cargo clippy --workspace --no-default-features --lib --bins -- -D warnings
+
+      # Full clippy including tests: non-gating informational output.
+      - name: Clippy (tests, non-gating)
         run: cargo clippy --workspace --no-default-features --all-targets || true
+
+      - name: Clippy (src-extension, production)
+        working-directory: src-extension
+        run: cargo clippy --workspace --lib --bins -- -D warnings
