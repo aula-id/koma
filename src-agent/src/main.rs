@@ -50,6 +50,7 @@ mod internet;
 mod ipc;
 mod security;
 mod model;
+mod re_util;
 mod resources;
 mod service;
 mod tool;
