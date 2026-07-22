@@ -1,5 +1,5 @@
 use ratatui::{
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Paragraph},
     Frame,
@@ -44,7 +44,7 @@ pub(super) fn draw_role_picker(
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let popup = Rect { x, y, width: w, height: h };
 
-    // Dim everything outside the modal (fg dim + bg reset — same as the other
+    // Dim everything outside the modal (fg dim + bg — same as the other
     // settings modals, so a stacked overlay still recedes the layer beneath it).
     {
         let buf = frame.buffer_mut();
@@ -53,7 +53,7 @@ pub(super) fn draw_role_picker(
                 if cx >= popup.x && cx < popup.right() && cy >= popup.y && cy < popup.bottom() {
                     continue;
                 }
-                buf[(cx, cy)].set_fg(palette.dim).set_bg(Color::Reset);
+                buf[(cx, cy)].set_fg(palette.dim).set_bg(palette.bg);
             }
         }
     }
