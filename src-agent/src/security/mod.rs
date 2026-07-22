@@ -146,6 +146,15 @@ pub fn install(force: bool) -> Result<()> {
     // Step 6: install Python dependencies.
     let pip = dest.join("venv").join("bin").join("pip");
     let requirements = dest.join("requirements.txt");
+
+    // 6a: upgrade pip itself to get modern wheel tag support.
+    println!("upgrading pip...");
+    let _ = std::process::Command::new(&pip)
+        .args(["install", "--upgrade", "pip", "setuptools", "wheel"])
+        .status();
+
+    // 6b: install main requirements (lief>=0.17.5 pins a modern version
+    //     with Python 3.14 wheels, bypassing checksec.py's exact pin).
     println!(
         "installing Python dependencies from {}...",
         requirements.display()
@@ -160,6 +169,16 @@ pub fn install(force: bool) -> Result<()> {
         .context("failed to launch pip install")?;
     if !status.success() {
         return Err(anyhow!("pip install exited with status {}", status));
+    }
+
+    // 6c: install checksec.py with --no-deps so it doesn't downgrade lief.
+    println!("installing checksec.py (with --no-deps)...");
+    let status = std::process::Command::new(&pip)
+        .args(["install", "--no-deps", "checksec.py"])
+        .status()
+        .context("failed to launch pip install checksec.py")?;
+    if !status.success() {
+        return Err(anyhow!("pip install checksec.py exited with status {}", status));
     }
 
     println!("security daemon installed at {}", dest.display());

@@ -1,4 +1,4 @@
-checksec.py
+lief>=0.17.5
 fpylll
 hashid
 jsbeautifier
