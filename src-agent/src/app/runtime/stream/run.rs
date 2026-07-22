@@ -678,6 +678,7 @@ fn append_ext_context(dst: &mut String, ctx: &std::collections::BTreeMap<String,
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_context_tests {
     use super::append_ext_context;
     use std::collections::BTreeMap;

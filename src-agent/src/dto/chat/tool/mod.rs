@@ -10,6 +10,7 @@ mod extract;
 mod sanitize;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;
 
 pub use types::{FunctionCall, ToolCall};

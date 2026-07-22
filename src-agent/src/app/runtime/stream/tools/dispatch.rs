@@ -49,7 +49,10 @@ pub(crate) fn dispatch_deferred(state: &mut AppState, sess_idx: usize, call: &To
     let ctx = super::super::spawn::build_tool_ctx(state, sess_idx);
     let call_cloned = call.clone();
     let id = call.id.clone();
-    let tx = state.rest.sessions[sess_idx].tool_task_tx.as_ref().unwrap().clone();
+    let Some(tx) = state.rest.sessions[sess_idx].tool_task_tx.as_ref().cloned() else {
+        crate::model::store::append_global_error_log("dispatch", "BUG: tool_task_tx missing");
+        return;
+    };
     // Phase label for the comet: name the tool running off-thread so the
     // shimmering status surfaces what the agent is doing while it's parked.
     state.rest.sessions[sess_idx].status = format!("running {}", call.function.name);
@@ -261,12 +264,13 @@ pub(super) fn finish_tool_round(
         .as_ref()
         .is_some_and(|s| s.settings.knowledge.enabled)
     {
-        let sd = state.rest.sessions[sess_idx]
+        let Some(sd) = state.rest.sessions[sess_idx]
             .session
             .as_ref()
-            .unwrap()
-            .path
-            .clone();
+            .map(|s| s.path.clone())
+        else {
+            return;
+        };
         let results: Vec<(String, String)> = cleaned_results.clone();
         handle.spawn_blocking(move || {
             super::super::turn::extract_from_tool_results(&sd, &results);

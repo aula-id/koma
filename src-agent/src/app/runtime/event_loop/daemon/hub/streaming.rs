@@ -213,10 +213,10 @@ impl DaemonHub {
             let result = {
                 let stream_subagent = self.clients[i].stream_subagent;
                 let stream_session = self.clients[i].stream_session.as_deref();
-                let prev = self.clients[i]
-                    .last_snapshot
-                    .as_ref()
-                    .expect("attached client always has a baseline");
+                let Some(prev) = self.clients[i].last_snapshot.as_ref() else {
+                    crate::model::store::append_global_error_log("daemon", "BUG: attached client missing baseline");
+                    continue;
+                };
                 diff(prev, &next, stream_subagent, stream_session)
             };
 

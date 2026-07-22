@@ -1,6 +1,7 @@
 use super::*;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod text_tool_call_tests {
     use super::*;
 
@@ -183,6 +184,7 @@ Bye.";
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod sanitize_tool_arguments_tests {
     use super::*;
 
@@ -264,6 +266,7 @@ mod sanitize_tool_arguments_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod strip_ansi_tests {
     use super::strip_ansi;
 

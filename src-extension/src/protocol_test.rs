@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! W13 additional regression suite for `protocol.rs` — PURE ADDITION alongside the existing
 //! inline `mod tests` in that file (never touched here). Focuses on gaps the inline suite
 //! doesn't already cover: an EXHAUSTIVE Grant wire-string canary (every variant, compile-time

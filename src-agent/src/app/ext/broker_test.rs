@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! W13 additional regression suite for `broker.rs` — PURE ADDITION alongside the existing
 //! inline `mod tests` in that file (never touched here, and none of its helpers are reachable
 //! from this sibling file — small local duplicates are built below instead).

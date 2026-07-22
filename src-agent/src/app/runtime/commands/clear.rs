@@ -34,15 +34,16 @@ pub(super) fn handle_clear(state: &mut AppState) -> Result<()> {
         state.rest.fg_mut().waiting = false;
     }
 
-    let session_dir = {
-        let sess = state.rest.fg_mut().session.as_mut().unwrap();
-        // Drop user/assistant/tool turns; keep system if present.
-        sess.conversation.clear_body();
-        // Re-seed / refresh the live system prompt (embedded + MEMORY.md etc.).
-        sess.rebuild_system();
-        let _ = sess.save();
-        sess.path.clone()
+    let Some(sess) = state.rest.fg_mut().session.as_mut() else {
+        crate::model::store::append_global_error_log("clear", "BUG: fg session missing");
+        return Ok(());
     };
+    // Drop user/assistant/tool turns; keep system if present.
+    sess.conversation.clear_body();
+    // Re-seed / refresh the live system prompt (embedded + MEMORY.md etc.).
+    sess.rebuild_system();
+    let _ = sess.save();
+    let session_dir = sess.path.clone();
 
     // Freeze short-send at the archive tip without deleting message/blob rows.
     let _ = msglog::clear_rolling_summary(&session_dir);

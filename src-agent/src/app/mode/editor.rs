@@ -312,7 +312,9 @@ impl TextEditorState {
             self.row -= 1;
             let chars: Vec<char> = self.lines[self.row].chars().collect();
             let prev = wrap_segments(&chars, self.wrap_w.get().max(1));
-            let (s, e) = *prev.last().expect("wrap_segments is never empty");
+            let Some(&(s, e)) = prev.last() else {
+                continue;
+            };
             self.col = s + visual_col.min(e - s);
         }
         self.clamp();

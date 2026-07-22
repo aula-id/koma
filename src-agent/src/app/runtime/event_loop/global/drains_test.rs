@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! W13 additional regression suite for `drains.rs` — PURE ADDITION alongside the existing
 //! inline `mod ext_notify_tests` in that file (never touched here).
 //!

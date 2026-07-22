@@ -276,6 +276,7 @@ pub enum KomaMsg {
 pub struct RunInfo { pub socket: String, pub token: String, pub pid: u32 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use serde_json::json;

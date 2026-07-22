@@ -62,7 +62,9 @@ pub async fn catch_post_callback(
         }
     }
 
-    let (port, listener) = listener.unwrap();
+    let Some((port, listener)) = listener else {
+        return Err("failed to bind loopback".into());
+    };
     let state = expected_state.to_string();
 
     let fut = async move {
@@ -308,6 +310,7 @@ async fn write_json_response(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

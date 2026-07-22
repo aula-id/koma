@@ -23,51 +23,48 @@ pub(crate) fn try_filter(command: &str, raw: &str, _exit_code: Option<i32>) -> O
 
 fn noise_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"^\s*(Compiling|Checking|Downloading|Downloaded|Updating|Adding|Locking|Fresh|Building)\b")
-            .expect("cargo noise regex must be valid")
-    })
+    RE.get_or_init(|| crate::re_util::static_re(r"^\s*(Compiling|Checking|Downloading|Downloaded|Updating|Adding|Locking|Fresh|Building)\b"))
 }
 
 fn finished_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*Finished\b").expect("cargo finished regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^\s*Finished\b"))
 }
 
 fn progress_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*\[.*\]").expect("cargo progress-bar regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^\s*\[.*\]"))
 }
 
 fn running_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*Running\b").expect("cargo running regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^\s*Running\b"))
 }
 
 fn doc_tests_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\s*Doc-tests\b").expect("cargo doc-tests regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^\s*Doc-tests\b"))
 }
 
 fn error_start_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^error(\[\w+\])?:").expect("cargo error-start regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^error(\[\w+\])?:"))
 }
 
 fn warning_start_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^warning(\[\w+\])?:").expect("cargo warning-start regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^warning(\[\w+\])?:"))
 }
 
 fn passing_test_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^test .* \.\.\. ok$").expect("cargo passing-test regex must be valid"))
+    RE.get_or_init(|| crate::re_util::static_re(r"^test .* \.\.\. ok$"))
 }
 
 /// Extract the `in <duration>` portion of a `Finished ...` line, e.g. `12.34s`.
 fn extract_timing(finished_line: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"in ([\d.]+s)").expect("cargo timing regex must be valid"));
+    let re = RE.get_or_init(|| crate::re_util::static_re(r"in ([\d.]+s)"));
     re.captures(finished_line).map(|c| c[1].to_string())
 }
 

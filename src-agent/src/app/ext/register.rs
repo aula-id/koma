@@ -215,6 +215,7 @@ fn read_manifest(id: &str) -> Result<ExtensionManifest> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

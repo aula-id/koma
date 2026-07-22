@@ -185,6 +185,7 @@ pub fn models_for_provider(provider: OAuthProvider) -> Vec<ModelInfo> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

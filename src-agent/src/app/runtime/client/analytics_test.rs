@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Host-side Analytics projection + push-envelope serialization tests.
 //!
 //! These cover the Phase 1 Analytics dashboard contract: correlation fields are
