@@ -174,13 +174,18 @@ forget — delete a saved memory by its "slug" (as listed in the memory index).
   No-op if the slug doesn't exist.
 
 message_find — search the session's chat history (messages.sqlite) for past
-  conversation turns matching the query. Uses FTS5 full-text search. Returns up
+  conversation turns matching the query. Uses full-text search (FTS5). Returns up
   to 10 ranked snippets with message id, role, and content context.
   Arguments: { "query": "search terms" }
   Example:   message_find({"query": "FS5"})
-  Use to recall past decisions, error messages, tradeoffs, or facts discussed
-  earlier in the conversation that may have scrolled out of the context window.
-  Supports FTS5 query syntax: multi-word AND, quoted phrases, wildcards.
+  WHEN TO USE:
+  - You are confused, missing context, or unsure about a past decision, error,
+    tradeoff, or fact that may have scrolled out of the context window — call
+    this before guessing.
+  - The user explicitly asks you to recall, look up, find, or check something
+    from earlier in the conversation.
+  Multi-word queries are OR'd as prefix matches (e.g. "foo bar" matches
+  messages containing "foo*" or "bar*").
 
 checklist — create and maintain a task/todo list for the current session. The user
   can view the list via `/todo` (a read-only overlay) and toggle item status with

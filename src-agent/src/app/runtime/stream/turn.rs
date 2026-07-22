@@ -315,9 +315,20 @@ pub(crate) fn advance_turn(
                     final_answer(buf.clone().unwrap_or_default(), reasoning);
                 if !content.is_empty() {
                     let _ = crate::model::msglog::append(&sess.path, Role::Assistant, &content, usage);
-                    sess.conversation.push_assistant(content, msg_reasoning, promoted);
+                    sess.conversation.push_assistant(content.clone(), msg_reasoning, promoted);
                     if let Err(e) = sess.save() {
                         save_err = Some(e.to_string());
+                    }
+                    // Post-response knowledge extraction: fire-and-forget fact
+                    // extraction from the assistant's response to auto-feed the
+                    // knowledge graph. Non-blocking — the user already sees the
+                    // response; this runs in the background.
+                    if sess.settings.knowledge.enabled {
+                        let pid = sess.path.clone();
+                        let c = content.clone();
+                        handle.spawn_blocking(move || {
+                            extract_and_store_facts(&pid, &c);
+                        });
                     }
                 }
             }
@@ -475,4 +486,123 @@ pub(crate) fn advance_turn(
     state.rest.sessions[sess_idx].tool_idx = 0;
     state.rest.sessions[sess_idx].tool_results.clear();
     super::tools::process_tools(state, sess_idx, client, handle);
+}
+
+// ── Post-response knowledge extraction ────────────────────────────────
+
+/// Extract facts from an assistant response and store them in the local
+/// knowledge graph (which also pushes to the global knowledge daemon
+/// via fire-and-forget). Runs on a blocking thread so it never stalls the
+/// event loop.
+fn extract_and_store_facts(session_dir: &std::path::Path, response: &str) {
+    let mut stored = Vec::new();
+    for sentence in response.split(&['.', '!', '?'][..]) {
+        let s = sentence.trim();
+        if s.len() < 20 || s.len() > 500 {
+            continue;
+        }
+        let lower = s.to_lowercase();
+        let looks_factual = [" is ", " are ", " was ", " were ", " has ", " have ",
+                             " does ", " can ", " will ", " should ", " must ",
+                             " uses ", " provides ", " supports ", " allows ",
+                             " requires ", " includes ", " runs ", " works "]
+            .iter()
+            .any(|v| lower.contains(v));
+        if !looks_factual {
+            continue;
+        }
+        // Apply quality filter before storing — prevents garbage facts
+        // from entering the knowledge graph in the first place.
+        if !super::knowledge::is_quality_fact_static(s) {
+            continue;
+        }
+        // Only count facts that were actually stored successfully.
+        let fact_id = crate::model::surreal::memory::store_fact(
+            session_dir,
+            s,
+            "inferred",
+            0.6,
+        );
+        if let Some(id) = fact_id {
+            stored.push(format!("  [{}] \"{s}\" (id={})", stored.len(), id));
+        }
+        if stored.len() >= 5 {
+            break;
+        }
+    }
+    crate::model::store::append_global_error_log(
+        "knowledge-extract",
+        &format!("session={}, response_len={}, stored={}\n{}", session_dir.display(), response.len(), stored.len(), stored.join("\n")),
+    );
+}
+
+/// Extract facts from tool results after a tool round finishes.
+/// Runs on a blocking thread so it never stalls the event loop.
+///
+/// Tool results often contain declarative technical facts (file paths,
+/// build settings, API responses) that are worth storing as "observations".
+/// Caps at 3 facts per round to avoid flooding the knowledge graph.
+pub(crate) fn extract_from_tool_results(session_dir: &std::path::Path, tool_results: &[(String, String)]) {
+    let mut stored = Vec::new();
+    for (_tool_id, result) in tool_results {
+        // Truncate each result to ~2KB to avoid processing huge outputs.
+        let truncated = if result.len() > 2048 {
+            &result[..2048]
+        } else {
+            result.as_str()
+        };
+        // Skip results that are mostly code/JSON (heuristic: high brace/bracket ratio).
+        let code_ratio = truncated.chars()
+            .filter(|c| *c == '{' || *c == '}' || *c == '[' || *c == ']')
+            .count() as f64 / truncated.len() as f64;
+        if code_ratio > 0.15 {
+            continue;
+        }
+        // Extract sentences from the result.
+        for sentence in truncated.split(&['.', '!', '?', '\n'][..]) {
+            let s = sentence.trim();
+            if s.len() < 20 || s.len() > 500 {
+                continue;
+            }
+            // Must look factual (contains copula or declarative marker).
+            let lower = s.to_lowercase();
+            let looks_factual = [" is ", " are ", " was ", " were ", " has ", " have ",
+                                 " does ", " can ", " will ", " should ", " must ",
+                                 " uses ", " provides ", " supports ", " allows ",
+                                 " requires ", " includes ", " runs ", " works ",
+                                 " found ", " detected ", " enabled ", " configured "]
+                .iter()
+                .any(|v| lower.contains(v));
+            if !looks_factual {
+                continue;
+            }
+            // Apply quality filter.
+            if !super::knowledge::is_quality_fact_static(s) {
+                continue;
+            }
+            // Store as "observation" with lower confidence (tool output is noisier).
+            let fact_id = crate::model::surreal::memory::store_fact(
+                session_dir,
+                s,
+                "observation",
+                0.45,
+            );
+            if let Some(id) = fact_id {
+                stored.push(format!("  [{}] \"{s}\" (id={})", stored.len(), id));
+            }
+            // Cap at 3 facts per round.
+            if stored.len() >= 3 {
+                break;
+            }
+        }
+        if stored.len() >= 3 {
+            break;
+        }
+    }
+    if !stored.is_empty() {
+        crate::model::store::append_global_error_log(
+            "knowledge-extract-tool",
+            &format!("session={}, tools={}, stored={}\n{}", session_dir.display(), tool_results.len(), stored.len(), stored.join("\n")),
+        );
+    }
 }

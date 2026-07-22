@@ -7,3 +7,6 @@
 target/
 node_modules/
 dist/
+
+# model caches (downloaded at runtime)
+.fastembed_cache/

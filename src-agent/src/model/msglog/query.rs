@@ -27,7 +27,6 @@ pub struct MessageMatch {
     pub id: i64,
     pub role: String,
     pub snippet: String,
-    #[allow(dead_code)]
     pub created_at: i64,
 }
 

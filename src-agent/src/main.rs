@@ -54,6 +54,37 @@ mod tool;
 mod view;
 
 fn main() -> anyhow::Result<()> {
+    // Install a panic hook that logs to ~/.koma/error.log before exiting.
+    // Daemon stderr goes to /dev/null, so the default hook's eprintln is invisible.
+    // This makes every panic (including .expect()/.unwrap() failures) diagnosable.
+    {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            let thread_name = thread.name().unwrap_or("<unnamed>");
+            let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Box<dyn Any>".to_string()
+            };
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "<unknown>".to_string());
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            let msg = format!(
+                "PANIC on thread '{thread_name}': {payload}\nat {location}\n{backtrace}"
+            );
+            crate::model::store::append_global_error_log("panic", &msg);
+            // Also print to stderr in case it's visible (non-daemon invocations).
+            eprintln!("FATAL: {msg}");
+            // Call the default hook to get the normal abort behaviour.
+            default_hook(info);
+        }));
+    }
+
     // --- short-circuit: `--version`/`-V`/`--help`/`-h` (#75) ---
     // Must run BEFORE any side effect (legacy-dir migration, catalogue overlay init,
     // daemon spawn) — these just print and exit, they must not touch disk or state.
@@ -195,6 +226,15 @@ fn main() -> anyhow::Result<()> {
     // the resulting delta, then quits the daemon. Never returns (OK/FAIL exit).
     if opts.daemon_selftest {
         app::run_daemon_selftest();
+    }
+
+    // --- headless path: run the GLOBAL knowledge daemon (no TUI) ---
+    // A singleton process that owns the central SurrealKV knowledge store so
+    // sessions share entity resolution and graph-expanded recall. Checked BEFORE
+    // `--mcp-daemon` and `--daemon` so a stray combination can't accidentally
+    // take the wrong branch.
+    if opts.knowledge_daemon {
+        return app::run_knowledge_daemon(opts);
     }
 
     // --- headless path: run the GLOBAL MCP daemon (no TUI) ---

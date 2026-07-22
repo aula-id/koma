@@ -167,6 +167,10 @@ impl DaemonHub {
     pub(super) fn quit_session(&mut self, idx: usize, state: &mut AppState, session_id: String) {
         match state.rest.sessions.iter().position(|s| s.id == session_id) {
             Some(target) => {
+                crate::model::store::append_global_error_log(
+                    "daemon-exit",
+                    &format!("quit_session: tombstoning session {session_id} (idx={target})"),
+                );
                 state.rest.sessions[target].close();
                 self.repoint_foreground_off_closed(state);
                 self.send_to(idx, DaemonEvent::Ack);
@@ -205,6 +209,10 @@ impl DaemonHub {
     // The actual teardown (release locks, drop runtime, unlink socket) runs
     // once `daemon_loop` observes `should_shutdown()` and returns.
     pub(super) fn quit_daemon(&mut self, idx: usize) {
+        crate::model::store::append_global_error_log(
+            "daemon-exit",
+            &format!("door: quit_daemon called by client idx={idx}"),
+        );
         self.shutdown = true;
         self.send_to(idx, DaemonEvent::Ack);
     }
