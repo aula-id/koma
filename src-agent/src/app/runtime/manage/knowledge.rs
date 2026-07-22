@@ -125,42 +125,62 @@ fn probe_knowledge_fingerprint(path: &Path) -> Result<KnowledgeResponse> {
 }
 
 /// Stop the GLOBAL knowledge daemon (best-effort). SIGTERM, wait, then SIGKILL.
-fn stop_knowledge_daemon() {
+///
+/// `pub` so `manage::commands::cmd_kill` can tear it down alongside the MCP daemon.
+/// `quiet` suppresses the outcome println (used by the local stale-restart path).
+pub fn stop_knowledge_daemon(quiet: bool) {
     if !knowledge_daemon_alive() {
+        // Sweep any leftover turds from a previous crash so the next start is clean.
         unlink_knowledge_daemon_files();
+        if !quiet {
+            println!("koma daemon: knowledge daemon not running");
+        }
         return;
     }
 
+    // Alive but no graceful-quit channel: signal the pidfile PID. If it's missing we
+    // can't signal, so just nuke the files.
     let Some(pid) = read_knowledge_pidfile() else {
         unlink_knowledge_daemon_files();
+        if !quiet {
+            println!(
+                "koma daemon: knowledge daemon still up but no pidfile to signal; removed stale \
+                 socket/pidfile. If a process is still running, stop it manually."
+            );
+        }
         return;
     };
 
-    // Unix: SIGTERM → wait → SIGKILL
+    // Graceful terminate, then wait. Unix: SIGTERM (the signal task runs the orderly
+    // teardown). Windows has no SIGTERM, so send the `KnowledgeRequest::Shutdown` IPC
+    // message (the daemon flips the SAME `shutting_down` flag a signal / the idle
+    // reaper set); best-effort — the Kill fallback below covers a wedged daemon.
     #[cfg(unix)]
-    {
-        super::send_signal(pid, StopSignal::Term);
-        if knowledge_wait_until_dead(SIGNAL_GRACE) {
-            unlink_knowledge_daemon_files();
-            return;
-        }
-        super::send_signal(pid, StopSignal::Kill);
-        let _ = knowledge_wait_until_dead(SIGNAL_GRACE);
-    }
-
-    // Windows: Shutdown IPC → wait → Kill
+    super::send_signal(pid, StopSignal::Term);
     #[cfg(windows)]
-    {
-        send_knowledge_shutdown_request();
-        if knowledge_wait_until_dead(SIGNAL_GRACE) {
-            unlink_knowledge_daemon_files();
-            return;
+    send_knowledge_shutdown_request();
+    if knowledge_wait_until_dead(SIGNAL_GRACE) {
+        unlink_knowledge_daemon_files();
+        if !quiet {
+            println!("koma daemon: stopped knowledge daemon (SIGTERM to pid {pid})");
         }
-        super::send_signal(pid, StopSignal::Kill);
-        let _ = knowledge_wait_until_dead(SIGNAL_GRACE);
+        return;
     }
 
+    // SIGKILL (last resort), then wait.
+    super::send_signal(pid, StopSignal::Kill);
+    let died = knowledge_wait_until_dead(SIGNAL_GRACE);
     unlink_knowledge_daemon_files();
+    if !quiet {
+        if died {
+            println!("koma daemon: killed knowledge daemon (SIGKILL to pid {pid})");
+        } else {
+            println!(
+                "koma daemon: sent SIGKILL to pid {pid} (knowledge daemon) but the socket is still up; \
+                 removed socket/pidfile. The process may be unkillable (zombie/stuck IO)."
+            );
+        }
+    }
 }
 
 fn knowledge_wait_until_dead(timeout: Duration) -> bool {
@@ -182,7 +202,9 @@ fn read_knowledge_pidfile() -> Option<u32> {
     contents.trim().parse::<u32>().ok()
 }
 
-fn unlink_knowledge_daemon_files() {
+/// Sweep stale knowledge-daemon socket/pidfile turds. `pub(super)` so `cmd_kill`
+/// can clean them when nothing is live (mirrors `mcp::unlink_mcp_daemon_files`).
+pub(super) fn unlink_knowledge_daemon_files() {
     #[cfg(unix)]
     if let Ok(sock) = store::knowledge_daemon_sock_path() {
         let _ = std::fs::remove_file(sock);
@@ -250,7 +272,7 @@ pub fn ensure_knowledge_daemon_running() -> Result<()> {
                 );
             }
         }
-        stop_knowledge_daemon();
+        stop_knowledge_daemon(true);
         return spawn_knowledge_and_wait_until_alive(&path);
     }
 

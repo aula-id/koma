@@ -36,18 +36,19 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 /// Best-effort sweep of orphan koma daemon processes that the socket scan
-/// ([`super::live_session_sockets`] / [`super::mcp::mcp_daemon_alive`]) misses — e.g. the socket file was
+/// ([`super::live_session_sockets`] / [`super::mcp::mcp_daemon_alive`] /
+/// [`super::knowledge::knowledge_daemon_alive`]) misses — e.g. the socket file was
 /// removed out from under a still-running daemon, or the daemon was spawned by an
 /// older/different-path binary that this build's socket paths don't line up with.
 ///
 /// Scans `/proc` directly: for every numeric `/proc/<pid>` entry, reads
 /// `/proc/<pid>/cmdline` and matches a process whose `argv[0]` BASENAME equals our own
-/// executable's basename (e.g. `"koma"`) AND whose args contain `--daemon` or
-/// `--mcp-daemon`. Matching on the basename (not the full exe path) is deliberate — it
-/// is exactly what lets this catch a daemon spawned by an older build installed at a
-/// different path, which is the whole point of this sweep. `koma daemon kill` itself is
-/// never matched: its argv is `["koma", "daemon", "kill"]`, which has no
-/// `--daemon`/`--mcp-daemon` token, regardless of basename.
+/// executable's basename (e.g. `"koma"`) AND whose args contain `--daemon`,
+/// `--mcp-daemon`, or `--knowledge-daemon`. Matching on the basename (not the full
+/// exe path) is deliberate — it is exactly what lets this catch a daemon spawned by
+/// an older build installed at a different path, which is the whole point of this
+/// sweep. `koma daemon kill` itself is never matched: its argv is
+/// `["koma", "daemon", "kill"]`, which has none of those tokens, regardless of basename.
 ///
 /// SIGTERMs every match, briefly polls (up to [`SIGNAL_GRACE`]) for them to exit, then
 /// SIGKILLs any survivor. Never panics: any unreadable/unparseable `/proc` entry is
@@ -98,7 +99,9 @@ pub(super) fn kill_orphan_daemon_processes() -> usize {
         if argv0_basename != our_basename {
             continue;
         }
-        if !args.iter().any(|a| a == "--daemon" || a == "--mcp-daemon") {
+        if !args.iter().any(|a| {
+            a == "--daemon" || a == "--mcp-daemon" || a == "--knowledge-daemon"
+        }) {
             continue;
         }
 
