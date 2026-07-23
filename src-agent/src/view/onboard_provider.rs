@@ -30,6 +30,19 @@ const BLOCK_W: u16 = 64;
 /// Braille spinner frames (matches the `/settings` OAuth wait screens).
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Return the fixed loopback port for providers that bind one, or `None` for
+/// providers whose port is dynamic (Command Code) or that don't use a loopback.
+fn wait_port(p: crate::model::app_config::OAuthProvider) -> Option<u16> {
+    use crate::model::app_config::OAuthProvider;
+    use crate::service::oauth::registry::*;
+    match p {
+        OAuthProvider::Codex => Some(CODEX_PORT),
+        OAuthProvider::ClaudeAI => Some(CLAUDE_PORT),
+        OAuthProvider::KomaRun => Some(KOMA_PORT),
+        _ => None,
+    }
+}
+
 /// Render the wizard for `state`.
 pub fn draw(
     frame: &mut Frame,
@@ -119,48 +132,59 @@ fn draw_login(frame: &mut Frame, flow: &OAuthFlowState, palette: &Palette, area:
         // No idle "connections list" in the wizard — Idle falls back to the picker.
         OAuthFlowState::Idle => draw_picker(frame, 0, palette, area),
         OAuthFlowState::Pick(cursor) => draw_picker(frame, *cursor, palette, area),
-        OAuthFlowState::Starting => draw_message(
+        OAuthFlowState::Starting { provider } => draw_message(
             frame,
             palette,
             area,
-            &format!("{} starting login…", SPINNER[0]),
+            &format!("{} {} starting login…", SPINNER[0], provider.label()),
             None,
             false,
         ),
         OAuthFlowState::CodexWait {
+            provider,
             url,
             frame: f,
             copied,
-        } => draw_message(
-            frame,
-            palette,
-            area,
-            &format!(
-                "{} waiting for browser · listening on localhost:{}",
-                SPINNER[(*f as usize) % SPINNER.len()],
-                crate::service::oauth::registry::CODEX_PORT,
-            ),
-            Some(url),
-            *copied,
-        ),
+        } => {
+            let label = provider.label();
+            let status = match wait_port(*provider) {
+                Some(port) => format!(
+                    "{} waiting for browser · {} listening on localhost:{}",
+                    SPINNER[(*f as usize) % SPINNER.len()],
+                    label,
+                    port,
+                ),
+                None => format!(
+                    "{} waiting for browser · {}",
+                    SPINNER[(*f as usize) % SPINNER.len()],
+                    label,
+                ),
+            };
+            draw_message(frame, palette, area, &status, Some(url), *copied)
+        }
         OAuthFlowState::CodexPaste { input, .. } => draw_paste(frame, input, palette, area),
         OAuthFlowState::KiloWait {
+            provider,
             user_code,
             verification_url,
             frame: f,
             copied,
-        } => draw_message(
-            frame,
-            palette,
-            area,
-            &format!(
-                "{} approve in browser · code: {}",
-                SPINNER[(*f as usize) % SPINNER.len()],
-                user_code,
-            ),
-            Some(verification_url),
-            *copied,
-        ),
+        } => {
+            let label = provider.label();
+            draw_message(
+                frame,
+                palette,
+                area,
+                &format!(
+                    "{} approve in browser · {} · code: {}",
+                    SPINNER[(*f as usize) % SPINNER.len()],
+                    label,
+                    user_code,
+                ),
+                Some(verification_url),
+                *copied,
+            )
+        }
         OAuthFlowState::Failed(msg) => draw_failed(frame, msg, palette, area),
     }
 }

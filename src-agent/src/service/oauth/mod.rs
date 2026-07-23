@@ -26,7 +26,7 @@ pub mod pkce;
 pub mod registry;
 pub mod xai;
 
-use crate::model::app_config::OAuthConn;
+use crate::model::app_config::{OAuthConn, OAuthProvider};
 
 /// Lifecycle events emitted by an in-flight `/settings` OAuth submenu connect
 /// flow (Codex browser login, or a Kilo Code / xAI device login). Sent across
@@ -40,13 +40,17 @@ use crate::model::app_config::OAuthConn;
 /// (W11 grew `OAuthConn` by two `Option<String>`s, nudging it past clippy's threshold.)
 #[allow(clippy::large_enum_variant)]
 pub enum OAuthEvent {
-    /// The Codex flow reached the "open this URL" step (loopback listener is up).
-    CodexUrl { url: String },
+    /// The browser flow reached the "open this URL" step (loopback listener is up).
+    /// `provider` identifies the originating provider so the drain can title/label
+    /// the wait screen correctly (shared by Codex, Claude, Koma, Command Code).
+    CodexUrl { provider: OAuthProvider, url: String },
     /// A device flow issued a device code the user must approve. Reused as the
     /// generic device-code carrier for BOTH Kilo Code and xAI (Grok) — both show
     /// a `user_code` + a `verification_url`, and the downstream wait screen / GUI
     /// `waiting_code` push are identical, so no separate variant is warranted.
+    /// `provider` identifies the originating provider for correct titling.
     KiloCode {
+        provider: OAuthProvider,
         user_code: String,
         verification_url: String,
     },

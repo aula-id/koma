@@ -243,7 +243,7 @@ fn handle_oauth_page(s: &mut SettingsState, key: KeyEvent) -> Action {
 fn handle_oauth_flow(s: &mut SettingsState, key: KeyEvent) -> Action {
     match s.oauth_flow.clone() {
         OAuthFlowState::Idle => Action::None,
-        OAuthFlowState::Starting
+        OAuthFlowState::Starting { .. }
         | OAuthFlowState::CodexWait { .. }
         | OAuthFlowState::KiloWait { .. } => match key.code {
             KeyCode::Esc => Action::OAuthCancel,

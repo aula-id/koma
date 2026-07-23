@@ -151,9 +151,10 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
     let mut dirty = false;
     if let Some(mut orx) = state.rest.oauth_rx.take() {
         match orx.try_recv() {
-            Ok(OAuthEvent::CodexUrl { url }) => {
+            Ok(OAuthEvent::CodexUrl { provider, url }) => {
                 for flow in oauth_flow_states(state) {
                     *flow = OAuthFlowState::CodexWait {
+                        provider,
                         url: url.clone(),
                         frame: 0,
                         copied: false,
@@ -166,11 +167,13 @@ pub(super) fn drain_oauth(state: &mut AppState, handle: &tokio::runtime::Handle)
                 dirty = true;
             }
             Ok(OAuthEvent::KiloCode {
+                provider,
                 user_code,
                 verification_url,
             }) => {
                 for flow in oauth_flow_states(state) {
                     *flow = OAuthFlowState::KiloWait {
+                        provider,
                         user_code: user_code.clone(),
                         verification_url: verification_url.clone(),
                         frame: 0,

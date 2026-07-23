@@ -22,12 +22,12 @@ use crate::model::app_config::OAuthProvider;
 /// provider means adding one arm here, not touching either caller.
 pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     match provider {
-        OAuthProvider::Codex => run_codex_flow(tx).await,
-        OAuthProvider::Kilocode => run_kilo_flow(tx).await,
-        OAuthProvider::Xai => run_xai_flow(tx).await,
-        OAuthProvider::ClaudeAI => run_claude_flow(tx).await,
-        OAuthProvider::KomaRun => run_komarun_flow(tx).await,
-        OAuthProvider::CommandCode => run_commandcode_flow(tx).await,
+        OAuthProvider::Codex => run_codex_flow(provider, tx).await,
+        OAuthProvider::Kilocode => run_kilo_flow(provider, tx).await,
+        OAuthProvider::Xai => run_xai_flow(provider, tx).await,
+        OAuthProvider::ClaudeAI => run_claude_flow(provider, tx).await,
+        OAuthProvider::KomaRun => run_komarun_flow(provider, tx).await,
+        OAuthProvider::CommandCode => run_commandcode_flow(provider, tx).await,
         // W11: an extension-delegated flow is NEVER driven through here — it runs
         // off-loop in the daemon hub (`requests_oauth::run_ext_oauth_delegate`), keyed
         // by an `ext:<id>:<provider>` picker id, and never via `Action::OAuthStart`
@@ -46,9 +46,10 @@ pub async fn run_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedS
 /// wait on the loopback redirect, then exchange the code for tokens. Sends exactly one
 /// terminal event (`Success` or `Failed`) after an initial `CodexUrl`; a dropped
 /// receiver (flow superseded/cancelled) makes every send a silent no-op.
-async fn run_codex_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+async fn run_codex_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let auth = super::codex::build_auth_url();
     let _ = tx.send(OAuthEvent::CodexUrl {
+        provider,
         url: auth.url.clone(),
     });
     super::browser::open_in_browser(&auth.url);
@@ -79,9 +80,10 @@ async fn run_codex_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// The Claude (Anthropic) browser flow: build the PKCE authorization URL, open the
 /// system browser, wait on the loopback redirect (port 54545), then exchange the code
 /// for tokens. Mirrors `run_codex_flow` exactly, against Anthropic's own endpoints.
-async fn run_claude_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+async fn run_claude_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let auth = super::claude::build_auth_url();
     let _ = tx.send(OAuthEvent::CodexUrl {
+        provider,
         url: auth.url.clone(),
     });
     super::browser::open_in_browser(&auth.url);
@@ -114,9 +116,10 @@ async fn run_claude_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// browser, wait on the loopback redirect (port 51004), then exchange the code for
 /// tokens. Mirrors `run_claude_flow` exactly, against koma.run's own (form-encoded, no
 /// client_id/scope) endpoints.
-async fn run_komarun_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+async fn run_komarun_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let auth = super::komarun::build_auth_url();
     let _ = tx.send(OAuthEvent::CodexUrl {
+        provider,
         url: auth.url.clone(),
     });
     super::browser::open_in_browser(&auth.url);
@@ -149,7 +152,7 @@ async fn run_komarun_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// The Kilo Code device flow: request a device code, open the system browser to its
 /// verification URL, poll for approval, then fetch the profile (org id / email) to
 /// label the connection. Sends exactly one terminal event after an initial `KiloCode`.
-async fn run_kilo_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+async fn run_kilo_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let http = reqwest::Client::new();
     let dc = match super::kilo::device_init(&http).await {
         Ok(dc) => dc,
@@ -159,6 +162,7 @@ async fn run_kilo_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
         }
     };
     let _ = tx.send(OAuthEvent::KiloCode {
+        provider,
         user_code: dc.code.clone(),
         verification_url: dc.verification_url.clone(),
     });
@@ -181,7 +185,7 @@ async fn run_kilo_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// returned access + refresh token set. Reuses the `KiloCode` event as the generic
 /// device-code carrier (`user_code` + `verification_url`). Sends exactly one terminal
 /// event after an initial `KiloCode`.
-async fn run_xai_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+async fn run_xai_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let http = reqwest::Client::new();
     let dc = match super::xai::device_init(&http).await {
         Ok(dc) => dc,
@@ -191,6 +195,7 @@ async fn run_xai_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
         }
     };
     let _ = tx.send(OAuthEvent::KiloCode {
+        provider,
         user_code: dc.user_code.clone(),
         verification_url: dc.verification_url.clone(),
     });
@@ -211,7 +216,7 @@ async fn run_xai_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
 /// authorization URL in the browser, wait for the Studio website to POST the
 /// API key back. Sends exactly one terminal event after an initial `CodexUrl`
 /// (reused as the generic browser-URL carrier).
-async fn run_commandcode_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
+async fn run_commandcode_flow(provider: OAuthProvider, tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>) {
     let state = super::commandcode::generate_state();
     let timeout = super::registry::COMMANDCODE_AUTH_TIMEOUT_SECS;
 
@@ -226,6 +231,7 @@ async fn run_commandcode_flow(tx: tokio::sync::mpsc::UnboundedSender<OAuthEvent>
 
     let auth_url = super::commandcode::build_auth_url(port, &state);
     let _ = tx.send(OAuthEvent::CodexUrl {
+        provider,
         url: auth_url.clone(),
     });
     super::browser::open_in_browser(&auth_url);
