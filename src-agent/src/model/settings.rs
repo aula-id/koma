@@ -159,6 +159,56 @@ impl std::fmt::Display for InternetMode {
     }
 }
 
+/// Controls mouse-capture behaviour for the TUI.
+///
+/// On touch terminals (Termux), mouse capture is needed for scroll gestures.
+/// On desktop, capture should stay OFF so native terminal selection works.
+/// `Auto` detects the environment once at startup; the user can override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseCapture {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl MouseCapture {
+    /// Lowercase label / wire token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+
+    /// Cycle to the next variant: Auto → On → Off → Auto.
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Auto => Self::On,
+            Self::On => Self::Off,
+            Self::Off => Self::Auto,
+        }
+    }
+
+    /// Resolve `Auto` based on environment detection (TERMUX_VERSION).
+    /// `On` / `Off` pass through unchanged.
+    pub fn resolved(self) -> bool {
+        match self {
+            Self::Auto => std::env::var("TERMUX_VERSION").is_ok(),
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
+impl std::fmt::Display for MouseCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Per-session user-configurable settings.
 ///
 /// Deserialized from (and serialized to) `<session_dir>/settings.json`.
@@ -314,6 +364,12 @@ pub struct Settings {
     /// from the cross-session knowledge graph.
     #[serde(default)]
     pub knowledge: KnowledgeConfig,
+    /// Mouse-capture mode for the TUI. `Auto` (default) enables capture on
+    /// touch terminals (Termux) and disables it on desktop, so native terminal
+    /// selection works. `On` / `Off` override the detection. Resolved once at
+    /// session init and on settings save; not re-polled mid-session.
+    #[serde(default)]
+    pub mouse_capture: MouseCapture,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -440,6 +496,7 @@ impl Default for Settings {
             session_models: Vec::new(),
             git_ssh_key: None,
             knowledge: KnowledgeConfig::default(),
+            mouse_capture: MouseCapture::default(),
         }
     }
 }

@@ -61,6 +61,23 @@ pub(in crate::app::runtime) fn request_quit(state: &mut AppState) {
         .count();
     // Always ask: the overlay header adapts to whether work is in flight.
     *state.mode_mut() = Mode::QuitConfirm(Box::new(QuitConfirmState::new(working, total)));
+    // Re-enable mouse capture temporarily so the overlay's left-click buttons
+    // work — but only when mouse capture is effectively ON (touch terminal or
+    // explicit `on`). When capture is OFF (desktop default), QuitConfirm is
+    // keyboard-only (already works) and we avoid a spurious enable/disable cycle.
+    let capture_on = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.settings.mouse_capture.resolved())
+        .unwrap_or(false);
+    if capture_on {
+        let _ = ratatui::crossterm::execute!(
+            std::io::stdout(),
+            ratatui::crossterm::event::EnableMouseCapture
+        );
+    }
 }
 
 /// Handle `Action::QuitKillAll`: abort EVERY session's in-flight stream, then
@@ -102,4 +119,15 @@ pub(super) fn handle_quit_detach(state: &mut AppState) {
 /// unchanged. Nothing is aborted; the app keeps running.
 pub(super) fn handle_quit_cancel(state: &mut AppState) {
     *state.mode_mut() = Mode::Chat;
+    // Restore the mouse-capture state to what the session setting dictates —
+    // the QuitConfirm open may have toggled it; cancel re-applies the
+    // session's current mode (ON for touch terminals, OFF for desktop).
+    let mc = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.settings.mouse_capture)
+        .unwrap_or_default();
+    crate::app::runtime::actions::apply_mouse_capture(mc);
 }

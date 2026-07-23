@@ -34,6 +34,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             s.bash_saving,
             s.coding_autosave,
             s.internet_mode,
+            s.mouse_capture,
             s.providers.clone(),
             s.oauth_drafts.clone(),
             s.models.clone(),
@@ -57,6 +58,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         bash_saving,
         coding_autosave,
         internet_mode,
+        mouse_capture,
         provider_drafts,
         oauth_drafts,
         model_drafts,
@@ -312,6 +314,9 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             // Internet-mode toggle: no client rebuild needed; the tool
             // dispatch layer reads this flag per-request.
             sess.settings.internet_mode = internet_mode;
+            // Mouse-capture toggle: apply immediately so touch/desktop
+            // mode switches live. No client rebuild needed.
+            sess.settings.mouse_capture = mouse_capture;
             // But DO refresh the system-prompt roster so any mode-gated agents
             // stay in sync on a mid-session mode change (rebuild reads in-memory
             // settings; nothing else here rebuilds).
@@ -406,6 +411,9 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
             old_internet,
             internet_mode,
         );
+        // g) Apply mouse-capture mode change immediately (touch/desktop
+        //    live-switch without restart).
+        crate::app::runtime::actions::apply_mouse_capture(mouse_capture);
     }
     *state.mode_mut() = Mode::Chat;
     Ok(())

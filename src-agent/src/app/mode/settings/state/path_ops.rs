@@ -25,7 +25,8 @@ impl SettingsState {
             | SettingField::SlidingCache
             | SettingField::BashSaving
             | SettingField::CodingAutosave
-            | SettingField::InternetMode => None,
+            | SettingField::InternetMode
+            | SettingField::MouseCapture => None,
         }
     }
 

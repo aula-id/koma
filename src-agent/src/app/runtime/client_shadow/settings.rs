@@ -17,7 +17,7 @@ use crate::ipc::proto::{
     ModelModalSnapshot, OAuthDraftSnapshot, PathPickerSnapshot, SettingsSnapshot,
 };
 use crate::model::app_config::{ApiType, ModelRole, ThemeMode};
-use crate::model::settings::{InternetMode, Settings};
+use crate::model::settings::{InternetMode, MouseCapture, Settings};
 
 /// Rebuild the `/settings` dashboard ([`SettingsState`]) from its projection — the
 /// largest reconstruction. Every draft + list + modal + picker is restored so the
@@ -45,6 +45,7 @@ pub(crate) fn shadow_settings(s: SettingsSnapshot) -> SettingsState {
         bash_saving: s.bash_saving,
         coding_autosave: s.coding_autosave,
         internet_mode: shadow_internet_mode(&s.internet_mode),
+        mouse_capture: shadow_mouse_capture(&s.mouse_capture),
         cwd: std::path::PathBuf::from(s.cwd),
         list_editing: s.list_editing,
         list_sel: s.list_sel,
@@ -196,6 +197,15 @@ pub(crate) fn shadow_internet_mode(t: &str) -> InternetMode {
     match t {
         "full" => InternetMode::Full,
         _ => InternetMode::Simple,
+    }
+}
+
+/// Map a mouse-capture wire token back to a [`MouseCapture`] (unknown → Auto).
+fn shadow_mouse_capture(t: &str) -> MouseCapture {
+    match t {
+        "on" => MouseCapture::On,
+        "off" => MouseCapture::Off,
+        _ => MouseCapture::Auto,
     }
 }
 

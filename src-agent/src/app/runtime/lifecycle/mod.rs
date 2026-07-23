@@ -684,6 +684,17 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
     // Clear the alternate screen so no shell scrollback bleeds through the
     // cells the UI never paints (e.g. the empty part of the transcript).
     terminal.clear()?;
+    // Apply the mouse-capture mode from the foreground session's settings.
+    // Auto-detects touch terminals (Termux) vs desktop; resolved once here
+    // and re-applied on settings save.
+    let mc = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.settings.mouse_capture)
+        .unwrap_or_default();
+    crate::app::runtime::actions::apply_mouse_capture(mc);
 
     let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 

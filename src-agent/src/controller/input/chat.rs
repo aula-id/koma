@@ -474,6 +474,17 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Up => {
+            // Empty composer + no palette → scroll the chat. This covers
+            // touch/Termux (which translate swipe to arrow keys) and also
+            // desktop: with nothing typed, Up/Down scrolling is more useful
+            // than history recall on an empty input.
+            if rest.fg().input.is_empty()
+                && command::palette_matches(&rest.fg().input).is_empty()
+                && file_ref_partial(&rest.fg().input).is_none()
+            {
+                rest.scroll_up();
+                return Action::None;
+            }
             // Command palette takes precedence; then file palette; then within-input
             // line movement; finally history recall (only when already on line 0).
             if !command::palette_matches(&rest.fg().input).is_empty() {
@@ -498,6 +509,14 @@ pub fn handle_chat(rest: &mut AppStateRest, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Down => {
+            // Empty composer + no palette → scroll the chat (see Up above).
+            if rest.fg().input.is_empty()
+                && command::palette_matches(&rest.fg().input).is_empty()
+                && file_ref_partial(&rest.fg().input).is_none()
+            {
+                rest.scroll_down();
+                return Action::None;
+            }
             let n = command::palette_matches(&rest.fg().input).len();
             if n > 0 {
                 rest.palette_sel = (rest.palette_sel + 1).min(n - 1);
