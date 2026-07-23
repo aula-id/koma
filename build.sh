@@ -108,8 +108,22 @@ if [ "$_os" = "Darwin" ] && command -v xattr > /dev/null 2>&1; then
     xattr -d com.apple.quarantine "$bin" 2>/dev/null || true
 fi
 
+# ---------------------------------------------------------------------------
+# Linux: wrap the real ELF with a launcher script that preflights shared libs
+# (missing webkit/gtk, too-old glibc) before the dynamic linker can crash.
+# On macOS, skip — system WebKit is always available.
+# ---------------------------------------------------------------------------
+launcher="$bin"   # final PATH entry (launcher on Linux, bare binary on macOS)
+
+if [ "$_os" = "Linux" ]; then
+    mv "$bin" "${bin}.bin"
+    cp packaging/linux/koma-launcher.sh "$bin"
+    chmod +x "$bin"
+    launcher="$bin"
+fi
+
 echo ""
-echo "Build complete: $bin"
+echo "Build complete: $launcher"
 
 # ---------------------------------------------------------------------------
 # Optional install to $INSTALL_DIR.
@@ -118,29 +132,50 @@ echo "Build complete: $bin"
 if [ "$DO_INSTALL" = "1" ]; then
     echo ""
     echo "Installing to $INSTALL_DIR/koma ..."
-    if [ -w "$INSTALL_DIR" ]; then
-        cp "$bin" "$INSTALL_DIR/koma"
-        chmod +x "$INSTALL_DIR/koma"
-    else
-        echo "  $INSTALL_DIR is not writable; using sudo for the copy step."
-        sudo cp "$bin" "$INSTALL_DIR/koma"
-        sudo chmod +x "$INSTALL_DIR/koma"
-    fi
-    # Re-strip quarantine on the installed copy (macOS).
-    if [ "$_os" = "Darwin" ] && command -v xattr > /dev/null 2>&1; then
-        if [ -w "$INSTALL_DIR/koma" ]; then
-            xattr -d com.apple.quarantine "$INSTALL_DIR/koma" 2>/dev/null || true
+    if [ "$_os" = "Linux" ]; then
+        # Linux: install both launcher and real binary.
+        if [ -w "$INSTALL_DIR" ]; then
+            cp "$bin" "$INSTALL_DIR/koma"
+            cp "${bin}.bin" "$INSTALL_DIR/koma.bin"
+            chmod +x "$INSTALL_DIR/koma"
         else
-            sudo xattr -d com.apple.quarantine "$INSTALL_DIR/koma" 2>/dev/null || true
+            echo "  $INSTALL_DIR is not writable; using sudo for the copy step."
+            sudo cp "$bin" "$INSTALL_DIR/koma"
+            sudo cp "${bin}.bin" "$INSTALL_DIR/koma.bin"
+            sudo chmod +x "$INSTALL_DIR/koma"
+        fi
+        # Remove any stale bare-ELF koma from older installs (would shadow
+        # the launcher if someone manually placed a binary there before).
+    else
+        # macOS: single binary, no launcher needed.
+        if [ -w "$INSTALL_DIR" ]; then
+            cp "$bin" "$INSTALL_DIR/koma"
+            chmod +x "$INSTALL_DIR/koma"
+        else
+            echo "  $INSTALL_DIR is not writable; using sudo for the copy step."
+            sudo cp "$bin" "$INSTALL_DIR/koma"
+            sudo chmod +x "$INSTALL_DIR/koma"
+        fi
+        # Re-strip quarantine on the installed copy.
+        if command -v xattr > /dev/null 2>&1; then
+            if [ -w "$INSTALL_DIR/koma" ]; then
+                xattr -d com.apple.quarantine "$INSTALL_DIR/koma" 2>/dev/null || true
+            else
+                sudo xattr -d com.apple.quarantine "$INSTALL_DIR/koma" 2>/dev/null || true
+            fi
         fi
     fi
     echo "Installed: $INSTALL_DIR/koma"
     echo "Run 'koma' to start."
 else
     echo ""
-    echo "  Run it:        ./$bin"
+    echo "  Run it:        ./$launcher"
     echo "  Install it:    ./build.sh --install      (copies to $INSTALL_DIR)"
-    echo "  Or by hand:    sudo cp $bin $INSTALL_DIR/koma"
+    if [ "$_os" = "Linux" ]; then
+        echo "  Or by hand:    sudo cp $launcher ${bin}.bin $INSTALL_DIR/"
+    else
+        echo "  Or by hand:    sudo cp $bin $INSTALL_DIR/koma"
+    fi
 fi
 
 echo ""
