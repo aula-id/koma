@@ -242,19 +242,22 @@ fn shadow_oauth_draft(o: OAuthDraftSnapshot) -> OAuthDraft {
 ///
 /// `pub(super)` — also called from `super::modes::shadow_onboard_provider`.
 pub(super) fn shadow_oauth_flow(s: crate::ipc::proto::OAuthFlowSnapshot) -> OAuthFlowState {
+    let provider = shadow_oauth_provider(&s.provider);
     match s.kind.as_str() {
-        "starting" => OAuthFlowState::Starting,
+        "starting" => OAuthFlowState::Starting { provider },
         "pick" => OAuthFlowState::Pick(s.cursor),
         "codex_wait" => OAuthFlowState::CodexWait {
+            provider,
             url: s.url,
             frame: s.frame,
             copied: s.copied,
         },
         "codex_paste" => OAuthFlowState::CodexPaste {
             input: s.input,
-            provider: crate::model::app_config::OAuthProvider::default(),
+            provider,
         },
         "kilo_wait" => OAuthFlowState::KiloWait {
+            provider,
             user_code: s.user_code,
             verification_url: s.url,
             frame: s.frame,

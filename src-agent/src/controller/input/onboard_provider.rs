@@ -39,7 +39,7 @@ pub fn handle_onboard_provider(
 /// but Esc on the picker backs out to the chooser (no idle connections list here).
 fn handle_login(s: &mut OnboardProviderState, key: KeyEvent) -> Action {
     match s.oauth_flow.clone() {
-        OAuthFlowState::Starting
+        OAuthFlowState::Starting { .. }
         | OAuthFlowState::CodexWait { .. }
         | OAuthFlowState::KiloWait { .. } => match key.code {
             KeyCode::Esc => Action::OAuthCancel,

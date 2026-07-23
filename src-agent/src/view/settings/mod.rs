@@ -216,19 +216,22 @@ pub fn draw(
             OAuthFlowState::Pick(cursor) => {
                 oauth::draw_picker(frame, *cursor, palette, body);
             }
-            OAuthFlowState::CodexWait { url, copied, .. } => {
-                oauth::draw_message(frame, palette, body, "codex login", Some(url), *copied);
+            OAuthFlowState::CodexWait { provider, url, copied, .. } => {
+                let title = format!("{} login", provider.label());
+                oauth::draw_message(frame, palette, body, &title, Some(url), *copied);
             }
             OAuthFlowState::KiloWait {
+                provider,
                 verification_url,
                 copied,
                 ..
             } => {
+                let title = format!("{} login", provider.label());
                 oauth::draw_message(
                     frame,
                     palette,
                     body,
-                    "kilo code login",
+                    &title,
                     Some(verification_url),
                     *copied,
                 );
@@ -239,8 +242,9 @@ pub fn draw(
             OAuthFlowState::Failed(msg) => {
                 oauth::draw_failed(frame, msg, palette, body);
             }
-            OAuthFlowState::Starting => {
-                oauth::draw_message(frame, palette, body, "starting login\u{2026}", None, false);
+            OAuthFlowState::Starting { provider } => {
+                let title = format!("starting {} login\u{2026}", provider.label());
+                oauth::draw_message(frame, palette, body, &title, None, false);
             }
             _ => {}
         }

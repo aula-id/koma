@@ -14,19 +14,23 @@ pub enum OAuthFlowState {
     /// A flow was just started (`Action::OAuthStart`) but the background task
     /// hasn't reported its first event yet (no URL/code to show). Transitional —
     /// swapped for `CodexWait`/`KiloWait` the moment the corresponding
-    /// [`crate::service::oauth::OAuthEvent`] lands.
-    Starting,
+    /// [`crate::service::oauth::OAuthEvent`] lands. `provider` carries the
+    /// chosen provider so the view can render the correct title/port.
+    Starting { provider: OAuthProvider },
     /// Provider picker cursor. Indices (must match TUI OPTIONS in
     /// `view/settings/oauth.rs`):
     /// 0 Codex, 1 Kilo Code, 2 koma.run, 3 xAI, 4 Claude,
     /// 5 Command Code, 6 Codex paste, 7 Command Code paste.
     Pick(usize),
-    /// Codex browser flow: the loopback listener is up and `url` is the
+    /// Browser-based flow: the loopback listener is up and `url` is the
     /// authorization URL (shown so the user can copy it if the browser didn't
-    /// open). `frame` drives the braille spinner, advanced once per tick.
-    /// `copied` flips to `true` after a successful `c` (copy-url) press, so
-    /// the view can show a one-shot confirmation line.
+    /// open). Shared by Codex, Claude, Koma, and Command Code browser flows —
+    /// `provider` determines the title and port. `frame` drives the braille
+    /// spinner, advanced once per tick. `copied` flips to `true` after a
+    /// successful `c` (copy-url) press, so the view can show a one-shot
+    /// confirmation line.
     CodexWait {
+        provider: OAuthProvider,
         url: String,
         frame: u8,
         copied: bool,
@@ -38,10 +42,12 @@ pub enum OAuthFlowState {
         input: String,
         provider: OAuthProvider,
     },
-    /// Kilo Code device flow: waiting for the user to approve `user_code` at
-    /// `verification_url`. `frame` drives the braille spinner. `copied` flips
-    /// to `true` after a successful `c` (copy-url) press.
+    /// Device flow: waiting for the user to approve `user_code` at
+    /// `verification_url`. Shared by Kilo Code and xAI device flows —
+    /// `provider` determines the title. `frame` drives the braille spinner.
+    /// `copied` flips to `true` after a successful `c` (copy-url) press.
     KiloWait {
+        provider: OAuthProvider,
         user_code: String,
         verification_url: String,
         frame: u8,
