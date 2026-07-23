@@ -52,7 +52,7 @@ Works on Linux, macOS, and Windows. On Windows, run that same command from a Git
 The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gui` cargo feature at build time, but you don't need to build it yourself on most platforms:
 
 - **macOS** — the install.sh binary already has `gui` baked in; `koma gui` just works.
-- **Linux** — the raw install.sh binary is TUI-only (webkitgtk isn't safe to hard-link into a binary meant to run on headless servers). Grab the `.deb` or `.AppImage` instead; both are `gui`-featured and add a desktop entry that launches straight into `koma gui`.
+- **Linux** — the raw install.sh binary is GUI-featured but requires `libwebkit2gtk-4.1-0` and `libgtk-3-0` at runtime. On Linux, install.sh ships a launcher (`koma`) that checks for these libraries and prints install commands if they are missing. If you prefer a package that handles dependencies automatically, grab the `.deb` or `.AppImage` instead; both are `gui`-featured and add a desktop entry that launches straight into `koma gui`. Prebuilt Linux binaries target **glibc 2.35 (Ubuntu 22.04 LTS)** and run on 22.04 and all newer releases.
 - **Windows** — the `.msi` installer is the GUI build (it installs the WebView2 runtime for you if it's missing; WebView2 ships with Windows 11 and most patched Windows 10 machines already). The raw `koma-windows-x64.exe` from install.sh is TUI-only.
 
 Grab the platform installer from the [latest release](https://github.com/aula-id/koma/releases/latest): `koma-x64.deb` / `koma-arm64.deb`, `koma-x64.AppImage` / `koma-arm64.AppImage`, `koma-x64.msi`.

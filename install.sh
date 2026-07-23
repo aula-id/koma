@@ -125,17 +125,271 @@ chmod +x "$tmp"
 
 # ---------------------------------------------------------------------------
 # Install — fall back to sudo if the directory is not user-writable
+#
+# On Linux: install the real ELF as koma.bin and a shell launcher as koma.
+# The launcher preflights shared-library availability (missing webkit/gtk,
+# too-old glibc) before the dynamic linker crashes.  macOS / Windows:
+# single binary named koma / koma.exe.
 # ---------------------------------------------------------------------------
 mkdir -p "$INSTALL_DIR" 2>/dev/null || true
-if [ -w "$INSTALL_DIR" ]; then
-    mv "$tmp" "$INSTALL_DIR/$bin_name"
+
+if [ "$os" = "linux" ]; then
+    # Linux: two-file layout — koma (launcher) + koma.bin (real ELF).
+    _install_linux_binary() {
+        mv "$tmp" "$INSTALL_DIR/koma.bin"
+        # --- embedded launcher — keep in sync with packaging/linux/koma-launcher.sh ---
+        cat > "$INSTALL_DIR/koma" << 'KOMA_LAUNCHER'
+#!/bin/sh
+# koma launcher — preflight shared libs before the dynamic linker crashes.
+# Keep in sync with packaging/linux/koma-launcher.sh
+set -e
+resolve_dir() {
+    _src="$0"
+    while [ -L "$_src" ]; do
+        _dir="$(cd -P "$(dirname -- "$_src")" && pwd)"
+        _src="$(readlink -- "$_src")"
+        case "$_src" in
+            /*) ;;
+            *)  _src="$_dir/$_src" ;;
+        esac
+    done
+    cd -P "$(dirname -- "$_src")" && pwd
+}
+DIR="$(resolve_dir)"
+BIN="$DIR/koma.bin"
+if [ ! -f "$BIN" ]; then
+    echo "koma: $BIN not found." >&2
+    echo "The koma launcher expects the real binary alongside itself as koma.bin." >&2
+    exit 1
+fi
+if [ ! -x "$BIN" ]; then
+    echo "koma: $BIN is not executable." >&2
+    echo "Run: chmod +x $BIN" >&2
+    exit 1
+fi
+ldd_out=""
+ldd_ok=0
+if command -v ldd >/dev/null 2>&1; then
+    ldd_out="$(ldd "$BIN" 2>&1)" && ldd_ok=1 || ldd_ok=0
+fi
+if [ "$ldd_ok" = "1" ] && echo "$ldd_out" | grep -q "not a dynamic executable"; then
+    exec "$BIN" "$@"
+fi
+if [ "$ldd_ok" = "1" ] && ! echo "$ldd_out" | grep -q "not found"; then
+    exec "$BIN" "$@"
+fi
+glibc_needed=""
+missing_libs=""
+if [ "$ldd_out" != "" ]; then
+    glibc_needed=$(echo "$ldd_out" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')
+    missing_libs=$(echo "$ldd_out" | grep "not found" | grep -v 'GLIBC_' | awk '{print $1}' | sort -u)
+fi
+if [ -n "$glibc_needed" ]; then
+    echo "" >&2
+    echo "koma: prebuilt binary requires a newer glibc than this system provides." >&2
+    echo "" >&2
+    if ldd --version >/dev/null 2>&1; then
+        _glibcv="$(ldd --version 2>&1 | head -1)"
+        echo "  Host:    $_glibcv" >&2
+    fi
+    echo "  Need:    glibc $glibc_needed" >&2
+    echo "" >&2
+    echo "You have two options:" >&2
+    echo "" >&2
+    echo "  1. Build from source on this machine (links against your local glibc):" >&2
+    echo "     git clone https://github.com/aula-id/koma.git && cd koma" >&2
+    echo "     ./build.sh" >&2
+    echo "" >&2
+    echo "  2. Use Ubuntu 22.04 LTS or newer (ships glibc 2.35+)." >&2
+    echo "" >&2
+    if [ -n "$missing_libs" ]; then
+        echo "Additional missing libraries:" >&2
+        echo "$missing_libs" | sed 's/^/  /' >&2
+        echo "" >&2
+    fi
+    exit 127
+fi
+if [ -n "$missing_libs" ]; then
+    has_webkit=0
+    has_gtk=0
+    echo "$missing_libs" | grep -q 'libwebkit2gtk' && has_webkit=1
+    echo "$missing_libs" | grep -q 'libgtk-3' && has_gtk=1
+    if [ "$has_webkit" = "1" ] || [ "$has_gtk" = "1" ]; then
+        echo "" >&2
+        echo "koma: missing system libraries required for the GUI." >&2
+        echo "" >&2
+        echo "Install them with your package manager:" >&2
+        echo "" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+        elif command -v dnf >/dev/null 2>&1; then
+            echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
+        elif command -v pacman >/dev/null 2>&1; then
+            echo "  sudo pacman -S webkit2gtk-4.1 gtk3" >&2
+        elif command -v zypper >/dev/null 2>&1; then
+            echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
+        else
+            echo "  # Debian/Ubuntu:" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  # Fedora:" >&2
+            echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
+            echo "  # Arch:" >&2
+            echo "  sudo pacman -S webkit2gtk-4.1 gtk3" >&2
+        fi
+        echo "" >&2
+        echo "(Package names may vary by distro/version.)" >&2
+        echo "" >&2
+    else
+        echo "" >&2
+        echo "koma: missing shared libraries:" >&2
+        echo "$ldd_out" | grep "not found" | sed 's/^/  /' >&2
+        echo "" >&2
+        echo "Install the missing libraries via your package manager." >&2
+        echo "" >&2
+    fi
+    exit 127
+fi
+exec "$BIN" "$@"
+KOMA_LAUNCHER
+        chmod +x "$INSTALL_DIR/koma"
+    }
+
+    if [ -w "$INSTALL_DIR" ]; then
+        _install_linux_binary
+    else
+        if [ "$(id -u)" = "0" ]; then
+            _install_linux_binary
+        else
+            echo "  $INSTALL_DIR is not writable; using sudo for install step."
+            _tmp_launcher=$(mktemp)
+            cat > "$_tmp_launcher" << 'KOMA_LAUNCHER'
+#!/bin/sh
+# koma launcher — preflight shared libs before the dynamic linker crashes.
+# Keep in sync with packaging/linux/koma-launcher.sh
+set -e
+resolve_dir() {
+    _src="$0"
+    while [ -L "$_src" ]; do
+        _dir="$(cd -P "$(dirname -- "$_src")" && pwd)"
+        _src="$(readlink -- "$_src")"
+        case "$_src" in
+            /*) ;;
+            *)  _src="$_dir/$_src" ;;
+        esac
+    done
+    cd -P "$(dirname -- "$_src")" && pwd
+}
+DIR="$(resolve_dir)"
+BIN="$DIR/koma.bin"
+if [ ! -f "$BIN" ]; then
+    echo "koma: $BIN not found." >&2
+    exit 1
+fi
+if [ ! -x "$BIN" ]; then
+    echo "koma: $BIN is not executable." >&2
+    echo "Run: chmod +x $BIN" >&2
+    exit 1
+fi
+ldd_out=""
+ldd_ok=0
+if command -v ldd >/dev/null 2>&1; then
+    ldd_out="$(ldd "$BIN" 2>&1)" && ldd_ok=1 || ldd_ok=0
+fi
+if [ "$ldd_ok" = "1" ] && echo "$ldd_out" | grep -q "not a dynamic executable"; then
+    exec "$BIN" "$@"
+fi
+if [ "$ldd_ok" = "1" ] && ! echo "$ldd_out" | grep -q "not found"; then
+    exec "$BIN" "$@"
+fi
+glibc_needed=""
+missing_libs=""
+if [ "$ldd_out" != "" ]; then
+    glibc_needed=$(echo "$ldd_out" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')
+    missing_libs=$(echo "$ldd_out" | grep "not found" | grep -v 'GLIBC_' | awk '{print $1}' | sort -u)
+fi
+if [ -n "$glibc_needed" ]; then
+    echo "" >&2
+    echo "koma: prebuilt binary requires a newer glibc than this system provides." >&2
+    echo "" >&2
+    if ldd --version >/dev/null 2>&1; then
+        _glibcv="$(ldd --version 2>&1 | head -1)"
+        echo "  Host:    $_glibcv" >&2
+    fi
+    echo "  Need:    glibc $glibc_needed" >&2
+    echo "" >&2
+    echo "You have two options:" >&2
+    echo "" >&2
+    echo "  1. Build from source on this machine (links against your local glibc):" >&2
+    echo "     git clone https://github.com/aula-id/koma.git && cd koma" >&2
+    echo "     ./build.sh" >&2
+    echo "" >&2
+    echo "  2. Use Ubuntu 22.04 LTS or newer (ships glibc 2.35+)." >&2
+    echo "" >&2
+    if [ -n "$missing_libs" ]; then
+        echo "Additional missing libraries:" >&2
+        echo "$missing_libs" | sed 's/^/  /' >&2
+        echo "" >&2
+    fi
+    exit 127
+fi
+if [ -n "$missing_libs" ]; then
+    has_webkit=0
+    has_gtk=0
+    echo "$missing_libs" | grep -q 'libwebkit2gtk' && has_webkit=1
+    echo "$missing_libs" | grep -q 'libgtk-3' && has_gtk=1
+    if [ "$has_webkit" = "1" ] || [ "$has_gtk" = "1" ]; then
+        echo "" >&2
+        echo "koma: missing system libraries required for the GUI." >&2
+        echo "" >&2
+        echo "Install them with your package manager:" >&2
+        echo "" >&2
+        if command -v apt-get >/dev/null 2>&1; then
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+        elif command -v dnf >/dev/null 2>&1; then
+            echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
+        elif command -v pacman >/dev/null 2>&1; then
+            echo "  sudo pacman -S webkit2gtk-4.1 gtk3" >&2
+        elif command -v zypper >/dev/null 2>&1; then
+            echo "  sudo zypper install libwebkit2gtk-4_1-0 libgtk-3-0" >&2
+        else
+            echo "  # Debian/Ubuntu:" >&2
+            echo "  sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+            echo "  # Fedora:" >&2
+            echo "  sudo dnf install webkit2gtk4.1 gtk3" >&2
+            echo "  # Arch:" >&2
+            echo "  sudo pacman -S webkit2gtk-4.1 gtk3" >&2
+        fi
+        echo "" >&2
+        echo "(Package names may vary by distro/version.)" >&2
+        echo "" >&2
+    else
+        echo "" >&2
+        echo "koma: missing shared libraries:" >&2
+        echo "$ldd_out" | grep "not found" | sed 's/^/  /' >&2
+        echo "" >&2
+        echo "Install the missing libraries via your package manager." >&2
+        echo "" >&2
+    fi
+    exit 127
+fi
+exec "$BIN" "$@"
+KOMA_LAUNCHER
+            sudo mv "$_tmp_launcher" "$INSTALL_DIR/koma"
+            sudo chmod +x "$INSTALL_DIR/koma"
+        fi
+    fi
 else
-    if [ "$(id -u)" = "0" ]; then
+    # macOS / Windows: single binary, no launcher needed.
+    if [ -w "$INSTALL_DIR" ]; then
         mv "$tmp" "$INSTALL_DIR/$bin_name"
     else
-        echo "  $INSTALL_DIR is not writable; using sudo for install step."
-        sudo mv "$tmp" "$INSTALL_DIR/$bin_name"
-        sudo chmod +x "$INSTALL_DIR/$bin_name"
+        if [ "$(id -u)" = "0" ]; then
+            mv "$tmp" "$INSTALL_DIR/$bin_name"
+        else
+            echo "  $INSTALL_DIR is not writable; using sudo for install step."
+            sudo mv "$tmp" "$INSTALL_DIR/$bin_name"
+            sudo chmod +x "$INSTALL_DIR/$bin_name"
+        fi
     fi
 fi
 
@@ -149,6 +403,27 @@ if [ "$os" = "darwin" ] && command -v xattr > /dev/null 2>&1; then
         xattr -d com.apple.quarantine "$INSTALL_DIR/$bin_name" 2>/dev/null || true
     else
         sudo xattr -d com.apple.quarantine "$INSTALL_DIR/$bin_name" 2>/dev/null || true
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Linux: non-fatal preflight warning (after install, before success banner).
+# Tells the user right away if their system is missing webkit/gtk, instead of
+# waiting for them to run `koma` and hit the error.
+# ---------------------------------------------------------------------------
+if [ "$os" = "linux" ] && command -v ldd >/dev/null 2>&1; then
+    _ldd_check="$(ldd "$INSTALL_DIR/koma.bin" 2>&1)" || true
+    if echo "$_ldd_check" | grep -qE 'GLIBC_[0-9]'; then
+        _glibc_needed="$(echo "$_ldd_check" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tr '\n' ' ')"
+        echo ""
+        echo "WARNING: this binary requires glibc $_glibc_needed" >&2
+        echo "  If koma fails to start, build from source: ./build.sh" >&2
+    elif echo "$_ldd_check" | grep -q "not found"; then
+        echo ""
+        echo "WARNING: some shared libraries are missing — koma may not start." >&2
+        echo "  Debian/Ubuntu: sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0" >&2
+        echo "  Fedora:        sudo dnf install webkit2gtk4.1 gtk3" >&2
+        echo "  Arch:          sudo pacman -S webkit2gtk-4.1 gtk3" >&2
     fi
 fi
 
