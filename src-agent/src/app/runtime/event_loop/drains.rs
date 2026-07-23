@@ -22,6 +22,10 @@ use super::Term;
 /// native selection. Raw mode stays on (we read a single key to return), so
 /// lines are terminated with `\r\n`.
 pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()> {
+    // Disable mouse capture so native terminal selection works during the
+    // plain-text dump (crossterm intercepts all mouse events otherwise).
+    use ratatui::crossterm::event::DisableMouseCapture;
+    let _ = execute!(stdout(), DisableMouseCapture);
     execute!(stdout(), LeaveAlternateScreen)?;
     let mut out = stdout();
     if let Some(sess) = rest.fg().session.as_ref() {
@@ -48,6 +52,9 @@ pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()>
 /// Re-enter the alternate screen and force a full repaint.
 pub(super) fn exit_select(terminal: &mut Term) -> Result<()> {
     execute!(stdout(), EnterAlternateScreen)?;
+    // Re-enable mouse capture after returning from the plain-text /select screen.
+    use ratatui::crossterm::event::EnableMouseCapture;
+    let _ = execute!(stdout(), EnableMouseCapture);
     terminal.clear()?;
     Ok(())
 }
