@@ -40,8 +40,8 @@ pub(super) fn handle_oauth_start(
 
     // Optimistic transitional paint on whichever oauth-flow-bearing mode is active.
     match state.mode_mut() {
-        Mode::Settings(s) => s.oauth_flow = OAuthFlowState::Starting,
-        Mode::OnboardProvider(op) => op.oauth_flow = OAuthFlowState::Starting,
+        Mode::Settings(s) => s.oauth_flow = OAuthFlowState::Starting { provider },
+        Mode::OnboardProvider(op) => op.oauth_flow = OAuthFlowState::Starting { provider },
         _ => {}
     }
 
