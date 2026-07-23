@@ -18,6 +18,20 @@ use crate::view::theme::Palette;
 /// Braille spinner frames, matching the `/security` panel's in-flight probe glyph.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Return the fixed loopback port for providers that bind one, or `None` for
+/// providers whose port is dynamic (Command Code) or that don't use a loopback.
+fn wait_port(p: crate::model::app_config::OAuthProvider) -> Option<u16> {
+    use crate::model::app_config::OAuthProvider;
+    use crate::service::oauth::registry::*;
+    match p {
+        OAuthProvider::Codex => Some(CODEX_PORT),
+        OAuthProvider::ClaudeAI => Some(CLAUDE_PORT),
+        OAuthProvider::KomaRun => Some(KOMA_PORT),
+        // Command Code binds dynamically in a range — omit specific port.
+        _ => None,
+    }
+}
+
 /// Pull the parenthesized identity out of an `OAuthDraft::label` like
 /// `"codex (foo@bar.com)"` → `"foo@bar.com"`. Falls back to the whole label if it
 /// doesn't match that shape.
@@ -44,49 +58,63 @@ pub(crate) fn draw_oauth_page(
 
     match &st.oauth_flow {
         OAuthFlowState::Idle => draw_list(frame, st, palette, area),
-        OAuthFlowState::Starting => draw_message(
-            frame,
-            palette,
-            area,
-            &format!("{} starting login…", SPINNER[0]),
-            None,
-            false,
-        ),
+        OAuthFlowState::Starting { provider } => {
+            let label = provider.label();
+            draw_message(
+                frame,
+                palette,
+                area,
+                &format!("{} {} starting login…", SPINNER[0], label),
+                None,
+                false,
+            )
+        }
         OAuthFlowState::Pick(cursor) => draw_picker(frame, *cursor, palette, area),
         OAuthFlowState::CodexWait {
+            provider,
             url,
             frame: f,
             copied,
-        } => draw_message(
-            frame,
-            palette,
-            area,
-            &format!(
-                "{} waiting for browser · listening on localhost:{}",
-                SPINNER[(*f as usize) % SPINNER.len()],
-                crate::service::oauth::registry::CODEX_PORT,
-            ),
-            Some(url),
-            *copied,
-        ),
+        } => {
+            let label = provider.label();
+            let status = match wait_port(*provider) {
+                Some(port) => format!(
+                    "{} waiting for browser · {} listening on localhost:{}",
+                    SPINNER[(*f as usize) % SPINNER.len()],
+                    label,
+                    port,
+                ),
+                None => format!(
+                    "{} waiting for browser · {}",
+                    SPINNER[(*f as usize) % SPINNER.len()],
+                    label,
+                ),
+            };
+            draw_message(frame, palette, area, &status, Some(url), *copied)
+        }
         OAuthFlowState::CodexPaste { input, .. } => draw_paste(frame, input, palette, area),
         OAuthFlowState::KiloWait {
+            provider,
             user_code,
             verification_url,
             frame: f,
             copied,
-        } => draw_message(
-            frame,
-            palette,
-            area,
-            &format!(
-                "{} approve in browser · code: {}",
-                SPINNER[(*f as usize) % SPINNER.len()],
-                user_code,
-            ),
-            Some(verification_url),
-            *copied,
-        ),
+        } => {
+            let label = provider.label();
+            draw_message(
+                frame,
+                palette,
+                area,
+                &format!(
+                    "{} approve in browser · {} · code: {}",
+                    SPINNER[(*f as usize) % SPINNER.len()],
+                    label,
+                    user_code,
+                ),
+                Some(verification_url),
+                *copied,
+            )
+        }
         OAuthFlowState::Failed(msg) => draw_failed(frame, msg, palette, area),
     }
 }

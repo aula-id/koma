@@ -109,6 +109,9 @@ pub struct OAuthFlowSnapshot {
     /// `codex_wait`/`kilo_wait`'s "url copied to clipboard" confirmation flag,
     /// set after a successful `c` (copy-url) key press.
     pub copied: bool,
+    /// Provider wire id for `starting`/`codex_wait`/`kilo_wait`/`codex_paste`
+    /// states (`"codex"`, `"xai"`, etc.). Empty when N/A (idle, pick, failed).
+    pub provider: String,
 }
 
 /// A serde-safe projection of one model draft.

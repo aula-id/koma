@@ -679,7 +679,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                         handle.spawn(async move {
                             while let Some(ev) = orx.recv().await {
                                 match ev {
-                                    crate::service::oauth::OAuthEvent::CodexUrl { url } => {
+                                    crate::service::oauth::OAuthEvent::CodexUrl { provider: _, url } => {
                                         let (conns, providers) = build_host_oauth_state();
                                         push_oauth_state(
                                             &push2,
@@ -693,6 +693,7 @@ fn host_swapper<P: Fn(String) + Clone + Send + 'static>(
                                         );
                                     }
                                     crate::service::oauth::OAuthEvent::KiloCode {
+                                        provider: _,
                                         user_code,
                                         verification_url,
                                     } => {

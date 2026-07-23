@@ -303,8 +303,9 @@ pub fn oauth_flow_snapshot(
             kind: "idle".to_string(),
             ..Default::default()
         },
-        OAuthFlowState::Starting => OAuthFlowSnapshot {
+        OAuthFlowState::Starting { provider } => OAuthFlowSnapshot {
             kind: "starting".to_string(),
+            provider: provider.wire_id().to_string(),
             ..Default::default()
         },
         OAuthFlowState::Pick(cursor) => OAuthFlowSnapshot {
@@ -312,25 +313,29 @@ pub fn oauth_flow_snapshot(
             cursor: *cursor,
             ..Default::default()
         },
-        OAuthFlowState::CodexWait { url, frame, copied } => OAuthFlowSnapshot {
+        OAuthFlowState::CodexWait { provider, url, frame, copied } => OAuthFlowSnapshot {
             kind: "codex_wait".to_string(),
+            provider: provider.wire_id().to_string(),
             url: url.clone(),
             frame: *frame,
             copied: *copied,
             ..Default::default()
         },
-        OAuthFlowState::CodexPaste { input, .. } => OAuthFlowSnapshot {
+        OAuthFlowState::CodexPaste { input, provider, .. } => OAuthFlowSnapshot {
             kind: "codex_paste".to_string(),
             input: input.clone(),
+            provider: provider.wire_id().to_string(),
             ..Default::default()
         },
         OAuthFlowState::KiloWait {
+            provider,
             user_code,
             verification_url,
             frame,
             copied,
         } => OAuthFlowSnapshot {
             kind: "kilo_wait".to_string(),
+            provider: provider.wire_id().to_string(),
             url: verification_url.clone(),
             user_code: user_code.clone(),
             frame: *frame,

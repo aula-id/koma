@@ -842,13 +842,17 @@ fn run_ext_oauth_delegate(
     };
     match parse_begin(&begin) {
         BeginOutcome::Browser { url } => {
-            let _ = tx.send(OAuthEvent::CodexUrl { url });
+            let _ = tx.send(OAuthEvent::CodexUrl {
+                provider: OAuthProvider::Extension,
+                url,
+            });
         }
         BeginOutcome::Device {
             user_code,
             verification_url,
         } => {
             let _ = tx.send(OAuthEvent::KiloCode {
+                provider: OAuthProvider::Extension,
                 user_code,
                 verification_url,
             });
