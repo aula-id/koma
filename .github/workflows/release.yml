@@ -6,13 +6,20 @@ name: release
 #
 # All builds ship the GUI feature by default (default = ["gui"] in Cargo.toml),
 # so `koma gui` works out of the box on every platform. Linux raw binaries
-# bundle webkit2gtk; Darwin uses the system WebKit; Windows uses WebView2.
+# link against system webkit2gtk (not bundled); Darwin uses the system WebKit;
+# Windows uses WebView2.
 #
 # The linux-packages / windows-package jobs additionally publish desktop
 # installers under STABLE, VERSIONLESS names (hard-linked from the homepage via
 # /releases/latest/download/): koma-x64.deb, koma-arm64.deb, koma-x64.AppImage,
 # koma-arm64.AppImage, koma-x64.msi, plus the raw koma-windows-x64.exe.
 # These are NOT referenced by install.sh.
+#
+# IMPORTANT: Linux runners are pinned to ubuntu-22.04 (glibc 2.35) so that
+# prebuilt binaries run on Ubuntu 22.04 LTS and all newer releases. Glibc is
+# backward-compatible: a binary linked against 2.35 runs on 2.35+ but NOT on
+# older systems. Building on ubuntu-latest (24.04 / glibc 2.39) would produce
+# binaries that crash with "GLIBC_2.38/2.39 not found" on Jammy.
 on:
   push:
     tags:
@@ -29,13 +36,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ----- Linux -----
-          - os: ubuntu-latest
+          # ----- Linux (pinned to 22.04 for glibc 2.35 baseline) -----
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             asset: koma-linux-x64
             cross: false
             buildflags: ""
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             asset: koma-linux-arm64
             cross: true
@@ -116,9 +123,8 @@ jobs:
   # names embed the version (e.g. koma_0.2.27_amd64.deb), so a rename step maps
   # them to the stable versionless homepage names.
   #
-  # NOTE: `ubuntu-24.04-arm` is a GitHub-hosted arm64 runner. It is free for
-  # PUBLIC repos (this repo is public); private repos would need a paid larger-
-  # runner plan for the arm label.
+  # Pinned to ubuntu-22.04 / ubuntu-22.04-arm for the same glibc 2.35 floor as
+  # the raw binary jobs above.
   # ---------------------------------------------------------------------------
   linux-packages:
     name: package linux ${{ matrix.arch }} (deb + appimage)
@@ -127,9 +133,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-22.04
             arch: x64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04
             arch: arm64
     steps:
       - name: Checkout
