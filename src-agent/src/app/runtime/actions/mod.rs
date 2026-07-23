@@ -58,6 +58,20 @@ pub(in crate::app::runtime) use session::create_session_for_pwd;
 pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
 mod settings_creds;
 
+/// Apply mouse-capture mode to the terminal. Resolves `Auto` via env detection
+/// (`TERMUX_VERSION`), then sends the appropriate crossterm escape sequence.
+/// Called at session init and on settings save.
+pub(in crate::app::runtime) fn apply_mouse_capture(mode: crate::model::settings::MouseCapture) {
+    use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    use ratatui::crossterm::execute;
+    let enabled = mode.resolved();
+    let _ = if enabled {
+        execute!(std::io::stdout(), EnableMouseCapture)
+    } else {
+        execute!(std::io::stdout(), DisableMouseCapture)
+    };
+}
+
 /// Apply one `Action` (the decoded result of a keystroke) by mutating state and,
 /// where needed, spawning/aborting the request task.
 ///

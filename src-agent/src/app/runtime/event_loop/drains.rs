@@ -7,8 +7,7 @@ use std::io::{stdout, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
-use ratatui::crossterm::event::DisableMouseCapture;
-use ratatui::crossterm::event::EnableMouseCapture;
+
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 
@@ -18,12 +17,12 @@ use crate::service::openrouter::OpenRouterClient;
 
 use super::Term;
 
-/// Leave the alternate screen + disable mouse capture, then print the full
+/// Leave the alternate screen, then print the full
 /// conversation as plain text so the user can select/copy with the terminal's
 /// native selection. Raw mode stays on (we read a single key to return), so
 /// lines are terminated with `\r\n`.
 pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()> {
-    execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(stdout(), LeaveAlternateScreen)?;
     let mut out = stdout();
     if let Some(sess) = rest.fg().session.as_ref() {
         for m in sess.conversation.messages() {
@@ -46,9 +45,9 @@ pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()>
     Ok(())
 }
 
-/// Re-enter the alternate screen + mouse capture and force a full repaint.
+/// Re-enter the alternate screen and force a full repaint.
 pub(super) fn exit_select(terminal: &mut Term) -> Result<()> {
-    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout(), EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
 }

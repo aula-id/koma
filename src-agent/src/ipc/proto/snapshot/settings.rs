@@ -48,6 +48,9 @@ pub struct SettingsSnapshot {
     #[serde(default)]
     pub coding_autosave: bool,
     pub internet_mode: String,
+    /// Wire token for [`MouseCapture`]: `"auto"`, `"on"`, `"off"`.
+    #[serde(default)]
+    pub mouse_capture: String,
     pub cwd: String,
     pub list_editing: bool,
     pub list_sel: usize,

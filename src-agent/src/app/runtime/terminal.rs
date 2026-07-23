@@ -3,7 +3,7 @@
 use std::io::stdout;
 
 use ratatui::crossterm::{
-    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
+    event::{DisableBracketedPaste, EnableBracketedPaste},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -19,7 +19,6 @@ impl TerminalGuard {
         if let Err(e) = execute!(
             stdout(),
             EnterAlternateScreen,
-            EnableMouseCapture,
             EnableBracketedPaste
         ) {
             let _ = disable_raw_mode();
@@ -34,7 +33,6 @@ impl Drop for TerminalGuard {
         let _ = execute!(
             stdout(),
             LeaveAlternateScreen,
-            DisableMouseCapture,
             DisableBracketedPaste
         );
         let _ = disable_raw_mode();

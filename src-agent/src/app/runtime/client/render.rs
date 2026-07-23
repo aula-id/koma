@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    self, Event, KeyCode, KeyEventKind, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
@@ -477,12 +477,12 @@ pub(super) fn advance_local_animations(shadow: &mut AppState) {
 /// [`super::super::event_loop::drains`] `enter_select`/`exit_select`, but sourced from
 /// the SHADOW conversation and self-contained (it blocks for the return keypress here
 /// rather than threading a `select_active` state through the render loop):
-///   1. leave the alt-screen + disable mouse capture,
+///   1. leave the alt-screen,
 ///   2. print the foreground shadow session's conversation as plain text (so the user
 ///      can select/copy with the terminal's native selection) — raw mode stays on, so
 ///      lines are terminated with `\r\n`,
 ///   3. block until the user presses any key,
-///   4. re-enter the alt-screen + mouse capture and force a full repaint
+///   4. re-enter the alt-screen and force a full repaint
 ///      (`terminal.clear()`), so the next loop pass redraws the live shadow cleanly.
 ///
 /// Robustness: if the shadow has no foreground session/conversation there is nothing to
@@ -500,7 +500,7 @@ pub(super) fn client_select_dump(
 
     // (1) Drop to the normal screen so the printed transcript uses the scrollback the
     // user can select from.
-    execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(stdout(), LeaveAlternateScreen)?;
 
     // (2) Print the conversation as plain text (raw mode is on → `\r\n`). Mirrors
     // `drains::enter_select`'s formatting exactly: skip System/Tool, label you/ai.
@@ -533,7 +533,7 @@ pub(super) fn client_select_dump(
     }
 
     // (4) Restore the alt-screen + mouse and force a full repaint next draw.
-    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout(), EnterAlternateScreen)?;
     terminal.clear()?;
     Ok(())
 }
