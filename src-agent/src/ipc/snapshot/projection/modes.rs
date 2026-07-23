@@ -486,7 +486,12 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
         });
     }
 
-    let catalogue_providers: Vec<CatalogueProviderSnapshot> = config
+    // Include OAuth conns alongside static providers so OAuth-backed models
+    // (xAI / Codex / koma.run / …) resolve to `name @ provider` in /agents,
+    // not `(unknown model)`. Projected KEYLESS (uuid + display name only).
+    // Mirrors send_agents_values (requests_read.rs) and build_host_agents_values
+    // (host_catalogue.rs).
+    let mut catalogue_providers: Vec<CatalogueProviderSnapshot> = config
         .providers
         .iter()
         .map(|p| CatalogueProviderSnapshot {
@@ -495,6 +500,18 @@ pub fn agents_snapshot(a: &AgentsState, state: &AppState) -> AgentsSnapshot {
             endpoint: p.endpoint.clone(),
         })
         .collect();
+    for c in &config.oauth_conns {
+        let name = if !c.name.trim().is_empty() {
+            c.name.clone()
+        } else {
+            c.provider.label().to_string()
+        };
+        catalogue_providers.push(CatalogueProviderSnapshot {
+            uuid: c.uuid.clone(),
+            name,
+            endpoint: String::new(),
+        });
+    }
 
     AgentsSnapshot {
         agents: a
