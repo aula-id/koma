@@ -499,7 +499,9 @@ pub(super) fn client_select_dump(
     }
 
     // (1) Drop to the normal screen so the printed transcript uses the scrollback the
-    // user can select from.
+    // user can select from. Disable mouse capture first so native selection works.
+    use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    let _ = execute!(stdout(), DisableMouseCapture);
     execute!(stdout(), LeaveAlternateScreen)?;
 
     // (2) Print the conversation as plain text (raw mode is on → `\r\n`). Mirrors
@@ -534,6 +536,7 @@ pub(super) fn client_select_dump(
 
     // (4) Restore the alt-screen + mouse and force a full repaint next draw.
     execute!(stdout(), EnterAlternateScreen)?;
+    let _ = execute!(stdout(), EnableMouseCapture);
     terminal.clear()?;
     Ok(())
 }
