@@ -252,20 +252,15 @@ impl SyncIpcStream {
         }
     }
 
-    /// Record-and-ignore stub (best-effort), matching the `UnixStream` method the sync
-    /// call sites use to bound a wedged daemon.
-    ///
-    /// TODO(windows-port): a `std::fs::File` on a pipe has no per-read timeout knob;
-    /// real timeouts need overlapped I/O (`ReadFile` + `WaitForSingleObject`/`CancelIo`),
-    /// which `File` does not expose. Until that lands, the connect-per-call pattern +
-    /// tiny framed payloads keep the practical risk low. Returns `Ok(())` so the call
-    /// sites (which treat the timeout as a guard, not a hard requirement) proceed.
+    // Accepted limitation (Windows port): named-pipe ReadFile/WriteFile on a
+    // std::fs::File handle blocks the calling thread with no cancellation token;
+    // implementing real timeouts requires switching to raw HANDLE + overlapped I/O
+    // + WaitForSingleObject, which is a significant refactor. Callers treat timeout
+    // failures as non-fatal (.ok()? / let _ =) and payloads are small framed
+    // messages, so this is safe in practice.
     pub fn set_read_timeout(&self, _timeout: Option<Duration>) -> io::Result<()> {
         Ok(())
     }
-
-    /// Record-and-ignore stub — the write-side twin of [`Self::set_read_timeout`].
-    /// See its TODO(windows-port) note.
     pub fn set_write_timeout(&self, _timeout: Option<Duration>) -> io::Result<()> {
         Ok(())
     }

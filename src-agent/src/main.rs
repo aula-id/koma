@@ -230,15 +230,6 @@ fn main() -> anyhow::Result<()> {
         app::run_daemon_selftest();
     }
 
-    // --- headless path: run the GLOBAL knowledge daemon (no TUI) ---
-    // A singleton process that owns the central RocksDB knowledge store so
-    // sessions share entity resolution and graph-expanded recall. Checked BEFORE
-    // `--mcp-daemon` and `--daemon` so a stray combination can't accidentally
-    // take the wrong branch.
-    if opts.knowledge_daemon {
-        return app::run_knowledge_daemon(opts);
-    }
-
     // --- headless path: run the GLOBAL MCP daemon (no TUI) ---
     // A singleton process that owns every configured MCP server connection so
     // session-daemons proxy to it (`~/.koma/mcp.sock`) instead of each spawning their

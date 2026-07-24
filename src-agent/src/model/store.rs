@@ -65,10 +65,25 @@ pub struct SessionMeta {
     pub pwd_hash: String,
 }
 
-/// Returns `~/.koma/` (the application data root).
+/// Returns the application data root.
+///
+/// - **Unix/macOS:** `~/.koma/` (hidden dot-dir in home).
+/// - **Windows:** `%LOCALAPPDATA%\koma` (`AppData\Local\koma`) — the standard
+///   per-user machine-local data location. The old `~/.koma` path is migrated
+///   on first launch by [`migrate_legacy_dir`].
 pub fn base_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot resolve home directory"))?;
-    Ok(home.join(APP_DIR_NAME))
+    #[cfg(windows)]
+    {
+        let data = dirs::data_local_dir()
+            .ok_or_else(|| anyhow!("cannot resolve %LOCALAPPDATA%"))?;
+        Ok(data.join("koma"))
+    }
+    #[cfg(not(windows))]
+    {
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow!("cannot resolve home directory"))?;
+        Ok(home.join(APP_DIR_NAME))
+    }
 }
 
 /// Root of koma's throwaway scratch space (`<temp>/koma`). Bash + file tools
@@ -82,40 +97,116 @@ pub fn scratch_dir(session_id: &str) -> PathBuf {
     scratch_root().join(session_id)
 }
 
-/// One-time, non-destructive migration: rename `~/.simple-coder` to `~/.koma`
-/// if the new dir does not yet exist and the old one does.
+/// One-time, non-destructive migration to the canonical data directory.
+///
+/// - **Unix/macOS:** renames `~/.simple-coder` → `~/.koma` if needed.
+/// - **Windows:** migrates from `~/.koma` (old location) or `~/.simple-coder`
+///   into `%LOCALAPPDATA%\koma`. Cross-drive renames fall back to copy+remove.
 ///
 /// Must be called ONCE at startup before any code reads `base_dir()`.
-/// Never panics — any error is printed to stderr and silently ignored so the
-/// app can proceed (it will create a fresh `~/.koma` on first use).
+/// Never panics — any error is logged and silently ignored so the app can
+/// proceed (it will create a fresh data dir on first use).
 pub fn migrate_legacy_dir() {
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
+    let new_dir = match base_dir() {
+        Ok(d) => d,
+        Err(e) => {
             append_global_error_log(
                 "config migration skipped",
-                "cannot resolve home directory; skipping config migration",
+                &format!("cannot resolve base dir: {e}"),
             );
             return;
         }
     };
-    let old_dir = home.join(".simple-coder");
-    let new_dir = home.join(APP_DIR_NAME); // ".koma"
+
+    // On Windows the canonical dir lives under %LOCALAPPDATA%, not ~.
+    // We must also check the old home-relative locations as migration sources.
+    #[cfg(windows)]
+    let legacy_dirs: Vec<PathBuf> = {
+        let mut v = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            // Old dot-dir in home (from early Windows port builds).
+            let home_koma = home.join(APP_DIR_NAME); // ~/.koma
+            if home_koma.exists() && home_koma != new_dir {
+                v.push(home_koma);
+            }
+            // Pre-rename legacy name.
+            let simple_coder = home.join(".simple-coder");
+            if simple_coder.exists() && simple_coder != new_dir {
+                v.push(simple_coder);
+            }
+        }
+        v
+    };
+
+    // On Unix the canonical dir IS ~/.koma, so the only migration is
+    // the old .simple-coder name.
+    #[cfg(not(windows))]
+    let legacy_dirs: Vec<PathBuf> = {
+        let mut v = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            let simple_coder = home.join(".simple-coder");
+            if simple_coder.exists() {
+                v.push(simple_coder);
+            }
+        }
+        v
+    };
+
     if new_dir.exists() {
-        // New dir already exists — nothing to do.
+        // Target already exists — nothing to do (or merge not implemented).
         return;
     }
-    if !old_dir.exists() {
-        // Neither dir exists yet — fresh install, nothing to migrate.
-        return;
+    if legacy_dirs.is_empty() {
+        return; // fresh install
     }
-    match std::fs::rename(&old_dir, &new_dir) {
-        Ok(()) => append_global_error_log("config migrated", "~/.simple-coder -> ~/.koma"),
-        Err(e) => append_global_error_log(
-            "config migration failed",
-            &format!("could not migrate ~/.simple-coder to ~/.koma: {e}"),
-        ),
+
+    for old_dir in &legacy_dirs {
+        // Try rename first (works within the same filesystem / drive).
+        match std::fs::rename(old_dir, &new_dir) {
+            Ok(()) => {
+                append_global_error_log(
+                    "config migrated",
+                    &format!("{} -> {}", old_dir.display(), new_dir.display()),
+                );
+                return; // success — stop at the first one that moves
+            }
+            Err(e) => {
+                // Cross-drive rename on Windows (e.g. C:\Users → C:\AppData\Local
+                // can sometimes fail). Fall back to copy + remove.
+                append_global_error_log(
+                    "rename failed, trying copy",
+                    &format!("{} → {}: {e}", old_dir.display(), new_dir.display()),
+                );
+                if copy_dir_all(old_dir, &new_dir).is_ok() {
+                    let _ = std::fs::remove_dir_all(old_dir);
+                    append_global_error_log(
+                        "config migrated (copy)",
+                        &format!("{} -> {}", old_dir.display(), new_dir.display()),
+                    );
+                    return;
+                }
+                append_global_error_log(
+                    "config migration failed",
+                    &format!("could not migrate {} to {}: {e}", old_dir.display(), new_dir.display()),
+                );
+            }
+        }
     }
+}
+
+/// Recursively copy a directory tree. Used for cross-drive migration on Windows.
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Returns `~/.simple-coder/sessions/`.
@@ -506,42 +597,6 @@ pub fn mcp_daemon_pid_path() -> Result<PathBuf> {
 /// liveness oracle. The MCP daemon's graceful-shutdown teardown unlinks it.
 pub fn write_mcp_daemon_pid() -> Result<()> {
     std::fs::write(mcp_daemon_pid_path()?, std::process::id().to_string())?;
-    Ok(())
-}
-
-// ── Global knowledge daemon socket / pidfile ──────────────────────────
-
-/// Path to the GLOBAL knowledge daemon's Unix domain socket: `~/.koma/knowledge.sock`.
-///
-/// Like the MCP daemon, the knowledge daemon is a SINGLETON — one process owns the
-/// central RocksDB store at `~/.koma/knowledge/` and sessions push facts / query
-/// for graph expansion here. Whoever binds this socket IS the live knowledge daemon
-/// (bind-as-oracle, same rule as the session and MCP sockets).
-#[cfg(unix)]
-pub fn knowledge_daemon_sock_path() -> Result<PathBuf> {
-    Ok(base_dir()?.join("knowledge.sock"))
-}
-
-/// Windows twin of [`knowledge_daemon_sock_path`] — the singleton knowledge daemon
-/// named pipe `\\.\pipe\koma-knowledge`.
-#[cfg(windows)]
-pub fn knowledge_daemon_sock_path() -> Result<PathBuf> {
-    Ok(PathBuf::from(r"\\.\pipe\koma-knowledge"))
-}
-
-/// Path to the GLOBAL knowledge daemon's PID file: `~/.koma/knowledge.pid`.
-///
-/// Advisory only — recorded for diagnostics / `koma daemon kill`. Singleton, like
-/// the MCP daemon pidfile.
-pub fn knowledge_daemon_pid_path() -> Result<PathBuf> {
-    Ok(base_dir()?.join("knowledge.pid"))
-}
-
-/// Write the running knowledge daemon's PID into [`knowledge_daemon_pid_path`],
-/// overwriting any stale one. Best-effort + advisory — the bound socket, not this
-/// file, is the liveness oracle.
-pub fn write_knowledge_daemon_pid() -> Result<()> {
-    std::fs::write(knowledge_daemon_pid_path()?, std::process::id().to_string())?;
     Ok(())
 }
 

@@ -433,7 +433,7 @@ fi
 if [ "$WITH_RESEARCH" = "1" ]; then
     if [ "$os" = "windows" ]; then
         echo ""
-        echo "WARNING: research/full internet mode is not supported on Windows yet — installing base koma only." >&2
+        echo "WARNING: research/full internet mode is not supported on Windows — installing base koma only." >&2
     else
         echo ""
         echo "Provisioning full internet mode environment (downloads ~80MB Firefox)..."

@@ -684,6 +684,17 @@ pub fn run(opts: crate::cli::Opts) -> Result<()> {
     // Clear the alternate screen so no shell scrollback bleeds through the
     // cells the UI never paints (e.g. the empty part of the transcript).
     terminal.clear()?;
+    // Apply the mouse-capture mode from the foreground session's settings.
+    // Auto-detects touch terminals (Termux) vs desktop; resolved once here
+    // and re-applied on settings save.
+    let mc = state
+        .rest
+        .fg()
+        .session
+        .as_ref()
+        .map(|s| s.settings.mouse_capture)
+        .unwrap_or_default();
+    crate::app::runtime::actions::apply_mouse_capture(mc);
 
     let result = run_loop(&mut terminal, &mut state, &handle, &mut client);
 
@@ -749,14 +760,6 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
     // MCP for the session-daemon: PROXY to the global MCP daemon when possible, with a
     // LOCAL fallback that is never worse than today. `build_startup` left
     // `mcp_manager = None` in daemon mode so this is the sole owner of the decision.
-    // 4.5 Global knowledge daemon — ensure it's running so sessions can push facts
-    //     and query for graph-expanded recall. Fire-and-forget at boot: a missing
-    //     daemon is spawned, a stale one is restarted. Best-effort — the session
-    //     never blocks or fails on this.
-    {
-        let _ = super::manage::ensure_knowledge_daemon_running();
-    }
-
     //
     // - No `mcp_servers` configured → leave it `None` (no manager, no global daemon
     //   spawned): byte-identical to a build without MCP.

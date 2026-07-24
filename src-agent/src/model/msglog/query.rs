@@ -20,8 +20,8 @@ pub struct ArchivedMsg {
 }
 
 /// A match from the FTS5 full-text search index (`messages_fts`).
-/// Returned by [`search_messages`]; the `snippet` field is FTS5's own
-/// `snippet()` output with matching terms highlighted by the marker chars.
+/// Returned by [`search_messages`]; the `snippet` field is the first 300
+/// characters of the matching message for coherent context.
 #[derive(Debug, Clone)]
 pub struct MessageMatch {
     pub id: i64,
@@ -249,10 +249,20 @@ pub fn truncate_after(session_dir: &Path, cut_id: i64) -> Result<()> {
 /// into OR'd prefix terms so the model can search conversationally ("hello test
 /// thing" → any message matching "hello*" OR "test*" OR "thing*"). Each term has
 /// FTS5 syntax chars stripped and a `*` suffix appended for prefix matching.
-/// Results are ranked by BM25 and capped at `limit`. Each result includes a
-/// snippet with match context from FTS5's `snippet()`. Best-effort: returns an
-/// empty vec on error or empty/whitespace query.
-pub fn search_messages(session_dir: &Path, raw_query: &str, limit: i64) -> Vec<MessageMatch> {
+///
+/// `role_filter` optionally restricts results to a specific role ("user",
+/// "assistant", "tool"). Pass `None` to search all roles.
+///
+/// Results are ranked by BM25 and capped at `limit`. Each result includes the
+/// first 300 characters of the matching message for coherent context (instead of
+/// FTS5's fragmentary `snippet()` output). Best-effort: returns an empty vec on
+/// error or empty/whitespace query.
+pub fn search_messages(
+    session_dir: &Path,
+    raw_query: &str,
+    limit: i64,
+    role_filter: Option<&str>,
+) -> Vec<MessageMatch> {
     let terms: Vec<String> = raw_query
         .split_whitespace()
         .map(|t| {
@@ -269,34 +279,53 @@ pub fn search_messages(session_dir: &Path, raw_query: &str, limit: i64) -> Vec<M
     if terms.is_empty() {
         return Vec::new();
     }
-    let query = terms.join(" OR ");
+    let fts_query = terms.join(" OR ");
 
-    fn inner(session_dir: &Path, query: &str, limit: i64) -> anyhow::Result<Vec<MessageMatch>> {
+    fn inner(
+        session_dir: &Path,
+        fts_query: &str,
+        limit: i64,
+        role_filter: Option<&str>,
+    ) -> anyhow::Result<Vec<MessageMatch>> {
         let conn = open(session_dir)?;
-        // Column 0 = content, column 1 = role. We want snippets from content.
-        let mut stmt = conn.prepare(
-            "SELECT m.id, m.role, snippet(messages_fts, 0, '', '', '…', 64) AS snip, m.created_at
+        // Use substr() for the first 300 chars of the actual message content
+        // instead of FTS5's snippet() — gives coherent, readable context.
+        let sql = if role_filter.is_some() {
+            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?
+             WHERE messages_fts MATCH ?1 AND m.role = ?2
              ORDER BY rank
-             LIMIT ?",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![query, limit], |r| {
+             LIMIT ?3"
+        } else {
+            "SELECT m.id, m.role, substr(m.content, 1, 300) AS excerpt, m.created_at
+             FROM messages_fts
+             JOIN messages m ON m.id = messages_fts.rowid
+             WHERE messages_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2"
+        };
+        fn map_row(r: &rusqlite::Row) -> rusqlite::Result<MessageMatch> {
             Ok(MessageMatch {
                 id: r.get(0)?,
                 role: r.get(1)?,
                 snippet: r.get(2)?,
                 created_at: r.get(3)?,
             })
-        })?;
+        }
+        let mut stmt = conn.prepare(sql)?;
+        let rows = if let Some(role) = role_filter {
+            stmt.query_map(rusqlite::params![fts_query, role, limit], map_row)?
+        } else {
+            stmt.query_map(rusqlite::params![fts_query, limit], map_row)?
+        };
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
         }
         Ok(out)
     }
-    inner(session_dir, &query, limit).unwrap_or_default()
+    inner(session_dir, &fts_query, limit, role_filter).unwrap_or_default()
 }
 
 #[cfg(test)]

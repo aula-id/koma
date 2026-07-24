@@ -76,6 +76,19 @@ impl PathPicker {
     }
 }
 
+/// Whether `raw` looks like an absolute path on any OS.
+/// Matches `/home/user`, `\Users\foo`, `C:\Users\foo`, `\\server\share`.
+fn is_abs_path(raw: &str) -> bool {
+    raw.starts_with('/')
+        || raw.starts_with('\\')
+        || (raw.len() >= 2 && raw.as_bytes().get(1) == Some(&b':'))
+}
+
+/// Position of the last path separator (either `/` or `\`), or `None`.
+fn last_sep(raw: &str) -> Option<usize> {
+    raw.rfind(['/', '\\'])
+}
+
 /// List directories for an `@`-style `query`, rendered in the same form the user
 /// is typing them, capped at `limit`.
 ///
@@ -97,11 +110,11 @@ impl PathPicker {
 pub fn list_dirs(query: &str, cwd: &Path, limit: usize) -> Vec<String> {
     // Strip an optional leading '@'; the rest is the path the user is typing.
     let raw = query.strip_prefix('@').unwrap_or(query);
-    let is_abs = raw.starts_with('/');
+    let is_abs = is_abs_path(raw);
 
     // Split into the directory part and the in-progress final segment (prefix).
     // A trailing '/' means the whole thing is the parent and the prefix is empty.
-    let (dir_part, prefix) = match raw.rfind('/') {
+    let (dir_part, prefix) = match last_sep(raw) {
         Some(i) => (&raw[..=i], &raw[i + 1..]), // keep the slash on dir_part
         None => ("", raw),                      // no slash: parent is cwd-relative root
     };
@@ -147,4 +160,59 @@ pub fn list_dirs(query: &str, cwd: &Path, limit: usize) -> Vec<String> {
     out.sort();
     out.truncate(limit);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_abs_path_unix() {
+        assert!(is_abs_path("/home/user"));
+    }
+
+    #[test]
+    fn is_abs_path_windows_drive() {
+        assert!(is_abs_path("C:\\Users\\foo"));
+    }
+
+    #[test]
+    fn is_abs_path_windows_unc() {
+        assert!(is_abs_path("\\\\server\\share"));
+    }
+
+    #[test]
+    fn is_abs_path_windows_backslash_root() {
+        assert!(is_abs_path("\\Users\\foo"));
+    }
+
+    #[test]
+    fn is_abs_path_relative_slash() {
+        assert!(!is_abs_path("src/main.rs"));
+    }
+
+    #[test]
+    fn is_abs_path_relative_backslash() {
+        assert!(!is_abs_path("src\\main.rs"));
+    }
+
+    #[test]
+    fn last_sep_forward_slash() {
+        assert_eq!(last_sep("src/main.rs"), Some(3));
+    }
+
+    #[test]
+    fn last_sep_backslash() {
+        assert_eq!(last_sep("src\\main.rs"), Some(3));
+    }
+
+    #[test]
+    fn last_sep_mixed() {
+        assert_eq!(last_sep("src/main\\file.rs"), Some(8));
+    }
+
+    #[test]
+    fn last_sep_no_slash() {
+        assert_eq!(last_sep("README.md"), None);
+    }
 }

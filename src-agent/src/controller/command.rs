@@ -53,7 +53,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/usage", "Show the cost and token usage dashboard"),
     ("/rename", "Rename the current session"),
-    ("/select", "Dump history to the terminal to copy/paste"),
+    ("/select", "Dump full history to terminal for native copy (viewport is already selectable)"),
     ("/help", "List the available commands"),
     ("/quit", "Quit koma"),
 ];

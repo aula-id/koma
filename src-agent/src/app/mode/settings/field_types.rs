@@ -29,6 +29,8 @@ pub enum SettingField {
     /// Toggle: internet-access tier — `simple` (DDG in-process) vs `full`
     /// (scrapion Firefox subprocess, higher token usage).
     InternetMode,
+    /// Toggle: mouse-capture mode — `auto` (touch detection) / `on` / `off`.
+    MouseCapture,
 }
 
 impl SettingField {
@@ -49,6 +51,7 @@ impl SettingField {
             SettingField::BashSaving => "Bash shorts",
             SettingField::CodingAutosave => "Coding autosave",
             SettingField::InternetMode => "Internet mode",
+            SettingField::MouseCapture => "Mouse capture",
         }
     }
 }
@@ -65,4 +68,5 @@ pub const GENERAL_FIELDS: &[SettingField] = &[
     SettingField::BashSaving,
     SettingField::CodingAutosave,
     SettingField::InternetMode,
+    SettingField::MouseCapture,
 ];
