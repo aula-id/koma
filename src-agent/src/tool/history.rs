@@ -1,11 +1,5 @@
 //! Chat history search tool: `message_find` queries the session's chat
-//! history. Tries SurrealDB first (hybrid search when synced, FTS-only
-//! fallback when not), then falls back to SQLite FTS5.
-//!
-//! The SurrealDB layer is a fire-and-forget background sync from the
-//! SQLite message log. Until the sync completes, SurrealDB returns empty
-//! or partial results — the tool transparently falls back to SQLite FTS5
-//! in that case, logging "Surreal Empty" to error.log for observability.
+//! history via SQLite FTS5 full-text search on `messages.sqlite`.
 
 use super::{Tool, ToolCtx};
 use anyhow::{bail, Result};
@@ -68,39 +62,18 @@ impl Tool for MessageFind {
             None => bail!("no active session to search"),
         };
 
-        // Try SurrealDB first. If it returns results, use those.
-        // If not (sync hasn't completed, or DB doesn't exist), fall back
-        // to SQLite FTS5 without logging any error — this is normal
-        // operation during sync.
-        let matches = {
-            let surreal_hits =
-                crate::model::surreal::search_messages(session_dir, query, 10, role_filter);
-            if !surreal_hits.is_empty() {
-                format_matches(
-                    surreal_hits
-                        .iter()
-                        .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at)),
-                )
-            } else {
-                // SurrealDB returned empty — log and transparent fallback to SQLite FTS5.
-                crate::model::store::append_global_error_log(
-                    "Surreal Empty",
-                    &format!("search_messages returned 0 hits for query: {query}"),
-                );
-                let fts5_hits =
-                    crate::model::msglog::search_messages(session_dir, query, 10, role_filter);
-                format_matches(
-                    fts5_hits
-                        .iter()
-                        .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at)),
-                )
-            }
-        };
+        let matches =
+            crate::model::msglog::search_messages(session_dir, query, 10, role_filter);
+        let out = format_matches(
+            matches
+                .iter()
+                .map(|m| (m.id, m.role.as_str(), m.snippet.as_str(), m.created_at)),
+        );
 
-        if matches.is_empty() {
+        if out.is_empty() {
             return Ok("(no matching messages found)".to_string());
         }
-        Ok(matches)
+        Ok(out)
     }
 }
 

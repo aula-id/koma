@@ -1,6 +1,5 @@
 //! Async streaming bridge: spawn / abort / finalize a request task.
 
-mod knowledge;
 mod run;
 mod spawn;
 mod tools;

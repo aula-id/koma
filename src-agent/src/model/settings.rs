@@ -360,56 +360,12 @@ pub struct Settings {
     /// field when the user calls `action="select"`.
     #[serde(default)]
     pub git_ssh_key: Option<String>,
-    /// Knowledge daemon integration — enables pre-send context injection
-    /// from the cross-session knowledge graph.
-    #[serde(default)]
-    pub knowledge: KnowledgeConfig,
     /// Mouse-capture mode for the TUI. `Auto` (default) enables capture on
     /// touch terminals (Termux) and disables it on desktop, so native terminal
     /// selection works. `On` / `Off` override the detection. Resolved once at
     /// session init and on settings save; not re-polled mid-session.
     #[serde(default)]
     pub mouse_capture: MouseCapture,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KnowledgeConfig {
-    /// Master switch. When false, no knowledge injection happens and no
-    /// post-response facts are extracted.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Cap the subgraph input to the awareness model (in tokens, approximate).
-    /// Lower = faster distillation, less context for the model to work with.
-    #[serde(default = "default_knowledge_max_input")]
-    pub max_input_tokens: usize,
-    /// Cap the awareness model's output note length.
-    #[serde(default = "default_knowledge_max_output")]
-    pub max_output_tokens: usize,
-    /// When true, use the awareness model to distill the subgraph into a
-    /// compact note. When false, inject raw fact listing instead.
-    #[serde(default = "default_true")]
-    pub use_awareness: bool,
-}
-
-impl Default for KnowledgeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_input_tokens: 6000,
-            max_output_tokens: 4000,
-            use_awareness: true,
-        }
-    }
-}
-
-fn default_true() -> bool {
-    true
-}
-fn default_knowledge_max_input() -> usize {
-    6000
-}
-fn default_knowledge_max_output() -> usize {
-    4000
 }
 
 fn default_model() -> String {
@@ -495,7 +451,6 @@ impl Default for Settings {
             internet_mode: InternetMode::Simple,
             session_models: Vec::new(),
             git_ssh_key: None,
-            knowledge: KnowledgeConfig::default(),
             mouse_capture: MouseCapture::default(),
         }
     }
