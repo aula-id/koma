@@ -600,42 +600,6 @@ pub fn write_mcp_daemon_pid() -> Result<()> {
     Ok(())
 }
 
-// ── Global knowledge daemon socket / pidfile ──────────────────────────
-
-/// Path to the GLOBAL knowledge daemon's Unix domain socket: `~/.koma/knowledge.sock`.
-///
-/// Like the MCP daemon, the knowledge daemon is a SINGLETON — one process owns the
-/// central RocksDB store at `~/.koma/knowledge/` and sessions push facts / query
-/// for graph expansion here. Whoever binds this socket IS the live knowledge daemon
-/// (bind-as-oracle, same rule as the session and MCP sockets).
-#[cfg(unix)]
-pub fn knowledge_daemon_sock_path() -> Result<PathBuf> {
-    Ok(base_dir()?.join("knowledge.sock"))
-}
-
-/// Windows twin of [`knowledge_daemon_sock_path`] — the singleton knowledge daemon
-/// named pipe `\\.\pipe\koma-knowledge`.
-#[cfg(windows)]
-pub fn knowledge_daemon_sock_path() -> Result<PathBuf> {
-    Ok(PathBuf::from(r"\\.\pipe\koma-knowledge"))
-}
-
-/// Path to the GLOBAL knowledge daemon's PID file: `~/.koma/knowledge.pid`.
-///
-/// Advisory only — recorded for diagnostics / `koma daemon kill`. Singleton, like
-/// the MCP daemon pidfile.
-pub fn knowledge_daemon_pid_path() -> Result<PathBuf> {
-    Ok(base_dir()?.join("knowledge.pid"))
-}
-
-/// Write the running knowledge daemon's PID into [`knowledge_daemon_pid_path`],
-/// overwriting any stale one. Best-effort + advisory — the bound socket, not this
-/// file, is the liveness oracle.
-pub fn write_knowledge_daemon_pid() -> Result<()> {
-    std::fs::write(knowledge_daemon_pid_path()?, std::process::id().to_string())?;
-    Ok(())
-}
-
 /// A stable identity string for the CURRENTLY-RUNNING executable, used as the
 /// daemon<->client build-skew handshake (task #142).
 ///

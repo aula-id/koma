@@ -29,5 +29,4 @@ pub mod session_lock;
 pub mod session_registry;
 pub mod settings;
 pub mod store;
-pub mod surreal;
 pub mod usage;

@@ -50,7 +50,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0.0.1-cache-rust"
+          prefix-key: "v0.0.2-cache-rust"
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Tests (agent)
@@ -76,7 +76,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0.0.1-cache-rust-lint"
+          prefix-key: "v0.0.2-cache-rust-lint"
           save-if: ${{ github.event_name != 'pull_request' }}
 
       # Formatting: non-gating until the tree is rustfmt-clean.
