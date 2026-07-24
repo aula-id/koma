@@ -64,7 +64,7 @@ pub(super) fn not_found_help(ctx: &ToolCtx, abs: &Path, rel: &str) -> String {
     let dir_label = if dir_rel.is_empty() {
         ".".to_string()
     } else {
-        format!("{dir_rel}/")
+        format!("{}/", dir_rel.replace('\\', "/"))
     };
 
     // List the ancestor's entries. Prefer the gitignore-aware cache; if it has

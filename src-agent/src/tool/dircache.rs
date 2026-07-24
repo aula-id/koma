@@ -107,7 +107,11 @@ pub fn reindex(roots: Vec<PathBuf>, cache: Arc<RwLock<DirCache>>) {
             for dent in walker.flatten() {
                 if dent.file_type().is_some_and(|t| t.is_file()) {
                     if let Ok(rel) = dent.path().strip_prefix(root) {
-                        let path = rel.to_string_lossy().into_owned();
+                        // Normalize to forward-slash protocol strings so
+                        // downstream rfind('/') / trim_end_matches('/') works
+                        // regardless of OS (the ignore crate yields native `\`
+                        // separators on Windows).
+                        let path = rel.to_string_lossy().replace('\\', "/");
                         if multi {
                             files.push(format!("[{i}]{path}"));
                         } else {
@@ -335,5 +339,64 @@ impl Tool for DirCacheUpdate {
     fn run(&self, ctx: &ToolCtx, _args: &Value) -> Result<String> {
         reindex(ctx.workspaces.clone(), ctx.dir_cache.clone());
         Ok("Re-indexing the workspace in the background.".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_slashes_in_stored_paths() {
+        let input = "src\\app\\main.rs";
+        let normalized = input.replace('\\', "/");
+        assert_eq!(normalized, "src/app/main.rs");
+    }
+
+    #[test]
+    fn compute_dirs_works_on_normalized_slashes() {
+        let files = vec![
+            "src/app/main.rs".into(),
+            "src/lib/mod.rs".into(),
+            "README.md".into(),
+        ];
+        let dirs = compute_dirs(&files);
+        assert!(dirs.contains(&"src/".to_string()));
+        assert!(dirs.contains(&"src/app/".to_string()));
+        assert!(dirs.contains(&"src/lib/".to_string()));
+        assert!(!dirs.contains(&"/".to_string()));
+    }
+
+    #[test]
+    fn compute_dirs_multi_root_prefixes() {
+        let files = vec![
+            "[0]src/main.rs".into(),
+            "[1]pkg/README.md".into(),
+        ];
+        let dirs = compute_dirs(&files);
+        assert!(dirs.contains(&"[0]src/".to_string()));
+        assert!(dirs.contains(&"[1]pkg/".to_string()));
+    }
+
+    #[test]
+    fn search_finds_after_normalize() {
+        let cache = DirCache {
+            files: vec![
+                "src/app/main.rs".into(),
+                "src/lib/mod.rs".into(),
+                "README.md".into(),
+            ],
+            dirs: compute_dirs(&[
+                "src/app/main.rs".into(),
+                "src/lib/mod.rs".into(),
+                "README.md".into(),
+            ]),
+            indexing: false,
+            missing_roots: Vec::new(),
+            version: 1,
+            memo: Mutex::new(SearchMemo::default()),
+        };
+        let results = cache.search("main", 10);
+        assert!(results.iter().any(|r| r.contains("main.rs")));
     }
 }

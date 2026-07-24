@@ -90,11 +90,13 @@ pub fn draw(frame: &mut Frame, rest: &AppStateRest, st: &HelpState, palette: &Pa
         ));
     }
     update_lines.push(Line::from(cur_spans));
-    // How to update.
-    update_lines.push(Line::from(Span::styled(
-        "  run  koma update  in your shell  (or  curl -fsSL https://koma.run/install.sh | sh )",
-        dim,
-    )));
+    // How to update — platform-specific installer hint.
+    let update_hint = if cfg!(windows) {
+        "  run  koma update  in your shell  (or  irm https://koma.run/install.ps1 | iex )"
+    } else {
+        "  run  koma update  in your shell  (or  curl -fsSL https://koma.run/install.sh | sh )"
+    };
+    update_lines.push(Line::from(Span::styled(update_hint, dim)));
     // Optional release message.
     if let Some((_, Some(msg))) = &st.update {
         update_lines.push(Line::from(Span::styled(format!("  {msg}"), dim)));

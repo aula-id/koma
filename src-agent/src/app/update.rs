@@ -11,25 +11,59 @@
 
 use anyhow::{anyhow, Result};
 
-// Only the unix `run_update` body below (which stops the daemon before
-// shelling out to the installer) needs this; the windows stub doesn't touch
-// the daemon at all, so it's gated the same way to avoid an unused-import
-// warning on a windows build.
-#[cfg(not(windows))]
 use crate::cli::DaemonSub;
 
-/// Windows: self-update is not implemented yet. The unix path below shells out
-/// to the `curl|sh`/`wget|sh` koma.run installer, which does not exist for
-/// Windows (no equivalent installer script is published), so rather than run
-/// something wrong we fail loudly with a clear next step.
+/// Windows self-update: stop the daemon, then launch the official `install.ps1`
+/// via PowerShell with a two-URL fallback chain.
 ///
-/// TODO(windows-port): implement a real Windows self-update (fetch the
-/// release zip/installer for this platform and replace the on-disk binary),
-/// then drop this stub in favor of a shared `run_update`.
+/// The script downloads the latest `koma-x64.msi` from GitHub and runs
+/// `msiexec /i` with a full UI (so UAC elevation can pop). WiX's
+/// `MajorUpgrade` element handles in-place upgrades.
 #[cfg(windows)]
 pub fn run_update() -> Result<()> {
+    // 1. Stop the daemon — same logic as the unix path.
+    println!("koma update: stopping daemon…");
+    let _ = super::run_daemon_subcommand(DaemonSub::Kill);
+
+    // 2. Fetch + run the PowerShell installer via two URL candidates.
+    println!("koma update: fetching latest installer…");
+
+    let ps_urls = [
+        "https://koma.run/install.ps1",
+        "https://raw.githubusercontent.com/aula-id/koma/main/install.ps1",
+    ];
+
+    let mut last_err = None;
+    for url in &ps_urls {
+        let ps_cmd = format!(
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm '{}' | iex",
+            url
+        );
+        match std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_cmd])
+            .status()
+        {
+            Ok(status) if status.success() => {
+                super::migrate_legacy_daemon();
+                println!("koma updated. Run 'koma' to start.");
+                return Ok(());
+            }
+            Ok(status) => {
+                last_err = Some(format!("installer exited with status {}", status.code().unwrap_or(-1)));
+            }
+            Err(e) => {
+                last_err = Some(format!("failed to launch PowerShell: {e}"));
+            }
+        }
+    }
+
     Err(anyhow!(
-        "self-update not supported on Windows yet; download the new installer from the releases page"
+        "could not download or run the installer from any source.\n\
+         {}\n\n\
+         You can update manually:\n\
+         1. Download koma-x64.msi from https://github.com/aula-id/koma/releases/latest\n\
+         2. Run the MSI installer",
+        last_err.as_deref().unwrap_or("unknown error")
     ))
 }
 
