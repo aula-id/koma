@@ -125,6 +125,10 @@ pub(crate) fn draw_general(
                 let v = st.internet_mode.as_str();
                 vec![Span::styled(v, Style::default().fg(palette.accent))]
             }
+            SettingField::MouseCapture => {
+                let v = st.mouse_capture.as_str();
+                vec![Span::styled(v, Style::default().fg(palette.accent))]
+            }
             _ => {
                 let raw: &str = match f {
                     SettingField::ApiKey => st.api_key.as_str(),

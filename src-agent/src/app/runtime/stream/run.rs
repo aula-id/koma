@@ -9,6 +9,13 @@ use crate::app::state::{AgentMode, AppState, AppStateRest};
 use crate::dto::chat::{ChatMessage, Role};
 use crate::service::openrouter::OpenRouterClient;
 
+/// Wire-only tool-nudge appended to the last User message on first hop.
+/// Never persisted — only mutates the local `history` Vec before POST.
+const TOOL_NUDGE: &str = "\n\nnote:\n\
+- If unsure, use web_search/web_fetch rather than guessing.\n\
+- If you need prior conversation context, use message_find.";
+
+
 /// Fully cancel the foreground session's in-flight turn before its conversation is
 /// cut/replaced: abort the stream task, drop the active receiver (so late events
 /// vanish), clear `waiting`, AND tear down the whole agentic round — approval,
@@ -258,42 +265,6 @@ over sec_remote (stateful socket).\n",
         .filter(|r| r.is_routable());
         (sess.path.clone(), sess.settings.clone(), user_intent, aware)
     });
-
-    // Knowledge context: captured pre-spawn, gathered inside the spawned task
-    // so daemon IPC (proxy_expand, up to 5s) never blocks the event loop.
-    let knowledge_session_path: Option<std::path::PathBuf> = state.rest.sessions[sess_idx]
-        .session
-        .as_ref()
-        .map(|s| s.path.clone());
-    let knowledge_cfg: Option<crate::model::settings::KnowledgeConfig> = state.rest.sessions
-        [sess_idx]
-        .session
-        .as_ref()
-        .map(|s| s.settings.knowledge.clone());
-    let knowledge_user_query: Option<String> = state.rest.sessions[sess_idx]
-        .session
-        .as_ref()
-        .and_then(|s| {
-            // Skip gather on tool hops (agent_steps > 0) to avoid re-querying
-            // with the same user string. Delta inject for tool hops will be
-            // added in a follow-up.
-            if state.rest.sessions[sess_idx].agent_steps > 0 {
-                return None;
-            }
-            let last_user = s.conversation.last_user_content();
-            if let Some(lu) = last_user {
-                // Enrich the query with recent context for multi-turn intent.
-                let recent = s.conversation.recent_context(4, 200);
-                let mut enriched = lu.clone();
-                if !recent.is_empty() {
-                    enriched.push_str("\n\n[Recent context]\n");
-                    enriched.push_str(&recent);
-                }
-                Some(enriched)
-            } else {
-                None
-            }
-        });
 
     // Resolve the model driving THIS turn: its connection (endpoint + key),
     // model id, upstream-route slug, and effort. EFFORT ISOLATION: effort flows
@@ -572,6 +543,7 @@ over sec_remote (stateful socket).\n",
         advertise.push("plan_enter".to_string());
     }
 
+    let agent_steps = state.rest.sessions[sess_idx].agent_steps;
     let (tx, rx) = mpsc::unbounded_channel();
     state.rest.sessions[sess_idx].active_rx = Some(rx);
     let Some(c) = client.as_ref().cloned() else {
@@ -581,37 +553,13 @@ over sec_remote (stateful socket).\n",
         return;
     };
     let jh = handle.spawn(async move {
-        // Knowledge gather + distill: runs inside the spawned task so daemon IPC
-        // (proxy_expand, up to 5s timeout) never blocks the event loop.
-        // spawn_blocking moves the sync gather (which internally calls
-        // blocking_block → new thread + tokio runtime + SurrealDB open) onto
-        // the dedicated blocking thread pool, so it never stalls a tokio worker
-        // thread or races with the main runtime's SurrealDB connections.
-        let knowledge_facts = match (
-            &knowledge_session_path,
-            &knowledge_cfg,
-            &knowledge_user_query,
-        ) {
-            (Some(path), Some(cfg), Some(query)) => {
-                let p = path.clone();
-                let c = cfg.clone();
-                let q = query.clone();
-                tokio::task::spawn_blocking(move || super::knowledge::gather(&p, &c, &q))
-                    .await
-                    .ok()
-                    .flatten()
-            }
-            _ => None,
-        };
-        if let Some(kfacts) = knowledge_facts.as_ref() {
-            // Mechanical top-N-by-trust injection — no AI inference, instant.
-            let note = super::knowledge::raw_note(kfacts);
-            if !note.is_empty() {
-                if let Some(first) = history.first_mut() {
-                    if first.role == crate::dto::chat::Role::System {
-                        first.content.push_str(&note);
-                    }
-                }
+        // Wire-only first-hop tool nudge: append a note to the last User
+        // message ONLY on the first dispatch of an agentic round. Never
+        // persisted to msglog, UI, or messages.json — this mutates the local
+        // `history` Vec only.
+        if agent_steps == 0 {
+            if let Some(msg) = history.iter_mut().rev().find(|m| m.role == Role::User) {
+                msg.content.push_str(TOOL_NUDGE);
             }
         }
 

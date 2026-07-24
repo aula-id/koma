@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use crate::model::app_config::{AppConfig, ThemeMode};
 use crate::model::session::Session;
-use crate::model::settings::InternetMode;
+use crate::model::settings::{InternetMode, MouseCapture};
 use crate::view::theme::ACCENTS;
 
 use super::super::SettingField;
@@ -84,6 +84,8 @@ pub struct SettingsState {
     pub coding_autosave: bool,
     /// Draft: internet-access tier toggle.
     pub internet_mode: InternetMode,
+    /// Draft: mouse-capture mode toggle.
+    pub mouse_capture: MouseCapture,
     /// The session's effective working directory, captured at construction. Used
     /// as the base for resolving workspace-relative paths in the FS picker.
     pub cwd: PathBuf,
@@ -261,6 +263,7 @@ impl SettingsState {
             bash_saving: session.settings.bash_saving,
             coding_autosave: session.settings.coding_autosave,
             internet_mode: session.settings.internet_mode,
+            mouse_capture: session.settings.mouse_capture,
             cwd: effective_cwd,
             list_editing: false,
             list_sel: 0,
@@ -333,6 +336,9 @@ impl SettingsState {
             }
             SettingField::InternetMode => {
                 self.internet_mode = self.internet_mode.toggled();
+            }
+            SettingField::MouseCapture => {
+                self.mouse_capture = self.mouse_capture.toggled();
             }
             SettingField::Workdir | SettingField::AllowedFolders => {
                 self.list_editing = true;

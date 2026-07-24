@@ -159,6 +159,56 @@ impl std::fmt::Display for InternetMode {
     }
 }
 
+/// Controls mouse-capture behaviour for the TUI.
+///
+/// On touch terminals (Termux), mouse capture is needed for scroll gestures.
+/// On desktop, capture should stay OFF so native terminal selection works.
+/// `Auto` detects the environment once at startup; the user can override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseCapture {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl MouseCapture {
+    /// Lowercase label / wire token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+
+    /// Cycle to the next variant: Auto → On → Off → Auto.
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Auto => Self::On,
+            Self::On => Self::Off,
+            Self::Off => Self::Auto,
+        }
+    }
+
+    /// Resolve `Auto` based on environment detection (TERMUX_VERSION).
+    /// `On` / `Off` pass through unchanged.
+    pub fn resolved(self) -> bool {
+        match self {
+            Self::Auto => true,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
+impl std::fmt::Display for MouseCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Per-session user-configurable settings.
 ///
 /// Deserialized from (and serialized to) `<session_dir>/settings.json`.
@@ -310,50 +360,12 @@ pub struct Settings {
     /// field when the user calls `action="select"`.
     #[serde(default)]
     pub git_ssh_key: Option<String>,
-    /// Knowledge daemon integration — enables pre-send context injection
-    /// from the cross-session knowledge graph.
+    /// Mouse-capture mode for the TUI. `Auto` (default) enables capture on
+    /// touch terminals (Termux) and disables it on desktop, so native terminal
+    /// selection works. `On` / `Off` override the detection. Resolved once at
+    /// session init and on settings save; not re-polled mid-session.
     #[serde(default)]
-    pub knowledge: KnowledgeConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KnowledgeConfig {
-    /// Master switch. When false, no knowledge injection happens and no
-    /// post-response facts are extracted.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Cap the subgraph input to the awareness model (in tokens, approximate).
-    /// Lower = faster distillation, less context for the model to work with.
-    #[serde(default = "default_knowledge_max_input")]
-    pub max_input_tokens: usize,
-    /// Cap the awareness model's output note length.
-    #[serde(default = "default_knowledge_max_output")]
-    pub max_output_tokens: usize,
-    /// When true, use the awareness model to distill the subgraph into a
-    /// compact note. When false, inject raw fact listing instead.
-    #[serde(default = "default_true")]
-    pub use_awareness: bool,
-}
-
-impl Default for KnowledgeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_input_tokens: 6000,
-            max_output_tokens: 4000,
-            use_awareness: true,
-        }
-    }
-}
-
-fn default_true() -> bool {
-    true
-}
-fn default_knowledge_max_input() -> usize {
-    6000
-}
-fn default_knowledge_max_output() -> usize {
-    4000
+    pub mouse_capture: MouseCapture,
 }
 
 fn default_model() -> String {
@@ -439,7 +451,7 @@ impl Default for Settings {
             internet_mode: InternetMode::Simple,
             session_models: Vec::new(),
             git_ssh_key: None,
-            knowledge: KnowledgeConfig::default(),
+            mouse_capture: MouseCapture::default(),
         }
     }
 }

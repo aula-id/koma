@@ -684,29 +684,41 @@ fn check_extensions() -> CheckResult {
 // ─── 6. Internet full-mode ──────────────────────────────────────────────────
 
 fn check_internet_fullmode() -> CheckResult {
-    let mut details = Vec::new();
-    let python3 = std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    details.push(format!(
-        "python3 on PATH: {}",
-        if python3 { "yes" } else { "no" }
-    ));
-
-    if crate::internet::is_installed() {
-        CheckResult {
-            status: Status::Ok,
-            headline: "Internet full-mode (installed)".to_string(),
-            details,
-        }
-    } else {
-        details.push("optional — install with: koma --internet-fullmode-install".to_string());
-        CheckResult {
+    #[cfg(windows)]
+    {
+        return CheckResult {
             status: Status::Warn,
-            headline: "Internet full-mode (optional, not installed)".to_string(),
-            details,
+            headline: "Internet full-mode (not supported on Windows)".to_string(),
+            details: Vec::new(),
+        };
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut details = Vec::new();
+        let python3 = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        details.push(format!(
+            "python3 on PATH: {}",
+            if python3 { "yes" } else { "no" }
+        ));
+
+        if crate::internet::is_installed() {
+            CheckResult {
+                status: Status::Ok,
+                headline: "Internet full-mode (installed)".to_string(),
+                details,
+            }
+        } else {
+            details.push("optional — install with: koma --internet-fullmode-install".to_string());
+            CheckResult {
+                status: Status::Warn,
+                headline: "Internet full-mode (optional, not installed)".to_string(),
+                details,
+            }
         }
     }
 }
@@ -714,13 +726,25 @@ fn check_internet_fullmode() -> CheckResult {
 // ─── 7. Security daemon ─────────────────────────────────────────────────────
 
 fn check_security_daemon() -> CheckResult {
-    if crate::security::is_installed() {
-        CheckResult::ok("Security daemon (optional, installed)")
-    } else {
-        CheckResult::warn(
-            "Security daemon (optional, not installed)",
-            vec!["optional — install with: koma --security-install".to_string()],
-        )
+    #[cfg(windows)]
+    {
+        return CheckResult {
+            status: Status::Warn,
+            headline: "Security daemon (not supported on Windows)".to_string(),
+            details: Vec::new(),
+        };
+    }
+
+    #[cfg(not(windows))]
+    {
+        if crate::security::is_installed() {
+            CheckResult::ok("Security daemon (optional, installed)")
+        } else {
+            CheckResult::warn(
+                "Security daemon (optional, not installed)",
+                vec!["optional — install with: koma --security-install".to_string()],
+            )
+        }
     }
 }
 

@@ -288,7 +288,15 @@ pub(super) fn generate_key(name: &str, comment: &str) -> KeyOpResult {
         return op_err(OP, "invalid path encoding");
     };
     match ssh_keygen_cmd(&["-t", "ed25519", "-f", priv_str, "-N", "", "-C", &comment]) {
-        Some(out) if out.status.success() => op_ok(OP),
+        Some(out) if out.status.success() => {
+            #[cfg(windows)]
+            if let Err(e) = crate::model::win_acl::restrict_owner_only(&priv_path) {
+                let _ = std::fs::remove_file(&priv_path);
+                let _ = std::fs::remove_file(dir.join(format!("{name}.pub")));
+                return op_err(OP, format!("could not restrict key file permissions: {e}"));
+            }
+            op_ok(OP)
+        }
         Some(out) => op_err(OP, keygen_failure(&out, "ssh-keygen failed")),
         None => op_err(OP, "failed to run ssh-keygen"),
     }
@@ -334,9 +342,6 @@ pub(super) fn import_key(name: &str, private_key: &str) -> KeyOpResult {
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
         // Create with 0600 from the start (no create-then-chmod TOCTOU window).
-        // TODO(windows-port, phase B3: restrict ACLs so the private key file
-        // isn't inherited-permissive) — Windows has no unix permission bits;
-        // a real port needs a security-descriptor/ACL equivalent at create time.
         #[cfg(unix)]
         opts.mode(0o600);
         let file = opts.open(&priv_path);
@@ -349,6 +354,12 @@ pub(super) fn import_key(name: &str, private_key: &str) -> KeyOpResult {
             }
             Err(e) => return op_err(OP, format!("could not write key: {e}")),
         }
+    }
+
+    #[cfg(windows)]
+    if let Err(e) = crate::model::win_acl::restrict_owner_only(&priv_path) {
+        let _ = std::fs::remove_file(&priv_path);
+        return op_err(OP, format!("could not restrict key file permissions: {e}"));
     }
 
     let Some(priv_str) = priv_path.to_str() else {

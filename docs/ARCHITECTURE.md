@@ -67,7 +67,8 @@ tick
  │       timeout: 8 ms while waiting, 100 ms idle
  │       drain-all-on-tick: inner poll(Duration::ZERO) loop
  │       Key → controller::input::handle_key → Action → apply_action
- │       Mouse (ScrollUp/Down) → scroll transcript in Chat mode
+ │       Mouse: native terminal selection (capture off by default;
+│              PageUp/PageDown scroll; QuitConfirm re-enables capture)
  │       Resize → dirty = true
  │       Paste → controller::input::handle_paste
  └─ 3. Draw if dirty (view::draw)

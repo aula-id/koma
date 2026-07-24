@@ -45,7 +45,13 @@ curl -fsSL https://koma.run/install.sh | sh
 
 Installs to `~/.local/bin` — no sudo required. Then run `koma` and start a session.
 
-Works on Linux, macOS, and Windows. On Windows, run that same command from a Git Bash terminal — it installs `koma.exe`. Windows needs [Git for Windows](https://git-scm.com/download/win) (koma's shell tool runs commands through Git Bash).
+Works on Linux, macOS, and Windows. On Windows, use the PowerShell installer — it downloads and runs the MSI directly, no Git Bash required:
+
+```powershell
+irm https://koma.run/install.ps1 | iex
+```
+
+The MSI is the canonical Windows package. Security tools and full-internet/research mode are not supported on Windows.
 
 ### Desktop GUI (optional)
 
@@ -53,7 +59,7 @@ The `koma gui` desktop client (a wry webview hosting xterm.js) is behind the `gu
 
 - **macOS** — the install.sh binary already has `gui` baked in; `koma gui` just works.
 - **Linux** — the raw install.sh binary is GUI-featured but requires `libwebkit2gtk-4.1-0` and `libgtk-3-0` at runtime. On Linux, install.sh ships a launcher (`koma`) that checks for these libraries and prints install commands if they are missing. If you prefer a package that handles dependencies automatically, grab the `.deb` or `.AppImage` instead; both are `gui`-featured and add a desktop entry that launches straight into `koma gui`. Prebuilt Linux binaries target **glibc 2.35 (Ubuntu 22.04 LTS)** and run on 22.04 and all newer releases.
-- **Windows** — the `.msi` installer is the GUI build (it installs the WebView2 runtime for you if it's missing; WebView2 ships with Windows 11 and most patched Windows 10 machines already). The raw `koma-windows-x64.exe` from install.sh is TUI-only.
+- **Windows** — `irm https://koma.run/install.ps1 | iex` installs the `.msi` (GUI build with WebView2 runtime bundled). WebView2 ships with Windows 11 and most patched Windows 10 machines already. Security tools and full-internet/research mode are not supported on Windows.
 
 Grab the platform installer from the [latest release](https://github.com/aula-id/koma/releases/latest): `koma-x64.deb` / `koma-arm64.deb`, `koma-x64.AppImage` / `koma-arm64.AppImage`, `koma-x64.msi`.
 

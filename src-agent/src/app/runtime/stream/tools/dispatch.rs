@@ -271,24 +271,6 @@ pub(super) fn finish_tool_round(
     // The tool round is done; this re-stream is a model wait, so label it the same
     // "thinking" phase the comet sweeps (not a tool run).
     state.rest.sessions[sess_idx].status = "thinking".into();
-    // Extract facts from tool results (fire-and-forget, non-blocking).
-    if state.rest.sessions[sess_idx]
-        .session
-        .as_ref()
-        .is_some_and(|s| s.settings.knowledge.enabled)
-    {
-        let Some(sd) = state.rest.sessions[sess_idx]
-            .session
-            .as_ref()
-            .map(|s| s.path.clone())
-        else {
-            return;
-        };
-        let results: Vec<(String, String)> = cleaned_results.clone();
-        handle.spawn_blocking(move || {
-            super::super::turn::extract_from_tool_results(&sd, &results);
-        });
-    }
     state.rest.sessions[sess_idx].begin_stream();
     super::super::run::start_stream_task(history, state, sess_idx, client, handle);
 }
