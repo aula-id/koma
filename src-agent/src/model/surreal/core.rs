@@ -25,7 +25,12 @@ static EMBEDDER: OnceLock<Option<TextEmbedding>> = OnceLock::new();
 fn get_embedder() -> Option<&'static TextEmbedding> {
     EMBEDDER
         .get_or_init(|| {
-            TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15))
+            let cache_dir = crate::model::store::base_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("fastembed_cache");
+            TextEmbedding::try_new(
+                InitOptions::new(EmbeddingModel::BGESmallENV15).with_cache_dir(cache_dir),
+            )
                 .inspect_err(|e| {
                     crate::model::store::append_global_error_log(
                         "fastembed init failed",

@@ -36,7 +36,15 @@ pub struct MessageMatch {
 /// state. If the SurrealDB mirror is synced, runs hybrid search (FTS5 +
 /// vector cosine via RRF). If syncing or not yet started, falls back to
 /// pure FTS5 on SurrealDB. If the DB file doesn't exist, returns empty.
-pub fn search_messages(session_dir: &Path, query: &str, limit: usize) -> Vec<MessageMatch> {
+///
+/// `role_filter` optionally restricts results to a specific role ("user",
+/// "assistant", "tool"). Pass `None` to search all roles.
+pub fn search_messages(
+    session_dir: &Path,
+    query: &str,
+    limit: usize,
+    role_filter: Option<&str>,
+) -> Vec<MessageMatch> {
     let q = query.trim();
     if q.is_empty() {
         return Vec::new();
@@ -46,13 +54,13 @@ pub fn search_messages(session_dir: &Path, query: &str, limit: usize) -> Vec<Mes
         return Vec::new();
     }
     match sync_state(session_dir) {
-        SyncState::Done => search_hybrid(session_dir, q, limit),
+        SyncState::Done => search_hybrid(session_dir, q, limit, role_filter),
         SyncState::Unsynced => {
             // Kick off background sync so future searches use hybrid mode.
             core::start_sync(session_dir);
-            search_fts_only(session_dir, q, limit)
+            search_fts_only(session_dir, q, limit, role_filter)
         }
-        SyncState::Syncing => search_fts_only(session_dir, q, limit),
+        SyncState::Syncing => search_fts_only(session_dir, q, limit, role_filter),
     }
 }
 
@@ -65,14 +73,14 @@ mod tests {
     fn test_search_messages_empty_query() {
         let tmp = std::env::temp_dir().join("koma_test_surreal_mod");
         let _ = std::fs::create_dir_all(&tmp);
-        assert!(search_messages(&tmp, "   ", 10).is_empty());
+        assert!(search_messages(&tmp, "   ", 10, None).is_empty());
     }
 
     #[test]
     fn test_search_messages_no_db() {
         let tmp = std::env::temp_dir().join("koma_test_surreal_mod_nodb");
         let _ = std::fs::create_dir_all(&tmp);
-        assert!(search_messages(&tmp, "hello", 10).is_empty());
+        assert!(search_messages(&tmp, "hello", 10, None).is_empty());
     }
 
     #[test]

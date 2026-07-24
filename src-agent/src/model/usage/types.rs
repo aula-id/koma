@@ -17,7 +17,11 @@ pub fn local_utc_offset_secs() -> i64 {
 /// `GetTimeZoneInformation`. Falls back to 0 (UTC) on error.
 #[cfg(windows)]
 pub fn local_utc_offset_secs() -> i64 {
-    use windows_sys::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_ID_DAYLIGHT};
+    use windows_sys::Win32::System::Time::GetTimeZoneInformation;
+    // GetTimeZoneInformation return values (not all exported by windows-sys 0.59
+    // in Win32::System::Time — they live in Win32::System::SystemServices which
+    // pulls in a massive feature; define inline instead).
+    const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
     unsafe {
         let mut tzi = std::mem::MaybeUninit::uninit();
         let state = GetTimeZoneInformation(tzi.as_mut_ptr());

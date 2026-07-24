@@ -97,9 +97,11 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
 /// 5. Create the venv.
 /// 6. Install Python deps from `requirements.txt`.
 /// 7. Install Firefox via Playwright.
+#[allow(unreachable_code)]
 pub fn install(force: bool) -> Result<()> {
     #[cfg(windows)]
     {
+        let _ = force;
         anyhow::bail!("full internet / research mode is not supported on Windows");
     }
 

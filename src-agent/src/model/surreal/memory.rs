@@ -706,9 +706,17 @@ mod tests {
         // trigger near-duplicate detection. This is correct engine behavior.
         let _ = store_fact(&dir, "Python is used for ML", "tech", 0.8);
 
-        // RocksDB must make store_fact visible to recall_memory.
+        // RocksDB HNSW index may need a moment after the first INSERT to make
+        // the record searchable via KNN. Retry a few times with backoff.
         let qv = embed_one("systems programming language Rust");
-        let facts = recall_memory(&dir, &qv, 5);
+        let mut facts = Vec::new();
+        for attempt in 0..5 {
+            facts = recall_memory(&dir, &qv, 5);
+            if !facts.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1)));
+        }
         assert!(!facts.is_empty(), "RocksDB must make store_fact visible to recall_memory");
         assert!(
             facts.iter().any(|f| f.content.contains("Rust")),

@@ -10,26 +10,35 @@ use super::core::{self, embed_one, open_db};
 use super::MessageMatch;
 
 /// Hybrid search: FTS5 (BM25) + KNN vector, fused with RRF.
-pub fn search_hybrid(session_dir: &Path, query: &str, limit: usize) -> Vec<MessageMatch> {
+pub fn search_hybrid(
+    session_dir: &Path,
+    query: &str,
+    limit: usize,
+    role_filter: Option<&str>,
+) -> Vec<MessageMatch> {
     let q = query.trim();
     if q.is_empty() {
         return Vec::new();
     }
     let sd = session_dir.to_path_buf();
     let q_owned = q.to_string();
+    let role_owned = role_filter.map(|s| s.to_string());
     let lim = limit.min(100) as i64;
     core::blocking_block(move || {
         let sd = sd.clone();
         let q = q_owned.clone();
+        let role = role_owned.clone();
         async move {
-            search_hybrid_async(&sd, &q, lim).await.unwrap_or_else(|e| {
-                crate::model::store::append_error_log(
-                    &sd,
-                    "surreal::search_hybrid failed",
-                    &e.to_string(),
-                );
-                Vec::new()
-            })
+            search_hybrid_async(&sd, &q, lim, role.as_deref())
+                .await
+                .unwrap_or_else(|e| {
+                    crate::model::store::append_error_log(
+                        &sd,
+                        "surreal::search_hybrid failed",
+                        &e.to_string(),
+                    );
+                    Vec::new()
+                })
         }
     })
     .unwrap_or_default()
@@ -39,20 +48,27 @@ async fn search_hybrid_async(
     session_dir: &Path,
     query: &str,
     limit: i64,
+    role_filter: Option<&str>,
 ) -> anyhow::Result<Vec<MessageMatch>> {
     let db = open_db(session_dir).await?;
     let query_vec = embed_one(query);
 
-    // FTS query
-    let mut fts_res = db
-        .query(
-            "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
-             FROM message WHERE content @@ $query
-             ORDER BY search::score(content) DESC LIMIT $limit",
-        )
-        .bind(("query", query.to_string()))
-        .bind(("limit", limit))
-        .await?;
+    // FTS query — with optional role filter.
+    let fts_sql = if role_filter.is_some() {
+        "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
+         FROM message WHERE content @@ $query AND role = $role
+         ORDER BY search::score(content) DESC LIMIT $limit"
+    } else {
+        "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
+         FROM message WHERE content @@ $query
+         ORDER BY search::score(content) DESC LIMIT $limit"
+    };
+    let mut fts_res = db.query(fts_sql).bind(("query", query.to_string()));
+    if let Some(role) = role_filter {
+        let role = role.to_string();
+        fts_res = fts_res.bind(("role", role));
+    }
+    let mut fts_res = fts_res.bind(("limit", limit)).await?;
 
     let ids: Vec<i64> = fts_res.take("sqlite_id").unwrap_or_default();
     let roles: Vec<String> = fts_res.take("role").unwrap_or_default();
@@ -72,16 +88,22 @@ async fn search_hybrid_async(
         })
         .collect();
 
-    // Vector query
-    let mut vec_res = db
-        .query(
-            "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
-             FROM message WHERE embedding <|100|> $query_vec
-             LIMIT $limit",
-        )
-        .bind(("query_vec", query_vec.clone()))
-        .bind(("limit", limit))
-        .await?;
+    // Vector query — with optional role filter.
+    let vec_sql = if role_filter.is_some() {
+        "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
+         FROM message WHERE embedding <|100|> $query_vec AND role = $role
+         LIMIT $limit"
+    } else {
+        "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
+         FROM message WHERE embedding <|100|> $query_vec
+         LIMIT $limit"
+    };
+    let mut vec_res = db.query(vec_sql).bind(("query_vec", query_vec.clone()));
+    if let Some(role) = role_filter {
+        let role = role.to_string();
+        vec_res = vec_res.bind(("role", role));
+    }
+    let mut vec_res = vec_res.bind(("limit", limit)).await?;
 
     let v_ids: Vec<i64> = vec_res.take("sqlite_id").unwrap_or_default();
     let v_roles: Vec<String> = vec_res.take("role").unwrap_or_default();
@@ -105,19 +127,26 @@ async fn search_hybrid_async(
 }
 
 /// FTS5-only fallback — no vectors.
-pub fn search_fts_only(session_dir: &Path, query: &str, limit: usize) -> Vec<MessageMatch> {
+pub fn search_fts_only(
+    session_dir: &Path,
+    query: &str,
+    limit: usize,
+    role_filter: Option<&str>,
+) -> Vec<MessageMatch> {
     let q = query.trim();
     if q.is_empty() {
         return Vec::new();
     }
     let sd = session_dir.to_path_buf();
     let q_owned = q.to_string();
+    let role_owned = role_filter.map(|s| s.to_string());
     let lim = limit.min(100) as i64;
     core::blocking_block(move || {
         let sd = sd.clone();
         let q = q_owned.clone();
+        let role = role_owned.clone();
         async move {
-            search_fts_only_async(&sd, &q, lim)
+            search_fts_only_async(&sd, &q, lim, role.as_deref())
                 .await
                 .unwrap_or_else(|e| {
                     crate::model::store::append_error_log(
@@ -136,17 +165,24 @@ async fn search_fts_only_async(
     session_dir: &Path,
     query: &str,
     limit: i64,
+    role_filter: Option<&str>,
 ) -> anyhow::Result<Vec<MessageMatch>> {
     let db = open_db(session_dir).await?;
-    let mut results = db
-        .query(
-            "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
-             FROM message WHERE content @@ $query
-             ORDER BY search::score(content) DESC LIMIT $limit",
-        )
-        .bind(("query", query.to_string()))
-        .bind(("limit", limit))
-        .await?;
+    let sql = if role_filter.is_some() {
+        "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
+         FROM message WHERE content @@ $query AND role = $role
+         ORDER BY search::score(content) DESC LIMIT $limit"
+    } else {
+        "SELECT sqlite_id, role, string::slice(content, 0, 300) AS snippet, created_at
+         FROM message WHERE content @@ $query
+         ORDER BY search::score(content) DESC LIMIT $limit"
+    };
+    let mut results = db.query(sql).bind(("query", query.to_string()));
+    if let Some(role) = role_filter {
+        let role = role.to_string();
+        results = results.bind(("role", role));
+    }
+    let mut results = results.bind(("limit", limit)).await?;
 
     let ids: Vec<i64> = results.take("sqlite_id").unwrap_or_default();
     let roles: Vec<String> = results.take("role").unwrap_or_default();
@@ -252,6 +288,6 @@ mod tests {
     fn test_search_fts_only_empty_query() {
         let tmp = std::env::temp_dir().join("koma_test_surreal_fts");
         let _ = std::fs::create_dir_all(&tmp);
-        assert!(search_fts_only(&tmp, "   ", 10).is_empty());
+        assert!(search_fts_only(&tmp, "   ", 10, None).is_empty());
     }
 }

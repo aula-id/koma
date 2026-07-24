@@ -95,7 +95,7 @@ fn search_messages_single_term_finds_match() {
     append(dir.path(), Role::User, "hello world", None).unwrap();
     append(dir.path(), Role::Assistant, "goodbye", Some((10, 5, 0.0))).unwrap();
 
-    let hits = search_messages(dir.path(), "hello", 10);
+    let hits = search_messages(dir.path(), "hello", 10, None);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].role, "user");
     assert!(
@@ -119,7 +119,7 @@ fn search_messages_multi_term_or_finds_any_match() {
     append(dir.path(), Role::User, "unrelated text here", None).unwrap();
 
     // "fox zebra" -> fox* OR zebra* -> should match message 1 but not 2 or 3.
-    let hits = search_messages(dir.path(), "fox zebra", 10);
+    let hits = search_messages(dir.path(), "fox zebra", 10, None);
     assert_eq!(hits.len(), 1, "only fox matches");
     assert_eq!(hits[0].role, "user");
 }
@@ -143,7 +143,7 @@ fn search_messages_or_ranks_multiple_hits() {
     .unwrap();
     append(dir.path(), Role::User, "nothing to see here", None).unwrap();
 
-    let hits = search_messages(dir.path(), "security", 10);
+    let hits = search_messages(dir.path(), "security", 10, None);
     assert_eq!(hits.len(), 2);
     for h in &hits {
         assert!(
@@ -158,7 +158,7 @@ fn search_messages_no_match_returns_empty() {
     let dir = TempDir::new("fts-nomatch");
     append(dir.path(), Role::User, "hello", None).unwrap();
 
-    let hits = search_messages(dir.path(), "zzznotexist", 10);
+    let hits = search_messages(dir.path(), "zzznotexist", 10, None);
     assert!(hits.is_empty());
 }
 
@@ -174,7 +174,7 @@ fn search_messages_strips_fts5_syntax_chars() {
     .unwrap();
 
     // Parentheses and asterisks should be stripped so the query doesn't error.
-    let hits = search_messages(dir.path(), "FOO*", 10);
+    let hits = search_messages(dir.path(), "FOO*", 10, None);
     assert!(!hits.is_empty());
     assert!(hits[0].snippet.contains("FOO"));
 }
