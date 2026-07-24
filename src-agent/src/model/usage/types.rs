@@ -13,13 +13,23 @@ pub fn local_utc_offset_secs() -> i64 {
     }
 }
 
-/// TODO(windows-port: GetTimeZoneInformation). Windows has no `localtime_r`/
-/// `tm_gmtoff`; a real implementation needs `GetTimeZoneInformation` (accounting
-/// for DST via `GetDynamicTimeZoneInformation` or `TIME_ZONE_ID_DAYLIGHT`).
-/// Conservative stub: report UTC (0 offset) rather than guess.
+/// Returns the local timezone offset in seconds east of UTC using Win32
+/// `GetTimeZoneInformation`. Falls back to 0 (UTC) on error.
 #[cfg(windows)]
 pub fn local_utc_offset_secs() -> i64 {
-    0
+    use windows_sys::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_ID_DAYLIGHT};
+    unsafe {
+        let mut tzi = std::mem::MaybeUninit::uninit();
+        let state = GetTimeZoneInformation(tzi.as_mut_ptr());
+        let tzi = tzi.assume_init();
+        // Windows Bias is minutes west of UTC; we need seconds east of UTC.
+        let bias_min = if state == TIME_ZONE_ID_DAYLIGHT {
+            tzi.Bias as i64 + tzi.DaylightBias as i64
+        } else {
+            tzi.Bias as i64 + tzi.StandardBias as i64
+        };
+        -bias_min * 60
+    }
 }
 
 // ── Read-only query types ────────────────────────────────────────────────────

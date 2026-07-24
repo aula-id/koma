@@ -169,7 +169,7 @@ impl SettingsState {
         let cwd = self.cwd.clone();
         if let Some(p) = self.picker.as_mut() {
             if let Some(sel) = p.selected().cloned() {
-                p.query = format!("{sel}/");
+                p.query = format!("{sel}{}", std::path::MAIN_SEPARATOR);
                 p.sel = 0;
                 p.recompute(&cwd);
             }

@@ -98,6 +98,11 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
 /// 6. Install Python deps from `requirements.txt`.
 /// 7. Install Firefox via Playwright.
 pub fn install(force: bool) -> Result<()> {
+    #[cfg(windows)]
+    {
+        anyhow::bail!("full internet / research mode is not supported on Windows");
+    }
+
     // Step 1: verify python3 is available.
     let py3_ok = std::process::Command::new("python3")
         .arg("--version")

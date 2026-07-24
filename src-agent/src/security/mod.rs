@@ -94,6 +94,11 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
 /// 5. Create the venv.
 /// 6. Install Python deps from `requirements.txt`.
 pub fn install(force: bool) -> Result<()> {
+    #[cfg(windows)]
+    {
+        anyhow::bail!("security mode is not supported on Windows");
+    }
+
     // Step 1: verify python3 is available.
     let py3_ok = std::process::Command::new("python3")
         .arg("--version")
