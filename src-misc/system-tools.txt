@@ -174,10 +174,13 @@ forget — delete a saved memory by its "slug" (as listed in the memory index).
   No-op if the slug doesn't exist.
 
 message_find — search the session's chat history (messages.sqlite) for past
-  conversation turns matching the query. Uses full-text search (FTS5). Returns up
-  to 10 ranked snippets with message id, role, and content context.
+  conversation turns matching the query. Tries SurrealDB hybrid search (FTS5 + vector
+  cosine) first, falls back to SQLite FTS5. Returns up to 10 results with [role] prefix,
+  message id, and the first 300 characters of matching content for coherent context.
   Arguments: { "query": "search terms" }
+  Optional: { "role": "user|assistant|tool" } — filter to a specific role.
   Example:   message_find({"query": "FS5"})
+  Example:   message_find({"query": "blocking code", "role": "assistant"})
   WHEN TO USE:
   - You are confused, missing context, or unsure about a past decision, error,
     tradeoff, or fact that may have scrolled out of the context window — call

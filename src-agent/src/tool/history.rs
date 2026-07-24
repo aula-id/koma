@@ -23,8 +23,10 @@ impl Tool for MessageFind {
     fn description(&self) -> &'static str {
         "Search the current session's chat history (messages.sqlite) for past \
          conversation turns matching the query. Uses full-text search (FTS5). \
-         Returns up to 10 ranked snippets with message id, role, and content \
-         context. Call this when you are confused or missing context about a \
+         Returns up to 10 ranked results with message id, role, and the first \
+         300 characters of the matching message for coherent context. \
+         Optionally filter by role (user, assistant, tool). \
+         Call this when you are confused or missing context about a \
          past decision, error, tradeoff, or fact that may have scrolled out of \
          the context window — before guessing. Also call it when the user \
          explicitly asks you to recall, look up, find, or check something from \
@@ -38,6 +40,11 @@ impl Tool for MessageFind {
                 "query": {
                     "type": "string",
                     "description": "Search terms to find in past messages. Multi-word queries are OR'd as prefix matches (e.g. \"foo bar\" matches messages containing \"foo*\" or \"bar*\")."
+                },
+                "role": {
+                    "type": "string",
+                    "description": "Optional role filter: \"user\" for user messages, \"assistant\" for assistant messages, \"tool\" for tool results. Omit to search all roles.",
+                    "enum": ["user", "assistant", "tool"]
                 }
             },
             "required": ["query"]
@@ -51,6 +58,11 @@ impl Tool for MessageFind {
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'query'"))?;
 
+        let role_filter = args
+            .get("role")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+
         let session_dir = match ctx.session_dir.as_ref() {
             Some(d) => d,
             None => bail!("no active session to search"),
@@ -61,7 +73,8 @@ impl Tool for MessageFind {
         // to SQLite FTS5 without logging any error — this is normal
         // operation during sync.
         let matches = {
-            let surreal_hits = crate::model::surreal::search_messages(session_dir, query, 10);
+            let surreal_hits =
+                crate::model::surreal::search_messages(session_dir, query, 10, role_filter);
             if !surreal_hits.is_empty() {
                 format_matches(
                     surreal_hits
@@ -74,7 +87,8 @@ impl Tool for MessageFind {
                     "Surreal Empty",
                     &format!("search_messages returned 0 hits for query: {query}"),
                 );
-                let fts5_hits = crate::model::msglog::search_messages(session_dir, query, 10);
+                let fts5_hits =
+                    crate::model::msglog::search_messages(session_dir, query, 10, role_filter);
                 format_matches(
                     fts5_hits
                         .iter()
@@ -92,26 +106,22 @@ impl Tool for MessageFind {
 
 fn format_matches<'a>(matches: impl Iterator<Item = (i64, &'a str, &'a str, i64)>) -> String {
     let mut out = String::new();
-    for (msg_id, role, snip, created_at) in matches {
+    for (msg_id, role, content, _created_at) in matches {
         let role_prefix = match role {
-            "user" => "user",
-            "assistant" => "assistant",
-            "tool" => "tool",
-            "system" => "system",
-            _ => "?",
+            "user" => "[user]",
+            "assistant" => "[assistant]",
+            "tool" => "[tool]",
+            "system" => "[system]",
+            _ => "[?]",
         };
-        let ts = if created_at > 0 {
-            format!("@{}", created_at)
+        // Strip leading/trailing whitespace and truncate to keep output dense.
+        let snippet = content.trim();
+        let snippet = if snippet.len() > 300 {
+            &snippet[..300]
         } else {
-            String::new()
+            snippet
         };
-        out.push_str(&format!(
-            "[{}] {}{}: {}\n",
-            msg_id,
-            role_prefix,
-            ts,
-            snip.trim()
-        ));
+        out.push_str(&format!("{} #{}: {}\n\n", role_prefix, msg_id, snippet));
     }
     out
 }

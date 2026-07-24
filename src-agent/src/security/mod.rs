@@ -93,9 +93,11 @@ fn extract_assets(dir: &Dir, dest: &PathBuf) -> Result<()> {
 /// 4. Extract embedded assets into `security_dir()`.
 /// 5. Create the venv.
 /// 6. Install Python deps from `requirements.txt`.
+#[allow(unreachable_code)]
 pub fn install(force: bool) -> Result<()> {
     #[cfg(windows)]
     {
+        let _ = force;
         anyhow::bail!("security mode is not supported on Windows");
     }
 

@@ -14,30 +14,23 @@ pub fn restrict_owner_only(path: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{LocalFree, HLOCAL};
     use windows_sys::Win32::Security::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-        SetNamedSecurityInfoW, SE_FILE_OBJECT, SDDL_REVISION_1,
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        SetFileSecurityW,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
     };
 
     // SDDL: Protected DACL, grants Full Access to SYSTEM, Administrators, and Owner.
-    let sddl: &[u16] = &[
-        b'D' as u16, b':' as u16, b'P' as u16, b'(' as u16,
-        b'A' as u16, b';' as u16, b';' as u16, b'F' as u16, b'A' as u16, b';' as u16,
-        b';' as u16, b';' as u16, b'S' as u16, b'Y' as u16, b')' as u16,
-        b'(' as u16, b'A' as u16, b';' as u16, b';' as u16, b'F' as u16, b'A' as u16,
-        b';' as u16, b';' as u16, b';' as u16, b'B' as u16, b'A' as u16, b')' as u16,
-        b'(' as u16, b'A' as u16, b';' as u16, b';' as u16, b'F' as u16, b'A' as u16,
-        b';' as u16, b';' as u16, b';' as u16, b'O' as u16, b'W' as u16, b')' as u16,
-        0,
-    ];
+    const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)";
 
-    let mut psd: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(),
+            SDDL.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>().as_ptr(),
             SDDL_REVISION_1,
             &mut psd,
-            std::ptr::null(),
+            std::ptr::null_mut(),
         )
     };
     if ok == 0 || psd.is_null() {
@@ -52,25 +45,15 @@ pub fn restrict_owner_only(path: &Path) -> std::io::Result<()> {
         .collect();
 
     let flags = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
-    let result = unsafe {
-        SetNamedSecurityInfoW(
-            path_wide.as_ptr(),
-            SE_FILE_OBJECT,
-            flags,
-            std::ptr::null(),
-            std::ptr::null(),
-            psd,
-            std::ptr::null(),
-        )
-    };
+    let ok = unsafe { SetFileSecurityW(path_wide.as_ptr(), flags, psd) };
 
     // Free the security descriptor regardless of outcome.
     unsafe {
         LocalFree(psd as HLOCAL);
     }
 
-    if result != 0 {
-        return Err(std::io::Error::from_raw_os_error(result as i32));
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
 }
