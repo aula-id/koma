@@ -173,6 +173,25 @@ pub enum Action {
     SaveEffort(String),
     /// Esc on the `/effort` picker — discard the selection and return to Chat.
     EffortCancel,
+    // --- Model command actions ---
+    /// Enter on the `/model` picker for a role — swap the session role's model.
+    /// `None` uuid = inherit (drop override); `Some` uuid = set from global catalogue.
+    ModelRoleSwap {
+        role: crate::model::app_config::ModelRole,
+        model_uuid: Option<String>,
+    },
+    /// Enter on the `/model` agent model picker — set the agent's model.
+    /// `None` uuid = inherit Main; `Some` uuid = set from models list.
+    ModelAgentSwap {
+        agent_name: String,
+        model_uuid: Option<String>,
+    },
+    /// Esc on the `/model` picker (or Enter on Help submode) — return to Chat.
+    ModelCancel,
+    /// Esc in AgentPick → back to AgentList.
+    ModelBackToAgentList,
+    /// Enter on a row in AgentList → open AgentPick for that agent.
+    ModelOpenAgentPick { agent_name: String },
     // --- Agents dashboard actions ---
     /// Confirm CREATE: write a new agent from the drafts, reload, back to Browse.
     CreateAgent,

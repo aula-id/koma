@@ -466,6 +466,48 @@ mod roundtrip_tests {
             note: "model supports effort".to_string(),
         }));
 
+        // Model command: role_pick submode + options + cursor + note.
+        roundtrip(&ModeSnapshot::Model(Box::new(ModelCmdSnapshot {
+            sub: "role_pick".to_string(),
+            role: Some("main".to_string()),
+            agent_name: None,
+            options: vec![
+                (None, "(inherit global)".to_string()),
+                (
+                    Some("uuid-1".to_string()),
+                    "gpt-4o — openai/gpt-4o @ OpenAI".to_string(),
+                ),
+            ],
+            cursor: 1,
+            note: "pick a model for the main role".to_string(),
+        })));
+
+        // Model command: help submode.
+        roundtrip(&ModeSnapshot::Model(Box::new(ModelCmdSnapshot {
+            sub: "help".to_string(),
+            role: None,
+            agent_name: None,
+            options: vec![],
+            cursor: 0,
+            note: String::new(),
+        })));
+
+        // Model command: agent_pick submode.
+        roundtrip(&ModeSnapshot::Model(Box::new(ModelCmdSnapshot {
+            sub: "agent_pick".to_string(),
+            role: None,
+            agent_name: Some("explore".to_string()),
+            options: vec![
+                (None, "(inherit main)".to_string()),
+                (
+                    Some("uuid-2".to_string()),
+                    "fast — gpt-4o-mini @ OpenAI".to_string(),
+                ),
+            ],
+            cursor: 1,
+            note: "pick a model for this agent".to_string(),
+        })));
+
         // SessionPicker: metadata list + query + filtered subset + cursor.
         roundtrip(&ModeSnapshot::SessionPicker(PickerSnapshot {
             query: "auth".to_string(),

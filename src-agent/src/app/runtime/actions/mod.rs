@@ -29,6 +29,7 @@ pub(in crate::app::runtime) mod ext_install;
 pub(in crate::app::runtime) mod ext_uninstall;
 mod extensions;
 mod mcp;
+pub(crate) mod model_cmd;
 mod oauth;
 mod onboard;
 mod plan_decision;
@@ -238,6 +239,29 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::EffortCancel => {
             *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::ModelRoleSwap { role, model_uuid } => {
+            model_cmd::handle_model_role_swap(role, model_uuid, state)?;
+        }
+
+        Action::ModelAgentSwap {
+            agent_name,
+            model_uuid,
+        } => {
+            model_cmd::handle_model_agent_swap(agent_name, model_uuid, state)?;
+        }
+
+        Action::ModelCancel => {
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::ModelBackToAgentList => {
+            model_cmd::handle_model_back_to_agent_list(state);
+        }
+
+        Action::ModelOpenAgentPick { agent_name } => {
+            model_cmd::handle_model_open_agent_pick(agent_name, state);
         }
 
         Action::CreateAgent => {
