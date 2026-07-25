@@ -1,12 +1,8 @@
 //! View – `/model` session model switcher overlay.
 //!
-//! A popup above the composer (chat stays visible), matching the `/bash`
-//! overlay pattern. Layout:
-//!
-//! 1. Top+bottom rule title bar — title ` model switcher ` on the TOP rule.
-//! 2. Flat option list (or help lines for Help submode) with cursor highlight.
-//! 3. Note line (dim) — context-sensitive help/error.
-//! 4. Keybinding hint line.
+//! A popup anchored above the composer (chat stays visible), matching the
+//! `/bash`, `/todo`, `$` sub-agents, and settings menu overlay pattern.
+//! Layout: bordered block with title, option/help list, note, keybinding hint.
 
 use crate::app::mode::{ModelCmdState, ModelCmdSub};
 use crate::model::app_config::ModelRole;
@@ -15,19 +11,18 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 
-/// Render the model command overlay inside the given `popup_area` (typically
-/// `chunks[4]` = the input box area) over the `chat_area` (typically
-/// `chunks[1]` = the transcript area).
+/// Render the model command overlay anchored above `input_chunk` on top of
+/// `transcript_chunk`, following the same geometry as bash/todo/subagents.
 pub fn render_overlay(
     frame: &mut Frame,
     state: &ModelCmdState,
     palette: &Palette,
-    popup_area: ratatui::layout::Rect,
-    _chat_area: ratatui::layout::Rect,
+    input_chunk: ratatui::layout::Rect,
+    transcript_chunk: ratatui::layout::Rect,
 ) {
     let title_str = match &state.sub {
         ModelCmdSub::Help { .. } => " model — help ".to_string(),
@@ -44,53 +39,63 @@ pub fn render_overlay(
         }
     };
 
-    // Calculate needed height: title (3) + options + note (1) + hint (1)
-    let option_count = if state.options.is_empty() {
-        match &state.sub {
-            ModelCmdSub::Help { lines } => lines.len(),
-            _ => 1,
+    // Content rows: option/help list, capped at 12 with scroll.
+    let content_rows = match &state.sub {
+        ModelCmdSub::Help { lines } => lines.len(),
+        _ => {
+            if state.options.is_empty() {
+                1 // empty placeholder
+            } else {
+                state.options.len()
+            }
         }
-    } else {
-        state.options.len()
     };
-    let height = (option_count.min(12) + 5) as u16; // title + options + note + hint
-    let height = height.min(popup_area.height);
+    let list_rows = content_rows.min(12) as u16;
 
-    // Split popup_area to get a centered region.
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),                    // space above
-            Constraint::Length(height),            // popup
-            Constraint::Min(0),                    // space below
-        ])
-        .split(popup_area);
+    // Desired height: list + 2 (bordered block top/bottom) + 1 note + 1 hint.
+    let has_note = !state.note.is_empty();
+    let desired = list_rows + 2 + if has_note { 1 } else { 0 } + 1; // hint always
 
-    let popup = chunks[1];
+    // Anchor above the input bar, growing upward into transcript space.
+    let avail = input_chunk.y.saturating_sub(transcript_chunk.y);
+    let h = desired.min(avail.max(3));
+    let y = input_chunk.y.saturating_sub(h);
+    let rect = ratatui::layout::Rect {
+        x: input_chunk.x,
+        y,
+        width: input_chunk.width,
+        height: h,
+    };
 
-    let inner_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // title: top+bottom rules
-            Constraint::Min(1),   // flat option list / help lines
-            Constraint::Length(1), // note
-            Constraint::Length(1), // hint
-        ])
-        .split(popup);
-
-    // --- Title bar ---
-    let title_block = Block::new()
-        .borders(Borders::TOP | Borders::BOTTOM)
+    let block = Block::bordered()
         .border_style(Style::default().fg(palette.dim))
         .title(Span::styled(
             title_str,
             Style::default().fg(palette.dim),
-        ))
-        .padding(Padding::horizontal(1));
-    frame.render_widget(title_block, inner_chunks[0]);
+        ));
+    let inner = block.inner(rect);
+    crate::view::clear_and_fill(frame, rect, palette.bg);
+    frame.render_widget(block, rect);
 
-    // --- Content area ---
-    let inner = inner_chunks[1].inner(Margin {
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Layout: list (fills remaining), optional note (1), hint (1).
+    let mut constraints = vec![Constraint::Min(1)]; // option/help list
+    if has_note && h > list_rows + 2 + 1 {
+        // room for at least: list + border + hint + note
+        constraints.push(Constraint::Length(1)); // note
+    }
+    constraints.push(Constraint::Length(1)); // hint
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
+
+    // --- Content area (option list / help) ---
+    let content_area = chunks[0].inner(Margin {
         horizontal: 1,
         vertical: 0,
     });
@@ -106,61 +111,83 @@ pub fn render_overlay(
                     ))
                 })
                 .collect();
-            frame.render_widget(Paragraph::new(styled_lines), inner);
+            frame.render_widget(Paragraph::new(styled_lines), content_area);
         }
         _ => {
-            let lines: Vec<Line> = state
-                .options
-                .iter()
-                .enumerate()
-                .map(|(i, (uuid, label))| {
-                    let display = if uuid.is_none() {
-                        // Inherit row — dim
-                        format!(" {label} ")
-                    } else {
-                        format!(" {label} ")
-                    };
-                    if i == state.cursor {
-                        let hl =
-                            Style::default().fg(palette.sel_fg).bg(palette.sel_bg);
-                        Line::from(Span::styled(display, hl))
-                    } else {
-                        Line::from(Span::styled(
-                            display,
-                            Style::default().fg(palette.accent),
-                        ))
-                    }
-                })
-                .collect();
-
-            // Scroll so cursor stays visible.
-            let list_height = inner.height as usize;
-            let sel = state.cursor.min(state.options.len().saturating_sub(1));
-            let scroll_offset = if list_height > 0 && sel >= list_height {
-                (sel - list_height + 1) as u16
+            if state.options.is_empty() {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        " (no options available) ",
+                        Style::default().fg(palette.dim),
+                    )),
+                    content_area,
+                );
             } else {
-                0
-            };
-            frame.render_widget(
-                Paragraph::new(lines).scroll((scroll_offset, 0)),
-                inner,
-            );
+                let lines: Vec<Line> = state
+                    .options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (uuid, label))| {
+                        let display = format!(" {label} ");
+                        if i == state.cursor {
+                            // Pad selected row to full inner width to avoid
+                            // ratatui highlight bleed (known project issue).
+                            let pad_w = content_area.width as usize;
+                            let text_w = display.len();
+                            let padded = if text_w < pad_w {
+                                format!("{display:<pad_w$}")
+                            } else {
+                                display
+                            };
+                            let hl = Style::default()
+                                .fg(palette.sel_fg)
+                                .bg(palette.sel_bg);
+                            Line::from(Span::styled(padded, hl))
+                        } else {
+                            let style = if uuid.is_none() {
+                                // Inherit row — dim.
+                                Style::default().fg(palette.dim)
+                            } else {
+                                Style::default().fg(palette.accent)
+                            };
+                            Line::from(Span::styled(display, style))
+                        }
+                    })
+                    .collect();
+
+                // Scroll so cursor stays visible.
+                let list_height = content_area.height as usize;
+                let sel = state.cursor.min(state.options.len().saturating_sub(1));
+                let scroll_offset = if list_height > 0 && sel >= list_height {
+                    (sel - list_height + 1) as u16
+                } else {
+                    0
+                };
+                frame.render_widget(
+                    Paragraph::new(lines).scroll((scroll_offset, 0)),
+                    content_area,
+                );
+            }
         }
     }
 
-    // --- Note (dim) ---
-    let note_area = inner_chunks[2].inner(Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
-    frame.render_widget(
-        Paragraph::new(state.note.as_str())
-            .style(Style::default().fg(palette.dim)),
-        note_area,
-    );
+    // --- Note (dim) — offset index shifts when note is present ---
+    let note_idx = if has_note && chunks.len() > 2 { 1 } else { 0 };
+    if has_note {
+        let note_area = chunks[note_idx].inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        });
+        frame.render_widget(
+            Paragraph::new(state.note.as_str())
+                .style(Style::default().fg(palette.dim)),
+            note_area,
+        );
+    }
 
     // --- Keybinding hint ---
-    let hint_area = inner_chunks[3].inner(Margin {
+    let hint_idx = chunks.len() - 1;
+    let hint_area = chunks[hint_idx].inner(Margin {
         horizontal: 1,
         vertical: 0,
     });
