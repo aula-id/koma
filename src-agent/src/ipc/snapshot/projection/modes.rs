@@ -28,12 +28,12 @@ use crate::ipc::proto::{
     CatalogueProviderSnapshot, CookingEntrySnapshot, EffortSnapshot, ExtRowWire, ExtScreenSnapshot,
     ExtStoreDetailWire, ExtStoreRowWire, ExtStoreSnapshot, ExtTuiScreenWire, ExtensionsSnapshot,
     HelpEntrySnapshot, HelpSnapshot, HistoryEntrySnapshot, KeyInputSnapshot, LoadingSnapshot,
-    McpSnapshot, ModeSnapshot, ModelDraftSnapshot, ModelEndpointWire, ModelModalSnapshot,
-    OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot, PathPickerSnapshot,
-    PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot, RewindEntrySnapshot,
-    RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot, SessionMetaSnapshot,
-    SettingsSnapshot, TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot,
-    UsageSnapshot, WarmStatusWire,
+    McpSnapshot, ModeSnapshot, ModelCmdSnapshot, ModelDraftSnapshot, ModelEndpointWire,
+    ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
+    PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
+    RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
+    SessionMetaSnapshot, SettingsSnapshot, TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot,
+    ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -86,6 +86,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // instead of a blank Chat screen.
         Mode::Help(h) => ModeSnapshot::Help(Box::new(help_snapshot(h))),
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
+        Mode::Model(m) => ModeSnapshot::Model(Box::new(model_cmd_snapshot(m))),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
         Mode::MessageRewind(rw) => ModeSnapshot::MessageRewind(rewind_snapshot(rw)),
         Mode::QuitConfirm(s) => ModeSnapshot::QuitConfirm {
@@ -437,6 +438,40 @@ pub fn effort_snapshot(e: &EffortPickerState) -> EffortSnapshot {
         options: e.options.clone(),
         selected: e.selected,
         note: e.note.clone(),
+    }
+}
+
+pub fn model_cmd_snapshot(m: &crate::app::mode::ModelCmdState) -> ModelCmdSnapshot {
+    use crate::app::mode::ModelCmdSub;
+    let (sub, role, agent_name) = match &m.sub {
+        ModelCmdSub::Help { .. } => ("help".to_string(), None, None),
+        ModelCmdSub::RolePick { role } => {
+            let r = match role {
+                crate::model::app_config::ModelRole::Main => "main",
+                crate::model::app_config::ModelRole::Awareness => "awareness",
+                crate::model::app_config::ModelRole::Planner => "planner",
+                crate::model::app_config::ModelRole::Compactor => "compactor",
+                crate::model::app_config::ModelRole::Safeguard => "safeguard",
+            };
+            ("role_pick".to_string(), Some(r.to_string()), None)
+        }
+        ModelCmdSub::AgentList => ("agent_list".to_string(), None, None),
+        ModelCmdSub::AgentPick {
+            agent_name,
+            current_model: _,
+        } => (
+            "agent_pick".to_string(),
+            None,
+            Some(agent_name.clone()),
+        ),
+    };
+    ModelCmdSnapshot {
+        sub,
+        role,
+        agent_name,
+        options: m.options.clone(),
+        cursor: m.cursor,
+        note: m.note.clone(),
     }
 }
 

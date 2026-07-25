@@ -890,6 +890,7 @@ pub enum ModeSnapshot {
     Todo(Box<TodoSnapshot>),
     Help(Box<HelpSnapshot>),
     Effort(EffortSnapshot),
+    Model(Box<ModelCmdSnapshot>),
     Usage(Box<UsageSnapshot>),
     MessageRewind(RewindSnapshot),
     QuitConfirm {

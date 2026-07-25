@@ -187,6 +187,7 @@ pub fn handle_paste(state: &mut AppState, text: &str) {
         // panel — paste is a no-op in all of them.
         Mode::Onboard(_)
         | Mode::Effort(_)
+        | Mode::Model(_)
         | Mode::Loading(_)
         | Mode::Usage(_)
         | Mode::MessageRewind(_)

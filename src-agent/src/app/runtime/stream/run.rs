@@ -11,9 +11,10 @@ use crate::service::openrouter::OpenRouterClient;
 
 /// Wire-only tool-nudge appended to the last User message on first hop.
 /// Never persisted — only mutates the local `history` Vec before POST.
-const TOOL_NUDGE: &str = "\n\nnote:\n\
-- If unsure, use web_search/web_fetch rather than guessing.\n\
-- If you need prior conversation context, use message_find.";
+const TOOL_NUDGE: &str = "\n\nIMPORTANT:\n\
+- If unsure (for example does not know how to implement, or does not know what is this or you really unsure what does the code mean or there is unclear documentation of certain module or api and other thing that IS UNSURE but NON BLOCKING), USE web_search/web_fetch rather than guessing.\n\
+- If you need prior conversation context, use message_find.\n\
+- If internet and history having zero result, STOP and ASK me.";
 
 
 /// Fully cancel the foreground session's in-flight turn before its conversation is
