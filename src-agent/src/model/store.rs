@@ -515,7 +515,7 @@ pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
 pub fn list_koma_session_pipes() -> Vec<String> {
     const PREFIX: &str = "koma-";
     // Exact non-session pipe names (checked with the shared `koma-` prefix still on).
-    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-ipc-selftest", "koma-daemon-selftest"];
+    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-oauth", "koma-ipc-selftest", "koma-daemon-selftest"];
     // Non-session pipe name PREFIXES (also checked before stripping `koma-`), so a
     // whole family — every extension host — is excluded without listing each id.
     const RESERVED_PREFIX: &[&str] = &["koma-ext-"];
@@ -597,6 +597,40 @@ pub fn mcp_daemon_pid_path() -> Result<PathBuf> {
 /// liveness oracle. The MCP daemon's graceful-shutdown teardown unlinks it.
 pub fn write_mcp_daemon_pid() -> Result<()> {
     std::fs::write(mcp_daemon_pid_path()?, std::process::id().to_string())?;
+    Ok(())
+}
+
+/// Path to the GLOBAL OAuth keep-alive daemon's unix-domain socket: `~/.koma/oauth.sock`.
+///
+/// Singleton like [`mcp_daemon_sock_path`]: exactly one process owns every configured
+/// OAuth connection so session-daemons get proactive token refresh. Whoever binds this
+/// socket IS the live OAuth daemon (bind-as-oracle).
+#[cfg(unix)]
+pub fn oauth_daemon_sock_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("oauth.sock"))
+}
+
+/// Windows twin of [`oauth_daemon_sock_path`] — the singleton OAuth daemon named pipe
+/// `\\.\pipe\koma-oauth`.
+#[cfg(windows)]
+pub fn oauth_daemon_sock_path() -> Result<PathBuf> {
+    Ok(PathBuf::from(r"\\.\pipe\koma-oauth"))
+}
+
+/// Path to the GLOBAL OAuth daemon's PID file: `~/.koma/oauth.pid`.
+///
+/// Advisory only — recorded for diagnostics / `koma daemon kill` — NOT the liveness
+/// oracle (PIDs get reused; the bound [`oauth_daemon_sock_path`] socket is the oracle).
+pub fn oauth_daemon_pid_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("oauth.pid"))
+}
+
+/// Write the running OAuth daemon's PID into [`oauth_daemon_pid_path`], overwriting any
+/// stale one. Best-effort + advisory (diagnostics / `kill`); an IO error is returned
+/// but callers treat it as non-fatal — the bound socket, not this file, is the
+/// liveness oracle. The OAuth daemon's graceful-shutdown teardown unlinks it.
+pub fn write_oauth_daemon_pid() -> Result<()> {
+    std::fs::write(oauth_daemon_pid_path()?, std::process::id().to_string())?;
     Ok(())
 }
 

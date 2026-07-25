@@ -129,7 +129,7 @@ pub const KOMA_REFRESH_LEAD_SECS: u64 = 300;
 /// koma.run's refresh token itself expires in 30 days (`refresh_expires_in`);
 /// cap silent retries at 20 hours since the last successful refresh, matching
 /// Codex's style of a conservative fraction of that window.
-pub const KOMA_MAX_REFRESH_AGE_SECS: u64 = 20 * 3_600;
+pub const KOMA_MAX_REFRESH_AGE_SECS: u64 = 7 * 24 * 3_600;
 
 // --- Extension-delegated model providers (W12) ---
 

@@ -168,7 +168,7 @@ fn main() -> anyhow::Result<()> {
     // here (best-effort) so it releases any session write-locks it holds and vacates disk.
     // Skip in the daemon/mcp-daemon children — they are spawned AFTER this migration runs
     // in the parent, and a child re-running migrate would be a no-op race anyway.
-    if !opts.daemon && !opts.mcp_daemon {
+    if !opts.daemon && !opts.mcp_daemon && !opts.oauth_daemon {
         app::migrate_legacy_daemon();
     }
 
@@ -238,6 +238,12 @@ fn main() -> anyhow::Result<()> {
     // stray combination can't accidentally take the session-daemon branch.
     if opts.mcp_daemon {
         return app::run_mcp_daemon(opts);
+    }
+
+    // --- headless path: run the OAuth keep-alive daemon (no TUI) ---
+    // A singleton process that proactively refreshes every configured OAuth token.
+    if opts.oauth_daemon {
+        return app::run_oauth_daemon(opts);
     }
 
     // --- headless path: run the koma-daemon event loop (no TUI) ---

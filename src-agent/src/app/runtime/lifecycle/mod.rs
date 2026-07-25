@@ -788,6 +788,16 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
         });
     }
 
+    // Ensure the OAuth keep-alive daemon is running when there are OAuth connections.
+    if !state.rest.config.oauth_conns.is_empty() {
+        if let Err(e) = super::manage::ensure_oauth_daemon_running() {
+            crate::model::store::append_global_error_log(
+                "oauth",
+                &format!("failed to start OAuth daemon: {e:#}"),
+            );
+        }
+    }
+
     // Install the SIGHUP-survive + graceful/double-SIGTERM signal handling and get
     // the flag the SYNC loop polls. Done BEFORE binding the socket so a signal that
     // arrives during startup is already accounted for (it sets the flag the loop
