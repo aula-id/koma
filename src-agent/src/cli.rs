@@ -133,6 +133,11 @@ pub struct Opts {
     /// `ensure_mcp_daemon_running`; consumed by the session-daemon MCP proxy in the
     /// next commit.
     pub mcp_daemon: bool,
+    /// When `true`, run the GLOBAL OAuth keep-alive daemon with no terminal
+    /// (`--oauth-daemon` flag): a singleton process that proactively refreshes OAuth
+    /// tokens so session-daemons get fresh tokens on demand. No `--session` — it is
+    /// not keyed to any session. Spawned by `ensure_oauth_daemon_running`.
+    pub oauth_daemon: bool,
     /// When `true`, run as a thin client that attaches to a running daemon
     /// (`--attach` flag): connect to `~/.koma/daemon.sock`, render the daemon's
     /// foreground session from streamed snapshots/deltas, and forward input.
@@ -250,6 +255,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Opts {
             "--daemon-selftest" => opts.daemon_selftest = true,
             "--daemon" => opts.daemon = true,
             "--mcp-daemon" => opts.mcp_daemon = true,
+            "--oauth-daemon" => opts.oauth_daemon = true,
             "--attach" => opts.attach = true,
             "--local" => opts.local = true,
             _ => {}

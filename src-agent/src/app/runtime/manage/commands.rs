@@ -41,8 +41,9 @@ pub fn print_daemon_usage() -> i32 {
 pub(super) fn cmd_status() -> Result<()> {
     let live = super::live_session_sockets()?;
     let mcp_live = super::mcp::mcp_daemon_alive();
+    let oauth_live = super::oauth::oauth_daemon_alive();
 
-    if live.is_empty() && !mcp_live {
+    if live.is_empty() && !mcp_live && !oauth_live {
         println!("koma daemon: no daemons running");
         return Ok(());
     }
@@ -79,6 +80,18 @@ pub(super) fn cmd_status() -> Result<()> {
         };
         println!("  MCP daemon ({pid_str})");
         if let Ok(sock) = store::mcp_daemon_sock_path() {
+            println!("    socket: {}", sock.display());
+        }
+    }
+
+    // Report the GLOBAL OAuth daemon (singleton) too.
+    if oauth_live {
+        let pid_str = match super::oauth::read_oauth_pidfile() {
+            Some(pid) => format!("pid {pid}"),
+            None => "pid unknown (no pidfile)".to_string(),
+        };
+        println!("  OAuth daemon ({pid_str})");
+        if let Ok(sock) = store::oauth_daemon_sock_path() {
             println!("    socket: {}", sock.display());
         }
     }
@@ -136,6 +149,7 @@ pub(super) fn cmd_kill() -> Result<()> {
         // Sweep any stale socket/pidfiles left by crashed daemons.
         sweep_stale_files();
         super::mcp::unlink_mcp_daemon_files();
+        super::oauth::unlink_oauth_daemon_files();
         return Ok(());
     }
     for (id, _path) in live {
@@ -147,6 +161,10 @@ pub(super) fn cmd_kill() -> Result<()> {
     if mcp_live {
         // `koma daemon kill` owns a terminal — print the outcome (not quiet).
         super::mcp::stop_mcp_daemon(false);
+    }
+    // Stop the GLOBAL OAuth daemon too (best-effort). Same pattern as MCP.
+    if super::oauth::oauth_daemon_alive() {
+        super::oauth::stop_oauth_daemon(false);
     }
     // Catch any socket-less orphans the scan above couldn't see, regardless of whether
     // any keyed sockets were found live.
@@ -248,6 +266,20 @@ pub(super) fn cmd_clean() -> Result<()> {
         }
     }
 
+    // GLOBAL OAuth daemon: same cleanup as MCP.
+    if !super::oauth::oauth_daemon_alive() {
+        if let Ok(sock) = store::oauth_daemon_sock_path() {
+            if std::fs::remove_file(&sock).is_ok() {
+                removed.push(sock.display().to_string());
+            }
+        }
+        if let Ok(pid) = store::oauth_daemon_pid_path() {
+            if std::fs::remove_file(&pid).is_ok() {
+                removed.push(pid.display().to_string());
+            }
+        }
+    }
+
     if !live.is_empty() {
         println!(
             "koma daemon: {} session daemon(s) still running ({}); left their files in place — \
@@ -259,6 +291,12 @@ pub(super) fn cmd_clean() -> Result<()> {
     if mcp_live {
         println!(
             "koma daemon: MCP daemon still running; left its files in place — \
+             use `koma daemon kill` to stop it"
+        );
+    }
+    if super::oauth::oauth_daemon_alive() {
+        println!(
+            "koma daemon: OAuth daemon still running; left its files in place — \
              use `koma daemon kill` to stop it"
         );
     }
