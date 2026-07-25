@@ -442,12 +442,110 @@ if [ "$WITH_RESEARCH" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Linux: user-level desktop entry + icons (app drawer / Activities).
+# Best-effort — never fails the install. Helps curl|sh users on GNOME and on
+# immutable/atomic distros (Bluefin, Silverblue, …) where .deb is awkward and
+# .AppImage is a separate download path. Absolute Exec path avoids PATH
+# shadowing in GUI sessions (same concern as packaging/linux/koma.desktop.hbs).
+# Override icon CDN with KOMA_ICON_BASE=... (defaults to assets on main).
+# ---------------------------------------------------------------------------
+if [ "$os" = "linux" ] && [ -n "${HOME:-}" ]; then
+    _koma_bin="$INSTALL_DIR/koma"
+    # Resolve to an absolute path for Exec= (required by the FreeDesktop spec
+    # when the binary is not guaranteed to be on the desktop session PATH).
+    case "$_koma_bin" in
+        /*) ;;
+        *)  _koma_bin="$(cd -P "$(dirname -- "$_koma_bin")" 2>/dev/null && pwd)/$(basename -- "$_koma_bin")" ;;
+    esac
+    if [ -x "$_koma_bin" ]; then
+        _apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+        _icons_base="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+        _desktop="$_apps_dir/koma.desktop"
+        _icon_name="koma"
+        _icon_ok=0
+
+        mkdir -p "$_apps_dir" 2>/dev/null || true
+
+        # Fetch PNG icons into the hicolor theme. Prefer several sizes so
+        # GNOME/KDE pick a crisp one; a single 128px is enough for the drawer.
+        _icon_base="${KOMA_ICON_BASE:-https://raw.githubusercontent.com/aula-id/koma/main/assets}"
+        _fetch_icon() {
+            _size="$1"
+            _src_name="$2"
+            _dest_dir="$_icons_base/${_size}x${_size}/apps"
+            _dest="$_dest_dir/koma.png"
+            mkdir -p "$_dest_dir" 2>/dev/null || return 1
+            if command -v curl > /dev/null 2>&1; then
+                curl -fsSL "${_icon_base}/${_src_name}" -o "$_dest" 2>/dev/null || return 1
+            elif command -v wget > /dev/null 2>&1; then
+                wget -qO "$_dest" "${_icon_base}/${_src_name}" 2>/dev/null || return 1
+            else
+                return 1
+            fi
+            [ -s "$_dest" ] || return 1
+            return 0
+        }
+        # Best-effort per size — partial success is fine.
+        _fetch_icon 32  icon-32.png  && _icon_ok=1 || true
+        _fetch_icon 64  icon-64.png  && _icon_ok=1 || true
+        _fetch_icon 128 icon-128.png && _icon_ok=1 || true
+        _fetch_icon 256 icon-256.png && _icon_ok=1 || true
+        _fetch_icon 512 icon-512.png && _icon_ok=1 || true
+        # Master fallback name used by some packagers.
+        if [ "$_icon_ok" = "0" ]; then
+            _fetch_icon 128 icon.png && _icon_ok=1 || true
+        fi
+
+        # Icon key: theme name when hicolor install worked; else absolute path
+        # to whichever PNG we got; else omit a broken theme name.
+        _icon_key="$_icon_name"
+        if [ "$_icon_ok" != "1" ]; then
+            _icon_key=""
+        fi
+
+        if [ -d "$_apps_dir" ] && [ -w "$_apps_dir" ]; then
+            {
+                printf '%s\n' '[Desktop Entry]'
+                printf '%s\n' 'Type=Application'
+                printf '%s\n' 'Name=Koma'
+                printf '%s\n' 'Comment=Agentic coding desktop client'
+                printf '%s\n' "Exec=${_koma_bin} gui"
+                if [ -n "$_icon_key" ]; then
+                    printf '%s\n' "Icon=${_icon_key}"
+                fi
+                printf '%s\n' 'Terminal=false'
+                printf '%s\n' 'Categories=Development;'
+                printf '%s\n' 'StartupNotify=true'
+                printf '%s\n' 'Keywords=ai;agent;coding;'
+            } > "$_desktop" 2>/dev/null || true
+
+            if [ -f "$_desktop" ]; then
+                chmod 644 "$_desktop" 2>/dev/null || true
+                # Refresh desktop/icon caches when the tools exist (GNOME etc.).
+                if command -v update-desktop-database > /dev/null 2>&1; then
+                    update-desktop-database "$_apps_dir" 2>/dev/null || true
+                fi
+                if command -v gtk-update-icon-cache > /dev/null 2>&1 && [ -d "$_icons_base" ]; then
+                    gtk-update-icon-cache -f -t "$_icons_base" 2>/dev/null || true
+                fi
+                # Stash path for the success banner below.
+                KOMA_DESKTOP_ENTRY="$_desktop"
+            fi
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Success
 # ---------------------------------------------------------------------------
 echo ""
 echo "koma installed to $INSTALL_DIR/$bin_name"
 echo ""
-echo "  Run 'koma' to start."
+echo "  Run 'koma' to start the TUI, or 'koma gui' for the desktop client."
+if [ -n "${KOMA_DESKTOP_ENTRY:-}" ]; then
+    echo "  Desktop entry: $KOMA_DESKTOP_ENTRY"
+    echo "  Open your app grid and search for Koma (log out/in if it is missing)."
+fi
 if [ "$os" != "windows" ]; then
     echo "  Re-run this installer with --with-research (or run"
     echo "  'koma --internet-fullmode-install') to enable full internet mode."
