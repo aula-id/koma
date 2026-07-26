@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Search, Plus } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
 import { NewSessionMenu } from './NewSessionMenu'
 import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
+import { SessionBulkBar } from './SessionBulkBar'
+import { useSessionMultiSelect } from './sessionListSelection'
 import { useKoma, isDying } from '../store/koma'
 
 type ResumePaletteProps = {
@@ -27,6 +29,9 @@ function Empty({ children }: { children: string }) {
 // reveals below. New session is inline with the Cooking header. Cooking
 // (live) + History (past) are driven straight off the koma store's hub
 // slice, itself an authoritative mirror of the host's Hub push envelope.
+//
+// Session rows (issue #126): plain click selects/highlights; Ctrl/Cmd toggles;
+// Shift ranges; double-click or Enter opens. Bulk Kill/Delete via SessionBulkBar.
 export function ResumePalette({ onClose }: ResumePaletteProps) {
   const cooking = useKoma((s) => s.hub.cooking)
   const history = useKoma((s) => s.hub.history)
@@ -37,12 +42,18 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
   // a different row disarms whichever was armed before.
   const [armed, setArmed] = useState<ArmedRow>(null)
+  const multi = useSessionMultiSelect()
 
+  const multiHas = multi.hasSelection
+  const multiClear = multi.clear
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        // Escape cancels an armed row first; only closes the palette once
-        // nothing is armed.
+        // Escape: multi-select → armed row → close palette.
+        if (multiHas) {
+          multiClear()
+          return
+        }
         if (armed) {
           setArmed(null)
           return
@@ -52,7 +63,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, armed])
+  }, [onClose, armed, multiHas, multiClear])
 
   // Live-session-listing fix: the host only discovers live sessions on
   // demand. Ask for a fresh Hub the moment this overlay opens, then keep
@@ -66,7 +77,13 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
     return () => window.clearInterval(interval)
   }, [req])
 
-  const selectSession = (id: string, name: string) => {
+  // Clear multi-select when the search query changes (visible order / membership
+  // shifts — range anchors would otherwise point at stale rows).
+  useEffect(() => {
+    multiClear()
+  }, [query, multiClear])
+
+  const openSession = (id: string, name: string) => {
     // Optimistic: fires the full-screen swap overlay immediately, since the
     // host gives no "swap started" push and the attach can block for
     // seconds. Cleared by the next authoritative Snapshot (see koma.ts).
@@ -99,6 +116,34 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   // most-recent matches.
   const filteredHistory = history.filter((h) => matches(h.id, h.name)).slice(0, 10)
 
+  const cookingIds = useMemo(
+    () => filteredCooking.map((c) => c.id).filter((id): id is string => !!id),
+    [filteredCooking],
+  )
+  const historyIds = useMemo(() => filteredHistory.map((h) => h.id), [filteredHistory])
+  const fgCooking = useMemo(
+    () => filteredCooking.filter((c) => c.foreground && c.id).map((c) => c.id as string),
+    [filteredCooking],
+  )
+
+  const armRow = (row: ArmedRow) => {
+    multi.clear()
+    setArmed(row)
+  }
+
+  const onRowMouse = (
+    e: ReactMouseEvent,
+    kind: 'session' | 'history',
+    id: string,
+    ordered: string[],
+  ) => {
+    if (armed) setArmed(null)
+    multi.onRowClick(e, kind, id, ordered)
+  }
+
+  const bulkCooking = multi.selectedIds('session')
+  const bulkHistory = multi.selectedIds('history')
+
   return (
     <div className="absolute inset-0 z-50" onMouseDown={onClose}>
       <div
@@ -126,6 +171,15 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
             transition={{ duration: 0.16, ease: 'easeOut', delay: 0.02 }}
             className="max-h-[50vh] overflow-auto border-t border-koma-border py-1"
           >
+            {multi.hasSelection && (
+              <SessionBulkBar
+                cookingIds={bulkCooking}
+                historyIds={bulkHistory}
+                foregroundCookingIds={fgCooking}
+                onDone={() => multi.clear()}
+                onClear={() => multi.clear()}
+              />
+            )}
             <div className="flex items-center justify-between px-3 pb-1 pt-2">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-koma-fg opacity-40">
                 Cooking
@@ -145,30 +199,44 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               <Empty>{q === '' ? 'No live sessions' : 'No matches'}</Empty>
             ) : (
               filteredCooking.map((c) => {
-                const dying = !!c.id && isDying(dyingSessions, c.id, 'session')
-                const rowArmed = !!c.id && armed?.id === c.id && armed.kind === 'session'
+                const id = c.id as string
+                const dying = !!c.id && isDying(dyingSessions, id, 'session')
+                const rowArmed = !!c.id && armed?.id === id && armed.kind === 'session'
+                const sel = !!c.id && multi.isSelected('session', id)
                 return (
                   <div
                     key={c.id}
                     role="button"
                     tabIndex={dying || rowArmed ? -1 : 0}
-                    onClick={() => {
-                      if (dying) return
-                      if (armed && armed.id === c.id && armed.kind === 'session') return
-                      c.id && selectSession(c.id, c.name)
+                    aria-selected={sel}
+                    onClick={(e) => {
+                      if (dying || !c.id) return
+                      if (rowArmed) return
+                      onRowMouse(e, 'session', id, cookingIds)
+                    }}
+                    onDoubleClick={(e) => {
+                      if (dying || rowArmed || !c.id) return
+                      e.preventDefault()
+                      openSession(id, c.name)
                     }}
                     onKeyDown={(e) => {
                       if (e.key !== 'Enter' && e.key !== ' ') return
                       if (e.key === ' ') e.preventDefault()
-                      if (!dying && !armed && c.id) selectSession(c.id, c.name)
+                      if (!dying && !armed && c.id) openSession(id, c.name)
                     }}
                     className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors ${
-                      rowArmed ? '' : 'px-3 py-1.5 hover:bg-koma-hover'
-                    } ${dying ? 'pointer-events-none opacity-60' : ''}`}
+                      rowArmed ? '' : 'px-3 py-1.5'
+                    } ${dying ? 'pointer-events-none opacity-60' : ''} ${
+                      rowArmed
+                        ? ''
+                        : sel
+                          ? 'bg-koma-accent/15 hover:bg-koma-accent/20'
+                          : 'hover:bg-koma-hover'
+                    }`}
                   >
                     {rowArmed && c.id ? (
                       <SessionRowConfirmStrip
-                        id={c.id}
+                        id={id}
                         kind="session"
                         foreground={c.foreground}
                         onCancel={() => setArmed(null)}
@@ -176,9 +244,6 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       />
                     ) : (
                       <>
-                        {/* Content cell — flex-1 min-w-0 so ALL text/status/folder
-                            chips truncate INSIDE this cell, never spilling into
-                            the fixed trailing action column next to it. */}
                         <div className="flex min-w-0 flex-1 items-center gap-1.5">
                           {c.working && (
                             <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
@@ -195,14 +260,9 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                             </span>
                           )}
                         </div>
-                        {/* Trailing action cell — fixed ~28px, always reserved
-                            (opacity-toggled inside, never conditionally
-                            rendered) so text width never jumps on hover, and
-                            the destructive button's hit area is strictly this
-                            column, never the content cell's text. */}
                         <div className="flex w-7 flex-none items-center justify-center">
                           {c.id && (
-                            <SessionRowActions id={c.id} kind="session" armed={armed} onArm={setArmed} />
+                            <SessionRowActions id={id} kind="session" armed={armed} onArm={armRow} />
                           )}
                         </div>
                       </>
@@ -218,24 +278,37 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
               filteredHistory.map((h) => {
                 const dying = isDying(dyingSessions, h.id, 'history')
                 const rowArmed = armed?.id === h.id && armed.kind === 'history'
+                const sel = multi.isSelected('history', h.id)
                 return (
                   <div
                     key={h.id}
                     role="button"
                     tabIndex={dying || rowArmed ? -1 : 0}
-                    onClick={() => {
+                    aria-selected={sel}
+                    onClick={(e) => {
                       if (dying) return
-                      if (armed && armed.id === h.id && armed.kind === 'history') return
-                      selectSession(h.id, h.name)
+                      if (rowArmed) return
+                      onRowMouse(e, 'history', h.id, historyIds)
+                    }}
+                    onDoubleClick={(e) => {
+                      if (dying || rowArmed) return
+                      e.preventDefault()
+                      openSession(h.id, h.name)
                     }}
                     onKeyDown={(e) => {
                       if (e.key !== 'Enter' && e.key !== ' ') return
                       if (e.key === ' ') e.preventDefault()
-                      if (!dying && !armed) selectSession(h.id, h.name)
+                      if (!dying && !armed) openSession(h.id, h.name)
                     }}
                     className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors ${
-                      rowArmed ? '' : 'px-3 py-1.5 hover:bg-koma-hover'
-                    } ${dying ? 'pointer-events-none opacity-60' : ''}`}
+                      rowArmed ? '' : 'px-3 py-1.5'
+                    } ${dying ? 'pointer-events-none opacity-60' : ''} ${
+                      rowArmed
+                        ? ''
+                        : sel
+                          ? 'bg-koma-accent/15 hover:bg-koma-accent/20'
+                          : 'hover:bg-koma-hover'
+                    }`}
                   >
                     {rowArmed ? (
                       <SessionRowConfirmStrip
@@ -255,7 +328,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                           )}
                         </div>
                         <div className="flex w-7 flex-none items-center justify-center">
-                          <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
+                          <SessionRowActions id={h.id} kind="history" armed={armed} onArm={armRow} />
                         </div>
                       </>
                     )}
@@ -263,6 +336,9 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                 )
               })
             )}
+            <div className="px-3 pb-1 pt-0.5 text-[10px] text-koma-fg opacity-30">
+              Click select · Ctrl/⌘ toggle · Shift range · Double-click / Enter open
+            </div>
           </motion.div>
         </div>
       </div>
