@@ -515,7 +515,7 @@ pub fn daemon_sock_path(session_id: &str) -> Result<PathBuf> {
 pub fn list_koma_session_pipes() -> Vec<String> {
     const PREFIX: &str = "koma-";
     // Exact non-session pipe names (checked with the shared `koma-` prefix still on).
-    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-oauth", "koma-ipc-selftest", "koma-daemon-selftest"];
+    const RESERVED_EXACT: &[&str] = &["koma-mcp", "koma-oauth", "koma-linker", "koma-ipc-selftest", "koma-daemon-selftest"];
     // Non-session pipe name PREFIXES (also checked before stripping `koma-`), so a
     // whole family — every extension host — is excluded without listing each id.
     const RESERVED_PREFIX: &[&str] = &["koma-ext-"];
@@ -631,6 +631,31 @@ pub fn oauth_daemon_pid_path() -> Result<PathBuf> {
 /// liveness oracle. The OAuth daemon's graceful-shutdown teardown unlinks it.
 pub fn write_oauth_daemon_pid() -> Result<()> {
     std::fs::write(oauth_daemon_pid_path()?, std::process::id().to_string())?;
+    Ok(())
+}
+
+// --- Linker daemon ---
+
+/// Path to the GLOBAL linker daemon's unix-domain socket: `~/.koma/linker.sock`.
+#[cfg(unix)]
+pub fn linker_daemon_sock_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("linker.sock"))
+}
+
+/// Windows twin: named pipe `\\.\pipe\koma-linker`.
+#[cfg(windows)]
+pub fn linker_daemon_sock_path() -> Result<PathBuf> {
+    Ok(PathBuf::from(r"\\.\pipe\koma-linker"))
+}
+
+/// Advisory PID file: `~/.koma/linker.pid`.
+pub fn linker_daemon_pid_path() -> Result<PathBuf> {
+    Ok(base_dir()?.join("linker.pid"))
+}
+
+/// Write the running linker daemon's PID into the pidfile.
+pub fn write_linker_daemon_pid() -> Result<()> {
+    std::fs::write(linker_daemon_pid_path()?, std::process::id().to_string())?;
     Ok(())
 }
 

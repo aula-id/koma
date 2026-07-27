@@ -19,7 +19,7 @@ impl Tool for Delete {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Workspace-relative file path. When multiple workspace roots are active, file listings prefix paths with [N] (e.g. \"[1]src/main.rs\") — copy that prefix exactly. A bare path with no prefix targets workspace [0]." }
+                "path": { "type": "string", "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]." }
             },
             "required": ["path"]
         })

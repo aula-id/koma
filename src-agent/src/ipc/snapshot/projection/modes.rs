@@ -443,8 +443,8 @@ pub fn effort_snapshot(e: &EffortPickerState) -> EffortSnapshot {
 
 pub fn model_cmd_snapshot(m: &crate::app::mode::ModelCmdState) -> ModelCmdSnapshot {
     use crate::app::mode::ModelCmdSub;
-    let (sub, role, agent_name) = match &m.sub {
-        ModelCmdSub::Help { .. } => ("help".to_string(), None, None),
+    let (sub, role, agent_name, lines) = match &m.sub {
+        ModelCmdSub::Help { lines } => ("help".to_string(), None, None, lines.clone()),
         ModelCmdSub::RolePick { role } => {
             let r = match role {
                 crate::model::app_config::ModelRole::Main => "main",
@@ -453,9 +453,9 @@ pub fn model_cmd_snapshot(m: &crate::app::mode::ModelCmdState) -> ModelCmdSnapsh
                 crate::model::app_config::ModelRole::Compactor => "compactor",
                 crate::model::app_config::ModelRole::Safeguard => "safeguard",
             };
-            ("role_pick".to_string(), Some(r.to_string()), None)
+            ("role_pick".to_string(), Some(r.to_string()), None, vec![])
         }
-        ModelCmdSub::AgentList => ("agent_list".to_string(), None, None),
+        ModelCmdSub::AgentList => ("agent_list".to_string(), None, None, vec![]),
         ModelCmdSub::AgentPick {
             agent_name,
             current_model: _,
@@ -463,6 +463,7 @@ pub fn model_cmd_snapshot(m: &crate::app::mode::ModelCmdState) -> ModelCmdSnapsh
             "agent_pick".to_string(),
             None,
             Some(agent_name.clone()),
+            vec![],
         ),
     };
     ModelCmdSnapshot {
@@ -472,6 +473,7 @@ pub fn model_cmd_snapshot(m: &crate::app::mode::ModelCmdState) -> ModelCmdSnapsh
         options: m.options.clone(),
         cursor: m.cursor,
         note: m.note.clone(),
+        lines,
     }
 }
 

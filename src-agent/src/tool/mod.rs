@@ -22,6 +22,7 @@ pub mod cd;
 pub mod dircache;
 pub mod fs;
 pub mod git_cred;
+pub mod graph;
 pub mod git_operator;
 pub mod git_worktree;
 pub mod history;
@@ -92,6 +93,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "plan_ready"
             | "plan_enter"
             | "checklist"
+            | "graph_query"
     )
 }
 
@@ -190,6 +192,37 @@ pub fn parse_ws_prefix(path: &str) -> (usize, &str) {
     (0, path)
 }
 
+/// Format a path for model/tool results.
+/// Multi-root: absolute path under the owning workspace root (no ambiguity).
+/// Single-root: workspace-relative path (shorter, no ambiguity).
+pub fn model_display_path(workspaces: &[PathBuf], abs: &Path) -> String {
+    if workspaces.len() <= 1 {
+        // Single root: strip the workspace prefix for a relative path
+        if let Some(ws) = workspaces.first() {
+            if let Ok(rel) = abs.strip_prefix(ws) {
+                return rel.to_string_lossy().replace('\\', "/");
+            }
+        }
+        return abs.to_string_lossy().replace('\\', "/");
+    }
+    // Multi-root: absolute path
+    abs.to_string_lossy().replace('\\', "/")
+}
+
+/// Convert a stored DirCache entry (`[N]rel` or bare) to a model-facing path.
+pub fn model_path_from_entry(workspaces: &[PathBuf], entry: &str) -> String {
+    let (ws_idx, bare) = parse_ws_prefix(entry);
+    if workspaces.len() <= 1 {
+        return bare.replace('\\', "/");
+    }
+    // Multi-root: absolute under the owning workspace
+    if let Some(ws) = workspaces.get(ws_idx) {
+        ws.join(bare).to_string_lossy().replace('\\', "/")
+    } else {
+        bare.replace('\\', "/")
+    }
+}
+
 /// A callable tool, shaped for OpenRouter function-calling: `parameters` is a
 /// JSON Schema object; `run` takes the decoded arguments and returns a string
 /// result fed back to the model.
@@ -230,6 +263,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(internet::WebDownload),
         Box::new(git_cred::GitCred),
         Box::new(git_operator::GitOperator),
+        Box::new(graph::GraphQuery),
         Box::new(git_worktree::GitWorktree),
         Box::new(plan::PlanEnter),
         Box::new(plan::PlanReady),
@@ -311,6 +345,7 @@ pub const DEFERRED_TOOLS: &[&str] = &[
     "web_search",
     "web_download",
     "git_operator",
+    "graph_query",
 ];
 
 /// Tool names advertised to the MAIN chat model (everything except agent-only
@@ -332,6 +367,11 @@ pub fn main_tool_names() -> Vec<String> {
 /// scratch root (`<temp>/koma`), it is returned as-is (no workspace required).
 /// Only absolute paths get this bypass; relative paths still resolve against
 /// the workspace as normal.
+///
+/// WORKSPACE-ROOT BYPASS: if `rel` is an absolute path under any configured
+/// workspace root, it is returned directly. This lets the model send real
+/// absolute paths (the outbound display format for multi-root) back to tools
+/// without needing to strip the workspace prefix.
 pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
     // Scratch bypass: absolute paths under the scratch root skip workspace
     // containment entirely. The scratch root itself exists once a session is
@@ -371,6 +411,44 @@ pub fn resolve(workspaces: &[PathBuf], rel: &str) -> Result<PathBuf> {
         if candidate.starts_with(&scratch) {
             return Ok(candidate);
         }
+    }
+
+    // Workspace-root absolute path: if `rel` is absolute and under any configured
+    // workspace root, resolve it directly. This lets the model send real absolute
+    // paths (the outbound display format for multi-root) back to tools without
+    // needing to strip the workspace prefix.
+    if as_path.is_absolute() {
+        let candidate = match as_path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                let mut existing = as_path;
+                let mut tail: Vec<std::ffi::OsString> = Vec::new();
+                while !existing.exists() {
+                    match existing.file_name() {
+                        Some(n) => tail.push(n.to_os_string()),
+                        None => break,
+                    }
+                    match existing.parent() {
+                        Some(p) => existing = p,
+                        None => break,
+                    }
+                }
+                let mut base = existing
+                    .canonicalize()
+                    .unwrap_or_else(|_| existing.to_path_buf());
+                for seg in tail.iter().rev() {
+                    base.push(seg);
+                }
+                base
+            }
+        };
+        for ws in workspaces {
+            let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+            if candidate.starts_with(&ws_canon) {
+                return Ok(candidate);
+            }
+        }
+        // Not under any workspace root — fall through to the error below.
     }
 
     let (ws_idx, bare) = parse_ws_prefix(rel);
@@ -490,6 +568,38 @@ pub fn resolve_read(
                 return Ok(normalized);
             }
         }
+        // Workspace-root absolute path: accepted for read operations.
+        let candidate = match as_path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                let mut existing = as_path;
+                let mut tail: Vec<std::ffi::OsString> = Vec::new();
+                while !existing.exists() {
+                    match existing.file_name() {
+                        Some(n) => tail.push(n.to_os_string()),
+                        None => break,
+                    }
+                    match existing.parent() {
+                        Some(p) => existing = p,
+                        None => break,
+                    }
+                }
+                let mut base = existing
+                    .canonicalize()
+                    .unwrap_or_else(|_| existing.to_path_buf());
+                for seg in tail.iter().rev() {
+                    base.push(seg);
+                }
+                base
+            }
+        };
+        for ws in workspaces {
+            let ws_canon = ws.canonicalize().unwrap_or_else(|_| ws.to_path_buf());
+            if candidate.starts_with(&ws_canon) {
+                return Ok(candidate);
+            }
+        }
+        // Not under any workspace root — fall through to existing logic.
     }
 
     if rel.starts_with('[') {

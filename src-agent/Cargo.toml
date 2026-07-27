@@ -5,12 +5,6 @@ edition = "2021"
 license = "Apache-2.0"
 
 [build-dependencies]
-# Embeds the app icon + version metadata into the koma.exe PE resource table
-# (see build.rs). Windows-only in effect (build.rs gates the actual call on
-# CARGO_CFG_TARGET_OS == "windows"), but listed unconditionally since Cargo
-# build-dependencies aren't per-target-gateable without a target-specific
-# table, and the crate itself is a no-op dependency cost on other hosts.
-# `winresource` is the maintained fork of the abandoned `winres`.
 winresource = "0.1"
 
 [dependencies]
@@ -38,74 +32,34 @@ regex = "1"
 globset = "0.4"
 infer = "0.16"
 base64 = "0.22"
-# Extension host: signed-zip verification + the shared wire protocol crate.
-# `zip` (deflate only — the pack.sh zips are deflate-compressed) unpacks an
-# installed extension; `ed25519-dalek` verifies the release signature over the
-# package's SHA-256 digest. `koma-extension` is a PATH dep on the sibling SDK
-# crate (its own detached workspace — the root `exclude` doesn't block a path
-# dep on the package) so the manifest/handshake wire types are shared verbatim,
-# never re-declared here.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ed25519-dalek = "2"
 koma-extension = { path = "../src-extension" }
-# Preemptive image downscaling at send time (see `data_url_for` in
-# dto/openrouter/request.rs): oversized attachments are decoded, resized, and
-# re-encoded before they hit the upstream chat API (previously no cap existed,
-# so an oversized original could 400 upstream). NORMAL (not gui-gated) dep —
-# the chat/attachment path is core, not GUI-only. `default-features = false`
-# + an explicit codec list keeps compile impact down: only the formats
-# attachments actually arrive as (png/jpeg/webp/gif/bmp) are compiled in — no
-# `rayon` (a single per-send image resize isn't worth the parallelism dep) and
-# no avif/tiff/exr/qoi/ico/dds/hdr/pnm/ff (unused, each pulls its own extra deps).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 sha2 = "0.10"
-# MCP (Model Context Protocol) CLIENT. Client + stdio child-process transport +
-# streamable-HTTP client transport. tokio-native; reuses the existing tokio runtime.
 rmcp = { version = "1.8", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
+
+# Linker daemon: import-graph scanner (tree-sitter based).
+tree-sitter = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-php = "0.23"
+notify = "8"
+notify-debouncer-mini = "0.7"
 
 # --- feature = "gui": xterm.js + wry desktop client. All optional; the default
 # build pulls NONE of these (headless-safe, lean `cargo install`). ---
-# NOTE: wry's "transparent" cargo feature is REQUIRED for `with_transparent`
-# to have any effect at all on macOS/iOS (wry-0.52.1 src/wkwebview/mod.rs
-# gates the WKWebViewConfiguration `drawsBackground=NO` call behind
-# `#[cfg(feature = "transparent")]`; without it the call is compiled out and
-# the webview stays fully opaque no matter what `WebViewBuilder::with_transparent`
-# is set to). Linux (webkit2gtk) does not need this feature to honor transparency.
 wry = { version = "0.52", optional = true, features = ["transparent"] }
 tao = { version = "0.35", optional = true }
-# Native OS file/folder dialog for the GUI "+ New session" picker. On Linux the
-# default XDG-portal backend is async/thread-safe; on macOS/Windows it's the native
-# dialog. Run off the tao event-loop thread so its modal loop never stalls the 16ms
-# push loop. Optional + only pulled by the `gui` feature so the default build stays lean.
 rfd = { version = "0.15", optional = true }
 
-# macOS-only: lets us clear WKWebView's `underPageBackgroundColor`, which wry
-# 0.52.1 never touches on macOS (it only sets the legacy `drawsBackground`
-# KVC flag via the "transparent" feature above). On macOS 12+, WKWebView
-# paints an opaque `underPageBackgroundColor` behind the page independently
-# of `drawsBackground`, which is exactly the "opaque square behind the
-# rounded corners" symptom. Target-gated so it never touches non-macOS
-# builds; optional + only pulled in by the `gui` feature so the default
-# build stays lean. Version/feature set mirrors wry's own internal use of
-# this same crate (see wry-0.52.1 Cargo.toml) to avoid duplicate/conflicting
-# objc2 stacks.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Windows named-pipe IPC backend (src/ipc/win.rs) + the phase-B2 process-lifecycle port:
-#   - Foundation: SECURITY_ATTRIBUTES, LocalFree/BOOL/HLOCAL, CloseHandle/GetLastError,
-#     STILL_ACTIVE + ERROR_ACCESS_DENIED (pid-liveness).
-#   - Security + Security_Authorization: the daemon-pipe DACL hardening
-#     (ConvertStringSecurityDescriptorToSecurityDescriptorW / SDDL).
-#   - System_Threading: DETACHED_PROCESS/CREATE_NEW_PROCESS_GROUP/CREATE_NO_WINDOW
-#     (detached daemon spawn + taskkill windowless), OpenProcess/TerminateProcess/
-#     GetExitCodeProcess/GetCurrentProcess (pid-liveness + kill), and the IO_COUNTERS the
-#     JobObjects extended-limit struct embeds.
-#   - System_JobObjects: the kill-on-close Job Object tree-kill safety net.
-#   - System_Console: GetConsoleProcessList + FreeConsole — the `koma gui`
-#     orphan-console drop (detach the console Windows allocates for a shortcut
-#     launch so it doesn't linger as an empty window behind the GUI). GUI path.
-# 0.59 is already in the tree (transitive), so this adds no new windows-sys version.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -116,13 +70,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_System_Time",
 ] }
-# Clipboard-image paste (controller/input/clipboard.rs): linux/macos shell out to
-# xclip/wl-paste/pngpaste/osascript; windows has no equivalent always-present CLI
-# tool, so we use arboard for real `OpenClipboard`/`GetClipboardData` access.
-# `default-features = false` + explicit `image-data` (the feature that gates
-# `Clipboard::get_image`) keeps this lean; `image-data` pulls arboard's own
-# windows-only `image` dep with the same `png` feature our own `image` dep
-# above already enables, so cargo unifies them — no second PNG encoder needed.
 arboard = { version = "3", default-features = false, features = ["image-data"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -131,19 +78,6 @@ objc2-app-kit = { version = "0.3", optional = true, default-features = false, fe
     "objc2-core-foundation",
     "NSColor",
 ] }
-
-# macOS-only native menu bar. On macOS, WKWebView's editing commands
-# (paste/copy/cut/select-all) are dispatched via the app's NSMenu Edit-menu
-# items through the responder chain. `koma gui` (gui/mod.rs) builds a
-# frameless tao window with NO menu bar, so Cmd+V/C/X/A never reach the
-# webview. `muda`'s `PredefinedMenuItem` variants (Cut/Copy/Paste/SelectAll/
-# Undo/Redo) bind the standard AppKit selectors, so installing a minimal
-# App+Edit menu fixes this with no custom key handling. Target-gated (like
-# `objc2-app-kit` above) so it never touches non-macOS builds, and
-# `default-features = false` to skip muda's `gtk`/`libxdo` defaults (those
-# back its Linux/BSD menu backend, irrelevant here and each an extra system
-# dependency we don't want anywhere near this crate's build). Optional +
-# only pulled in by the `gui` feature so the default build stays lean.
 muda = { version = "0.19", optional = true, default-features = false }
 
 [features]
@@ -154,52 +88,18 @@ gui = ["dep:wry", "dep:tao", "dep:objc2-app-kit", "dep:rfd", "dep:muda"]
 name = "koma"
 path = "src/main.rs"
 
-# cargo-packager metadata (deb/wix packaging). All keys verified against the
-# cargo-packager `Config` struct (crates/packager/src/config/mod.rs, tag main
-# as of 2026-07): every field is `#[serde(rename_all = "camelCase")]` with
-# `deny_unknown_fields`, but nearly every multi-word field also carries
-# explicit `alias = "kebab-case"` / `alias = "snake_case"` entries, so the
-# kebab-case keys below (product-name, out-dir, fragment-paths, ...) all
-# deserialize correctly - this is NOT just camelCase-tolerant TOML, it's
-# real serde aliasing. Relative paths (icons, fragment-paths, desktop-template)
-# resolve relative to *this* Cargo.toml's directory (src-agent/), because the
-# packager CLI does `set_current_dir(manifest_path.parent())` before reading
-# them (crates/packager/src/cli/mod.rs) - hence the "../" prefixes.
 [package.metadata.packager]
 product-name = "koma"
 identifier = "run.koma.app"
 category = "DeveloperTool"
-# icon.ico is listed explicitly (not just the `icon*.png` glob) because
-# `Config::find_ico()` only auto-picks a `.ico` if one is literally present
-# in the resolved icons list; without it, the Windows MSI/ARP icon and this
-# fragment's Start Menu shortcut icon would silently fall back to a flat PNG
-# instead of the multi-res ICO. The deb hicolor icon generator ignores
-# non-`.png` entries on its own, so listing icon.ico here does not affect it.
 icons = ["../assets/icon.ico", "../assets/icon.icns", "../assets/icon*.png"]
-# CI runs `cargo packager --release` after `cargo build --release`; binaries and out-dir auto-detect from target/release
 
 [package.metadata.packager.deb]
 depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
 section = "utils"
-# cargo-packager's default .desktop Exec line is just the bare binary name
-# (`Exec=koma`, since a GUI launcher `.desktop` entry launches the ratatui
-# TUI with no controlling terminal (Terminal=false) and no way to do
-# anything). Our own template hardcodes `Exec=koma gui` instead.
 desktop-template = "../packaging/linux/koma.desktop.hbs"
 
 [package.metadata.packager.wix]
-# koma vendors the full WiX main template: cargo-packager v0.11.8's built-in
-# template hardcodes the Desktop + Start Menu shortcuts with Target="[!Path]" and
-# no Arguments, so they launch bare koma.exe (the ratatui TUI) instead of `koma
-# gui`. A full custom template is the only override knob (no per-shortcut config
-# field exists), so this points at our vendored copy, which differs from the
-# pristine v0.11.8 template by exactly Arguments="gui" on those two app shortcuts
-# (see packaging/windows/main.wxs). Path is relative to this Cargo.toml's dir
-# (../), same as fragment-paths below.
 template = "../packaging/windows/main.wxs"
 fragment-paths = ["../packaging/windows/path-and-shortcut.wxs"]
-# Must reference the actual ComponentGroup Id declared in the fragment above,
-# or the fragment's components are compiled but never added to the MSI's
-# Feature tree (see main.wxs's `Feature Id="External"`, which only pulls in
-# `{{#each component_group_refs}}` / `{{#each component_refs}}`).
 component-group-refs = ["KomaPathAndShortcut"]

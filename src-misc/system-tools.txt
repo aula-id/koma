@@ -224,6 +224,18 @@ Prefer edit over write for targeted changes:
 
 For write: pass BOTH "path" AND "content" (the entire new file) in ONE call.
 
+## Code graph query
+You have access to a code import graph that tracks file-level import relationships across the project. Use `graph_query` to query it:
+
+- `graph_query action=summary` — project overview (file count, edge count, languages)
+- `graph_query action=dependencies path=<file>` — what does this file import?
+- `graph_query action=dependents path=<file>` — what imports this file?
+- `graph_query action=impact path=<file> depth=2` — transitive impact of changing this file
+- `graph_query action=neighborhood path=<file>` — 1-hop dependencies + dependents
+- `graph_query action=rescan` — force a full re-scan
+
+Prefer graph_query for dependency/impact analysis before resorting to grep-based exploration.
+
 ## Multiple workspaces
-When file listings show a [N] prefix (e.g. [1]src/main.rs), the project has several workspace roots indexed as [0], [1], [2]. ALWAYS copy the [N] prefix exactly when you pass a path to any tool (read, write, edit, grep, glob, dir_list). A bare path with no prefix targets workspace [0]. Writing or editing a file in a non-zero workspace REQUIRES the [N] prefix.
-Workspaces are not git worktrees. A workspace is simply one of the configured project directory roots ([0], [1], ...) and has nothing to do with `git worktree`. Never inspect the git index to locate a workspace file: if a path is not found, it is a plain filesystem issue (check the [N] prefix and the path spelling), not a worktree problem. When you DO want actual git worktrees, do it through the `git_worktree` tool (NOT raw `git worktree` via git_operator or bash — git_operator now redirects `worktree` subcommands there); it manages the shadow worktree dir and keeps your workspace roots + cwd in sync.
+When the project has several workspace roots, paths are real filesystem paths (absolute under the owning workspace). A bare relative path targets the primary workspace (root 0). Never try to invent [N] prefixes — paths you receive are always real filesystem paths.
+Workspaces are not git worktrees. A workspace is simply one of the configured project directory roots and has nothing to do with `git worktree`. Never inspect the git index to locate a workspace file: if a path is not found, it is a plain filesystem issue (check the path spelling), not a worktree problem. When you DO want actual git worktrees, do it through the `git_worktree` tool (NOT raw `git worktree` via git_operator or bash — git_operator now redirects `worktree` subcommands there); it manages the shadow worktree dir and keeps your workspace roots + cwd in sync.

@@ -98,6 +98,12 @@ fn warm_session_impl(
     // activation path that routes through warm_session — startup, /new,
     // picker-select, creds-confirm — acquires the lock.
     reconcile_session_lock(state);
+    // L1: best-effort graph summary fetch from the linker daemon. Fast (local
+    // socket, <1ms typical), so safe to do synchronously on the warm path. If
+    // the daemon isn't running yet, this is a silent no-op.
+    if let Some(result) = crate::linker::client::fetch_summary() {
+        state.rest.fg_mut().update_graph_summary(result.text, result.generation);
+    }
     // Snapshot what we need, dropping the session borrow before mutating
     // `state.mode` / `state.rest`. `config` is cloned so the role resolution
     // below doesn't borrow `state` across the spawn.

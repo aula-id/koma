@@ -1,0 +1,332 @@
+//! In-memory directed import graph.
+//!
+//! Nodes are canonical file paths; edges represent import/module relationships
+//! extracted by tree-sitter. A reverse index enables fast dependents/impact
+//! queries without traversal.
+
+use std::collections::{HashMap, VecDeque};
+
+/// Supported source languages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Lang {
+    Rust,
+    Python,
+    Go,
+    Java,
+    TypeScript,
+    JavaScript,
+    PHP,
+    Unknown,
+}
+
+/// A directed edge from a source file to a target.
+#[derive(Debug, Clone)]
+pub struct Edge {
+    pub target: EdgeTarget,
+    pub kind: EdgeKind,
+}
+
+/// Where an import points — either a resolved file or an external (unresolved) specifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EdgeTarget {
+    /// Canonical file path within the scanned workspace.
+    File(String),
+    /// External / unresolved import string (e.g. crate name, npm package).
+    External(String),
+}
+
+/// The kind of import relationship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EdgeKind {
+    /// `use`, `import`, `require`, etc.
+    Import,
+    /// `mod` declaration (Rust-specific).
+    Mod,
+}
+
+/// A node in the graph — a source file.
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub lang: Lang,
+    pub path: String,
+}
+
+/// The complete import graph for one or more workspace roots.
+#[derive(Debug, Default)]
+pub struct ImportGraph {
+    /// Canonical path → Node
+    pub nodes: HashMap<String, Node>,
+    /// Source path → outgoing edges
+    pub edges: HashMap<String, Vec<Edge>>,
+    /// Target (file path or external string) → list of source paths (reverse index)
+    pub reverse: HashMap<String, Vec<String>>,
+    /// Total files tracked.
+    pub file_count: usize,
+    /// Total edges tracked.
+    pub edge_count: usize,
+    /// Monotonically increasing scan generation counter.
+    pub generation: u64,
+}
+
+impl ImportGraph {
+    /// Create an empty graph.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clear all data and increment generation.
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.edges.clear();
+        self.reverse.clear();
+        self.file_count = 0;
+        self.edge_count = 0;
+        self.generation += 1;
+    }
+
+    /// Ensure a node exists for the given path and language.
+    pub fn ensure_node(&mut self, path: &str, lang: Lang) {
+        self.nodes
+            .entry(path.to_string())
+            .or_insert_with(|| Node {
+                lang,
+                path: path.to_string(),
+            });
+    }
+
+    /// Replace all edges for a source file, updating the reverse index.
+    pub fn set_edges(&mut self, source: &str, lang: Lang, new_edges: Vec<Edge>) {
+        // Ensure the source node exists.
+        self.ensure_node(source, lang);
+
+        // Remove old reverse entries for this source.
+        if let Some(old_edges) = self.edges.remove(source) {
+            for old in &old_edges {
+                let key = edge_target_key(&old.target);
+                if let Some(list) = self.reverse.get_mut(key) {
+                    list.retain(|s| s != source);
+                    if list.is_empty() {
+                        self.reverse.remove(key);
+                    }
+                }
+                self.edge_count -= 1;
+            }
+        }
+
+        // Add new edges.
+        let count = new_edges.len();
+        for edge in &new_edges {
+            let key = edge_target_key(&edge.target);
+            self.reverse
+                .entry(key.to_string())
+                .or_default()
+                .push(source.to_string());
+        }
+        self.edge_count += count;
+        self.edges.insert(source.to_string(), new_edges);
+    }
+
+    /// Remove a node and all its edges (both incoming and outgoing).
+    pub fn remove_node(&mut self, path: &str) {
+        // Remove outgoing edges and their reverse entries.
+        if let Some(outgoing) = self.edges.remove(path) {
+            for edge in &outgoing {
+                let key = edge_target_key(&edge.target);
+                if let Some(list) = self.reverse.get_mut(key) {
+                    list.retain(|s| s != path);
+                    if list.is_empty() {
+                        self.reverse.remove(key);
+                    }
+                }
+                self.edge_count -= 1;
+            }
+        }
+
+        // Remove incoming edges (files that import this one).
+        if let Some(incoming) = self.reverse.remove(path) {
+            for source in &incoming {
+                if let Some(edges) = self.edges.get_mut(source) {
+                    edges.retain(|e| edge_target_key(&e.target) != path);
+                }
+            }
+        }
+
+        self.nodes.remove(path);
+        self.file_count = self.nodes.len();
+    }
+
+    /// Direct dependencies of a file (outgoing edges resolved to file paths).
+    pub fn dependencies(&self, path: &str) -> Vec<&str> {
+        self.edges
+            .get(path)
+            .map(|es| {
+                es.iter()
+                    .filter_map(|e| match &e.target {
+                        EdgeTarget::File(f) => Some(f.as_str()),
+                        EdgeTarget::External(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Direct dependents of a file (files that import it).
+    pub fn dependents(&self, path: &str) -> Vec<&str> {
+        self.reverse
+            .get(path)
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Transitive impact set: all files that transitively depend on `path`,
+    /// up to `max_depth` hops (BFS). Includes `path` itself.
+    pub fn impact<'a>(&'a self, path: &'a str, max_depth: u32) -> Vec<&'a str> {
+        let mut visited = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back((path, 0u32));
+        visited.insert(path);
+
+        while let Some((current, depth)) = queue.pop_front() {
+            result.push(current);
+            if depth < max_depth {
+                if let Some(sources) = self.reverse.get(current) {
+                    for source in sources {
+                        if visited.insert(source.as_str()) {
+                            queue.push_back((source.as_str(), depth + 1));
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// 1-hop neighborhood: (dependencies, dependents).
+    pub fn neighborhood(&self, path: &str) -> (Vec<&str>, Vec<&str>) {
+        (self.dependencies(path), self.dependents(path))
+    }
+
+    /// Set of languages present in the graph.
+    pub fn languages(&self) -> Vec<String> {
+        let mut langs = std::collections::HashSet::new();
+        for node in self.nodes.values() {
+            langs.insert(format!("{:?}", node.lang));
+        }
+        let mut v: Vec<String> = langs.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    /// Top N files by fan-in (most depended upon).
+    pub fn top_fan_in(&self, n: usize) -> Vec<(String, usize)> {
+        let mut counts: Vec<(String, usize)> = self
+            .reverse
+            .iter()
+            .map(|(k, v)| (k.clone(), v.len()))
+            .collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1));
+        counts.truncate(n);
+        counts
+    }
+
+    /// Entry points: files with zero dependents (nobody imports them), up to `n`.
+    pub fn entry_points(&self, n: usize) -> Vec<String> {
+        let mut eps: Vec<String> = self
+            .nodes
+            .keys()
+            .filter(|k| {
+                self.reverse
+                    .get(*k)
+                    .map_or(true, |v| v.is_empty())
+            })
+            .cloned()
+            .collect();
+        eps.sort();
+        eps.truncate(n);
+        eps
+    }
+}
+
+/// Extract the string key used in the reverse index for a given target.
+fn edge_target_key(target: &EdgeTarget) -> &str {
+    match target {
+        EdgeTarget::File(f) => f,
+        EdgeTarget::External(e) => e,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_edges_and_reverse_index() {
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        assert_eq!(g.file_count, 1);
+        assert_eq!(g.edge_count, 1);
+        assert_eq!(g.dependencies("a.rs"), vec!["b.rs"]);
+        assert_eq!(g.dependents("b.rs"), vec!["a.rs"]);
+    }
+
+    #[test]
+    fn remove_node_cleans_both_indexes() {
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("c.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.file_count = g.nodes.len();
+
+        g.remove_node("b.rs");
+        assert!(g.edges.get("a.rs").is_none() || g.edges["a.rs"].is_empty());
+        assert!(g.reverse.get("b.rs").is_none());
+    }
+
+    #[test]
+    fn impact_bfs() {
+        let mut g = ImportGraph::new();
+        g.set_edges(
+            "a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.set_edges(
+            "b.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("c.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.file_count = g.nodes.len();
+
+        let impact = g.impact("c.rs", 10);
+        assert!(impact.contains(&"c.rs"));
+        assert!(impact.contains(&"b.rs"));
+        assert!(impact.contains(&"a.rs"));
+    }
+}

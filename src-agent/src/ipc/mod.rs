@@ -65,6 +65,7 @@ pub mod conn;
 pub mod frame;
 pub mod mcp_proto;
 pub mod oauth_proto;
+pub mod linker_proto;
 pub mod proto;
 pub mod selftest;
 pub mod server;
@@ -481,6 +482,7 @@ mod roundtrip_tests {
             ],
             cursor: 1,
             note: "pick a model for the main role".to_string(),
+            lines: vec![],
         })));
 
         // Model command: help submode.
@@ -491,6 +493,11 @@ mod roundtrip_tests {
             options: vec![],
             cursor: 0,
             note: String::new(),
+            lines: vec![
+                "Usage: /model [role|agent]".to_string(),
+                "  role  — pick a model for a role".to_string(),
+                "  agent — pick a model for an agent".to_string(),
+            ],
         })));
 
         // Model command: agent_pick submode.
@@ -507,6 +514,7 @@ mod roundtrip_tests {
             ],
             cursor: 1,
             note: "pick a model for this agent".to_string(),
+            lines: vec![],
         })));
 
         // SessionPicker: metadata list + query + filtered subset + cursor.

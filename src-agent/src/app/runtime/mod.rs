@@ -31,6 +31,7 @@ mod shortsend;
 mod lifecycle;
 mod mcp_daemon;
 mod oauth_daemon;
+mod linker_daemon;
 mod session_mgmt;
 mod signals;
 // Wave-5: persist + restore the per-session bg-bash / sub-agent records (#25).
@@ -59,6 +60,7 @@ pub use manage::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
     run_daemon_subcommand, run_doctor,
 };
+pub use manage::{ensure_linker_daemon_running, stop_linker_daemon};
 
 // Re-export the live-session discovery + cross-daemon spawn transport at the `runtime` level
 // so the extension grant broker (`crate::app::ext::broker`, outside this module tree) can drive
@@ -76,6 +78,7 @@ pub use lifecycle::{run, run_daemon, run_daemon_selftest};
 // — the session-daemon MCP proxy in the next commit will.
 pub use mcp_daemon::run_mcp_daemon;
 pub use oauth_daemon::run_oauth_daemon;
+pub use linker_daemon::run_linker_daemon;
 
 // Re-export session management helpers at the `runtime` level so sibling
 // submodules that use `crate::app::runtime::build_client` / `super::warm_session`

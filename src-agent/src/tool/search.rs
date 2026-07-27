@@ -27,7 +27,7 @@ impl Tool for Grep {
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory or file to search (workspace-relative, default '.'). With multiple workspaces, prefix with [N] (e.g. \"[1]src\") to target workspace N; a bare path targets workspace [0]."
+                    "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]."
                 },
                 "glob": {
                     "type": "string",
@@ -84,11 +84,8 @@ impl Tool for Grep {
                     .enumerate()
                     .find_map(|(i, ws)| abs_path.strip_prefix(ws).ok().map(|r| (i, r)))
                     .map(|(i, r)| {
-                        if ctx.workspaces.len() > 1 {
-                            format!("[{i}]{}", r.display())
-                        } else {
-                            r.display().to_string()
-                        }
+                        let abs = ctx.workspaces[i].join(r);
+                        super::model_display_path(&ctx.workspaces, &abs)
                     });
                 match rel {
                     Some(ref r) if !m.is_match(r.as_str()) => continue,
@@ -109,11 +106,8 @@ impl Tool for Grep {
                 .enumerate()
                 .find_map(|(i, ws)| abs_path.strip_prefix(ws).ok().map(|r| (i, r)))
                 .map(|(i, r)| {
-                    if ctx.workspaces.len() > 1 {
-                        format!("[{i}]{}", r.display())
-                    } else {
-                        r.display().to_string()
-                    }
+                    let abs = ctx.workspaces[i].join(r);
+                    super::model_display_path(&ctx.workspaces, &abs)
                 })
                 .unwrap_or_else(|| abs_path.display().to_string());
 
@@ -166,7 +160,7 @@ impl Tool for Glob {
                 },
                 "path": {
                     "type": "string",
-                    "description": "Base directory to search (workspace-relative, default '.'). With multiple workspaces, prefix with [N] (e.g. \"[1]src\") to target workspace N; a bare path targets workspace [0]."
+                    "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]."
                 }
             },
             "required": ["pattern"]
@@ -205,7 +199,6 @@ impl Tool for Glob {
             // Cache empty: fall back to a fresh walk from the base path.
             let base_abs = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref())?;
             let mut v: Vec<String> = Vec::new();
-            let multi = ctx.workspaces.len() > 1;
             for entry in ignore::WalkBuilder::new(&base_abs).build().flatten() {
                 if entry.file_type().is_some_and(|t| t.is_file()) {
                     let abs = entry.path();
@@ -215,11 +208,8 @@ impl Tool for Glob {
                         .enumerate()
                         .find_map(|(i, ws)| abs.strip_prefix(ws).ok().map(|r| (i, r)))
                         .map(|(i, r)| {
-                            if multi {
-                                format!("[{i}]{}", r.display())
-                            } else {
-                                r.display().to_string()
-                            }
+                            let abs_path = ctx.workspaces[i].join(r);
+                            super::model_display_path(&ctx.workspaces, &abs_path)
                         })
                         .unwrap_or_else(|| abs.display().to_string());
                     if matcher.is_match(rel.as_str()) {

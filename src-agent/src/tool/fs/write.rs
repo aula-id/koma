@@ -19,7 +19,7 @@ impl Tool for Write {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Workspace-relative file path. When multiple workspace roots are active, file listings prefix paths with [N] (e.g. \"[1]src/main.rs\") — copy that prefix exactly. A bare path with no prefix targets workspace [0]." },
+                "path": { "type": "string", "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]." },
                 "content": { "type": "string", "description": "Full file content to write" }
             },
             "required": ["path", "content"]
@@ -43,6 +43,9 @@ impl Tool for Write {
             .with_context(|| format!("writing file '{rel}'"))?;
         super::super::dircache::reindex(ctx.workspaces.clone(), ctx.dir_cache.clone());
         super::record_change(ctx, &path, if existed { "modified" } else { "added" });
-        Ok(format!("Wrote {} bytes to {}.", content.len(), rel))
+        let mut result = format!("Wrote {} bytes to {}.", content.len(), rel);
+        // L3: auto-neighborhood footer (best-effort, daemon may not be running).
+        super::append_neighborhood_footer(&mut result, &rel);
+        Ok(result)
     }
 }
