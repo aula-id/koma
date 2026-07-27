@@ -153,8 +153,11 @@ fn collect_source_files(roots: &[PathBuf]) -> Vec<SourceFile> {
         }
 
         let walker = ignore::WalkBuilder::new(root)
+            .git_ignore(true)    // respect .gitignore
+            .git_global(true)    // respect global gitignore
+            .git_exclude(true)   // respect .git/info/exclude
+            .hidden(false)       // include hidden files (match DirCache policy)
             .filter_entry(|dent| {
-                // Never prune the walk root itself (depth 0).
                 if dent.depth() > 0 && dent.file_type().is_some_and(|t| t.is_dir()) {
                     if let Some(name) = dent.file_name().to_str() {
                         return !PRUNE_DIRS.contains(&name);
@@ -430,7 +433,7 @@ fn resolve_java_import(
 fn resolve_ts_import(
     raw: &str,
     file_dir: &Path,
-    root: &Path,
+    _root: &Path,
     known_files: &HashSet<String>,
 ) -> Option<String> {
     let raw = raw.trim();
@@ -492,6 +495,32 @@ fn resolve_php_import(
 mod tests {
     use super::*;
 
+    /// A unique path under the OS temp root for a single test, removed
+    /// recursively on drop. No `tempfile` dep in this crate's Cargo.toml.
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "koma-linker-test-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn is_source_file_works() {
         assert!(is_source_file("foo.rs"));
@@ -501,5 +530,105 @@ mod tests {
         assert!(is_source_file("index.php"));
         assert!(!is_source_file("readme.md"));
         assert!(!is_source_file("Cargo.toml"));
+    }
+
+    #[test]
+    fn scan_roots_respects_gitignore() {
+        // Create a temp fixture tree:
+        // proj/
+        //   src/a.rs          (contains: mod b; )
+        //   src/b.rs          (contains: use crate::a; )
+        //   target/secret.rs  (should be excluded by PRUNE_DIRS)
+        //   ignored.rs        (should be excluded by .gitignore)
+        //   .gitignore        (contains: ignored.rs)
+
+        let tmp = TempDir::new("scan-gitignore");
+        let proj = tmp.path().join("proj");
+        let src = proj.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        // Source files with Rust imports.
+        std::fs::write(src.join("a.rs"), "mod b;\n").unwrap();
+        std::fs::write(src.join("b.rs"), "use crate::a;\n").unwrap();
+
+        // File under target/ — should be pruned by PRUNE_DIRS.
+        let target_dir = proj.join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("secret.rs"), "fn secret() {}\n").unwrap();
+
+        // File that should be gitignored.
+        std::fs::write(proj.join("ignored.rs"), "fn ignored() {}\n").unwrap();
+        std::fs::write(proj.join(".gitignore"), "ignored.rs\n").unwrap();
+
+        // The `ignore` crate requires a git repo to process .gitignore rules.
+        std::process::Command::new("git")
+            .args(["init", proj.to_str().unwrap()])
+            .output()
+            .expect("git init must succeed for test fixture");
+
+        let roots = vec![proj];
+        let graph = crate::linker::scan::scan_roots(&roots);
+
+        // src/a.rs and src/b.rs should be in the graph.
+        let node_paths: Vec<&str> = graph.nodes.keys().map(|s| s.as_str()).collect();
+        assert!(
+            node_paths.iter().any(|p| p.ends_with("src/a.rs")),
+            "src/a.rs should be in the graph, got: {:?}",
+            node_paths
+        );
+        assert!(
+            node_paths.iter().any(|p| p.ends_with("src/b.rs")),
+            "src/b.rs should be in the graph, got: {:?}",
+            node_paths
+        );
+
+        // target/secret.rs should NOT be in the graph (PRUNE_DIRS).
+        assert!(
+            !node_paths.iter().any(|p| p.contains("target/secret.rs")),
+            "target/secret.rs should NOT be in the graph, got: {:?}",
+            node_paths
+        );
+
+        // ignored.rs should NOT be in the graph (.gitignore).
+        assert!(
+            !node_paths
+                .iter()
+                .any(|p| p.ends_with("/ignored.rs") || *p == "ignored.rs"),
+            "ignored.rs should NOT be in the graph, got: {:?}",
+            node_paths
+        );
+    }
+
+    #[test]
+    fn scan_detects_multiple_languages() {
+        let tmp = TempDir::new("scan-lang");
+        let proj = tmp.path().join("proj");
+        let src = proj.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        std::fs::write(src.join("main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(src.join("app.py"), "print('hello')\n")
+            .unwrap();
+        std::fs::write(src.join("lib.go"), "package main\n").unwrap();
+
+        let graph = crate::linker::scan::scan_roots(&[proj]);
+        let mut langs: Vec<String> = graph.languages();
+        langs.sort();
+
+        assert!(
+            langs.contains(&"Go".to_string()),
+            "expected Go, got {:?}",
+            langs
+        );
+        assert!(
+            langs.contains(&"Python".to_string()),
+            "expected Python, got {:?}",
+            langs
+        );
+        assert!(
+            langs.contains(&"Rust".to_string()),
+            "expected Rust, got {:?}",
+            langs
+        );
     }
 }

@@ -660,6 +660,11 @@ fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     // shutdown behavior in this pass — confirm first that calling `stop()`
     // unconditionally on every TUI + daemon shutdown path doesn't regress anything the
     // `/security` panel relies on.
+    // Best-effort: unregister this process from the linker daemon so its
+    // root refcounts decrement and the daemon can idle-reap.
+    for s in &mut state.rest.sessions {
+        crate::linker::client::unregister_client(&s.id);
+    }
     for s in &mut state.rest.sessions {
         if let Some(p) = s.held_lock.take() {
             crate::model::store::remove_lock(&p);

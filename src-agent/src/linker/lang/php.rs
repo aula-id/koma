@@ -12,7 +12,19 @@ pub fn extract_imports(content: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    let tree = match parser.parse(content, None) {
+    // tree-sitter-php expects a full program rooted at `program`. Bare snippets
+    // (e.g. `"use App\Models\User;"`) parse as errors because the grammar's
+    // `program` rule requires a `<?php` header.  Prepend one when missing so the
+    // tree-sitter parse can match `use_statement` nodes.
+    let content_owned;
+    let parse_content = if content.trim_start().starts_with("<?php") {
+        content
+    } else {
+        content_owned = format!("<?php\n{content}");
+        &content_owned
+    };
+
+    let tree = match parser.parse(parse_content, None) {
         Some(t) => t,
         None => return Vec::new(),
     };
@@ -21,12 +33,12 @@ pub fn extract_imports(content: &str) -> Vec<String> {
 
     if let Ok(query) = tree_sitter::Query::new(
         &lang,
-        "(use_statement) @use_stmt",
+        "(namespace_use_declaration) @use_stmt",
     ) {
         let mut cursor = tree_sitter::QueryCursor::new();
-        for m in cursor.matches(&query, tree.root_node(), content.as_bytes()) {
+        for m in cursor.matches(&query, tree.root_node(), parse_content.as_bytes()) {
             for cap in m.captures {
-                if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
+                if let Ok(text) = cap.node.utf8_text(parse_content.as_bytes()) {
                     if let Some(path) = parse_php_use(text) {
                         imports.push(path);
                     }

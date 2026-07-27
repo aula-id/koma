@@ -8,6 +8,7 @@ use crate::ipc::frame::FrameReader;
 use crate::ipc::linker_proto::{LinkerQuery, LinkerRequest, LinkerResponse};
 use crate::ipc::SyncIpcStream;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Timeout for linker daemon IPC round-trips.
@@ -16,7 +17,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(3);
 /// Open a sync Unix socket to the linker daemon, send a request, and read the
 /// response frame. Returns `None` if any step fails (daemon not running,
 /// timeout, bad frame, decode error).
-fn connect_and_send(req: &LinkerRequest) -> Option<LinkerResponse> {
+pub(crate) fn connect_and_send(req: &LinkerRequest) -> Option<LinkerResponse> {
     let sock_path = crate::model::store::linker_daemon_sock_path().ok()?;
     let mut stream = SyncIpcStream::connect(&sock_path).ok()?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok()?;
@@ -47,8 +48,14 @@ fn connect_and_send(req: &LinkerRequest) -> Option<LinkerResponse> {
 pub struct SummaryResult {
     pub text: String,
     pub generation: u64,
+    /// Populated for callers/tools; L1 currently uses `text` only.
+    #[allow(dead_code)]
     pub file_count: usize,
+    /// Populated for callers/tools; L1 currently uses `text` only.
+    #[allow(dead_code)]
     pub edge_count: usize,
+    /// Populated for callers/tools; L1 currently uses `text` only.
+    #[allow(dead_code)]
     pub languages: Vec<String>,
 }
 
@@ -100,6 +107,109 @@ pub fn fetch_neighborhood(path: &str) -> Option<(Vec<String>, Vec<String>)> {
         }
     }
     Some((imports, imported_by))
+}
+
+/// Ensure the linker daemon is running and register the given roots.
+/// Returns Ok(()) on success, best-effort error on failure.
+pub fn ensure_and_register(roots: &[PathBuf], client_id: &str) -> Result<(), String> {
+    crate::app::ensure_linker_daemon_running()
+        .map_err(|e| format!("failed to start linker daemon: {e}"))?;
+
+    let root_strs: Vec<String> = roots
+        .iter()
+        .map(|p| {
+            p.canonicalize()
+                .unwrap_or_else(|_| p.clone())
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+
+    let req = LinkerRequest::RegisterWorkspaces {
+        roots: root_strs,
+        session_id: client_id.to_string(),
+    };
+
+    match connect_and_send(&req) {
+        Some(_) => Ok(()),
+        None => Err("linker daemon did not respond".into()),
+    }
+}
+
+/// Unregister a client from the linker daemon.
+pub fn unregister_client(client_id: &str) {
+    let req = LinkerRequest::Unregister {
+        session_id: client_id.to_string(),
+    };
+    let _ = connect_and_send(&req);
+}
+
+/// Fetch summary only if the generation is newer than `min_gen`.
+/// Returns None if daemon is not running or generation hasn't advanced.
+pub fn fetch_summary_if_newer(min_gen: u64) -> Option<SummaryResult> {
+    let result = fetch_summary()?;
+    if result.generation > min_gen {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+/// Normalize a query path: if relative, join against project roots.
+/// If absolute and under a root, return as-is.
+/// Falls back to suffix matching against known_files from the graph.
+pub fn normalize_query_path(path: &str, project_roots: &[PathBuf]) -> String {
+    let p = std::path::Path::new(path);
+
+    // Already absolute — return as-is.
+    if p.is_absolute() {
+        return path.replace('\\', "/");
+    }
+
+    // Relative — try each root.
+    for root in project_roots {
+        let candidate = root.join(path);
+        if candidate.exists() {
+            return candidate.to_string_lossy().replace('\\', "/");
+        }
+    }
+
+    // Fallback: return as-is.
+    path.replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_query_path_absolute_passthrough() {
+        let roots = vec![PathBuf::from("/some/root")];
+        assert_eq!(
+            normalize_query_path("/foo/bar.rs", &roots),
+            "/foo/bar.rs"
+        );
+    }
+
+    #[test]
+    fn normalize_query_path_relative_fallback() {
+        // When the file doesn't exist on disk, returns as-is.
+        let roots = vec![PathBuf::from("/some/nonexistent")];
+        assert_eq!(
+            normalize_query_path("src/main.rs", &roots),
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn normalize_query_path_backslash() {
+        // Windows-style backslashes should be normalized.
+        let roots = vec![PathBuf::from("/some/root")];
+        assert_eq!(
+            normalize_query_path("/foo\\bar.rs", &roots),
+            "/foo/bar.rs"
+        );
+    }
 }
 
 

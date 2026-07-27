@@ -28,12 +28,23 @@ const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 /// Maximum number of results returned per query to avoid huge payloads.
 const QUERY_RESULT_CAP: usize = 200;
 
-/// Shared daemon state: the import graph plus per-session root tracking and
+/// Initial grace period before the reaper starts checking.
+const REAPER_INITIAL_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+/// Poll interval for the reaper.
+const REAPER_POLL: std::time::Duration = std::time::Duration::from_secs(15);
+/// Number of consecutive empty scans before exit.
+const REAPER_EMPTY_STREAK_TO_EXIT: u32 = 2;
+
+/// Shared daemon state: the import graph plus per-client root tracking and
 /// the file watcher.
 struct DaemonState {
     graph: RwLock<ImportGraph>,
-    /// session_id → set of registered workspace root paths.
-    sessions: RwLock<HashMap<String, HashSet<PathBuf>>>,
+    /// client_id → set of registered workspace root paths.
+    clients: RwLock<HashMap<String, HashSet<PathBuf>>>,
+    /// root → refcount (how many clients hold this root).
+    root_refs: RwLock<HashMap<PathBuf, u32>>,
+    /// True while a scan is running on a background thread.
+    scanning: std::sync::atomic::AtomicBool,
     /// The debounced file watcher (kept alive while the daemon runs).
     /// Dropped on shutdown or when all roots are unregistered.
     watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
@@ -49,7 +60,9 @@ impl DaemonState {
     fn new() -> Self {
         Self {
             graph: RwLock::new(ImportGraph::new()),
-            sessions: RwLock::new(HashMap::new()),
+            clients: RwLock::new(HashMap::new()),
+            root_refs: RwLock::new(HashMap::new()),
+            scanning: std::sync::atomic::AtomicBool::new(false),
             watcher: Mutex::new(None),
             watcher_rx: Mutex::new(None),
             watched_roots: RwLock::new(Vec::new()),
@@ -88,6 +101,13 @@ pub fn run_linker_daemon(_opts: crate::cli::Opts) -> Result<()> {
 
     // Shared state.
     let state = Arc::new(DaemonState::new());
+
+    // Spawn the idle reaper.
+    {
+        let flag = Arc::clone(&shutting_down);
+        let state = Arc::clone(&state);
+        handle.spawn(reaper_loop(flag, state));
+    }
 
     // Accept loop.
     handle.block_on(accept_loop(listener, &shutting_down, &state));
@@ -196,57 +216,118 @@ fn handle_request(
         LinkerRequest::RegisterWorkspaces { roots, session_id } => {
             let paths: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
 
-            // Register the session's roots.
+            // Register client → roots mapping.
             {
-                let mut sessions = state.sessions.write().unwrap_or_else(|e| e.into_inner());
-                sessions.insert(session_id, paths.iter().cloned().collect());
+                let mut clients = state.clients.write().unwrap_or_else(|e| e.into_inner());
+                clients.insert(session_id.clone(), paths.iter().cloned().collect());
             }
 
-            // Collect all roots across all sessions.
-            let all_roots = collect_all_roots(state);
+            // Bump refcounts; track which roots are NEW (need scan).
+            let mut new_roots = Vec::new();
+            {
+                let mut refs = state.root_refs.write().unwrap_or_else(|e| e.into_inner());
+                for root in &paths {
+                    let count = refs.entry(root.clone()).or_insert(0);
+                    *count += 1;
+                    if *count == 1 {
+                        // First client for this root — needs scan.
+                        new_roots.push(root.clone());
+                    }
+                }
+            }
 
-            // (Re-)create the watcher if roots changed.
+            // Collect all roots for the watcher.
+            let all_roots = collect_all_roots(state);
             maybe_update_watcher(state, &all_roots);
 
-            // Spawn scan on a blocking thread (tree-sitter parsing is CPU-bound).
-            let state_clone = Arc::clone(state);
-            let scan_roots = all_roots.clone();
-            std::thread::spawn(move || {
-                let graph = crate::linker::scan::scan_roots(&scan_roots);
-                if let Ok(mut g) = state_clone.graph.write() {
-                    *g = graph;
-                }
-            });
+            // Determine if we need to scan.
+            let needs_scan = !new_roots.is_empty();
+            let already_scanned = {
+                let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
+                graph.generation > 0
+            };
 
-            LinkerResponse::Ready
-        }
-        LinkerRequest::Unregister { session_id } => {
-            let removed;
-            {
-                let mut sessions = state.sessions.write().unwrap_or_else(|e| e.into_inner());
-                removed = sessions.remove(&session_id).is_some();
+            if needs_scan || (!already_scanned && !all_roots.is_empty()) {
+                let should_scan = {
+                    let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
+                    graph.nodes.is_empty()
+                };
+                if should_scan || !new_roots.is_empty() {
+                    state.scanning.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let state_clone = Arc::clone(state);
+                    let scan_roots = all_roots.clone();
+                    std::thread::Builder::new()
+                        .name("linker-scan".to_string())
+                        .spawn(move || {
+                            let graph = crate::linker::scan::scan_roots(&scan_roots);
+                            if let Ok(mut g) = state_clone.graph.write() {
+                                *g = graph;
+                            }
+                            state_clone.scanning.store(false, std::sync::atomic::Ordering::SeqCst);
+                        })
+                        .ok();
+                }
             }
 
-            if removed {
-                // Rescan remaining roots.
-                let all_roots = collect_all_roots(state);
+            let status = if state.scanning.load(std::sync::atomic::Ordering::SeqCst) {
+                crate::ipc::linker_proto::ScanStatus::Scanning
+            } else {
+                crate::ipc::linker_proto::ScanStatus::Ready
+            };
+            let gen = state.graph.read().unwrap_or_else(|e| e.into_inner()).generation;
 
+            LinkerResponse::Registered { status, generation: gen }
+        }
+        LinkerRequest::Unregister { session_id } => {
+            let removed_roots;
+            {
+                let mut clients = state.clients.write().unwrap_or_else(|e| e.into_inner());
+                removed_roots = clients.remove(&session_id);
+            }
+
+            if let Some(roots) = removed_roots {
+                let mut roots_to_drop = Vec::new();
+                {
+                    let mut refs = state.root_refs.write().unwrap_or_else(|e| e.into_inner());
+                    for root in &roots {
+                        if let Some(count) = refs.get_mut(root) {
+                            *count = count.saturating_sub(1);
+                            if *count == 0 {
+                                refs.remove(root);
+                                roots_to_drop.push(root.clone());
+                            }
+                        }
+                    }
+                }
+
+                // If all roots are empty, stop the watcher.
+                let all_roots = collect_all_roots(state);
                 if all_roots.is_empty() {
-                    // No roots left — stop the watcher.
                     stop_watcher(state);
                 } else {
-                    // Roots may have changed — update watcher.
                     maybe_update_watcher(state, &all_roots);
                 }
 
-                let state_clone = Arc::clone(state);
-                let scan_roots = all_roots;
-                std::thread::spawn(move || {
-                    let graph = crate::linker::scan::scan_roots(&scan_roots);
-                    if let Ok(mut g) = state_clone.graph.write() {
-                        *g = graph;
+                // If we dropped all roots AND no other roots remain, clear the graph.
+                if all_roots.is_empty() {
+                    if let Ok(mut g) = state.graph.write() {
+                        g.clear();
                     }
-                });
+                } else if !roots_to_drop.is_empty() {
+                    // Rescan remaining roots (dropped roots are gone from all_roots).
+                    state.scanning.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let state_clone = Arc::clone(state);
+                    std::thread::Builder::new()
+                        .name("linker-scan".to_string())
+                        .spawn(move || {
+                            let graph = crate::linker::scan::scan_roots(&all_roots);
+                            if let Ok(mut g) = state_clone.graph.write() {
+                                *g = graph;
+                            }
+                            state_clone.scanning.store(false, std::sync::atomic::Ordering::SeqCst);
+                        })
+                        .ok();
+                }
             }
 
             LinkerResponse::Ack
@@ -281,6 +362,12 @@ fn handle_request(
                 }
             }
 
+            // Cap summary text at 600 chars.
+            if text.len() > 600 {
+                text.truncate(600);
+                text.push('…');
+            }
+
             LinkerResponse::Summary {
                 text,
                 generation,
@@ -291,15 +378,15 @@ fn handle_request(
         }
         LinkerRequest::Query(query) => {
             let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
-            handle_query(query, &graph)
+            handle_query(query, &graph, state)
         }
     }
 }
 
-/// Collect all workspace roots across all registered sessions.
+/// Collect all workspace roots across all registered clients.
 fn collect_all_roots(state: &Arc<DaemonState>) -> Vec<PathBuf> {
-    let sessions = state.sessions.read().unwrap_or_else(|e| e.into_inner());
-    let mut all_roots: Vec<PathBuf> = sessions.values().flatten().cloned().collect();
+    let clients = state.clients.read().unwrap_or_else(|e| e.into_inner());
+    let mut all_roots: Vec<PathBuf> = clients.values().flatten().cloned().collect();
     all_roots.sort();
     all_roots.dedup();
     all_roots
@@ -393,7 +480,7 @@ fn watcher_loop(state: Arc<DaemonState>, workspace_roots: Vec<PathBuf>) {
 }
 
 /// Dispatch a graph query and produce a response.
-fn handle_query(query: LinkerQuery, graph: &ImportGraph) -> LinkerResponse {
+fn handle_query(query: LinkerQuery, graph: &ImportGraph, state: &Arc<DaemonState>) -> LinkerResponse {
     match query {
         LinkerQuery::Dependencies { path } => {
             let deps = graph.dependencies(&path);
@@ -460,9 +547,97 @@ fn handle_query(query: LinkerQuery, graph: &ImportGraph) -> LinkerResponse {
             }
         }
         LinkerQuery::Rescan => {
-            // Trigger an asynchronous rescan (same as RegisterWorkspaces).
-            // For now, just return Ack; the caller should re-register to trigger rescan.
+            let all_roots = collect_all_roots(state);
+            if all_roots.is_empty() {
+                return LinkerResponse::Ack;
+            }
+            state.scanning.store(true, std::sync::atomic::Ordering::SeqCst);
+            let state_clone = Arc::clone(state);
+            std::thread::Builder::new()
+                .name("linker-rescan".to_string())
+                .spawn(move || {
+                    let graph = crate::linker::scan::scan_roots(&all_roots);
+                    if let Ok(mut g) = state_clone.graph.write() {
+                        *g = graph;
+                    }
+                    state_clone.scanning.store(false, std::sync::atomic::Ordering::SeqCst);
+                })
+                .ok();
             LinkerResponse::Ack
         }
     }
+}
+
+/// Idle reaper: exit when no registered clients and no session sockets.
+async fn reaper_loop(
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    state: Arc<DaemonState>,
+) {
+    use std::sync::atomic::Ordering;
+
+    tokio::time::sleep(REAPER_INITIAL_GRACE).await;
+
+    let mut empty_streak: u32 = 0;
+    loop {
+        if shutting_down.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let has_clients = {
+            let clients = state.clients.read().unwrap_or_else(|e| e.into_inner());
+            !clients.is_empty()
+        };
+        let has_session_socket = run_dir_has_socket();
+
+        if has_clients || has_session_socket {
+            empty_streak = 0;
+        } else {
+            empty_streak = empty_streak.saturating_add(1);
+            if empty_streak >= REAPER_EMPTY_STREAK_TO_EXIT {
+                shutting_down.store(true, Ordering::Relaxed);
+                return;
+            }
+        }
+
+        tokio::time::sleep(REAPER_POLL).await;
+    }
+}
+
+/// Whether the run dir currently contains ANY `.sock` file.
+#[cfg(unix)]
+fn run_dir_has_socket() -> bool {
+    let dir = match crate::model::store::run_dir() {
+        Ok(d) => d,
+        Err(_) => return true,
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return true,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("sock") {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn run_dir_has_socket() -> bool {
+    // Windows: check for named pipes via run_dir listing.
+    let dir = match crate::model::store::run_dir() {
+        Ok(d) => d,
+        Err(_) => return true,
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return true,
+    };
+    for entry in entries.flatten() {
+        if entry.path().extension().and_then(|e| e.to_str()) == Some("sock") {
+            return true;
+        }
+    }
+    false
 }

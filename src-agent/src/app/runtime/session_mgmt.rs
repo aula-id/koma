@@ -98,12 +98,6 @@ fn warm_session_impl(
     // activation path that routes through warm_session — startup, /new,
     // picker-select, creds-confirm — acquires the lock.
     reconcile_session_lock(state);
-    // L1: best-effort graph summary fetch from the linker daemon. Fast (local
-    // socket, <1ms typical), so safe to do synchronously on the warm path. If
-    // the daemon isn't running yet, this is a silent no-op.
-    if let Some(result) = crate::linker::client::fetch_summary() {
-        state.rest.fg_mut().update_graph_summary(result.text, result.generation);
-    }
     // Snapshot what we need, dropping the session borrow before mutating
     // `state.mode` / `state.rest`. `config` is cloned so the role resolution
     // below doesn't borrow `state` across the spawn.
@@ -111,6 +105,55 @@ fn warm_session_impl(
         Some(s) => (s.workdir(), s.settings.clone(), s.workdirs()),
         None => return,
     };
+    // Warm channel: shared between the linker poll and the awareness task so
+    // both can send WarmEvent variants through a single drain.
+    let (warm_tx, warm_rx) = tokio::sync::mpsc::unbounded_channel();
+    state.rest.warm_rx = Some(warm_rx);
+    // L1: best-effort linker daemon warm — ensure it's running, register the
+    // session's workspace roots, then fetch the summary. If the graph is still
+    // scanning (generation=0), spawn a background poll via the warm channel.
+    {
+        let session_id = state.rest.fg().id.clone();
+        let workdirs_clone = workdirs.clone();
+        // Best-effort: start daemon + register. Failure is silent (graph just
+        // won't be available yet; the model turns fine without it).
+        let _ = crate::linker::client::ensure_and_register(&workdirs_clone, &session_id);
+
+        // Try immediate fetch.
+        if let Some(result) = crate::linker::client::fetch_summary() {
+            state.rest.fg_mut().update_graph_summary(result.text, result.generation);
+        }
+
+        // If generation is still 0, the scan is likely in progress. Spawn a
+        // background poll that sends a WarmGraph event when ready.
+        let current_gen = state.rest.fg().graph_generation;
+        if current_gen == 0 {
+            let warming_id = session_id;
+            let tx = warm_tx.clone();
+            handle.spawn(async move {
+                // Poll every 2s for up to 10s waiting for generation > 0.
+                for _ in 0..5 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if let Some(result) = crate::linker::client::fetch_summary_if_newer(0) {
+                        if result.generation > 0 {
+                            let _ = tx.send(crate::service::WarmEvent::WarmGraph {
+                                session_id: warming_id.clone(),
+                                summary: Some(result.text),
+                                generation: result.generation,
+                            });
+                            return;
+                        }
+                    }
+                }
+                // Timed out — send a no-op so the drain doesn't hang.
+                let _ = tx.send(crate::service::WarmEvent::WarmGraph {
+                    session_id: warming_id,
+                    summary: None,
+                    generation: 0,
+                });
+            });
+        }
+    }
     // Capture the warming session's stable UUID (the SessionRuntime id, the same key the
     // drain routes on) so the WarmAwareness result lands on THIS session by id (C4),
     // even if another session replaces the shared `warm_rx` and is also Loading.
@@ -170,11 +213,8 @@ fn warm_session_impl(
         });
     }
 
-    // One channel for the warm task; the receiver lives in state and is drained in
-    // run_loop. Dropping it (e.g. app close) makes the sends no-ops, same contract
-    // as the streaming / endpoints channels.
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    state.rest.warm_rx = Some(rx);
+    // Reuse the warm channel created above (shared with linker poll).
+    let tx = warm_tx;
 
     // Awareness task: read the depth-1 docs + summarize on the resolved Awareness
     // route. Move the owned route + the cloned settings/workdir in; `summarize`

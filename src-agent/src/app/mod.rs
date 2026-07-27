@@ -51,5 +51,5 @@ pub use runtime::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
     run_daemon_subcommand, run_doctor,
 };
-pub use runtime::{ensure_linker_daemon_running, stop_linker_daemon};
+pub use runtime::ensure_linker_daemon_running;
 pub use update::run_update;

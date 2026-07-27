@@ -60,7 +60,7 @@ pub use manage::{
     any_daemon_alive, ensure_daemon_running, migrate_legacy_daemon, print_daemon_usage,
     run_daemon_subcommand, run_doctor,
 };
-pub use manage::{ensure_linker_daemon_running, stop_linker_daemon};
+pub use manage::ensure_linker_daemon_running;
 
 // Re-export the live-session discovery + cross-daemon spawn transport at the `runtime` level
 // so the extension grant broker (`crate::app::ext::broker`, outside this module tree) can drive
