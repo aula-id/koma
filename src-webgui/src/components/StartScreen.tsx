@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ArrowRight, Clock, FolderPlus, Info, Sparkles, Zap } from 'lucide-react'
 import { NewSessionMenu } from './NewSessionMenu'
 import { SessionRowActions, SessionRowConfirmStrip, type ArmedRow } from './SessionRowActions'
+import { SessionBulkBar } from './SessionBulkBar'
+import { useSessionMultiSelect } from './sessionListSelection'
 import { useKoma, isDying } from '../store/koma'
 
 // Measures the component's own width with a ResizeObserver (a container query in
@@ -45,8 +47,9 @@ function SectionLabel({ icon: Icon, children }: { icon: typeof Clock; children: 
 // (from the host's authoritative hub history/cooking mirror) + a New session
 // action (reuses the native folder-picker flow via GuiReq NewSession) + a short
 // "about Koma" panel. Responsive: stacked when narrow, side-by-side when wide.
-// The resume/change-session OVERLAY (ResumePalette) is unaffected — it stays the
-// attached-state affordance.
+//
+// Session rows (issue #126): plain click selects/highlights; Ctrl/Cmd toggles;
+// Shift ranges; double-click or Enter opens. Bulk Kill/Delete via SessionBulkBar.
 export function StartScreen() {
   const history = useKoma((s) => s.hub.history)
   const cooking = useKoma((s) => s.hub.cooking)
@@ -58,6 +61,7 @@ export function StartScreen() {
   // The single armed row (kill/delete confirm pill) across BOTH lists — arming
   // a different row disarms whichever was armed before.
   const [armed, setArmed] = useState<ArmedRow>(null)
+  const multi = useSessionMultiSelect()
 
   // The host only discovers live sessions on demand — nudge a fresh Hub on
   // mount and on a short interval so recent/live rows stay current (same cadence
@@ -68,16 +72,24 @@ export function StartScreen() {
     return () => window.clearInterval(id)
   }, [req])
 
-  // Escape cancels an armed row (there's no overlay to close here, unlike
-  // ResumePalette).
+  // Escape: clear multi-select first, then cancel an armed row.
+  const multiHas = multi.hasSelection
+  const multiClear = multi.clear
   useEffect(() => {
-    if (!armed) return
+    if (!armed && !multiHas) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setArmed(null)
+      if (e.key !== 'Escape') return
+      if (multiHas) {
+        multiClear()
+        // Avoid leaving a browser focus ring on the last-clicked row.
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        return
+      }
+      if (armed) setArmed(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [armed])
+  }, [armed, multiHas, multiClear])
 
   // Live (cooking) sessions first, then past history — the same source rows the
   // ResumePalette lists, minus the synthetic `kind: 'new'` placeholder.
@@ -85,6 +97,8 @@ export function StartScreen() {
     () => cooking.filter((c) => c.kind === 'session' && c.id),
     [cooking],
   )
+  const liveIds = useMemo(() => liveSessions.map((c) => c.id as string), [liveSessions])
+  const historyIds = useMemo(() => history.map((h) => h.id), [history])
 
   const openSession = (id: string, name: string) => {
     // Optimistic swap overlay (no host "swap started" push; attach can block for
@@ -96,7 +110,25 @@ export function StartScreen() {
   // attaches once a folder is confirmed (cancel would strand the loader).
   const newSession = () => req({ r: 'NewSession' })
 
+  const armRow = (row: ArmedRow) => {
+    multi.clear()
+    setArmed(row)
+  }
+
+  const onRowMouse = (
+    e: ReactMouseEvent,
+    kind: 'session' | 'history',
+    id: string,
+    ordered: string[],
+  ) => {
+    if (armed) setArmed(null)
+    multi.onRowClick(e, kind, id, ordered)
+  }
+
   const hasRecent = liveSessions.length > 0 || history.length > 0
+  const bulkCooking = multi.selectedIds('session')
+  const bulkHistory = multi.selectedIds('history')
+  const fgCooking = liveSessions.filter((c) => c.foreground && c.id).map((c) => c.id as string)
 
   const actions = (
     <div className="flex min-w-0 flex-1 flex-col gap-4">
@@ -124,37 +156,62 @@ export function StartScreen() {
         <NewSessionMenu className="pr-3" />
       </div>
 
-      <Card>
-        <SectionLabel icon={Clock}>Recent</SectionLabel>
+      <Card className="!p-0 overflow-hidden">
+        <div className="px-4 pt-4">
+          <SectionLabel icon={Clock}>Recent</SectionLabel>
+        </div>
+        {multi.hasSelection && (
+          <SessionBulkBar
+            cookingIds={bulkCooking}
+            historyIds={bulkHistory}
+            foregroundCookingIds={fgCooking}
+            onDone={() => multi.clear()}
+            onClear={() => multi.clear()}
+          />
+        )}
         {!hasRecent ? (
-          <div className="px-1 py-2 text-[12px] text-koma-fg opacity-35">No sessions yet — start a new one.</div>
+          <div className="px-5 pb-4 pt-2 text-[12px] text-koma-fg opacity-35">No sessions yet — start a new one.</div>
         ) : (
-          <div className="-mx-1 max-h-[40vh] overflow-y-auto">
+          <div className="max-h-[40vh] overflow-y-auto px-3 pb-3">
             {liveSessions.map((c) => {
-              const dying = !!c.id && isDying(dyingSessions, c.id, 'session')
-              const rowArmed = !!c.id && armed?.id === c.id && armed.kind === 'session'
+              const id = c.id as string
+              const dying = isDying(dyingSessions, id, 'session')
+              const rowArmed = armed?.id === id && armed.kind === 'session'
+              const sel = multi.isSelected('session', id)
               return (
                 <div
-                  key={c.id}
+                  key={id}
                   role="button"
                   tabIndex={dying || rowArmed ? -1 : 0}
-                  onClick={() => {
+                  aria-selected={sel}
+                  onClick={(e) => {
                     if (dying) return
-                    if (armed && armed.id === c.id && armed.kind === 'session') return
-                    c.id && openSession(c.id, c.name)
+                    if (rowArmed) return
+                    onRowMouse(e, 'session', id, liveIds)
+                  }}
+                  onDoubleClick={(e) => {
+                    if (dying || rowArmed) return
+                    e.preventDefault()
+                    openSession(id, c.name)
                   }}
                   onKeyDown={(e) => {
                     if (e.key !== 'Enter' && e.key !== ' ') return
                     if (e.key === ' ') e.preventDefault()
-                    if (!dying && !armed && c.id) openSession(c.id, c.name)
+                    if (!dying && !armed) openSession(id, c.name)
                   }}
-                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors ${
-                    rowArmed ? '' : 'gap-2 px-3 py-2 hover:bg-koma-hover'
-                  } ${dying ? 'pointer-events-none opacity-60' : ''}`}
+                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
+                    rowArmed ? '' : 'gap-2 px-3 py-2'
+                  } ${dying ? 'pointer-events-none opacity-60' : ''} ${
+                    rowArmed
+                      ? ''
+                      : sel
+                        ? 'bg-koma-accent/15 hover:bg-koma-accent/20'
+                        : 'hover:bg-koma-hover'
+                  }`}
                 >
-                  {rowArmed && c.id ? (
+                  {rowArmed ? (
                     <SessionRowConfirmStrip
-                      id={c.id}
+                      id={id}
                       kind="session"
                       foreground={c.foreground}
                       onCancel={() => setArmed(null)}
@@ -162,9 +219,6 @@ export function StartScreen() {
                     />
                   ) : (
                     <>
-                      {/* Content cell — flex-1 min-w-0 so ALL text/status/folder
-                          chips truncate INSIDE this cell, never spilling into
-                          the fixed trailing action column next to it. */}
                       <div className="flex min-w-0 flex-1 items-center gap-2">
                         <span className="h-1.5 w-1.5 flex-none animate-pulse rounded-full bg-emerald-500" />
                         <span className="min-w-0 flex-1 truncate text-[12.5px] text-koma-fg">{c.name}</span>
@@ -179,15 +233,8 @@ export function StartScreen() {
                           </span>
                         )}
                       </div>
-                      {/* Trailing action cell — fixed ~28px, always reserved
-                          (opacity-toggled inside, never conditionally
-                          rendered) so text width never jumps on hover, and
-                          the destructive button's hit area is strictly this
-                          column, never the content cell's text. */}
                       <div className="flex w-7 flex-none items-center justify-center">
-                        {c.id && (
-                          <SessionRowActions id={c.id} kind="session" armed={armed} onArm={setArmed} />
-                        )}
+                        <SessionRowActions id={id} kind="session" armed={armed} onArm={armRow} />
                       </div>
                     </>
                   )}
@@ -197,14 +244,21 @@ export function StartScreen() {
             {history.map((h) => {
               const dying = isDying(dyingSessions, h.id, 'history')
               const rowArmed = armed?.id === h.id && armed.kind === 'history'
+              const sel = multi.isSelected('history', h.id)
               return (
                 <div
                   key={h.id}
                   role="button"
                   tabIndex={dying || rowArmed ? -1 : 0}
-                  onClick={() => {
+                  aria-selected={sel}
+                  onClick={(e) => {
                     if (dying) return
-                    if (armed && armed.id === h.id && armed.kind === 'history') return
+                    if (rowArmed) return
+                    onRowMouse(e, 'history', h.id, historyIds)
+                  }}
+                  onDoubleClick={(e) => {
+                    if (dying || rowArmed) return
+                    e.preventDefault()
                     openSession(h.id, h.name)
                   }}
                   onKeyDown={(e) => {
@@ -212,9 +266,15 @@ export function StartScreen() {
                     if (e.key === ' ') e.preventDefault()
                     if (!dying && !armed) openSession(h.id, h.name)
                   }}
-                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors ${
-                    rowArmed ? '' : 'gap-2 px-3 py-2 hover:bg-koma-hover'
-                  } ${dying ? 'pointer-events-none opacity-60' : ''}`}
+                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
+                    rowArmed ? '' : 'gap-2 px-3 py-2'
+                  } ${dying ? 'pointer-events-none opacity-60' : ''} ${
+                    rowArmed
+                      ? ''
+                      : sel
+                        ? 'bg-koma-accent/15 hover:bg-koma-accent/20'
+                        : 'hover:bg-koma-hover'
+                  }`}
                 >
                   {rowArmed ? (
                     <SessionRowConfirmStrip
@@ -234,13 +294,18 @@ export function StartScreen() {
                         )}
                       </div>
                       <div className="flex w-7 flex-none items-center justify-center">
-                        <SessionRowActions id={h.id} kind="history" armed={armed} onArm={setArmed} />
+                        <SessionRowActions id={h.id} kind="history" armed={armed} onArm={armRow} />
                       </div>
                     </>
                   )}
                 </div>
               )
             })}
+          </div>
+        )}
+        {hasRecent && (
+          <div className="border-t border-koma-border px-4 py-1.5 text-[10px] text-koma-fg opacity-35">
+            Click to select · Ctrl/⌘ click toggle · Shift range · Double-click or Enter to open
           </div>
         )}
       </Card>

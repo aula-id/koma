@@ -103,6 +103,12 @@ export default function HelpTab() {
               permanently — there's no undo. Killing the currently-attached session drops you back to the start
               screen once the daemon is confirmed stopped.
             </InfoRow>
+            <InfoRow label="Multi-select">
+              In the start screen Recent list and the change-session hub, a plain click selects and highlights a
+              row (it does not open it). Ctrl/⌘-click toggles; Shift-click selects a range. Double-click or Enter
+              opens/resumes. With one or more rows selected, the bulk bar offers Kill (live) and Delete forever
+              (history), each with a yes/no confirm. Esc clears the selection first.
+            </InfoRow>
             <InfoRow label="+ New session">
               The primary button opens a folder picker for a new session and leaves whatever's currently cooking
               running in the background. The chevron next to it offers "New session + close current," which stops
