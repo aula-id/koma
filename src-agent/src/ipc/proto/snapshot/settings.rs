@@ -143,6 +143,9 @@ pub struct ModelCmdSnapshot {
     pub cursor: usize,
     /// Note / help text.
     pub note: String,
+    /// Help text lines (only populated for help submode).
+    #[serde(default)]
+    pub lines: Vec<String>,
 }
 
 /// A serde-safe projection of one --resume session-picker row.

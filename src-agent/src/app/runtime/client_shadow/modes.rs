@@ -233,7 +233,7 @@ pub(crate) fn shadow_model_cmd(s: ModelCmdSnapshot) -> crate::app::mode::ModelCm
             current_model: None,
         },
         _ => ModelCmdSub::Help {
-            lines: vec![s.note.clone()],
+            lines: s.lines,
         },
     };
 

@@ -46,6 +46,7 @@ mod commands;
 mod doctor;
 mod mcp;
 mod oauth;
+mod linker;
 mod os;
 mod probe;
 
@@ -62,6 +63,7 @@ pub use doctor::run_doctor;
 // global MCP daemon so the next ensure respawns it off the just-saved config).
 pub use mcp::{ensure_mcp_daemon_running, stop_mcp_daemon};
 pub use oauth::ensure_oauth_daemon_running;
+pub use linker::{ensure_linker_daemon_running, stop_linker_daemon};
 // `spawn_into_session` + `SpawnIntoReply` are the extension `sessions.spawn_into`
 // cross-process transport (W7), consumed by the grant broker outside this module tree.
 // `broadcast_unload_extension` is the extension-uninstall in-memory fan-out (step 3),

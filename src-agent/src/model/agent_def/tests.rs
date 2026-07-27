@@ -108,7 +108,8 @@ fn builtins_present_with_expected_shape() {
             "glob",
             "dir_list",
             "web_search",
-            "web_fetch"
+            "web_fetch",
+            "graph_query",
         ]
     );
     assert!(!explore.prompt.trim().is_empty());
