@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Search, Plus } from 'lucide-react'
 import { CMD_SEARCH_SPRING, CMD_SEARCH_WIDTH } from './Titlebar'
@@ -43,6 +43,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
   // a different row disarms whichever was armed before.
   const [armed, setArmed] = useState<ArmedRow>(null)
   const multi = useSessionMultiSelect()
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const multiHas = multi.hasSelection
   const multiClear = multi.clear
@@ -52,6 +53,9 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
         // Escape: multi-select → armed row → close palette.
         if (multiHas) {
           multiClear()
+          // Drop keyboard focus ring on the last-clicked row (tabIndex=0
+          // leaves a blue outline after Esc clears the green multi-select).
+          searchRef.current?.focus()
           return
         }
         if (armed) {
@@ -158,6 +162,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
           >
             <Search size={13} className="flex-none text-koma-fg opacity-50" />
             <input
+              ref={searchRef}
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -224,7 +229,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       if (e.key === ' ') e.preventDefault()
                       if (!dying && !armed && c.id) openSession(id, c.name)
                     }}
-                    className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors ${
+                    className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
                       rowArmed ? '' : 'px-3 py-1.5'
                     } ${dying ? 'pointer-events-none opacity-60' : ''} ${
                       rowArmed
@@ -300,7 +305,7 @@ export function ResumePalette({ onClose }: ResumePaletteProps) {
                       if (e.key === ' ') e.preventDefault()
                       if (!dying && !armed) openSession(h.id, h.name)
                     }}
-                    className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors ${
+                    className={`group flex w-full cursor-pointer items-center justify-between text-left text-[12px] text-koma-fg transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
                       rowArmed ? '' : 'px-3 py-1.5'
                     } ${dying ? 'pointer-events-none opacity-60' : ''} ${
                       rowArmed

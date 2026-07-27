@@ -81,6 +81,8 @@ export function StartScreen() {
       if (e.key !== 'Escape') return
       if (multiHas) {
         multiClear()
+        // Avoid leaving a browser focus ring on the last-clicked row.
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
         return
       }
       if (armed) setArmed(null)
@@ -197,7 +199,7 @@ export function StartScreen() {
                     if (e.key === ' ') e.preventDefault()
                     if (!dying && !armed) openSession(id, c.name)
                   }}
-                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors ${
+                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
                     rowArmed ? '' : 'gap-2 px-3 py-2'
                   } ${dying ? 'pointer-events-none opacity-60' : ''} ${
                     rowArmed
@@ -264,7 +266,7 @@ export function StartScreen() {
                     if (e.key === ' ') e.preventDefault()
                     if (!dying && !armed) openSession(h.id, h.name)
                   }}
-                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors ${
+                  className={`group flex w-full cursor-pointer items-center justify-between rounded-lg text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-koma-accent/50 ${
                     rowArmed ? '' : 'gap-2 px-3 py-2'
                   } ${dying ? 'pointer-events-none opacity-60' : ''} ${
                     rowArmed
