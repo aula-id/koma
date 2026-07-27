@@ -131,15 +131,35 @@ export function SessionBulkBar({
     )
   }
 
+  // Hub palette is narrow (~340px) and must fit Kill+Delete+Clear without
+  // eating the summary mid-word. Prefer the shortest mixed form that still
+  // shows both counts; full sentence is always on `title` for hover.
+  // e.g. visible "2 · 1L · 1H"  title "2 selected · 1 live · 1 history"
+  const summary =
+    nCook > 0 && nHist > 0
+      ? `${total} · ${nCook}L · ${nHist}H`
+      : nCook > 0
+        ? `${nCook} live`
+        : nHist > 0
+          ? `${nHist} history`
+          : `${total} selected`
+  const summaryTitle =
+    nCook > 0 && nHist > 0
+      ? `${total} selected · ${nCook} live · ${nHist} history`
+      : nCook > 0
+        ? `${nCook} live selected`
+        : nHist > 0
+          ? `${nHist} history selected`
+          : `${total} selected`
+
   return (
     <div
       className={`flex w-full items-center gap-2 border-b border-koma-border bg-koma-panel2 px-3 py-1.5 text-[11.5px] text-koma-fg ${className}`}
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <span className="min-w-0 flex-1 truncate opacity-80">
-        {total} selected
-        {nCook > 0 && nHist > 0 ? ` · ${nCook} live · ${nHist} history` : ''}
+      <span className="min-w-0 flex-1 truncate opacity-80" title={summaryTitle}>
+        {summary}
       </span>
       {nCook > 0 && (
         <button
