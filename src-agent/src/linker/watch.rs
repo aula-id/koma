@@ -4,7 +4,7 @@
 use crate::linker::graph::ImportGraph;
 use crate::linker::lang::SOURCE_EXTENSIONS;
 use crate::linker::scan::scan_file;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -48,6 +48,20 @@ pub fn create_watcher(
     ),
     String,
 > {
+    // Build gitignore matchers for each root.
+    let gitignores: Vec<(PathBuf, ignore::gitignore::Gitignore)> = roots
+        .iter()
+        .filter_map(|root| {
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+            // Add .gitignore
+            builder.add(root.join(".gitignore"));
+            // Add .git/info/exclude
+            builder.add(root.join(".git").join("info").join("exclude"));
+            let gi = builder.build().ok()?;
+            Some((root.clone(), gi))
+        })
+        .collect();
+
     let (tx, rx) = mpsc::channel();
 
     let mut debouncer = new_debouncer(
@@ -61,7 +75,18 @@ pub fn create_watcher(
                     .iter()
                     .filter(|e| matches!(e.kind, DebouncedEventKind::Any))
                     .map(|e| e.path.clone())
-                    .filter(|p| !is_pruned(p) && is_source_file(p))
+                    .filter(|p| {
+                        if is_pruned(p) || !is_source_file(p) {
+                            return false;
+                        }
+                        // Check gitignore.
+                        for (_root, gi) in &gitignores {
+                            if gi.matched(p, p.is_dir()).is_ignore() {
+                                return false;
+                            }
+                        }
+                        true
+                    })
                     .collect();
                 if !paths.is_empty() {
                     let _ = tx.send(paths);
@@ -135,4 +160,70 @@ pub fn handle_events(
     // Recompute counters after batch.
     graph.file_count = graph.nodes.len();
     graph.generation += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unique path under the OS temp root for a single test, removed
+    /// recursively on drop. No `tempfile` dep in this crate's Cargo.toml.
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "koma-linker-watch-test-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn is_pruned_catches_target() {
+        assert!(is_pruned(std::path::Path::new("/foo/target/debug/x.rs")));
+        assert!(is_pruned(
+            std::path::Path::new("/foo/node_modules/pkg/index.ts")
+        ));
+        assert!(!is_pruned(std::path::Path::new("/foo/src/main.rs")));
+    }
+
+    #[test]
+    fn is_source_file_in_watch() {
+        assert!(is_source_file(std::path::Path::new("foo.rs")));
+        assert!(is_source_file(std::path::Path::new("bar.py")));
+        assert!(!is_source_file(std::path::Path::new("README.md")));
+    }
+
+    #[test]
+    fn gitignore_matcher_filters_correctly() {
+        let tmp = TempDir::new("gitignore-filter");
+        let root = tmp.path().to_path_buf();
+
+        // Create .gitignore
+        std::fs::write(root.join(".gitignore"), "secret.rs\n").unwrap();
+
+        // Build the gitignore matcher (same as create_watcher does).
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(&root);
+        builder.add(root.join(".gitignore"));
+        let gi = builder.build().expect("valid gitignore");
+
+        // secret.rs should be ignored.
+        assert!(gi.matched(root.join("secret.rs"), false).is_ignore());
+        // main.rs should NOT be ignored.
+        assert!(!gi.matched(root.join("main.rs"), false).is_ignore());
+    }
 }

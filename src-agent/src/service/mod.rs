@@ -122,4 +122,11 @@ pub enum WarmEvent {
         session_id: String,
         summary: Option<String>,
     },
+    /// The linker daemon graph summary resolved for the session identified by
+    /// `session_id`. The drain routes it to THAT session's `graph_summary` by id.
+    WarmGraph {
+        session_id: String,
+        summary: Option<String>,
+        generation: u64,
+    },
 }

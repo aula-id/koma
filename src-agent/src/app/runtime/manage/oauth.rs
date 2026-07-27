@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+#[cfg(windows)]
+use crate::ipc::oauth_proto::OAuthRequest;
 use crate::ipc::SyncIpcStream;
 use crate::model::store;
 

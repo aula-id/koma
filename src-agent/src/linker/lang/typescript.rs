@@ -103,9 +103,16 @@ fn parse_js_export_from(text: &str) -> Vec<String> {
 }
 
 /// Extract the module path from `from 'path'` or `from "path"`.
+///
+/// Handles both the normal `import { x } from 'y'` form (with a leading space
+/// before `from`) and the bare side-effect form `"from './utils'"` where `from`
+/// appears at the start of the text.
 fn extract_from_clause(text: &str) -> Option<String> {
+    let text = text.trim();
     if let Some(idx) = text.find(" from ") {
         let rest = &text[idx + 6..];
+        extract_trailing_string_literal(rest)
+    } else if let Some(rest) = text.strip_prefix("from ") {
         extract_trailing_string_literal(rest)
     } else {
         None

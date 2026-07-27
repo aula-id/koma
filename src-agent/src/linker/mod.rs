@@ -9,7 +9,4 @@ pub mod lang;
 pub mod scan;
 pub mod watch;
 
-// Re-exports for convenience.
-pub use graph::{Edge, EdgeKind, EdgeTarget, ImportGraph, Lang};
-pub use lang::{detect_lang, extract_imports, SOURCE_EXTENSIONS};
-pub use scan::scan_roots;
+

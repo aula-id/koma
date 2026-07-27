@@ -49,6 +49,11 @@ pub enum LinkerQuery {
 pub enum LinkerResponse {
     /// Ready (scan complete for all registered roots).
     Ready,
+    /// Registration result with scan status.
+    Registered {
+        status: ScanStatus,
+        generation: u64,
+    },
     /// Summary for L1 injection.
     Summary {
         text: String,
@@ -69,4 +74,13 @@ pub enum LinkerResponse {
     Ack,
     /// Error.
     Error(String),
+}
+
+/// Status of the graph scan returned with registration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ScanStatus {
+    /// Scan is still running; poll Summary for completion.
+    Scanning,
+    /// Scan complete; graph is ready.
+    Ready,
 }

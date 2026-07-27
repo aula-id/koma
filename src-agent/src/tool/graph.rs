@@ -34,15 +34,18 @@ impl Tool for GraphQuery {
             "required": ["action"]
         })
     }
-    fn run(&self, _ctx: &ToolCtx, args: &Value) -> Result<String> {
+    fn run(&self, ctx: &ToolCtx, args: &Value) -> Result<String> {
         // Get action
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required argument 'action'"))?;
 
-        // Get path (required for most actions)
-        let path = args.get("path").and_then(|v| v.as_str());
+        // Get path, normalized against session workspaces so relative paths
+        // like `src/foo.rs` resolve to the actual absolute path in the graph.
+        let path = args.get("path").and_then(|v| v.as_str()).map(|p| {
+            crate::linker::client::normalize_query_path(p, &ctx.workspaces)
+        });
 
         // Connect to the linker daemon
         let sock_path = crate::model::store::linker_daemon_sock_path()

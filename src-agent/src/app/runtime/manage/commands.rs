@@ -166,6 +166,10 @@ pub(super) fn cmd_kill() -> Result<()> {
     if super::oauth::oauth_daemon_alive() {
         super::oauth::stop_oauth_daemon(false);
     }
+    // Stop the GLOBAL Linker daemon too (best-effort). Same pattern as MCP/OAuth.
+    if super::linker::linker_daemon_alive() {
+        super::linker::stop_linker_daemon(false);
+    }
     // Catch any socket-less orphans the scan above couldn't see, regardless of whether
     // any keyed sockets were found live.
     let orphans = super::os::kill_orphan_daemon_processes();

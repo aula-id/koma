@@ -23,6 +23,8 @@ pub enum Lang {
 #[derive(Debug, Clone)]
 pub struct Edge {
     pub target: EdgeTarget,
+    /// Reserved for future mod-edge discrimination; always `Import` today.
+    #[allow(dead_code)]
     pub kind: EdgeKind,
 }
 
@@ -40,7 +42,8 @@ pub enum EdgeTarget {
 pub enum EdgeKind {
     /// `use`, `import`, `require`, etc.
     Import,
-    /// `mod` declaration (Rust-specific).
+    /// `mod` declaration (Rust-specific). Reserved for future use.
+    #[allow(dead_code)]
     Mod,
 }
 
@@ -48,6 +51,8 @@ pub enum EdgeKind {
 #[derive(Debug, Clone)]
 pub struct Node {
     pub lang: Lang,
+    /// Canonical path (identity); stored for future tooling.
+    #[allow(dead_code)]
     pub path: String,
 }
 
@@ -124,6 +129,7 @@ impl ImportGraph {
         }
         self.edge_count += count;
         self.edges.insert(source.to_string(), new_edges);
+        self.file_count = self.nodes.len();
     }
 
     /// Remove a node and all its edges (both incoming and outgoing).
@@ -328,5 +334,26 @@ mod tests {
         assert!(impact.contains(&"c.rs"));
         assert!(impact.contains(&"b.rs"));
         assert!(impact.contains(&"a.rs"));
+    }
+
+    #[test]
+    fn graph_clear_and_generation() {
+        let mut g = ImportGraph::new();
+        assert_eq!(g.generation, 0);
+        g.set_edges(
+            "a.rs",
+            Lang::Rust,
+            vec![Edge {
+                target: EdgeTarget::File("b.rs".into()),
+                kind: EdgeKind::Import,
+            }],
+        );
+        g.file_count = g.nodes.len();
+        assert_eq!(g.file_count, 1);
+        assert_eq!(g.generation, 0); // set_edges doesn't bump generation
+
+        g.clear();
+        assert_eq!(g.nodes.len(), 0);
+        assert_eq!(g.generation, 1); // clear bumps generation
     }
 }
