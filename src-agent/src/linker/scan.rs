@@ -117,7 +117,7 @@ pub fn scan_file(
     let mut edges = Vec::new();
 
     for raw in &raw_imports {
-        match resolve_import_multi(lang, &raw, &path_str, workspace_roots, known_files) {
+        match resolve_import_multi(lang, raw, &path_str, workspace_roots, known_files) {
             Some(resolved) => {
                 edges.push(Edge {
                     target: EdgeTarget::File(resolved),
@@ -215,7 +215,7 @@ fn resolve_import(
         Lang::TypeScript | Lang::JavaScript => {
             resolve_ts_import(raw, file_dir, root, known_files)
         }
-        Lang::PHP => resolve_php_import(raw, root, known_files),
+        Lang::Php => resolve_php_import(raw, root, known_files),
         Lang::Unknown => None,
     }
 }

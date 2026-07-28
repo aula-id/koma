@@ -15,7 +15,7 @@ pub enum Lang {
     Java,
     TypeScript,
     JavaScript,
-    PHP,
+    Php,
     Unknown,
 }
 
@@ -244,7 +244,7 @@ impl ImportGraph {
             .filter(|k| {
                 self.reverse
                     .get(*k)
-                    .map_or(true, |v| v.is_empty())
+                    .is_none_or(|v| v.is_empty())
             })
             .cloned()
             .collect();
@@ -305,8 +305,8 @@ mod tests {
         g.file_count = g.nodes.len();
 
         g.remove_node("b.rs");
-        assert!(g.edges.get("a.rs").is_none() || g.edges["a.rs"].is_empty());
-        assert!(g.reverse.get("b.rs").is_none());
+        assert!(!g.edges.contains_key("a.rs") || g.edges["a.rs"].is_empty());
+        assert!(!g.reverse.contains_key("b.rs"));
     }
 
     #[test]

@@ -642,7 +642,10 @@ mod tests {
         (dir, root_s, workdirs)
     }
 
-    fn capture_push() -> (Arc<Mutex<Vec<String>>>, Box<dyn Fn(String)>) {
+    type PushSink = Arc<Mutex<Vec<String>>>;
+    type PushFn = Box<dyn Fn(String)>;
+
+    fn capture_push() -> (PushSink, PushFn) {
         let sink = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink2 = Arc::clone(&sink);
         let push = Box::new(move |json: String| {

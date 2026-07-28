@@ -270,6 +270,6 @@ mod tests {
         assert_eq!(&d[4..5], "-");
         assert_eq!(&d[7..8], "-");
         let year: i32 = d[..4].parse().unwrap();
-        assert!(year >= 2024 && year <= 2100);
+        assert!((2024..=2100).contains(&year));
     }
 }

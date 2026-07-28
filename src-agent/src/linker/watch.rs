@@ -111,7 +111,7 @@ pub fn is_source_file(path: &Path) -> bool {
     path.to_string_lossy()
         .rsplit('.')
         .next()
-        .map_or(false, |ext| {
+        .is_some_and(|ext| {
             SOURCE_EXTENSIONS.contains(&format!(".{ext}").as_str())
         })
 }
@@ -121,7 +121,7 @@ pub fn is_pruned(path: &Path) -> bool {
     path.components().any(|c| {
         c.as_os_str()
             .to_str()
-            .map_or(false, |s| PRUNE_DIRS.contains(&s))
+            .is_some_and(|s| PRUNE_DIRS.contains(&s))
     })
 }
 
