@@ -32,7 +32,7 @@ pub fn detect_lang(path: &str) -> Lang {
     {
         Lang::JavaScript
     } else if path.ends_with(".php") {
-        Lang::PHP
+        Lang::Php
     } else {
         Lang::Unknown
     }
@@ -51,7 +51,7 @@ pub fn extract_imports(lang: Lang, content: &str) -> Vec<String> {
         Lang::Go => go_lang::extract_imports(content),
         Lang::Java => java::extract_imports(content),
         Lang::TypeScript | Lang::JavaScript => typescript::extract_imports(content),
-        Lang::PHP => php::extract_imports(content),
+        Lang::Php => php::extract_imports(content),
         Lang::Unknown => Vec::new(),
     }
 }
@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(detect_lang("app.jsx"), Lang::JavaScript);
         assert_eq!(detect_lang("app.mjs"), Lang::JavaScript);
         assert_eq!(detect_lang("app.cjs"), Lang::JavaScript);
-        assert_eq!(detect_lang("index.php"), Lang::PHP);
+        assert_eq!(detect_lang("index.php"), Lang::Php);
         assert_eq!(detect_lang("foo.txt"), Lang::Unknown);
     }
 }

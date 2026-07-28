@@ -79,7 +79,7 @@ impl Tool for Edit {
         let n = if replace_all { count } else { 1 };
         let mut result = format!("edited {rel} ({n} replacement(s))");
         // L3: auto-neighborhood footer (best-effort, daemon may not be running).
-        super::append_neighborhood_footer(&mut result, &rel);
+        super::append_neighborhood_footer(&mut result, rel);
         Ok(result)
     }
 }

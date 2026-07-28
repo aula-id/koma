@@ -511,24 +511,26 @@ mod cascade_test {
         let tmp = scratch("sess");
         let sess = tmp.join("bucket").join("sid");
         fs::create_dir_all(&sess).unwrap();
-        let mut settings = Settings::default();
-        settings.session_models = vec![
-            ModelEntry {
-                uuid: "m-dead".into(),
-                provider_uuid: "p-alive".into(),
-                ..Default::default()
-            },
-            ModelEntry {
-                uuid: "m-alive".into(),
-                provider_uuid: "p-dead".into(),
-                ..Default::default()
-            },
-            ModelEntry {
-                uuid: "m-ok".into(),
-                provider_uuid: "p-ok".into(),
-                ..Default::default()
-            },
-        ];
+        let settings = Settings {
+            session_models: vec![
+                ModelEntry {
+                    uuid: "m-dead".into(),
+                    provider_uuid: "p-alive".into(),
+                    ..Default::default()
+                },
+                ModelEntry {
+                    uuid: "m-alive".into(),
+                    provider_uuid: "p-dead".into(),
+                    ..Default::default()
+                },
+                ModelEntry {
+                    uuid: "m-ok".into(),
+                    provider_uuid: "p-ok".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
         let path = sess.join("settings.json");
         settings.save(&path).unwrap();
 
