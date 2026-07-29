@@ -21,6 +21,9 @@ pub enum LinkerRequest {
     Query(LinkerQuery),
     /// Get a summary for L1 injection.
     Summary,
+    /// Lightweight generation check — returns just the current graph generation
+    /// number without computing the full summary text. O(1) on the daemon side.
+    Generation,
     /// Report build fingerprint (same pattern as MCP).
     Fingerprint,
     /// Graceful shutdown.
@@ -72,6 +75,8 @@ pub enum LinkerResponse {
     Fingerprint(String),
     /// Acknowledgement (register, unregister, rescan, shutdown).
     Ack,
+    /// Current graph generation (lightweight probe, no summary text).
+    Generation(u64),
     /// Error.
     Error(String),
 }

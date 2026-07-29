@@ -59,6 +59,17 @@ pub struct SummaryResult {
     pub languages: Vec<String>,
 }
 
+/// One-shot fetch of just the linker daemon's current graph generation. O(1) on
+/// the daemon side — no summary text computed, no fan-in/entry-point scan.
+/// Returns `None` if the daemon is not running.
+pub fn fetch_generation() -> Option<u64> {
+    let resp = connect_and_send(&LinkerRequest::Generation)?;
+    match resp {
+        LinkerResponse::Generation(g) => Some(g),
+        _ => None,
+    }
+}
+
 /// One-shot fetch of the linker daemon's graph summary. Returns `None` if the
 /// daemon is not running or not ready.
 pub fn fetch_summary() -> Option<SummaryResult> {
@@ -145,14 +156,18 @@ pub fn unregister_client(client_id: &str) {
 }
 
 /// Fetch summary only if the generation is newer than `min_gen`.
-/// Returns None if daemon is not running or generation hasn't advanced.
+/// Uses a lightweight `Generation` probe first (O(1) on daemon, no summary
+/// text computed) — only fetches the full summary when the generation has
+/// actually advanced. Returns None if daemon not running or generation unchanged.
 pub fn fetch_summary_if_newer(min_gen: u64) -> Option<SummaryResult> {
-    let result = fetch_summary()?;
-    if result.generation > min_gen {
-        Some(result)
-    } else {
-        None
+    // Fast gate: ask for just the generation number (O(1), tiny payload).
+    // If unchanged, skip the expensive full-Summary round-trip entirely.
+    let cur = fetch_generation()?;
+    if cur <= min_gen {
+        return None;
     }
+    // Generation advanced — fetch the full summary text.
+    fetch_summary()
 }
 
 /// Normalize a query path: if relative, join against project roots.
