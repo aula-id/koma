@@ -122,14 +122,6 @@ pub(crate) fn start_stream_task(
                     first.content.push_str(summary);
                 }
             }
-            // L1: cheap generation poll — if the linker daemon has advanced since
-            // we last fetched, update the cached summary before injection.
-            {
-                let cur_gen = state.rest.sessions[sess_idx].graph_generation;
-                if let Some(result) = crate::linker::client::fetch_summary_if_newer(cur_gen) {
-                    state.rest.sessions[sess_idx].update_graph_summary(result.text, result.generation);
-                }
-            }
             // Code graph summary (L1): volatile, only when the linker daemon has
             // produced a summary. Lives in the volatile tail (after CACHE_SPLIT_MARK)
             // so it never busts the provider-cached head.
