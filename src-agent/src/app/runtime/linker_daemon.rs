@@ -376,6 +376,10 @@ fn handle_request(
                 languages,
             }
         }
+        LinkerRequest::Generation => {
+            let gen = state.graph.read().unwrap_or_else(|e| e.into_inner()).generation;
+            LinkerResponse::Generation(gen)
+        }
         LinkerRequest::Query(query) => {
             let graph = state.graph.read().unwrap_or_else(|e| e.into_inner());
             handle_query(query, &graph, state)
