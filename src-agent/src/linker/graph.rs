@@ -161,6 +161,44 @@ impl ImportGraph {
         self.file_count = self.nodes.len();
     }
 
+    /// Resolve a query path to a graph node key.
+    ///
+    /// 1. Normalize: backslash → `/`, strip trailing `/`.
+    /// 2. Exact match in `nodes` or `reverse` → return that key.
+    /// 3. Unique suffix match (`key` ends with `/{q}` or equals `q`) → return that key.
+    /// 4. Otherwise `None`.
+    ///
+    /// Suffix matching requires a `/` boundary so `foo.rs` doesn't match `barfoo.rs`.
+    /// If multiple nodes match the suffix, returns `None` (ambiguous).
+    pub fn resolve_key<'a>(&'a self, path: &str) -> Option<&'a str> {
+        let q = path.replace('\\', "/");
+        let q = q.trim_end_matches('/');
+        if q.is_empty() {
+            return None;
+        }
+
+        // Exact match in nodes — return the actual key from the map.
+        if let Some(key) = self.nodes.keys().find(|k| k.as_str() == q) {
+            return Some(key.as_str());
+        }
+        // Exact match in reverse index.
+        if let Some(key) = self.reverse.keys().find(|k| k.as_str() == q) {
+            return Some(key.as_str());
+        }
+
+        // Unique suffix match: key == q || key.ends_with("/" + q).
+        let mut candidates: Vec<&str> = Vec::new();
+        for key in self.nodes.keys() {
+            if key == q || key.ends_with(&format!("/{q}")) {
+                candidates.push(key.as_str());
+            }
+        }
+        match candidates.len() {
+            1 => Some(candidates[0]),
+            _ => None,
+        }
+    }
+
     /// Direct dependencies of a file (outgoing edges resolved to file paths).
     pub fn dependencies(&self, path: &str) -> Vec<&str> {
         self.edges
@@ -355,5 +393,58 @@ mod tests {
         g.clear();
         assert_eq!(g.nodes.len(), 0);
         assert_eq!(g.generation, 1); // clear bumps generation
+    }
+
+    // --- resolve_key tests ---
+
+    #[test]
+    fn resolve_key_exact_hit() {
+        let mut g = ImportGraph::new();
+        g.ensure_node("/abs/src/main.rs", Lang::Rust);
+        assert_eq!(g.resolve_key("/abs/src/main.rs"), Some("/abs/src/main.rs"));
+    }
+
+    #[test]
+    fn resolve_key_unique_suffix() {
+        let mut g = ImportGraph::new();
+        g.ensure_node("/abs/project/src/tool/mod.rs", Lang::Rust);
+        // Query with relative path that uniquely suffix-matches.
+        assert_eq!(
+            g.resolve_key("src/tool/mod.rs"),
+            Some("/abs/project/src/tool/mod.rs")
+        );
+    }
+
+    #[test]
+    fn resolve_key_ambiguous_two_roots() {
+        let mut g = ImportGraph::new();
+        g.ensure_node("/root_a/src/main.rs", Lang::Rust);
+        g.ensure_node("/root_b/src/main.rs", Lang::Rust);
+        // Ambiguous — same suffix in two roots.
+        assert_eq!(g.resolve_key("src/main.rs"), None);
+    }
+
+    #[test]
+    fn resolve_key_no_false_prefix() {
+        let mut g = ImportGraph::new();
+        g.ensure_node("/abs/barfoo.rs", Lang::Rust);
+        // "foo.rs" should NOT match "barfoo.rs".
+        assert_eq!(g.resolve_key("foo.rs"), None);
+    }
+
+    #[test]
+    fn resolve_key_empty_returns_none() {
+        let g = ImportGraph::new();
+        assert_eq!(g.resolve_key(""), None);
+    }
+
+    #[test]
+    fn resolve_key_trailing_slash_stripped() {
+        let mut g = ImportGraph::new();
+        g.ensure_node("/abs/src/main.rs", Lang::Rust);
+        assert_eq!(
+            g.resolve_key("/abs/src/main.rs/"),
+            Some("/abs/src/main.rs")
+        );
     }
 }
