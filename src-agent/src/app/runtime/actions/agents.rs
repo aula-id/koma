@@ -61,6 +61,10 @@ pub(super) fn handle_create_agent(state: &mut AppState) -> Result<()> {
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
             }
+            // Broadcast global catalogue change so other live daemons pick up the new agent.
+            if !scope_session {
+                std::thread::spawn(crate::app::runtime::manage::broadcast_reload_global_catalogue);
+            }
             state.rest.fg_mut().status = format!("agent created: {}", def.name);
         }
         Err(e) => {
@@ -118,6 +122,10 @@ pub(super) fn handle_save_agent(state: &mut AppState) -> Result<()> {
             // Rebuild the system prompt so the sub-agent roster reflects the change.
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
+            }
+            // Broadcast global catalogue change so other live daemons pick up the edit.
+            if source == AgentSource::Global {
+                std::thread::spawn(crate::app::runtime::manage::broadcast_reload_global_catalogue);
             }
             state.rest.fg_mut().status =
                 if source == AgentSource::Builtin || source == AgentSource::Extension {
@@ -190,6 +198,10 @@ pub(super) fn handle_delete_agent(state: &mut AppState) -> Result<()> {
             // Rebuild the system prompt so the sub-agent roster reflects the deletion.
             if let Some(sess) = state.rest.fg_mut().session.as_mut() {
                 sess.rebuild_system();
+            }
+            // Broadcast global catalogue change so other live daemons pick up the deletion.
+            if source == AgentSource::Global {
+                std::thread::spawn(crate::app::runtime::manage::broadcast_reload_global_catalogue);
             }
             state.rest.fg_mut().status = format!("agent deleted: {name}");
         }

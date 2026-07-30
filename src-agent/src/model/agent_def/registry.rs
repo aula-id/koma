@@ -72,7 +72,7 @@ pub(crate) fn builtin_agents() -> Vec<AgentDef> {
                 "General-purpose subagent for a scoped task",
                 include_str!("../../../../src-misc/agent-general-prompt.txt"),
                 // NO "task" — recursion guard.
-                tools(&["read", "grep", "glob", "dir_list", "edit", "write", "bash"]),
+                tools(&["read", "grep", "glob", "dir_list", "edit", "write", "bash", "graph_query"]),
             )
         },
     ]

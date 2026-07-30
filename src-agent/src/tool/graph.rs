@@ -11,7 +11,8 @@ impl Tool for GraphQuery {
         "graph_query"
     }
     fn description(&self) -> &'static str {
-        "Query the code import graph for a project. Find dependencies, dependents, impact sets, and project summaries."
+        "Query the code import graph for a project. Find dependencies, dependents, impact sets, and project summaries. \
+         PREFERRED for dependency/impact analysis over grep or glob — it is instant and complete."
     }
     fn parameters(&self) -> Value {
         json!({

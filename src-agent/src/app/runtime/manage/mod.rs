@@ -69,7 +69,8 @@ pub use linker::ensure_linker_daemon_running;
 // `broadcast_unload_extension` is the extension-uninstall in-memory fan-out (step 3),
 // called by both uninstall paths to unload the extension from every OTHER live daemon.
 pub use probe::{
-    broadcast_unload_extension, list_live_sessions, spawn_into_session, SpawnIntoReply,
+    broadcast_reload_global_catalogue, broadcast_unload_extension, list_live_sessions,
+    spawn_into_session, SpawnIntoReply,
 };
 
 use std::io::{Read, Write};

@@ -174,6 +174,43 @@ pub fn broadcast_unload_extension(ext_id: &str) {
     }
 }
 
+/// FIRE-AND-FORGET fan-out of a [`ClientRequest::ReloadGlobalCatalogue`] to
+/// every live session-daemon — the config-change broadcast that makes OTHER
+/// daemons re-read `~/.koma/config.json` + global agents from disk so their
+/// in-memory catalogue stays current without a restart.
+///
+/// Best-effort throughout, identical contract to [`broadcast_unload_extension`]:
+/// connect → write one frame → drop. Called on a background OS thread by
+/// [`super::save_config_and_broadcast`] so the saving daemon's event loop
+/// never blocks on peer connects.
+pub fn broadcast_reload_global_catalogue() {
+    let req = ClientRequest::ReloadGlobalCatalogue;
+    for status in list_live_sessions() {
+        let sock = match store::daemon_sock_path(&status.session_id) {
+            Ok(p) => p,
+            Err(e) => {
+                store::append_global_error_log(
+                    "config-reload",
+                    &format!(
+                        "reload fan-out: no socket path for session {}: {e}",
+                        status.session_id
+                    ),
+                );
+                continue;
+            }
+        };
+        if let Err(e) = send_unload_frame(&sock, &req) {
+            store::append_global_error_log(
+                "config-reload",
+                &format!(
+                    "reload fan-out to session {} failed: {e}",
+                    status.session_id
+                ),
+            );
+        }
+    }
+}
+
 /// Connect ONE session socket, WRITE the fan-out frame, then drop it (fire-and-forget — no
 /// reply is read). A short write timeout ([`PROBE_TIMEOUT`]) bounds a wedged daemon; the
 /// tiny frame lands in the kernel buffer before close, so the daemon reads it even though we
