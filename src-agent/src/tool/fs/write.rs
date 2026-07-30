@@ -13,7 +13,8 @@ impl Tool for Write {
         "write"
     }
     fn description(&self) -> &'static str {
-        "Create or overwrite a workspace-relative file with the given content."
+        "Create or overwrite a workspace-relative file with the given content. \
+         Before modifying, consider graph_query impact analysis to understand downstream effects."
     }
     fn parameters(&self) -> Value {
         json!({

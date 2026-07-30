@@ -13,7 +13,8 @@ impl Tool for Read {
         "read"
     }
     fn description(&self) -> &'static str {
-        "Read a workspace-relative file. Returns line-numbered content. Use offset/limit to paginate large files."
+        "Read a workspace-relative file. Returns line-numbered content. Use offset/limit to paginate large files. \
+         For a file's imports and dependents, use graph_query."
     }
     fn parameters(&self) -> Value {
         json!({

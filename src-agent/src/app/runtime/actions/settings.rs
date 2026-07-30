@@ -335,7 +335,7 @@ pub(super) fn handle_save_settings(state: &mut AppState) -> Result<()> {
         state.rest.config.palette = palette;
         state.rest.config.providers = provider_conns;
         state.rest.config.models = model_entries;
-        if let Err(e) = state.rest.config.save() {
+        if let Err(e) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
             state.rest.fg_mut().status = format!("config save failed: {e}");
         } else if !dead_models.is_empty() || !removed_providers.is_empty() {
             let cfg = state.rest.config.clone();

@@ -15,7 +15,8 @@ impl Tool for Grep {
         "grep"
     }
     fn description(&self) -> &'static str {
-        "Search file contents by regular expression. Returns matching lines as path:line: text."
+        "Search file contents by regular expression. Returns matching lines as path:line: text. \
+         For structural/import dependency queries, prefer graph_query instead."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -148,7 +149,8 @@ impl Tool for Glob {
         "glob"
     }
     fn description(&self) -> &'static str {
-        "Find files by glob pattern (e.g. **/*.rs). Returns matching paths."
+        "Find files by glob pattern (e.g. **/*.rs). Returns matching paths. \
+         For file dependency relationships, prefer graph_query."
     }
     fn parameters(&self) -> Value {
         json!({

@@ -101,7 +101,7 @@ impl DaemonHub {
             endpoint.trim().to_string(),
             api_key,
         );
-        let result = state.rest.config.save();
+        let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
         self.ack_or_error(idx, result);
     }
 
@@ -131,7 +131,7 @@ impl DaemonHub {
             return;
         }
         let purge = state.rest.config.cascade_remove_provider(&uuid);
-        let result = state.rest.config.save();
+        let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
         // Always rebind agent .md → inherit main when a provider went away (heals
         // orphans even if this provider had zero catalogue models).
         if result.is_ok() {
@@ -236,7 +236,7 @@ impl DaemonHub {
                 Ok(()) // no foreground session to hold a local override
             };
             state.rest.config.upsert_model(entry);
-            let config_result = state.rest.config.save();
+            let config_result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
             session_result.and(config_result)
         };
         state.rest.reset_effort_if_main_changed(before_main);
@@ -272,7 +272,7 @@ impl DaemonHub {
             let mut dead = HashSet::new();
             dead.insert(uuid.clone());
             let purge = state.rest.config.cascade_remove_models(&dead);
-            let save = state.rest.config.save();
+            let save = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
             if save.is_ok() && !purge.models_removed.is_empty() {
                 let dead_models: HashSet<String> = purge.models_removed.iter().cloned().collect();
                 let empty = HashSet::new();
@@ -304,7 +304,7 @@ impl DaemonHub {
     // `palette`), so the GUI host re-derives + re-pushes its Config palette live.
     pub(super) fn set_theme(&mut self, idx: usize, state: &mut AppState, name: String) {
         state.rest.config.palette = name;
-        let result = state.rest.config.save();
+        let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
         self.ack_or_error(idx, result);
     }
 
@@ -457,7 +457,7 @@ impl DaemonHub {
     // forces a full snapshot, so the GUI host re-pushes `Config` (clearing `firstRun`).
     pub(super) fn setup_koma_free(&mut self, idx: usize, state: &mut AppState) {
         crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
-        let result = state.rest.config.save();
+        let result = crate::app::runtime::actions::save_config_and_broadcast(&state.rest.config);
         self.ack_or_error(idx, result);
     }
 
