@@ -265,18 +265,28 @@ fn resolve_rust_import(
         .unwrap_or(raw);
 
     // Find crate root: walk up from file looking for Cargo.toml.
-    let crate_root = find_cargo_root(file_path, root)?;
+    let crate_root = find_crate_src_root(file_path, root)?;
 
     // Try resolving the path segments.
     let segments: Vec<&str> = relative.split("::").collect();
     resolve_rust_path_segments(&segments, &crate_root, known_files)
 }
 
-/// Walk up from `file_path` to find the nearest directory containing `Cargo.toml`.
-fn find_cargo_root(file_path: &str, workspace_root: &Path) -> Option<PathBuf> {
+/// Walk up from `file_path` to find the crate source root.
+///
+/// For standard Rust layouts, this is the `src/` directory containing
+/// `lib.rs` or `main.rs` (i.e., one level below the `Cargo.toml` directory).
+/// Falls back to the `Cargo.toml` directory for non-standard layouts.
+fn find_crate_src_root(file_path: &str, workspace_root: &Path) -> Option<PathBuf> {
     let mut dir = Path::new(file_path).parent()?.to_path_buf();
     loop {
         if dir.join("Cargo.toml").exists() {
+            // Standard Rust layout: source lives under src/
+            let src_dir = dir.join("src");
+            if src_dir.join("lib.rs").exists() || src_dir.join("main.rs").exists() {
+                return Some(src_dir);
+            }
+            // Non-standard layout: source lives next to Cargo.toml
             return Some(dir.clone());
         }
         // Don't go above the workspace root.
@@ -287,6 +297,9 @@ fn find_cargo_root(file_path: &str, workspace_root: &Path) -> Option<PathBuf> {
 }
 
 /// Resolve path segments relative to a crate root.
+///
+/// Handles both the module tree structure (`crate::app::mode` → `app/mode.rs`)
+/// and type/function names at the end of a path (`crate::foo::Bar` → `foo.rs`).
 fn resolve_rust_path_segments(
     segments: &[&str],
     crate_root: &Path,
@@ -297,9 +310,9 @@ fn resolve_rust_path_segments(
     }
 
     let base = crate_root;
-
-    // Build the path progressively.
     let mut current = base.to_path_buf();
+    let mut last_resolved: Option<String> = None;
+
     for (i, seg) in segments.iter().enumerate() {
         let is_last = i == segments.len() - 1;
         let candidate_file = current.join(format!("{seg}.rs"));
@@ -310,33 +323,45 @@ fn resolve_rust_path_segments(
         let candidate_mod_s = candidate_mod.to_string_lossy().replace('\\', "/");
 
         if is_last {
-            // Last segment: try `seg.rs` first, then `seg/mod.rs`.
+            // Last segment: try `seg.rs`, then `seg/mod.rs`, then fall back
+            // to deepest resolved module (last segment is a type/function name).
             if known_files.contains(&candidate_file_s) {
                 return Some(candidate_file_s);
             }
             if known_files.contains(&candidate_mod_s) {
                 return Some(candidate_mod_s);
             }
-            // Could also be a bare module directory reference.
-            return None;
-        } else {
-            // Intermediate segment: check `seg/mod.rs`.
-            if known_files.contains(&candidate_mod_s) {
-                current = candidate_dir;
-                continue;
-            }
-            // Check if the file itself is a module file (for `use foo::bar` where
-            // foo.rs exists and contains `mod bar`).
-            if known_files.contains(&candidate_file_s) {
-                // The segment refers to foo.rs; next segments are items inside it.
-                // We can't resolve further without parsing. Return as-is.
-                return Some(candidate_file_s);
-            }
-            // No match found.
-            return None;
+            return last_resolved;
         }
+
+        // Intermediate segment
+        if known_files.contains(&candidate_mod_s) {
+            last_resolved = Some(candidate_mod_s);
+            current = candidate_dir;
+            continue;
+        }
+        if known_files.contains(&candidate_file_s) {
+            // Check if next segment is a submodule of this file's directory
+            if i + 1 < segments.len() {
+                let next = segments[i + 1];
+                let sub_file = candidate_dir.join(format!("{next}.rs"));
+                let sub_mod = candidate_dir.join(next).join("mod.rs");
+                if known_files.contains(&sub_file.to_string_lossy().replace('\\', "/"))
+                    || known_files.contains(&sub_mod.to_string_lossy().replace('\\', "/"))
+                {
+                    last_resolved = Some(candidate_file_s);
+                    current = candidate_dir;
+                    continue;
+                }
+            }
+            // Not a submodule — remaining segments are items inside this file
+            return Some(candidate_file_s);
+        }
+
+        // No match at this segment — path is invalid.
+        return None;
     }
-    None
+    last_resolved
 }
 
 /// Resolve a Python import to a file.
@@ -630,5 +655,191 @@ mod tests {
             "expected Rust, got {:?}",
             langs
         );
+    }
+
+    #[test]
+    fn resolve_crate_import_through_src_dir() {
+        // Fixture:
+        //   proj/Cargo.toml
+        //   proj/src/lib.rs   (contains: use crate::bar;)
+        //   proj/src/bar.rs   (contains: fn bar() {})
+        //
+        // Verifies that `crate::bar` resolves to `src/bar.rs`, NOT to an
+        // External edge.  This catches the bug where find_cargo_root returned
+        // `proj/` instead of `proj/src/`.
+        let tmp = TempDir::new("resolve-crate-src");
+        let proj = tmp.path().join("proj");
+        let src = proj.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
+            .unwrap();
+        std::fs::write(src.join("lib.rs"), "use crate::bar;\n").unwrap();
+        std::fs::write(src.join("bar.rs"), "pub fn bar() {}\n").unwrap();
+
+        let roots = vec![proj];
+        let graph = crate::linker::scan::scan_roots(&roots);
+
+        // Find the edge from lib.rs.
+        let lib_path = src.join("lib.rs")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let edges = graph.edges.get(&lib_path);
+        assert!(edges.is_some(), "lib.rs should have edges, graph nodes: {:?}", graph.nodes.keys().collect::<Vec<_>>());
+
+        let edges = edges.unwrap();
+        assert_eq!(edges.len(), 1, "lib.rs should have exactly 1 edge");
+
+        match &edges[0].target {
+            EdgeTarget::File(path) => {
+                assert!(
+                    path.ends_with("src/bar.rs"),
+                    "should resolve to src/bar.rs, got: {}",
+                    path
+                );
+            }
+            other => panic!("expected File edge, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_multilevel_module_path() {
+        // Fixture:
+        //   proj/Cargo.toml
+        //   proj/src/lib.rs              (contains: use crate::app::mode::editor::Foo;)
+        //   proj/src/app/mod.rs          (empty)
+        //   proj/src/app/mode.rs         (contains: pub mod editor;)
+        //   proj/src/app/mode/editor.rs  (contains: pub struct Foo;)
+        //
+        // Verifies that `crate::app::mode::editor::Foo` resolves to `mode/editor.rs`
+        // even though `Foo` is a type, not a module.
+        let tmp = TempDir::new("resolve-multilevel");
+        let proj = tmp.path().join("proj");
+        let src = proj.join("src");
+        let app = src.join("app");
+        let mode_dir = app.join("mode");
+        std::fs::create_dir_all(&mode_dir).unwrap();
+
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
+            .unwrap();
+        std::fs::write(src.join("lib.rs"), "use crate::app::mode::editor::Foo;\n")
+            .unwrap();
+        std::fs::write(app.join("mod.rs"), "").unwrap();
+        std::fs::write(app.join("mode.rs"), "pub mod editor;\n").unwrap();
+        std::fs::write(mode_dir.join("editor.rs"), "pub struct Foo;\n")
+            .unwrap();
+
+        let roots = vec![proj];
+        let graph = crate::linker::scan::scan_roots(&roots);
+
+        let lib_path = src.join("lib.rs")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let edges = graph.edges.get(&lib_path);
+        assert!(edges.is_some(), "lib.rs should have edges");
+
+        let edges = edges.unwrap();
+        assert_eq!(edges.len(), 1);
+
+        match &edges[0].target {
+            EdgeTarget::File(path) => {
+                assert!(
+                    path.ends_with("app/mode/editor.rs"),
+                    "should resolve to app/mode/editor.rs, got: {}",
+                    path
+                );
+            }
+            other => panic!("expected File edge, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_type_name_fallback() {
+        // Fixture:
+        //   proj/Cargo.toml
+        //   proj/src/lib.rs  (contains: use crate::foo::Bar;)
+        //   proj/src/foo.rs  (contains: pub struct Bar;)
+        //
+        // Verifies that `crate::foo::Bar` resolves to `foo.rs` — Bar is a
+        // type name, not a module.
+        let tmp = TempDir::new("resolve-type-fallback");
+        let proj = tmp.path().join("proj");
+        let src = proj.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
+            .unwrap();
+        std::fs::write(src.join("lib.rs"), "use crate::foo::Bar;\n").unwrap();
+        std::fs::write(src.join("foo.rs"), "pub struct Bar;\n").unwrap();
+
+        let roots = vec![proj];
+        let graph = crate::linker::scan::scan_roots(&roots);
+
+        let lib_path = src.join("lib.rs")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let edges = graph.edges.get(&lib_path);
+        assert!(edges.is_some(), "lib.rs should have edges");
+
+        let edges = edges.unwrap();
+        assert_eq!(edges.len(), 1);
+
+        match &edges[0].target {
+            EdgeTarget::File(path) => {
+                assert!(
+                    path.ends_with("src/foo.rs"),
+                    "should resolve to src/foo.rs, got: {}",
+                    path
+                );
+            }
+            other => panic!("expected File edge, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_intermediate_miss_is_external() {
+        // Fixture:
+        //   proj/Cargo.toml
+        //   proj/src/lib.rs              (contains: use crate::app::does_not_exist::Bar;)
+        //   proj/src/app/mod.rs          (empty)
+        //
+        // Verifies that `crate::app::does_not_exist::Bar` resolves to External
+        // (not to `app/mod.rs`), since `does_not_exist` is not a valid module.
+        let tmp = TempDir::new("resolve-intermediate-miss");
+        let proj = tmp.path().join("proj");
+        let src = proj.join("src");
+        let app = src.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"test\"\n")
+            .unwrap();
+        std::fs::write(
+            src.join("lib.rs"),
+            "use crate::app::does_not_exist::Bar;\n",
+        )
+        .unwrap();
+        std::fs::write(app.join("mod.rs"), "").unwrap();
+
+        let roots = vec![proj];
+        let graph = crate::linker::scan::scan_roots(&roots);
+
+        let lib_path = src.join("lib.rs")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let edges = graph.edges.get(&lib_path);
+        assert!(edges.is_some(), "lib.rs should have edges");
+
+        let edges = edges.unwrap();
+        assert_eq!(edges.len(), 1);
+
+        match &edges[0].target {
+            EdgeTarget::External(path) => {
+                assert_eq!(
+                    path, "crate::app::does_not_exist::Bar",
+                    "should be marked External"
+                );
+            }
+            other => panic!("expected External edge for invalid intermediate, got: {:?}", other),
+        }
     }
 }
