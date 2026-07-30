@@ -170,27 +170,42 @@ pub fn fetch_summary_if_newer(min_gen: u64) -> Option<SummaryResult> {
     fetch_summary()
 }
 
-/// Normalize a query path: if relative, join against project roots.
-/// If absolute and under a root, return as-is.
-/// Falls back to suffix matching against known_files from the graph.
+/// Normalize a query path: if relative, join against project roots and
+/// canonicalize when the file exists. If absolute, canonicalize or
+/// slash-normalize. When the file doesn't exist on disk, still returns
+/// a best-effort absolute path under the primary root so the daemon's
+/// suffix match can fire.
 pub fn normalize_query_path(path: &str, project_roots: &[PathBuf]) -> String {
-    let p = std::path::Path::new(path);
+    let normalized = path.replace('\\', "/");
+    let p = std::path::Path::new(&normalized);
 
-    // Already absolute — return as-is.
+    // Already absolute — canonicalize if possible, else slash-normalize.
     if p.is_absolute() {
-        return path.replace('\\', "/");
+        return std::fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .replace('\\', "/");
     }
 
-    // Relative — try each root.
+    // Relative — try each root; prefer canonicalized path for existing files.
     for root in project_roots {
-        let candidate = root.join(path);
-        if candidate.exists() {
-            return candidate.to_string_lossy().replace('\\', "/");
+        let candidate = root.join(p);
+        if let Ok(canon) = std::fs::canonicalize(&candidate) {
+            return canon.to_string_lossy().replace('\\', "/");
         }
     }
 
-    // Fallback: return as-is.
-    path.replace('\\', "/")
+    // File doesn't exist on disk: still return an absolute path under the
+    // primary root so the daemon suffix-match has a chance.
+    if let Some(root) = project_roots.first() {
+        return root
+            .join(p)
+            .to_string_lossy()
+            .replace('\\', "/");
+    }
+
+    // No roots at all — return slash-normalized as-is.
+    p.to_string_lossy().replace('\\', "/")
 }
 
 #[cfg(test)]
@@ -208,11 +223,11 @@ mod tests {
 
     #[test]
     fn normalize_query_path_relative_fallback() {
-        // When the file doesn't exist on disk, returns as-is.
+        // When the file doesn't exist on disk, returns primary_root + path.
         let roots = vec![PathBuf::from("/some/nonexistent")];
         assert_eq!(
             normalize_query_path("src/main.rs", &roots),
-            "src/main.rs"
+            "/some/nonexistent/src/main.rs"
         );
     }
 
@@ -224,6 +239,25 @@ mod tests {
             normalize_query_path("/foo\\bar.rs", &roots),
             "/foo/bar.rs"
         );
+    }
+
+    #[test]
+    fn normalize_query_path_existing_file_canonicalizes() {
+        // Create a temp dir + file manually (no tempfile crate).
+        let dir = std::env::temp_dir().join(format!("koma_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("hello.rs"), "fn main() {}").unwrap();
+        let result = normalize_query_path("hello.rs", &[dir.clone()]);
+        // Should be the canonical absolute path.
+        assert!(std::path::Path::new(&result).is_absolute());
+        assert!(result.ends_with("hello.rs"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_query_path_no_roots_returns_bare() {
+        let result = normalize_query_path("src/main.rs", &[]);
+        assert_eq!(result, "src/main.rs");
     }
 }
 

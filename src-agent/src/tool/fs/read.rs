@@ -96,7 +96,7 @@ impl Tool for Read {
             ));
         }
         // L3: auto-neighborhood footer (best-effort, daemon may not be running).
-        super::append_neighborhood_footer(&mut out, rel);
+        super::append_neighborhood_footer(&mut out, &path);
         Ok(out)
     }
 }

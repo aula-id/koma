@@ -46,7 +46,7 @@ impl Tool for Write {
         super::record_change(ctx, &path, if existed { "modified" } else { "added" });
         let mut result = format!("Wrote {} bytes to {}.", content.len(), rel);
         // L3: auto-neighborhood footer (best-effort, daemon may not be running).
-        super::append_neighborhood_footer(&mut result, rel);
+        super::append_neighborhood_footer(&mut result, &path);
         Ok(result)
     }
 }

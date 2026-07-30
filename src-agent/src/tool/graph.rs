@@ -3,6 +3,7 @@
 use super::{Tool, ToolCtx};
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::io::{Read, Write};
 
 pub struct GraphQuery;
 
@@ -99,7 +100,50 @@ impl Tool for GraphQuery {
                     path: p.to_string(),
                 }
             }
-            "summary" => LinkerQuery::Status,
+            "summary" => {
+                // Use the dedicated Summary request for proper formatting.
+                let req = LinkerRequest::Summary;
+                let payload =
+                    serde_json::to_vec(&req).map_err(|e| anyhow::anyhow!("serialize request: {e}"))?;
+                let prefix = (payload.len() as u32).to_be_bytes();
+                stream.write_all(&prefix).map_err(|e| anyhow::anyhow!("write prefix: {e}"))?;
+                stream.write_all(&payload).map_err(|e| anyhow::anyhow!("write payload: {e}"))?;
+                stream.flush().map_err(|e| anyhow::anyhow!("flush: {e}"))?;
+
+                let mut frame_reader = crate::ipc::frame::FrameReader::new();
+                let frame = loop {
+                    if let Some(f) = frame_reader
+                        .next_frame()
+                        .map_err(|e| anyhow::anyhow!("frame reassembly: {e}"))?
+                    {
+                        break f;
+                    }
+                    let mut buf = [0u8; 64 * 1024];
+                    let n = stream
+                        .read(&mut buf)
+                        .map_err(|e| anyhow::anyhow!("read response: {e}"))?;
+                    if n == 0 {
+                        return Ok("linker daemon closed connection".into());
+                    }
+                    frame_reader.push(&buf[..n]);
+                };
+                let resp: LinkerResponse = serde_json::from_slice(&frame)
+                    .map_err(|e| anyhow::anyhow!("deserialize response: {e}"))?;
+                return match resp {
+                    LinkerResponse::Summary { text, generation, file_count, edge_count, languages } => {
+                        if text.is_empty() {
+                            Ok(format!(
+                                "graph: generation={generation}, {file_count} files, {edge_count} edges, langs=[{}]",
+                                languages.join(", ")
+                            ))
+                        } else {
+                            Ok(text)
+                        }
+                    }
+                    LinkerResponse::Error(e) => Ok(format!("linker error: {e}")),
+                    _ => Ok("unexpected response type".into()),
+                };
+            }
             "rescan" => LinkerQuery::Rescan,
             _ => {
                 return Ok(format!(
@@ -112,8 +156,6 @@ impl Tool for GraphQuery {
         let payload =
             serde_json::to_vec(&req).map_err(|e| anyhow::anyhow!("serialize request: {e}"))?;
 
-        // Write request (length-prefixed frame)
-        use std::io::{Read, Write};
         let prefix = (payload.len() as u32).to_be_bytes();
         stream
             .write_all(&prefix)

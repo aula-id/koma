@@ -487,26 +487,42 @@ fn watcher_loop(state: Arc<DaemonState>, workspace_roots: Vec<PathBuf>) {
 fn handle_query(query: LinkerQuery, graph: &ImportGraph, state: &Arc<DaemonState>) -> LinkerResponse {
     match query {
         LinkerQuery::Dependencies { path } => {
-            let deps = graph.dependencies(&path);
+            let key = match graph.resolve_key(&path) {
+                Some(k) => k,
+                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+            };
+            let deps = graph.dependencies(key);
             let total = deps.len();
             let paths: Vec<String> = deps.into_iter().take(QUERY_RESULT_CAP).map(String::from).collect();
             LinkerResponse::PathList { paths, total }
         }
         LinkerQuery::Dependents { path } => {
-            let deps = graph.dependents(&path);
+            let key = match graph.resolve_key(&path) {
+                Some(k) => k,
+                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+            };
+            let deps = graph.dependents(key);
             let total = deps.len();
             let paths: Vec<String> = deps.into_iter().take(QUERY_RESULT_CAP).map(String::from).collect();
             LinkerResponse::PathList { paths, total }
         }
         LinkerQuery::Impact { path, depth } => {
+            let key = match graph.resolve_key(&path) {
+                Some(k) => k,
+                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+            };
             let max_depth = depth.unwrap_or(10);
-            let impact = graph.impact(&path, max_depth);
+            let impact = graph.impact(key, max_depth);
             let total = impact.len();
             let paths: Vec<String> = impact.into_iter().take(QUERY_RESULT_CAP).map(String::from).collect();
             LinkerResponse::PathList { paths, total }
         }
         LinkerQuery::Neighborhood { path } => {
-            let (deps, dependents) = graph.neighborhood(&path);
+            let key = match graph.resolve_key(&path) {
+                Some(k) => k,
+                None => return LinkerResponse::PathList { paths: vec![], total: 0 },
+            };
+            let (deps, dependents) = graph.neighborhood(key);
             let mut paths: Vec<String> = Vec::new();
             for d in &deps {
                 paths.push(format!("{d} (dependency)"));
