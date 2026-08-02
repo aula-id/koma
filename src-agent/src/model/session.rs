@@ -23,6 +23,7 @@ use crate::model::agent_def::AgentRegistry;
 use crate::model::conversation::Conversation;
 use crate::model::memory::{load_agents, load_memory_index, migrate_legacy_memory};
 use crate::model::session_registry;
+use crate::model::skill::SkillRegistry;
 use crate::model::settings::{LocalConfig, Settings};
 use crate::model::store::shared_settings_path;
 use crate::resources;
@@ -58,6 +59,9 @@ pub struct Session {
     /// which is a `Session` method with no access to `AppStateRest`. Read only
     /// by `rebuild_system` to decide whether to append the planning nudge.
     pub plan_mode_hint: bool,
+    /// Skill catalogue loaded during `rebuild_system`. Contains name→path mappings
+    /// so the `skill` tool can load bodies on demand. Refreshed every rebuild.
+    pub skills: SkillRegistry,
 }
 
 impl Session {
@@ -87,6 +91,7 @@ impl Session {
             settings,
             conversation,
             plan_mode_hint: false,
+            skills: SkillRegistry::default(),
         }
     }
 
@@ -208,6 +213,7 @@ impl Session {
             settings,
             conversation,
             plan_mode_hint: false,
+            skills: SkillRegistry::default(),
         };
 
         // Ensure the per-session scratch dir exists. Best-effort: a failure here
@@ -389,8 +395,18 @@ Multiple workspace roots are configured. Paths written as [N]… (for example fr
             Some(roster)
         };
 
+        // Load the skill catalogue from known discovery roots. The registry
+        // snapshot is stored on `self.skills` so the `skill` tool can resolve
+        // names to file paths at load/unload time.
+        let skills_reg = SkillRegistry::load(Some(&self.workdir()));
+        let skills_cat = {
+            let t = skills_reg.catalogue_text();
+            if t.is_empty() { None } else { Some(t) }
+        };
+        self.skills = skills_reg;
+
         let mut sys =
-            resources::build_system_prompt(mem.as_deref(), agents.as_deref(), subagents.as_deref());
+            resources::build_system_prompt(mem.as_deref(), agents.as_deref(), subagents.as_deref(), skills_cat.as_deref());
 
         // Append the scratch space section so the model knows where it can
         // freely write temporary files and clone repositories.

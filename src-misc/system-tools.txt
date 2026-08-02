@@ -193,6 +193,16 @@ recall — read a saved memory's full body by its "slug" (the id shown next to e
   Arguments: { "slug": "deploy-uses-make-ship" }
   Example:   recall({"slug": "deploy-uses-make-ship"})
 
+skill — load or unload an Agent Skill into the session context. Skills are
+  catalogues of name+description in the system prompt; full bodies are only
+  injected after load. action="load" name="<skill>" loads the body for this
+  and later turns; action="unload" name="<skill>" removes it; action="list"
+  shows available skills and which are active.
+  Arguments: { "action": "load|unload|list", "name": "..." (load/unload) }
+  Example:   skill({"action": "load", "name": "rust-testing"})
+  Example:   skill({"action": "unload", "name": "rust-testing"})
+  Example:   skill({"action": "list"})
+
 forget — delete a saved memory by its "slug" (as listed in the memory index).
   Arguments: { "slug": "deploy-uses-make-ship" }
   Example:   forget({"slug": "deploy-uses-make-ship"})

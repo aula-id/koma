@@ -57,6 +57,8 @@ pub(super) fn handle_clear(state: &mut AppState) -> Result<()> {
         fg.follow = true;
         fg.scroll = 0;
         fg.status = "chat cleared".into();
+        // Clear loaded skill bodies so they don't persist across /clear.
+        fg.active_skills.clear();
     }
     Ok(())
 }
