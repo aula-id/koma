@@ -34,6 +34,7 @@ pub mod search;
 pub mod seqthink;
 pub mod shell;
 pub mod shell_filter;
+pub mod skill;
 pub mod task;
 pub mod todo;
 
@@ -77,6 +78,7 @@ pub(crate) fn tool_allowed_in_plan(name: &str) -> bool {
             | "dir_cache_update"
             | "recall"
             | "message_find"
+            | "skill"
             | "web_search"
             | "web_fetch"
             | "pong"
@@ -148,6 +150,11 @@ pub struct ToolCtx {
     /// `git_operator` to inject `-i ~/.ssh/<key>` into git commands. `None`
     /// means no key has been selected yet.
     pub ssh_key: Option<String>,
+    /// Skill catalogue snapshot from the session, so the `skill` tool can
+    /// resolve names to file paths without rescanning.
+    pub skill_registry: Option<crate::model::skill::SkillRegistry>,
+    /// Names of currently active (loaded) skills, for the `list` action.
+    pub active_skill_names: Option<Vec<String>>,
     /// The GLOBAL MCP client manager, shared across every session. `Some` once
     /// startup builds it (it lives in `AppStateRest`); used by [`execute_tool`] to
     /// dispatch `mcp__*` tool calls to their owning server. `None` where no manager
@@ -253,6 +260,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(memory::Remember),
         Box::new(memory::Forget),
         Box::new(memory::Recall),
+        Box::new(skill::Skill),
         Box::new(history::MessageFind),
         Box::new(task::Task),
         Box::new(task::TaskOutput),
@@ -276,7 +284,7 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
 /// (the orchestration/recursion guard — a sub-agent neither spawns nor steers other
 /// sub-agents), `pong` (a health no-op), and `dir_cache_update` (an internal reindex
 /// trigger).
-const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "task_send", "pong", "dir_cache_update"];
+const AGENT_PICKER_EXCLUDED: &[&str] = &["task", "task_send", "pong", "dir_cache_update", "skill"];
 
 /// The user-selectable tool names for the /agents editor, in [`all_tools`] SOURCE ORDER
 /// (deterministic): every built-in tool name except [`AGENT_PICKER_EXCLUDED`].

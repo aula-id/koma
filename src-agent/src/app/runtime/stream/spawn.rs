@@ -83,6 +83,14 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
     // exemption so the model can read its own `plan.md`/`plan_todos.md` (and
     // nothing from any OTHER session). `None` with no active session.
     let session_dir = session_ref.as_ref().map(|s| s.path.clone());
+    let skill_registry = session_ref.map(|s| s.skills.clone());
+    let active_skill_names = Some(
+        state.rest.sessions[sess_idx]
+            .active_skills
+            .keys()
+            .cloned()
+            .collect(),
+    );
     crate::tool::ToolCtx {
         workspace,
         workspaces,
@@ -92,6 +100,8 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         download_dir,
         internet_mode,
         ssh_key,
+        skill_registry,
+        active_skill_names,
         mcp_manager,
         sec_manager,
         bash_saving,
@@ -666,6 +676,8 @@ mod tests {
             download_dir: None,
             internet_mode: crate::model::settings::InternetMode::default(),
             ssh_key: None,
+            skill_registry: None,
+            active_skill_names: None,
             mcp_manager: None,
             sec_manager: None,
             bash_saving: true,

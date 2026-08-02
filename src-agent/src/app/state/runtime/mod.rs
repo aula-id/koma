@@ -451,6 +451,9 @@ pub struct SessionRuntime {
     pub graph_summary: Option<String>,
     /// Generation counter of the last graph summary we fetched.
     pub graph_generation: u64,
+    /// Currently loaded skill bodies (name → markdown). Injected into the
+    /// volatile system tail each request. Ephemeral, never persisted.
+    pub active_skills: std::collections::BTreeMap<String, String>,
     /// Start instant of THIS session's `/compact` animation. `Some` only while a
     /// compaction is in flight for this session (set in `Command::Compact`, cleared
     /// once the result is applied). The renderer reads the FOREGROUND session's value
@@ -615,6 +618,7 @@ impl SessionRuntime {
             awareness_summary: None,
             graph_summary: None,
             graph_generation: 0,
+            active_skills: std::collections::BTreeMap::new(),
             compact_anim_start: None,
             compact_apply_at: None,
             compact_pending: None,
