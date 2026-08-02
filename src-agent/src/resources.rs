@@ -219,6 +219,7 @@ pub fn build_system_prompt(
     memory: Option<&str>,
     agents: Option<&str>,
     subagents: Option<&str>,
+    skills: Option<&str>,
 ) -> String {
     let mut s = String::new();
     s.push_str(system_prompt());
@@ -247,6 +248,19 @@ pub fn build_system_prompt(
                  and forget(<slug>) to delete one.\n",
             );
             s.push_str(mem);
+        }
+    }
+    if let Some(sk) = skills {
+        let sk = sk.trim();
+        if !sk.is_empty() {
+            s.push_str("\n\n# Skills\n");
+            s.push_str(
+                "Available skills (name + description only). Load one with \
+                 skill({\"action\":\"load\",\"name\":\"...\"}) when the task matches; \
+                 unload with action=unload when done. Only loaded skill bodies \
+                 appear below the cache split as \"# Skill: <name>\".\n",
+            );
+            s.push_str(sk);
         }
     }
     let tools = system_tools();

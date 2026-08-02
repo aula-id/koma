@@ -38,6 +38,7 @@ mod task;
 pub(super) use bash::{intercept_bash_background, intercept_bash_kill, intercept_bash_output};
 pub(super) use guard::{
     intercept_cd, intercept_git_cred, intercept_git_worktree, intercept_read_before_edit_guard,
+    intercept_skill,
 };
 pub(super) use plan::{
     build_convo_context, intercept_checklist_plan, intercept_plan_enter,

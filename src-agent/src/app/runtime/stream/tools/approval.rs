@@ -453,6 +453,16 @@ pub(crate) fn process_tools(
                 InterceptFlow::Fallthrough => {}
             }
         }
+        // Intercept the model-callable `skill` tool BEFORE the generic dispatch
+        // path. Load/unload mutate session state (active_skills), so the
+        // interception applies the side-effect on the main thread.
+        if call.function.name == "skill" {
+            match intercepts::intercept_skill(state, sess_idx, &call) {
+                InterceptFlow::Continue => continue,
+                InterceptFlow::Return => return,
+                InterceptFlow::Fallthrough => {}
+            }
+        }
         // Intercept the model-callable `git_worktree` tool BEFORE the generic
         // dispatch path. `create`, `remove`, `enter`, and `exit` mutate session
         // state (cwd + allowed roots), which a read-only `ToolCtx` can't do. The

@@ -44,6 +44,8 @@ mod tests;
 
 pub use def::{AgentDef, AgentSource};
 pub use parse::load_agent_file;
+// Re-exposed so sibling modules (skill) can reuse the same split logic.
+pub(crate) use parse::split_frontmatter;
 // Exposed for the extension-uninstall agent-override sweep, which validates each contributed
 // sub-agent name (the delete key) exactly as `save_agent` did when it wrote the file.
 pub(crate) use parse::validate_agent_name;

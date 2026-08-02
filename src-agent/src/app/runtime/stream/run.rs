@@ -136,6 +136,13 @@ pub(crate) fn start_stream_task(
             // the provider-cached head. Iterated in BTreeMap key order → a byte-stable
             // tail across turns. Empty map = no-op (byte-identical to before).
             append_ext_context(&mut first.content, &state.rest.ext_context);
+            // Active skill bodies: injected into the volatile tail (after cache
+            // split) so they never bust the cached head. BTreeMap key order is
+            // byte-stable across turns.
+            append_active_skills(
+                &mut first.content,
+                &state.rest.sessions[sess_idx].active_skills,
+            );
             // Security mode: when active, tell the model it IS a security testing agent
             // and list its live security tools, so it uses them directly instead of
             // grepping the codebase for "security tools".
@@ -660,6 +667,20 @@ fn append_ext_context(dst: &mut String, ctx: &std::collections::BTreeMap<String,
     }
 }
 
+/// Append each active skill's body to the volatile system tail. Iterated in
+/// `BTreeMap` KEY ORDER (deterministic). Empty map = no-op.
+fn append_active_skills(dst: &mut String, skills: &std::collections::BTreeMap<String, String>) {
+    for (name, body) in skills {
+        if body.trim().is_empty() {
+            continue;
+        }
+        dst.push_str("\n\n# Skill: ");
+        dst.push_str(name);
+        dst.push('\n');
+        dst.push_str(body);
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ext_context_tests {
@@ -688,6 +709,35 @@ mod ext_context_tests {
         let ctx: BTreeMap<String, String> = BTreeMap::new();
         let mut dst = String::from("HEAD");
         append_ext_context(&mut dst, &ctx);
+        assert_eq!(dst, "HEAD");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod skill_tail_tests {
+    use super::append_active_skills;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn append_skills_is_ordered_and_skips_blank() {
+        let mut skills = BTreeMap::new();
+        skills.insert("zebra".to_string(), "z-body".to_string());
+        skills.insert("alpha".to_string(), "a-body".to_string());
+        skills.insert("blank".to_string(), "   ".to_string());
+        let mut dst = String::from("HEAD");
+        append_active_skills(&mut dst, &skills);
+        assert_eq!(
+            dst,
+            "HEAD\n\n# Skill: alpha\na-body\n\n# Skill: zebra\nz-body"
+        );
+    }
+
+    #[test]
+    fn empty_map_noop() {
+        let skills = BTreeMap::new();
+        let mut dst = String::from("HEAD");
+        append_active_skills(&mut dst, &skills);
         assert_eq!(dst, "HEAD");
     }
 }
