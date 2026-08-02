@@ -29,7 +29,7 @@ pub(crate) fn apply_global_catalogue_reload(state: &mut AppState) {
             // Rebuild the full SettingsState from fresh config + session.
             if let Some(session) = state.rest.fg().session.as_ref() {
                 let cfg = state.rest.config.clone();
-                *s = Box::new(crate::app::mode::settings::SettingsState::from(session, &cfg));
+                **s = crate::app::mode::settings::SettingsState::from(session, &cfg);
             }
         }
         crate::app::mode::Mode::Agents(a) => {

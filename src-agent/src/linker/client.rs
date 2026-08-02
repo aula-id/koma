@@ -291,6 +291,16 @@ mod tests {
         std::fs::write(root_a.join("src/main.rs"), "fn main() {}").unwrap();
         let result = normalize_query_path("[0]src/main.rs", &[root_a.clone()]);
         assert!(result.contains("src/main.rs"));
+        // On macOS, temp_dir() symlinks /var → /private/var; canonicalize resolves
+        // the symlink, so compare against the canonicalized + slash-normalized root.
+        let expected_root = std::fs::canonicalize(&root_a)
+            .unwrap_or(root_a.clone())
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            result.starts_with(&expected_root),
+            "result={result:?} expected_root={expected_root:?}"
+        );
         let _ = std::fs::remove_dir_all(&root_a);
     }
 
@@ -304,7 +314,16 @@ mod tests {
         std::fs::write(root_b.join("pkg/README.md"), "hello").unwrap();
         let result = normalize_query_path("[1]pkg/README.md", &[root_a.clone(), root_b.clone()]);
         assert!(result.contains("pkg/README.md"));
-        assert!(result.starts_with(&root_b.to_string_lossy().as_ref()));
+        // File exists → canonicalize resolves macOS /var → /private/var symlink;
+        // compare against the canonicalized + slash-normalized root.
+        let expected_root = std::fs::canonicalize(&root_b)
+            .unwrap_or(root_b.clone())
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            result.starts_with(&expected_root),
+            "result={result:?} expected_root={expected_root:?}"
+        );
         let _ = std::fs::remove_dir_all(&root_a);
         let _ = std::fs::remove_dir_all(&root_b);
     }
@@ -317,8 +336,13 @@ mod tests {
         let _ = std::fs::create_dir_all(&root_a);
         let _ = std::fs::create_dir_all(&root_b);
         let result = normalize_query_path("[9]src/main.rs", &[root_a.clone(), root_b.clone()]);
-        // OOB index falls back to primary root
-        assert!(result.starts_with(&root_a.to_string_lossy().as_ref()));
+        // OOB index falls back to primary root (no canonicalize — file absent);
+        // slash-normalize the expected prefix for Windows compatibility.
+        let expected = root_a.to_string_lossy().replace('\\', "/");
+        assert!(
+            result.starts_with(&expected),
+            "result={result:?} expected={expected:?}"
+        );
         let _ = std::fs::remove_dir_all(&root_a);
         let _ = std::fs::remove_dir_all(&root_b);
     }
