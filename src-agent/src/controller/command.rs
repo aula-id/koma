@@ -42,6 +42,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/task",
         "Run an agent on a task, or open the sub-agents viewer (no args)",
     ),
+    (
+        "/model",
+        "Switch session / agent model  (/model for help)",
+    ),
     ("/bash", "Manage background bash jobs"),
     ("/todo", "View the session task list"),
     ("/cd", "Change the session working directory"),
@@ -168,6 +172,9 @@ pub enum Command {
     Usage,
     /// Exit the application.
     Quit,
+    /// Switch session or agent model. Inner string is the raw remainder after
+    /// `/model` — subcommand dispatch happens in the handler.
+    Model(String),
     /// An unrecognised command verb; holds the raw verb for display.
     Unknown(String),
 }
@@ -224,6 +231,7 @@ pub fn parse(line: &str) -> Command {
         "store" => Command::Store,
         "security" => Command::Security,
         "task" => Command::Task(rest.to_string()),
+        "model" => Command::Model(rest.to_string()),
         "bash" => Command::Bash,
         "todo" => Command::Todo,
         "cd" => Command::Cd(rest.to_string()),
@@ -261,5 +269,55 @@ mod parse_tests {
         assert!(COMMANDS.iter().any(|(n, _)| *n == "/clear"));
         let matches = palette_matches("/cl");
         assert!(matches.iter().any(|(n, _)| *n == "/clear"));
+    }
+
+    #[test]
+    fn parse_model_bare() {
+        assert_eq!(parse("/model"), Command::Model(String::new()));
+        assert_eq!(parse("  /model  "), Command::Model(String::new()));
+    }
+
+    #[test]
+    fn parse_model_help() {
+        assert_eq!(
+            parse("/model help"),
+            Command::Model("help".to_string())
+        );
+        assert_eq!(parse("/model ?"), Command::Model("?".to_string()));
+    }
+
+    #[test]
+    fn parse_model_role() {
+        assert_eq!(
+            parse("/model main"),
+            Command::Model("main".to_string())
+        );
+        assert_eq!(
+            parse("/model awareness"),
+            Command::Model("awareness".to_string())
+        );
+        assert_eq!(
+            parse("/model PLANNER"),
+            Command::Model("PLANNER".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_model_agent() {
+        assert_eq!(
+            parse("/model agent"),
+            Command::Model("agent".to_string())
+        );
+        assert_eq!(
+            parse("/model agent explore"),
+            Command::Model("agent explore".to_string())
+        );
+    }
+
+    #[test]
+    fn palette_lists_model() {
+        assert!(COMMANDS.iter().any(|(n, _)| *n == "/model"));
+        let matches = palette_matches("/mo");
+        assert!(matches.iter().any(|(n, _)| *n == "/model"));
     }
 }

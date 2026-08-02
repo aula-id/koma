@@ -190,7 +190,12 @@ fn persist_refresh(uuid: &str, tokens: &codex::TokenResponse, refreshed_at: u64)
             .map(|secs| refreshed_at + secs)
             .unwrap_or(conn.expires_at);
         conn.last_refresh = refreshed_at;
-        let _ = config.save();
+        if let Err(e) = config.save() {
+            crate::model::store::append_global_error_log(
+                "oauth",
+                &format!("failed to persist refreshed token for {uuid}: {e}"),
+            );
+        }
     }
 }
 
@@ -285,6 +290,25 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
         return (snap.access_token, snap.account);
     }
 
+    // Disk re-seed: the OAuth daemon may have refreshed this token while we were
+    // waiting. Reload from config.json and check if it's now fresher.
+    {
+        let disk_config = AppConfig::load();
+        if let Some(disk_idx) = disk_config.oauth_index_by_uuid(oauth_uuid) {
+            let disk_conn = &disk_config.oauth_conns[disk_idx];
+            if disk_conn.last_refresh > snap.last_refresh
+                || (disk_conn.expires_at != 0 && disk_conn.expires_at > snap.expires_at)
+            {
+                seed(disk_conn).await;
+                if let Some(s) = cache().read().await.get(oauth_uuid).cloned() {
+                    if !is_stale(&s) {
+                        return (s.access_token, s.account);
+                    }
+                }
+            }
+        }
+    }
+
     // Dispatch the refresh call per provider (both return the shared
     // `codex::TokenResponse` shape, so the persist/update path below is
     // provider-agnostic). Kilo never reaches here — `is_stale` returns false for
@@ -359,6 +383,17 @@ pub async fn fresh_key(oauth_uuid: &str, fallback_key: &str) -> (String, String)
             // the cached, possibly stale, token rather than failing the send.
             (snap.access_token, snap.account)
         }
+    }
+}
+
+/// Force a re-check of the token for `uuid` by evicting + re-seeding from disk.
+/// Called after a 401 to pick up a token the OAuth daemon just refreshed.
+#[allow(dead_code)] // wired in a follow-up: 401 retry in stream/oneshot paths
+pub async fn force_refresh(uuid: &str) {
+    cache().write().await.remove(uuid);
+    let config = AppConfig::load();
+    if let Some(idx) = config.oauth_index_by_uuid(uuid) {
+        seed(&config.oauth_conns[idx]).await;
     }
 }
 

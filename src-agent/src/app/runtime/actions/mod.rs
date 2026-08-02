@@ -29,6 +29,7 @@ pub(in crate::app::runtime) mod ext_install;
 pub(in crate::app::runtime) mod ext_uninstall;
 mod extensions;
 mod mcp;
+pub(crate) mod model_cmd;
 mod oauth;
 mod onboard;
 mod plan_decision;
@@ -41,6 +42,7 @@ mod security;
 // `pub(in crate::app::runtime)` so `runtime` can re-export `session::handle_live_switch` for
 // the extension grant broker's `sessions.switch` (W7); the module's own items stay `pub`.
 pub(in crate::app::runtime) mod session;
+mod config_reload;
 mod settings;
 mod store;
 
@@ -56,6 +58,7 @@ pub(in crate::app::runtime) use session::create_session_for_pwd;
 // (`SetMcpServer`/`DeleteMcpServer`/`EnableMcpServer`) can persist + live-reconnect the
 // MCP manager without a `Mode::Mcp` in scope.
 pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
+pub(crate) use config_reload::{apply_global_catalogue_reload, save_config_and_broadcast};
 mod settings_creds;
 
 /// Apply mouse-capture mode to the terminal. Resolves `Auto` via env detection
@@ -238,6 +241,29 @@ pub(in crate::app::runtime) fn apply_action(
 
         Action::EffortCancel => {
             *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::ModelRoleSwap { role, model_uuid } => {
+            model_cmd::handle_model_role_swap(role, model_uuid, state)?;
+        }
+
+        Action::ModelAgentSwap {
+            agent_name,
+            model_uuid,
+        } => {
+            model_cmd::handle_model_agent_swap(agent_name, model_uuid, state)?;
+        }
+
+        Action::ModelCancel => {
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::ModelBackToAgentList => {
+            model_cmd::handle_model_back_to_agent_list(state);
+        }
+
+        Action::ModelOpenAgentPick { agent_name } => {
+            model_cmd::handle_model_open_agent_pick(agent_name, state);
         }
 
         Action::CreateAgent => {

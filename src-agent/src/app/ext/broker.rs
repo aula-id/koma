@@ -3530,7 +3530,7 @@ mod tests {
             set(&mut state, "a.ext", "   ".to_string()),
             json!({ "ok": true })
         );
-        assert!(state.rest.ext_context.get("a.ext").is_none());
+        assert!(!state.rest.ext_context.contains_key("a.ext"));
         assert_eq!(
             state.rest.ext_context.get("b.ext").map(String::as_str),
             Some("b-data")
@@ -3547,7 +3547,7 @@ mod tests {
             json!({}),
         );
         assert_eq!(cleared, json!({ "ok": true }));
-        assert!(state.rest.ext_context.get("b.ext").is_none());
+        assert!(!state.rest.ext_context.contains_key("b.ext"));
 
         // Clearing an already-absent entry is idempotent — still ok.
         let again = call_broker(

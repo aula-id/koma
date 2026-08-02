@@ -246,12 +246,15 @@ impl DirCache {
                 continue;
             }
             // Basename: strip trailing "/" then take everything after the last "/".
+            // For multi-root entries, strip the "[N]" prefix so "[0]README.md"
+            // ranks as basename "README.md" for starts-with queries.
             let base = {
                 let stripped = c.trim_end_matches('/');
-                match stripped.rfind('/') {
+                let after_slash = match stripped.rfind('/') {
                     Some(i) => &stripped[i + 1..],
                     None => stripped,
-                }
+                };
+                crate::tool::parse_ws_prefix(after_slash).1
             };
             if base.to_lowercase().starts_with(&q) {
                 starts.push(c.clone());
@@ -398,5 +401,30 @@ mod tests {
         };
         let results = cache.search("main", 10);
         assert!(results.iter().any(|r| r.contains("main.rs")));
+    }
+
+    #[test]
+    fn search_multi_root_basename_strips_prefix() {
+        // "[0]README.md" should rank as basename "README.md" when searching "readme".
+        let cache = DirCache {
+            files: vec![
+                "[0]README.md".into(),
+                "[0]src/main.rs".into(),
+                "[1]pkg/README.md".into(),
+            ],
+            dirs: compute_dirs(&[
+                "[0]README.md".into(),
+                "[0]src/main.rs".into(),
+                "[1]pkg/README.md".into(),
+            ]),
+            indexing: false,
+            missing_roots: Vec::new(),
+            version: 1,
+            memo: Mutex::new(SearchMemo::default()),
+        };
+        let results = cache.search("readme", 10);
+        // Both README.md entries should appear in starts-with results.
+        assert!(results.iter().any(|r| r.contains("[0]README.md")));
+        assert!(results.iter().any(|r| r.contains("[1]pkg/README.md")));
     }
 }

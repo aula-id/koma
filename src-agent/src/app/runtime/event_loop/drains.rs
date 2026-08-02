@@ -50,11 +50,14 @@ pub(super) fn enter_select(rest: &crate::app::state::AppStateRest) -> Result<()>
 }
 
 /// Re-enter the alternate screen and force a full repaint.
-pub(super) fn exit_select(terminal: &mut Term) -> Result<()> {
+pub(super) fn exit_select(
+    terminal: &mut Term,
+    mouse_capture: crate::model::settings::MouseCapture,
+) -> Result<()> {
     execute!(stdout(), EnterAlternateScreen)?;
-    // Re-enable mouse capture after returning from the plain-text /select screen.
-    use ratatui::crossterm::event::EnableMouseCapture;
-    let _ = execute!(stdout(), EnableMouseCapture);
+    // Re-apply the session's mouse capture setting after returning from the
+    // plain-text /select screen — don't unconditionally enable.
+    crate::app::runtime::actions::apply_mouse_capture(mouse_capture);
     terminal.clear()?;
     Ok(())
 }

@@ -195,19 +195,17 @@ pub(super) fn handle_oauth_copy_url(state: &mut AppState) -> Result<()> {
     };
     if let Some(flow) = flow {
         match flow {
-            OAuthFlowState::CodexWait { url, copied, .. } => {
-                if crate::service::oauth::browser::copy_to_clipboard(url) {
-                    *copied = true;
-                }
+            OAuthFlowState::CodexWait { url, copied, .. }
+                if crate::service::oauth::browser::copy_to_clipboard(url) =>
+            {
+                *copied = true;
             }
             OAuthFlowState::KiloWait {
                 verification_url,
                 copied,
                 ..
-            } => {
-                if crate::service::oauth::browser::copy_to_clipboard(verification_url) {
-                    *copied = true;
-                }
+            } if crate::service::oauth::browser::copy_to_clipboard(verification_url) => {
+                *copied = true;
             }
             _ => {}
         }

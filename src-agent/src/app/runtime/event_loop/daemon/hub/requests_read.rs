@@ -37,6 +37,10 @@ impl DaemonHub {
                 version: self.version.clone(),
             },
         );
+        // Reload global catalogue from disk so a reconnecting client always sees
+        // the freshest models/providers/agents (covers detach-reopen and any
+        // missed broadcast).
+        crate::app::runtime::actions::apply_global_catalogue_reload(state);
         // ATOMIC attach (critique #2): build the full snapshot, send it, and
         // flip the client to attached + seed ITS OWN baseline IN THIS TICK.
         // Only this client's baseline is (re)seeded (blocker #2) — never a

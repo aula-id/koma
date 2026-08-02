@@ -22,6 +22,7 @@ mod extensions;
 mod help;
 mod key_input;
 mod mcp;
+mod model_cmd;
 mod onboard;
 mod onboard_provider;
 mod paste;
@@ -112,6 +113,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Mode::Todo(t) => todo::handle_todo(t, &mut state.rest, key),
         Mode::Help(h) => help::handle_help(h, &mut state.rest, key),
         Mode::Effort(e) => handle_effort(e, &mut state.rest, key),
+        Mode::Model(m) => model_cmd::handle_model_cmd(m, &mut state.rest, key),
         Mode::Loading(l) => handle_loading(l, key),
         Mode::Usage(nav) => usage::handle_usage(nav, key),
         Mode::MessageRewind(rw) => handle_rewind(rw, &mut state.rest, key),

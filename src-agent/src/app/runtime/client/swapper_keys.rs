@@ -172,10 +172,7 @@ fn handle_ctrl_x_cooking_nuke(
     // Resolve the focused row + its session id; bail (arm nothing) on the synthetic
     // new-session row or any row without an id.
     let target_id = match hub.selected_cooking() {
-        Some(entry) if entry.kind == SessionKind::Session => match &entry.session_id {
-            Some(id) => id.clone(),
-            None => return None,
-        },
+        Some(entry) if entry.kind == SessionKind::Session => entry.session_id.clone()?,
         _ => return None,
     };
 

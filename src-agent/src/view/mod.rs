@@ -24,6 +24,7 @@ pub mod loading;
 pub mod markdown;
 pub mod mcp;
 pub mod message_rewind;
+pub mod model_cmd;
 pub mod onboard;
 pub mod onboard_provider;
 pub mod quit_confirm;
@@ -231,6 +232,12 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
         }
         Mode::Help(h) => help::draw(frame, &state.rest, h, &palette),
         Mode::Effort(e) => effort::draw(frame, &state.rest, e, &palette),
+        Mode::Model(m) => {
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            let chunks = chat::layout_chunks(&state.rest, frame.area());
+            model_cmd::render_overlay(frame, m, &palette, chunks[4], chunks[1]);
+        }
         Mode::Loading(s) => loading::draw(frame, s, &palette),
         Mode::Usage(nav) => {
             // The dashboard renders from a pre-fetched ledger projection so the SAME

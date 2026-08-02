@@ -150,11 +150,9 @@ fn daemon_selftest_inner() -> Result<()> {
                     break;
                 }
                 // A full resync is also a valid carrier of the change; accept it.
-                DaemonEvent::Snapshot(s) => {
-                    if s.global.status == "no active session" {
-                        saw_status = true;
-                        break;
-                    }
+                DaemonEvent::Snapshot(s) if s.global.status == "no active session" => {
+                    saw_status = true;
+                    break;
                 }
                 // Ack for the request / unrelated deltas: keep reading.
                 _ => {}

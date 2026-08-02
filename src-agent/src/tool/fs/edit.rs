@@ -13,13 +13,14 @@ impl Tool for Edit {
         "edit"
     }
     fn description(&self) -> &'static str {
-        "Replace an exact string in a file in place. Read the file first to get the exact text. Fails if the old string is missing or not unique."
+        "Replace an exact string in a file in place. Read the file first to get the exact text. Fails if the old string is missing or not unique. \
+         Before modifying, consider graph_query impact analysis to understand downstream effects."
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Workspace-relative file path. When multiple workspace roots are active, file listings prefix paths with [N] (e.g. \"[1]src/main.rs\") — copy that prefix exactly. A bare path with no prefix targets workspace [0]." },
+                "path": { "type": "string", "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]." },
                 "old": { "type": "string", "description": "Exact substring to replace" },
                 "new": { "type": "string", "description": "Replacement text" },
                 "replace_all": {
@@ -77,6 +78,9 @@ impl Tool for Edit {
         super::record_change(ctx, &path, "modified");
 
         let n = if replace_all { count } else { 1 };
-        Ok(format!("edited {rel} ({n} replacement(s))"))
+        let mut result = format!("edited {rel} ({n} replacement(s))");
+        // L3: auto-neighborhood footer (best-effort, daemon may not be running).
+        super::append_neighborhood_footer(&mut result, &path);
+        Ok(result)
     }
 }

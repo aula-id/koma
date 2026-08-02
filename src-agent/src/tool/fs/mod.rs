@@ -99,3 +99,49 @@ pub(crate) fn capture_baseline(ctx: &ToolCtx, path: &Path) {
     let _ =
         crate::model::msglog::record_file_baseline(session_dir, &display, kind, content.as_deref());
 }
+
+/// Maximum number of paths shown per side in the L3 neighborhood footer.
+const NEIGHBORHOOD_FOOTER_CAP: usize = 8;
+
+/// Best-effort neighborhood footer for L3: queries the linker daemon for the
+/// 1-hop import graph of `path` (resolved absolute path) and appends a
+/// `# Related (graph)` section to `out`. If the daemon is not running, the
+/// file has no graph edges, or the fetch fails, this is a silent no-op.
+pub(crate) fn append_neighborhood_footer(out: &mut String, path: &Path) {
+    // Graph nodes are keyed by canonicalized absolute paths (with forward slashes).
+    // Try canonicalize first; fall back to slash-normalized absolute path.
+    let key = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/");
+    let Some((imports, imported_by)) = crate::linker::client::fetch_neighborhood(&key) else {
+        return;
+    };
+    if imports.is_empty() && imported_by.is_empty() {
+        return;
+    }
+    out.push_str("\n---\n# Related (graph)\n");
+    if !imports.is_empty() {
+        let display: Vec<_> = imports.iter().take(NEIGHBORHOOD_FOOTER_CAP).cloned().collect();
+        let suffix = if imports.len() > NEIGHBORHOOD_FOOTER_CAP {
+            format!(" (and {} more)", imports.len() - NEIGHBORHOOD_FOOTER_CAP)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("imports: {}{}\n", display.join(", "), suffix));
+    }
+    if !imported_by.is_empty() {
+        let display: Vec<_> = imported_by
+            .iter()
+            .take(NEIGHBORHOOD_FOOTER_CAP)
+            .cloned()
+            .collect();
+        let suffix = if imported_by.len() > NEIGHBORHOOD_FOOTER_CAP {
+            format!(" (and {} more)", imported_by.len() - NEIGHBORHOOD_FOOTER_CAP)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("imported-by: {}{}\n", display.join(", "), suffix));
+    }
+}

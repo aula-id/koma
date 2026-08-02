@@ -196,7 +196,7 @@ impl MouseCapture {
     /// `On` / `Off` pass through unchanged.
     pub fn resolved(self) -> bool {
         match self {
-            Self::Auto => true,
+            Self::Auto => std::env::var_os("TERMUX_VERSION").is_some(),
             Self::On => true,
             Self::Off => false,
         }

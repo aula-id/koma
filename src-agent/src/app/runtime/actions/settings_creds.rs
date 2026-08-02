@@ -147,7 +147,7 @@ pub(super) fn handle_save_creds(
                 source_uuid: None,
             });
         }
-        if let Err(e) = state.rest.config.save() {
+        if let Err(e) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
             state.rest.fg_mut().status = format!("config save failed: {e}");
         }
     }

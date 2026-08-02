@@ -127,6 +127,27 @@ pub struct EffortSnapshot {
     pub note: String,
 }
 
+/// A serde-safe projection of the `/model` session model switcher.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct ModelCmdSnapshot {
+    /// Submode discriminant: "help", "role_pick", "agent_list", "agent_pick".
+    pub sub: String,
+    /// Role token (only meaningful for role_pick submode).
+    pub role: Option<String>,
+    /// Agent name (only meaningful for agent_pick submode).
+    pub agent_name: Option<String>,
+    /// The model options list: (uuid_or_none, label).
+    pub options: Vec<(Option<String>, String)>,
+    /// Cursor position.
+    pub cursor: usize,
+    /// Note / help text.
+    pub note: String,
+    /// Help text lines (only populated for help submode).
+    #[serde(default)]
+    pub lines: Vec<String>,
+}
+
 /// A serde-safe projection of one --resume session-picker row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]

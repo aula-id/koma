@@ -21,7 +21,7 @@ impl Tool for DirList {
                 "paths": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Workspace-relative directory paths to list. Use [\".\"] for the workspace root. Prefix with [N] to target workspace N (e.g. \"[1]src\")."
+                    "description": "Workspace-relative directory paths to list. Use [\".\"] for the workspace root. A bare relative path targets workspace [0]."
                 },
                 "path": { "type": "string", "description": "A single directory (alternative to `paths`)." }
             }
@@ -59,13 +59,9 @@ impl Tool for DirList {
             let (ws_idx, bare) = super::super::parse_ws_prefix(dir);
             let children = cache.children(bare, ws_idx);
             let label = if bare.is_empty() || bare == "." {
-                if ws_idx == 0 {
-                    ".".to_string()
-                } else {
-                    format!("[{ws_idx}].")
-                }
+                crate::tool::model_display_path(&ctx.workspaces, &ctx.workspaces[ws_idx])
             } else {
-                dir.to_string()
+                crate::tool::model_display_path(&ctx.workspaces, &ctx.workspaces[ws_idx].join(bare))
             };
             out.push_str(&format!("{label}:\n"));
             if children.is_empty() {

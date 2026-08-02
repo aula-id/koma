@@ -446,6 +446,11 @@ pub struct SessionRuntime {
     /// `None` when awareness is disabled, no docs exist, or the call failed —
     /// it is recomputed per session, never persisted.
     pub awareness_summary: Option<String>,
+    /// Cached graph summary text for L1 injection into the system prompt.
+    /// Populated by the linker daemon on scan complete / generation change.
+    pub graph_summary: Option<String>,
+    /// Generation counter of the last graph summary we fetched.
+    pub graph_generation: u64,
     /// Start instant of THIS session's `/compact` animation. `Some` only while a
     /// compaction is in flight for this session (set in `Command::Compact`, cleared
     /// once the result is applied). The renderer reads the FOREGROUND session's value
@@ -608,6 +613,8 @@ impl SessionRuntime {
             active_cwd: None,
             dir_cache: Arc::new(RwLock::new(DirCache::default())),
             awareness_summary: None,
+            graph_summary: None,
+            graph_generation: 0,
             compact_anim_start: None,
             compact_apply_at: None,
             compact_pending: None,
@@ -620,6 +627,17 @@ impl SessionRuntime {
             closed: false,
             park_started_at: None,
             last_memory_mtime: None,
+        }
+    }
+
+    /// Update the cached graph summary if the generation changed or the text
+    /// differs. Called by the warm path (L1) after a linker summary fetch.
+    pub fn update_graph_summary(&mut self, summary: String, generation: u64) {
+        if generation > self.graph_generation
+            || summary != self.graph_summary.as_deref().unwrap_or_default()
+        {
+            self.graph_summary = Some(summary);
+            self.graph_generation = generation;
         }
     }
 

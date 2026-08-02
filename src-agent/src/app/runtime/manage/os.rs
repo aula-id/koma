@@ -100,7 +100,7 @@ pub(super) fn kill_orphan_daemon_processes() -> usize {
         }
         if !args
             .iter()
-            .any(|a| a == "--daemon" || a == "--mcp-daemon")
+            .any(|a| a == "--daemon" || a == "--mcp-daemon" || a == "--oauth-daemon")
         {
             continue;
         }

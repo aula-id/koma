@@ -236,6 +236,10 @@ impl DaemonHub {
             } => {
                 self.set_stream_view(idx, subagent, bash, session);
             }
+            ClientRequest::ReloadGlobalCatalogue => {
+                crate::app::runtime::actions::apply_global_catalogue_reload(state);
+                self.send_to(idx, DaemonEvent::Ack);
+            }
             req => {
                 self.handle_controller_mutation(idx, req, state, client, handle);
             }
@@ -720,7 +724,9 @@ impl DaemonHub {
             | ClientRequest::GetSettings
             | ClientRequest::ListAgents
             | ClientRequest::GetEffortOptions
-            | ClientRequest::SetStreamView { .. } => {
+            | ClientRequest::SetStreamView { .. }
+            // Handled in dispatch_request before the fallthrough; here for exhaustiveness.
+            | ClientRequest::ReloadGlobalCatalogue => {
                 self.send_to(idx, DaemonEvent::Ack);
             }
         }

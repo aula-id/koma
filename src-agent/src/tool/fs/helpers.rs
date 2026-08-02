@@ -55,17 +55,14 @@ pub(super) fn not_found_help(ctx: &ToolCtx, abs: &Path, rel: &str) -> String {
         _ => ws.as_path(),
     };
 
-    // Workspace-relative label for the ancestor ("" / "." -> the root itself).
+    // Model-facing label for the ancestor directory.
+    let dir_label = super::super::model_display_path(&ctx.workspaces, dir_abs);
+    // Cache lookup still uses workspace-relative path.
     let dir_rel = dir_abs
         .strip_prefix(&ws)
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let dir_label = if dir_rel.is_empty() {
-        ".".to_string()
-    } else {
-        format!("{}/", dir_rel.replace('\\', "/"))
-    };
 
     // List the ancestor's entries. Prefer the gitignore-aware cache; if it has
     // nothing for this dir (e.g. not yet indexed / ignored), read the dir live.

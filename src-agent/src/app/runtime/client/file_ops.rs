@@ -53,47 +53,39 @@ pub(super) fn handle_file_ctl(
             content,
             expected_fingerprint,
             request_id,
-        } => {
-            if file_save(
-                root,
-                path,
-                content,
-                expected_fingerprint,
-                request_id,
-                push,
-                workdirs,
-            ) {
-                refresh_git_status(push, session);
-            }
+        } if file_save(
+            root,
+            path,
+            content,
+            expected_fingerprint,
+            request_id,
+            push,
+            workdirs,
+        ) => {
+            refresh_git_status(push, session);
         }
         HostCtl::FileCreate {
             root,
             path,
             kind,
             request_id,
-        } => {
-            if file_create(root, path, kind, request_id, push, workdirs) {
-                refresh_git_status(push, session);
-            }
+        } if file_create(root, path, kind, request_id, push, workdirs) => {
+            refresh_git_status(push, session);
         }
         HostCtl::FileRename {
             root,
             old_path,
             new_path,
             request_id,
-        } => {
-            if file_rename(root, old_path, new_path, request_id, push, workdirs) {
-                refresh_git_status(push, session);
-            }
+        } if file_rename(root, old_path, new_path, request_id, push, workdirs) => {
+            refresh_git_status(push, session);
         }
         HostCtl::FileDelete {
             root,
             path,
             request_id,
-        } => {
-            if file_delete(root, path, request_id, push, workdirs) {
-                refresh_git_status(push, session);
-            }
+        } if file_delete(root, path, request_id, push, workdirs) => {
+            refresh_git_status(push, session);
         }
         _ => {}
     }
@@ -642,7 +634,10 @@ mod tests {
         (dir, root_s, workdirs)
     }
 
-    fn capture_push() -> (Arc<Mutex<Vec<String>>>, Box<dyn Fn(String)>) {
+    type PushSink = Arc<Mutex<Vec<String>>>;
+    type PushFn = Box<dyn Fn(String)>;
+
+    fn capture_push() -> (PushSink, PushFn) {
         let sink = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink2 = Arc::clone(&sink);
         let push = Box::new(move |json: String| {

@@ -40,7 +40,7 @@ pub(super) fn handle_setup_koma_free(
     // byte-identical entries; idempotent + ensures a non-empty `install_id`.
     crate::service::koma_free::ensure_koma_free_config(&mut state.rest.config);
 
-    if let Err(e) = state.rest.config.save() {
+    if let Err(e) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
         state.rest.fg_mut().status = format!("config save failed: {e}");
     }
 
@@ -164,7 +164,7 @@ pub(super) fn handle_onboard_provider_save_model(
         role: None,
         source_uuid: None,
     });
-    if let Err(e) = state.rest.config.save() {
+    if let Err(e) = super::config_reload::save_config_and_broadcast(&state.rest.config) {
         state.rest.fg_mut().status = format!("config save failed: {e}");
     }
 
