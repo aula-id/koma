@@ -3,7 +3,7 @@
 use std::io::stdout;
 
 use ratatui::crossterm::{
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -30,6 +30,9 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        // Disable mouse capture FIRST — while stdout is still fully usable — so
+        // the parent shell never receives stale mouse CSI sequences on hover.
+        let _ = execute!(stdout(), DisableMouseCapture);
         let _ = execute!(
             stdout(),
             LeaveAlternateScreen,

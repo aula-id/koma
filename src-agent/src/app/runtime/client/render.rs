@@ -504,7 +504,7 @@ pub(super) fn client_select_dump(
 
     // (1) Drop to the normal screen so the printed transcript uses the scrollback the
     // user can select from. Disable mouse capture first so native selection works.
-    use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    use ratatui::crossterm::event::DisableMouseCapture;
     let _ = execute!(stdout(), DisableMouseCapture);
     execute!(stdout(), LeaveAlternateScreen)?;
 
@@ -540,7 +540,11 @@ pub(super) fn client_select_dump(
 
     // (4) Restore the alt-screen + mouse and force a full repaint next draw.
     execute!(stdout(), EnterAlternateScreen)?;
-    let _ = execute!(stdout(), EnableMouseCapture);
+    // Re-apply the shadow session's mouse capture setting (not unconditional enable).
+    let mc = shadow.rest.fg().session.as_ref()
+        .map(|s| s.settings.mouse_capture)
+        .unwrap_or_default();
+    crate::app::runtime::actions::apply_mouse_capture(mc);
     terminal.clear()?;
     Ok(())
 }

@@ -177,6 +177,29 @@ pub fn fetch_summary_if_newer(min_gen: u64) -> Option<SummaryResult> {
 /// suffix match can fire.
 pub fn normalize_query_path(path: &str, project_roots: &[PathBuf]) -> String {
     let normalized = path.replace('\\', "/");
+
+    // Multi-root [N] prefix: "[1]src/foo.rs" → resolve bare "src/foo.rs"
+    // under project_roots[1] (or fallback to primary on OOB).
+    if let Some(rest) = normalized.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            if let Ok(idx) = rest[..end].parse::<usize>() {
+                let bare = &rest[end + 1..];
+                if !bare.is_empty() {
+                    let root = project_roots
+                        .get(idx)
+                        .or(project_roots.first())
+                        .cloned()
+                        .unwrap_or_default();
+                    let candidate = root.join(bare);
+                    if let Ok(canon) = std::fs::canonicalize(&candidate) {
+                        return canon.to_string_lossy().replace('\\', "/");
+                    }
+                    return candidate.to_string_lossy().replace('\\', "/");
+                }
+            }
+        }
+    }
+
     let p = std::path::Path::new(&normalized);
 
     // Already absolute — canonicalize if possible, else slash-normalize.
@@ -258,6 +281,55 @@ mod tests {
     fn normalize_query_path_no_roots_returns_bare() {
         let result = normalize_query_path("src/main.rs", &[]);
         assert_eq!(result, "src/main.rs");
+    }
+
+    #[test]
+    fn normalize_query_path_ws_prefix_primary() {
+        // [0]src/main.rs → resolved under roots[0]
+        let root_a = std::env::temp_dir().join(format!("koma_test_{}_a", std::process::id()));
+        let _ = std::fs::create_dir_all(root_a.join("src"));
+        std::fs::write(root_a.join("src/main.rs"), "fn main() {}").unwrap();
+        let result = normalize_query_path("[0]src/main.rs", &[root_a.clone()]);
+        assert!(result.contains("src/main.rs"));
+        let _ = std::fs::remove_dir_all(&root_a);
+    }
+
+    #[test]
+    fn normalize_query_path_ws_prefix_secondary() {
+        // [1]pkg/README.md → resolved under roots[1]
+        let root_a = std::env::temp_dir().join(format!("koma_test_{}_a2", std::process::id()));
+        let root_b = std::env::temp_dir().join(format!("koma_test_{}_b2", std::process::id()));
+        let _ = std::fs::create_dir_all(&root_a);
+        let _ = std::fs::create_dir_all(root_b.join("pkg"));
+        std::fs::write(root_b.join("pkg/README.md"), "hello").unwrap();
+        let result = normalize_query_path("[1]pkg/README.md", &[root_a.clone(), root_b.clone()]);
+        assert!(result.contains("pkg/README.md"));
+        assert!(result.starts_with(&root_b.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+    }
+
+    #[test]
+    fn normalize_query_path_ws_prefix_oob_falls_back() {
+        // [9]src/main.rs with only 2 roots → falls back to primary root
+        let root_a = std::env::temp_dir().join(format!("koma_test_{}_c", std::process::id()));
+        let root_b = std::env::temp_dir().join(format!("koma_test_{}_d", std::process::id()));
+        let _ = std::fs::create_dir_all(&root_a);
+        let _ = std::fs::create_dir_all(&root_b);
+        let result = normalize_query_path("[9]src/main.rs", &[root_a.clone(), root_b.clone()]);
+        // OOB index falls back to primary root
+        assert!(result.starts_with(&root_a.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+    }
+
+    #[test]
+    fn normalize_query_path_ws_prefix_empty_bare() {
+        // "[0]" with no bare path → falls through to normal relative logic
+        let roots = vec![PathBuf::from("/some/root")];
+        let result = normalize_query_path("[0]", &roots);
+        // Empty bare falls through, treated as relative path "[0]" → primary root
+        assert_eq!(result, "/some/root/[0]");
     }
 }
 
