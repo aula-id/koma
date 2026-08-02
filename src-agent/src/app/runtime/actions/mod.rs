@@ -61,8 +61,8 @@ pub(in crate::app::runtime) use mcp::save_and_reload_mcp;
 pub(crate) use config_reload::{apply_global_catalogue_reload, save_config_and_broadcast};
 mod settings_creds;
 
-/// Apply mouse-capture mode to the terminal. Resolves `Auto` via env detection
-/// (`TERMUX_VERSION`), then sends the appropriate crossterm escape sequence.
+/// Apply mouse-capture mode to the terminal. Resolves `Auto` (always true),
+/// then sends the appropriate crossterm escape sequence.
 /// Called at session init and on settings save.
 pub(in crate::app::runtime) fn apply_mouse_capture(mode: crate::model::settings::MouseCapture) {
     use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};

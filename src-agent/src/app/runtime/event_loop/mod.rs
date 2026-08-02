@@ -194,18 +194,28 @@ pub(super) fn run_loop(
                         }
                     }
                     Event::Mouse(m) => {
-                        // Wheel scrolls the chat transcript only.
+                        // Wheel scrolls the chat transcript or the full-screen
+                        // sub-agent viewer (client-owned; mirrors the client path).
                         if matches!(state.mode(), Mode::Chat | Mode::Bash(_) | Mode::Todo(_)) {
+                            let viewer = state.rest.agent_viewer.is_some();
                             match m.kind {
                                 MouseEventKind::ScrollUp => {
                                     for _ in 0..3 {
-                                        state.rest.scroll_up();
+                                        if viewer {
+                                            state.rest.agent_viewer_scroll_up(1);
+                                        } else {
+                                            state.rest.scroll_up();
+                                        }
                                     }
                                     dirty = true;
                                 }
                                 MouseEventKind::ScrollDown => {
                                     for _ in 0..3 {
-                                        state.rest.scroll_down();
+                                        if viewer {
+                                            state.rest.agent_viewer_scroll_down(1);
+                                        } else {
+                                            state.rest.scroll_down();
+                                        }
                                     }
                                     dirty = true;
                                 }
