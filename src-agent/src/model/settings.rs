@@ -161,9 +161,14 @@ impl std::fmt::Display for InternetMode {
 
 /// Controls mouse-capture behaviour for the TUI.
 ///
-/// On touch terminals (Termux), mouse capture is needed for scroll gestures.
-/// On desktop, capture should stay OFF so native terminal selection works.
-/// `Auto` detects the environment once at startup; the user can override.
+/// Mouse capture is required for wheel-scroll to work in the main chat. Without
+/// it, most terminals emit CSI Up/Down for the wheel, which walks composer
+/// history instead of scrolling the transcript. The trade-off: native terminal
+/// drag-select requires capture OFF. Users who prefer native selection can set
+/// `Off` or use `/select` (which temporarily disables capture).
+///
+/// `Auto` enables capture on all platforms. `On` forces it on; `Off` forces it
+/// off (native drag-select; wheel becomes arrow keys).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseCapture {
@@ -192,11 +197,11 @@ impl MouseCapture {
         }
     }
 
-    /// Resolve `Auto` based on environment detection (TERMUX_VERSION).
+    /// Resolve `Auto` — always enables capture (wheel scroll needs it).
     /// `On` / `Off` pass through unchanged.
     pub fn resolved(self) -> bool {
         match self {
-            Self::Auto => std::env::var_os("TERMUX_VERSION").is_some(),
+            Self::Auto => true,
             Self::On => true,
             Self::Off => false,
         }
@@ -360,9 +365,9 @@ pub struct Settings {
     /// field when the user calls `action="select"`.
     #[serde(default)]
     pub git_ssh_key: Option<String>,
-    /// Mouse-capture mode for the TUI. `Auto` (default) enables capture on
-    /// touch terminals (Termux) and disables it on desktop, so native terminal
-    /// selection works. `On` / `Off` override the detection. Resolved once at
+    /// Mouse-capture mode for the TUI. `Auto` (default) enables capture so
+    /// wheel-scroll works in the main chat. `On` forces capture on; `Off` forces
+    /// it off (native drag-select; wheel becomes arrow keys). Resolved once at
     /// session init and on settings save; not re-polled mid-session.
     #[serde(default)]
     pub mouse_capture: MouseCapture,
