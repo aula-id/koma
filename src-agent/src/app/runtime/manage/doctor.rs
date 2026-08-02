@@ -359,11 +359,20 @@ fn check_daemons() -> CheckResult {
         "MCP daemon not running".to_string()
     };
 
+    // GLOBAL linker daemon liveness.
+    let linker_live = super::linker::linker_daemon_alive();
+    let linker_note = if linker_live {
+        "linker daemon running".to_string()
+    } else {
+        "linker daemon not running".to_string()
+    };
+
     let headline = format!(
-        "Daemons ({} session daemon{} live{builds_note}; {})",
+        "Daemons ({} session daemon{} live{builds_note}; {}, {})",
         live.len(),
         if live.len() == 1 { "" } else { "s" },
-        mcp_note
+        mcp_note,
+        linker_note
     );
 
     CheckResult {

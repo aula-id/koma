@@ -105,6 +105,59 @@ fn warm_session_impl(
         Some(s) => (s.workdir(), s.settings.clone(), s.workdirs()),
         None => return,
     };
+    // Warm channel: shared between the linker poll and the awareness task so
+    // both can send WarmEvent variants through a single drain.
+    let (warm_tx, warm_rx) = tokio::sync::mpsc::unbounded_channel();
+    state.rest.warm_rx = Some(warm_rx);
+    // L1: best-effort linker daemon warm — ensure it's running, register the
+    // session's workspace roots, then fetch the summary. All linker IPC runs on
+    // a dedicated std::thread so it never stalls the daemon event loop (which
+    // must respond to hub probes within 500ms).
+    {
+        let session_id = state.rest.fg().id.clone();
+        let workdirs_clone = workdirs.clone();
+        let tx = warm_tx.clone();
+        std::thread::spawn(move || {
+            // Best-effort: start daemon + register. Failure is silent (graph
+            // just won't be available yet; the model turns fine without it).
+            let _ = crate::linker::client::ensure_and_register(&workdirs_clone, &session_id);
+
+            // Try immediate fetch. Always deliver through the warm channel so
+            // the drain routes it by session id.
+            match crate::linker::client::fetch_summary() {
+                Some(result) if result.generation > 0 => {
+                    let _ = tx.send(WarmEvent::WarmGraph {
+                        session_id,
+                        summary: Some(result.text),
+                        generation: result.generation,
+                    });
+                }
+                _ => {
+                    // Generation is 0 or fetch failed — poll every 2s for up
+                    // to 10s waiting for generation > 0.
+                    for _ in 0..5 {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        if let Some(result) = crate::linker::client::fetch_summary_if_newer(0) {
+                            if result.generation > 0 {
+                                let _ = tx.send(WarmEvent::WarmGraph {
+                                    session_id,
+                                    summary: Some(result.text),
+                                    generation: result.generation,
+                                });
+                                return;
+                            }
+                        }
+                    }
+                    // Timed out — send a no-op so the drain doesn't hang.
+                    let _ = tx.send(WarmEvent::WarmGraph {
+                        session_id,
+                        summary: None,
+                        generation: 0,
+                    });
+                }
+            }
+        });
+    }
     // Capture the warming session's stable UUID (the SessionRuntime id, the same key the
     // drain routes on) so the WarmAwareness result lands on THIS session by id (C4),
     // even if another session replaces the shared `warm_rx` and is also Loading.
@@ -164,11 +217,8 @@ fn warm_session_impl(
         });
     }
 
-    // One channel for the warm task; the receiver lives in state and is drained in
-    // run_loop. Dropping it (e.g. app close) makes the sends no-ops, same contract
-    // as the streaming / endpoints channels.
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    state.rest.warm_rx = Some(rx);
+    // Reuse the warm channel created above (shared with linker poll).
+    let tx = warm_tx;
 
     // Awareness task: read the depth-1 docs + summarize on the resolved Awareness
     // route. Move the owned route + the cloned settings/workdir in; `summarize`

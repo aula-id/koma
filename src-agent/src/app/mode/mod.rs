@@ -22,6 +22,7 @@ pub mod bash;
 pub mod editor;
 mod effort;
 pub mod ext_screen;
+mod model_cmd;
 pub mod extensions;
 pub mod help;
 mod key_input;
@@ -50,6 +51,7 @@ pub use todo::{parse_todo_file, TodoState};
 // daemon Help projection (follow-up); re-exported now so that lands without
 // re-touching this line. `allow` silences the meanwhile-unused warning.
 pub use effort::EffortPickerState;
+pub use model_cmd::{ModelCmdState, ModelCmdSub};
 #[allow(unused_imports)]
 pub use help::{HelpEntry, HelpKind, HelpState};
 pub use key_input::KeyInputForm;
@@ -247,6 +249,10 @@ pub enum Mode {
     /// holds the option list, the cursor, and a one-line capability note. Boxed
     /// to keep `Mode` small and consistent with `Settings`.
     Effort(Box<EffortPickerState>),
+    /// Session model switcher (`/model`): pick a model for a session role or
+    /// agent. The inner [`ModelCmdState`] holds the submode, option list, cursor,
+    /// and help/error note. Boxed to keep `Mode` small and consistent.
+    Model(Box<ModelCmdState>),
     /// Cost and token usage dashboard (`/usage`): full-screen Bloomberg-terminal-
     /// style view with two tabs (Global / Session), range selector (1-4), metric
     /// toggle (m), and ESC to exit. The inner [`UsageNavState`] holds the active

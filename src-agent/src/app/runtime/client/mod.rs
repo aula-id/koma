@@ -729,8 +729,15 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                     // Leave the client: tear this connection down (flush the Detach) and
                     // break out of the loop. No connection survives, so the post-loop has
                     // nothing more to detach.
-                    Ok(render::ClientTransition::Exit) => {
+                    Ok(render::ClientTransition::Exit { kill }) => {
                         teardown_connection(&handle, conn);
+                        if kill {
+                            if let Some(id) = current_session_id.as_deref() {
+                                // Block until the daemon is confirmed dead so a reopened
+                                // session never reattaches to the dying process.
+                                let _ = crate::app::runtime::manage::kill_session_daemon(id);
+                            }
+                        }
                         break;
                     }
                     // `/resume`: DETACH from this daemon (leaving it cooking) and open the
@@ -763,6 +770,12 @@ pub fn client_run(opts: crate::cli::Opts) -> Result<()> {
                             let _ = conn.req_tx.send(ClientRequest::QuitDaemon);
                         }
                         teardown_connection(&handle, conn);
+                        if kill {
+                            // Wait for the old daemon to die so the new attach never races it.
+                            if let Some(id) = current_session_id.as_deref() {
+                                let _ = crate::app::runtime::manage::kill_session_daemon(id);
+                            }
+                        }
                         let new_id = uuid::Uuid::new_v4().to_string();
                         match attach_session(&mut terminal, &handle, &new_id) {
                             Ok(conn) => {

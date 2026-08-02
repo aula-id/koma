@@ -28,9 +28,9 @@ use crate::app::mode::{
 use crate::ipc::proto::{
     AgentEntry, AgentModelPickerSnapshot, AgentsSnapshot, BashSnapshot, EffortSnapshot, ExtRowWire,
     ExtScreenSnapshot, ExtStoreRowWire, ExtStoreSnapshot, ExtensionsSnapshot, HelpSnapshot,
-    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
-    PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot, TextEditorSnapshot,
-    ToolPickerSnapshot, WarmStatusWire,
+    KeyInputSnapshot, LoadingSnapshot, McpSnapshot, ModelCmdSnapshot, OnboardProviderSnapshot,
+    OnboardSnapshot, PickerSnapshot, RewindSnapshot, SecuritySnapshot, SessionHubSnapshot,
+    TextEditorSnapshot, ToolPickerSnapshot, WarmStatusWire,
 };
 use crate::model::app_config::McpTransport;
 use crate::model::store::SessionMeta;
@@ -206,6 +206,42 @@ pub(crate) fn shadow_effort(e: EffortSnapshot) -> EffortPickerState {
         options: e.options,
         selected: e.selected,
         note: e.note,
+    }
+}
+
+/// Rebuild the `/model` session model switcher ([`ModelCmdState`]) from its
+/// projection (all plain data the overlay reads).
+pub(crate) fn shadow_model_cmd(s: ModelCmdSnapshot) -> crate::app::mode::ModelCmdState {
+    use crate::app::mode::ModelCmdSub;
+    use crate::model::app_config::ModelRole;
+
+    let sub = match s.sub.as_str() {
+        "role_pick" => {
+            let role = match s.role.as_deref() {
+                Some("main") => ModelRole::Main,
+                Some("awareness") => ModelRole::Awareness,
+                Some("planner") => ModelRole::Planner,
+                Some("compactor") => ModelRole::Compactor,
+                Some("safeguard") => ModelRole::Safeguard,
+                _ => ModelRole::Main,
+            };
+            ModelCmdSub::RolePick { role }
+        }
+        "agent_list" => ModelCmdSub::AgentList,
+        "agent_pick" => ModelCmdSub::AgentPick {
+            agent_name: s.agent_name.unwrap_or_default(),
+            current_model: None,
+        },
+        _ => ModelCmdSub::Help {
+            lines: s.lines,
+        },
+    };
+
+    crate::app::mode::ModelCmdState {
+        sub,
+        options: s.options,
+        cursor: s.cursor,
+        note: s.note,
     }
 }
 

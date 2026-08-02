@@ -56,8 +56,10 @@ pub(super) const FRAME_BUDGET: Duration = Duration::from_millis(16);
 ///   it — and attach a freshly minted brand-new session-daemon.
 pub(super) enum ClientTransition {
     /// Tear the client down and return from `client_run` (detach / ExitClient /
-    /// frame channel disconnected).
-    Exit,
+    /// frame channel disconnected). `kill` is true when the quit-confirm overlay's
+    /// `[k]` was activated — the client must wait for the daemon to die before
+    /// returning so a reopened session never reattaches to the dying process.
+    Exit { kill: bool },
     /// Detach from the current daemon and open the local daemon swapper (`/resume`).
     OpenSwapper,
     /// Detach (or kill, on `kill`) the current daemon and attach a brand-new
@@ -187,7 +189,7 @@ pub(super) fn render_loop(
                 Err(TryRecvError::Empty) => break,
                 // The reader task dropped its sender: the daemon's socket closed.
                 // Nothing more will ever arrive — leave the client.
-                Err(TryRecvError::Disconnected) => return Ok(ClientTransition::Exit),
+                Err(TryRecvError::Disconnected) => return Ok(ClientTransition::Exit { kill: false }),
             }
         }
 
@@ -329,7 +331,9 @@ pub(super) fn render_loop(
                             0
                         };
                         match handle_quit_confirm_key(&key, req_tx, sel) {
-                            QuitConfirmKey::ExitClient => return Ok(ClientTransition::Exit),
+                            QuitConfirmKey::ExitClient { kill } => {
+                                return Ok(ClientTransition::Exit { kill })
+                            }
                             QuitConfirmKey::Stay => {}
                         }
                         continue;
@@ -500,7 +504,7 @@ pub(super) fn client_select_dump(
 
     // (1) Drop to the normal screen so the printed transcript uses the scrollback the
     // user can select from. Disable mouse capture first so native selection works.
-    use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    use ratatui::crossterm::event::DisableMouseCapture;
     let _ = execute!(stdout(), DisableMouseCapture);
     execute!(stdout(), LeaveAlternateScreen)?;
 
@@ -536,7 +540,11 @@ pub(super) fn client_select_dump(
 
     // (4) Restore the alt-screen + mouse and force a full repaint next draw.
     execute!(stdout(), EnterAlternateScreen)?;
-    let _ = execute!(stdout(), EnableMouseCapture);
+    // Re-apply the shadow session's mouse capture setting (not unconditional enable).
+    let mc = shadow.rest.fg().session.as_ref()
+        .map(|s| s.settings.mouse_capture)
+        .unwrap_or_default();
+    crate::app::runtime::actions::apply_mouse_capture(mc);
     terminal.clear()?;
     Ok(())
 }

@@ -896,6 +896,19 @@ pub(super) fn drain_warm(state: &mut AppState) -> bool {
                     // simply dropped — there is no live session to carry it.
                     dirty = true;
                 }
+                Ok(WarmEvent::WarmGraph {
+                    session_id,
+                    summary,
+                    generation,
+                }) => {
+                    // Route by session id (C4) — same pattern as WarmAwareness.
+                    if let Some(s) = state.rest.sessions.iter_mut().find(|s| s.id == session_id) {
+                        if let Some(text) = summary {
+                            s.update_graph_summary(text, generation);
+                        }
+                    }
+                    dirty = true;
+                }
                 // Channel drained for now: keep listening on later ticks.
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 // Both warm tasks finished and dropped their senders: done.

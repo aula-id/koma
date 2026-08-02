@@ -13,13 +13,14 @@ impl Tool for Read {
         "read"
     }
     fn description(&self) -> &'static str {
-        "Read a workspace-relative file. Returns line-numbered content. Use offset/limit to paginate large files."
+        "Read a workspace-relative file. Returns line-numbered content. Use offset/limit to paginate large files. \
+         For a file's imports and dependents, use graph_query."
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Workspace-relative file path. When multiple workspace roots are active, file listings prefix paths with [N] (e.g. \"[1]src/main.rs\") — copy that prefix exactly. A bare path with no prefix targets workspace [0]." },
+                "path": { "type": "string", "description": "Workspace-relative or absolute path under a configured workspace root. A bare relative path targets workspace [0]." },
                 "offset": {
                     "type": "integer",
                     "description": "0-based line to start from (default 0)."
@@ -94,6 +95,8 @@ impl Tool for Read {
                 "\n[truncated: showing lines {start_line}-{showed_through} of {total_lines}. Use read with offset={next_offset} to continue.]"
             ));
         }
+        // L3: auto-neighborhood footer (best-effort, daemon may not be running).
+        super::append_neighborhood_footer(&mut out, &path);
         Ok(out)
     }
 }

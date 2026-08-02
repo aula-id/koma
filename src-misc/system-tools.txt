@@ -48,6 +48,7 @@ dir_list — list directory contents (from the indexed file tree; folders end "/
 read — read a file. Returns line-numbered content.
   Arguments: { "path": "relative/path/file.rs" }
   Example:   read({"path": "src/main.rs"})
+  For understanding a file's imports and what depends on it, use graph_query.
 
 write — create or OVERWRITE a file. You MUST pass BOTH "path" AND "content" in
   the SAME call. "content" is the ENTIRE new file — not a fragment, not a diff.
@@ -71,18 +72,42 @@ edit — replace an EXACT substring in a file in place. Safer than write for
   - If "old" appears >1 times and replace_all is not true the tool returns an
     error — add surrounding context to make it unique, or set replace_all=true.
   - Use edit for targeted changes instead of rewriting the whole file with write.
+  - Before modifying, consider graph_query impact analysis to understand what
+    depends on this file.
 
-grep — search file contents by regular expression. Prefer this over reading files
-  blindly when you need to find where something is used or defined.
+grep — search file contents by regular expression. Returns matching lines as path:line: text.
   Arguments: { "pattern": "rust regex", "path": "dir or file (default '.')",
                "glob": "*.rs (optional file filter)" }
   Example:   grep({"pattern": "fn run_tool", "path": "src", "glob": "*.rs"})
   Returns matching lines as path:lineno: content. Capped at 200 matches.
+  NOTE: for structural queries (what imports what, dependency trees, impact
+  analysis), use graph_query instead — it is instant and complete. grep is for
+  TEXT pattern matching (finding strings, regex matches across files).
 
 glob — find files by glob pattern. Use to discover file paths before reading them.
   Arguments: { "pattern": "**/*.rs", "path": "base dir (default '.')" }
   Example:   glob({"pattern": "src/**/*.rs"})
   Returns matching workspace-relative paths, sorted. Capped at 200 results.
+  For understanding file relationships and dependency structure, prefer graph_query.
+
+graph_query — query the code import graph for a project. Tracks file-level
+  import relationships across the codebase. ALWAYS prefer this over grep/glob
+  for dependency, impact, and codebase-structure queries. Use grep for TEXT
+  searches (string matches, regex patterns); use graph_query for STRUCTURAL
+  queries (what imports what, what depends on what, impact of changing a file).
+  Arguments: { "action": "dependencies|dependents|impact|neighborhood|summary|rescan",
+               "path": "file path (required for most actions)",
+               "depth": "1-3 (impact only, default 1)" }
+  Example:   graph_query({"action": "dependents", "path": "src/foo.rs"})
+  Example:   graph_query({"action": "impact", "path": "src/foo.rs", "depth": 2})
+  Example:   graph_query({"action": "summary"})
+  WHEN TO USE:
+  - "what uses X?" / "what depends on X?" → graph_query dependents
+  - "what does X import?" → graph_query dependencies
+  - "what breaks if I change X?" → graph_query impact
+  - "show me the project structure" → graph_query summary
+  NEVER grep for "use crate::foo" or "mod foo" — graph_query answers that
+  instantly with the full dependency tree.
 
 bash — run a shell command in the workspace (cargo, build, tests, general shell).
   May require approval in Normal mode. Output is stdout+stderr combined.
@@ -225,5 +250,5 @@ Prefer edit over write for targeted changes:
 For write: pass BOTH "path" AND "content" (the entire new file) in ONE call.
 
 ## Multiple workspaces
-When file listings show a [N] prefix (e.g. [1]src/main.rs), the project has several workspace roots indexed as [0], [1], [2]. ALWAYS copy the [N] prefix exactly when you pass a path to any tool (read, write, edit, grep, glob, dir_list). A bare path with no prefix targets workspace [0]. Writing or editing a file in a non-zero workspace REQUIRES the [N] prefix.
-Workspaces are not git worktrees. A workspace is simply one of the configured project directory roots ([0], [1], ...) and has nothing to do with `git worktree`. Never inspect the git index to locate a workspace file: if a path is not found, it is a plain filesystem issue (check the [N] prefix and the path spelling), not a worktree problem. When you DO want actual git worktrees, do it through the `git_worktree` tool (NOT raw `git worktree` via git_operator or bash — git_operator now redirects `worktree` subcommands there); it manages the shadow worktree dir and keeps your workspace roots + cwd in sync.
+When the project has several workspace roots, paths are real filesystem paths (absolute under the owning workspace). A bare relative path targets the primary workspace (root 0). Never try to invent [N] prefixes — paths you receive are always real filesystem paths.
+Workspaces are not git worktrees. A workspace is simply one of the configured project directory roots and has nothing to do with `git worktree`. Never inspect the git index to locate a workspace file: if a path is not found, it is a plain filesystem issue (check the path spelling), not a worktree problem. When you DO want actual git worktrees, do it through the `git_worktree` tool (NOT raw `git worktree` via git_operator or bash — git_operator now redirects `worktree` subcommands there); it manages the shadow worktree dir and keeps your workspace roots + cwd in sync.

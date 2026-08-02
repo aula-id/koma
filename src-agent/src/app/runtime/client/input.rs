@@ -63,8 +63,11 @@ pub(super) fn local_echo(shadow: &mut AppState, key: &KeyEvent) {
 
 /// What a key handled inside the mirrored `/quit` overlay tells the render loop to do.
 pub(super) enum QuitConfirmKey {
-    /// Tear down the client process (the request to act on it was already queued).
-    ExitClient,
+    /// Tear down the client process. `kill` is true when the quit-confirm
+    /// overlay's `[k]` was activated (the client must wait for the daemon
+    /// to die before returning so a reopened session never reattaches to
+    /// the dying process).
+    ExitClient { kill: bool },
     /// Stay attached and keep rendering (cancel, or a swallowed stray key).
     Stay,
 }
@@ -142,7 +145,7 @@ pub(super) fn handle_quit_confirm_key(
                 // detach — like `d`: reset the overlay then detach (daemon keeps cooking).
                 send_overlay_cancel(req_tx);
                 let _ = req_tx.send(ClientRequest::Detach);
-                QuitConfirmKey::ExitClient
+                QuitConfirmKey::ExitClient { kill: false }
             }
             // cancel (2) or any out-of-range — like `Esc`: cancel + stay.
             _ => {
@@ -157,7 +160,7 @@ pub(super) fn handle_quit_confirm_key(
             // No QuitDaemon/QuitSession: the daemon keeps running + cooking headless.
             send_overlay_cancel(req_tx);
             let _ = req_tx.send(ClientRequest::Detach);
-            QuitConfirmKey::ExitClient
+            QuitConfirmKey::ExitClient { kill: false }
         }
         KeyCode::Char('k') | KeyCode::Char('K') => {
             // Kill this window's daemon, then detach this client.
@@ -194,7 +197,7 @@ pub(super) fn handle_quit_confirm_key(
 fn quit_daemon_and_detach(req_tx: &Sender<ClientRequest>) -> QuitConfirmKey {
     let _ = req_tx.send(ClientRequest::QuitDaemon);
     let _ = req_tx.send(ClientRequest::Detach);
-    QuitConfirmKey::ExitClient
+    QuitConfirmKey::ExitClient { kill: true }
 }
 
 /// Forward a bare `Esc` so the daemon's `/quit` overlay cancels back to Chat. Used by

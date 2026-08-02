@@ -660,6 +660,11 @@ fn shutdown_runtime(state: &mut AppState, rt: tokio::runtime::Runtime) {
     // shutdown behavior in this pass — confirm first that calling `stop()`
     // unconditionally on every TUI + daemon shutdown path doesn't regress anything the
     // `/security` panel relies on.
+    // Best-effort: unregister this process from the linker daemon so its
+    // root refcounts decrement and the daemon can idle-reap.
+    for s in &mut state.rest.sessions {
+        crate::linker::client::unregister_client(&s.id);
+    }
     for s in &mut state.rest.sessions {
         if let Some(p) = s.held_lock.take() {
             crate::model::store::remove_lock(&p);
@@ -786,6 +791,16 @@ pub fn run_daemon(opts: crate::cli::Opts) -> Result<()> {
                 crate::app::mcp::McpManager::connect_all(&handle, &state.rest.config.mcp_servers)
             }
         });
+    }
+
+    // Ensure the OAuth keep-alive daemon is running when there are OAuth connections.
+    if !state.rest.config.oauth_conns.is_empty() {
+        if let Err(e) = super::manage::ensure_oauth_daemon_running() {
+            crate::model::store::append_global_error_log(
+                "oauth",
+                &format!("failed to start OAuth daemon: {e:#}"),
+            );
+        }
     }
 
     // Install the SIGHUP-survive + graceful/double-SIGTERM signal handling and get

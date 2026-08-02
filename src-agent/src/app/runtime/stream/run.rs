@@ -11,9 +11,10 @@ use crate::service::openrouter::OpenRouterClient;
 
 /// Wire-only tool-nudge appended to the last User message on first hop.
 /// Never persisted — only mutates the local `history` Vec before POST.
-const TOOL_NUDGE: &str = "\n\nnote:\n\
-- If unsure, use web_search/web_fetch rather than guessing.\n\
-- If you need prior conversation context, use message_find.";
+const TOOL_NUDGE: &str = "\n\nIMPORTANT:\n\
+- If unsure (for example does not know how to implement, or does not know what is this or you really unsure what does the code mean or there is unclear documentation of certain module or api and other thing that IS UNSURE but NON BLOCKING), USE web_search/web_fetch rather than guessing.\n\
+- If you need prior conversation context, use message_find.\n\
+- If internet and history having zero result, STOP and ASK me.";
 
 
 /// Fully cancel the foreground session's in-flight turn before its conversation is
@@ -101,14 +102,33 @@ pub(crate) fn start_stream_task(
                     }
                 }
                 if !listing.is_empty() {
+                    // Convert [N]rel entries to model-facing paths.
+                    let workspaces = state.rest.sessions[sess_idx]
+                        .session
+                        .as_ref()
+                        .map(|s| s.workdirs())
+                        .unwrap_or_default();
+                    let model_listing: Vec<_> = listing
+                        .iter()
+                        .map(|e| crate::tool::model_path_from_entry(&workspaces, e))
+                        .collect();
                     first.content.push_str("\n\n# Project files (top level)\n");
-                    first.content.push_str(&listing.join("\n"));
+                    first.content.push_str(&model_listing.join("\n"));
                 }
             }
             if let Some(summary) = state.rest.sessions[sess_idx].awareness_summary.as_deref() {
                 if !summary.is_empty() {
                     first.content.push_str("\n\n# Project summary\n");
                     first.content.push_str(summary);
+                }
+            }
+            // Code graph summary (L1): volatile, only when the linker daemon has
+            // produced a summary. Lives in the volatile tail (after CACHE_SPLIT_MARK)
+            // so it never busts the provider-cached head.
+            if let Some(graph_text) = state.rest.sessions[sess_idx].graph_summary.as_deref() {
+                if !graph_text.is_empty() {
+                    first.content.push_str("\n\n# Code graph\n");
+                    first.content.push_str(graph_text);
                 }
             }
             // Extension-published context (`context.set`): each granted extension's

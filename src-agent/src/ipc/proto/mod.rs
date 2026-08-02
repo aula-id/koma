@@ -560,6 +560,14 @@ pub enum ClientRequest {
     UnloadExtension {
         id: String,
     },
+    /// FIRE-AND-FORGET cross-daemon notification that the global config
+    /// (`~/.koma/config.json`) and/or global agents (`~/.koma/agents/`) were
+    /// written by a peer. Every receiving daemon must re-read from disk and
+    /// refresh its in-memory catalogue. Idempotent, no payload. The sender
+    /// never waits for a reply (fire-and-forget), and a daemon too old to
+    /// know the verb either error-replies (ignored) or drops the connection
+    /// (ignored) — additive variant, same as `UnloadExtension`.
+    ReloadGlobalCatalogue,
     /// Fetch the locally-installed extension registry (read-only): replies with a one-shot
     /// [`DaemonEvent::InstalledExtensions`]. gui-gated.
     ListInstalledExtensions,
@@ -890,6 +898,7 @@ pub enum ModeSnapshot {
     Todo(Box<TodoSnapshot>),
     Help(Box<HelpSnapshot>),
     Effort(EffortSnapshot),
+    Model(Box<ModelCmdSnapshot>),
     Usage(Box<UsageSnapshot>),
     MessageRewind(RewindSnapshot),
     QuitConfirm {

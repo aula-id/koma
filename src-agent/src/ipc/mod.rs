@@ -64,6 +64,8 @@ pub mod client;
 pub mod conn;
 pub mod frame;
 pub mod mcp_proto;
+pub mod oauth_proto;
+pub mod linker_proto;
 pub mod proto;
 pub mod selftest;
 pub mod server;
@@ -465,6 +467,55 @@ mod roundtrip_tests {
             selected: 1,
             note: "model supports effort".to_string(),
         }));
+
+        // Model command: role_pick submode + options + cursor + note.
+        roundtrip(&ModeSnapshot::Model(Box::new(ModelCmdSnapshot {
+            sub: "role_pick".to_string(),
+            role: Some("main".to_string()),
+            agent_name: None,
+            options: vec![
+                (None, "(inherit global)".to_string()),
+                (
+                    Some("uuid-1".to_string()),
+                    "gpt-4o — openai/gpt-4o @ OpenAI".to_string(),
+                ),
+            ],
+            cursor: 1,
+            note: "pick a model for the main role".to_string(),
+            lines: vec![],
+        })));
+
+        // Model command: help submode.
+        roundtrip(&ModeSnapshot::Model(Box::new(ModelCmdSnapshot {
+            sub: "help".to_string(),
+            role: None,
+            agent_name: None,
+            options: vec![],
+            cursor: 0,
+            note: String::new(),
+            lines: vec![
+                "Usage: /model [role|agent]".to_string(),
+                "  role  — pick a model for a role".to_string(),
+                "  agent — pick a model for an agent".to_string(),
+            ],
+        })));
+
+        // Model command: agent_pick submode.
+        roundtrip(&ModeSnapshot::Model(Box::new(ModelCmdSnapshot {
+            sub: "agent_pick".to_string(),
+            role: None,
+            agent_name: Some("explore".to_string()),
+            options: vec![
+                (None, "(inherit main)".to_string()),
+                (
+                    Some("uuid-2".to_string()),
+                    "fast — gpt-4o-mini @ OpenAI".to_string(),
+                ),
+            ],
+            cursor: 1,
+            note: "pick a model for this agent".to_string(),
+            lines: vec![],
+        })));
 
         // SessionPicker: metadata list + query + filtered subset + cursor.
         roundtrip(&ModeSnapshot::SessionPicker(PickerSnapshot {

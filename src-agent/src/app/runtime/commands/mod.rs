@@ -30,6 +30,7 @@ pub(crate) mod free;
 // mode and must show the identical status line.
 pub(crate) mod internet;
 mod mcp;
+pub(crate) mod model_cmd;
 // `pub(crate)` so `build_extensions_state` (the `/extension` row builder) is reachable from
 // `actions::extensions` (post-uninstall rebuild + ExtScreen pop-back) and the ext-screen
 // close drain, which all derive the installed-extension rows the SAME way.
@@ -75,6 +76,7 @@ pub(super) fn apply_slash(
         Command::Usage => misc::handle_usage(state)?,
         Command::Quit => misc::handle_quit(state)?,
         Command::Task(args) => task::handle_task(args, state, client, handle)?,
+        Command::Model(args) => model_cmd::handle_model(args, state)?,
         Command::Bash => bash::handle_bash(state)?,
         Command::Todo => todo::handle_todo(state)?,
         Command::Cd(path) => cd::handle_cd(path, state, client, handle)?,
