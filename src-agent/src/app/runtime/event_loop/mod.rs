@@ -248,11 +248,9 @@ pub(super) fn run_loop(
                         }
                     }
                     Event::Resize(_, _) => dirty = true,
-                    Event::Paste(text) => {
-                        if !state.rest.select_active {
-                            controller::input::handle_paste(state, &text);
-                            dirty = true;
-                        }
+                    Event::Paste(text) if !state.rest.select_active => {
+                        controller::input::handle_paste(state, &text);
+                        dirty = true;
                     }
                     _ => {}
                 }

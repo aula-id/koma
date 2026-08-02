@@ -374,10 +374,8 @@ fn check_destructive(args: &[String]) -> Option<&'static str> {
             return Some("filter-branch (rewrites history)");
         }
 
-        "gc" => {
-            if has_prefix(rest, "--prune") {
-                return Some("gc --prune");
-            }
+        "gc" if has_prefix(rest, "--prune") => {
+            return Some("gc --prune");
         }
 
         _ => {}

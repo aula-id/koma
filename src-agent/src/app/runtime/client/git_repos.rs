@@ -211,7 +211,7 @@ pub(super) fn discover_repos(session: Option<&str>) -> Vec<RepoInfo> {
             }
         })
         .collect();
-    infos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    infos.sort_by_key(|a| a.name.to_lowercase());
     infos
 }
 
