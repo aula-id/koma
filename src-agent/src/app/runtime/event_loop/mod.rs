@@ -181,7 +181,10 @@ pub(super) fn run_loop(
                     Event::Key(key) => {
                         if state.rest.select_active {
                             // Any key returns from /select copy mode.
-                            exit_select(terminal)?;
+                            let mc = state.rest.fg().session.as_ref()
+                                .map(|s| s.settings.mouse_capture)
+                                .unwrap_or_default();
+                            exit_select(terminal, mc)?;
                             state.rest.select_active = false;
                             dirty = true;
                         } else {
