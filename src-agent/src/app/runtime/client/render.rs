@@ -104,6 +104,10 @@ pub(super) fn render_loop(
     // the shadow is NOT in the agents full-screen editor so each fresh open re-sends.
     let mut last_sent_wrap_w: Option<usize> = None;
 
+    // One-shot: re-apply the session's mouse_capture setting after the first Snapshot
+    // populates the shadow. Until then, the initial Auto (from `client_run`) is active.
+    let mut mouse_capture_synced = false;
+
     // Per-connection seq tracking (critique #1). `expected` is the seq the NEXT
     // frame should carry. `0` means "not yet seeded" — the first frame seeds it.
     let mut expected: u64 = 0;
@@ -191,6 +195,21 @@ pub(super) fn render_loop(
                 // Nothing more will ever arrive — leave the client.
                 Err(TryRecvError::Disconnected) => return Ok(ClientTransition::Exit { kill: false }),
             }
+        }
+
+        // One-shot: after the first Snapshot populates the shadow, re-apply the
+        // session's mouse_capture setting so an explicit `Off` overrides the
+        // startup `Auto`.
+        if !mouse_capture_synced && seeded {
+            mouse_capture_synced = true;
+            let mc = shadow
+                .rest
+                .fg()
+                .session
+                .as_ref()
+                .map(|s| s.settings.mouse_capture)
+                .unwrap_or_default();
+            crate::app::runtime::actions::apply_mouse_capture(mc);
         }
 
         // `/resume` hand-off: the daemon signalled `OpenSwapper` this drain pass. Hand
