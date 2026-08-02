@@ -13,6 +13,8 @@ fn test_ctx() -> ToolCtx {
         download_dir: None,
         internet_mode: crate::model::settings::InternetMode::default(),
         ssh_key: None,
+        skill_registry: None,
+        active_skill_names: None,
         mcp_manager: None,
         sec_manager: None,
         bash_saving: true,

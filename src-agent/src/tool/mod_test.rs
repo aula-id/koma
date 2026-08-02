@@ -23,6 +23,7 @@ fn plan_allowlist_allows_read_only_and_reasoning_tools() {
     // the checklist through it (fully intercepted in `process_tools`, see
     // `approval.rs`), so it's allowed here at the tool-name level.
     assert!(tool_allowed_in_plan("checklist"));
+    assert!(tool_allowed_in_plan("skill"));
 }
 
 #[test]

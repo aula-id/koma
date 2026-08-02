@@ -394,3 +394,41 @@ pub(in crate::app::runtime::stream::tools) fn intercept_read_before_edit_guard(
     }
     InterceptFlow::Fallthrough
 }
+
+pub(in crate::app::runtime::stream::tools) fn intercept_skill(
+    state: &mut AppState,
+    sess_idx: usize,
+    call: &crate::dto::chat::ToolCall,
+) -> InterceptFlow {
+    let result =
+        crate::app::runtime::stream::tools::dispatch::run_tool(state, sess_idx, call);
+    let final_result =
+        if let Some(rest) = result.strip_prefix(crate::tool::skill::SKILL_LOAD_PREFIX) {
+            // rest = "name\nbody" — split on first newline.
+            let (name, body) = match rest.split_once('\n') {
+                Some((n, b)) => (n.to_string(), b.trim().to_string()),
+                None => (rest.to_string(), String::new()),
+            };
+            // Install into active_skills.
+            state.rest.sessions[sess_idx]
+                .active_skills
+                .insert(name.clone(), body);
+            format!("loaded skill '{name}' — body injected into context.")
+        } else if let Some(name) =
+            result.strip_prefix(crate::tool::skill::SKILL_UNLOAD_PREFIX)
+        {
+            let name = name.trim().to_string();
+            state.rest.sessions[sess_idx]
+                .active_skills
+                .remove(&name);
+            format!("unloaded skill '{name}'.")
+        } else {
+            // list output or error: pass through unchanged.
+            result
+        };
+    state.rest.sessions[sess_idx]
+        .tool_results
+        .push((call.id.clone(), final_result));
+    state.rest.sessions[sess_idx].tool_idx += 1;
+    InterceptFlow::Continue
+}
