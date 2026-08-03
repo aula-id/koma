@@ -555,7 +555,8 @@ pub fn resolve_read(
         // the session dir before the containment check.
         if let Some(session_dir) = session_dir {
             let normalized = partial_canonicalize(as_path);
-            if normalized.starts_with(session_dir) {
+            let session_canon = canonicalize_or_verbatim(session_dir);
+            if normalized.starts_with(&session_canon) {
                 return Ok(normalized);
             }
         }
@@ -564,7 +565,8 @@ pub fn resolve_read(
         // the session_dir check above — `..` tricks can't escape.
         for skill_dir in active_skill_dirs {
             let normalized = partial_canonicalize(as_path);
-            if normalized.starts_with(skill_dir) {
+            let skill_canon = canonicalize_or_verbatim(skill_dir);
+            if normalized.starts_with(&skill_canon) {
                 return Ok(normalized);
             }
         }
@@ -617,6 +619,12 @@ pub fn resolve_read(
         }
     }
     Ok(primary)
+}
+
+/// Canonicalize a path, falling back to verbatim if the OS can't resolve it
+/// (e.g. the parent directory doesn't exist yet).
+fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Partial-canonicalize a path: walk up to the longest existing prefix,
