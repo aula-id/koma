@@ -19,6 +19,7 @@
 
 mod fetch;
 mod model;
+pub(crate) mod premium_dynamic;
 
 // dead_code: infra-only for now — no consumer wired yet (W2/W3 will read this).
 #[allow(unused_imports)]
@@ -53,6 +54,7 @@ pub fn init() {
     let table = load_initial();
     let _ = OVERLAY.set(RwLock::new(table));
     fetch::spawn_refresh();
+    premium_dynamic::init_from_disk();
 }
 
 /// Load the starting table: on-disk cache if it parses, else the bundled
@@ -75,7 +77,7 @@ fn load_initial() -> OverlayTable {
         Err(e) => {
             crate::model::store::append_global_error_log(
                 "catalogue overlay",
-                &format!("bundled default failed to parse ({e}) — starting empty"),
+                &format!("bundled default failed to parse ({e}) - starting empty"),
             );
             HashMap::new()
         }
@@ -185,7 +187,25 @@ pub fn models_for_provider(provider: OAuthProvider) -> Vec<ModelInfo> {
             models.push(m);
         }
     }
+    // Merge dynamic premium catalogue (live-fetched from KomaRun /models).
+    premium_dynamic::merge_into(&mut models);
     models
+}
+
+/// Fast membership check: is `model_id` a premium-tier KomaRun model?
+/// Returns true if the id is in the static premium overlay OR the dynamic
+/// premium store. Used by `resolve.rs` to route requests to the premium
+/// endpoint instead of the base endpoint.
+pub fn is_premium_model(model_id: &str) -> bool {
+    // Check static overlay first.
+    if models_for(crate::service::oauth::registry::KOMA_PREMIUM_CHAT_ENDPOINT)
+        .iter()
+        .any(|m| m.id == model_id)
+    {
+        return true;
+    }
+    // Then the dynamic store.
+    premium_dynamic::contains(model_id)
 }
 
 #[cfg(test)]
