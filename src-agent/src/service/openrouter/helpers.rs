@@ -335,6 +335,92 @@ pub(super) fn clean_error(status: reqwest::StatusCode, body: &str) -> String {
     }
 }
 
+// ── Retry / backoff for transient inference errors ──────────────────────────
+
+/// Maximum number of attempts for a single inference request (the initial
+/// attempt plus up to two retries).
+pub(super) const MAX_ATTEMPTS: u32 = 3;
+
+/// Per-retry backoff in milliseconds (index 0 = delay before 2nd attempt).
+pub(super) const BACKOFF_MS: &[u64] = &[1000, 2000, 4000];
+
+/// Upper bound for the random jitter added on top of each backoff delay.
+const JITTER_MS: u64 = 500;
+
+/// True when an HTTP status warrants a retry: server errors (5xx) and
+/// rate-limit responses (429). Permanent client errors (4xx, except 429) are
+/// NOT retried.
+pub(super) fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
+/// True when a reqwest send-level failure is transient (connection refused,
+/// DNS lookup failure, connection reset, timeout, etc.). Builder errors and
+/// redirect loops are permanent and NOT retried.
+pub(super) fn is_retryable_send_err(err: &reqwest::Error) -> bool {
+    err.is_connect() || err.is_timeout()
+}
+
+/// Compute the sleep duration before the *next* attempt. `attempt` is
+/// 1-based: the delay after the 1st attempt (before the 2nd) is
+/// `BACKOFF_MS[0]`, etc. Includes jitter drawn from the current
+/// nanosecond tick so concurrent callers don't stampede.
+pub(super) fn backoff_delay(attempt: u32) -> std::time::Duration {
+    let idx = ((attempt as usize) - 1).min(BACKOFF_MS.len() - 1);
+    let base = BACKOFF_MS[idx];
+    // Cheap jitter: fold the current instant's sub-second nanos into
+    // [0, JITTER_MS). No external RNG dependency required.
+    let jitter = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as u64
+        % (JITTER_MS + 1);
+    std::time::Duration::from_millis(base + jitter)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod retry_tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn retryable_statuses() {
+        // Retryable: server errors + rate limit
+        for code in [500, 502, 503, 520, 529, 429] {
+            let s = StatusCode::from_u16(code).unwrap();
+            assert!(is_retryable_status(s), "expected {code} to be retryable");
+        }
+        // NOT retryable: success + permanent client errors
+        for code in [200, 201, 204, 400, 401, 403, 404, 405, 422] {
+            let s = StatusCode::from_u16(code).unwrap();
+            assert!(
+                !is_retryable_status(s),
+                "expected {code} to NOT be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn backoff_delay_is_monotonic_and_bounded() {
+        let d1 = backoff_delay(1);
+        let d2 = backoff_delay(2);
+        let d3 = backoff_delay(3);
+        // Each base is larger than the previous.
+        assert!(d2 > d1, "d2={d2:?} should be > d1={d1:?}");
+        assert!(d3 > d2, "d3={d3:?} should be > d2={d2:?}");
+        // Upper bound: base + max jitter.
+        assert!(d3 <= std::time::Duration::from_millis(4000 + JITTER_MS));
+        // Lower bound: base + 0 jitter.
+        assert!(d1 >= std::time::Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn max_attempts_is_three() {
+        assert_eq!(MAX_ATTEMPTS, 3);
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod apply_tool_call_delta_tests {

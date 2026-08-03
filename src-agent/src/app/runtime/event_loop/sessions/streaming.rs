@@ -7,7 +7,7 @@ use super::super::super::stream::{advance_turn, finish_stream};
 use super::super::drains::apply_compaction_result;
 use super::super::MIN_COMPACT_ANIM;
 
-/// Drain this session's `active_rx` stream (Token/Reasoning/Usage/ToolCalls/Done/Error/Compacted).
+/// Drain this session's `active_rx` stream (Token/Reasoning/Usage/ToolCalls/Done/Error/Retrying/Compacted).
 /// Returns true if any event was processed.
 pub(super) fn drain_stream(
     state: &mut AppState,
@@ -105,6 +105,14 @@ pub(super) fn drain_stream(
                     state.rest.pending_plan_seed = false;
                     still_streaming = false;
                     break;
+                }
+                StreamEvent::Retrying { attempt, max, delay_ms: _ } => {
+                    // Transient upstream failure; the stream task is sleeping
+                    // and will re-POST.  Update the status line but do NOT
+                    // finish the stream or clear any tool/approval state.
+                    state.rest.sessions[idx].status =
+                        format!("retrying {attempt}/{max}\u{2026}");
+                    // still_streaming remains true — keep draining.
                 }
                 StreamEvent::Compacted { summary, kept_tail } => {
                     // The model is done; the task is finished either way.

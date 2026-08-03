@@ -647,7 +647,8 @@ async fn stream_step(
             | StreamEvent::Compacted { .. }
             | StreamEvent::HarnessVerdict { .. }
             | StreamEvent::EndpointsLoaded { .. }
-            | StreamEvent::EndpointsError { .. } => {}
+            | StreamEvent::EndpointsError { .. }
+            | StreamEvent::Retrying { .. } => {}
         }
     }
     // The sender task has nothing left to emit; await it so it's fully joined

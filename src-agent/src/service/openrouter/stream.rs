@@ -14,8 +14,9 @@ use crate::service::StreamEvent;
 
 use super::client::OpenRouterClient;
 use super::helpers::{
-    apply_tool_call_delta, auth_headers, clean_error, emit, is_openrouter, provider_routing_for,
-    reasoning_config, sanitize_tool_acc,
+    apply_tool_call_delta, auth_headers, backoff_delay, clean_error, emit, is_openrouter,
+    is_retryable_send_err, is_retryable_status, provider_routing_for, reasoning_config,
+    sanitize_tool_acc, MAX_ATTEMPTS,
 };
 use super::think_split::{Emit as ThinkEmit, ThinkSplit};
 use super::types::Conn;
@@ -179,90 +180,135 @@ impl OpenRouterClient {
             max_tokens: Some(32_000),
         };
 
-        let resp = auth_headers(
-            self.http.post(&url),
-            &conn,
-            &bearer,
-            self.codex_session_id(),
-        )
-        .json(&body)
-        .send()
-        .await;
-        let resp = match resp {
-            Ok(r) => r,
-            Err(e) => {
+        // ── 5xx / 429 retry with exponential backoff ─────────────────────
+        let resp: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = auth_headers(
+                    self.http.post(&url),
+                    &conn,
+                    &bearer,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                let r = match send {
+                    Ok(r) => r,
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        if let Some(ctx) = image_ctx.as_ref() {
+                            crate::model::store::append_error_log(
+                                &ctx.session_dir,
+                                "request send failed",
+                                &e.to_string(),
+                            );
+                        }
+                        let d = backoff_delay(attempt);
+                        emit(
+                            &tx,
+                            StreamEvent::Retrying {
+                                attempt: attempt + 1,
+                                max: MAX_ATTEMPTS,
+                                delay_ms: d.as_millis() as u64,
+                            },
+                        );
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        if let Some(ctx) = image_ctx.as_ref() {
+                            crate::model::store::append_error_log(
+                                &ctx.session_dir,
+                                "request send failed",
+                                &e.to_string(),
+                            );
+                        }
+                        emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
+                        return Ok(());
+                    }
+                };
+
+                if r.status().is_success() {
+                    break 'retry r;
+                }
+
+                let status = r.status();
+                let text = r.text().await.unwrap_or_default();
                 if let Some(ctx) = image_ctx.as_ref() {
                     crate::model::store::append_error_log(
                         &ctx.session_dir,
-                        "request send failed",
-                        &e.to_string(),
+                        &format!("HTTP {status} from {} (model {model})", conn.endpoint),
+                        &text,
                     );
                 }
-                emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
-                return Ok(());
-            }
-        };
 
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            if let Some(ctx) = image_ctx.as_ref() {
-                crate::model::store::append_error_log(
-                    &ctx.session_dir,
-                    &format!("HTTP {status} from {} (model {model})", conn.endpoint),
-                    &text,
-                );
-            }
-            // koma-free is rate-limited per install against a shared free-tier
-            // bucket; a 429 means it is busy/exhausted (Retry-After ignored on
-            // purpose). Surface a human hint instead of the raw upstream JSON.
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                && conn.api_type == ApiType::KomaFree
-            {
-                emit(
-                    &tx,
-                    StreamEvent::Error(
-                        "koma free tier is busy right now - retry in a moment, or set up a provider/custom model in /settings".to_string(),
-                    ),
-                );
+                // CommandCode 403 transport switch: permanent plan denial, NOT retried.
+                if !conn.oauth_uuid.is_empty()
+                    && crate::service::oauth::commandcode::is_provider_api_denied(status, &text)
+                    && conn.endpoint.contains("api.commandcode.ai/provider/v1")
+                {
+                    crate::service::oauth::commandcode::remember_chat_pref(
+                        conn.oauth_uuid,
+                        crate::service::oauth::commandcode::CHAT_NDJSON,
+                    );
+                    let ndjson_endpoint =
+                        crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
+                    let ndjson_conn = Conn {
+                        endpoint: ndjson_endpoint,
+                        api_key: conn.api_key,
+                        api_type: ApiType::CommandCode,
+                        account_id: conn.account_id,
+                        oauth_uuid: conn.oauth_uuid,
+                        install_id: conn.install_id,
+                    };
+                    return self
+                        .commandcode_stream_complete(
+                            ndjson_conn,
+                            &bearer,
+                            model,
+                            messages,
+                            advertise,
+                            mcp_tools,
+                            image_ctx,
+                            tx,
+                        )
+                        .await;
+                }
+
+                // Retryable + attempts remaining → sleep + retry
+                if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                    let d = backoff_delay(attempt);
+                    emit(
+                        &tx,
+                        StreamEvent::Retrying {
+                            attempt: attempt + 1,
+                            max: MAX_ATTEMPTS,
+                            delay_ms: d.as_millis() as u64,
+                        },
+                    );
+                    tokio::time::sleep(d).await;
+                    continue;
+                }
+
+                // FINAL failure — KomaFree 429 friendly message (last attempt only)
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    && conn.api_type == ApiType::KomaFree
+                {
+                    emit(
+                        &tx,
+                        StreamEvent::Error(
+                            "koma free tier is busy right now - retry in a moment, or set up a provider/custom model in /settings".to_string(),
+                        ),
+                    );
+                    return Ok(());
+                }
+
+                // General final error
+                emit(&tx, StreamEvent::Error(clean_error(status, &text)));
                 return Ok(());
             }
-            // Command Code API-first: on a Go-plan 403 against provider/v1, remember
-            // NDJSON and retry once via `/alpha/generate` so the user never sees the
-            // plan error on a first chat after OAuth.
-            if !conn.oauth_uuid.is_empty()
-                && crate::service::oauth::commandcode::is_provider_api_denied(status, &text)
-                && conn.endpoint.contains("api.commandcode.ai/provider/v1")
-            {
-                crate::service::oauth::commandcode::remember_chat_pref(
-                    conn.oauth_uuid,
-                    crate::service::oauth::commandcode::CHAT_NDJSON,
-                );
-                let ndjson_endpoint = crate::service::oauth::registry::COMMANDCODE_CHAT_BASE;
-                let ndjson_conn = Conn {
-                    endpoint: ndjson_endpoint,
-                    api_key: conn.api_key,
-                    api_type: ApiType::CommandCode,
-                    account_id: conn.account_id,
-                    oauth_uuid: conn.oauth_uuid,
-                    install_id: conn.install_id,
-                };
-                return self
-                    .commandcode_stream_complete(
-                        ndjson_conn,
-                        &bearer,
-                        model,
-                        messages,
-                        advertise,
-                        mcp_tools,
-                        image_ctx,
-                        tx,
-                    )
-                    .await;
-            }
-            emit(&tx, StreamEvent::Error(clean_error(status, &text)));
+            emit(&tx, StreamEvent::Error("all retry attempts exhausted".into()));
             return Ok(());
-        }
+        };
 
         // Command Code provider/v1 succeeded — remember so we keep hitting it.
         if !conn.oauth_uuid.is_empty() && conn.endpoint.contains("api.commandcode.ai/provider/v1") {

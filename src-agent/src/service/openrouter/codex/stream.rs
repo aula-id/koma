@@ -8,7 +8,10 @@ use crate::dto::chat::{ChatMessage, FunctionCall, ReasoningDetail, ToolCall};
 use crate::dto::openrouter::{ImageWireCtx, ToolDef};
 use crate::service::StreamEvent;
 
-use super::super::helpers::{clean_error, emit, sanitize_tool_acc};
+use super::super::helpers::{
+    backoff_delay, clean_error, emit, is_retryable_send_err, is_retryable_status,
+    sanitize_tool_acc, MAX_ATTEMPTS,
+};
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::request::{
@@ -72,39 +75,87 @@ impl OpenRouterClient {
             text: None,
         };
 
-        let rb = codex_headers(
-            self.http.post(&url),
-            bearer,
-            account_id,
-            self.codex_session_id(),
-        );
-        let resp = match rb.json(&body).send().await {
-            Ok(r) => r,
-            Err(e) => {
+        // ── 5xx / 429 retry with exponential backoff ─────────────────────
+        let resp: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = codex_headers(
+                    self.http.post(&url),
+                    bearer,
+                    account_id,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                let r = match send {
+                    Ok(r) => r,
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        if let Some(ctx) = image_ctx.as_ref() {
+                            crate::model::store::append_error_log(
+                                &ctx.session_dir,
+                                "request send failed",
+                                &e.to_string(),
+                            );
+                        }
+                        let d = backoff_delay(attempt);
+                        emit(
+                            &tx,
+                            StreamEvent::Retrying {
+                                attempt: attempt + 1,
+                                max: MAX_ATTEMPTS,
+                                delay_ms: d.as_millis() as u64,
+                            },
+                        );
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        if let Some(ctx) = image_ctx.as_ref() {
+                            crate::model::store::append_error_log(
+                                &ctx.session_dir,
+                                "request send failed",
+                                &e.to_string(),
+                            );
+                        }
+                        emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
+                        return Ok(());
+                    }
+                };
+
+                if r.status().is_success() {
+                    break 'retry r;
+                }
+
+                let status = r.status();
+                let text = r.text().await.unwrap_or_default();
                 if let Some(ctx) = image_ctx.as_ref() {
                     crate::model::store::append_error_log(
                         &ctx.session_dir,
-                        "request send failed",
-                        &e.to_string(),
+                        &format!("HTTP {status} from {} (model {model})", conn.endpoint),
+                        &text,
                     );
                 }
-                emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
+
+                if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                    let d = backoff_delay(attempt);
+                    emit(
+                        &tx,
+                        StreamEvent::Retrying {
+                            attempt: attempt + 1,
+                            max: MAX_ATTEMPTS,
+                            delay_ms: d.as_millis() as u64,
+                        },
+                    );
+                    tokio::time::sleep(d).await;
+                    continue;
+                }
+
+                emit(&tx, StreamEvent::Error(clean_error(status, &text)));
                 return Ok(());
             }
-        };
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            if let Some(ctx) = image_ctx.as_ref() {
-                crate::model::store::append_error_log(
-                    &ctx.session_dir,
-                    &format!("HTTP {status} from {} (model {model})", conn.endpoint),
-                    &text,
-                );
-            }
-            emit(&tx, StreamEvent::Error(clean_error(status, &text)));
+            emit(&tx, StreamEvent::Error("all retry attempts exhausted".into()));
             return Ok(());
-        }
+        };
 
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
