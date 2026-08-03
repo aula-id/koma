@@ -182,6 +182,11 @@ pub struct ToolCtx {
     /// `None` when no session is active (or for headless/test constructions), in
     /// which case the exemption is simply skipped.
     pub session_dir: Option<PathBuf>,
+    /// Absolute paths of currently loaded dir-form skill directories. Granted
+    /// read-only access by [`resolve_read`] (mirroring the `session_dir`
+    /// exemption). Built from `active_skills` values where `skill_dir` is
+    /// `Some`. Emptied on unload. Write/edit/delete stay refused.
+    pub active_skill_dirs: Vec<PathBuf>,
 }
 
 /// Parse a `[N]` workspace-index prefix from the start of a path string.
@@ -530,6 +535,7 @@ pub fn resolve_read(
     workspaces: &[PathBuf],
     rel: &str,
     session_dir: Option<&Path>,
+    active_skill_dirs: &[PathBuf],
 ) -> Result<PathBuf> {
     // Absolute scratch-root paths: let resolve() handle the bypass.
     let as_path = Path::new(rel);
@@ -548,31 +554,19 @@ pub fn resolve_read(
         // bypass above, so `..` tricks can't walk the candidate back out of
         // the session dir before the containment check.
         if let Some(session_dir) = session_dir {
-            let normalized = match as_path.canonicalize() {
-                Ok(p) => p,
-                Err(_) => {
-                    let mut existing = as_path;
-                    let mut tail: Vec<std::ffi::OsString> = Vec::new();
-                    while !existing.exists() {
-                        match existing.file_name() {
-                            Some(n) => tail.push(n.to_os_string()),
-                            None => break,
-                        }
-                        match existing.parent() {
-                            Some(p) => existing = p,
-                            None => break,
-                        }
-                    }
-                    let mut base = existing
-                        .canonicalize()
-                        .unwrap_or_else(|_| existing.to_path_buf());
-                    for seg in tail.iter().rev() {
-                        base.push(seg);
-                    }
-                    base
-                }
-            };
-            if normalized.starts_with(session_dir) {
+            let normalized = partial_canonicalize(as_path);
+            let session_canon = canonicalize_or_verbatim(session_dir);
+            if normalized.starts_with(&session_canon) {
+                return Ok(normalized);
+            }
+        }
+        // Active skill dir bypass: read-only access to loaded dir-form skill
+        // directories. Same partial-canonicalize + starts_with containment as
+        // the session_dir check above — `..` tricks can't escape.
+        for skill_dir in active_skill_dirs {
+            let normalized = partial_canonicalize(as_path);
+            let skill_canon = canonicalize_or_verbatim(skill_dir);
+            if normalized.starts_with(&skill_canon) {
                 return Ok(normalized);
             }
         }
@@ -625,6 +619,42 @@ pub fn resolve_read(
         }
     }
     Ok(primary)
+}
+
+/// Canonicalize a path, falling back to verbatim if the OS can't resolve it
+/// (e.g. the parent directory doesn't exist yet).
+fn canonicalize_or_verbatim(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Partial-canonicalize a path: walk up to the longest existing prefix,
+/// re-append the non-existent tail. Prevents `..` tricks from escaping
+/// containment checks.
+fn partial_canonicalize(as_path: &Path) -> PathBuf {
+    match as_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            let mut existing = as_path;
+            let mut tail: Vec<std::ffi::OsString> = Vec::new();
+            while !existing.exists() {
+                match existing.file_name() {
+                    Some(n) => tail.push(n.to_os_string()),
+                    None => break,
+                }
+                match existing.parent() {
+                    Some(p) => existing = p,
+                    None => break,
+                }
+            }
+            let mut base = existing
+                .canonicalize()
+                .unwrap_or_else(|_| existing.to_path_buf());
+            for seg in tail.iter().rev() {
+                base.push(seg);
+            }
+            base
+        }
+    }
 }
 
 /// Pure tool dispatcher: given a ready [`ToolCtx`] and a [`ToolCall`], loop

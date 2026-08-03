@@ -409,11 +409,27 @@ pub(in crate::app::runtime::stream::tools) fn intercept_skill(
                 Some((n, b)) => (n.to_string(), b.trim().to_string()),
                 None => (rest.to_string(), String::new()),
             };
+            // Look up skill_dir from the skill registry on the session.
+            let skill_dir = state.rest.sessions[sess_idx]
+                .session
+                .as_ref()
+                .and_then(|sess| sess.skills.get(&name))
+                .and_then(|s| s.skill_dir.clone());
+            // Build companion inventory when dir-form.
+            let companion_msg = skill_dir.as_ref().map(|dir| {
+                list_companions(dir, &name)
+            });
             // Install into active_skills.
             state.rest.sessions[sess_idx]
                 .active_skills
-                .insert(name.clone(), body);
-            format!("loaded skill '{name}' — body injected into context.")
+                .insert(name.clone(), crate::app::state::ActiveSkill {
+                    body,
+                    skill_dir,
+                });
+            match companion_msg {
+                Some(msg) => msg,
+                None => format!("loaded skill '{name}' — body injected into context."),
+            }
         } else if let Some(name) =
             result.strip_prefix(crate::tool::skill::SKILL_UNLOAD_PREFIX)
         {
@@ -431,4 +447,133 @@ pub(in crate::app::runtime::stream::tools) fn intercept_skill(
         .push((call.id.clone(), final_result));
     state.rest.sessions[sess_idx].tool_idx += 1;
     InterceptFlow::Continue
+}
+
+/// List companion files in a skill directory (non-recursive one level + one
+/// level of subdirs), excluding the entry file (`SKILL.md`/`skill.md`).
+/// Returns the full user-facing load confirmation message.
+fn list_companions(skill_dir: &std::path::Path, skill_name: &str) -> String {
+    use std::fs;
+    const ENTRY_FILES: &[&str] = &["SKILL.md", "skill.md"];
+    const MAX_ENTRIES: usize = 50;
+
+    let mut companions: Vec<String> = Vec::new();
+
+    if let Ok(read_dir) = fs::read_dir(skill_dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if path.is_file() && !ENTRY_FILES.contains(&file_name.as_str()) {
+                companions.push(file_name);
+            } else if path.is_dir() {
+                // One-level subdirs (e.g. references/).
+                if let Ok(sub) = fs::read_dir(&path) {
+                    for sub_entry in sub.flatten() {
+                        if sub_entry.path().is_file() {
+                            let sub_name = format!(
+                                "{}/{}",
+                                file_name,
+                                sub_entry.file_name().to_string_lossy()
+                            );
+                            companions.push(sub_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    companions.sort();
+    let truncated = companions.len() > MAX_ENTRIES;
+    companions.truncate(MAX_ENTRIES);
+
+    let dir_display = skill_dir.display();
+    let mut msg = format!(
+        "loaded skill '{skill_name}' — body injected into context.\n\
+         skill_dir: {dir_display}"
+    );
+    if companions.is_empty() {
+        msg.push_str("\n(no companion files in skill directory)");
+    } else {
+        msg.push_str("\ncompanions (use the `read` tool with absolute paths under skill_dir):\n");
+        for c in &companions {
+            msg.push_str(&format!("  - {c}\n"));
+        }
+        if truncated {
+            msg.push_str("  ... (truncated at 50 entries)\n");
+        }
+    }
+    msg
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::list_companions;
+
+    #[test]
+    fn lists_companions_and_skips_entry_files() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koma-guard-test-companions-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("SKILL.md"), "# skill body").unwrap();
+        std::fs::write(tmp.join("helper.md"), "helper content").unwrap();
+        std::fs::write(tmp.join("notes.txt"), "notes").unwrap();
+
+        let msg = list_companions(&tmp, "test-skill");
+        assert!(msg.contains("loaded skill 'test-skill'"));
+        assert!(msg.contains("skill_dir:"));
+        assert!(msg.contains("- helper.md"));
+        assert!(msg.contains("- notes.txt"));
+        // SKILL.md must NOT appear as a companion.
+        assert!(!msg.contains("- SKILL.md"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn lists_subdir_companions_one_level_deep() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koma-guard-test-subdir-{}",
+            std::process::id()
+        ));
+        let refs = tmp.join("references");
+        std::fs::create_dir_all(&refs).unwrap();
+        std::fs::write(tmp.join("SKILL.md"), "# skill").unwrap();
+        std::fs::write(refs.join("api.md"), "api ref").unwrap();
+        std::fs::write(refs.join("deep.md"), "deep").unwrap();
+
+        let msg = list_companions(&tmp, "subdir-skill");
+        assert!(msg.contains("- references/api.md"));
+        assert!(msg.contains("- references/deep.md"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn flat_skill_dir_shows_no_companions() {
+        let tmp = std::env::temp_dir().join(format!(
+            "koma-guard-test-empty-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("SKILL.md"), "# skill").unwrap();
+        // No other files.
+
+        let msg = list_companions(&tmp, "empty-skill");
+        assert!(msg.contains("(no companion files in skill directory)"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn nonexistent_dir_shows_no_companions() {
+        let fake = std::path::PathBuf::from(format!(
+            "/tmp/koma-guard-test-nonexistent-{}",
+            std::process::id()
+        ));
+        let msg = list_companions(&fake, "ghost");
+        assert!(msg.contains("(no companion files in skill directory)"));
+    }
 }

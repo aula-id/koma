@@ -33,6 +33,7 @@ pub mod security;
 pub mod session_hub;
 pub mod session_picker;
 pub mod settings;
+pub mod skill_cmd;
 pub mod store;
 pub mod theme;
 pub mod todo;
@@ -227,6 +228,19 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
                 &t.items,
                 t.selected,
                 t.completed_count(),
+                &palette,
+            );
+        }
+        Mode::Skill(s) => {
+            let resolved_model = resolved_main_model(&state.rest);
+            chat::draw(frame, &state.rest, &resolved_model, &palette);
+            let chunks = chat::layout_chunks(&state.rest, frame.area());
+            skill_cmd::render_overlay(
+                frame,
+                chunks[4],
+                chunks[1],
+                s,
+                &state.rest,
                 &palette,
             );
         }

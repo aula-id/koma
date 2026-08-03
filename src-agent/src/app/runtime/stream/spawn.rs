@@ -91,6 +91,11 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
             .cloned()
             .collect(),
     );
+    let active_skill_dirs: Vec<std::path::PathBuf> = state.rest.sessions[sess_idx]
+        .active_skills
+        .values()
+        .filter_map(|s| s.skill_dir.clone())
+        .collect();
     crate::tool::ToolCtx {
         workspace,
         workspaces,
@@ -102,6 +107,7 @@ pub(crate) fn build_tool_ctx(state: &AppState, sess_idx: usize) -> crate::tool::
         ssh_key,
         skill_registry,
         active_skill_names,
+        active_skill_dirs,
         mcp_manager,
         sec_manager,
         bash_saving,
@@ -678,6 +684,7 @@ mod tests {
             ssh_key: None,
             skill_registry: None,
             active_skill_names: None,
+            active_skill_dirs: Vec::new(),
             mcp_manager: None,
             sec_manager: None,
             bash_saving: true,
