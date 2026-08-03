@@ -56,6 +56,19 @@ use super::types::ToastKind;
 /// re-exported through `app::state` so both consumers share the ONE constant.
 pub const EXT_TURN_BUDGET: u32 = 10;
 
+/// Currently loaded skill: the body injected into context, plus an optional
+/// `skill_dir` for dir-form skills (`bar/SKILL.md` sets `Some(bar/)`; flat
+/// `foo.md` sets `None`). `skill_dir` is used at load time to list companion
+/// files and later to grant read-only access through `resolve_read`.
+#[derive(Debug, Clone)]
+pub struct ActiveSkill {
+    /// Markdown body injected into the volatile system tail.
+    pub body: String,
+    /// Dir-form only: absolute path to the skill's parent directory.
+    /// `None` for flat skills.
+    pub skill_dir: Option<PathBuf>,
+}
+
 /// Per-session execution state. Always non-empty in [`super::AppStateRest::sessions`];
 /// the foreground one is reached through `fg()` / `fg_mut()`.
 pub struct SessionRuntime {
@@ -451,9 +464,9 @@ pub struct SessionRuntime {
     pub graph_summary: Option<String>,
     /// Generation counter of the last graph summary we fetched.
     pub graph_generation: u64,
-    /// Currently loaded skill bodies (name → markdown). Injected into the
+    /// Currently loaded skill bodies (name → [`ActiveSkill`]). Injected into the
     /// volatile system tail each request. Ephemeral, never persisted.
-    pub active_skills: std::collections::BTreeMap<String, String>,
+    pub active_skills: std::collections::BTreeMap<String, ActiveSkill>,
     /// Start instant of THIS session's `/compact` animation. `Some` only while a
     /// compaction is in flight for this session (set in `Command::Compact`, cleared
     /// once the result is applied). The renderer reads the FOREGROUND session's value

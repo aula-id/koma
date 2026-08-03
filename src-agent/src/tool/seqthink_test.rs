@@ -15,6 +15,7 @@ fn test_ctx() -> ToolCtx {
         ssh_key: None,
         skill_registry: None,
         active_skill_names: None,
+        active_skill_dirs: Vec::new(),
         mcp_manager: None,
         sec_manager: None,
         bash_saving: true,

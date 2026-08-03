@@ -51,7 +51,7 @@ impl Tool for Grep {
         };
 
         let search_path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let base = resolve_read(&ctx.workspaces, search_path, ctx.session_dir.as_deref())?;
+        let base = resolve_read(&ctx.workspaces, search_path, ctx.session_dir.as_deref(), &ctx.active_skill_dirs)?;
 
         // Optional glob filter.
         let glob_matcher: Option<globset::GlobMatcher> =
@@ -175,7 +175,7 @@ impl Tool for Glob {
             .ok_or_else(|| anyhow::anyhow!("missing required string argument 'pattern'"))?;
 
         let base_rel = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let _base = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref())?; // sandbox check
+        let base_abs = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref(), &ctx.active_skill_dirs)?;
 
         let matcher = globset::Glob::new(pattern)
             .map_err(|e| anyhow::anyhow!("invalid glob '{pattern}': {e}"))?
@@ -183,23 +183,33 @@ impl Tool for Glob {
 
         const MAX_RESULTS: usize = 200;
 
-        // Prefer the live dir cache — it's already gitignore-aware and sorted.
-        let cache_files: Vec<String> = {
+        // Check if base is inside a workspace root — if not (e.g. under an
+        // active skill dir), we must walk from base_abs directly instead of
+        // filtering the workspace dir cache.
+        let base_in_workspace = ctx.workspaces.iter().any(|ws| {
+            let ws = ws.canonicalize().unwrap_or_else(|_| ws.clone());
+            base_abs.starts_with(&ws)
+        });
+
+        // Prefer the live dir cache when the base is inside a workspace —
+        // it's already gitignore-aware and sorted.
+        let cache_files: Vec<String> = if base_in_workspace {
             let cache = ctx
                 .dir_cache
                 .read()
                 .map_err(|_| anyhow::anyhow!("dir cache unavailable"))?;
             cache.files.clone()
+        } else {
+            Vec::new()
         };
 
-        let mut results: Vec<String> = if !cache_files.is_empty() {
+        let mut results: Vec<String> = if base_in_workspace && !cache_files.is_empty() {
             cache_files
                 .into_iter()
                 .filter(|f| matcher.is_match(f.as_str()))
                 .collect()
         } else {
-            // Cache empty: fall back to a fresh walk from the base path.
-            let base_abs = resolve_read(&ctx.workspaces, base_rel, ctx.session_dir.as_deref())?;
+            // Cache empty or base outside workspace: walk from base_abs.
             let mut v: Vec<String> = Vec::new();
             for entry in ignore::WalkBuilder::new(&base_abs).build().flatten() {
                 if entry.file_type().is_some_and(|t| t.is_file()) {
