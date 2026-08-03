@@ -108,11 +108,22 @@ pub(crate) fn start_stream_task(
                         .as_ref()
                         .map(|s| s.workdirs())
                         .unwrap_or_default();
+                    first.content.push_str("\n\n# Project files (top level)\n");
+                    // In multi-workspace mode, emit an explicit idx→path mapping
+                    // table so the model can resolve @N workspace references
+                    // without guessing.
+                    if cache.is_multi() && !workspaces.is_empty() {
+                        first.content.push_str("|idx|path|\n|---|---|\n");
+                        for (i, ws) in workspaces.iter().enumerate() {
+                            first.content
+                                .push_str(&format!("|{i}|{}|\n", ws.display()));
+                        }
+                        first.content.push('\n');
+                    }
                     let model_listing: Vec<_> = listing
                         .iter()
                         .map(|e| crate::tool::model_path_from_entry(&workspaces, e))
                         .collect();
-                    first.content.push_str("\n\n# Project files (top level)\n");
                     first.content.push_str(&model_listing.join("\n"));
                 }
             }
