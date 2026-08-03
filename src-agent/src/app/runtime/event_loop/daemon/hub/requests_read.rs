@@ -237,8 +237,18 @@ impl DaemonHub {
             .iter()
             .find(|c| c.uuid == provider)
         {
-            // OAuth-conn provider: no live fetch — resolve straight to the curated
+            // OAuth-conn provider: resolve straight to the curated
             // catalogue overlay for this provider's chat endpoint(s).
+            // For KomaRun, also trigger a TTL-gated refresh of the dynamic
+            // premium catalogue so the picker picks up new models.
+            if conn.provider == crate::model::app_config::OAuthProvider::KomaRun
+                && !conn.access_token.is_empty()
+            {
+                crate::service::catalogue_overlay::premium_dynamic::maybe_refresh(
+                    &conn.access_token,
+                    false,
+                );
+            }
             let models = crate::service::catalogue_overlay::models_for_provider(conn.provider)
                 .into_iter()
                 .map(|m| m.id)
