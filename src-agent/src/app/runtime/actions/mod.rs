@@ -369,6 +369,28 @@ pub(in crate::app::runtime) fn apply_action(
             bash::handle_bash_kill(id, state)?;
         }
 
+        Action::CloseSkill => {
+            *state.mode_mut() = crate::app::mode::Mode::Chat;
+        }
+
+        Action::SkillToggle(name) => {
+            let sess_idx = state.rest.foreground;
+            let is_active = state.rest.sessions[sess_idx].active_skills.contains_key(&name);
+            if is_active {
+                let msg = super::commands::skill_cmd::deactivate_skill(state, sess_idx, &name);
+                state.rest.fg_mut().status = msg;
+            } else {
+                match super::commands::skill_cmd::activate_skill(state, sess_idx, &name) {
+                    Ok(msg) => state.rest.fg_mut().status = msg,
+                    Err(e) => state.rest.fg_mut().status = format!("error: {e}"),
+                }
+            }
+            // Refresh the hub state's is_active flags
+            if let crate::app::mode::Mode::Skill(s) = state.mode_mut() {
+                s.set_active(&name, !is_active);
+            }
+        }
+
         Action::CloseHelp => {
             *state.mode_mut() = crate::app::mode::Mode::Chat;
         }

@@ -353,4 +353,9 @@ pub enum Action {
     /// tool_call_id present) and lets the park gate in `deferred.rs`
     /// (`pending_subagent_calls.is_empty()`) resume the turn automatically.
     BackgroundAllSubagents,
+    // --- Skill hub actions ---
+    /// Esc in the `/skill` hub — close it and return to Chat.
+    CloseSkill,
+    /// Enter on a row in `/skill` — toggle load/unload. Inner String is the skill name.
+    SkillToggle(String),
 }

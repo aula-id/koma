@@ -48,6 +48,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/bash", "Manage background bash jobs"),
     ("/todo", "View the session task list"),
+    ("/skill", "Load or unload agent skills"),
     ("/cd", "Change the session working directory"),
     ("/adddir", "Add a directory to the workspace roots"),
     ("/compact", "Summarize and compact the conversation"),
@@ -175,6 +176,9 @@ pub enum Command {
     /// Switch session or agent model. Inner string is the raw remainder after
     /// `/model` — subcommand dispatch happens in the handler.
     Model(String),
+    /// Open the `/skill` hub overlay. Inner string is the raw remainder after
+    /// `/skill` — pre-seeds the hub's search query if non-empty.
+    Skill(String),
     /// An unrecognised command verb; holds the raw verb for display.
     Unknown(String),
 }
@@ -232,6 +236,7 @@ pub fn parse(line: &str) -> Command {
         "security" => Command::Security,
         "task" => Command::Task(rest.to_string()),
         "model" => Command::Model(rest.to_string()),
+        "skill" => Command::Skill(rest.to_string()),
         "bash" => Command::Bash,
         "todo" => Command::Todo,
         "cd" => Command::Cd(rest.to_string()),
