@@ -71,7 +71,9 @@ impl StreamEventWire {
                 reason: reason.clone(),
             },
             // Client-local UI events — never sent over the wire.
-            StreamEvent::EndpointsLoaded { .. } | StreamEvent::EndpointsError { .. } => {
+            StreamEvent::EndpointsLoaded { .. }
+            | StreamEvent::EndpointsError { .. }
+            | StreamEvent::Retrying { .. } => {
                 return None
             }
             // `reasoning_details` are accumulated + replayed WITHIN a single turn on

@@ -10,7 +10,10 @@ use crate::dto::chat::{ChatMessage, FunctionCall, ToolCall};
 use crate::dto::openrouter::{ImageWireCtx, ToolDef};
 use crate::service::StreamEvent;
 
-use super::super::helpers::{clean_error, emit, sanitize_tool_acc};
+use super::super::helpers::{
+    backoff_delay, clean_error, emit, is_retryable_send_err, is_retryable_status,
+    sanitize_tool_acc, MAX_ATTEMPTS,
+};
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::ndjson::{parse_line, CcEvent};
@@ -73,30 +76,70 @@ impl OpenRouterClient {
             thread_id: Uuid::new_v4().to_string(),
         };
 
-        let rb = self
-            .http
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {bearer}"))
-            .header("x-command-code-version", super::CC_CLI_VERSION)
-            .header("x-cli-environment", "production")
-            .header("x-project-slug", slug_from_path(&body.config.working_dir))
-            .header("x-taste-learning", "true")
-            .header("x-co-flag", "false");
+        // ── 5xx / 429 retry with exponential backoff ─────────────────────
+        let resp: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = self
+                    .http
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", format!("Bearer {bearer}"))
+                    .header("x-command-code-version", super::CC_CLI_VERSION)
+                    .header("x-cli-environment", "production")
+                    .header("x-project-slug", slug_from_path(&body.config.working_dir))
+                    .header("x-taste-learning", "true")
+                    .header("x-co-flag", "false")
+                    .json(&body)
+                    .send()
+                    .await;
+                let r = match send {
+                    Ok(r) => r,
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        emit(
+                            &tx,
+                            StreamEvent::Retrying {
+                                attempt: attempt + 1,
+                                max: MAX_ATTEMPTS,
+                                delay_ms: d.as_millis() as u64,
+                            },
+                        );
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
+                        return Ok(());
+                    }
+                };
 
-        let resp = match rb.json(&body).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                emit(&tx, StreamEvent::Error(format!("request failed: {e}")));
+                if r.status().is_success() {
+                    break 'retry r;
+                }
+
+                let status = r.status();
+                let text = r.text().await.unwrap_or_default();
+
+                if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                    let d = backoff_delay(attempt);
+                    emit(
+                        &tx,
+                        StreamEvent::Retrying {
+                            attempt: attempt + 1,
+                            max: MAX_ATTEMPTS,
+                            delay_ms: d.as_millis() as u64,
+                        },
+                    );
+                    tokio::time::sleep(d).await;
+                    continue;
+                }
+
+                emit(&tx, StreamEvent::Error(clean_error(status, &text)));
                 return Ok(());
             }
-        };
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            emit(&tx, StreamEvent::Error(clean_error(status, &text)));
+            emit(&tx, StreamEvent::Error("all retry attempts exhausted".into()));
             return Ok(());
-        }
+        };
 
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();

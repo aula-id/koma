@@ -5,7 +5,9 @@ use futures_util::StreamExt;
 
 use crate::dto::chat::ChatMessage;
 
-use super::super::helpers::clean_error;
+use super::super::helpers::{
+    backoff_delay, clean_error, is_retryable_send_err, is_retryable_status, MAX_ATTEMPTS,
+};
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::request::{build_messages, thinking_params, AnthropicTool, MessagesRequest};
@@ -75,13 +77,38 @@ impl OpenRouterClient {
             stream: true,
         };
 
-        let rb = anthropic_headers(self.http.post(&url), bearer, false);
-        let resp = rb.json(&body).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("{}", clean_error(status, &text)));
-        }
+        let resp: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = anthropic_headers(self.http.post(&url), bearer, false)
+                    .json(&body)
+                    .send()
+                    .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        return Err(anyhow!("{}", clean_error(status, &text)));
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
+            }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
 
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();

@@ -50,6 +50,17 @@ pub enum StreamEvent {
     Done,
     /// The stream failed; `String` is the error to surface in the status line.
     Error(String),
+    /// A transient upstream error (5xx / 429 / connect failure) was detected
+    /// on the initial POST; the stream task will sleep and retry. Does NOT
+    /// end the turn — the TUI status line updates to show progress.
+    /// `attempt` is 1-based (the attempt *about to start* after the delay),
+    /// `max` is the total number of attempts allowed, `delay_ms` is the
+    /// sleep in milliseconds before the next try.
+    Retrying {
+        attempt: u32,
+        max: u32,
+        delay_ms: u64,
+    },
     /// `/compact` result: the `summary` plus the `kept_tail` snapshot captured
     /// at dispatch time (so compaction is applied against a stable tail).
     Compacted {

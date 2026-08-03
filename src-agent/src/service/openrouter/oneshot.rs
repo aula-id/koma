@@ -6,8 +6,9 @@ use anyhow::{anyhow, Result};
 use super::client::OpenRouterClient;
 use super::codex::to_text_format;
 use super::helpers::{
-    accepts_reasoning_exclude, auth_headers, clean_error, parse_blob_ids, parse_summary,
-    provider_routing_for,
+    accepts_reasoning_exclude, auth_headers, backoff_delay, clean_error,
+    is_retryable_send_err, is_retryable_status, parse_blob_ids, parse_summary,
+    provider_routing_for, MAX_ATTEMPTS,
 };
 use super::types::Conn;
 use crate::dto::chat::{ChatMessage, Role};
@@ -120,27 +121,57 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(
-            self.http.post(&url),
-            &conn,
-            &bearer,
-            self.codex_session_id(),
-        )
-        .json(&body)
-        .send()
-        .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            if let Some(out) =
-                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
-                    .await?
-            {
-                return Ok(out);
+        let response: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = auth_headers(
+                    self.http.post(&url),
+                    &conn,
+                    &bearer,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        // Final attempt or non-retryable: check commandcode 403 fallback
+                        if let Some(out) = commandcode_oneshot_fallback(
+                            self,
+                            conn,
+                            &bearer,
+                            model,
+                            messages,
+                            status,
+                            &text,
+                        )
+                        .await?
+                        {
+                            return Ok(out);
+                        }
+                        return Err(anyhow!("{}", clean_error(status, &text)));
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
             }
-            return Err(anyhow!("{}", clean_error(status, &text)));
-        }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
         remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
@@ -226,27 +257,57 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(
-            self.http.post(&url),
-            &conn,
-            &bearer,
-            self.codex_session_id(),
-        )
-        .json(&body)
-        .send()
-        .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            if let Some(out) =
-                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
-                    .await?
-            {
-                return Ok(out);
+        let response: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = auth_headers(
+                    self.http.post(&url),
+                    &conn,
+                    &bearer,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        // Final attempt or non-retryable: check commandcode 403 fallback
+                        if let Some(out) = commandcode_oneshot_fallback(
+                            self,
+                            conn,
+                            &bearer,
+                            model,
+                            messages,
+                            status,
+                            &text,
+                        )
+                        .await?
+                        {
+                            return Ok(out);
+                        }
+                        return Err(anyhow!("{}", clean_error(status, &text)));
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
             }
-            return Err(anyhow!("{}", clean_error(status, &text)));
-        }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
         remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
@@ -404,31 +465,61 @@ impl OpenRouterClient {
             max_tokens: Some(2_000),
         };
 
-        let response = auth_headers(
-            self.http.post(&url),
-            &conn,
-            &bearer,
-            self.codex_session_id(),
-        )
-        .json(&body)
-        .send()
-        .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            if let Some(out) =
-                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
-                    .await?
-            {
-                let trimmed = out.trim();
-                if trimmed.is_empty() {
-                    return Err(anyhow!("empty classifier reply"));
+        let response: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = auth_headers(
+                    self.http.post(&url),
+                    &conn,
+                    &bearer,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        // Final attempt or non-retryable: check commandcode 403 fallback
+                        if let Some(out) = commandcode_oneshot_fallback(
+                            self,
+                            conn,
+                            &bearer,
+                            model,
+                            messages,
+                            status,
+                            &text,
+                        )
+                        .await?
+                        {
+                            let trimmed = out.trim();
+                            if trimmed.is_empty() {
+                                return Err(anyhow!("empty classifier reply"));
+                            }
+                            return Ok(trimmed.to_string());
+                        }
+                        return Err(anyhow!("{}", clean_error(status, &text)));
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
                 }
-                return Ok(trimmed.to_string());
             }
-            return Err(anyhow!("{}", clean_error(status, &text)));
-        }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
         remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
@@ -578,27 +669,57 @@ impl OpenRouterClient {
             max_tokens: None,
         };
 
-        let response = auth_headers(
-            self.http.post(&url),
-            &conn,
-            &bearer,
-            self.codex_session_id(),
-        )
-        .json(&body)
-        .send()
-        .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            if let Some(out) =
-                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
-                    .await?
-            {
-                return parse_summary(&out);
+        let response: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = auth_headers(
+                    self.http.post(&url),
+                    &conn,
+                    &bearer,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        // Final attempt or non-retryable: check commandcode 403 fallback
+                        if let Some(out) = commandcode_oneshot_fallback(
+                            self,
+                            conn,
+                            &bearer,
+                            model,
+                            messages,
+                            status,
+                            &text,
+                        )
+                        .await?
+                        {
+                            return parse_summary(&out);
+                        }
+                        return Err(anyhow!("{}", clean_error(status, &text)));
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
             }
-            return Err(anyhow!("{}", clean_error(status, &text)));
-        }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
         remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = response.json().await?;
@@ -761,32 +882,59 @@ impl OpenRouterClient {
             max_tokens: Some(2_000),
         };
 
-        // Best-effort: any failure returns an empty selection rather than erroring.
-        let response = match auth_headers(
-            self.http.post(&url),
-            &conn,
-            &bearer,
-            self.codex_session_id(),
-        )
-        .json(&body)
-        .send()
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => return Ok(Vec::new()),
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            if let Ok(Some(out)) =
-                commandcode_oneshot_fallback(self, conn, &bearer, model, messages, status, &text)
-                    .await
-            {
-                return Ok(parse_blob_ids(&out));
+        // Best-effort: retries first, then any final failure returns an empty
+        // selection rather than erroring.
+        let response: reqwest::Response = 'retry_pick: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = auth_headers(
+                    self.http.post(&url),
+                    &conn,
+                    &bearer,
+                    self.codex_session_id(),
+                )
+                .json(&body)
+                .send()
+                .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry_pick r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        // Final attempt or non-retryable: check commandcode 403 fallback
+                        if let Ok(Some(out)) = commandcode_oneshot_fallback(
+                            self,
+                            conn,
+                            &bearer,
+                            model,
+                            messages,
+                            status,
+                            &text,
+                        )
+                        .await
+                        {
+                            return Ok(parse_blob_ids(&out));
+                        }
+                        return Ok(Vec::new());
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(_) => {
+                        return Ok(Vec::new());
+                    }
+                }
             }
-            return Ok(Vec::new());
-        }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
         remember_commandcode_provider_v1(&conn);
 
         let chat_response: ChatResponse = match response.json().await {
