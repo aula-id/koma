@@ -141,7 +141,13 @@ fn apply_login_result(rest: &mut AppStateRest, conn: OAuthConn, handle: &tokio::
     });
     let conn_uuid = conn.uuid.clone();
     let conn_provider = conn.provider;
+    let conn_token = conn.access_token.clone();
     rest.config.oauth_conns.push(conn);
+    // Fire background refresh of the dynamic premium model catalogue for KomaRun
+    // (paste path; force=true so the fresh token is used immediately).
+    if conn_provider == crate::model::app_config::OAuthProvider::KomaRun {
+        crate::service::catalogue_overlay::premium_dynamic::spawn_refresh(conn_token);
+    }
     // Pre-compute the outcome (drafts on success) BEFORE the mode borrow so the fold
     // below doesn't need to re-borrow `rest.config` while holding `&mut ...mode`.
     let outcome = rest
