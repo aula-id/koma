@@ -235,6 +235,31 @@ pub struct TodoItemSnapshot {
     pub locked: bool,
 }
 
+/// A serde-safe projection of one skill entry for the `/skill` hub.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct SkillEntrySnapshot {
+    pub name: String,
+    pub description: String,
+    pub is_active: bool,
+}
+
+/// A serde-safe projection of the `/skill` hub overlay.
+///
+/// Mirrors [`crate::app::mode::skill_cmd::SkillCmdState`] field-for-field. Each
+/// entry rides as a `SkillEntrySnapshot`, so a thin client rebuilds and renders
+/// the skill hub instead of a blank Chat screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct SkillCmdSnapshot {
+    pub query: String,
+    /// Wire token: "all" | "active"
+    pub chip: String,
+    pub all: Vec<SkillEntrySnapshot>,
+    pub filtered_idx: Vec<usize>,
+    pub selected: usize,
+}
+
 /// A serde-safe projection of the `/todo` task-panel.
 ///
 /// Mirrors [`BashSnapshot`]'s shape (list + cursor): the todo items + the LIST

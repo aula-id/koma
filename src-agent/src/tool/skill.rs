@@ -25,7 +25,9 @@ impl Tool for Skill {
          catalogues of name+description in the system prompt; full bodies are \
          only injected after load. action=\"load\" loads the body for this and \
          later turns; action=\"unload\" removes it; action=\"list\" shows \
-         available skills and which are active."
+         available skills and which are active. Dir-form skills (bar/SKILL.md) \
+         list companion files in the load result — use `read` with absolute \
+         paths under skill_dir to access them."
     }
 
     fn parameters(&self) -> Value {

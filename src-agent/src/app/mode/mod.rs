@@ -36,6 +36,7 @@ mod rewind;
 pub mod security;
 mod session_hub;
 pub mod settings;
+pub mod skill_cmd;
 pub mod store;
 pub mod todo;
 
@@ -52,6 +53,8 @@ pub use todo::{parse_todo_file, TodoState};
 // re-touching this line. `allow` silences the meanwhile-unused warning.
 pub use effort::EffortPickerState;
 pub use model_cmd::{ModelCmdState, ModelCmdSub};
+#[allow(unused_imports)]
+pub use skill_cmd::{SkillCmdState, SkillFilterChip, SkillEntry};
 #[allow(unused_imports)]
 pub use help::{HelpEntry, HelpKind, HelpState};
 pub use key_input::KeyInputForm;
@@ -297,4 +300,9 @@ pub enum Mode {
     /// shows the selected item's content, status, and priority. The model writes
     /// todos via the `checklist` tool; the user views them here.
     Todo(Box<TodoState>),
+    /// Skill hub overlay (`/skill`): a searchable, filterable list of skills from
+    /// the session's registry. Users can toggle skills on/off from the hub. The
+    /// inner [`SkillCmdState`] holds the query, chip filter, entry list, and
+    /// cursor. Boxed to keep `Mode` small, consistent with the other list variants.
+    Skill(Box<SkillCmdState>),
 }

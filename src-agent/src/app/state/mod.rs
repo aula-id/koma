@@ -39,6 +39,7 @@ pub use types::{AgentMode, ToastKind};
 // outside this module while there is a single foreground session.
 #[allow(unused_imports)]
 pub use runtime::SessionRuntime;
+pub use runtime::ActiveSkill;
 // The extension-injection turn budget (cost-DoS guard): shared by the deferred-drain
 // injection gate and the `chat.prompt` broker so both consult the SAME ceiling.
 pub use runtime::EXT_TURN_BUDGET;

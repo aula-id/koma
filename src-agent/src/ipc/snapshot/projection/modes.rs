@@ -14,6 +14,7 @@ use crate::app::mode::security::SecurityState;
 use crate::app::mode::settings::{
     ModelDraft, ModelModal, OAuthDraft, PathPicker, PickerMode, ProviderDraft,
 };
+use crate::app::mode::skill_cmd::{SkillCmdState, SkillFilterChip};
 use crate::app::mode::store::{ExtStoreState, StoreRow};
 use crate::app::mode::{
     CookingEntry, EffortPickerState, HistoryEntry, HubPane, KeyInputForm, LoadingState, Mode,
@@ -32,8 +33,8 @@ use crate::ipc::proto::{
     ModelModalSnapshot, OAuthDraftSnapshot, OnboardProviderSnapshot, OnboardSnapshot,
     PathPickerSnapshot, PickerSnapshot, ProviderDraftSnapshot, ProviderModalSnapshot,
     RewindEntrySnapshot, RewindSnapshot, RolePickerSnapshot, SecuritySnapshot, SessionHubSnapshot,
-    SessionMetaSnapshot, SettingsSnapshot, TextEditorSnapshot, TodoItemSnapshot, TodoSnapshot,
-    ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
+    SessionMetaSnapshot, SettingsSnapshot, SkillCmdSnapshot, SkillEntrySnapshot, TextEditorSnapshot,
+    TodoItemSnapshot, TodoSnapshot, ToolPickerSnapshot, UsageSnapshot, WarmStatusWire,
 };
 
 pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
@@ -85,6 +86,7 @@ pub fn mode_snapshot(state: &AppState) -> ModeSnapshot {
         // + cursor, so a thin client rebuilds and renders the searchable help screen
         // instead of a blank Chat screen.
         Mode::Help(h) => ModeSnapshot::Help(Box::new(help_snapshot(h))),
+        Mode::Skill(s) => ModeSnapshot::Skill(Box::new(skill_cmd_snapshot(s))),
         Mode::Effort(e) => ModeSnapshot::Effort(effort_snapshot(e)),
         Mode::Model(m) => ModeSnapshot::Model(Box::new(model_cmd_snapshot(m))),
         Mode::Usage(nav) => ModeSnapshot::Usage(Box::new(usage_snapshot(nav, state))),
@@ -826,6 +828,28 @@ pub fn help_snapshot(h: &HelpState) -> HelpSnapshot {
         selected: h.selected,
         current_version: h.current_version.clone(),
         update: h.update.clone(),
+    }
+}
+
+pub fn skill_cmd_snapshot(s: &SkillCmdState) -> SkillCmdSnapshot {
+    SkillCmdSnapshot {
+        query: s.query.clone(),
+        chip: match s.chip {
+            SkillFilterChip::All => "all",
+            SkillFilterChip::Active => "active",
+        }
+        .to_string(),
+        all: s
+            .all
+            .iter()
+            .map(|e| SkillEntrySnapshot {
+                name: e.name.clone(),
+                description: e.description.clone(),
+                is_active: e.is_active,
+            })
+            .collect(),
+        filtered_idx: s.filtered_idx.clone(),
+        selected: s.selected,
     }
 }
 
