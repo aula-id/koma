@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 use crate::dto::chat::ChatMessage;
 
-use super::super::helpers::clean_error;
+use super::super::helpers::{
+    backoff_delay, clean_error, is_retryable_send_err, is_retryable_status, MAX_ATTEMPTS,
+};
 use super::super::Conn;
 use super::super::OpenRouterClient;
 use super::ndjson::{parse_line, CcEvent};
@@ -67,23 +69,47 @@ impl OpenRouterClient {
             thread_id: Uuid::new_v4().to_string(),
         };
 
-        let rb = self
-            .http
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {bearer}"))
-            .header("x-command-code-version", super::CC_CLI_VERSION)
-            .header("x-cli-environment", "production")
-            .header("x-project-slug", "koma")
-            .header("x-taste-learning", "true")
-            .header("x-co-flag", "false");
-
-        let resp = rb.json(&body).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("{}", clean_error(status, &text)));
-        }
+        let resp: reqwest::Response = 'retry: {
+            for attempt in 1u32..=MAX_ATTEMPTS {
+                let send = self
+                    .http
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", format!("Bearer {bearer}"))
+                    .header("x-command-code-version", super::CC_CLI_VERSION)
+                    .header("x-cli-environment", "production")
+                    .header("x-project-slug", "koma")
+                    .header("x-taste-learning", "true")
+                    .header("x-co-flag", "false")
+                    .json(&body)
+                    .send()
+                    .await;
+                match send {
+                    Ok(r) => {
+                        let status = r.status();
+                        if status.is_success() {
+                            break 'retry r;
+                        }
+                        let text = r.text().await.unwrap_or_default();
+                        if is_retryable_status(status) && attempt < MAX_ATTEMPTS {
+                            let d = backoff_delay(attempt);
+                            tokio::time::sleep(d).await;
+                            continue;
+                        }
+                        return Err(anyhow!("{}", clean_error(status, &text)));
+                    }
+                    Err(e) if is_retryable_send_err(&e) && attempt < MAX_ATTEMPTS => {
+                        let d = backoff_delay(attempt);
+                        tokio::time::sleep(d).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
+            }
+            return Err(anyhow!("all retry attempts exhausted"));
+        };
 
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
